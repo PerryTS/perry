@@ -113,7 +113,14 @@ pub(crate) unsafe fn sqlite_error_value(error: NodeSqliteBackupError) -> f64 {
 
     if let Some(errcode) = error.errcode {
         let key = js_string_from_bytes(b"errcode".as_ptr(), "errcode".len() as u32);
-        js_object_set_field_by_name(err_obj, key, f64::from_bits(JSValue::int32(errcode).bits()));
+        // NUMBER-tagged, not INT32-tagged: small extended result codes can
+        // collide with registered class ids, which makes `typeof e.errcode`
+        // report "function" (see node_sqlite_integer_value, #6561).
+        js_object_set_field_by_name(
+            err_obj,
+            key,
+            f64::from_bits(JSValue::number(errcode as f64).bits()),
+        );
     }
     if let Some(errstr) = error.errstr {
         let key = js_string_from_bytes(b"errstr".as_ptr(), "errstr".len() as u32);
@@ -126,6 +133,28 @@ pub(crate) unsafe fn sqlite_error_value(error: NodeSqliteBackupError) -> f64 {
     }
 
     js_nanbox_pointer(err as i64)
+}
+
+/// Throw a synchronous `ERR_SQLITE_ERROR` carrying Node's `errcode`
+/// (extended result code) and `errstr` (`sqlite3_errstr` text) own
+/// properties, matching `node:sqlite`'s error shape (#6561). The plain
+/// [`throw_sqlite_error`] path only sets `code`; Node also exposes the
+/// SQLite result code on every SQL-level failure.
+pub(crate) unsafe fn throw_sqlite_error_ext(message: &str, errcode: i32) -> ! {
+    let error = NodeSqliteBackupError {
+        message: message.to_string(),
+        errcode: Some(errcode),
+        errstr: Some(sqlite_errstr(errcode)),
+    };
+    perry_runtime::exception::js_throw(sqlite_error_value(error))
+}
+
+/// Throw `ERR_SQLITE_ERROR` for the connection's current error state:
+/// `sqlite3_errmsg` message + `sqlite3_extended_errcode` code (#6561).
+pub(crate) unsafe fn throw_sqlite_error_from_conn(conn: &Connection) -> ! {
+    let errcode = ffi::sqlite3_extended_errcode(conn.handle());
+    let message = sqlite_error_message(conn);
+    throw_sqlite_error_ext(&message, errcode)
 }
 
 pub(crate) fn backup_path_type_error(name: &str, value: f64) -> ! {
@@ -300,12 +329,12 @@ pub(crate) unsafe fn call_backup_progress(
     js_object_set_field_by_name(
         info,
         total_key,
-        f64::from_bits(JSValue::int32(total_pages).bits()),
+        f64::from_bits(JSValue::number(total_pages as f64).bits()),
     );
     js_object_set_field_by_name(
         info,
         remaining_key,
-        f64::from_bits(JSValue::int32(remaining_pages).bits()),
+        f64::from_bits(JSValue::number(remaining_pages as f64).bits()),
     );
     js_closure_call1(
         progress,

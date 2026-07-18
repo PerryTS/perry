@@ -37,6 +37,11 @@ pub const ARRAY_ITERATOR_CLASS_ID: u32 = 0xFFFF_0006;
 const KIND_VALUES: i32 = 0;
 const KIND_KEYS: i32 = 1;
 const KIND_ENTRIES: i32 = 2;
+/// Values iterator with Node's `node:sqlite` result protocol (#6561):
+/// exhaustion and `return()` yield `{ done: true, value: null }` (the
+/// array iterator yields `value: undefined`), and `return()` terminates
+/// the iterator. Produced only by `StatementSync.prototype.iterate()`.
+const KIND_VALUES_NULL_DONE: i32 = 3;
 
 /// Clean a NaN-boxed array pointer to a raw `*mut ArrayHeader`, or null.
 fn unbox_array_ptr(value: f64) -> *mut ArrayHeader {
@@ -69,6 +74,17 @@ pub fn array_values_iter(arr_f64: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe { alloc_iterator(arr_ptr, KIND_VALUES) }
+}
+
+/// Values iterator whose done-result carries `value: null` and whose
+/// `return()` terminates it — the `node:sqlite` `iterate()` protocol
+/// (#6561). See [`KIND_VALUES_NULL_DONE`].
+pub fn array_values_iter_null_done(arr_f64: f64) -> f64 {
+    let arr_ptr = unbox_array_ptr(arr_f64);
+    if arr_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe { alloc_iterator(arr_ptr, KIND_VALUES_NULL_DONE) }
 }
 
 /// `arr.keys()` iterator — yields each index `0..length`.
@@ -413,6 +429,17 @@ pub unsafe fn dispatch_array_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
+    // Field 2: iterator kind — read up front so the exhausted paths can pick
+    // the kind's done-value (`null` for KIND_VALUES_NULL_DONE, `undefined`
+    // otherwise).
+    let kind = f64::from_bits(js_object_get_field(iter_obj, 2).bits()) as i32;
+    let done_value = || {
+        if kind == KIND_VALUES_NULL_DONE {
+            JSValue::null()
+        } else {
+            JSValue::undefined()
+        }
+    };
     match method_name {
         "next" => {
             // Field 0: backing array pointer (NaN-boxed).
@@ -424,15 +451,12 @@ pub unsafe fn dispatch_array_iterator_method(
             // (test262 Array/prototype/{values,keys,entries}/iteration-mutable:
             // pushing AFTER the iterator reported done must not resurface).
             if JSValue::from_bits(backing_f64.to_bits()).is_undefined() {
-                return make_iter_result(JSValue::undefined(), true);
+                return make_iter_result(done_value(), true);
             }
             let arr_ptr = js_nanbox_get_pointer(backing_f64) as *const ArrayHeader;
             // Field 1: current index.
             let idx_field = js_object_get_field(iter_obj, 1);
             let idx = f64::from_bits(idx_field.bits()) as u32;
-            // Field 2: iterator kind.
-            let kind_field = js_object_get_field(iter_obj, 2);
-            let kind = f64::from_bits(kind_field.bits()) as i32;
 
             let len = if arr_ptr.is_null() {
                 0u32
@@ -442,7 +466,7 @@ pub unsafe fn dispatch_array_iterator_method(
 
             if idx >= len {
                 js_object_set_field(iter_obj, 0, JSValue::undefined());
-                return make_iter_result(JSValue::undefined(), true);
+                return make_iter_result(done_value(), true);
             }
 
             // Advance the stored cursor before computing the value so a
@@ -456,7 +480,7 @@ pub unsafe fn dispatch_array_iterator_method(
             };
 
             let value = match kind {
-                KIND_VALUES => JSValue::from_bits(elem.to_bits()),
+                KIND_VALUES | KIND_VALUES_NULL_DONE => JSValue::from_bits(elem.to_bits()),
                 KIND_KEYS => JSValue::number(idx as f64),
                 KIND_ENTRIES => {
                     let pair = make_pair_array(idx, elem);
@@ -473,7 +497,15 @@ pub unsafe fn dispatch_array_iterator_method(
         // `return`/`throw` are part of the iterator spec; Node's array
         // iterator inherits them from %IteratorPrototype%. Return a
         // `{ value: undefined, done: true }` shape for early-exit code.
-        "return" | "throw" => make_iter_result(JSValue::undefined(), true),
+        // KIND_VALUES_NULL_DONE (`node:sqlite` iterate()) additionally
+        // TERMINATES the iterator on `return()` — a later `.next()` stays
+        // `{ done: true, value: null }` — matching Node's sqlite iterator.
+        "return" | "throw" => {
+            if kind == KIND_VALUES_NULL_DONE {
+                js_object_set_field(iter_obj, 0, JSValue::undefined());
+            }
+            make_iter_result(done_value(), true)
+        }
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }

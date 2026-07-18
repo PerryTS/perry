@@ -108,6 +108,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "close"
             | "exec"
             | "prepare"
+            // `function`/`aggregate`/`enableDefensive`/`setAuthorizer` were
+            // missing from this gate (#6561): an any-typed
+            // `db.function(...)` / `db.aggregate(...)` fell through the
+            // tower and silently no-op'd, so the SQL function was never
+            // registered and the next query failed with
+            // "no such function: <name>".
+            | "function"
+            | "aggregate"
+            | "enableDefensive"
+            | "setAuthorizer"
             | "createTagStore"
             | "createSession"
             | "applyChangeset"
