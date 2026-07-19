@@ -415,31 +415,36 @@ fn lift_logical_with_yield_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
 fn lift_sequence_with_yield(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
     let temp_id = alloc_local(next_id);
     let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
-    if let Expr::Sequence(mut items) = owned {
-        // The last operand is the sequence's value; everything before it runs
-        // only for its side effects.
-        let Some(last) = items.pop() else {
-            // Degenerate empty sequence — a comma always has ≥2 operands in
-            // source, but guard rather than allocate a dangling temp read.
-            *expr = Expr::Undefined;
-            return;
-        };
-        let mut stmts: Vec<Stmt> = Vec::with_capacity(items.len() + 1);
-        for item in items {
-            stmts.push(Stmt::Expr(item));
-        }
-        stmts.push(Stmt::Let {
-            id: temp_id,
-            name: format!("__yseq_{}", temp_id),
-            ty: Type::Any,
-            mutable: false,
-            init: Some(last),
-        });
-        // Split each operand's own yields (and the value operand's) into the
-        // suspend/resume states the linearizer understands.
-        hoist_yields_in_stmts(&mut stmts, next_id);
-        hoisted.extend(stmts);
+    // Both callers gate on `matches!(expr, Expr::Sequence(_))`; asserting it here
+    // panics loudly if that invariant ever drifts rather than silently leaving
+    // the dangling `LocalGet(temp_id)` placeholder in the AST.
+    let Expr::Sequence(mut items) = owned else {
+        unreachable!("lift_sequence_with_yield called on a non-Sequence expr");
+    };
+
+    // The last operand is the sequence's value; everything before it runs only
+    // for its side effects.
+    let Some(last) = items.pop() else {
+        // Degenerate empty sequence — a comma always has ≥2 operands in source,
+        // but guard rather than allocate a dangling temp read.
+        *expr = Expr::Undefined;
+        return;
+    };
+    let mut stmts: Vec<Stmt> = Vec::with_capacity(items.len() + 1);
+    for item in items {
+        stmts.push(Stmt::Expr(item));
     }
+    stmts.push(Stmt::Let {
+        id: temp_id,
+        name: format!("__yseq_{}", temp_id),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(last),
+    });
+    // Split each operand's own yields (and the value operand's) into the
+    // suspend/resume states the linearizer understands.
+    hoist_yields_in_stmts(&mut stmts, next_id);
+    hoisted.extend(stmts);
 }
 
 #[cfg(test)]
