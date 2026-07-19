@@ -74,21 +74,26 @@ fn proxy_set_prototype_of(proxy_boxed: f64, proto: f64) -> f64 {
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "setPrototypeOf");
-    let trap_bits = trap.to_bits();
-    if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
-        // No trap — forward to the target's [[SetPrototypeOf]].
-        return js_reflect_set_prototype_of(target, proto);
-    }
-    if !is_callable_function(trap) {
-        return throw_type_error("proxy setPrototypeOf trap is not a function");
-    }
+    // Root target/proto/handler before `handler_trap`, which allocates a key
+    // string (and may fire a handler getter) — either can trigger a GC that
+    // evacuates these heap values. Rooted handles are rewritten on evacuation,
+    // so every read below stays valid across user code.
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_h = scope.root_nanbox_f64(target);
     let proto_h = scope.root_nanbox_f64(proto);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let trap_h = scope.root_nanbox_f64(handler_trap(handler_h.get_nanbox_f64(), "setPrototypeOf"));
+    let trap_bits = trap_h.get_nanbox_f64().to_bits();
+    if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
+        // No trap — forward to the target's [[SetPrototypeOf]].
+        return js_reflect_set_prototype_of(target_h.get_nanbox_f64(), proto_h.get_nanbox_f64());
+    }
+    if !is_callable_function(trap_h.get_nanbox_f64()) {
+        return throw_type_error("proxy setPrototypeOf trap is not a function");
+    }
     let trap_result = call_trap(
-        handler,
-        trap,
+        handler_h.get_nanbox_f64(),
+        trap_h.get_nanbox_f64(),
         &[target_h.get_nanbox_f64(), proto_h.get_nanbox_f64()],
     );
     if crate::value::js_is_truthy(trap_result) == 0 {
