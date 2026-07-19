@@ -30,7 +30,11 @@ fn str_from_header(ptr: *const u8) -> &'static str {
         let header = ptr as *const perry_runtime::string::StringHeader;
         let len = (*header).byte_len as usize;
         let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+        // Checked parse, not from_utf8_unchecked: runtime strings are WTF-8
+        // and may contain lone surrogates, which would be UB to expose as
+        // &str. An invalid size key falls back to "" → the default 320×50
+        // banner slot.
+        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
     }
 }
 
