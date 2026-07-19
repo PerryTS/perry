@@ -127,6 +127,14 @@ pub(crate) fn supported_builtin_module_name(specifier: &str) -> Option<&str> {
     if name.starts_with('_') {
         return None;
     }
+    // A residual `node:` after one strip is a double-prefixed specifier
+    // (`node:node:test`). Node rejects those; without this check the
+    // stripped form matches the scheme-only entries (stored WITH their
+    // prefix in MODULE_BUILTIN_MODULES) and a prefixed "prefixless" name
+    // escapes to the value router.
+    if name.starts_with("node:") {
+        return None;
+    }
     if MODULE_BUILTIN_MODULES.contains(&name)
         || (had_node_prefix && MODULE_BUILTIN_MODULES.contains(&specifier))
     {
@@ -782,7 +790,17 @@ mod builtin_module_list_tests {
 
     #[test]
     fn non_builtins_are_rejected() {
-        for specifier in ["lodash", "node:nope", "./file.js", "/abs/file.js", ""] {
+        for specifier in [
+            "lodash",
+            "node:nope",
+            "./file.js",
+            "/abs/file.js",
+            "",
+            // Double-prefixed spellings must not reach the scheme-only
+            // entries via the single strip (Node rejects them).
+            "node:node:test",
+            "node:node:fs",
+        ] {
             assert_eq!(
                 supported_builtin_module_name(specifier),
                 None,
