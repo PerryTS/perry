@@ -1291,7 +1291,13 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             }
         } else {
             // Number (most common for data objects) — or Date, handled
-            // centrally by `write_number` via DATE_REGISTRY lookup.
+            // centrally by `write_number` via DATE_REGISTRY lookup. A BigInt
+            // member funnels through `write_number` to `serialize_bigint` /
+            // `bigint_apply_to_json`, which reads the pending `toJSON` key, so
+            // record this member's key first (#5909).
+            if val_tag == BIGINT_TAG {
+                set_to_json_key_str(str_from_header(key_ptr).unwrap_or(""));
+            }
             write_number(buf, field_val);
         }
     }
@@ -1575,6 +1581,11 @@ pub(crate) unsafe fn try_emit_shape_element(
                 set_to_json_key_for_template_field(template, f);
                 stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
             } else {
+                // A BigInt field reaches `serialize_bigint` via `write_number`,
+                // which reads the pending `toJSON` key — record it first (#5909).
+                if vtag == BIGINT_TAG {
+                    set_to_json_key_for_template_field(template, f);
+                }
                 write_number(buf, field_val);
             }
         }
@@ -1637,6 +1648,11 @@ pub(crate) unsafe fn try_emit_shape_element(
             set_to_json_key_for_template_field(template, f);
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
         } else {
+            // A BigInt field reaches `serialize_bigint` via `write_number`,
+            // which reads the pending `toJSON` key — record it first (#5909).
+            if vtag == BIGINT_TAG {
+                set_to_json_key_for_template_field(template, f);
+            }
             write_number(buf, field_val);
         }
     }
