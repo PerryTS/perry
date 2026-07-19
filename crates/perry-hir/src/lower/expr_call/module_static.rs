@@ -824,8 +824,9 @@ pub(super) fn try_module_static_methods(
             // DataView-marked buffers) by re-emitting a `util/types`
             // NativeMethodCall — no new HIR variant or runtime helper needed.
             if obj_ident.sym.as_ref() == "ArrayBuffer" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    if method_ident.sym.as_ref() == "isView" {
+                // #6677: accept the string-literal computed form too.
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
+                    if method_name == "isView" {
                         let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "util/types".to_string(),
@@ -846,8 +847,8 @@ pub(super) fn try_module_static_methods(
             // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
             // value path.)
             if obj_ident.sym.as_ref() == "BigInt" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let m = method_ident.sym.as_ref();
+                // #6677: accept the string-literal computed form too.
+                if let Some(m) = super::static_call_prop_name(&member.prop) {
                     if m == "asIntN" || m == "asUintN" {
                         let mut it = args.into_iter();
                         let bits = it.next().unwrap_or(Expr::Undefined);
@@ -863,10 +864,9 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for Number.methodName() static calls
+            // Check for Number.methodName() static calls. #6677: computed form too.
             if obj_ident.sym.as_ref() == "Number" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         // A missing argument is `undefined` (Type ≠ Number), so
                         // each predicate is `false`. Fold the no-arg form to the
@@ -920,10 +920,9 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for String.methodName() static calls
+            // Check for String.methodName() static calls. #6677: computed form too.
             if obj_ident.sym.as_ref() == "String" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "fromCharCode" => {
                             if args.is_empty() {
@@ -1478,10 +1477,10 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for Date.now() / Date.parse() / Date.UTC() static method calls
+            // Check for Date.now() / Date.parse() / Date.UTC() static method calls.
+            // #6677: computed form too.
             if obj_ident.sym.as_ref() == "Date" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "now" {
                         return Ok(Ok(Expr::DateNow));
                     }
@@ -1504,8 +1503,8 @@ pub(super) fn try_module_static_methods(
             // arm intercepts both spellings and routes to dedicated
             // HIR variants.
             if obj_ident.sym.as_ref() == "URL" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                // #6677: accept the string-literal computed form too.
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "canParse" && !args.is_empty() {
                         let mut iter = args.into_iter();
                         let input = iter.next().unwrap();
