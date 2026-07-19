@@ -697,9 +697,11 @@ pub(super) unsafe fn maybe_pull(stream_id: usize) {
     // `pull_cb` of its own; the source's enqueue fans the chunk out to both
     // branches. `force` so a highWaterMark-0 flight producer actually pulls.
     if let Some(source) = tee_source_of(stream_id) {
-        // Tick parity: the pull travels a microtask cycle (buffered chunks +
-        // close discovery included); a live producer is driven from that job.
-        tee::tee_schedule_pull(source);
+        // Tick parity: a demand-initiated pull travels TWO microtask cycles
+        // (Node's sourceReader.read() resolution + .then(fanout) reaction);
+        // buffered chunks + close discovery included. A live producer is
+        // driven from the pull job.
+        tee::tee_schedule_pull_demand(source);
         return;
     }
     maybe_pull_inner(stream_id, false);
