@@ -43,7 +43,12 @@ unsafe fn describe_mix_operand(v: f64) -> String {
     } else if jv.is_any_string() {
         let ptr = js_get_string_pointer_unified(v) as *const crate::string::StringHeader;
         let mut s = crate::exception::string_header_to_string(ptr);
-        s.truncate(80);
+        // Char-boundary-safe preview cap: byte-index truncate panics when the
+        // 80th byte lands inside a multi-byte UTF-8 sequence.
+        if s.len() > 80 {
+            let cut = (0..=80).rev().find(|i| s.is_char_boundary(*i)).unwrap_or(0);
+            s.truncate(cut);
+        }
         format!("string({s:?})")
     } else if jv.is_pointer() {
         format!("pointer(0x{:x})", jv.as_pointer::<u8>() as usize)
