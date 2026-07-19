@@ -969,7 +969,22 @@ pub(super) fn try_module_static_methods(
                     // #1434: keep the named-import + dotted form on one
                     // shared lowering path for the methods whose shape
                     // matches between sites.
-                    if super::crypto::is_passthrough_method(method_name) {
+                    //
+                    // #6668: only for a NON-spread call. `lower_crypto_passthrough`
+                    // collapses the call into a flat `Expr::Call` whose args are
+                    // the lowered AST arguments verbatim — a spread operand
+                    // (`crypto.hkdf(...args, cb)`) is passed as the ARRAY itself,
+                    // not expanded, so the codegen fast-path (e.g.
+                    // `arm_crypto_hkdf_async_alg`) sees too few args and silently
+                    // returns `undefined` (callback never fires). When a spread is
+                    // present, fall through so the generic tail builds an
+                    // `Expr::CallSpread` with callee `PropertyGet{
+                    // NativeModuleRef("crypto"), method }`; codegen then routes it
+                    // through `js_closure_call_apply_with_spread` →
+                    // `dispatch_bound_method` → `js_native_call_method`, the same
+                    // bound-native dispatch the value-read form
+                    // (`const f = crypto.hkdf; f(...)`) already uses.
+                    if !has_spread && super::crypto::is_passthrough_method(method_name) {
                         if let Some(expr) = super::crypto::lower_crypto_passthrough(
                             method_name,
                             std::mem::take(&mut args),
