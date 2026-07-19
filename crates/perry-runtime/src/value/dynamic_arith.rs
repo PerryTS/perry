@@ -58,11 +58,16 @@ unsafe fn describe_mix_operand(v: f64) -> String {
 #[cold]
 unsafe fn throw_mix_bigint(a: f64, b: f64) -> ! {
     if std::env::var_os("PERRY_BIGINT_MIX_DIAG").is_some() {
-        eprintln!(
-            "[bigint-mix-diag] a={} b={}",
-            describe_mix_operand(a),
-            describe_mix_operand(b)
-        );
+        // describe_mix_operand can allocate (BigInt → decimal string); root
+        // both operands and reload `b` through its handle so the first
+        // describe's allocations cannot leave the second reading a stale
+        // pointer. Cold diagnostic path — the scope cost is irrelevant.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a_handle = scope.root_nanbox_f64(a);
+        let b_handle = scope.root_nanbox_f64(b);
+        let a_desc = describe_mix_operand(a_handle.get_nanbox_f64());
+        let b_desc = describe_mix_operand(b_handle.get_nanbox_f64());
+        eprintln!("[bigint-mix-diag] a={a_desc} b={b_desc}");
         eprintln!("{}", std::backtrace::Backtrace::force_capture());
     }
     let msg = b"Cannot mix BigInt and other types, use explicit conversions";
@@ -716,8 +721,18 @@ pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
 /// ToUint32 `>>>`.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    // Root both operands across the coercions: to_numeric(a) can invoke a
+    // user ToPrimitive (allocate → GC → evacuation), which would leave the
+    // raw NaN-boxed `b` — and the freshly coerced `a`, if it is a BigInt
+    // pointer — dangling. Reload through the handles after each GC-capable
+    // call (same discipline as dynamic_bigint_binary_op above).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_in = scope.root_nanbox_f64(a);
+    let b_in = scope.root_nanbox_f64(b);
+    let a_num = to_numeric(a_in.get_nanbox_f64());
+    let a_handle = scope.root_nanbox_f64(a_num);
+    let b = to_numeric(b_in.get_nanbox_f64());
+    let a = a_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
         let msg = b"BigInts have no unsigned right shift, use >> instead";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
