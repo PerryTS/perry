@@ -1397,6 +1397,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // #5389 Tier 2: synchronous ambient require(spec) resolution — the codegen
     // fallthrough when a computed require() didn't const-fold to a compiled target.
     module.declare_function("js_module_ambient_require_apply", DOUBLE, &[DOUBLE]);
+    // #6660: dynamic-`import(spec)` unresolved / no-match fallback — builtins
+    // resolve by string (promise-wrapped), everything else rejects with an
+    // `ERR_MODULE_NOT_FOUND` Error (never literal `undefined`). The deferred
+    // variant carries the #5230 compile-time deferral message for unknown
+    // modules.
+    module.declare_function("js_module_dynamic_import_fallback", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_module_dynamic_import_deferred",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // #6644: `module.createRequire(...)` devirt entry — arms the nm/submod
     // install-all hooks before delegating (see js_process_get_builtin_module_devirt).
     module.declare_function("js_module_create_require_devirt", DOUBLE, &[DOUBLE]);
