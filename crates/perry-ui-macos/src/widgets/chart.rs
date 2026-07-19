@@ -18,16 +18,16 @@
 //! first; richer modes follow as #474 follow-ups once the surface is
 //! used in TS apps.
 
+use crate::ffi::CGContextAddLineToPoint;
+use crate::ffi::CGContextBeginPath;
 use crate::ffi::CGContextClosePath;
 use crate::ffi::CGContextFillPath;
-use crate::ffi::CGContextStrokePath;
-use crate::ffi::CGContextAddLineToPoint;
-use crate::ffi::CGContextMoveToPoint;
-use crate::ffi::CGContextBeginPath;
 use crate::ffi::CGContextFillRect;
+use crate::ffi::CGContextMoveToPoint;
 use crate::ffi::CGContextSetLineWidth;
-use crate::ffi::CGContextSetRGBStrokeColor;
 use crate::ffi::CGContextSetRGBFillColor;
+use crate::ffi::CGContextSetRGBStrokeColor;
+use crate::ffi::CGContextStrokePath;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};

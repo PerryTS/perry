@@ -5,14 +5,15 @@
 //! NOTHING here names all buckets together (that would re-pin everything).
 use super::native_module_dispatch::{
     nm_dispatch_assert, nm_dispatch_async_hooks, nm_dispatch_bigint, nm_dispatch_buffer,
-    nm_dispatch_bun, nm_dispatch_bun_ffi, nm_dispatch_child_process, nm_dispatch_cluster, nm_dispatch_console,
-    nm_dispatch_crypto, nm_dispatch_dgram, nm_dispatch_dns, nm_dispatch_domain, nm_dispatch_events,
-    nm_dispatch_fs, nm_dispatch_http, nm_dispatch_inspector, nm_dispatch_module, nm_dispatch_net,
-    nm_dispatch_node_pty, nm_dispatch_os, nm_dispatch_path, nm_dispatch_perf, nm_dispatch_process,
-    nm_dispatch_punycode, nm_dispatch_querystring, nm_dispatch_readline, nm_dispatch_repl,
-    nm_dispatch_sea, nm_dispatch_sqlite, nm_dispatch_stream, nm_dispatch_timers, nm_dispatch_tls,
-    nm_dispatch_tty, nm_dispatch_url, nm_dispatch_util, nm_dispatch_v8, nm_dispatch_vm,
-    nm_dispatch_wasi, nm_dispatch_zlib, NmCtx,
+    nm_dispatch_bun, nm_dispatch_bun_ffi, nm_dispatch_child_process, nm_dispatch_cluster,
+    nm_dispatch_console, nm_dispatch_crypto, nm_dispatch_dgram, nm_dispatch_dns,
+    nm_dispatch_domain, nm_dispatch_events, nm_dispatch_fs, nm_dispatch_http,
+    nm_dispatch_inspector, nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty,
+    nm_dispatch_os, nm_dispatch_path, nm_dispatch_perf, nm_dispatch_process, nm_dispatch_punycode,
+    nm_dispatch_querystring, nm_dispatch_readline, nm_dispatch_repl, nm_dispatch_sea,
+    nm_dispatch_sqlite, nm_dispatch_stream, nm_dispatch_timers, nm_dispatch_tls, nm_dispatch_tty,
+    nm_dispatch_url, nm_dispatch_util, nm_dispatch_v8, nm_dispatch_vm, nm_dispatch_wasi,
+    nm_dispatch_zlib, NmCtx,
 };
 use std::sync::atomic::{AtomicPtr, Ordering};
 

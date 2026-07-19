@@ -9,8 +9,8 @@
 //!   PlaybackId  0x10000001 ..= 0x1FFFFFFF  — live AVAudioPlayerNode voice
 //!   Bus         0x20000001 ..= 0x2FFFFFFF  — AVAudioMixerNode group (0 = master)
 
-use crate::ffi::sel_registerName;
 use crate::ffi::class_addMethod;
+use crate::ffi::sel_registerName;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};

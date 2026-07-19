@@ -17,8 +17,8 @@ mod tests;
 pub use arith::*;
 pub use bitwise::*;
 pub use compare::*;
-pub use convert::*;
 pub(crate) use compare::{bigint_cmp_f64, string_to_bigint};
+pub use convert::*;
 
 /// Number of 64-bit limbs in a BigInt (1024 bits total)
 pub const BIGINT_LIMBS: usize = 16;
