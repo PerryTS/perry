@@ -84,8 +84,8 @@ pub extern "C" fn js_process_add_uncaught_exception_capture_callback(callback: f
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
     // #3041 — match Node's `parseAndValidateExitCode`:
-    //   * `undefined` / `null`  → exit with the prior `process.exitCode`
-    //     (0 by default here, since the validated path never stored one).
+    //   * `undefined` / `null`  → exit with the stored `process.exitCode`
+    //     (0 when it was never set / was reset to nullish — #6666).
     //   * number                → must be a finite integer, else
     //     RangeError [ERR_OUT_OF_RANGE] ("It must be an integer").
     //   * string                → coerced with `Number()`; empty string or
@@ -93,7 +93,14 @@ pub extern "C" fn js_process_exit(code: f64) {
     //     TypeError [ERR_INVALID_ARG_TYPE], otherwise it is validated as a
     //     number (so `"2.5"` → RangeError, `"2"` → exit 2).
     //   * anything else (boolean/object/array) → TypeError.
-    let exit_code = validate_exit_code(code).unwrap_or_default();
+    //
+    // `validate_exit_code` returns `None` *only* for nullish input, so a bare
+    // `process.exit()` falls back to `process.exitCode` while an explicit arg
+    // (`process.exit(0)`) overrides it — matching Node (#6666).
+    let exit_code = match validate_exit_code(code) {
+        Some(code) => code,
+        None => js_process_pending_exit_code(),
+    };
     js_process_run_finalization_exit();
     crate::gc::js_gc_release_current_thread_collection_side_allocations();
     terminate_without_atexit(exit_code)
@@ -819,20 +826,62 @@ pub extern "C" fn js_process_exit_code_get() -> f64 {
     f64::from_bits(bits)
 }
 
-/// `process.exitCode = v`. Stores the raw NaN-boxed bits verbatim so
-/// the read round-trips byte-for-byte — Node forwards e.g. the string
-/// `"0"` as a string and only coerces when `process.exit()` runs.
+/// `process.exitCode = v`. Node validates + coerces the value *at
+/// assignment time* (`process.set [as exitCode]` → `parseAndValidateExitCode`,
+/// verified against node v26): a nullish value clears the code, a string is
+/// `Number()`-coerced, and a non-integer / NaN-string / wrong-type value
+/// throws synchronously (RangeError [ERR_OUT_OF_RANGE] or
+/// TypeError [ERR_INVALID_ARG_TYPE]). The *stored* value is the coerced
+/// integer, so `process.exitCode = "2"` reads back as the number `2`. We
+/// reuse the same `validate_exit_code` the `process.exit(code)` path uses
+/// (#1350 / #6666).
 ///
-/// Returns `value` so the call site can use it as the result of the
-/// assignment expression (JS assignment evaluates to the RHS value).
-/// That keeps the codegen path uniform with other `js_*` runtime
-/// helpers that return f64 — see `lower_call/extern_func.rs:330` for
-/// the direct-call path.
+/// Returns `value` (the *original* RHS) so the call site uses it as the
+/// assignment-expression result: JS yields the assigned value *before* the
+/// setter's coercion, so `(process.exitCode = "2") === "2"`. That also keeps
+/// the codegen path uniform with other `js_*` runtime helpers that return
+/// f64 — see `lower_call/extern_func.rs:330` for the direct-call path.
 #[no_mangle]
 pub extern "C" fn js_process_exit_code_set(value: f64) -> f64 {
-    PROCESS_EXIT_CODE.with(|c| c.set(value.to_bits()));
+    match validate_exit_code(value) {
+        Some(code) => PROCESS_EXIT_CODE.with(|c| c.set(JSValue::number(code as f64).bits())),
+        // Nullish (`process.exitCode = null` / `undefined`) resets to the
+        // unset state, so natural exit falls back to 0.
+        None => PROCESS_EXIT_CODE.with(|c| c.set(JSValue::undefined().bits())),
+    }
     value
 }
+
+/// Resolve the process's final exit status from the stored `process.exitCode`.
+///
+/// Used on **natural** termination — the event loop drained and generated
+/// `main` returned with no explicit `process.exit()` call — and as the
+/// fallback for a bare `process.exit()` (#6666). The cell holds either
+/// `undefined` (never set / reset → 0) or an already-validated integer (the
+/// setter coerced it), so no re-validation is needed here. Truncating to
+/// `i32` mirrors what `_exit()` does with the value; the OS then reduces it
+/// to the 0-255 wait-status byte, matching Node's modulo-256 (e.g.
+/// `process.exitCode = 257` → status 1, `= -1` → 255).
+#[no_mangle]
+pub extern "C" fn js_process_pending_exit_code() -> i32 {
+    let jv = JSValue::from_bits(PROCESS_EXIT_CODE.with(|c| c.get()));
+    if jv.is_undefined() || jv.is_null() {
+        return 0;
+    }
+    if jv.is_int32() {
+        jv.as_int32()
+    } else {
+        jv.as_number() as i32
+    }
+}
+
+// The natural-exit epilogue emits a call to `js_process_pending_exit_code`
+// unconditionally into generated `_main`, but the only other caller inside the
+// runtime is `js_process_exit`'s nullish fallback. Anchor the symbol so the
+// auto-optimize whole-program dead-strip cannot drop it (same guard the
+// unhandled-rejection reporter uses, #4876).
+#[used]
+static KEEP_PROCESS_PENDING_EXIT_CODE: extern "C" fn() -> i32 = js_process_pending_exit_code;
 
 /// Set an environment variable. Backs `process.env.X = v` (#1344).
 ///

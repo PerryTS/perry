@@ -881,6 +881,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_run_finalization_exit", VOID, &[]);
     module.declare_function("js_promise_report_unhandled_rejections", VOID, &[]);
+    // #6666: the natural-exit epilogue returns the stored `process.exitCode`
+    // (default 0) as the process status instead of a hardcoded 0.
+    module.declare_function("js_process_pending_exit_code", I32, &[]);
     module.declare_function(
         "js_gc_release_current_thread_collection_side_allocations",
         VOID,
