@@ -139,6 +139,48 @@ fn assignment_named_evaluation_names_anonymous_class_identifier_rhs_only() {
 }
 
 #[test]
+fn named_class_expression_var_decl_reports_explicit_name() {
+    // #6679: `const B = class Named {}` binds `B`, but the class was declared
+    // `Named`, so `B.name === "Named"`. The module-top-level fast path
+    // registers the class under the binding name `B` (so `new B()` resolves
+    // statically) and records a `class_display_names` override to the explicit
+    // name for codegen to emit as `.name`. An ANONYMOUS class expression
+    // (`const A = class {}`) takes the inferred binding name and needs no
+    // override.
+    let module = lower_src(
+        r#"
+        const B = class Named {};
+        const A = class {};
+        "#,
+    );
+
+    let named = module
+        .classes
+        .iter()
+        .find(|class| class.name == "B")
+        .expect("class registered under binding name `B`");
+    assert_eq!(
+        module
+            .class_display_names
+            .get(&named.id)
+            .map(String::as_str),
+        Some("Named"),
+        "named class expression must report its explicit name as `.name`"
+    );
+
+    let anon = module
+        .classes
+        .iter()
+        .find(|class| class.name == "A")
+        .expect("anonymous class registered under inferred name `A`");
+    assert_eq!(
+        module.class_display_names.get(&anon.id),
+        None,
+        "anonymous class expression uses the inferred binding name, no override"
+    );
+}
+
+#[test]
 fn array_is_array_static_alias_call_lowers_to_intrinsic() {
     let module = lower_src(
         r#"

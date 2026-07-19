@@ -718,6 +718,23 @@ pub(crate) fn lower_stmt(
                                             false,
                                         )?;
                                     if let Some(inner_name) = inner_name_for_register {
+                                        // #6679: a NAMED class EXPRESSION's `.name`
+                                        // is its own explicit name (`Named` in
+                                        // `const B = class Named {}`), NOT the outer
+                                        // binding name. Per spec a named class
+                                        // expression is not an anonymous function
+                                        // definition, so assignment NamedEvaluation
+                                        // (`SetFunctionName` from `const B =`) must
+                                        // not override the declared name. This fast
+                                        // path registers the class under `bind_name`
+                                        // so `new B()` / `instanceof B` resolve
+                                        // statically, so record a display-name
+                                        // override (the #5592 mechanism, exactly like
+                                        // the mixin arm below) that codegen emits for
+                                        // the `.name` string constant instead of the
+                                        // `bind_name` registration key.
+                                        ctx.class_display_names
+                                            .insert(lowered_class.id, inner_name.clone());
                                         lowered_class.aliases.push(inner_name);
                                     }
                                     // Computed member keys (`static get [expr]()`,
