@@ -812,6 +812,14 @@ fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
     None
 }
 
+/// Test-only: whether `key` names a registered submodule spec. #6651 —
+/// `process::builtin_submodule_key`'s cross-check (the spec type and its
+/// fields are private to this module).
+#[cfg(test)]
+pub(crate) fn is_registered_submodule_key(key: &str) -> bool {
+    ALL_SUBMODULE_SPECS.iter().any(|spec| spec.key == key)
+}
+
 /// Test-only: every submodule spec, for exhaustiveness checks (the production
 /// `find_submodule` resolves through the registry, not an iterable array).
 #[cfg(test)]

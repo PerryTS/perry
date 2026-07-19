@@ -841,33 +841,13 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
     let Ok(specifier) = std::str::from_utf8(bytes) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    if specifier == "sea" {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    let name = specifier.strip_prefix("node:").unwrap_or(specifier);
-    let Some(module_name) = supported_builtin_module_name(name) else {
+    // #6651: shared allowlist + routing with createRequire's `require` — one
+    // source of truth (`MODULE_BUILTIN_MODULES`), including the `node:` strip
+    // and the scheme-only / `_`-internal carve-outs.
+    let Some(module_name) = supported_builtin_module_name(specifier) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    if module_name == "timers/promises" {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(
-                b"timers_promises".as_ptr(),
-                "timers_promises".len() as u32,
-            )
-        };
-    }
-    // #6644: diagnostics_channel is a node_submodules spec, not a native-module
-    // dispatch bucket — route it there (mirrors createRequire's
-    // require_builtin_value).
-    if module_name == "diagnostics_channel" {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(
-                b"diagnostics_channel".as_ptr(),
-                "diagnostics_channel".len() as u32,
-            )
-        };
-    }
-    crate::object::native_module_get_builtin_module_value(module_name)
+    crate::process::builtin_module_value(module_name)
 }
 
 fn module_bool_value(value: bool) -> f64 {

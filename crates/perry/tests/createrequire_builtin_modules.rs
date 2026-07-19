@@ -132,3 +132,95 @@ console.log("ok");
         "tls: object true\ndgram: object\nvm: object\ndomain: object\nok\n"
     );
 }
+
+/// #6651 (pi wall #5): `require('node:v8')` through `createRequire` threw
+/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE` — `v8` has a full native module
+/// (`node_v8.rs`, nm dispatch bucket, static-import support) but was missing
+/// from BOTH runtime dynamic allowlists. The pi bundle's esbuild createRequire
+/// banner funnels `__require("node:v8")` through this path. Expected output
+/// captured from `node v26.3.0` (byte-identical).
+#[test]
+fn createrequire_resolves_v8_in_both_spellings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+
+const v8a = require("node:v8");
+const v8b = require("v8");
+console.log("serialize:", typeof v8a.serialize, typeof v8b.deserialize);
+const round = v8b.deserialize(v8a.serialize({ pi: 5, arr: [1, 2, 3] }));
+console.log("roundtrip:", JSON.stringify(round));
+console.log("getBuiltinModule:", typeof process.getBuiltinModule("node:v8").serialize);
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "serialize: function function\n\
+         roundtrip: {\"pi\":5,\"arr\":[1,2,3]}\n\
+         getBuiltinModule: function\n"
+    );
+}
+
+/// #6651 family regression guard, fixture side: every entry of
+/// `module.builtinModules` (the runtime's `MODULE_BUILTIN_MODULES`, which the
+/// dynamic allowlists now derive from) must resolve through BOTH
+/// `createRequire(...)`'s `require` and `process.getBuiltinModule`, in every
+/// spelling Node accepts — and must keep failing in the spellings Node
+/// rejects (bare scheme-only names) or Perry does not implement (`_`-prefixed
+/// legacy internals, whose error must still name the module).
+#[test]
+fn createrequire_and_get_builtin_module_reach_every_builtin_modules_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const failures: string[] = [];
+const resolvable = (t: string) => t === "object" || t === "function";
+let checked = 0;
+const moduleNs = require("node:module");
+const builtins = moduleNs.builtinModules;
+for (const entry of builtins) {
+  if (entry.startsWith("_")) {
+    // Unimplemented legacy internals: must throw, naming the module.
+    try {
+      require(entry);
+      failures.push(entry + ": internal resolved");
+    } catch (e: any) {
+      if (!String(e && e.message).includes(entry)) failures.push(entry + ": error hides module name");
+    }
+    if (process.getBuiltinModule(entry) !== undefined) failures.push(entry + ": gbm resolved internal");
+    continue;
+  }
+  const bare = entry.startsWith("node:") ? entry.slice(5) : entry;
+  const spellings = entry.startsWith("node:") ? [entry] : [entry, "node:" + entry];
+  for (const s of spellings) {
+    checked++;
+    try {
+      if (!resolvable(typeof require(s))) failures.push(s + ": require gave non-namespace");
+    } catch (e: any) {
+      failures.push(s + ": require threw " + (e && e.code));
+    }
+    if (!resolvable(typeof process.getBuiltinModule(s))) failures.push(s + ": gbm gave non-namespace");
+  }
+  if (entry.startsWith("node:")) {
+    // Scheme-only builtin: the bare spelling is an npm name (Node parity).
+    try {
+      require(bare);
+      failures.push(bare + ": scheme-only resolved bare");
+    } catch (e: any) {
+      if (!String(e && e.message).includes(bare)) failures.push(bare + ": error hides module name");
+    }
+    if (process.getBuiltinModule(bare) !== undefined) failures.push(bare + ": gbm resolved bare scheme-only");
+  }
+}
+console.log("checked enough:", checked >= 100);
+console.log("failures:", JSON.stringify(failures));
+"#,
+    );
+    assert_eq!(stdout, "checked enough: true\nfailures: []\n");
+}

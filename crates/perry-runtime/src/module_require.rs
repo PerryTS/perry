@@ -91,29 +91,16 @@ fn validate_create_require_base(filename_or_url: f64) {
     throw_invalid_value("filename", filename_or_url);
 }
 
+/// #6651 (pi wall #5, same family as #6644's wall #3): this used to be a
+/// hand-copied allowlist that drifted from `process.getBuiltinModule`'s and
+/// from the static-import tables — `v8` (and `sea`, `fs/promises`,
+/// `stream/consumers`, `stream/web`, `trace_events`, `test/reporters`) were
+/// implemented and statically importable but rejected here as "package/file".
+/// Both resolvers now share one source of truth (`MODULE_BUILTIN_MODULES`,
+/// i.e. `module.builtinModules`), including the `node:` normalization and the
+/// scheme-only / `_`-internal carve-outs.
 fn supported_require_builtin(specifier: &str) -> Option<&str> {
-    let name = specifier.strip_prefix("node:").unwrap_or(specifier);
-    match name {
-        "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
-        | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
-        | "http" | "http2" | "https" | "module" | "net" | "os" | "path" | "path/posix"
-        | "path/win32" | "perf_hooks" | "process" | "punycode" | "querystring" | "readline"
-        | "readline/promises" | "stream" | "stream/promises" | "string_decoder" | "sys"
-        | "test" | "test/reporters" | "timers" | "timers/promises" | "tls" | "tty" | "url"
-        | "util" | "util/types" | "vm" | "wasi" | "worker_threads" | "zlib"
-        // Implemented native modules that were missing from the createRequire
-        // allowlist (they have runtime registry buckets + dispatch, but
-        // `require('tls')` etc. via createRequire was rejected as "package/file").
-        | "dgram" | "domain" | "inspector" | "inspector/promises" | "repl"
-        | "sqlite"
-        // #6644: implemented as a node_submodules spec (real pub/sub channel
-        // registry in node_submodules/diagnostics.rs) but missing here, so
-        // `require('node:diagnostics_channel')` through createRequire (the
-        // esbuild banner shim in any ESM bundle of CJS deps — lru-cache's node
-        // build in the pi bundle) was rejected as "package/file".
-        | "diagnostics_channel" => Some(name),
-        _ => None,
-    }
+    crate::process::supported_builtin_module_name(specifier)
 }
 
 fn resolve_builtin(specifier: &str) -> Option<&str> {
@@ -121,28 +108,11 @@ fn resolve_builtin(specifier: &str) -> Option<&str> {
 }
 
 fn require_builtin_value(module_name: &str) -> f64 {
-    if module_name == "timers/promises" {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(
-                b"timers_promises".as_ptr(),
-                "timers_promises".len() as u32,
-            )
-        };
-    }
-    // #6644: diagnostics_channel lives in the node_submodules registry (not a
-    // native-module dispatch bucket); route it there like timers/promises so
-    // `require('diagnostics_channel')` / `require('node:diagnostics_channel')`
-    // return the real channel/subscribe/tracingChannel exports instead of an
-    // empty native-module namespace.
-    if module_name == "diagnostics_channel" {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(
-                b"diagnostics_channel".as_ptr(),
-                "diagnostics_channel".len() as u32,
-            )
-        };
-    }
-    crate::object::native_module_get_builtin_module_value(module_name)
+    // #6651: shared routing with `process.getBuiltinModule` — submodule-spec
+    // modules (diagnostics_channel, timers/promises, fs/promises, …) resolve
+    // through the node_submodules registry, the rest through the native-module
+    // namespace.
+    crate::process::builtin_module_value(module_name)
 }
 
 fn throw_module_not_found(specifier: &str) -> ! {
@@ -543,3 +513,27 @@ pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
 #[used]
 static KEEP_JS_MODULE_AMBIENT_REQUIRE_APPLY: extern "C" fn(f64) -> f64 =
     js_module_ambient_require_apply;
+
+/// #6651 family regression guard: createRequire's resolver must never drift
+/// from `process.getBuiltinModule`'s again. Today they are the same function;
+/// this pins the contract so a future re-split of the implementations still
+/// has to keep the module sets identical across both spellings.
+#[cfg(test)]
+mod builtin_allowlist_parity_tests {
+    use super::*;
+
+    #[test]
+    fn createrequire_allowlist_matches_get_builtin_module() {
+        for &entry in crate::process::MODULE_BUILTIN_MODULES {
+            let bare = entry.strip_prefix("node:").unwrap_or(entry);
+            let prefixed = format!("node:{bare}");
+            for specifier in [bare, prefixed.as_str()] {
+                assert_eq!(
+                    supported_require_builtin(specifier),
+                    crate::process::supported_builtin_module_name(specifier),
+                    "{specifier}"
+                );
+            }
+        }
+    }
+}
