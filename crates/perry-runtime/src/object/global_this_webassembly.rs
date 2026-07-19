@@ -158,10 +158,9 @@ fn webassembly_error_ctor_expected_name(type_ref: f64) -> Option<&'static [u8]> 
         return None;
     }
     // `is_valid_obj_ptr` alone does not reject the small-handle band on
-    // Linux/Windows/Android/iOS — pair it with a band predicate (#6279).
-    if !crate::value::addr_class::is_above_handle_band(ptr as usize)
-        || !crate::value::addr_class::is_valid_obj_ptr(ptr as *const u8)
-    {
+    // Linux/Windows/Android/iOS — use the canonical band+heap-floor pairing
+    // (#6279).
+    if !crate::value::addr_class::is_plausible_heap_addr(ptr as usize) {
         return None;
     }
     unsafe {
