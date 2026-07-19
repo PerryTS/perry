@@ -1,3 +1,5 @@
+use crate::ffi::sel_registerName;
+use crate::ffi::class_addMethod;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
@@ -829,17 +831,10 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                         extra: usize,
                     ) -> *mut std::ffi::c_void;
                     fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-                    fn class_addMethod(
-                        cls: *mut std::ffi::c_void,
-                        sel: *const std::ffi::c_void,
-                        imp: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i8,
-                        types: *const i8,
-                    ) -> i8;
                     fn object_setClass(
                         obj: *mut std::ffi::c_void,
                         cls: *mut std::ffi::c_void,
                     ) -> *mut std::ffi::c_void;
-                    fn sel_registerName(name: *const i8) -> *mut std::ffi::c_void;
                     fn object_getClass(obj: *const std::ffi::c_void) -> *mut std::ffi::c_void;
                 }
                 extern "C" fn can_become_key(
@@ -859,7 +854,7 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                     let cls = objc_allocateClassPair(parent_class, subclass_name.as_ptr(), 0);
                     if !cls.is_null() {
                         let sel = sel_registerName(c"canBecomeKeyWindow".as_ptr());
-                        class_addMethod(cls, sel, can_become_key, c"B@:".as_ptr());
+                        class_addMethod(cls, sel, can_become_key as *const std::ffi::c_void, c"B@:".as_ptr());
                         objc_registerClassPair(cls);
                     }
                     cls

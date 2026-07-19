@@ -5148,12 +5148,32 @@ pub fn run_with_parse_cache(
         // previous build's contents.
         let _ = fs::remove_file(&exe_path);
         let mut cmd = if is_windows_target {
-            // MSVC `lib.exe` is the standard host on Windows; mingw users
-            // can override with `AR=...` since `cc::ar_name()` parity isn't
-            // available here.
-            let mut c = Command::new("lib.exe");
-            c.arg(format!("/OUT:{}", exe_path.display()));
-            c
+            // Archiver precedence (2026-07 audit): MSVC `lib.exe` when a
+            // Visual Studio install (or a vcvars prompt) provides one, else
+            // LLVM's `llvm-lib` — a drop-in lib.exe replacement that ships
+            // with `winget install LLVM.LLVM`, i.e. the lightweight-toolchain
+            // path from `perry setup windows` — else `llvm-ar --format=coff`
+            // as a last resort (rustup's llvm-tools carries llvm-ar but not
+            // llvm-lib). Previously this spawned `lib.exe` unconditionally,
+            // so LLVM+xwin users got a raw "program not found" spawn error.
+            let Some(archiver) = find_windows_archiver() else {
+                return Err(anyhow!(
+                    "No Windows archiver found for --output-type staticlib. Perry needs \
+                     MSVC lib.exe, or LLVM's llvm-lib / llvm-ar. Pick whichever is \
+                     lighter for you:\n\
+                     \n\
+                     \x20  A) Lightweight (LLVM, no Visual Studio needed):\n\
+                     \x20       winget install LLVM.LLVM\n\
+                     \n\
+                     \x20  B) MSVC (Visual Studio Build Tools + C++ workload):\n\
+                     \x20       Visual Studio Installer → Modify → \"Desktop development with C++\"\n\
+                     \x20       or: winget install Microsoft.VisualStudio.2022.BuildTools --override \
+                     \"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"\n\
+                     \n\
+                     Then open a new terminal and retry. Run `perry doctor` to verify."
+                ));
+            };
+            windows_archiver_command(&archiver, &exe_path)
         } else {
             let mut c = Command::new("ar");
             // `c` create, `r` insert/replace, `s` write index. Matches what
@@ -5309,13 +5329,41 @@ pub fn run_with_parse_cache(
             // link fails with LNK2019 on the first unresolved `js_*` symbol
             // and no DLL is emitted.
             //
-            // We use lld-link rather than MSVC link.exe here: lld-link honors
-            // /FORCE:UNRESOLVED on the LLVM .o files that Perry emits (treating
-            // the missing symbols as warnings that produce a runnable DLL),
-            // whereas MSVC link.exe returns 0 without writing the DLL — see
-            // the cross-linker note in `select_linker_command`.
-            let linker = find_lld_link().unwrap_or_else(|| PathBuf::from("lld-link"));
+            // lld-link is preferred here: it has always honored
+            // /FORCE:UNRESOLVED on the LLVM .o files that Perry emits
+            // (treating the missing symbols as warnings that produce a
+            // runnable DLL). MSVC link.exe was historically excluded because
+            // it returned 0 WITHOUT writing the DLL on this input; re-tested
+            // 2026-07 against MSVC 14.50 (VS 2026 Build Tools), link.exe now
+            // writes a loadable DLL (exit 0 + LNK4088, exports resolve via
+            // GetProcAddress), so it is accepted as a fallback when lld-link
+            // is absent. The post-link existence check below turns any older
+            // toolset that still silently drops the output into an
+            // actionable error instead of a mystery "file not found" later.
+            // See also the cross-linker note in `select_linker_command`.
+            let Some(linker) = find_lld_link()
+                .or_else(|| find_llvm_tool("lld-link"))
+                .or_else(find_msvc_link_exe)
+            else {
+                return Err(anyhow!(
+                    "Building a Windows plugin .dll requires a COFF linker and none was \
+                     found. Preferred: LLVM's lld-link — install via:\n\
+                     \x20  winget install LLVM.LLVM\n\
+                     then open a new terminal and retry (or set PERRY_LLD_LINK to an \
+                     existing lld-link.exe).\n\
+                     MSVC link.exe from Visual Studio Build Tools (\"Desktop development \
+                     with C++\" workload) also works as a fallback."
+                ));
+            };
             let mut c = Command::new(linker);
+            // Both linkers need the CRT + SDK lib dirs for /defaultlib:libcmt.
+            // Mirror `select_linker_command`: leave a user-provided LIB alone,
+            // otherwise resolve it (xwin sysroot first, then vswhere).
+            if std::env::var("LIB").is_err() {
+                if let Some(lib_paths) = find_msvc_lib_paths() {
+                    c.env("LIB", lib_paths);
+                }
+            }
             c.arg("/NOLOGO").arg("/DLL").arg("/FORCE:UNRESOLVED");
             let stem = exe_path
                 .file_stem()
@@ -5390,6 +5438,19 @@ pub fn run_with_parse_cache(
         let status = cmd.status()?;
         if !status.success() {
             return Err(anyhow!("Linking dylib failed"));
+        }
+        if is_dylib_windows && !exe_path.exists() {
+            // Guard for the legacy MSVC link.exe failure mode: some toolsets
+            // exit 0 under /FORCE:UNRESOLVED yet never write the DLL (the
+            // reason lld-link is preferred above).
+            return Err(anyhow!(
+                "The linker reported success but did not write {}.\n\
+                 This is a known MSVC link.exe behavior with /FORCE:UNRESOLVED on \
+                 some toolsets. Install LLVM's lld-link and retry:\n\
+                 \x20  winget install LLVM.LLVM\n\
+                 (or set PERRY_LLD_LINK to an existing lld-link.exe).",
+                exe_path.display()
+            ));
         }
 
         match format {

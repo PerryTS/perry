@@ -3,6 +3,18 @@
 // Stores a command buffer that replays on each drawRect: call.
 // Commands: MoveTo, LineTo, Stroke, FillGradient, BeginPath, Clear.
 
+use crate::ffi::CGContextClosePath;
+use crate::ffi::CGContextFillPath;
+use crate::ffi::CGContextStrokePath;
+use crate::ffi::CGContextAddLineToPoint;
+use crate::ffi::CGContextMoveToPoint;
+use crate::ffi::CGContextBeginPath;
+use crate::ffi::CGContextStrokeRect;
+use crate::ffi::CGContextFillRect;
+use crate::ffi::CGContextSetLineWidth;
+use crate::ffi::CGContextSetRGBStrokeColor;
+use crate::ffi::CGContextSetRGBFillColor;
+use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
@@ -29,20 +41,9 @@ type CGFloat = f64;
 extern "C" {
     fn CGContextSaveGState(c: CGContextRef);
     fn CGContextRestoreGState(c: CGContextRef);
-    fn CGContextBeginPath(c: CGContextRef);
-    fn CGContextMoveToPoint(c: CGContextRef, x: CGFloat, y: CGFloat);
-    fn CGContextAddLineToPoint(c: CGContextRef, x: CGFloat, y: CGFloat);
-    fn CGContextStrokePath(c: CGContextRef);
-    fn CGContextClosePath(c: CGContextRef);
     fn CGContextClip(c: CGContextRef);
-    fn CGContextSetLineWidth(c: CGContextRef, width: CGFloat);
     fn CGContextSetLineCap(c: CGContextRef, cap: i32);
     fn CGContextSetLineJoin(c: CGContextRef, join: i32);
-    fn CGContextSetRGBStrokeColor(c: CGContextRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
-    fn CGContextSetRGBFillColor(c: CGContextRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
-    fn CGContextFillPath(c: CGContextRef);
-    fn CGContextFillRect(c: CGContextRef, rect: CGRect);
-    fn CGContextStrokeRect(c: CGContextRef, rect: CGRect);
     fn CGContextDrawImage(c: CGContextRef, rect: CGRect, image: CGImageRef);
     fn CGContextDrawLinearGradient(
         c: CGContextRef,
@@ -182,7 +183,6 @@ extern "C" {
     fn js_object_alloc(class_id: u32, field_count: u32) -> *mut c_void;
     fn js_object_set_field_by_name(obj: *mut c_void, key: *const c_void, value: f64);
     fn js_object_get_field_by_name_f64(obj: *mut c_void, key: *const c_void) -> f64;
-    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut c_void;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_promise_resolved(value: f64) -> *mut c_void;
@@ -190,7 +190,7 @@ extern "C" {
 }
 
 fn js_key(name: &[u8]) -> *mut c_void {
-    unsafe { js_string_from_bytes(name.as_ptr(), name.len() as u32) }
+    unsafe { js_string_from_bytes(name.as_ptr(), name.len() as u32) as *mut c_void }
 }
 
 fn set_image_field(obj: *mut c_void, name: &[u8], value: f64) {

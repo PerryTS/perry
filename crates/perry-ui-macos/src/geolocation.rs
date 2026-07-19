@@ -4,6 +4,9 @@
 //! older API; this module ships the issue-#552 surface with a 4-arg success
 //! callback `(lat, lng, accuracy, timestamp)` plus a separate error callback.
 
+use crate::ffi::sel_registerName;
+use crate::ffi::class_addMethod;
+use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, Encode, Encoding, RefEncode};
@@ -17,7 +20,6 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_closure_call4(closure: *const u8, arg0: f64, arg1: f64, arg2: f64, arg3: f64) -> f64;
-    fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -28,13 +30,6 @@ extern "C" {
         extra_bytes: usize,
     ) -> *mut std::ffi::c_void;
     fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-    fn class_addMethod(
-        cls: *mut std::ffi::c_void,
-        sel: *const std::ffi::c_void,
-        imp: *const std::ffi::c_void,
-        types: *const i8,
-    ) -> bool;
-    fn sel_registerName(name: *const i8) -> *const std::ffi::c_void;
     fn objc_getClass(name: *const i8) -> *const std::ffi::c_void;
 }
 

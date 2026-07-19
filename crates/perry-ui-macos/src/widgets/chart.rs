@@ -18,6 +18,16 @@
 //! first; richer modes follow as #474 follow-ups once the surface is
 //! used in TS apps.
 
+use crate::ffi::CGContextClosePath;
+use crate::ffi::CGContextFillPath;
+use crate::ffi::CGContextStrokePath;
+use crate::ffi::CGContextAddLineToPoint;
+use crate::ffi::CGContextMoveToPoint;
+use crate::ffi::CGContextBeginPath;
+use crate::ffi::CGContextFillRect;
+use crate::ffi::CGContextSetLineWidth;
+use crate::ffi::CGContextSetRGBStrokeColor;
+use crate::ffi::CGContextSetRGBFillColor;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -112,7 +122,7 @@ impl PerryChartView {
 // Drawing routines — CoreGraphics on the current NSGraphicsContext.
 // ===========================================================================
 
-unsafe fn current_cg_context() -> *mut AnyObject {
+unsafe fn current_cg_context() -> *mut std::ffi::c_void {
     let ctx_cls = AnyClass::get(c"NSGraphicsContext").unwrap();
     let cur: *mut AnyObject = msg_send![ctx_cls, currentContext];
     if cur.is_null() {
@@ -122,30 +132,8 @@ unsafe fn current_cg_context() -> *mut AnyObject {
 }
 
 extern "C" {
-    fn CGContextSetRGBFillColor(
-        c: *mut AnyObject,
-        red: CGFloat,
-        green: CGFloat,
-        blue: CGFloat,
-        alpha: CGFloat,
-    );
-    fn CGContextSetRGBStrokeColor(
-        c: *mut AnyObject,
-        red: CGFloat,
-        green: CGFloat,
-        blue: CGFloat,
-        alpha: CGFloat,
-    );
-    fn CGContextSetLineWidth(c: *mut AnyObject, width: CGFloat);
-    fn CGContextFillRect(c: *mut AnyObject, rect: objc2_core_foundation::CGRect);
-    fn CGContextStrokeRect(c: *mut AnyObject, rect: objc2_core_foundation::CGRect);
-    fn CGContextBeginPath(c: *mut AnyObject);
-    fn CGContextMoveToPoint(c: *mut AnyObject, x: CGFloat, y: CGFloat);
-    fn CGContextAddLineToPoint(c: *mut AnyObject, x: CGFloat, y: CGFloat);
-    fn CGContextStrokePath(c: *mut AnyObject);
-    fn CGContextFillPath(c: *mut AnyObject);
     fn CGContextAddArc(
-        c: *mut AnyObject,
+        c: *mut std::ffi::c_void,
         x: CGFloat,
         y: CGFloat,
         radius: CGFloat,
@@ -153,7 +141,6 @@ extern "C" {
         end_angle: CGFloat,
         clockwise: i32,
     );
-    fn CGContextClosePath(c: *mut AnyObject);
 }
 
 const PADDING: CGFloat = 24.0;
@@ -220,7 +207,7 @@ unsafe fn draw_chart(
 }
 
 unsafe fn draw_line(
-    ctx: *mut AnyObject,
+    ctx: *mut std::ffi::c_void,
     plot: objc2_core_foundation::CGRect,
     data: &[(String, f64)],
 ) {
@@ -268,7 +255,7 @@ unsafe fn draw_line(
 }
 
 unsafe fn draw_bars(
-    ctx: *mut AnyObject,
+    ctx: *mut std::ffi::c_void,
     plot: objc2_core_foundation::CGRect,
     data: &[(String, f64)],
 ) {
@@ -297,7 +284,7 @@ unsafe fn draw_bars(
 }
 
 unsafe fn draw_pie(
-    ctx: *mut AnyObject,
+    ctx: *mut std::ffi::c_void,
     plot: objc2_core_foundation::CGRect,
     data: &[(String, f64)],
 ) {

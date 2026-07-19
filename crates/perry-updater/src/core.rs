@@ -10,13 +10,31 @@ use perry_runtime::{js_string_from_bytes, StringHeader};
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
-// The Ed25519 verify primitive lives in `perry-stdlib::crypto` (alongside
-// SHA, HMAC, AES, X25519, etc.) — this crate routes through that single
-// implementation instead of pulling `ed25519-dalek` a second time. The
-// symbol is defined in `crates/perry-stdlib/src/crypto.rs` and reachable
-// at static-link time because perry-stdlib bundles us into libperry_stdlib.a.
-extern "C" {
-    fn js_crypto_ed25519_verify(msg_ptr: i64, sig_ptr: i64, pk_ptr: i64) -> i32;
+/// Verify an Ed25519 signature over `payload` in-crate via `ed25519-dalek`
+/// (already a hard dependency for the sign side in `cli_manifest.rs`).
+///
+/// This used to extern-call perry-stdlib's `js_crypto_ed25519_verify`, but
+/// the `perry` CLI links perry-updater WITHOUT perry-stdlib: MSVC `link.exe`
+/// rejects the unresolved extern (LNK2019) even though GNU/Mach-O linkers
+/// dead-strip the reference — which is how the Windows CLI build broke while
+/// Unix builds stayed green. Verifying in-crate removes the cross-crate
+/// link-time coupling. Semantics match the stdlib primitive exactly:
+/// non-strict `Verifier::verify`, 64-byte signature, 32-byte public key.
+fn verify_ed25519(payload: &[u8], sig_bytes: &[u8], pk_bytes: &[u8]) -> bool {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    if sig_bytes.len() != 64 || pk_bytes.len() != 32 {
+        return false;
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(sig_bytes);
+    let mut pk_arr = [0u8; 32];
+    pk_arr.copy_from_slice(pk_bytes);
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&pk_arr) else {
+        return false;
+    };
+    verifying_key
+        .verify(payload, &Signature::from_bytes(&sig_arr))
+        .is_ok()
 }
 
 // ============================================================================
@@ -213,24 +231,10 @@ pub extern "C" fn perry_updater_verify_signature(
     }
     let digest = hasher.finalize();
 
-    // Hand the (digest, sig, pk) triple off to the stdlib primitive.
-    // js_crypto_ed25519_verify accepts pointers that resolve as either a
-    // BufferHeader or a StringHeader (it sniffs is_registered_buffer at
-    // runtime), so we materialize three Buffers — each owns its bytes for
-    // the duration of the call.
-    unsafe {
-        let digest_buf = alloc_buffer(&digest);
-        let sig_buf = alloc_buffer(&sig_bytes);
-        let pk_buf = alloc_buffer(&pk_bytes);
-        if digest_buf.is_null() || sig_buf.is_null() || pk_buf.is_null() {
-            return 0;
-        }
-        let ok = js_crypto_ed25519_verify(digest_buf as i64, sig_buf as i64, pk_buf as i64);
-        if ok == 1 {
-            1
-        } else {
-            0
-        }
+    if verify_ed25519(&digest, &sig_bytes, &pk_bytes) {
+        1
+    } else {
+        0
     }
 }
 
@@ -330,34 +334,11 @@ pub extern "C" fn perry_updater_verify_signature_v2(
     payload.extend_from_slice(&digest);
     payload.extend_from_slice(version.as_bytes());
 
-    unsafe {
-        let payload_buf = alloc_buffer(&payload);
-        let sig_buf = alloc_buffer(&sig_bytes);
-        let pk_buf = alloc_buffer(&pk_bytes);
-        if payload_buf.is_null() || sig_buf.is_null() || pk_buf.is_null() {
-            return 0;
-        }
-        let ok = js_crypto_ed25519_verify(payload_buf as i64, sig_buf as i64, pk_buf as i64);
-        if ok == 1 {
-            1
-        } else {
-            0
-        }
+    if verify_ed25519(&payload, &sig_bytes, &pk_bytes) {
+        1
+    } else {
+        0
     }
-}
-
-/// Allocate a perry-runtime Buffer and copy `bytes` into it. Returns the
-/// registered `*mut BufferHeader` pointer, or null on alloc failure. Used
-/// to bridge owned Rust byte slices into the FFI shape the stdlib expects.
-unsafe fn alloc_buffer(bytes: &[u8]) -> *mut BufferHeader {
-    let buf = perry_runtime::buffer::buffer_alloc(bytes.len() as u32);
-    if buf.is_null() {
-        return buf;
-    }
-    (*buf).length = bytes.len() as u32;
-    let dst = perry_runtime::buffer::buffer_data_mut(buf);
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
-    buf
 }
 
 // ============================================================================
@@ -464,56 +445,12 @@ pub extern "C" fn perry_updater_sha256_buffer(buf_ptr: i64) -> *mut BufferHeader
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+    use ed25519_dalek::{Signer, SigningKey};
 
-    // The production `perry_updater_verify_signature` extern-calls
-    // `js_crypto_ed25519_verify`, which is provided by perry-stdlib at
-    // static-link time. Cargo's per-crate `cargo test` doesn't link
-    // perry-stdlib, so we provide a local impl here that mirrors the
-    // stdlib signature exactly. The stub uses ed25519-dalek (a
-    // dev-dependency) to do the real verification, so the test still
-    // exercises end-to-end correctness — including file read, SHA
-    // streaming, base64 decode, and buffer marshaling — just routed
-    // through this in-test verifier instead of the stdlib one.
-    #[no_mangle]
-    pub extern "C" fn js_crypto_ed25519_verify(msg_ptr: i64, sig_ptr: i64, pk_ptr: i64) -> i32 {
-        unsafe fn read_buf_bytes(ptr: i64) -> Option<Vec<u8>> {
-            if ptr == 0 {
-                return None;
-            }
-            let buf = ptr as *const BufferHeader;
-            let len = (*buf).length as usize;
-            let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-            Some(std::slice::from_raw_parts(data, len).to_vec())
-        }
-        unsafe {
-            let Some(msg) = read_buf_bytes(msg_ptr) else {
-                return 0;
-            };
-            let Some(sig_bytes) = read_buf_bytes(sig_ptr) else {
-                return 0;
-            };
-            let Some(pk_bytes) = read_buf_bytes(pk_ptr) else {
-                return 0;
-            };
-            if sig_bytes.len() != 64 || pk_bytes.len() != 32 {
-                return 0;
-            }
-            let mut sig_arr = [0u8; 64];
-            sig_arr.copy_from_slice(&sig_bytes);
-            let signature = Signature::from_bytes(&sig_arr);
-            let mut pk_arr = [0u8; 32];
-            pk_arr.copy_from_slice(&pk_bytes);
-            let Ok(vk) = VerifyingKey::from_bytes(&pk_arr) else {
-                return 0;
-            };
-            if vk.verify(&msg, &signature).is_ok() {
-                1
-            } else {
-                0
-            }
-        }
-    }
+    // Note: the signature tests exercise the production `verify_ed25519`
+    // path directly (ed25519-dalek is a real dependency now) — no in-test
+    // verifier stub is needed. Coverage still spans file read, SHA
+    // streaming, base64 decode, and payload construction end-to-end.
 
     fn make_str(s: &str) -> i64 {
         // Tests pass the raw *StringHeader pointer as i64 — same convention

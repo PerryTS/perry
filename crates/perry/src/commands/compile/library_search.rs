@@ -229,7 +229,82 @@ pub(super) fn find_llvm_tool(tool_name: &str) -> Option<PathBuf> {
         }
     }
 
+    // 4. Well-known LLVM install directories (#5779). The prebuilt runtime/stdlib
+    //    and well-known-wrapper archives carry LLVM *bitcode* emitted by the
+    //    active Rust toolchain's LLVM (thin-LTO). Inspecting/rewriting them for
+    //    the runtime-dedup strip (see `strip_bundled_runtime_from_well_known_lib`)
+    //    needs an `llvm-nm`/`llvm-ar`/`llvm-objcopy` whose LLVM is >= the
+    //    toolchain's — an older one fails (`nm: ... Unknown attribute kind`) and
+    //    the strip silently no-ops, leaving two disjoint copies of perry-runtime's
+    //    event-loop globals (the #5779 in-process server+fetch deadlock). The
+    //    system `nm` on macOS (Apple LLVM) is routinely too old, and Homebrew's
+    //    LLVM is keg-only (not on PATH), so it is missed by the checks above.
+    //    Search the standard keg/versioned locations, preferring the newest, so a
+    //    matching tool is found without the user having to add the toolchain's
+    //    `llvm-tools` component or put Homebrew LLVM on PATH.
+    if let Some(p) = find_tool_in_well_known_llvm_dirs(tool_name) {
+        return Some(p);
+    }
+
     None
+}
+
+/// Fallback LLVM-tool locator used by [`find_llvm_tool`]: scan the standard
+/// LLVM install directories that are commonly NOT on `PATH` — Homebrew's
+/// keg-only LLVM on macOS (`/opt/homebrew/opt/llvm`, `/usr/local/opt/llvm`,
+/// including versioned `llvm@NN` kegs) and Debian/Ubuntu's `/usr/lib/llvm-NN`.
+/// Versioned directories are tried newest-first so the returned tool is as new
+/// as possible (bitcode inspection needs LLVM >= the Rust toolchain's).
+fn find_tool_in_well_known_llvm_dirs(tool_name: &str) -> Option<PathBuf> {
+    let exe = format!("{tool_name}{}", std::env::consts::EXE_SUFFIX);
+
+    // Unversioned "current" kegs/prefixes first.
+    let mut dirs: Vec<PathBuf> = vec![
+        PathBuf::from("/opt/homebrew/opt/llvm/bin"),
+        PathBuf::from("/usr/local/opt/llvm/bin"),
+    ];
+
+    // Versioned kegs/installs, newest first. `(parent, prefix)`: e.g.
+    // `/opt/homebrew/opt/llvm@18` and `/usr/lib/llvm-18`.
+    for (parent, prefix) in [
+        ("/opt/homebrew/opt", "llvm@"),
+        ("/usr/local/opt", "llvm@"),
+        ("/usr/lib", "llvm-"),
+    ] {
+        let names: Vec<String> = std::fs::read_dir(parent)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        dirs.extend(versioned_llvm_bin_dirs(parent, prefix, &names));
+    }
+
+    dirs.into_iter()
+        .map(|d| d.join(&exe))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Pure helper for [`find_tool_in_well_known_llvm_dirs`]: given the entry
+/// `names` found directly under `parent`, return the `<parent>/<name>/bin`
+/// paths for entries shaped `<prefix><MAJOR>[...]` (e.g. `llvm@18`, `llvm-17`),
+/// ordered newest major version first. Non-matching or non-numeric entries are
+/// ignored. Kept separate (no filesystem access) so the version ordering is
+/// unit-testable.
+fn versioned_llvm_bin_dirs(parent: &str, prefix: &str, names: &[String]) -> Vec<PathBuf> {
+    let mut versioned: Vec<(u32, PathBuf)> = names
+        .iter()
+        .filter_map(|name| {
+            let ver = name.strip_prefix(prefix)?;
+            let end = ver.find(|c: char| !c.is_ascii_digit()).unwrap_or(ver.len());
+            let n = ver[..end].parse::<u32>().ok()?;
+            Some((n, Path::new(parent).join(name).join("bin")))
+        })
+        .collect();
+    versioned.sort_by_key(|k| std::cmp::Reverse(k.0));
+    versioned.into_iter().map(|(_, p)| p).collect()
 }
 
 /// Find MSVC link.exe by searching Visual Studio installation directories.
@@ -323,6 +398,101 @@ pub(super) fn find_lld_link() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// MSVC `lib.exe` — the archive manager that ships in the same MSVC bin
+/// directory as `link.exe`. Located via vswhere (through `find_msvc_link_exe`,
+/// which already picks the newest VC tools bin dir) first, then PATH (covers
+/// vcvars64 developer prompts). Windows-host only: on other hosts a
+/// Windows-target archive is built with llvm-lib / llvm-ar instead.
+#[cfg(target_os = "windows")]
+pub(super) fn find_msvc_lib_exe() -> Option<PathBuf> {
+    if let Some(link_exe) = find_msvc_link_exe() {
+        let lib = link_exe.with_file_name("lib.exe");
+        if lib.exists() {
+            return Some(lib);
+        }
+    }
+    if let Ok(output) = Command::new("where").arg("lib.exe").output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if let Some(first) = s.lines().next() {
+                let p = PathBuf::from(first.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn find_msvc_lib_exe() -> Option<PathBuf> {
+    None
+}
+
+/// The archiver selected for bundling a Windows `--output-type staticlib`
+/// (#1088). Selection is split from discovery so the precedence is
+/// unit-testable off-Windows (`windows_link_tests`).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum WindowsArchiver {
+    /// MSVC `lib.exe`, or LLVM's `llvm-lib` — a drop-in lib.exe replacement
+    /// (same `/OUT:` command line) that ships with `winget install LLVM.LLVM`.
+    LibExe(PathBuf),
+    /// LLVM's generic `ar` — last resort (rustup's llvm-tools component
+    /// carries llvm-ar but not llvm-lib). `--format=coff` makes it emit the
+    /// MSVC-compatible archive flavor.
+    LlvmAr(PathBuf),
+}
+
+/// Pick the Windows archiver from the tools that resolved, in precedence
+/// order: MSVC `lib.exe` → `llvm-lib` → `llvm-ar`. `None` when no archiver
+/// is installed at all — the caller emits the two-toolchain install hint.
+pub(super) fn choose_windows_archiver(
+    msvc_lib_exe: Option<PathBuf>,
+    llvm_lib: Option<PathBuf>,
+    llvm_ar: Option<PathBuf>,
+) -> Option<WindowsArchiver> {
+    if let Some(p) = msvc_lib_exe {
+        return Some(WindowsArchiver::LibExe(p));
+    }
+    if let Some(p) = llvm_lib {
+        return Some(WindowsArchiver::LibExe(p));
+    }
+    llvm_ar.map(WindowsArchiver::LlvmAr)
+}
+
+/// Locate the archiver for a Windows-target staticlib. `find_llvm_tool`
+/// contributes the `PERRY_LLVM_LIB` / `PERRY_LLVM_AR` env overrides, the
+/// rustup-sysroot probe, and the PATH lookup for free, so all three rungs
+/// follow the established lookup precedence.
+pub(super) fn find_windows_archiver() -> Option<WindowsArchiver> {
+    choose_windows_archiver(
+        find_msvc_lib_exe(),
+        find_llvm_tool("llvm-lib"),
+        find_llvm_tool("llvm-ar"),
+    )
+}
+
+/// Build the archive command for the selected archiver. The caller appends
+/// the object files.
+pub(super) fn windows_archiver_command(archiver: &WindowsArchiver, out: &Path) -> Command {
+    match archiver {
+        WindowsArchiver::LibExe(path) => {
+            let mut c = Command::new(path);
+            c.arg(format!("/OUT:{}", out.display()));
+            c
+        }
+        WindowsArchiver::LlvmAr(path) => {
+            let mut c = Command::new(path);
+            // `c` create, `r` insert/replace, `s` write index — same as the
+            // Unix `ar crs` branch; `--format=coff` selects the MSVC archive
+            // flavor so `link.exe` / `lld-link` consume the result.
+            c.arg("--format=coff").arg("crs").arg(out);
+            c
+        }
+    }
 }
 
 /// Location where `perry setup windows` writes the xwin'd Microsoft CRT +
@@ -1695,6 +1865,54 @@ mod native_lib_artifact_tests {
         fs::create_dir_all(&target_dir).expect("mkdir target");
         let found = locate_native_lib_artifact(&target_dir, None, "libfoo.a");
         assert!(found.is_none());
+    }
+}
+
+#[cfg(test)]
+mod llvm_tool_discovery_tests {
+    use super::versioned_llvm_bin_dirs;
+    use std::path::PathBuf;
+
+    // #5779: the well-known-LLVM-dir fallback must return versioned kegs
+    // newest-first, so bitcode inspection uses an LLVM at least as new as the
+    // Rust toolchain's. Ordering is the only non-trivial part, and it is pure,
+    // so exercise it directly without touching the filesystem.
+    #[test]
+    fn versioned_llvm_dirs_are_newest_first() {
+        let names = vec![
+            "llvm@15".to_string(),
+            "llvm@18".to_string(),
+            "llvm@9".to_string(),
+            "llvm".to_string(),    // unversioned — ignored here
+            "node@20".to_string(), // wrong prefix — ignored
+        ];
+        let dirs = versioned_llvm_bin_dirs("/opt/homebrew/opt", "llvm@", &names);
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/opt/homebrew/opt/llvm@18/bin"),
+                PathBuf::from("/opt/homebrew/opt/llvm@15/bin"),
+                PathBuf::from("/opt/homebrew/opt/llvm@9/bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn versioned_llvm_dirs_handles_debian_prefix_and_ignores_nonmatching() {
+        let names = vec![
+            "llvm-17".to_string(),
+            "llvm-16.0".to_string(),
+            "gcc-12".to_string(),
+            "llvm-".to_string(), // no numeric version — ignored
+        ];
+        let dirs = versioned_llvm_bin_dirs("/usr/lib", "llvm-", &names);
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/usr/lib/llvm-17/bin"),
+                PathBuf::from("/usr/lib/llvm-16.0/bin"),
+            ]
+        );
     }
 }
 

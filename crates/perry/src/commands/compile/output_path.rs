@@ -19,12 +19,17 @@ pub(super) fn default_output_path(
     stem: &str,
 ) -> PathBuf {
     if is_dylib {
-        #[cfg(target_os = "macos")]
-        {
+        // #4771 — keyed on the target like the rest of this file (host is
+        // only the fallback when no `--target` was given), not on host cfg
+        // alone: `--target windows` must yield `.dll` regardless of host.
+        // Same by-output-type table as `windows_default_output_extension`,
+        // which already covered the `-o NAME` path; this covers the
+        // no-`-o` default, which used to fall through to `.so` on Windows.
+        if is_windows_target(target) {
+            PathBuf::from(format!("{}.dll", stem))
+        } else if is_apple_target(target) {
             PathBuf::from(format!("{}.dylib", stem))
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
+        } else {
             PathBuf::from(format!("{}.so", stem))
         }
     } else if is_staticlib {
@@ -67,6 +72,25 @@ pub(super) fn default_output_path(
 fn is_windows_target(target: Option<&str>) -> bool {
     matches!(target, Some("windows") | Some("windows-winui"))
         || (target.is_none() && cfg!(target_os = "windows"))
+}
+
+/// `--target macos` or any embedded-Apple target, or a native build on a
+/// macOS host — the platforms whose shared-library convention is `.dylib`.
+fn is_apple_target(target: Option<&str>) -> bool {
+    matches!(
+        target,
+        Some(
+            "macos"
+                | "ios"
+                | "ios-simulator"
+                | "tvos"
+                | "tvos-simulator"
+                | "watchos"
+                | "watchos-simulator"
+                | "visionos"
+                | "visionos-simulator"
+        )
+    ) || (target.is_none() && cfg!(target_os = "macos"))
 }
 
 #[cfg(test)]
@@ -131,12 +155,29 @@ mod tests {
         );
     }
 
+    /// #4771 finish — an extension-less `--output-type dylib` build keys the
+    /// extension on the target: `.dll` for Windows (used to fall through to
+    /// `.so`), `.dylib` for the Apple family, `.so` elsewhere.
+    #[test]
+    fn dylib_extension_keys_on_target() {
+        let dylib = |target| default_output_path(true, false, target, "app");
+        assert_eq!(dylib(Some("windows")), PathBuf::from("app.dll"));
+        assert_eq!(dylib(Some("windows-winui")), PathBuf::from("app.dll"));
+        assert_eq!(dylib(Some("macos")), PathBuf::from("app.dylib"));
+        assert_eq!(dylib(Some("ios")), PathBuf::from("app.dylib"));
+        assert_eq!(dylib(Some("ios-simulator")), PathBuf::from("app.dylib"));
+        assert_eq!(dylib(Some("linux")), PathBuf::from("app.so"));
+    }
+
+    /// No `--target` falls back to the host's shared-library convention.
     #[test]
     fn dylib_uses_the_host_shared_library_extension() {
         let out = default_output_path(true, false, None, "app");
         #[cfg(target_os = "macos")]
         assert_eq!(out, PathBuf::from("app.dylib"));
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        assert_eq!(out, PathBuf::from("app.dll"));
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(out, PathBuf::from("app.so"));
     }
 }
