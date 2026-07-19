@@ -1212,6 +1212,22 @@ pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
         if class_id_from_method_receiver(call_this).is_some() {
             return call_this;
         }
+        // #6699: a PROXY call-site `this` is a legitimate spec receiver for a
+        // class method reached through the proxy's get trap. `proxy.method()`
+        // is `Get(proxy, "method")` (the trap forwards to the real instance's
+        // method) then `Call(method, proxy)`, so the body must run with
+        // `this === proxy` — its `this.field` accesses then route back through
+        // the trap. A proxy id lives in the handle band, so
+        // `class_id_from_method_receiver` (which requires an above-band heap
+        // object) rejects it and we would otherwise fall through and leak the
+        // INT32 owner-marker as `this` (`typeof this === "number"`), exactly the
+        // marker-leak the #6475 closure case below guards against. pi's TUI
+        // theme is a `new Proxy({}, …)` whose get trap forwards to the real
+        // Theme; `theme.fg()` → `this.fgColors.get(...)` threw
+        // `Cannot read properties of undefined (reading 'get')` without this.
+        if crate::proxy::js_proxy_is_proxy(call_this) != 0 {
+            return call_this;
+        }
         // #6475: a FUNCTION-object call-site `this` — effect's `TagClass`, a
         // plain function given the Tag class prototype via
         // `Object.setPrototypeOf(TagClass, Object.getPrototypeOf(tagInstance))` —

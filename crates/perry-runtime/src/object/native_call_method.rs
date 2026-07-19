@@ -1222,7 +1222,10 @@ pub unsafe extern "C" fn js_native_call_method(
         let method_handle = root_scope.root_nanbox_f64(method_value);
         let args = refreshed_args();
         // Bind `this` to the proxy for the duration of the call, matching the
-        // receiver semantics of a normal `obj.method(args)` invocation.
+        // receiver semantics of a normal `obj.method(args)` invocation. A
+        // canonical class-method value reads its receiver from IMPLICIT_THIS via
+        // `canonical_bound_method_receiver` (#6699 routes a proxy receiver
+        // through there).
         let prev_this = IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
         let result = crate::closure::js_native_call_value(
             method_handle.get_nanbox_f64(),
