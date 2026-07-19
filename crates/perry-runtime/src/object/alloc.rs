@@ -798,6 +798,21 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     }
     let src = src_raw as *const ObjectHeader;
 
+    // #6667: a native-module namespace (`{ ...require("crypto") }`) stores no
+    // real fields — only the internal `__module__` sentinel — so the raw
+    // keys_array walk below would copy nothing usable. Enumerate + resolve its
+    // export surface instead (the same list `Object.keys` returns), so wildcard
+    // interop and object spread see the exports Node's namespace exposes.
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let dst_h = scope.root_raw_mut_ptr(dst);
+        if super::native_module::copy_native_module_exports(src, |key_ptr, value| {
+            js_object_set_field_by_name(dst_h.get_raw_mut_ptr::<ObjectHeader>(), key_ptr, value);
+        }) {
+            return;
+        }
+    }
+
     // Iterate src's keys and copy each value via set_field_by_name.
     let src_keys = (*src).keys_array;
     if src_keys.is_null() || (src_keys as usize) < 0x10000 {
@@ -1203,6 +1218,30 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     }
 
     let src = src_raw as *const ObjectHeader;
+
+    // #6667: native-module namespace source (`Object.assign(t, require("crypto"))`).
+    // Its exports resolve lazily through the vtable, so the raw keys_array walk
+    // below sees only `__module__`. Enumerate + resolve the export surface, then
+    // return — native-module namespaces carry no own symbol-keyed properties, so
+    // the symbol-copy tail below would be a no-op.
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        if super::native_module::copy_native_module_exports(src, |key_ptr, value| {
+            object_assign_set_string_key(
+                tgt_h.get_raw_mut_ptr::<ObjectHeader>(),
+                target_is_array,
+                key_ptr,
+                value,
+            );
+        }) {
+            // `copy_native_module_exports` allocates (fresh export closures +
+            // key strings); a minor GC there can evacuate `target`. Return the
+            // handle-reloaded pointer so the caller threads the post-GC
+            // location, not the stale `target_f64`.
+            return crate::value::js_nanbox_pointer(tgt_h.get_raw_mut_ptr::<ObjectHeader>() as i64);
+        }
+    }
 
     // An array source (`Object.assign(t, [1,2])`, `{ ...[1,2] }`) stores its
     // indexed elements in the `ArrayHeader` element buffer, NOT in an

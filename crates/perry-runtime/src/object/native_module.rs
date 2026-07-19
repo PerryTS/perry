@@ -1507,3 +1507,70 @@ pub(crate) unsafe fn vt_own_keys_array(
     }
     Some(out)
 }
+
+/// #6667: materialize a native-module namespace's exports into `dst` during
+/// object spread (`{ ...crypto }`) or `Object.assign(dst, crypto)`. A
+/// native-module object physically stores only the internal `__module__`
+/// sentinel — every real export resolves lazily through the vtable — so the
+/// raw `keys_array` walk both copy helpers use otherwise copies nothing, and
+/// every enumeration-based interop layer (turbopack `e.i`, Babel
+/// `interopRequireWildcard`, plain spread) produced an empty namespace. Here
+/// we enumerate the module's export names (`native_module_enumerable_keys`, the
+/// same list `Object.keys` returns) and resolve each to its live value through
+/// the authoritative `[[Get]]` path, handing `(key, value)` to `set`.
+///
+/// Returns `true` when `src` is a native-module namespace with a known export
+/// set (the caller then skips its fallback walk); `false` otherwise, so a
+/// namespace with no key table degrades to the pre-existing behavior.
+///
+/// GC: a callable export resolves to a freshly allocated bound-method closure,
+/// so `src`, the key string, and the resolved value are each rooted across the
+/// allocations that would otherwise move them out from under the raw pointers.
+///
+/// # Safety
+/// `src` must point to a live `ObjectHeader`.
+pub(crate) unsafe fn copy_native_module_exports(
+    mut src: *const ObjectHeader,
+    mut set: impl FnMut(*const crate::StringHeader, f64),
+) -> bool {
+    if (*src).class_id != NATIVE_MODULE_CLASS_ID {
+        return false;
+    }
+    let Some(module_name) = read_native_module_name(src) else {
+        return false;
+    };
+    let Some(keys) = native_module_enumerable_keys(&module_name) else {
+        return false;
+    };
+    let include_permission = matches!(
+        module_name.as_str(),
+        "process" | "process.namespace" | "process.default"
+    ) && crate::process::process_permission_enabled();
+
+    for key_bytes in keys
+        .iter()
+        .copied()
+        .chain(include_permission.then_some(b"permission" as &[u8]))
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src_h = scope.root_raw_const_ptr(src);
+        let key_ptr =
+            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let key_h = scope.root_string_ptr(key_ptr);
+        let value = js_object_get_field_by_name(
+            src_h.get_raw_const_ptr::<ObjectHeader>(),
+            key_h.get_raw_const_ptr::<crate::StringHeader>(),
+        );
+        let value_h = scope.root_nanbox_f64(f64::from_bits(value.bits()));
+        set(
+            key_h.get_raw_const_ptr::<crate::StringHeader>(),
+            value_h.get_nanbox_f64(),
+        );
+        // The allocations above (key string, resolved-export closure, the `set`
+        // store) can trigger a minor GC that evacuates `src`. `src_h` tracked
+        // the move; write the refreshed pointer back before its scope drops so
+        // the next iteration re-roots the live location, not a stale one.
+        src = src_h.get_raw_const_ptr::<ObjectHeader>();
+    }
+    true
+}
