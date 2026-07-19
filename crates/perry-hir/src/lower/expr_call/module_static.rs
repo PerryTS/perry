@@ -351,10 +351,12 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for JSON.methodName() calls
+            // Check for JSON.methodName() calls. #6677: match BOTH the dot form
+            // and the string-literal computed form (`JSON["parse"](...)`) so the
+            // computed key does not fall through to generic dispatch (→
+            // `TypeError: value is not a function`).
             if obj_ident.sym.as_ref() == "JSON" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "parse" => {
                             if args.len() >= 2 {
@@ -620,10 +622,10 @@ pub(super) fn try_module_static_methods(
             // fs-method dispatch — so it can match Member receivers
             // without being gated on the Ident-receiver wrapper.)
 
-            // Check for Math.methodName() calls
+            // Check for Math.methodName() calls. #6677: match BOTH the dot form
+            // and the string-literal computed form (`Math["max"](...)`).
             if obj_ident.sym.as_ref() == "Math" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "floor" if !args.is_empty() => {
                             return Ok(Ok(Expr::MathFloor(Box::new(

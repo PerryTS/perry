@@ -904,10 +904,12 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for Object static methods
+            // Check for Object static methods. #6677: match BOTH the dot form
+            // and the string-literal computed form (`Object["keys"](...)`) so the
+            // computed key does not fall through to generic dispatch (→
+            // `TypeError: value is not a function`).
             if obj_name == "Object" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "keys" => {
                             let obj = args.first().cloned().unwrap_or(Expr::Undefined);
