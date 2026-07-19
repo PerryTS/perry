@@ -105,6 +105,69 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
 }
 
+/// #6676: a *computed* read of a well-known symbol off the `Symbol`
+/// constructor — `Symbol[name]` with a runtime key. Dot access (`Symbol.iterator`)
+/// and a string-literal bracket key are folded to the `@@__perry_wk_` sentinel at
+/// HIR, but a dynamic key can't be folded. This is the exact shape esbuild's
+/// `__knownSymbol` helper emits when downleveling `yield*`/`async` to
+/// es2015/es2017: `(symbol = Symbol[name]) ? symbol : Symbol.for("Symbol." + name)`.
+///
+/// Map a well-known member name to the cached well-known symbol — identity-equal
+/// to the dot form, so `Symbol[name] === Symbol.iterator`. Any other key (a
+/// non-string, or a name that isn't a well-known symbol) falls back to the
+/// ordinary `Symbol[key]` read on the constructor value, making this a strict
+/// superset of the prior behavior (a non-well-known key still reads `undefined`,
+/// which is exactly what lets the `__knownSymbol` fallback to `Symbol.for` fire).
+#[no_mangle]
+pub unsafe extern "C" fn js_symbol_computed_member(ctor_f64: f64, key_f64: f64) -> f64 {
+    let bits = key_f64.to_bits();
+    if bits & 0xFFFF_0000_0000_0000 == STRING_TAG {
+        let key_ptr = (bits & POINTER_MASK) as *const StringHeader;
+        if let Some(name) = str_from_header(key_ptr) {
+            if is_well_known_symbol_member_name(&name) {
+                let wk_ptr = well_known_symbol(&name);
+                return f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
+            }
+        }
+    }
+    // Not a well-known symbol name — behave exactly like a plain `Symbol[key]`
+    // read on the constructor value.
+    crate::value::js_dyn_index_get(ctor_f64, key_f64)
+}
+
+/// The well-known-symbol member names surfaced on the `Symbol` constructor. Kept
+/// in sync with `is_well_known_symbol_member` in perry-hir's `expr_member.rs`
+/// (the dot / string-literal fold) so all three forms — `Symbol.iterator`,
+/// `Symbol["iterator"]`, `Symbol[name]` — resolve to the same cached symbol.
+fn is_well_known_symbol_member_name(name: &str) -> bool {
+    matches!(
+        name,
+        "toPrimitive"
+            | "hasInstance"
+            | "toStringTag"
+            | "species"
+            | "match"
+            | "matchAll"
+            | "replace"
+            | "search"
+            | "split"
+            | "isConcatSpreadable"
+            | "unscopables"
+            | "iterator"
+            | "asyncIterator"
+            | "dispose"
+            | "asyncDispose"
+    )
+}
+
+// #1561-style force-keep: `js_symbol_computed_member` has no internal Rust
+// callers — only generated IR (perry-hir lowers `Symbol[key]` to a call to it),
+// so LTO / whole-program-bitcode link modes are free to internalize and
+// dead-strip it. The `#[used]` reference edge keeps the export alive.
+#[used]
+static KEEP_JS_SYMBOL_COMPUTED_MEMBER: unsafe extern "C" fn(f64, f64) -> f64 =
+    js_symbol_computed_member;
+
 /// `Symbol.keyFor(sym)` — reverse lookup. Returns the registration key as a
 /// string for registered symbols, or undefined for non-registered symbols.
 #[no_mangle]
