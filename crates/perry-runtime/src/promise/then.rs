@@ -1062,7 +1062,12 @@ fn promise_species_constructor(receiver: f64) -> f64 {
         throw_type_error_thunk("Promise.prototype.then: constructor property is not an object");
     }
 
-    // Step 4: S = Get(C, @@species) — getter throws → propagate.
+    // Step 4: S = Get(C, @@species) — getter throws → propagate. A user
+    // `@@species` accessor runs arbitrary code that can allocate and evacuate
+    // the (movable, heap-pointer) constructor, so root `C` across the read and
+    // reload it from the rewritten handle before any later reuse below.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let c_handle = scope.root_nanbox_f64(c);
     let sp = crate::symbol::well_known_symbol("species");
     let s = if sp.is_null() {
         f64::from_bits(TAG_UNDEFINED)
@@ -1070,6 +1075,7 @@ fn promise_species_constructor(receiver: f64) -> f64 {
         let sym_val = f64::from_bits(crate::value::JSValue::pointer(sp as *const u8).bits());
         unsafe { crate::symbol::js_object_get_symbol_property(c, sym_val) }
     };
+    let c = c_handle.get_nanbox_f64();
 
     // Step 5: `null` species → spec default (%Promise%).
     if s.to_bits() == TAG_NULL {
