@@ -724,3 +724,70 @@ fn probe_all_readers_of_null_closure_expando() {
         );
     }
 }
+
+// ── #6693 perf-optimization parity ─────────────────────────────────────────
+// The parse cache (source → prepared `InterpFn`) and the get-first `env::lookup`
+// must be pure speedups: identical source cached vs fresh yields identical
+// behavior, distinct sources never collide, each `new Function` still gets its
+// own instance environment, and a binding whose value is exactly `undefined`
+// is still resolved (not skipped past as if absent).
+
+#[test]
+fn parse_cache_same_source_identical_result() {
+    // The 2nd construction of an identical source is a parse-cache HIT (reuses
+    // the registered `InterpFn`); both closures must compute the same thing.
+    let src = "return a * 3 + b - 1";
+    let f1 = dyn_fn(&["a", "b", src]);
+    let f2 = dyn_fn(&["a", "b", src]);
+    assert_eq!(as_num(call(f1, &[num(4.0), num(5.0)])), 16.0);
+    assert_eq!(as_num(call(f2, &[num(4.0), num(5.0)])), 16.0);
+    // And a fresh, larger identical-source run still matches (cache stable
+    // across many hits).
+    for _ in 0..50 {
+        let f = dyn_fn(&["a", "b", src]);
+        assert_eq!(as_num(call(f, &[num(2.0), num(7.0)])), 12.0);
+    }
+}
+
+#[test]
+fn parse_cache_distinct_sources_do_not_collide() {
+    let f_add = dyn_fn(&["a", "b", "return a + b"]);
+    let f_mul = dyn_fn(&["a", "b", "return a * b"]);
+    let f_sub = dyn_fn(&["a", "b", "return a - b"]);
+    assert_eq!(as_num(call(f_add, &[num(3.0), num(4.0)])), 7.0);
+    assert_eq!(as_num(call(f_mul, &[num(3.0), num(4.0)])), 12.0);
+    assert_eq!(as_num(call(f_sub, &[num(3.0), num(4.0)])), -1.0);
+    // Interleaved re-construction of each (mix of cache hits) stays correct.
+    let f_add2 = dyn_fn(&["a", "b", "return a + b"]);
+    assert_eq!(as_num(call(f_add2, &[num(10.0), num(1.0)])), 11.0);
+    assert_eq!(as_num(call(f_mul, &[num(6.0), num(6.0)])), 36.0);
+}
+
+#[test]
+fn parse_cache_hit_keeps_independent_instance_environments() {
+    // Sloppy assignment to an undeclared name lands on THIS `new Function`
+    // instance's private root env and persists across its own calls. Two
+    // instances of the SAME source (2nd is a cache hit — same `InterpFn`) must
+    // NOT share that env; the cache reuses the parsed body, never the scope.
+    let src = "count = (typeof count === 'undefined' ? 0 : count) + 1; return count";
+    let f1 = dyn_fn(&[src]);
+    let f2 = dyn_fn(&[src]); // parse-cache hit
+    assert_eq!(as_num(call(f1, &[])), 1.0);
+    assert_eq!(as_num(call(f1, &[])), 2.0); // f1's own root env accumulates
+    assert_eq!(as_num(call(f2, &[])), 1.0); // f2 is independent → starts fresh
+    assert_eq!(as_num(call(f1, &[])), 3.0); // f1 unaffected by f2
+}
+
+#[test]
+fn get_first_lookup_resolves_declared_undefined_binding() {
+    // The get-first `env::lookup` reads the field before checking presence.
+    // An inner block binding of exactly `undefined` must still SHADOW the
+    // outer binding — the read must resolve to the inner `undefined`, not walk
+    // past it (the `has_own` disambiguation branch).
+    let f = dyn_fn(&["let x = 1; { let x; return x === undefined ? 'inner' : 'outer'; }"]);
+    assert_eq!(as_str(call(f, &[])), "inner");
+    // A param bound to an explicit `undefined` argument is likewise found as
+    // its own binding, not resolved to a same-named outer/global.
+    let g = dyn_fn(&["p", "return typeof p"]);
+    assert_eq!(as_str(call(g, &[bridge::undefined()])), "undefined");
+}

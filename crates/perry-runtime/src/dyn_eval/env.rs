@@ -8,6 +8,9 @@
 //! relocate scopes like any other object (no Rust-side pointer can go stale
 //! because every held value routes through the rooted stack in `mod.rs`).
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use super::{root_get, root_push, root_set, roots_truncate};
 
 /// Parent-scope key. Contains a space, so no declared identifier can ever
@@ -15,8 +18,41 @@ use super::{root_get, root_push, root_set, roots_truncate};
 /// identifier resolution, never via computed access).
 const PARENT_KEY: &str = "perry dyn parent";
 
-fn key_string(name: &str) -> *mut crate::string::StringHeader {
-    crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+thread_local! {
+    /// identifier name → its cached `StringHeader`. Every scope-chain read /
+    /// write allocated a fresh heap `StringHeader` for the key on the old
+    /// path (`js_string_from_bytes` never SSO-inlines), so a hot validator
+    /// that touches `value` / `ok` / a loop var thousands of times burned a
+    /// heap allocation per access — a top #6693 execution cost. Env keys are
+    /// the same small vocabulary reused forever, so we allocate each once in
+    /// the LONGLIVED arena (stable pointer for the thread's life, never
+    /// swept/moved — issue #179, the `PARSE_KEY_CACHE` precedent) and reuse
+    /// the pointer. Rooted by `scan_env_key_cache_mut` (called from
+    /// `scan_dyn_eval_roots_mut`).
+    static ENV_KEY_CACHE: RefCell<HashMap<Box<str>, *const crate::string::StringHeader>> =
+        RefCell::new(HashMap::new());
+}
+
+fn key_string(name: &str) -> *const crate::string::StringHeader {
+    if let Some(ptr) = ENV_KEY_CACHE.with(|c| c.borrow().get(name).copied()) {
+        return ptr;
+    }
+    let ptr = crate::string::js_string_from_bytes_longlived(name.as_ptr(), name.len() as u32);
+    ENV_KEY_CACHE.with(|c| {
+        c.borrow_mut().insert(name.into(), ptr);
+    });
+    ptr
+}
+
+/// Mark the cached longlived key strings so a collection never treats them as
+/// garbage (belt-and-suspenders — longlived blocks are never reset — and it
+/// rewrites the slot on the rare evacuating pass, matching `PARSE_KEY_CACHE`).
+pub(super) fn scan_env_key_cache_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    ENV_KEY_CACHE.with(|c| {
+        for ptr in c.borrow_mut().values_mut() {
+            visitor.visit_tagged_raw_const_ptr_slot(ptr, crate::value::STRING_TAG);
+        }
+    });
 }
 
 fn env_object_ptr(env: f64) -> *mut crate::object::ObjectHeader {
@@ -103,11 +139,28 @@ pub(crate) fn define(env: f64, name: &str, value: f64) {
 /// The cursor lives in a rooted slot: `env_has_own` / `env_parent` allocate
 /// key strings, and a moving collection triggered by those allocations would
 /// otherwise leave a raw `f64` cursor stale.
+///
+/// #6693 hot path: this runs on EVERY identifier reference, so it reads the
+/// field FIRST and only falls back to `env_has_own` when the read yields
+/// `undefined`. Because scopes are null-proto objects, a missing key reads as
+/// exactly `undefined`, and the overwhelmingly common binding (a parameter /
+/// `let` / loop var holding a non-`undefined` value) is then resolved in a
+/// SINGLE object field-op instead of the previous `has_own` + `read` pair —
+/// the field-op (key hash + keys-array probe), not the key allocation, is the
+/// dominant per-lookup cost. The `has_own` disambiguation only runs for the
+/// rare binding whose value genuinely is `undefined`.
 pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
     let cur_idx = root_push(env);
     loop {
+        let value = env_read(root_get(cur_idx), name);
+        if value.to_bits() != crate::value::TAG_UNDEFINED {
+            roots_truncate(cur_idx);
+            return Some(value);
+        }
+        // Read was `undefined`: either this scope binds it to `undefined`, or
+        // the key is absent and we must keep walking. Disambiguate with the
+        // presence check (only reached in the uncommon undefined-value case).
         if env_has_own(root_get(cur_idx), name) {
-            let value = env_read(root_get(cur_idx), name);
             roots_truncate(cur_idx);
             return Some(value);
         }

@@ -46,6 +46,8 @@ use std::rc::Rc;
 
 use perry_parser::swc_ecma_ast as ast;
 
+#[cfg(test)]
+mod bench;
 mod bridge;
 mod env;
 mod expr;
@@ -90,7 +92,24 @@ thread_local! {
     /// Interpreter call depth (native recursion guard — each interpreted
     /// frame recurses through the Rust tree-walker).
     static CALL_DEPTH: Cell<u32> = const { Cell::new(0) };
+
+    /// Assembled-source → prepared function id (#6693). `new Function` with a
+    /// body identical to one already prepared skips the SWC re-parse + subset
+    /// scan + hoist prepass entirely — the dominant construction cost — and
+    /// reuses the registered `InterpFn`. Each `new Function` still returns a
+    /// FRESH closure over a fresh per-instance root environment, so identity /
+    /// expando semantics are unchanged; only the parse work is shared. Fastify
+    /// stacks (ajv / fast-json-stringify / find-my-way) and repeated schema
+    /// compiles re-`new Function` identical bodies; distinct bodies simply
+    /// miss (no slower than before). Bounded so a pathological distinct-source
+    /// stream can't grow it (or `FN_REGISTRY`) without limit.
+    static SOURCE_FN_CACHE: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
 }
+
+/// Upper bound on distinct cached sources. Codegen sites are few; this only
+/// guards against an adversarial stream of unique bodies. On overflow new
+/// distinct sources still work — they just aren't memoized.
+const SOURCE_FN_CACHE_MAX: usize = 4096;
 
 /// Cap on interpreter recursion. Each interpreted call consumes native stack
 /// via the recursive tree-walker, so the guard must fire well before the OS
@@ -195,6 +214,7 @@ pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
             visitor.visit_nanbox_u64_slot(slot);
         }
     });
+    env::scan_env_key_cache_mut(visitor);
 }
 
 // ── entry point ────────────────────────────────────────────────────────────
@@ -216,12 +236,45 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     // expression so top-level `return` (which every ajv/fjs/fmw body uses)
     // parses, and the parameter text is validated by the same parse.
     let source = format!("(function anonymous({params}\n) {{\n{body}\n}})");
+    // Parse cache: an identical assembled source reuses the already-prepared
+    // `InterpFn` (same `FN_REGISTRY` id, same stable AST-node addresses that
+    // the nested-function cache keys on) — skipping SWC parse + subset scan +
+    // hoist prepass. A cache hit still builds a fresh root env + closure below.
+    let fn_id = match SOURCE_FN_CACHE.with(|c| c.borrow().get(&source).copied()) {
+        Some(id) => id,
+        None => {
+            let id = prepare_source(&source);
+            SOURCE_FN_CACHE.with(|c| {
+                let mut c = c.borrow_mut();
+                if c.len() < SOURCE_FN_CACHE_MAX {
+                    c.insert(source, id);
+                }
+            });
+            id
+        }
+    };
+    // The instance's root environment: undeclared-assignment target (sloppy
+    // implicit "globals" scoped to this Function instance) and the parent of
+    // every call scope.
+    let root_env = env::env_new_root();
+    let root_idx = root_push(root_env);
+    let closure = interp::alloc_interp_closure(fn_id, root_get(root_idx), None);
+    roots_truncate(root_idx);
+    closure
+}
+
+/// Parse an assembled `(function anonymous(…){…})` source, reject
+/// out-of-subset constructs eagerly, run the hoist prepass, and register the
+/// resulting `InterpFn`. Returns its `FN_REGISTRY` id. Throws SyntaxError on a
+/// parse failure and TypeError on an unsupported construct — the same
+/// diagnostics as before the parse cache existed; only a cache MISS runs this.
+fn prepare_source(source: &str) -> u32 {
     // `.cjs` pins script (sloppy, non-module) parsing: generated bodies rely
     // on sloppy semantics (find-my-way assigns the undeclared `value`), and
     // module auto-detection must not kick in on `import(`-looking substrings.
     let mut cache = perry_diagnostics_cache();
     let parsed =
-        match perry_parser::parse_typescript_with_cache(&source, "perry-dyn-fn.cjs", &mut cache) {
+        match perry_parser::parse_typescript_with_cache(source, "perry-dyn-fn.cjs", &mut cache) {
             Ok(p) => p,
             Err(e) => bridge::throw_syntax_error(&format!(
                 "invalid or unsupported source in runtime `new Function` body: {e}"
@@ -242,15 +295,7 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
         func.params.into_iter().map(|p| p.pat).collect(),
         InterpBody::Block(func.body.map(|b| b.stmts).unwrap_or_default()),
     );
-    let fn_id = register_fn(interp_fn);
-    // The instance's root environment: undeclared-assignment target (sloppy
-    // implicit "globals" scoped to this Function instance) and the parent of
-    // every call scope.
-    let root_env = env::env_new_root();
-    let root_idx = root_push(root_env);
-    let closure = interp::alloc_interp_closure(fn_id, root_get(root_idx), None);
-    roots_truncate(root_idx);
-    closure
+    register_fn(interp_fn)
 }
 
 fn perry_diagnostics_cache() -> perry_diagnostics::SourceCache {

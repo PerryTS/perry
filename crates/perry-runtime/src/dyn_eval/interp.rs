@@ -291,9 +291,14 @@ pub(crate) fn invoke_interp_fn(fn_id: u32, def_env: f64, this: f64, args: &[f64]
     let this_idx = root_push(this);
     let ret_idx = root_push(bridge::undefined());
     let def_env_idx = root_push(def_env);
+    // Root only the arguments a parameter will actually bind. The thunk always
+    // delivers THUNK_ARITY slots, but a validator declaring one or two params
+    // (the overwhelming case) needn't pay 16 `root_push`es per call — there is
+    // no `arguments` object, so surplus args are unobservable (#6693).
+    let nargs = fun.params.len().min(args.len()).min(THUNK_ARITY);
     let mut arg_idxs = [0usize; THUNK_ARITY];
-    for (i, a) in args.iter().enumerate().take(THUNK_ARITY) {
-        arg_idxs[i] = root_push(*a);
+    for (i, slot) in arg_idxs.iter_mut().enumerate().take(nargs) {
+        *slot = root_push(args[i]);
     }
     let call_env = env::env_new(root_get(def_env_idx));
     let env_idx = root_push(call_env);
@@ -302,7 +307,7 @@ pub(crate) fn invoke_interp_fn(fn_id: u32, def_env: f64, this: f64, args: &[f64]
 
     // Parameters.
     for (i, pat) in fun.params.iter().enumerate() {
-        let value = if i < THUNK_ARITY {
+        let value = if i < nargs {
             root_get(arg_idxs[i])
         } else {
             bridge::undefined()
