@@ -16,7 +16,9 @@ const salt = new Uint8Array(0);
 const info = new Uint8Array([4, 5]);
 
 // Sync spread — returns a value, fully deterministic.
-const sargs = ["sha256", ikm, salt, info, 64];
+// `as const` makes the arg lists tuples so the spreads satisfy the parameter
+// signatures under `tsc` (TS2556); runtime is unaffected.
+const sargs = ["sha256", ikm, salt, info, 64] as const;
 const syncOut = crypto.hkdfSync(...sargs);
 console.log("hkdfSync-spread =", new Uint8Array(syncOut).length);
 
@@ -34,15 +36,15 @@ function record(label: string, err: unknown, out: ArrayBuffer) {
 }
 
 // 1. dotted, full spread + trailing regular callback
-const a1 = ["sha256", ikm, salt, info, 64];
+const a1 = ["sha256", ikm, salt, info, 64] as const;
 crypto.hkdf(...a1, (e, out) => record("dotted-spread", e, out));
 
 // 2. dotted, interleaved: regular, regular, spread, regular, callback
-const mid = [salt, info];
+const mid = [salt, info] as const;
 crypto.hkdf("sha256", ikm, ...mid, 64, (e, out) => record("dotted-interleaved", e, out));
 
 // 3. named import, full spread
-const a3 = ["sha256", ikm, salt, info, 64];
+const a3 = ["sha256", ikm, salt, info, 64] as const;
 hkdf(...a3, (e, out) => record("named-spread", e, out));
 
 // 4. plain direct call (regression guard for the non-spread fast-path)
