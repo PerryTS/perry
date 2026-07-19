@@ -45,12 +45,25 @@ pub unsafe extern "C" fn js_symbol_new(description_f64: f64) -> f64 {
 pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     let bits = key_f64.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
+    // Resolve the registry key string. Spec step 1 (sec-symbol.for):
+    // `key = ToString(key)`. A NaN-boxed heap string is used directly, as is a
+    // raw StringHeader pointer from legacy callsites; every other value is
+    // ToString-coerced so `Symbol.for(undefined)` registers under "undefined",
+    // `Symbol.for(42)` under "42", `Symbol.for(null)`/`true` likewise — and
+    // `Symbol.for(x) === Symbol.for(String(x))`. A Symbol key throws a
+    // TypeError, matching `ToString(symbol)` (and `Symbol()`'s coercion).
     let key_ptr = if tag == STRING_TAG {
         (bits & POINTER_MASK) as *const StringHeader
     } else if (0x1000..0x0000_FFFF_FFFF_FFFF).contains(&bits) {
         bits as *const StringHeader
     } else {
-        return f64::from_bits(TAG_UNDEFINED);
+        if js_is_symbol(key_f64) != 0 {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+        }
+        // `js_string_coerce` is the full ToString: undefined→"undefined",
+        // null→"null", numbers/bools/objects coerce, and short (SSO) strings
+        // materialize onto the heap so `str_from_header` can read them.
+        crate::builtins::js_string_coerce(key_f64) as *const StringHeader
     };
     let key = match str_from_header(key_ptr) {
         Some(s) => s,
