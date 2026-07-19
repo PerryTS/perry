@@ -348,10 +348,16 @@ fn render_incompatible_receiver(bits: u64) -> String {
                 return "function () { [native code] }".to_string();
             }
             crate::gc::GC_TYPE_OBJECT => {
-                let obj = ptr as *mut ObjectHeader;
                 // An OWN user `toString` overrides the default — V8 refuses to
                 // call it and falls back to the Object.prototype.toString tag.
+                // js_string_from_bytes allocates and can trigger a GC that
+                // relocates the receiver: root it and re-derive the pointer
+                // through the (rewritten) handle after the allocation.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let handle = scope.root_nanbox_f64(f64::from_bits(bits));
                 let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+                let obj = crate::value::JSValue::from_bits(handle.get_nanbox_f64().to_bits())
+                    .as_pointer::<u8>() as *mut ObjectHeader;
                 if unsafe { super::own_data_field_by_name(obj, key) }.is_some() {
                     return "[object Object]".to_string();
                 }
