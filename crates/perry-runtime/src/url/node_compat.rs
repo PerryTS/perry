@@ -115,6 +115,10 @@ mod tests {
             .to_string()
     }
 
+    /// Unix-only: the `../` case needs a `/`-separated cwd for the posix
+    /// resolver to pop a segment — on a Windows host the backslashed cwd is
+    /// a single opaque segment to the pinned posix machinery.
+    #[cfg(not(windows))]
     #[test]
     fn path_to_file_url_posix_preserves_relative_trailing_slash() {
         let cwd = cwd();
@@ -148,16 +152,112 @@ mod tests {
         );
         assert_eq!(resolve_path_to_file_url_posix(""), cwd);
     }
+
+    fn str_f64(text: &str) -> f64 {
+        let ptr = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+    }
+
+    #[test]
+    fn windows_flag_defaults_to_platform() {
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        assert_eq!(super::options_windows_flag(undefined), cfg!(windows));
+        // Non-object options behave like a missing options argument.
+        assert_eq!(super::options_windows_flag(3.0), cfg!(windows));
+    }
+
+    #[test]
+    fn explicit_windows_option_wins_over_platform() {
+        let obj = crate::object::js_object_alloc(0, 1);
+        let key = crate::string::js_string_from_bytes("windows".as_ptr(), 7);
+        let obj_f64 = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        assert!(!super::options_windows_flag(obj_f64));
+
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+        assert!(super::options_windows_flag(obj_f64));
+
+        // `{ windows: undefined }` / `{ windows: null }` fall back to the
+        // platform, matching Node's `options?.windows ?? isWindows`.
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        assert_eq!(super::options_windows_flag(obj_f64), cfg!(windows));
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        assert_eq!(super::options_windows_flag(obj_f64), cfg!(windows));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn file_url_conversions_default_to_win32_on_windows() {
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+        let path = super::js_url_file_url_to_path(str_f64("file:///C:/tmp/x.txt"), undefined);
+        assert_eq!(super::string_from_js_value(path), "C:\\tmp\\x.txt");
+
+        let out = super::js_url_path_to_file_url(str_f64("C:\\tmp\\x.txt"), undefined);
+        let obj = crate::url::object_from_f64(out).expect("URL object");
+        assert_eq!(
+            crate::url::object_prop_string(obj, "href"),
+            "file:///C:/tmp/x.txt"
+        );
+
+        // Relative inputs resolve against the cwd (Node uses
+        // `path.win32.resolve` before building the URL).
+        let out = super::js_url_path_to_file_url(str_f64("x.txt"), undefined);
+        let obj = crate::url::object_from_f64(out).expect("URL object");
+        let href = crate::url::object_prop_string(obj, "href");
+        let drive = std::env::current_dir().expect("cwd").to_string_lossy()[..2].to_string();
+        assert!(
+            href.starts_with(&format!("file:///{drive}/")),
+            "href {href:?} does not start with the cwd drive"
+        );
+        assert!(href.ends_with("/x.txt"), "href {href:?}");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn file_url_conversions_default_to_posix_elsewhere() {
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+        let path = super::js_url_file_url_to_path(str_f64("file:///tmp/x.txt"), undefined);
+        assert_eq!(super::string_from_js_value(path), "/tmp/x.txt");
+    }
 }
 
 /// Read the `windows` option from a `{ windows }` options argument (#2975).
-/// Node treats a `true` value as force-Windows, anything else (including a
-/// missing/undefined options arg or `{ windows: false }`) as POSIX. Returns
-/// `false` for non-object / undefined options.
+/// Node's `fileURLToPath`/`pathToFileURL` default this to the PLATFORM
+/// (`options?.windows ?? isWindows`): a missing options argument, a missing
+/// `windows` property, or an explicit `null`/`undefined` all fall back to
+/// `cfg!(windows)`; any other value wins by truthiness (`{ windows: false }`
+/// forces POSIX even on Windows, `{ windows: 1 }` forces win32 anywhere).
 fn options_windows_flag(options: f64) -> bool {
     match object_from_f64(options) {
-        Some(opts) => crate::value::js_is_truthy(object_prop_f64(opts, "windows")) != 0,
-        None => false,
+        Some(opts) => {
+            let windows = object_prop_f64(opts, "windows");
+            let jv = crate::value::JSValue::from_bits(windows.to_bits());
+            if jv.is_undefined() || jv.is_null() {
+                cfg!(windows)
+            } else {
+                crate::value::js_is_truthy(windows) != 0
+            }
+        }
+        None => cfg!(windows),
     }
 }
 
@@ -401,7 +501,17 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
             let rest_fwd = rest.replace('\\', "/");
             format!("file://{}{}", host, encode_file_url_path(&rest_fwd))
         } else {
-            let fwd = path.replace('\\', "/");
+            // Node's win32 `pathToFileURL` resolves the input against the
+            // cwd first (`path.win32.resolve(filepath)`), then preserves a
+            // trailing separator — mirroring the posix arm below. Absolute
+            // inputs pass through resolution unchanged (modulo
+            // normalization).
+            let preserve_trailing_sep = path.ends_with('\\') || path.ends_with('/');
+            let mut resolved = crate::path::resolve_win32_str(&path);
+            if preserve_trailing_sep && !resolved.ends_with('\\') {
+                resolved.push('\\');
+            }
+            let fwd = resolved.replace('\\', "/");
             let encoded = encode_file_url_path(&fwd);
             if encoded.starts_with('/') {
                 format!("file://{}", encoded)

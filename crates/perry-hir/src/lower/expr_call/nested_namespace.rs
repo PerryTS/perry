@@ -520,6 +520,47 @@ pub(super) fn dispatch_path_subnamespace(
     method: &str,
     args: Vec<Expr>,
 ) -> Result<Expr, Vec<Expr>> {
+    // On Windows-host builds the default `js_path_*` runtime family resolves
+    // to win32 semantics (Node: `path === path.win32` on win32). The static
+    // posix rewrite below shares those symbols (`Expr::PathX`), so it would
+    // lose the explicit-posix pinning. Route `path.posix.<method>(...)`
+    // through the runtime by-name dispatcher instead — `nm_dispatch_path`'s
+    // `("path.posix", …)` arms call the pinned `js_path_posix_*` family. On
+    // non-Windows hosts the base family IS posix, so the static rewrite
+    // stays byte-identical there.
+    if sub == "posix" && cfg!(windows) {
+        const RUNTIME_DISPATCHED: &[&str] = &[
+            "join",
+            "dirname",
+            "basename",
+            "extname",
+            "isAbsolute",
+            "normalize",
+            "parse",
+            "format",
+            "toNamespacedPath",
+            "_makeLong",
+            "relative",
+            "resolve",
+            "matchesGlob",
+        ];
+        if RUNTIME_DISPATCHED.contains(&method) {
+            // `path.posix.join()` with no args folds to "." like the static
+            // arm below (and like win32 join).
+            if method == "join" && args.is_empty() {
+                return Ok(Expr::String(".".to_string()));
+            }
+            return Ok(Expr::NativeMethodCall {
+                module: "path.posix".to_string(),
+                class_name: None,
+                object: None,
+                method: method.to_string(),
+                args,
+            });
+        }
+        return Err(args);
+    }
+
     // path.<sub>.join(...)
     if method == "join" {
         if args.is_empty() {

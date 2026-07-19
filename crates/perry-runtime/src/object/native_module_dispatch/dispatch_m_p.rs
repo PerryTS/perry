@@ -373,13 +373,13 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
             result = if win32 {
                 crate::path::js_path_win32_resolve_join(result, segment)
             } else {
-                crate::path::js_path_resolve_join(result, segment)
+                crate::path::js_path_posix_resolve_join(result, segment)
             };
         }
         if win32 {
             str_to_f64(crate::path::js_path_win32_resolve(result))
         } else {
-            str_to_f64(crate::path::js_path_resolve(result))
+            str_to_f64(crate::path::js_path_posix_resolve(result))
         }
     };
     let path_basename_value = |win32: bool| -> f64 {
@@ -392,20 +392,24 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
                 str_to_f64(crate::path::js_path_win32_basename_ext(path, ext))
             }
         } else if ext.is_null() {
-            str_to_f64(crate::path::js_path_basename(path))
+            str_to_f64(crate::path::js_path_posix_basename(path))
         } else {
-            str_to_f64(crate::path::js_path_basename_ext(path, ext))
+            str_to_f64(crate::path::js_path_posix_basename_ext(path, ext))
         }
     };
     match (module_name, method_name) {
+        // Default `path.*` — platform semantics (Node: `path === path.win32`
+        // on Windows). The direct `crate::path::js_path_*` calls below are
+        // themselves platform-dispatching; the closure-based arms select the
+        // family with `cfg!(windows)`.
         ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0))),
-        ("path", "basename") => path_basename_value(false),
+        ("path", "basename") => path_basename_value(cfg!(windows)),
         ("path", "extname") => str_to_f64(crate::path::js_path_extname(require_path_str_ptr(0))),
         ("path", "normalize") => {
             str_to_f64(crate::path::js_path_normalize(require_path_str_ptr(0)))
         }
-        ("path", "resolve") => path_resolve_value(false),
-        ("path", "join") => path_join_value(false),
+        ("path", "resolve") => path_resolve_value(cfg!(windows)),
+        ("path", "join") => path_join_value(cfg!(windows)),
         ("path", "relative") => str_to_f64(crate::path::js_path_relative(
             require_path_str_ptr(0),
             require_path_str_ptr(1),
@@ -430,9 +434,11 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
         // (property reads) already worked, but method calls landed here with
         // module_name "path.win32" / "path.posix" and no matching arm, so they
         // returned undefined. win32 routes to the `js_path_win32_*` family;
-        // posix routes to the base `js_path_*` family (POSIX `/` semantics),
-        // mirroring how the static `path.win32.X()` / `path.posix.X()` forms
-        // lower in codegen.
+        // posix routes to the pinned `js_path_posix_*` family (the base
+        // `js_path_*` family is platform-dispatching, so it can no longer
+        // stand in for explicit posix). On Windows targets the static
+        // `path.posix.X()` forms also lower to these arms (see
+        // `dispatch_path_subnamespace` in perry-hir).
         ("path.win32", "dirname") => {
             str_to_f64(crate::path::js_path_win32_dirname(require_path_str_ptr(0)))
         }
@@ -465,34 +471,36 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
         }
         ("path.win32", "format") => str_to_f64(crate::path::js_path_win32_format(arg(0))),
         ("path.posix", "dirname") => {
-            str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0)))
+            str_to_f64(crate::path::js_path_posix_dirname(require_path_str_ptr(0)))
         }
         ("path.posix", "basename") => path_basename_value(false),
         ("path.posix", "extname") => {
-            str_to_f64(crate::path::js_path_extname(require_path_str_ptr(0)))
+            str_to_f64(crate::path::js_path_posix_extname(require_path_str_ptr(0)))
         }
-        ("path.posix", "normalize") => {
-            str_to_f64(crate::path::js_path_normalize(require_path_str_ptr(0)))
-        }
+        ("path.posix", "normalize") => str_to_f64(crate::path::js_path_posix_normalize(
+            require_path_str_ptr(0),
+        )),
         ("path.posix", "resolve") => path_resolve_value(false),
         ("path.posix", "join") => path_join_value(false),
-        ("path.posix", "relative") => str_to_f64(crate::path::js_path_relative(
+        ("path.posix", "relative") => str_to_f64(crate::path::js_path_posix_relative(
             require_path_str_ptr(0),
             require_path_str_ptr(1),
         )),
-        ("path.posix", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
-        ("path.posix", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
-        ("path.posix", "isAbsolute") => {
-            bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
+        ("path.posix", "toNamespacedPath") => {
+            crate::path::js_path_posix_to_namespaced_path_value(arg(0))
         }
-        ("path.posix", "matchesGlob") => bool_to_f64(crate::path::js_path_matches_glob(
+        ("path.posix", "_makeLong") => crate::path::js_path_posix_to_namespaced_path_value(arg(0)),
+        ("path.posix", "isAbsolute") => bool_to_f64(crate::path::js_path_posix_is_absolute(
+            require_path_str_ptr(0),
+        )),
+        ("path.posix", "matchesGlob") => bool_to_f64(crate::path::js_path_posix_matches_glob(
             require_path_str_ptr(0),
             require_path_str_ptr(1),
         )),
         ("path.posix", "parse") => {
-            ptr_to_f64(crate::path::js_path_parse(require_path_str_ptr(0)) as *const u8)
+            ptr_to_f64(crate::path::js_path_posix_parse(require_path_str_ptr(0)) as *const u8)
         }
-        ("path.posix", "format") => str_to_f64(crate::path::js_path_format(arg(0))),
+        ("path.posix", "format") => str_to_f64(crate::path::js_path_posix_format(arg(0))),
 
         // ── util module ──
         _ => f64::from_bits(JSValue::undefined().bits()),
