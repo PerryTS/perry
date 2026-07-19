@@ -11,7 +11,79 @@
 //! runtime closure, so host code dispatches into it through the exact same
 //! towers.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use super::{root_get, root_push, roots_truncate};
+
+thread_local! {
+    /// Property name → its canonical INTERNED `StringHeader`. The interpreter's
+    /// member read (`get_member`) went through `js_get_property`, which
+    /// allocates a fresh, NON-interned key every call — and a non-interned key
+    /// makes the object getter's inline-cache fast lane bail to the full slow
+    /// scan (the lane gates on `GC_FLAG_INTERNED`). For property-heavy codegen
+    /// (TypeBox's `value.providers` / `value.name` / … millions of reads) that
+    /// is the dominant `get_field_by_name` cost (#6693). Interning each name
+    /// once (in the longlived arena, then registered canonical) lets repeated
+    /// reads hit the read-plan IC. Rooted by `scan_member_key_cache_mut`.
+    static MEMBER_KEY_CACHE: RefCell<HashMap<Box<str>, *const crate::string::StringHeader>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Canonical interned key for `name` (cached). First use allocates it in the
+/// longlived arena and interns it; the canonical pointer is reused thereafter.
+fn interned_member_key(name: &str) -> *const crate::string::StringHeader {
+    if let Some(ptr) = MEMBER_KEY_CACHE.with(|c| c.borrow().get(name).copied()) {
+        return ptr;
+    }
+    let ll = crate::string::js_string_from_bytes_longlived(name.as_ptr(), name.len() as u32);
+    let hash = crate::object::key_content_hash(ll);
+    let canonical = crate::string::js_string_intern(ll, hash);
+    MEMBER_KEY_CACHE.with(|c| {
+        c.borrow_mut().insert(name.into(), canonical);
+    });
+    canonical
+}
+
+/// Mark + rewrite the cached interned member keys (they may be canonicals in a
+/// moving arena, unlike the always-longlived env keys, so the rewrite matters).
+pub(super) fn scan_member_key_cache_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    MEMBER_KEY_CACHE.with(|c| {
+        for ptr in c.borrow_mut().values_mut() {
+            visitor.visit_tagged_raw_const_ptr_slot(ptr, crate::value::STRING_TAG);
+        }
+    });
+}
+
+/// #6693 fast member read (gated by `PERRY_DYN_FAST_SCOPE`): for a plain heap
+/// object receiver, read the field with a cached INTERNED key so the object
+/// getter's inline-cache fast lane engages, skipping the generic
+/// `js_dynamic_object_get_property` receiver-dispatch cascade + per-call key
+/// allocation. Returns `None` (→ generic path) for any receiver that isn't a
+/// plain arena `GC_TYPE_OBJECT` — the generic read is authoritative for
+/// strings / arrays / handles / proxies / closures / errors. For a plain
+/// object the generic path ends in the very same `js_object_get_field_by_name_f64`,
+/// so results are identical.
+fn fast_object_get(base: f64, name: &str) -> Option<f64> {
+    let jv = crate::value::JSValue::from_bits(base.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let addr = crate::value::js_nanbox_get_pointer(base) as usize;
+    if crate::value::addr_class::is_handle_band(addr) {
+        return None;
+    }
+    let h = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
+    if h.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let key = interned_member_key(name);
+    let v = crate::object::js_object_get_field_by_name_f64(
+        addr as *const crate::object::ObjectHeader,
+        key,
+    );
+    Some(f64::from_bits(v.to_bits()))
+}
 
 pub(crate) fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -123,6 +195,11 @@ pub(crate) fn get_member(base: f64, name: &str) -> f64 {
     // typed arrays, closures, and plain objects carrying an own `length`.
     if name == "length" {
         return crate::value::js_value_length_f64(base);
+    }
+    if super::fast_scope_enabled() {
+        if let Some(v) = fast_object_get(base, name) {
+            return v;
+        }
     }
     unsafe { crate::value::js_get_property(base, name.as_ptr() as i64, name.len() as i64) }
 }

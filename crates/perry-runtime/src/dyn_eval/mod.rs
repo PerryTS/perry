@@ -43,6 +43,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use perry_parser::swc_ecma_ast as ast;
 
@@ -110,6 +111,41 @@ thread_local! {
 /// guards against an adversarial stream of unique bodies. On overflow new
 /// distinct sources still work — they just aren't memoized.
 const SOURCE_FN_CACHE_MAX: usize = 4096;
+
+// ── #6693 runtime A/B toggles ───────────────────────────────────────────────
+// Read once per process, then a relaxed atomic load on the hot path. 0 =
+// unresolved, 1 = on, 2 = off. Let the SAME compiled binary A/B each win on
+// the real bundle without recompiling: `PERRY_DYN_NO_PARSE_CACHE=1` reverts to
+// re-parse-every-call (the pre-#6693 parse behavior), and `PERRY_DYN_FAST_SCOPE=1`
+// enables the lean plain-scope env accessor (the prototype surgical fix).
+static PARSE_CACHE_OFF: AtomicU8 = AtomicU8::new(0);
+static FAST_SCOPE_ON: AtomicU8 = AtomicU8::new(0);
+
+fn env_toggle(slot: &AtomicU8, var: &str) -> bool {
+    match slot.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::env::var_os(var)
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false);
+            slot.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// Whether the source→`InterpFn` parse cache is active (default on; disabled by
+/// `PERRY_DYN_NO_PARSE_CACHE=1` to A/B its effect on the real grind).
+fn parse_cache_enabled() -> bool {
+    !env_toggle(&PARSE_CACHE_OFF, "PERRY_DYN_NO_PARSE_CACHE")
+}
+
+/// Whether the lean plain-scope env accessor is active (default off; enabled by
+/// `PERRY_DYN_FAST_SCOPE=1`). #6693 prototype.
+pub(crate) fn fast_scope_enabled() -> bool {
+    env_toggle(&FAST_SCOPE_ON, "PERRY_DYN_FAST_SCOPE")
+}
 
 /// Cap on interpreter recursion. Each interpreted call consumes native stack
 /// via the recursive tree-walker, so the guard must fire well before the OS
@@ -215,6 +251,7 @@ pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         }
     });
     env::scan_env_key_cache_mut(visitor);
+    bridge::scan_member_key_cache_mut(visitor);
 }
 
 // ── entry point ────────────────────────────────────────────────────────────
@@ -240,17 +277,21 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     // `InterpFn` (same `FN_REGISTRY` id, same stable AST-node addresses that
     // the nested-function cache keys on) — skipping SWC parse + subset scan +
     // hoist prepass. A cache hit still builds a fresh root env + closure below.
-    let fn_id = match SOURCE_FN_CACHE.with(|c| c.borrow().get(&source).copied()) {
-        Some(id) => id,
-        None => {
-            let id = prepare_source(&source);
-            SOURCE_FN_CACHE.with(|c| {
-                let mut c = c.borrow_mut();
-                if c.len() < SOURCE_FN_CACHE_MAX {
-                    c.insert(source, id);
-                }
-            });
-            id
+    let fn_id = if !parse_cache_enabled() {
+        prepare_source(&source)
+    } else {
+        match SOURCE_FN_CACHE.with(|c| c.borrow().get(&source).copied()) {
+            Some(id) => id,
+            None => {
+                let id = prepare_source(&source);
+                SOURCE_FN_CACHE.with(|c| {
+                    let mut c = c.borrow_mut();
+                    if c.len() < SOURCE_FN_CACHE_MAX {
+                        c.insert(source, id);
+                    }
+                });
+                id
+            }
         }
     };
     // The instance's root environment: undeclared-assignment target (sloppy
