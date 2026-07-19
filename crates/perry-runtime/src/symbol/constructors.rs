@@ -54,7 +54,11 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     // TypeError, matching `ToString(symbol)` (and `Symbol()`'s coercion).
     let key_ptr = if tag == STRING_TAG {
         (bits & POINTER_MASK) as *const StringHeader
-    } else if (0x1000..0x0000_FFFF_FFFF_FFFF).contains(&bits) {
+    } else if crate::value::addr_class::is_plausible_heap_addr(bits as usize) {
+        // Raw StringHeader pointer from a legacy callsite. Use the canonical
+        // heap-address predicate rather than a duplicated literal range so a
+        // small-magnitude (e.g. denormal) double key isn't misclassified as a
+        // pointer — it falls through to ToString below and coerces correctly.
         bits as *const StringHeader
     } else {
         if js_is_symbol(key_f64) != 0 {
