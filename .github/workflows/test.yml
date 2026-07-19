@@ -623,6 +623,11 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
+        with:
+          # This job compiles PR-controlled build scripts / proc macros;
+          # don't leave the workflow token in .git/config for them to read
+          # (zizmor "artipacked", flagged by review on #6610).
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
