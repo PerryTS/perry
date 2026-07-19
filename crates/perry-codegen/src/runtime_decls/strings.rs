@@ -606,7 +606,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // NaN-boxed JSValue (string / array / undefined).
     module.declare_function("js_string_to_locale_lower_case", I64, &[I64, DOUBLE]);
     module.declare_function("js_string_to_locale_upper_case", I64, &[I64, DOUBLE]);
-    module.declare_function("js_string_validate_locales", VOID, &[DOUBLE]);
+    module.declare_function("js_string_validate_collator_args", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_trim", I64, &[I64]);
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);

@@ -320,6 +320,21 @@ fn get_option_string(options: f64, key: &str) -> Option<String> {
     coerce_option_string(get_option_value(options, key))
 }
 
+/// Validate the `locales` / `options` arguments of `String.prototype.localeCompare`
+/// exactly as `Construct(%Collator%, « locales, options »)` would (ECMA-402
+/// §22.1.3.10 step 4). Perry's collation ordering stays locale-neutral (full ICU
+/// deferred), so `localeCompare` never actually builds a Collator — but the spec
+/// still requires the *observable throwing* of `CanonicalizeLocaleList(locales)`
+/// followed by `InitializeCollator`'s `CoerceOptionsToObject` + `GetOption` reads
+/// (test262 `localeCompare/throws-same-exceptions-as-Collator`, #5906).
+pub(crate) fn validate_locale_compare(locales: f64, options: f64) {
+    // requestedLocales = ? CanonicalizeLocaleList(locales) — reuse the exact
+    // Intl.getCanonicalLocales machinery for its TypeError/RangeError side effect
+    // (undefined yields an empty list and never throws).
+    let _ = locales::get_canonical_locales(locales);
+    date_collator::validate_collator_options(options);
+}
+
 /// As `get_option_string`, but for the Unicode locale-extension keys (`calendar`,
 /// `numberingSystem`) whose value is validated for *well-formedness* rather than
 /// against a closed enum. ECMA-402 coerces `null` to the string `"null"` — a
