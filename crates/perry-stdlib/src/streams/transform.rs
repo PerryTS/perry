@@ -245,11 +245,19 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
     // write promise resolves in the job, after the transform enqueues.
     let job_fn = transform_write_job as *const u8;
     perry_runtime::closure::js_register_closure_arity(job_fn, 0);
-    let job = perry_runtime::closure::js_closure_alloc(job_fn, 4);
+    let job = perry_runtime::closure::js_closure_alloc(job_fn, 5);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 0, transform_cb);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 1, readable_id as i64);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 2, chunk.to_bits() as i64);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 3, promise as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(job, 4, writable_id as i64);
+    // #6607: a `writer.close()` in the same synchronous run must not close the
+    // readable ahead of this queued job — count it so transform_close defers.
+    *TRANSFORM_PENDING_WRITES
+        .lock()
+        .unwrap()
+        .entry(writable_id)
+        .or_insert(0) += 1;
     perry_runtime::builtins::js_queue_microtask(job as i64);
     promise
 }
@@ -262,8 +270,8 @@ extern "C" fn transform_write_job(closure: *const ClosureHeader) -> f64 {
     unsafe {
         let job_fn = transform_write_job2 as *const u8;
         perry_runtime::closure::js_register_closure_arity(job_fn, 0);
-        let job = perry_runtime::closure::js_closure_alloc(job_fn, 4);
-        for i in 0..4 {
+        let job = perry_runtime::closure::js_closure_alloc(job_fn, 5);
+        for i in 0..5 {
             perry_runtime::closure::js_closure_set_capture_ptr(
                 job,
                 i,
@@ -282,6 +290,7 @@ extern "C" fn transform_write_job2(closure: *const ClosureHeader) -> f64 {
         let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as u64;
         let promise =
             perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as *mut Promise;
+        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 4) as usize;
         let chunk = f64::from_bits(chunk_bits);
         if transform_cb != 0 && readable_id != 0 {
             let ret = js_closure_call2(
@@ -301,12 +310,14 @@ extern "C" fn transform_write_job2(closure: *const ClosureHeader) -> f64 {
                     let r = transform_write_settle_rejected as *const u8;
                     perry_runtime::closure::js_register_closure_arity(f, 1);
                     perry_runtime::closure::js_register_closure_arity(r, 1);
-                    let fc = perry_runtime::closure::js_closure_alloc(f, 2);
+                    let fc = perry_runtime::closure::js_closure_alloc(f, 3);
                     perry_runtime::closure::js_closure_set_capture_ptr(fc, 0, readable_id as i64);
                     perry_runtime::closure::js_closure_set_capture_ptr(fc, 1, promise as i64);
-                    let rc = perry_runtime::closure::js_closure_alloc(r, 2);
+                    perry_runtime::closure::js_closure_set_capture_ptr(fc, 2, writable_id as i64);
+                    let rc = perry_runtime::closure::js_closure_alloc(r, 3);
                     perry_runtime::closure::js_closure_set_capture_ptr(rc, 0, readable_id as i64);
                     perry_runtime::closure::js_closure_set_capture_ptr(rc, 1, promise as i64);
+                    perry_runtime::closure::js_closure_set_capture_ptr(rc, 2, writable_id as i64);
                     let _ = perry_runtime::promise::js_promise_then(inner, fc, rc);
                     return f64::from_bits(TAG_UNDEFINED);
                 }
@@ -326,6 +337,7 @@ extern "C" fn transform_write_job2(closure: *const ClosureHeader) -> f64 {
         // stalled here, so the flight branch's read #3 stays pending while
         // the module-require chain finishes).
         settle_transform_write(readable_id, promise);
+        transform_write_job_done(writable_id);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -366,6 +378,55 @@ lazy_static::lazy_static! {
     /// when the consumer drains the readable (see `transform_release_writes`).
     pub(super) static ref TRANSFORM_WRITE_RELEASES: Mutex<HashMap<usize, Vec<usize>>> =
         Mutex::new(HashMap::new());
+    /// #6607: transform writable id -> count of write jobs queued by
+    /// `transform_write` whose transformer hasn't finished delivering yet
+    /// (async transformers count until their returned promise settles).
+    static ref TRANSFORM_PENDING_WRITES: Mutex<HashMap<usize, usize>> =
+        Mutex::new(HashMap::new());
+    /// #6607: transform writable id -> close-request promise (as address)
+    /// deferred until the pending write jobs above drain.
+    pub(super) static ref TRANSFORM_PENDING_CLOSE: Mutex<HashMap<usize, usize>> =
+        Mutex::new(HashMap::new());
+}
+
+/// #6607: a queued transform write job finished delivering its chunk. When the
+/// last pending job for the writable drains, run any close request that
+/// arrived while the jobs were still queued (see `transform_close`).
+unsafe fn transform_write_job_done(writable_id: usize) {
+    let drained = {
+        let mut g = TRANSFORM_PENDING_WRITES.lock().unwrap();
+        match g.get_mut(&writable_id) {
+            Some(count) => {
+                *count -= 1;
+                if *count == 0 {
+                    g.remove(&writable_id);
+                    true
+                } else {
+                    false
+                }
+            }
+            None => true,
+        }
+    };
+    if !drained {
+        return;
+    }
+    let deferred = TRANSFORM_PENDING_CLOSE.lock().unwrap().remove(&writable_id);
+    if let Some(promise_addr) = deferred {
+        let promise = promise_addr as *mut Promise;
+        // The stream may have errored (writer.abort(), controller.error(...))
+        // while the close waited on the jobs — settle the close request with
+        // that error instead of running flush on an errored stream.
+        let errored = WRITABLE_STREAMS
+            .lock()
+            .unwrap()
+            .get(&writable_id)
+            .and_then(|s| (s.state == WritableState::Errored).then_some(s.error_value));
+        match errored {
+            Some(reason) => js_promise_reject(promise, f64::from_bits(reason)),
+            None => perform_transform_close(writable_id, promise),
+        }
+    }
 }
 
 /// The async transformer's returned promise fulfilled — settle the write with
@@ -375,7 +436,9 @@ extern "C" fn transform_write_settle_fulfilled(closure: *const ClosureHeader, _v
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         let promise =
             perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as usize;
         settle_transform_write(readable_id, promise);
+        transform_write_job_done(writable_id);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -388,10 +451,12 @@ extern "C" fn transform_write_settle_rejected(closure: *const ClosureHeader, rea
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         let promise =
             perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as usize;
         if readable_id != 0 {
             js_readable_stream_controller_error(readable_id as f64, reason);
         }
         js_promise_reject(promise, reason);
+        transform_write_job_done(writable_id);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -428,7 +493,43 @@ pub(super) unsafe fn transform_release_writes(readable_id: usize) {
 }
 
 pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
+    // #6607 (WHATWG TransformStreamDefaultSinkCloseAlgorithm ordering): the
+    // sink close runs only after queued writes complete. `transform_write`
+    // defers the transformer invocation through a two-hop microtask job, so a
+    // same-run `writer.close()` would otherwise close the readable before the
+    // jobs deliver their chunks — controller_enqueue would then silently drop
+    // them on a Closed readable. Defer the whole close (flush included)
+    // behind the pending jobs; `transform_write_job_done` resumes it.
+    if let Some(&pending) = TRANSFORM_PENDING_CLOSE.lock().unwrap().get(&writable_id) {
+        return pending as *mut Promise;
+    }
     let promise = js_promise_new();
+    let jobs_pending = TRANSFORM_PENDING_WRITES
+        .lock()
+        .unwrap()
+        .get(&writable_id)
+        .copied()
+        .unwrap_or(0)
+        > 0;
+    if jobs_pending {
+        TRANSFORM_PENDING_CLOSE
+            .lock()
+            .unwrap()
+            .insert(writable_id, promise as usize);
+        // Close is requested: writes arriving during the wait must reject
+        // ("Stream is closed or closing"), same as the plain-writable path.
+        if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+            if s.state == WritableState::Writable {
+                s.state = WritableState::Closing;
+            }
+        }
+        return promise;
+    }
+    perform_transform_close(writable_id, promise);
+    promise
+}
+
+unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     let mut handled_native = false;
     let mut native_error = None;
     let (flush_cb, readable_id) = {
@@ -466,7 +567,7 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
         }
         super::idalloc::retire_writable_terminal(writable_id);
         js_promise_reject(promise, f64::from_bits(error_bits));
-        return promise;
+        return;
     }
     // Invoke the user `flush(controller)`. It may return a promise: e.g.
     // Next.js' `createBufferedTransformStream` buffers chunks in `transform()`
@@ -497,7 +598,7 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
                     2 => {
                         let reason = perry_runtime::promise::js_promise_reason(inner);
                         error_transform_close(writable_id, readable_id, promise, reason.to_bits());
-                        return promise;
+                        return;
                     }
                     // Pending — chain the close onto flush's settlement so the
                     // deferred enqueue lands on the still-open readable first.
@@ -541,7 +642,7 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
                             promise as i64,
                         );
                         let _ = perry_runtime::promise::js_promise_then(inner, fulfill, reject);
-                        return promise;
+                        return;
                     }
                 }
             }
@@ -549,7 +650,6 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     }
 
     finish_transform_close(writable_id, readable_id, promise);
-    promise
 }
 
 /// Close a TransformStream's writable side once `flush()` has settled: close
