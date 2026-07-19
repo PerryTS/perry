@@ -33,9 +33,23 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+/// Upper bound on distinct interned env keys. Real bodies reuse a tiny
+/// identifier vocabulary; this only guards against codegen-heavy / adversarial
+/// `new Function` bodies with an unbounded set of distinct local names, each of
+/// which would otherwise pin one never-freed longlived allocation for the
+/// thread's life.
+const ENV_KEY_CACHE_MAX: usize = 4096;
+
 fn key_string(name: &str) -> *const crate::string::StringHeader {
     if let Some(ptr) = ENV_KEY_CACHE.with(|c| c.borrow().get(name).copied()) {
         return ptr;
+    }
+    // Past the cap, fall back to the pre-cache path: a fresh GC-managed key per
+    // access (correct — this is exactly the old behavior — just uncached and
+    // collectable, so the longlived arena can't grow without limit).
+    if ENV_KEY_CACHE.with(|c| c.borrow().len()) >= ENV_KEY_CACHE_MAX {
+        return crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+            as *const crate::string::StringHeader;
     }
     let ptr = crate::string::js_string_from_bytes_longlived(name.as_ptr(), name.len() as u32);
     ENV_KEY_CACHE.with(|c| {

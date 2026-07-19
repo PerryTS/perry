@@ -105,12 +105,23 @@ thread_local! {
     /// miss (no slower than before). Bounded so a pathological distinct-source
     /// stream can't grow it (or `FN_REGISTRY`) without limit.
     static SOURCE_FN_CACHE: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
+
+    /// Aggregate byte size of the source strings currently held in
+    /// `SOURCE_FN_CACHE`. The entry-count cap alone doesn't bound memory —
+    /// `new Function` bodies are script-controlled and can be large (real
+    /// TypeBox validators reach ~58 KB), so 4096 large distinct bodies would
+    /// retain hundreds of MB. This tracks the total so we can cap by size too.
+    static SOURCE_FN_CACHE_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Upper bound on distinct cached sources. Codegen sites are few; this only
 /// guards against an adversarial stream of unique bodies. On overflow new
 /// distinct sources still work — they just aren't memoized.
 const SOURCE_FN_CACHE_MAX: usize = 4096;
+
+/// Aggregate byte cap on cached source strings (defense-in-depth alongside the
+/// entry-count cap). Past this, new distinct sources still run — just uncached.
+const SOURCE_FN_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 // ── #6693 runtime A/B toggles ───────────────────────────────────────────────
 // Read once per process, then a relaxed atomic load on the hot path. 0 =
@@ -286,7 +297,11 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
                 let id = prepare_source(&source);
                 SOURCE_FN_CACHE.with(|c| {
                     let mut c = c.borrow_mut();
-                    if c.len() < SOURCE_FN_CACHE_MAX {
+                    let bytes = SOURCE_FN_CACHE_BYTES.with(|b| b.get());
+                    if c.len() < SOURCE_FN_CACHE_MAX
+                        && bytes + source.len() <= SOURCE_FN_CACHE_MAX_BYTES
+                    {
+                        SOURCE_FN_CACHE_BYTES.with(|b| b.set(bytes + source.len()));
                         c.insert(source, id);
                     }
                 });
