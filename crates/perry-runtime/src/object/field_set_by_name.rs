@@ -308,10 +308,24 @@ pub extern "C" fn js_object_set_field_by_name(
     // the value is a *registered* proxy so a real heap object whose masked
     // address happens to be small isn't misrouted.
     {
+        // #6699 (mirror of the read side): the class-field IC-miss fallback
+        // (`js_class_field_set_fallback`, reached when a typed-`this` field set
+        // rejects an off-shape receiver) forwards the *full NaN-box* value with
+        // the `0x7FFD` heap-pointer tag still set, whereas the `obj.prop++`
+        // path (#5135) hands us the bare masked band. A tagged proxy value is
+        // not itself in the proxy id band, so the un-normalized test missed it
+        // and a `this.field = v` write whose `this` is a Proxy skipped the set
+        // trap. Strip the tag first (the FAST LANE below already does) so both
+        // encodings route to `js_proxy_set` identically.
         let addr = obj as u64;
-        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+        let raw_addr = if (addr >> 48) == 0x7FFD {
+            addr & 0x0000_FFFF_FFFF_FFFF
+        } else {
+            addr
+        };
+        if crate::value::addr_class::is_proxy_id_band(raw_addr as usize) && !key.is_null() {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 crate::proxy::js_proxy_set(boxed, key_f64, value);

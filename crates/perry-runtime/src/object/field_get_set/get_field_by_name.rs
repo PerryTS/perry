@@ -49,10 +49,29 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         // Proxy ids live in the proxy id band; `js_proxy_is_proxy` confirms
         // it is a *registered* proxy before we route to the proxy getter.
+        //
+        // #6699: the receiver arrives in two encodings. A generic property read
+        // passes the raw small proxy-id pointer (`top16 == 0`). The class-field
+        // IC-miss fallback (`js_object_get_field_by_name_f64`, reached when the
+        // typed-`this` field guard rejects an off-shape receiver) instead
+        // forwards the *full NaN-box* value with the `0x7FFD` heap-pointer tag
+        // still set — exactly the tagged encoding the FAST LANE below already
+        // strips. A tagged proxy value (`0x7FFD_0000_000F_xxxx`) is not itself
+        // in the proxy id band, so the un-normalized band test missed it and the
+        // read fell through to `undefined` instead of the get trap. This bit a
+        // typed-`this` field read whose `this` is a Proxy — e.g. pi's TUI theme
+        // is a `new Proxy({}, …)` whose `get` trap forwards to the real Theme;
+        // `theme.fg()` runs with `this === proxy`, and `this.fgColors` must hit
+        // the trap. Normalize the tag first so both encodings route identically.
         let addr = obj as u64;
-        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+        let raw_addr = if (addr >> 48) == 0x7FFD {
+            addr & 0x0000_FFFF_FFFF_FFFF
+        } else {
+            addr
+        };
+        if crate::value::addr_class::is_proxy_id_band(raw_addr as usize) && !key.is_null() {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 let v = crate::proxy::js_proxy_get(boxed, key_f64);
