@@ -559,6 +559,46 @@ pub extern "C" fn js_async_first_call(step_closure_nanbox: f64) -> f64 {
     result
 }
 
+/// #6709. Entry point for an async-generator activation. Like
+/// `js_async_first_call`, but the caller supplies the resume `value` and an
+/// `is_error` flag instead of the hard-coded `(undefined, false)`.
+///
+/// Each `gen.next(v)` / `gen.throw(e)` / `.return(v)` on a lowered async
+/// generator starts a fresh async-step activation that resumes the SHARED
+/// state machine (the generator's `__state`/`__done`/`__sent` boxes persist
+/// across calls). The activation's step body reads its resumed value from the
+/// first arg (delivered to `__sent`) and routes an error (`is_error = true`) at
+/// the current suspend state; it returns either an already-settled Promise
+/// (synchronous yield/completion), a fresh pending Promise (the body suspended
+/// at an inner `await` via `js_async_step_chain`), or a rejected Promise (an
+/// uncaught throw). The `trap_next = null` reset mirrors `js_async_first_call`
+/// so a nested async fn/gen the body invokes cannot prematurely settle THIS
+/// activation's result promise; `prev` is restored on exit for composition.
+#[no_mangle]
+pub extern "C" fn js_async_generator_resume(
+    step_closure_nanbox: f64,
+    value: f64,
+    is_error: f64,
+) -> f64 {
+    let ptr = crate::value::js_nanbox_get_pointer(step_closure_nanbox)
+        as *mut crate::closure::ClosureHeader;
+    let prev = INLINE_TRAP.with(|c| {
+        let old = c.get();
+        c.set(InlineTrap {
+            trap_next: std::ptr::null_mut(),
+            current_step: ptr as usize,
+        });
+        old
+    });
+    let result = crate::closure::js_closure_call2(ptr, value, is_error);
+    INLINE_TRAP.with(|c| c.set(prev));
+    result
+}
+
+#[used]
+static KEEP_JS_ASYNC_GENERATOR_RESUME: extern "C" fn(f64, f64, f64) -> f64 =
+    js_async_generator_resume;
+
 // Thread-local single-slot cache for async-step thunks. Keyed by the
 // step closure pointer. When the same step closure is used across
 // multiple promise-of-promise awaits (the simple-probe shape), we

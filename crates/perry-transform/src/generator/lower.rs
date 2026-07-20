@@ -30,9 +30,208 @@ pub(crate) use call_this::{
 };
 pub(crate) use resume::{
     generator_executing_guard, generator_executing_type_error, generator_resume_rethrow,
-    prepend_executing_clear_before_returns, promise_reject, wrap_generator_resume_body,
+    prepend_executing_clear_before_returns, promise_reject, wrap_async_gen_step_body,
+    wrap_generator_resume_body,
 };
 pub(crate) use yield_await::await_async_generator_yield_operands;
+
+/// #6709: read the currently-running step closure (`Expr::CurrentStepClosure`).
+fn current_step() -> Expr {
+    Expr::CurrentStepClosure
+}
+
+/// #6709: `AsyncStepChain(value, __step_self)` — suspend the async-generator
+/// activation on the microtask queue (an inner `await`) and resume the step
+/// when `value` settles.
+fn async_step_chain(value: Expr) -> Expr {
+    Expr::AsyncStepChain {
+        value: Box::new(value),
+        step_closure: Box::new(current_step()),
+    }
+}
+
+/// #6709: `AsyncStepDone({value, done}, __step_self)` — settle THIS activation's
+/// result Promise with the iterator-result object (a consumer `yield` or the
+/// generator's completion) and stop, leaving the state machine suspended for
+/// the next `.next()`.
+fn async_step_resolve(iter_result: Expr) -> Expr {
+    Expr::AsyncStepDone {
+        value: Box::new(iter_result),
+        step_closure: Box::new(current_step()),
+    }
+}
+
+/// #6709: Build the `while (true) { <state dispatch> }` body over `states`.
+///
+/// `async_step = false` reproduces the historical sync-generator / busy-wait
+/// shape: yield/done states `return {value, done}`, and (async-generator only)
+/// `await` states busy-wait inline (`__sent = await value; continue`). This
+/// feeds the `.return()` closure and sync generators unchanged.
+///
+/// `async_step = true` is the async-generator suspend shape: `await` states
+/// `return AsyncStepChain(value, __step_self)` (suspend on the microtask
+/// queue); yield/done states still emit `return {value, done}` here — the
+/// caller runs [`wrap_iter_result_returns_in_async_step_done`] over the FINAL
+/// step body afterward to convert every iter-result return into an
+/// `AsyncStepDone` that settles the activation's result Promise. Splitting it
+/// this way lets the wrap also cover returns that `wrap_dispatch_loop` and the
+/// throw-routing inject later.
+#[allow(clippy::too_many_arguments)]
+fn build_dispatch_while_body(
+    states: &[State],
+    async_step: bool,
+    state_id: LocalId,
+    done_id: LocalId,
+    sent_id: LocalId,
+) -> Vec<Stmt> {
+    let mut while_body: Vec<Stmt> = Vec::new();
+    for state in states {
+        let num = state.num;
+        let mut case_body = state.body.clone();
+        match &state.exit {
+            StateExit::Yield { value, next_state } => {
+                if body_contains_return(&case_body) {
+                    prepend_done_before_returns(&mut case_body, done_id);
+                    rewrite_returns_as_done(&mut case_body);
+                }
+                case_body.push(Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(*next_state as f64)),
+                )));
+                case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
+            }
+            StateExit::Await { value, next_state } => {
+                case_body.push(Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(*next_state as f64)),
+                )));
+                if async_step {
+                    // Suspend on the microtask queue; resume delivers the
+                    // settled value through `__sent`.
+                    case_body.push(Stmt::Return(Some(async_step_chain(value.clone()))));
+                } else {
+                    // Busy-wait fallback (the `.return()` continuation path):
+                    // evaluate the await inline and continue to the next state.
+                    case_body.push(Stmt::Expr(Expr::LocalSet(
+                        sent_id,
+                        Box::new(Expr::Await(Box::new(value.clone()))),
+                    )));
+                    case_body.push(Stmt::Continue);
+                }
+            }
+            StateExit::Goto(next_state) => {
+                if body_contains_return(&case_body) {
+                    prepend_done_before_returns(&mut case_body, done_id);
+                    rewrite_returns_as_done(&mut case_body);
+                }
+                case_body.push(Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(*next_state as f64)),
+                )));
+                case_body.push(Stmt::Continue);
+            }
+            StateExit::Done => {
+                let has_return = body_contains_return(&case_body);
+                if has_return {
+                    prepend_done_before_returns(&mut case_body, done_id);
+                    rewrite_returns_as_done(&mut case_body);
+                    let last_is_return = matches!(case_body.last(), Some(Stmt::Return(_)));
+                    if !last_is_return {
+                        case_body.push(Stmt::Expr(Expr::LocalSet(
+                            done_id,
+                            Box::new(Expr::Bool(true)),
+                        )));
+                        case_body
+                            .push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+                    }
+                } else {
+                    case_body.push(Stmt::Expr(Expr::LocalSet(
+                        done_id,
+                        Box::new(Expr::Bool(true)),
+                    )));
+                    case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+                }
+            }
+        }
+
+        while_body.push(Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(state_id)),
+                right: Box::new(Expr::Number(num as f64)),
+            },
+            then_branch: case_body,
+            else_branch: None,
+        });
+    }
+
+    // Default: done
+    while_body.push(Stmt::Expr(Expr::LocalSet(
+        done_id,
+        Box::new(Expr::Bool(true)),
+    )));
+    while_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+    while_body
+}
+
+/// #6709: Rewrite every `Stmt::Return(Some(<iter-result object>))` in an
+/// async-generator step body into `return AsyncStepDone(<iter-result>,
+/// __step_self)`, so a consumer `yield` / completion settles the activation's
+/// result Promise with `{value, done}` instead of returning the raw object.
+/// `AsyncStepChain` (await) returns are NOT iter-result objects, so they are
+/// left untouched. Does not descend into nested closures (their returns are
+/// their own). Recurses through control flow.
+fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
+    for stmt in stmts.iter_mut() {
+        match stmt {
+            Stmt::Return(Some(expr)) => {
+                if is_iter_result(expr) {
+                    let inner = std::mem::replace(expr, Expr::Undefined);
+                    *expr = async_step_resolve(inner);
+                }
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                wrap_iter_result_returns_in_async_step_done(then_branch);
+                if let Some(eb) = else_branch {
+                    wrap_iter_result_returns_in_async_step_done(eb);
+                }
+            }
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::For { body, .. } => {
+                wrap_iter_result_returns_in_async_step_done(body);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                wrap_iter_result_returns_in_async_step_done(body);
+                if let Some(c) = catch {
+                    wrap_iter_result_returns_in_async_step_done(&mut c.body);
+                }
+                if let Some(f) = finally {
+                    wrap_iter_result_returns_in_async_step_done(f);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    wrap_iter_result_returns_in_async_step_done(&mut case.body);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                let mut v = vec![std::mem::replace(body.as_mut(), Stmt::Break)];
+                wrap_iter_result_returns_in_async_step_done(&mut v);
+                **body = v.into_iter().next().unwrap();
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Transform a single generator function into a state machine.
 pub fn transform_generator_function(
@@ -137,6 +336,15 @@ pub fn transform_generator_function_with_extra_captures(
     // remaining yield is at a statement-level position this pass recognises.
     if is_async_generator {
         await_async_generator_yield_operands(&mut func.body, next_local_id);
+        // #6709: hoist every non-top-level `await` (nested in a call arg, a
+        // binary operand, an if/while condition, …) into a fresh
+        // `let __awaitN = await <expr>;` at statement level — including the
+        // yield-operand awaits just inserted above — so `linearize_body`'s
+        // `StateExit::Await` arms see each `await` in a position they split
+        // into a suspend state. Mirrors the plain-async pre-pass
+        // (`transform_async_to_generator`), which does the same before it
+        // rewrites `await`→`yield`.
+        crate::async_to_generator::hoist_awaits_in_stmts(&mut func.body, next_local_id);
     }
 
     // #6354: a per-iteration binding a closure WRITES that also outlives a
@@ -172,6 +380,17 @@ pub fn transform_generator_function_with_extra_captures(
     // completion checks are inert on the async path.)
     let pending_type_id = alloc_local(next_local_id);
     let pending_value_id = alloc_local(next_local_id);
+
+    // #6709: the shared async-generator step closure. `.next(v)`/`.throw(e)`
+    // are thin outer closures that call `js_async_generator_resume(__agstep,
+    // v, is_error)`; `__agstep` drives the state machine and suspends inner
+    // `await`s on the microtask queue. It is boxed + captured like the other
+    // state-machine internals so `.next`/`.throw` resolve it per-call.
+    let agstep_id = if is_async_generator {
+        Some(alloc_local(next_local_id))
+    } else {
+        None
+    };
 
     // Collect all states from the generator body
     let mut states: Vec<State> = Vec::new();
@@ -285,132 +504,30 @@ pub fn transform_generator_function_with_extra_captures(
         rewrite_hoisted_lets_in_stmts(&mut state.body, &hoisted_ids);
     }
 
-    // Build the if-chain inside while(true)
-    let mut while_body: Vec<Stmt> = Vec::new();
-    for state in states {
-        let State { num, body, exit } = state;
-        let mut case_body = body;
-        match exit {
-            StateExit::Yield { value, next_state } => {
-                // #1047: a user `return X` inside this state body — at
-                // any depth — must terminate the whole async function,
-                // not just exit the state. Without rewriting, the bare
-                // `return existing.kid` returns a non-iter-result from
-                // next(), the AsyncStepChain caller treats the missing
-                // `.done` as `false`, and re-enters the same state with
-                // the SAME state_id (the synthesized `state_id = N + 1`
-                // append below is unreachable when the user's return
-                // fires first). Result: infinite loop. Same fix as the
-                // `StateExit::Done` arm — set `__gen_done = true` and
-                // wrap the returned value in an iter-result with
-                // `done = true` so the async-step driver short-circuits.
-                if body_contains_return(&case_body) {
-                    prepend_done_before_returns(&mut case_body, done_id);
-                    rewrite_returns_as_done(&mut case_body);
-                }
-                case_body.push(Stmt::Expr(Expr::LocalSet(
-                    state_id,
-                    Box::new(Expr::Number(next_state as f64)),
-                )));
-                case_body.push(Stmt::Return(Some(make_iter_result(value, false))));
-            }
-            StateExit::Goto(next_state) => {
-                // #1196: a user `return X` inside this state body — at any
-                // depth — must terminate the whole async function, not just
-                // fall through to `next_state`. Mirrors the Yield/Done arms
-                // above. Without the rewrite, `rewrite_returns_to_labeled_break`
-                // later strips the return to `[Expr(X), LabeledBreak]`
-                // (value discarded, IterResult never set). The post-step
-                // code then sees the IterResult left over from the previous
-                // yield (done=false) and re-chains the step closure onto
-                // it via AsyncStepChain — re-entering this same state,
-                // taking the same early-return, and looping forever.
-                // Symptom: ~123 MB arena growth per outer call, GC every
-                // ~250 ms, 90%+ CPU. Triggered when the state body fans
-                // into a Goto (e.g. an `if (...) return X;` immediately
-                // before a `for` loop with `await` inside).
-                if body_contains_return(&case_body) {
-                    prepend_done_before_returns(&mut case_body, done_id);
-                    rewrite_returns_as_done(&mut case_body);
-                }
-                case_body.push(Stmt::Expr(Expr::LocalSet(
-                    state_id,
-                    Box::new(Expr::Number(next_state as f64)),
-                )));
-                case_body.push(Stmt::Continue);
-            }
-            StateExit::Done => {
-                // Check if the body already has a return (from the user's `return expr`)
-                // — at ANY depth, since user code can `return` inside `if` /
-                // `try` / `switch` etc. inside a state body. Without the
-                // recursion (#594), a user `return X` inside an
-                // `if (cond) { return X }` block fell through both rewrites
-                // — the bare `Return(X)` reached the iterator caller and
-                // `__step_r.done` access threw "Cannot read properties of
-                // undefined".
-                let has_return = body_contains_return(&case_body);
-                if has_return {
-                    // Rewrite existing returns to iter results, and prepend done=true
-                    // Insert done=true BEFORE the return so it's reachable.
-                    // Both passes recurse through nested control flow so a
-                    // `return X` at any depth inside this state body is
-                    // covered.
-                    prepend_done_before_returns(&mut case_body, done_id);
-                    rewrite_returns_as_done(&mut case_body);
-                    // The body still needs a trailing iter-result if NOT every
-                    // path returns (e.g. `if (cond) return X` falls through
-                    // when `cond` is false). Append a default
-                    // `__gen_done = true; return { value: undefined, done: true }`
-                    // unless the LAST stmt is unconditionally a Return.
-                    let last_is_return = matches!(case_body.last(), Some(Stmt::Return(_)));
-                    if !last_is_return {
-                        case_body.push(Stmt::Expr(Expr::LocalSet(
-                            done_id,
-                            Box::new(Expr::Bool(true)),
-                        )));
-                        case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
-                    }
-                } else {
-                    // No explicit return: add done + default return
-                    case_body.push(Stmt::Expr(Expr::LocalSet(
-                        done_id,
-                        Box::new(Expr::Bool(true)),
-                    )));
-                    case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
-                }
-            }
-        }
-
-        while_body.push(Stmt::If {
-            condition: Expr::Compare {
-                op: CompareOp::Eq,
-                left: Box::new(Expr::LocalGet(state_id)),
-                right: Box::new(Expr::Number(num as f64)),
-            },
-            then_branch: case_body,
-            else_branch: None,
-        });
-    }
-
-    // Default: done
-    while_body.push(Stmt::Expr(Expr::LocalSet(
-        done_id,
-        Box::new(Expr::Bool(true)),
-    )));
-    while_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+    // Build the `while (true) { <state dispatch> }` body. #6709: for async
+    // generators, `.next()`/`.throw()` drive the state machine through an
+    // async-step driver, so `await` states must suspend on the microtask queue
+    // (`async_step = true`). Sync generators and the `was_plain_async` path use
+    // the historical shape (`async_step = false`); they have no `await` states.
+    let while_body =
+        build_dispatch_while_body(&states, is_async_generator, state_id, done_id, sent_id);
 
     // The next() closure parameter — receives the value from next(val) calls
     let next_param_id = alloc_local(next_local_id);
 
     // #4374: clone the state-dispatch loop so the .throw() closure can
-    // *continue* the state machine after running a catch handler — running
-    // the inlined finally and proceeding to the next yield / completion,
-    // instead of returning {value: undefined, done: false} and deferring to
-    // the next .next(). Only the sync-generator .throw() path uses this.
+    // *continue* the state machine after running a catch handler.
     let while_body_for_throw = while_body.clone();
     // #4438 B2-finally: the `.return()` closure needs the same continuation loop
     // when it routes into a yielding finally (so the finally's `yield`s suspend).
-    let while_body_for_return = while_body.clone();
+    // #6709: the `.return()` closure is NOT an async-step driver (it cannot
+    // chain an inner `await` through `CurrentStepClosure`), so its dispatch
+    // keeps the busy-wait `await` shape — matching pre-#6709 `.return()`.
+    let while_body_for_return = if is_async_generator {
+        build_dispatch_while_body(&states, false, state_id, done_id, sent_id)
+    } else {
+        while_body.clone()
+    };
 
     // #4438: wrap each state-dispatch loop body in a real try/catch so a `throw`
     // *executing inside a try block during dispatch* is caught and routed to the
@@ -562,6 +679,12 @@ pub fn transform_generator_function_with_extra_captures(
         prealloc_ids.push(pending_type_id);
         prealloc_ids.push(pending_value_id);
     }
+    // #6709: box the shared async-generator step closure so `.next`/`.throw`
+    // read a distinct instance per generator activation (closure-cache key by
+    // box pointer, matching the #1029 idempotency fix for the other internals).
+    if let Some(id) = agstep_id {
+        prealloc_ids.push(id);
+    }
     for (var_id, _, _) in &hoisted {
         prealloc_ids.push(*var_id);
     }
@@ -672,6 +795,13 @@ pub fn transform_generator_function_with_extra_captures(
         mutable_captures.push(pending_type_id);
         mutable_captures.push(pending_value_id);
     }
+    // #6709: the outer `.next`/`.throw` closures reference `__agstep` (and the
+    // step captures the same boxes as the resume closures); capture it by
+    // reference like the other boxed state-machine internals.
+    if let Some(id) = agstep_id {
+        captures.push(id);
+        mutable_captures.push(id);
+    }
     for param in &func.params {
         captures.push(param.id);
     }
@@ -767,6 +897,10 @@ pub fn transform_generator_function_with_extra_captures(
         // The flag is safe to keep set — the generator transform only
         // checks it here, and codegen only reads it.
     } else {
+        // #6709: for async generators, the shared `__agstep` closure to bind
+        // into a boxed local (emitted into `new_body` just before the iterator
+        // object is returned). `None` for sync generators.
+        let mut agstep_init: Option<(LocalId, Expr)> = None;
         // Build .return(value) closure — immediately marks done and returns {value, done: true}
         let return_param_id = alloc_local(next_local_id);
         let return_func_id_val = {
@@ -895,12 +1029,21 @@ pub fn transform_generator_function_with_extra_captures(
         // state machine via the `while_body_for_throw` continuation loop, so it
         // is built BEFORE the loop is moved into `throw_continuation` below.
         // Empty for sync generators (`delegations` is only recorded for async).
+        // #6709: for async generators `.throw(e)` is the error arm of the
+        // shared step closure, so the thrown value arrives through the step's
+        // value param (`next_param_id`) rather than a dedicated `.throw`
+        // closure param. Sync generators keep the dedicated `throw_param_id`.
+        let throw_val_id = if is_async_generator {
+            next_param_id
+        } else {
+            throw_param_id
+        };
         let yield_star_throw_routes = build_yield_star_throw_routes(
             &delegations,
             &catches,
             &finallys,
             state_id,
-            throw_param_id,
+            throw_val_id,
             pending_type_id,
             pending_value_id,
             &while_body_for_throw,
@@ -934,80 +1077,218 @@ pub fn transform_generator_function_with_extra_captures(
             &finallys,
             state_id,
             done_id,
-            throw_param_id,
+            throw_val_id,
             inner_catch_id,
             pending_type_id,
             pending_value_id,
             &hoisted_ids,
             throw_continuation,
         ));
-        let throw_catch_id = alloc_local(next_local_id);
-        let throw_body = wrap_generator_resume_body(
-            throw_resume_body,
-            executing_id,
-            done_id,
-            throw_catch_id,
-            is_async_generator,
-        );
-        let throw_closure = Expr::Closure {
-            func_id: throw_func_id_val,
-            params: vec![perry_hir::Param {
-                id: throw_param_id,
-                name: "__throw_val".to_string(),
-                ty: Type::Any,
-                is_rest: false,
-                default: None,
-                decorators: Vec::new(),
-                arguments_object: None,
-            }],
-            return_type: Type::Any,
-            body: throw_body,
-            captures: captures.clone(),
-            mutable_captures: mutable_captures.clone(),
-            captures_this,
-            captures_new_target: false,
-            enclosing_class: enclosing_class.clone(),
-            is_arrow: false,
-            is_strict: func.is_strict,
-            is_async: false,
-            is_generator: false,
-        };
+        // #6709: for async generators, `.next`/`.throw` are thin outer closures
+        // driving a shared async-step `__agstep` closure so inner `await`s
+        // suspend on the microtask queue; sync generators keep direct closures.
+        let (next_closure, throw_closure) = if is_async_generator {
+            // Non-error arm = the next dispatch (deliver `value` to `__sent`);
+            // insert the executing flag before the dispatch loop.
+            next_resume_body.insert(
+                2,
+                Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
+            );
+            let is_error_param_id = alloc_local(next_local_id);
+            let agstep_func_id = {
+                let id = *next_func_id;
+                *next_func_id += 1;
+                id
+            };
+            let agstep_catch_id = alloc_local(next_local_id);
 
-        // Plain generator: build the iterator object and return it directly.
-        let next_catch_id = alloc_local(next_local_id);
-        next_resume_body.insert(
-            2,
-            Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
-        );
-        let next_body = wrap_generator_resume_body(
-            next_resume_body,
-            executing_id,
-            done_id,
-            next_catch_id,
-            is_async_generator,
-        );
-        let next_closure = Expr::Closure {
-            func_id: next_func_id_val,
-            params: vec![perry_hir::Param {
-                id: next_param_id,
-                name: "__val".to_string(),
-                ty: Type::Any,
-                is_rest: false,
-                default: None,
-                decorators: Vec::new(),
-                arguments_object: None,
-            }],
-            return_type: Type::Any,
-            body: next_body,
-            captures: captures.clone(),
-            mutable_captures: mutable_captures.clone(),
-            captures_this,
-            captures_new_target: false,
-            enclosing_class: enclosing_class.clone(),
-            is_arrow: false,
-            is_strict: func.is_strict,
-            is_async: false,
-            is_generator: false,
+            // `if (__is_error) { <throw routing> } else { <next dispatch> }`.
+            // An `await` that REJECTS re-enters the step with __is_error = true,
+            // routing the rejection to the enclosing catch exactly like an
+            // explicit `.throw()`; a settled `await` re-enters with
+            // __is_error = false, delivering the value through `__sent`.
+            let step_inner = vec![Stmt::If {
+                condition: Expr::LocalGet(is_error_param_id),
+                then_branch: throw_resume_body,
+                else_branch: Some(next_resume_body),
+            }];
+            let mut step_body =
+                wrap_async_gen_step_body(step_inner, executing_id, done_id, agstep_catch_id);
+            // Turn every `{value, done}` return into an `AsyncStepDone` that
+            // settles the activation's result Promise; `AsyncStepChain` (await)
+            // returns are left as-is.
+            wrap_iter_result_returns_in_async_step_done(&mut step_body);
+
+            let agstep_local_id = agstep_id.expect("agstep_id set for async generators");
+            let agstep_closure = Expr::Closure {
+                func_id: agstep_func_id,
+                params: vec![
+                    perry_hir::Param {
+                        id: next_param_id,
+                        name: "__val".to_string(),
+                        ty: Type::Any,
+                        is_rest: false,
+                        default: None,
+                        decorators: Vec::new(),
+                        arguments_object: None,
+                    },
+                    perry_hir::Param {
+                        id: is_error_param_id,
+                        name: "__is_error".to_string(),
+                        ty: Type::Boolean,
+                        is_rest: false,
+                        default: None,
+                        decorators: Vec::new(),
+                        arguments_object: None,
+                    },
+                ],
+                return_type: Type::Any,
+                body: step_body,
+                captures: captures.clone(),
+                mutable_captures: mutable_captures.clone(),
+                captures_this,
+                captures_new_target: false,
+                enclosing_class: enclosing_class.clone(),
+                is_arrow: false,
+                is_strict: func.is_strict,
+                is_async: false,
+                is_generator: false,
+            };
+            // `let __agstep = <agstep_closure>` is emitted into the outer body
+            // just before the iterator object is returned (see `agstep_init`).
+            agstep_init = Some((agstep_local_id, agstep_closure));
+
+            // Outer `.next(v)` closure: `return js_async_generator_resume(
+            //   __agstep, v, false)`.
+            let outer_next_param_id = alloc_local(next_local_id);
+            let outer_next_closure = Expr::Closure {
+                func_id: next_func_id_val,
+                params: vec![perry_hir::Param {
+                    id: outer_next_param_id,
+                    name: "__val".to_string(),
+                    ty: Type::Any,
+                    is_rest: false,
+                    default: None,
+                    decorators: Vec::new(),
+                    arguments_object: None,
+                }],
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(Expr::AsyncGenResume {
+                    step_closure: Box::new(Expr::LocalGet(agstep_local_id)),
+                    value: Box::new(Expr::LocalGet(outer_next_param_id)),
+                    is_error: false,
+                }))],
+                captures: captures.clone(),
+                mutable_captures: mutable_captures.clone(),
+                captures_this,
+                captures_new_target: false,
+                enclosing_class: enclosing_class.clone(),
+                is_arrow: false,
+                is_strict: func.is_strict,
+                is_async: false,
+                is_generator: false,
+            };
+            // Outer `.throw(e)` closure: `return js_async_generator_resume(
+            //   __agstep, e, true)`.
+            let outer_throw_param_id = alloc_local(next_local_id);
+            let outer_throw_closure = Expr::Closure {
+                func_id: throw_func_id_val,
+                params: vec![perry_hir::Param {
+                    id: outer_throw_param_id,
+                    name: "__throw_val".to_string(),
+                    ty: Type::Any,
+                    is_rest: false,
+                    default: None,
+                    decorators: Vec::new(),
+                    arguments_object: None,
+                }],
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(Expr::AsyncGenResume {
+                    step_closure: Box::new(Expr::LocalGet(agstep_local_id)),
+                    value: Box::new(Expr::LocalGet(outer_throw_param_id)),
+                    is_error: true,
+                }))],
+                captures: captures.clone(),
+                mutable_captures: mutable_captures.clone(),
+                captures_this,
+                captures_new_target: false,
+                enclosing_class: enclosing_class.clone(),
+                is_arrow: false,
+                is_strict: func.is_strict,
+                is_async: false,
+                is_generator: false,
+            };
+            (outer_next_closure, outer_throw_closure)
+        } else {
+            let throw_catch_id = alloc_local(next_local_id);
+            let throw_body = wrap_generator_resume_body(
+                throw_resume_body,
+                executing_id,
+                done_id,
+                throw_catch_id,
+                is_async_generator,
+            );
+            let throw_closure = Expr::Closure {
+                func_id: throw_func_id_val,
+                params: vec![perry_hir::Param {
+                    id: throw_param_id,
+                    name: "__throw_val".to_string(),
+                    ty: Type::Any,
+                    is_rest: false,
+                    default: None,
+                    decorators: Vec::new(),
+                    arguments_object: None,
+                }],
+                return_type: Type::Any,
+                body: throw_body,
+                captures: captures.clone(),
+                mutable_captures: mutable_captures.clone(),
+                captures_this,
+                captures_new_target: false,
+                enclosing_class: enclosing_class.clone(),
+                is_arrow: false,
+                is_strict: func.is_strict,
+                is_async: false,
+                is_generator: false,
+            };
+
+            // Plain generator: build the iterator object and return it directly.
+            let next_catch_id = alloc_local(next_local_id);
+            next_resume_body.insert(
+                2,
+                Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
+            );
+            let next_body = wrap_generator_resume_body(
+                next_resume_body,
+                executing_id,
+                done_id,
+                next_catch_id,
+                is_async_generator,
+            );
+            let next_closure = Expr::Closure {
+                func_id: next_func_id_val,
+                params: vec![perry_hir::Param {
+                    id: next_param_id,
+                    name: "__val".to_string(),
+                    ty: Type::Any,
+                    is_rest: false,
+                    default: None,
+                    decorators: Vec::new(),
+                    arguments_object: None,
+                }],
+                return_type: Type::Any,
+                body: next_body,
+                captures: captures.clone(),
+                mutable_captures: mutable_captures.clone(),
+                captures_this,
+                captures_new_target: false,
+                enclosing_class: enclosing_class.clone(),
+                is_arrow: false,
+                is_strict: func.is_strict,
+                is_async: false,
+                is_generator: false,
+            };
+            (next_closure, throw_closure)
         };
         let iter_obj = Expr::Object(vec![
             ("next".to_string(), next_closure),
@@ -1025,6 +1306,18 @@ pub fn transform_generator_function_with_extra_captures(
             obj: Box::new(iter_obj),
             is_async: is_async_generator,
         };
+        // #6709: bind the shared async-generator step closure into its boxed
+        // local before returning the iterator object, so the `.next`/`.throw`
+        // closures (which captured the box) read a fresh `__agstep` per call.
+        if let Some((agstep_local_id, agstep_closure)) = agstep_init {
+            new_body.push(Stmt::Let {
+                id: agstep_local_id,
+                name: "__agstep".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(agstep_closure),
+            });
+        }
         new_body.push(Stmt::Return(Some(linked)));
     }
 

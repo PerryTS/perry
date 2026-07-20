@@ -1352,6 +1352,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             Type::Promise(Box::new(Type::Named("WebAssembly.Module".to_string())))
         }
         Expr::AsyncFirstCall { .. }
+        | Expr::AsyncGenResume { .. }
         | Expr::WebAssemblyInstantiate(_)
         | Expr::WebCryptoDigest { .. }
         | Expr::WebCryptoImportKey { .. }

@@ -311,6 +311,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::AsyncStepDone { .. }
         | Expr::CurrentStepClosure
         | Expr::AsyncFirstCall { .. }
+        | Expr::AsyncGenResume { .. }
         | Expr::ObjectGetOwnPropertyNames(..)
         | Expr::MathHypot(..)
         | Expr::RegExpExecGroups => super::misc_methods::lower(ctx, expr),

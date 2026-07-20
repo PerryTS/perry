@@ -47,9 +47,9 @@ pub(crate) use per_iteration::{
     rewrite_written_captures_to_cells, snapshot_suspended_loop_captures,
 };
 pub(crate) use rewrite_returns::{
-    body_contains_return, prepend_done_before_returns, rewrite_catch_returns_to_iter_result,
-    rewrite_iter_results_in_stmts, rewrite_returns_as_done, rewrite_returns_to_labeled_break,
-    rewrite_yield_to_await_in_stmts,
+    body_contains_return, is_iter_result, prepend_done_before_returns,
+    rewrite_catch_returns_to_iter_result, rewrite_iter_results_in_stmts, rewrite_returns_as_done,
+    rewrite_returns_to_labeled_break, rewrite_yield_to_await_in_stmts,
 };
 
 // #3664: per-thread accumulator for async-generator func_ids discovered while

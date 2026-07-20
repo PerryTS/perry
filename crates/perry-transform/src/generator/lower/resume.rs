@@ -32,6 +32,39 @@ pub(crate) fn wrap_generator_resume_body(
     ]
 }
 
+/// #6709: wrap an async-generator step-closure body. Like
+/// [`wrap_generator_resume_body`] for the async path (executing guard that
+/// rejects a re-entrant resume, `executing`-clear before every return, and a
+/// catch that completes the generator and rejects on an escaping throw) — but
+/// does NOT `wrap_returns_in_promise`, because the step body's returns are
+/// ALREADY Promises: `AsyncStepChain` (suspend on an inner `await`),
+/// `AsyncStepDone` (settle this activation with `{value, done}`), or the
+/// catch's `Promise.reject`. Wrapping those in `Promise.resolve` would make
+/// `.next()` resolve to a Promise instead of an iterator result.
+pub(crate) fn wrap_async_gen_step_body(
+    mut body: Vec<Stmt>,
+    executing_id: LocalId,
+    done_id: LocalId,
+    catch_id: LocalId,
+) -> Vec<Stmt> {
+    prepend_executing_clear_before_returns(&mut body, executing_id);
+    vec![
+        generator_executing_guard(executing_id, true),
+        Stmt::Try {
+            body,
+            catch: Some(CatchClause {
+                param: Some((catch_id, "__gen_exec_e".to_string())),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                    Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
+                    generator_resume_rethrow(Expr::LocalGet(catch_id), true),
+                ],
+            }),
+            finally: None,
+        },
+    ]
+}
+
 pub(crate) fn generator_executing_guard(executing_id: LocalId, is_async_generator: bool) -> Stmt {
     Stmt::If {
         condition: Expr::LocalGet(executing_id),

@@ -119,8 +119,6 @@ main().then(() => log("main:resolved"));
 const EXPECTED: &str = "GOT agent_start\nGOT turn_start\nGOT message_start\ndone\nmain:resolved\n";
 
 #[test]
-#[ignore = "unfixed #6709: async-generator `await` on a pending Promise busy-waits (deadlocks) \
-            instead of suspending; needs the async-generator await-suspension fix"]
 fn async_generator_pending_await_suspends_not_deadlocks() {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.mjs");

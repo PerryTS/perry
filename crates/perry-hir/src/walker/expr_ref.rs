@@ -1140,6 +1140,14 @@ where
         Expr::AsyncFirstCall { step_closure } => {
             f(step_closure);
         }
+        Expr::AsyncGenResume {
+            step_closure,
+            value,
+            ..
+        } => {
+            f(step_closure);
+            f(value);
+        }
         Expr::BufferFrom { data, encoding } => {
             f(data);
             if let Some(e) = encoding {

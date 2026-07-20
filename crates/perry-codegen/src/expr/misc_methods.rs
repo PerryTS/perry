@@ -969,6 +969,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(DOUBLE, "js_async_first_call", &[(DOUBLE, &step_box)]))
         }
 
+        // -------- #6709: async-generator activation entry --------
+        // Like AsyncFirstCall but delivers a caller-supplied value + is_error
+        // flag to the step closure (gen.next(v) / gen.throw(e)).
+        Expr::AsyncGenResume {
+            step_closure,
+            value,
+            is_error,
+        } => {
+            let step_box = lower_expr(ctx, step_closure)?;
+            let value_box = lower_expr(ctx, value)?;
+            let is_error_lit = if *is_error {
+                double_literal(f64::from_bits(crate::nanbox::TAG_TRUE))
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_FALSE))
+            };
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_async_generator_resume",
+                &[
+                    (DOUBLE, &step_box),
+                    (DOUBLE, &value_box),
+                    (DOUBLE, is_error_lit.as_str()),
+                ],
+            ))
+        }
+
         // -------- Object.getOwnPropertyNames(obj) --------
         // Returns ALL own keys (including non-enumerable ones from
         // defineProperty), unlike Object.keys which skips them.

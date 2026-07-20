@@ -343,6 +343,13 @@ pub struct State {
 pub enum StateExit {
     /// Yield a value and advance to next_state
     Yield { value: Expr, next_state: u32 },
+    /// #6709: async-generator `await` suspend point. Distinct from `Yield`:
+    /// the value is awaited on the microtask queue (via `AsyncStepChain`) and
+    /// the generator resumes WITHOUT returning `{value, done}` to the
+    /// consumer — the enclosing `.next()`/`.throw()` result Promise stays
+    /// pending until a real consumer `Yield` or completion is reached. Only
+    /// produced when linearizing an `async function*` body.
+    Await { value: Expr, next_state: u32 },
     /// Goto another state (non-yielding transition)
     Goto(u32),
     /// Function is done
@@ -467,6 +474,99 @@ pub fn linearize_body(
                         next_state: *state_num,
                     },
                 });
+            }
+
+            // #6709: async-generator `await` suspend points. After
+            // `hoist_awaits_in_stmts` every remaining `await` sits in a
+            // statement-level position (bare `await x;`, `let v = await x;`,
+            // `return await x;`, `throw await x;`); split each into its own
+            // `StateExit::Await` state so the enclosing `.next()`/`.throw()`
+            // step driver suspends on the microtask queue instead of
+            // busy-waiting. The awaited (settled/rejected) value is delivered
+            // back through `__sent`, mirroring the two-way `yield` resume
+            // channel. Only fires for async generators (`Expr::Await` never
+            // reaches the linearizer otherwise — plain async fns rewrite
+            // `await`→`yield` upstream, sync generators have no `await`).
+            Stmt::Expr(Expr::Await(inner)) if linearize_async_generator() => {
+                let await_val = (**inner).clone();
+                let this_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: this_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Await {
+                        value: await_val,
+                        next_state: *state_num,
+                    },
+                });
+                // Bare `await x;` — result discarded, no continuation binding.
+            }
+            Stmt::Let {
+                id,
+                init: Some(Expr::Await(inner)),
+                mutable,
+                ty,
+                name,
+            } if linearize_async_generator() => {
+                let await_val = (**inner).clone();
+                let this_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: this_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Await {
+                        value: await_val,
+                        next_state: *state_num,
+                    },
+                });
+                // Resumed value (the settled await result) arrives via __sent.
+                current.push(Stmt::Let {
+                    id: *id,
+                    init: Some(Expr::LocalGet(sent_id)),
+                    mutable: *mutable,
+                    ty: ty.clone(),
+                    name: name.clone(),
+                });
+            }
+            Stmt::Return(Some(Expr::Await(inner))) if linearize_async_generator() => {
+                let await_val = (**inner).clone();
+                let this_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: this_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Await {
+                        value: await_val,
+                        next_state: *state_num,
+                    },
+                });
+                // `return await x` — the awaited value (__sent) is the return.
+                current.push(Stmt::Return(Some(make_iter_result(
+                    Expr::LocalGet(sent_id),
+                    true,
+                ))));
+                let cont_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: cont_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Done,
+                });
+            }
+            Stmt::Throw(Expr::Await(inner)) if linearize_async_generator() => {
+                let await_val = (**inner).clone();
+                let this_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: this_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Await {
+                        value: await_val,
+                        next_state: *state_num,
+                    },
+                });
+                // `throw await x` — throw the awaited value (__sent).
+                current.push(Stmt::Throw(Expr::LocalGet(sent_id)));
             }
 
             // #34: `return yield* inner` — delegation in return position.

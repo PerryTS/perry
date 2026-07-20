@@ -1148,6 +1148,20 @@ pub enum Expr {
         step_closure: Box<Expr>,
     },
 
+    /// #6709. Async-generator activation entry. Like `AsyncFirstCall`, but
+    /// invokes the step closure with a caller-supplied `value` + `is_error`
+    /// instead of `(undefined, false)`. Emitted by the async-generator
+    /// lowering for each `gen.next(v)` / `gen.throw(e)` so the shared state
+    /// machine resumes: a non-error call delivers `value` to `__sent`, an
+    /// error call routes `value` as a throw at the current suspend state. The
+    /// runtime helper (`js_async_generator_resume`) sets up the
+    /// `CURRENT_STEP_CLOSURE` / `trap_next` TLS exactly like `AsyncFirstCall`.
+    AsyncGenResume {
+        step_closure: Box<Expr>,
+        value: Box<Expr>,
+        is_error: bool,
+    },
+
     // Crypto operations
     CryptoRandomBytes(Box<Expr>), // crypto.randomBytes(size) -> string (hex)
     CryptoRandomUUID,             // crypto.randomUUID() -> string

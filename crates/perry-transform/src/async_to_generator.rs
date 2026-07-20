@@ -486,7 +486,7 @@ fn alloc_local(next_id: &mut LocalId) -> LocalId {
 // processed recursively so awaits inside a nested `if (cond) { x = y +
 // await z; }` are hoisted into the inner block, not the outer scope.
 
-fn hoist_awaits_in_stmts(stmts: &mut Vec<Stmt>, next_id: &mut LocalId) {
+pub(crate) fn hoist_awaits_in_stmts(stmts: &mut Vec<Stmt>, next_id: &mut LocalId) {
     let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
     for stmt in std::mem::take(stmts) {
         let mut hoisted: Vec<Stmt> = Vec::new();

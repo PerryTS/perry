@@ -1153,6 +1153,14 @@ where
         Expr::AsyncFirstCall { step_closure } => {
             f(step_closure);
         }
+        Expr::AsyncGenResume {
+            step_closure,
+            value,
+            ..
+        } => {
+            f(step_closure);
+            f(value);
+        }
 
         // ─── Buffer family ───────────────────────────────────────────────
         Expr::BufferFrom { data, encoding } => {
