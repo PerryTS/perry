@@ -116,6 +116,7 @@ impl LoweringContext {
             suppress_stdlib_dispatch_guard_once: false,
             lowering_call_callee: false,
             unresolved_ident_as_global: false,
+            global_intrinsic_new_once: false,
             with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
             tdz_forward_ids: HashSet::new(),

@@ -431,6 +431,14 @@ pub struct LoweringContext {
     /// unresolvable identifiers throw ReferenceError, but member receivers are
     /// still allowed to use the existing GlobalGet sentinel path.
     pub(crate) unresolved_ident_as_global: bool,
+    /// #6726 — one-shot flag set when `lower_new` re-dispatches a
+    /// `new globalThis.<Builtin>(...)` through a synthesized bare-identifier
+    /// `new <Builtin>(...)`. `globalThis.Set` refers UNAMBIGUOUSLY to the
+    /// intrinsic, so the recursive call must construct the built-in even when a
+    /// lexical `class Set {}` / `const Set = …` shadows the bare name. Consumed
+    /// (cleared) at the top of `lower_new` so it scopes to that single
+    /// re-dispatched callee and never leaks into argument lowering.
+    pub(crate) global_intrinsic_new_once: bool,
     /// Active `with` object environment records. Each frame points at the
     /// synthetic local that stores the object value and the locals length when
     /// the frame was entered, so declarations inside the block/function can

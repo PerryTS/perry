@@ -39,6 +39,12 @@ pub(crate) use non_ident::{lower_new_non_ident, register_stream_controller_param
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
+    // #6726: consume the one-shot "this callee is an unambiguous global
+    // intrinsic" flag set by the `new globalThis.<Builtin>()` re-dispatch below.
+    // Taken here (before any argument lowering) so it applies ONLY to the
+    // synthesized bare-identifier callee and never leaks into arguments or
+    // nested `new` expressions.
+    let force_global_intrinsic = std::mem::take(&mut ctx.global_intrinsic_new_once);
     // #5253: source byte offset of this `new` expression, captured once and
     // threaded into every `New`/`NewDynamic`/`NewDynamicSpread` we build below.
     // Under `--debug-symbols`, codegen resolves it to a `file:line` for the
@@ -158,12 +164,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // `lower_new_member_native` above) and re-dispatch through a synthesized
     // bare-identifier `new <Ident>(...)`. The recursion terminates because the
     // synthesized callee is an `Ident`, not a `Member`.
+    //
+    // Two subtleties (both raised in review):
+    //  - The `globalThis` guard uses `shadows_unqualified_global` (locals,
+    //    functions, imports AND classes), not just `lookup_local`, so a
+    //    `function globalThis` / `class globalThis` / imported `globalThis` that
+    //    rebinds the name suppresses the rewrite — the member then reads that
+    //    user binding, matching Node.
+    //  - `globalThis.Set` is the intrinsic even when a lexical `class Set {}`
+    //    shadows the bare name, so the re-dispatch sets
+    //    `global_intrinsic_new_once` to tell the recursive call to ignore that
+    //    shadowing (consumed at the top of `lower_new`, above).
     if let ast::Expr::Member(member) = callee_expr {
         if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
             (peel_new_callee(member.obj.as_ref()), &member.prop)
         {
             if obj_ident.sym.as_ref() == "globalThis"
-                && ctx.lookup_local("globalThis").is_none()
+                && !ctx.shadows_unqualified_global("globalThis")
                 && is_reified_global_builtin_constructor(prop_ident.sym.as_ref())
             {
                 let mut synthetic = new_expr.clone();
@@ -172,6 +189,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     prop_ident.span,
                     Default::default(),
                 )));
+                ctx.global_intrinsic_new_once = true;
                 return lower_new(ctx, &synthetic);
             }
         }
@@ -229,7 +247,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // class-decl name only carries a local slot when the module
             // reassigns it (#5833), and for a reassigned binding reading the
             // slot is the spec-correct behavior for `new` too.
-            let callee_local_at_entry: Option<LocalId> = ctx.lookup_local(&class_name);
+            // #6726: when this callee was re-dispatched from
+            // `new globalThis.<Builtin>()`, the name is an unambiguous global
+            // intrinsic — a lexical `class Set {}` / `const Set = …` must NOT
+            // capture it. Suppress the local snapshot (and the shadow flag
+            // below) so the built-in arms fire.
+            let callee_local_at_entry: Option<LocalId> = if force_global_intrinsic {
+                None
+            } else {
+                ctx.lookup_local(&class_name)
+            };
             // #6233: a user-declared binding — `class Symbol extends Base {}`,
             // a local/param, a `function` declaration, or an imported binding —
             // lexically shadows the same-named global for every reference in
@@ -245,11 +272,12 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // fresh lookup later is unreliable. `forward_class_names` covers a
             // sibling `class X` declared later in the same function body
             // (pre-registered by the Phase-1.5 scan but not yet lowered).
-            let shadowed_by_user_binding = ctx.lookup_class(&class_name).is_some()
-                || callee_local_at_entry.is_some()
-                || ctx.lookup_func(&class_name).is_some()
-                || ctx.lookup_imported_func(&class_name).is_some()
-                || ctx.forward_class_names.contains(class_name.as_str());
+            let shadowed_by_user_binding = !force_global_intrinsic
+                && (ctx.lookup_class(&class_name).is_some()
+                    || callee_local_at_entry.is_some()
+                    || ctx.lookup_func(&class_name).is_some()
+                    || ctx.lookup_imported_func(&class_name).is_some()
+                    || ctx.forward_class_names.contains(class_name.as_str()));
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))

@@ -57,3 +57,28 @@ const S = globalThis.Set;
 const aliased = new S();
 aliased.add(8);
 console.log(aliased.has(8), aliased.size);
+
+// #6726 review (CodeRabbit): `globalThis.<Builtin>` is the intrinsic even when a
+// lexical binding shadows the bare name — a block-scoped `class Set {}` must NOT
+// capture `new globalThis.Set()`.
+{
+  class Set {
+    isLocal = true;
+  }
+  const shadowed = new globalThis.Set([1, 2]);
+  console.log(shadowed.has(1), (shadowed as any).isLocal, shadowed.size);
+  // The bare name still resolves to the local class in the same scope.
+  console.log((new Set() as any).isLocal);
+}
+
+// Conversely, a locally-rebound `globalThis` is an ordinary object, so
+// `new globalThis.Set()` must construct THAT object's `Set`, not the intrinsic.
+{
+  const globalThis = {
+    Set: class {
+      isFake = true;
+    },
+  };
+  const fake = new globalThis.Set();
+  console.log((fake as any).isFake);
+}
