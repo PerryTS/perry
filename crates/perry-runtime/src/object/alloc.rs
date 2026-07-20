@@ -1205,8 +1205,14 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     let src_raw = source.as_pointer::<u8>() as usize;
     // Same alignment guard as the target above — `src` is dereferenced at
     // `(*src).keys_array` just below; an unaligned non-object source must
-    // be skipped, not dereferenced.
-    if src_raw < 0x10000
+    // be skipped, not dereferenced. Reject the WHOLE handle band, not just a
+    // `< 0x10000` floor: a common-band registry id (crypto `Hash`, `Blob`, …)
+    // can sit above 0x10000 and be 8-aligned, so the old floor let it through
+    // and `(*src).keys_array` read unmapped memory (SIGSEGV). A native handle
+    // has no own enumerable properties to spread, so skipping it yields `{}`,
+    // matching Node (`{...new Blob([])}` === `{}`). test_gap_handle_band_object_ops
+    // `{...blob}`/`{...hash}`.
+    if !crate::value::addr_class::is_above_handle_band(src_raw)
         || !src_raw.is_multiple_of(8)
         || crate::symbol::is_registered_symbol(src_raw)
     {
