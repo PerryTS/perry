@@ -114,7 +114,7 @@ pub extern "C" fn js_object_alloc_with_parent(
     // assumption (max(field_count, 8)). Without this, empty objects ({}) with field_count=0
     // would have 0 field slots but js_object_set_field_by_name writes up to 8 fields inline,
     // causing heap buffer overflow into adjacent arena objects.
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -149,7 +149,7 @@ pub extern "C" fn js_object_alloc_with_parent(
 #[no_mangle]
 pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut ObjectHeader {
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -182,7 +182,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
     }
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -226,7 +226,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         register_class(class_id, parent_class_id);
     }
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -344,7 +344,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     }
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -506,7 +506,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     };
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
@@ -551,7 +551,7 @@ pub extern "C" fn js_object_alloc_with_shape(
 ) -> *mut ObjectHeader {
     let header_size = std::mem::size_of::<ObjectHeader>();
     // Allocate extra field slots for dynamic property growth (plain objects may get new fields)
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * 8;
     let total_size = header_size + fields_size;
     let obj_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
@@ -663,7 +663,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
             Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT
         );
     if !src_is_object {
-        let phys_slots = std::cmp::max(extra_count, 8);
+        let phys_slots = std::cmp::max(extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
         let total_size = header_size + phys_slots as usize * 8;
         let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
         (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -688,7 +688,10 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // Physical slot capacity: src_field_count + extra_count, but at least max(fc, 8) to match
     // js_object_set_field's alloc_limit check. Extra slots are scratch space for subsequent
     // js_object_set_field_by_name calls.
-    let phys_slots = std::cmp::max(src_field_count + extra_count, 8);
+    let phys_slots = std::cmp::max(
+        src_field_count + extra_count,
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    );
     let total_size = header_size + phys_slots as usize * 8;
     let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -798,6 +801,21 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     }
     let src = src_raw as *const ObjectHeader;
 
+    // #6667: a native-module namespace (`{ ...require("crypto") }`) stores no
+    // real fields — only the internal `__module__` sentinel — so the raw
+    // keys_array walk below would copy nothing usable. Enumerate + resolve its
+    // export surface instead (the same list `Object.keys` returns), so wildcard
+    // interop and object spread see the exports Node's namespace exposes.
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let dst_h = scope.root_raw_mut_ptr(dst);
+        if super::native_module::copy_native_module_exports(src, |key_ptr, value| {
+            js_object_set_field_by_name(dst_h.get_raw_mut_ptr::<ObjectHeader>(), key_ptr, value);
+        }) {
+            return;
+        }
+    }
+
     // Iterate src's keys and copy each value via set_field_by_name.
     let src_keys = (*src).keys_array;
     if src_keys.is_null() || (src_keys as usize) < 0x10000 {
@@ -805,7 +823,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     }
     let key_count = crate::array::js_array_length(src_keys) as usize;
     let src_field_count = (*src).field_count as usize;
-    let alloc_limit = std::cmp::max(src_field_count, 8);
+    let alloc_limit = std::cmp::max(src_field_count, crate::object::INLINE_SLOT_FLOOR);
     let header_size = std::mem::size_of::<ObjectHeader>();
     let src_fields = (src as *const u8).add(header_size) as *const u64;
 
@@ -1190,8 +1208,14 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     let src_raw = source.as_pointer::<u8>() as usize;
     // Same alignment guard as the target above — `src` is dereferenced at
     // `(*src).keys_array` just below; an unaligned non-object source must
-    // be skipped, not dereferenced.
-    if src_raw < 0x10000
+    // be skipped, not dereferenced. Reject the WHOLE handle band, not just a
+    // `< 0x10000` floor: a common-band registry id (crypto `Hash`, `Blob`, …)
+    // can sit above 0x10000 and be 8-aligned, so the old floor let it through
+    // and `(*src).keys_array` read unmapped memory (SIGSEGV). A native handle
+    // has no own enumerable properties to spread, so skipping it yields `{}`,
+    // matching Node (`{...new Blob([])}` === `{}`). test_gap_handle_band_object_ops
+    // `{...blob}`/`{...hash}`.
+    if !crate::value::addr_class::is_above_handle_band(src_raw)
         || !src_raw.is_multiple_of(8)
         || crate::symbol::is_registered_symbol(src_raw)
     {
@@ -1226,6 +1250,30 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     }
 
     let src = src_raw as *const ObjectHeader;
+
+    // #6667: native-module namespace source (`Object.assign(t, require("crypto"))`).
+    // Its exports resolve lazily through the vtable, so the raw keys_array walk
+    // below sees only `__module__`. Enumerate + resolve the export surface, then
+    // return — native-module namespaces carry no own symbol-keyed properties, so
+    // the symbol-copy tail below would be a no-op.
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        if super::native_module::copy_native_module_exports(src, |key_ptr, value| {
+            object_assign_set_string_key(
+                tgt_h.get_raw_mut_ptr::<ObjectHeader>(),
+                target_is_array,
+                key_ptr,
+                value,
+            );
+        }) {
+            // `copy_native_module_exports` allocates (fresh export closures +
+            // key strings); a minor GC there can evacuate `target`. Return the
+            // handle-reloaded pointer so the caller threads the post-GC
+            // location, not the stale `target_f64`.
+            return crate::value::js_nanbox_pointer(tgt_h.get_raw_mut_ptr::<ObjectHeader>() as i64);
+        }
+    }
 
     // An array source (`Object.assign(t, [1,2])`, `{ ...[1,2] }`) stores its
     // indexed elements in the `ArrayHeader` element buffer, NOT in an

@@ -152,7 +152,10 @@ pub(super) fn resolve_module_idx_by_source(
         // Module names are project-relative paths with the platform's
         // separators ("engine\src\core\keys.ts" on Windows) — normalize.
         let mn = m.name.replace('\\', "/");
-        let stem = mn.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or_else(|| mn.clone());
+        let stem = mn
+            .rsplit_once('.')
+            .map(|(s, _)| s.to_string())
+            .unwrap_or_else(|| mn.clone());
         let hit = stem == src
             || mn == src
             || stem.ends_with(&format!("/{}", src))
@@ -267,7 +270,10 @@ pub(super) fn resolve_export_to_let(
                         continue;
                     }
                     for spec in &import.specifiers {
-                        if let perry_hir::ir::ImportSpecifier::Named { imported, local: il } = spec
+                        if let perry_hir::ir::ImportSpecifier::Named {
+                            imported,
+                            local: il,
+                        } = spec
                         {
                             if il == local {
                                 if let Some(si) =
@@ -386,7 +392,10 @@ pub(super) fn resolve_export_to_func(
                         continue;
                     }
                     for spec in &import.specifiers {
-                        if let perry_hir::ir::ImportSpecifier::Named { imported, local: il } = spec
+                        if let perry_hir::ir::ImportSpecifier::Named {
+                            imported,
+                            local: il,
+                        } = spec
                         {
                             if il == local {
                                 if let Some(si) =

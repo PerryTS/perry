@@ -514,6 +514,88 @@ pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
 static KEEP_JS_MODULE_AMBIENT_REQUIRE_APPLY: extern "C" fn(f64) -> f64 =
     js_module_ambient_require_apply;
 
+/// #6660 (pi wall #8): shared runtime fallback for a dynamic `import(spec)`
+/// whose specifier did not match a compiled-module target at the dispatch
+/// site. The `import()` analog of `js_module_ambient_require_apply` (#5389
+/// Tier 2): builtins (`node:fs/promises`, `os`, …) resolve by string to the
+/// same namespace `require(spec)` / `process.getBuiltinModule(spec)` produce,
+/// wrapped in a resolved promise; anything else becomes a promise rejected
+/// with a descriptive `Error` (`code: 'ERR_MODULE_NOT_FOUND'`, Node's dynamic
+/// import failure family) — never a rejection with literal `undefined`, which
+/// is what the old codegen fallthrough arms produced and what surfaced as the
+/// reasonless `Uncaught (in promise) undefined` one-shot wall.
+///
+/// `deferred_note` carries the compile-time deferral message for #5230 sites
+/// (runtime-computed specifier, non-strict policy) so a genuinely unknown
+/// module still reports the site's `file:line`.
+fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> f64 {
+    // Arm the install-all hooks the way `getBuiltinModule`'s devirt entry does
+    // (#6644): the namespace handed back below must dispatch methods even when
+    // no static import of the module exists anywhere in the program. Codegen
+    // references this symbol only from dynamic-import fallback sites, so
+    // programs without them keep per-module stripping.
+    crate::object::js_nm_enable_install_all();
+    crate::node_submodules::js_node_submod_enable_install_all();
+    // `import()` performs ToString on the specifier: a string resolves
+    // directly, any other value participates via its string form.
+    let jv = JSValue::from_bits(spec.to_bits());
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let spec_str = match unsafe { crate::string::js_string_key_bytes(jv, &mut sso) } {
+        Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        None => unsafe {
+            crate::exception::string_header_to_string(crate::value::js_jsvalue_to_string(spec))
+        },
+    };
+    if let Some(module_name) = supported_require_builtin(&spec_str) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ns_handle = scope.root_nanbox_f64(require_builtin_value(module_name));
+        let promise = crate::promise::js_promise_resolved(ns_handle.get_nanbox_f64());
+        return js_nanbox_pointer(promise as i64);
+    }
+    let message = deferred_note.unwrap_or_else(|| format!("Cannot find module '{spec_str}'"));
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_MODULE_NOT_FOUND");
+    let err = crate::error::js_error_new_with_message(msg_ptr);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let err_handle = scope.root_nanbox_f64(js_nanbox_pointer(err as i64));
+    let promise = crate::promise::js_promise_rejected(err_handle.get_nanbox_f64());
+    js_nanbox_pointer(promise as i64)
+}
+
+/// Codegen entry for the unresolved / no-match dynamic-`import()` fallthrough
+/// arms (#6660). Returns a NaN-boxed promise; never throws synchronously
+/// (`import()` always rejects, per spec).
+#[no_mangle]
+pub extern "C" fn js_module_dynamic_import_fallback(spec: f64) -> f64 {
+    dynamic_import_fallback_promise(spec, None)
+}
+
+/// Keepalive anchor (same pattern as the ambient-require anchors above).
+#[used]
+static KEEP_JS_MODULE_DYNAMIC_IMPORT_FALLBACK: extern "C" fn(f64) -> f64 =
+    js_module_dynamic_import_fallback;
+
+/// Codegen entry for #5230 *deferred* dynamic-import sites (runtime-computed
+/// specifier under the default non-strict policy). Same builtin-or-reject
+/// fallback, but a genuinely unknown module rejects with the compile-time
+/// deferral message (which names the site's `file:line`) instead of the
+/// generic `Cannot find module` text. `msg` is the NaN-boxed deferral string.
+#[no_mangle]
+pub extern "C" fn js_module_dynamic_import_deferred(spec: f64, msg: f64) -> f64 {
+    let note = {
+        let jv = JSValue::from_bits(msg.to_bits());
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        unsafe { crate::string::js_string_key_bytes(jv, &mut sso) }
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+    };
+    dynamic_import_fallback_promise(spec, note)
+}
+
+/// Keepalive anchor (same pattern as the ambient-require anchors above).
+#[used]
+static KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED: extern "C" fn(f64, f64) -> f64 =
+    js_module_dynamic_import_deferred;
+
 /// #6651 family regression guard: createRequire's resolver must never drift
 /// from `process.getBuiltinModule`'s again. Today they are the same function;
 /// this pins the contract so a future re-split of the implementations still

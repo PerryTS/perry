@@ -3,18 +3,18 @@
 // Stores a command buffer that replays on each drawRect: call.
 // Commands: MoveTo, LineTo, Stroke, FillGradient, BeginPath, Clear.
 
+use crate::ffi::js_string_from_bytes;
+use crate::ffi::CGContextAddLineToPoint;
+use crate::ffi::CGContextBeginPath;
 use crate::ffi::CGContextClosePath;
 use crate::ffi::CGContextFillPath;
-use crate::ffi::CGContextStrokePath;
-use crate::ffi::CGContextAddLineToPoint;
-use crate::ffi::CGContextMoveToPoint;
-use crate::ffi::CGContextBeginPath;
-use crate::ffi::CGContextStrokeRect;
 use crate::ffi::CGContextFillRect;
+use crate::ffi::CGContextMoveToPoint;
 use crate::ffi::CGContextSetLineWidth;
-use crate::ffi::CGContextSetRGBStrokeColor;
 use crate::ffi::CGContextSetRGBFillColor;
-use crate::ffi::js_string_from_bytes;
+use crate::ffi::CGContextSetRGBStrokeColor;
+use crate::ffi::CGContextStrokePath;
+use crate::ffi::CGContextStrokeRect;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};

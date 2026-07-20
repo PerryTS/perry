@@ -18,8 +18,8 @@
 //! - Now Playing metadata uses `MPNowPlayingInfoCenter`. Lock-screen / Touch
 //!   Bar / Siri Remote play/pause/skip routes through `MPRemoteCommandCenter`.
 
-use crate::ffi::sel_registerName;
 use crate::ffi::js_string_from_bytes;
+use crate::ffi::sel_registerName;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};

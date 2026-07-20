@@ -1,5 +1,5 @@
-use crate::ffi::sel_registerName;
 use crate::ffi::class_addMethod;
+use crate::ffi::sel_registerName;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, Encode, Encoding, RefEncode};

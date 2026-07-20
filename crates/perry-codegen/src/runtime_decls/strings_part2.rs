@@ -259,6 +259,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_symbol_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_symbol_new_empty", DOUBLE, &[]);
     module.declare_function("js_symbol_for", DOUBLE, &[DOUBLE]);
+    // #6676: computed `Symbol[key]` (constructor value + runtime key).
+    module.declare_function("js_symbol_computed_member", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_symbol_key_for", DOUBLE, &[DOUBLE]);
     module.declare_function("js_symbol_description", DOUBLE, &[DOUBLE]);
     module.declare_function("js_symbol_to_string", I64, &[DOUBLE]);
