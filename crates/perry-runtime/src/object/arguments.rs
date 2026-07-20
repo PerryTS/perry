@@ -558,7 +558,8 @@ unsafe fn read_ordinary_own_value(
 ) -> JSValue {
     let keys = (*obj).keys_array;
     let key_count = crate::array::js_array_length(keys) as usize;
-    let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let alloc_limit =
+        std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {
@@ -580,7 +581,8 @@ unsafe fn write_ordinary_own_value(
 ) {
     let keys = (*obj).keys_array;
     let key_count = crate::array::js_array_length(keys) as usize;
-    let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let alloc_limit =
+        std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {

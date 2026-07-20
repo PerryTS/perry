@@ -1594,7 +1594,8 @@ pub(crate) fn get_field_by_name_object_tail(
         // Slow path: linear scan through keys array
         let _field_count = (*obj).field_count as usize;
 
-        let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
 
         // #5054: wide objects get a validated key→index map so per-key reads
         // stay O(1) instead of O(key_count). A `None` falls through to the

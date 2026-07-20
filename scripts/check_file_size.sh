@@ -115,6 +115,11 @@ crates/perry-transform/src/inline/call_inliner.rs
 # Windows UI widget registry (2118 lines): the Win32 widget create/dispatch
 # table; a per-widget-family split is a mechanical follow-up.
 crates/perry-ui-windows/src/widgets/mod.rs
+# Regex grammar/parser (2075 lines): the single recursive-descent PCRE grammar;
+# #6711 (ReDoS-guard bounded-quantifier collapse) pushed it 75 lines over. A
+# split of the character-class / quantifier sub-parsers is a mechanical
+# follow-up.
+crates/perry-runtime/src/regex/grammar.rs
 EOF
 )
 

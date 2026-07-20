@@ -158,7 +158,8 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         if key_count > 65536 {
             return f64::from_bits(TAG_UNDEF);
         }
-        let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
             // #1781: SSO-aware match by byte slice — the

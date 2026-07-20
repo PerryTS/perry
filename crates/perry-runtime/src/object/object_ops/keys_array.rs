@@ -101,7 +101,8 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     // getter here bumped field_count from 8 (the proto's physical capacity) to
     // 11, exposing the overflowed `values` slot and corrupting the boundary.
     let new_index = key_count as u32;
-    let inline_capacity = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+    let inline_capacity =
+        std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
     if new_index < inline_capacity && new_index >= (*obj).field_count {
         (*obj).field_count = new_index + 1;
     }

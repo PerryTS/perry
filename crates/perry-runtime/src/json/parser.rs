@@ -368,7 +368,8 @@ impl<'a> DirectParser<'a> {
         // Initialize all fields to undefined so JSON with missing
         // fields returns `undefined` for absent properties (matches
         // spec: access to absent own property returns undefined).
-        let alloc_field_count = std::cmp::max(shape.field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+        let alloc_field_count =
+            std::cmp::max(shape.field_count as usize, crate::object::INLINE_SLOT_FLOOR);
         for i in 0..alloc_field_count {
             let fields_ptr =
                 (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
@@ -657,7 +658,8 @@ impl<'a> DirectParser<'a> {
             self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
         };
         let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, field_count, keys_arr);
-        let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+        let alloc_field_count =
+            std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
         let fields_ptr =
             (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
         for i in 0..alloc_field_count {

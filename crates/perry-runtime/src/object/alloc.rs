@@ -688,7 +688,10 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // Physical slot capacity: src_field_count + extra_count, but at least max(fc, 8) to match
     // js_object_set_field's alloc_limit check. Extra slots are scratch space for subsequent
     // js_object_set_field_by_name calls.
-    let phys_slots = std::cmp::max(src_field_count + extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
+    let phys_slots = std::cmp::max(
+        src_field_count + extra_count,
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    );
     let total_size = header_size + phys_slots as usize * 8;
     let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;

@@ -138,7 +138,8 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         set_object_keys_array(obj, next_keys as *mut ArrayHeader);
         super::mark_object_dynamic_shape_unknown(obj);
 
-        let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
         let slot_usize = slot_idx as usize;
         let vbits = value.to_bits();
         let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
@@ -437,7 +438,11 @@ pub extern "C" fn js_object_set_field_by_name(
                                     // pointer-ness may change — degrade the
                                     // layout to full-visit before the store.
                                     super::mark_object_dynamic_shape_unknown(o);
-                                    let alloc_limit = std::cmp::max((*o).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+                                    let alloc_limit = std::cmp::max(
+                                        (*o).field_count,
+                                        crate::object::INLINE_SLOT_FLOOR as u32,
+                                    )
+                                        as usize;
                                     if (idx as usize) < alloc_limit {
                                         let fields_ptr = (o as *mut u8)
                                             .add(std::mem::size_of::<ObjectHeader>())
@@ -475,7 +480,10 @@ pub extern "C" fn js_object_set_field_by_name(
                                 };
                                 set_object_keys_array(o, next_keys as *mut ArrayHeader);
                                 super::mark_object_dynamic_shape_unknown(o);
-                                let alloc_limit = std::cmp::max((*o).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+                                let alloc_limit = std::cmp::max(
+                                    (*o).field_count,
+                                    crate::object::INLINE_SLOT_FLOOR as u32,
+                                ) as usize;
                                 if (slot_idx as usize) < alloc_limit {
                                     let fields_ptr = (o as *mut u8)
                                         .add(std::mem::size_of::<ObjectHeader>())
@@ -1249,7 +1257,9 @@ pub extern "C" fn js_object_set_field_by_name(
                 };
                 set_object_keys_array(obj, next_keys as *mut ArrayHeader);
                 super::mark_object_dynamic_shape_unknown(obj);
-                let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+                let alloc_limit =
+                    std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32)
+                        as usize;
                 if (slot_idx as usize) < alloc_limit {
                     // Inline the field write — `obj` has already been
                     // validated (GC header read, type check, closure
@@ -1393,7 +1403,8 @@ pub extern "C" fn js_object_set_field_by_name(
 
         // Search through the keys array for a match
         let key_count = crate::array::js_array_length(keys) as usize;
-        let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
 
         // Sidecar O(1) lookup when keys_array has grown past the
         // linear-scan break-even. Without this, the build-then-fill
