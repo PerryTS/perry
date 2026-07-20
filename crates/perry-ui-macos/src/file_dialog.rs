@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2_app_kit::NSOpenPanel;
 use objc2_foundation::{MainThreadMarker, NSString};
@@ -5,7 +6,6 @@ use objc2_foundation::{MainThreadMarker, NSString};
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -34,7 +34,7 @@ pub fn open_dialog(callback: f64) {
                 let path_str: objc2::rc::Retained<NSString> = msg_send![url, path];
                 let rust_str = path_str.to_string();
                 let bytes = rust_str.as_bytes();
-                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
                 js_closure_call1(closure_ptr, nanboxed);
             } else {
@@ -70,7 +70,7 @@ pub fn open_folder_dialog(callback: f64) {
                 let path_str: objc2::rc::Retained<NSString> = msg_send![url, path];
                 let rust_str = path_str.to_string();
                 let bytes = rust_str.as_bytes();
-                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
                 js_closure_call1(closure_ptr, nanboxed);
             } else {
@@ -121,7 +121,7 @@ pub fn save_dialog(callback: f64, default_name_ptr: *const u8, _allowed_types_pt
                 let path_str: objc2::rc::Retained<NSString> = msg_send![url, path];
                 let rust_str = path_str.to_string();
                 let bytes = rust_str.as_bytes();
-                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
                 js_closure_call1(closure_ptr, nanboxed);
             } else {

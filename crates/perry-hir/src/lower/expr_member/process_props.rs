@@ -38,6 +38,7 @@ pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
 
 pub(crate) fn process_native_property(prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_offset: 0,
         object: Box::new(Expr::NativeModuleRef("process".to_string())),
         property: prop.to_string(),
     }
@@ -85,17 +86,16 @@ pub(crate) fn is_ws_ready_state_receiver(
     fn native_ws_class_property(expr: &Expr) -> bool {
         match expr {
             Expr::NativeModuleRef(module) if module == "ws" => true,
-            Expr::PropertyGet { object, property }
-                if matches!(property.as_str(), "WebSocket" | "default")
-                    && matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "ws") =>
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(property.as_str(), "WebSocket" | "default")
+                && matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "ws") =>
             {
                 true
             }
-            Expr::PropertyGet { object, property }
-                if property == "WebSocket" && matches!(object.as_ref(), Expr::GlobalGet(0)) =>
-            {
-                true
-            }
+            Expr::PropertyGet {
+                object, property, ..
+            } if property == "WebSocket" && matches!(object.as_ref(), Expr::GlobalGet(0)) => true,
             _ => false,
         }
     }

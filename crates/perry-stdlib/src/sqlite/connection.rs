@@ -113,36 +113,23 @@ where
     F: FnOnce(&Connection) -> R,
 {
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     let conn_ptr = {
         let conn = db
             .conn
             .lock()
-            .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
         if let Some(conn) = conn.as_ref() {
             conn as *const Connection
         } else {
             drop(conn);
-            throw_invalid_state("Database is not open")
+            throw_invalid_state("database is not open")
         }
     };
     f(&*conn_ptr)
 }
 
 pub(crate) unsafe fn ensure_open_node_database(db_handle: Handle) {
-    let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
-    let conn = db
-        .conn
-        .lock()
-        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
-    if conn.is_none() {
-        drop(conn);
-        throw_invalid_state("Database is not open");
-    }
-}
-
-pub(crate) unsafe fn ensure_open_node_database_lowercase(db_handle: Handle) {
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
         .unwrap_or_else(|| throw_invalid_state("database is not open"));
     let conn = db

@@ -39,7 +39,11 @@ building launcher-style, overlay, or utility apps:
 ```
 
 `App` additionally accepts the optional fields `frameless`, `level`,
-`transparent`, `vibrancy`, `activationPolicy`, and `icon`. They map to the
+`transparent`, `vibrancy`, `activationPolicy`, and `icon`. Each present
+field is applied to the window right after creation — before the body
+widget is attached, so vibrancy and frameless reconfigure the window ahead
+of layout. (`activationPolicy` is also settable at runtime via the
+standalone `appSetActivationPolicy(policy)` function.) They map to the
 following native primitives:
 
 ### `frameless: true`

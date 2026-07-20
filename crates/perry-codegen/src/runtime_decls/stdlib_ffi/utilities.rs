@@ -63,6 +63,7 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_dayjs_day", DOUBLE, &[I64]);
     module.declare_function("js_dayjs_diff", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_dayjs_end_of", DOUBLE, &[I64, I64]);
+    module.declare_function("js_dayjs_factory", DOUBLE, &[I64]);
     module.declare_function("js_dayjs_format", I64, &[I64, I64]);
     module.declare_function("js_dayjs_from_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_dayjs_hour", DOUBLE, &[I64]);
@@ -82,23 +83,38 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_dayjs_unix", DOUBLE, &[I64]);
     module.declare_function("js_dayjs_value_of", DOUBLE, &[I64]);
     module.declare_function("js_dayjs_year", DOUBLE, &[I64]);
-    module.declare_function("js_moment_add", I64, &[I64, DOUBLE, I64]);
+    // moment: same handle scheme as dayjs — the factory returns the
+    // handle as f64 bits (DOUBLE), instance methods take the handle as
+    // an I64 first arg. Methods returning a new moment return DOUBLE
+    // (f64::from_bits(handle)). Keep in lock-step with the moment rows
+    // in lower_call/native_table/dates.rs and the runtime signatures in
+    // perry-stdlib/src/moment.rs + perry-ext-moment.
+    module.declare_function("js_moment_add", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_moment_clone", DOUBLE, &[I64]);
     module.declare_function("js_moment_date", DOUBLE, &[I64]);
     module.declare_function("js_moment_day", DOUBLE, &[I64]);
     module.declare_function("js_moment_diff", DOUBLE, &[I64, I64, I64]);
-    module.declare_function("js_moment_end_of", I64, &[I64, I64]);
+    module.declare_function("js_moment_end_of", DOUBLE, &[I64, I64]);
+    module.declare_function("js_moment_factory", DOUBLE, &[I64]);
     module.declare_function("js_moment_format", I64, &[I64, I64]);
-    module.declare_function("js_moment_from_timestamp", I64, &[DOUBLE]);
+    module.declare_function("js_moment_from_now", I64, &[I64]);
+    module.declare_function("js_moment_from_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_moment_hour", DOUBLE, &[I64]);
+    module.declare_function("js_moment_is_after", DOUBLE, &[I64, I64]);
+    module.declare_function("js_moment_is_before", DOUBLE, &[I64, I64]);
+    module.declare_function("js_moment_is_between", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_moment_is_same", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_moment_is_valid", DOUBLE, &[I64]);
     module.declare_function("js_moment_millisecond", DOUBLE, &[I64]);
     module.declare_function("js_moment_minute", DOUBLE, &[I64]);
     module.declare_function("js_moment_month", DOUBLE, &[I64]);
-    module.declare_function("js_moment_now", I64, &[]);
-    module.declare_function("js_moment_parse", I64, &[I64]);
+    module.declare_function("js_moment_now", DOUBLE, &[]);
+    module.declare_function("js_moment_parse", DOUBLE, &[I64]);
     module.declare_function("js_moment_second", DOUBLE, &[I64]);
-    module.declare_function("js_moment_start_of", I64, &[I64, I64]);
-    module.declare_function("js_moment_subtract", I64, &[I64, DOUBLE, I64]);
+    module.declare_function("js_moment_start_of", DOUBLE, &[I64, I64]);
+    module.declare_function("js_moment_subtract", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_moment_to_date", DOUBLE, &[I64]);
+    module.declare_function("js_moment_to_iso_string", I64, &[I64]);
     module.declare_function("js_moment_unix", DOUBLE, &[I64]);
     module.declare_function("js_moment_value_of", DOUBLE, &[I64]);
     module.declare_function("js_moment_year", DOUBLE, &[I64]);

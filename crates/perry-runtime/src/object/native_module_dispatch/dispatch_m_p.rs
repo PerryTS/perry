@@ -149,6 +149,55 @@ pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name
     }
 }
 
+/// #6563: node-pty / @lydell/node-pty — one shared bucket (the namespace name
+/// is normalized to `node-pty` at creation, and the `.default` alias to the
+/// base name in `dispatch_native_module_method`). Only `spawn` is a module
+/// export; every other operation is a method on the returned IPty object,
+/// dispatched through the generic closure-field path.
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
+pub(crate) unsafe fn nm_dispatch_node_pty(
+    ctx: &NmCtx,
+    module_name: &str,
+    method_name: &str,
+) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
+    let _ = (obj, args_ptr, args_len, assert_skip_prototype);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
+    match (module_name, method_name) {
+        ("node-pty", "spawn") => crate::pty::js_pty_spawn(arg_bits(0), arg_bits(1), arg_bits(2)),
+        _ => f64::from_bits(JSValue::undefined().bits()),
+    }
+}
+
 #[allow(
     unused_variables,
     unused_mut,

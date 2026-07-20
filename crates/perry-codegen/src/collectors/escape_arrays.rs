@@ -185,7 +185,10 @@ fn collect_length_only_indices_in_expr(
             }
         }
     }
-    if let Expr::PropertyGet { object, property } = expr {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
         if property == "length" {
             if let Expr::IndexGet { object, index } = object.as_ref() {
                 if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
@@ -367,7 +370,7 @@ pub fn find_array_candidates(
                 && !module_globals.contains_key(id)
                 && matches!(
                     callee.as_ref(),
-                    Expr::PropertyGet { object, property }
+                    Expr::PropertyGet { object, property, .. }
                         if matches!(object.as_ref(), Expr::LocalGet(_))
                             && property == "split"
                 )
@@ -573,7 +576,9 @@ pub fn check_array_escapes_in_expr(
         }
 
         // Safe: `arr.length` read folds to the constant N.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(&len) = candidates.get(id) {
                     if property == "length" {

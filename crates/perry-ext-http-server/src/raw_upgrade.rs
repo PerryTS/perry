@@ -172,6 +172,14 @@ pub(crate) async fn peek_and_maybe_dispatch_raw_upgrade(
     im.complete = true;
     let im_handle = alloc_incoming_message(im);
     let socket_id = perry_ext_net::adopt_upgraded_tcp_stream(stream);
+    // #6441: `adopt_upgraded_tcp_stream` returns `INVALID_HANDLE` and drops the
+    // stream when the shared net handle-id band is exhausted. Abort the upgrade
+    // rather than forward a phantom id-0 socket downstream, and reclaim the
+    // just-allocated incoming-message handle so it doesn't orphan.
+    if socket_id == perry_ffi::INVALID_HANDLE {
+        perry_ffi::drop_handle(im_handle);
+        return PeekResult::Handled;
+    }
 
     let pending = HttpPendingUpgrade {
         server_handle,

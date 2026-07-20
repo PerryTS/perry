@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::arena::arena_alloc_gc;
+use crate::fast_hash::{new_fast_key_hash_map, FastKeyHashMap};
 use crate::ArrayHeader;
 use crate::JSValue;
 use std::cell::{Cell, RefCell, UnsafeCell};
@@ -52,7 +53,11 @@ impl PropertyAttrs {
 }
 
 thread_local! {
-    pub(crate) static PROPERTY_DESCRIPTORS: RefCell<HashMap<(usize, String), PropertyAttrs>> = RefCell::new(HashMap::new());
+    // Hasher: `FastKeyHasher` (FNV-1a) rather than std's SipHash `RandomState`.
+    // The key is `(owner_addr, key_string)` — a runtime heap pointer plus a
+    // program-supplied property name, so no external input reaches it and
+    // DoS-resistant hashing buys nothing on this hot property-access path.
+    pub(crate) static PROPERTY_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), PropertyAttrs>> = RefCell::new(new_fast_key_hash_map());
 }
 
 /// Accessor descriptor storage: maps (obj_ptr, key) -> (get_closure_bits, set_closure_bits).
@@ -67,7 +72,9 @@ pub(crate) struct AccessorDescriptor {
 }
 
 thread_local! {
-    pub(crate) static ACCESSOR_DESCRIPTORS: RefCell<HashMap<(usize, String), AccessorDescriptor>> = RefCell::new(HashMap::new());
+    // Hasher: `FastKeyHasher` (FNV-1a); see `PROPERTY_DESCRIPTORS` above for the
+    // same-shape `(owner_addr, key_string)` key and rationale.
+    pub(crate) static ACCESSOR_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), AccessorDescriptor>> = RefCell::new(new_fast_key_hash_map());
     /// Fast-path gate: `false` when no accessor descriptors have ever been installed
     /// on this thread, so hot `js_object_get_field_by_name` / `set_field_by_name`
     /// can skip the `ACCESSOR_DESCRIPTORS` HashMap lookup entirely.

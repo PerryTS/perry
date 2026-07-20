@@ -382,6 +382,81 @@ const JS_NON_WHITESPACE_CLASS: &str = r"[^\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{200
 // ECMAScript allows quantifiers up to 2^53-1; regex-syntax uses u32 and rejects larger values.
 const MAX_QUANTIFIER: u64 = 65_535;
 
+/// Above this upper bound, a `{m,N}` range is treated as a ReDoS guard rather than a
+/// meaningful length limit and collapsed to unbounded (see below).
+const REDOS_GUARD_UPPER_BOUND: u64 = 128;
+
+/// Collapse large *bounded* quantifiers `{m,N}` (N > [`REDOS_GUARD_UPPER_BOUND`]) to the
+/// unbounded `{m,}`. The Rust `regex` crate builds a linear-time NFA/DFA that expands
+/// `x{0,N}` into N states — patterns like the npm `semver` package's `\d{0,256}` (whose
+/// bounds exist purely to stop ReDoS in *backtracking* engines like V8's) blow up to
+/// 8–16 MB of automata each. This engine cannot ReDoS, so the bound is dead weight and
+/// `{0,N}` is safely equivalent to `*` here — collapsing it cuts the automaton from N
+/// states to one loop. The only observable change is that inputs *longer* than N now also
+/// match (a strict superset); for real patterns (version components, identifiers) an input
+/// exceeding 128 repetitions is degenerate. Small bounds (≤128) — the ones apps actually
+/// use as length limits — are left untouched. Applied only in the `regex`-crate compile
+/// path (`build_std_regex`), not to the observable `.source`.
+pub(crate) fn collapse_redos_guard_quantifiers(s: &str) -> String {
+    if !s.contains('{') {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut in_class = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            out.push(c);
+            i += 1;
+            if i < chars.len() {
+                out.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+        if c == '[' && !in_class {
+            in_class = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ']' && in_class {
+            in_class = false;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '{' && !in_class {
+            if let Some(end) = parse_braced_quantifier(&chars, i) {
+                let inner: String = chars[i + 1..end].iter().collect();
+                // Only ranges `{m,N}` with an explicit finite upper bound N > guard are
+                // collapsed. `{N}` (exact) and `{m,}` (already unbounded) pass through.
+                if let Some((lo, hi)) = inner.split_once(',') {
+                    if !hi.is_empty()
+                        && hi.parse::<u64>().is_ok_and(|n| n > REDOS_GUARD_UPPER_BOUND)
+                    {
+                        out.push('{');
+                        out.push_str(lo);
+                        out.push_str(",}");
+                        i = end + 1;
+                        continue;
+                    }
+                }
+                for &ch in chars[i..=end].iter() {
+                    out.push(ch);
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
 fn clamp_large_quantifiers(s: &str) -> String {
     if !s.contains('{') {
         return s.to_string();

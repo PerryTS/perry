@@ -69,6 +69,9 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
+            "getDeviceIdiom" | "get_device_idiom" => {
+                self.output.push_str("perry_get_device_idiom()");
+            }
             "getDeviceModel" | "get_device_model" => {
                 self.output.push_str("perry_system_get_device_model()");
             }

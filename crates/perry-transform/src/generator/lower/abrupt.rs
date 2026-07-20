@@ -680,6 +680,7 @@ pub(crate) fn build_yield_star_return_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
             }),
@@ -716,6 +717,7 @@ pub(crate) fn build_yield_star_return_routes(
             mutable: false,
             init: Some(Expr::Await(Box::new(Expr::Call {
                 callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(m_id)),
                     property: "call".to_string(),
                 }),
@@ -739,6 +741,7 @@ pub(crate) fn build_yield_star_return_routes(
         // else            return {__r.value, false};   // re-yield, generator not done
         let dispatch_done = Stmt::If {
             condition: Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(r_id)),
                 property: "done".to_string(),
             },
@@ -746,6 +749,7 @@ pub(crate) fn build_yield_star_return_routes(
                 Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                 Stmt::Return(Some(make_iter_result(
                     Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
                     },
@@ -754,6 +758,7 @@ pub(crate) fn build_yield_star_return_routes(
             ],
             else_branch: Some(vec![Stmt::Return(Some(make_iter_result(
                 Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(r_id)),
                     property: "value".to_string(),
                 },
@@ -852,6 +857,7 @@ pub(crate) fn build_yield_star_throw_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "throw".to_string(),
             }),
@@ -871,6 +877,7 @@ pub(crate) fn build_yield_star_throw_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
             }),
@@ -897,6 +904,7 @@ pub(crate) fn build_yield_star_throw_routes(
                     mutable: false,
                     init: Some(Expr::Await(Box::new(Expr::Call {
                         callee: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(ret_m_id)),
                             property: "call".to_string(),
                         }),
@@ -944,6 +952,7 @@ pub(crate) fn build_yield_star_throw_routes(
             route.result_id,
             Box::new(Expr::Await(Box::new(Expr::Call {
                 callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(m_id)),
                     property: "call".to_string(),
                 }),

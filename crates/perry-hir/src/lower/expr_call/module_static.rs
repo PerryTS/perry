@@ -58,6 +58,41 @@ pub(super) fn try_module_static_methods(
     has_spread: bool,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let ast::Expr::Member(member) = expr {
+        // #6560: `Bun.<method>(...)` — the Bun global shim pack, member
+        // position only (mirrors the `WebAssembly` receiver pattern below:
+        // an unshadowed bare `Bun` ident). Bare `Bun` / `typeof Bun` stay
+        // untouched so node-targeting bundles that feature-detect Bun via
+        // `typeof Bun !== "undefined"` keep taking their node paths. Only
+        // the implemented surface lowers natively; unknown members fall
+        // through to the ordinary (undefined-global) lowering.
+        if !has_spread {
+            if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident)) =
+                (member.obj.as_ref(), &member.prop)
+            {
+                if obj_ident.sym.as_ref() == "Bun"
+                    && ctx.lookup_local("Bun").is_none()
+                    && ctx.lookup_native_module("Bun").is_none()
+                    && matches!(
+                        method_ident.sym.as_ref(),
+                        "stringWidth"
+                            | "hash"
+                            | "file"
+                            | "write"
+                            | "pathToFileURL"
+                            | "fileURLToPath"
+                    )
+                {
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: "bun".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: method_ident.sym.as_ref().to_string(),
+                        args,
+                    }));
+                }
+            }
+        }
+
         // WebAssembly.Module.* metadata statics. This is intentionally a
         // direct-call lowering so it does not duplicate the runtime namespace
         // descriptor work handled separately in #3635.
@@ -316,10 +351,12 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for JSON.methodName() calls
+            // Check for JSON.methodName() calls. #6677: match BOTH the dot form
+            // and the string-literal computed form (`JSON["parse"](...)`) so the
+            // computed key does not fall through to generic dispatch (→
+            // `TypeError: value is not a function`).
             if obj_ident.sym.as_ref() == "JSON" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "parse" => {
                             if args.len() >= 2 {
@@ -585,10 +622,10 @@ pub(super) fn try_module_static_methods(
             // fs-method dispatch — so it can match Member receivers
             // without being gated on the Ident-receiver wrapper.)
 
-            // Check for Math.methodName() calls
+            // Check for Math.methodName() calls. #6677: match BOTH the dot form
+            // and the string-literal computed form (`Math["max"](...)`).
             if obj_ident.sym.as_ref() == "Math" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "floor" if !args.is_empty() => {
                             return Ok(Ok(Expr::MathFloor(Box::new(
@@ -787,8 +824,9 @@ pub(super) fn try_module_static_methods(
             // DataView-marked buffers) by re-emitting a `util/types`
             // NativeMethodCall — no new HIR variant or runtime helper needed.
             if obj_ident.sym.as_ref() == "ArrayBuffer" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    if method_ident.sym.as_ref() == "isView" {
+                // #6677: accept the string-literal computed form too.
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
+                    if method_name == "isView" {
                         let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "util/types".to_string(),
@@ -809,8 +847,8 @@ pub(super) fn try_module_static_methods(
             // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
             // value path.)
             if obj_ident.sym.as_ref() == "BigInt" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let m = method_ident.sym.as_ref();
+                // #6677: accept the string-literal computed form too.
+                if let Some(m) = super::static_call_prop_name(&member.prop) {
                     if m == "asIntN" || m == "asUintN" {
                         let mut it = args.into_iter();
                         let bits = it.next().unwrap_or(Expr::Undefined);
@@ -826,10 +864,9 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for Number.methodName() static calls
+            // Check for Number.methodName() static calls. #6677: computed form too.
             if obj_ident.sym.as_ref() == "Number" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         // A missing argument is `undefined` (Type ≠ Number), so
                         // each predicate is `false`. Fold the no-arg form to the
@@ -883,10 +920,9 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for String.methodName() static calls
+            // Check for String.methodName() static calls. #6677: computed form too.
             if obj_ident.sym.as_ref() == "String" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "fromCharCode" => {
                             if args.is_empty() {
@@ -962,6 +998,24 @@ pub(super) fn try_module_static_methods(
             let is_crypto_module =
                 obj_name == "crypto" || ctx.lookup_builtin_module_alias(obj_name) == Some("crypto");
             if is_crypto_module {
+                // #6668: a spread call declines the whole crypto fast-path.
+                // `lower_crypto_passthrough` AND the manual `sha256`/`md5`/
+                // `getRandomValues` arms below collapse the call into a flat
+                // `Expr::Call`/intrinsic whose args are the lowered AST arguments
+                // verbatim — a spread operand (`crypto.hkdf(...args, cb)`) is
+                // passed as the ARRAY itself, not expanded, so the codegen
+                // fast-path (e.g. `arm_crypto_hkdf_async_alg`) sees too few args
+                // and silently returns `undefined` (callback never fires). Bail so
+                // the generic tail builds an `Expr::CallSpread` with callee
+                // `PropertyGet{ NativeModuleRef("crypto"), method }`; codegen then
+                // routes it through `js_closure_call_apply_with_spread` →
+                // `dispatch_bound_method` → `js_native_call_method`, the same
+                // bound-native dispatch the value-read form
+                // (`const f = crypto.hkdf; f(...)`) already uses. Mirrors the
+                // crypto guard in `globals.rs` (named-import form).
+                if has_spread {
+                    return Ok(Err(args));
+                }
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     // #1434: keep the named-import + dotted form on one
@@ -996,6 +1050,7 @@ pub(super) fn try_module_static_methods(
                             let buf_arg = args.into_iter().next().unwrap();
                             return Ok(Ok(Expr::Call {
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(buf_arg),
                                     property: "$$cryptoFillRandom".to_string(),
                                 }),
@@ -1193,6 +1248,7 @@ pub(super) fn try_module_static_methods(
                             let b = iter.next().unwrap();
                             return Ok(Ok(Expr::Call {
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),
                                 }),
@@ -1421,10 +1477,10 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for Date.now() / Date.parse() / Date.UTC() static method calls
+            // Check for Date.now() / Date.parse() / Date.UTC() static method calls.
+            // #6677: computed form too.
             if obj_ident.sym.as_ref() == "Date" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "now" {
                         return Ok(Ok(Expr::DateNow));
                     }
@@ -1447,8 +1503,8 @@ pub(super) fn try_module_static_methods(
             // arm intercepts both spellings and routes to dedicated
             // HIR variants.
             if obj_ident.sym.as_ref() == "URL" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                // #6677: accept the string-literal computed form too.
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "canParse" && !args.is_empty() {
                         let mut iter = args.into_iter();
                         let input = iter.next().unwrap();

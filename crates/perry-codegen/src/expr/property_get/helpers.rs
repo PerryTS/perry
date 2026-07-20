@@ -102,6 +102,7 @@ pub(crate) fn builtin_prototype_method_read<'a>(
     let Expr::PropertyGet {
         object: ctor_object,
         property: proto_property,
+        ..
     } = object
     else {
         return None;
@@ -112,6 +113,7 @@ pub(crate) fn builtin_prototype_method_read<'a>(
     let Expr::PropertyGet {
         object: global_object,
         property: builtin_name,
+        ..
     } = ctor_object.as_ref()
     else {
         return None;
@@ -126,13 +128,16 @@ pub(crate) fn builtin_prototype_method_read<'a>(
 pub(crate) fn is_global_builtin_value_expr(expr: &Expr, name: &str) -> bool {
     matches!(
         expr,
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet { object, property, .. }
             if property == name && matches!(object.as_ref(), Expr::GlobalGet(_))
     )
 }
 
 pub(crate) fn promise_static_function_length_expr(expr: &Expr) -> Option<u32> {
-    let Expr::PropertyGet { object, property } = expr else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    else {
         return None;
     };
     let is_promise_receiver = matches!(object.as_ref(), Expr::GlobalGet(_))
@@ -189,7 +194,10 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    let Expr::PropertyGet { object, property } = expr else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    else {
         return Ok(None);
     };
 

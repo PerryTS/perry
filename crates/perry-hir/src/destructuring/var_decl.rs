@@ -108,7 +108,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                     Some(Expr::NewDynamic { callee, .. }) => {
-                        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                        if let Expr::PropertyGet {
+                            object, property, ..
+                        } = callee.as_ref()
+                        {
                             if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "net" || module == "node:net")
                                 && matches!(property.as_str(), "BlockList" | "SocketAddress")
                             {

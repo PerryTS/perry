@@ -399,13 +399,15 @@ pub extern "C" fn js_string_to_locale_upper_case(
     js_string_from_str(&upper)
 }
 
-/// Validate the `locales` argument of `localeCompare` for its side effect
-/// (throwing `RangeError` on an invalid tag). Returns nothing — the actual
-/// comparison still routes through the existing (locale-neutral) collation in
-/// `compare.rs`, since full ICU ordering is deferred.
+/// Validate the `locales` / `options` arguments of `String.prototype.localeCompare`
+/// for their side effects — throwing exactly as `Construct(%Collator%, « locales,
+/// options »)` would (ECMA-402 §22.1.3.10). Returns nothing: the actual comparison
+/// still routes through the existing (locale-neutral) collation in `compare.rs`,
+/// since full ICU ordering is deferred. See [`crate::intl::validate_locale_compare`]
+/// (#5906).
 #[no_mangle]
-pub extern "C" fn js_string_validate_locales(locales: f64) {
-    let _ = resolve_primary_locale(locales);
+pub extern "C" fn js_string_validate_collator_args(locales: f64, options: f64) {
+    crate::intl::validate_locale_compare(locales, options);
 }
 
 // `#[used]` keepalive anchors: these `#[no_mangle]` entry points are reached
@@ -418,7 +420,7 @@ static KEEP_LOCALE_LOWER: extern "C" fn(*const StringHeader, f64) -> *mut String
 static KEEP_LOCALE_UPPER: extern "C" fn(*const StringHeader, f64) -> *mut StringHeader =
     js_string_to_locale_upper_case;
 #[used]
-static KEEP_VALIDATE_LOCALES: extern "C" fn(f64) = js_string_validate_locales;
+static KEEP_VALIDATE_COLLATOR_ARGS: extern "C" fn(f64, f64) = js_string_validate_collator_args;
 
 #[cfg(test)]
 mod tests {

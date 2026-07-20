@@ -147,6 +147,33 @@ export async function requestReview(): Promise<void> {
 
 `declare function` tells Perry the function is provided by native code. The raw return type is `number` because all values cross the FFI boundary as NaN-boxed `f64` values. Promise handles are NaN-boxed pointers that Perry's runtime knows how to `await`.
 
+#### Ergonomic aliases and the wrapper-name collision rule
+
+For manifest symbols that follow the `js_<pkg>_<snake_case>` convention (where `<pkg>` is the sanitized last segment of the package name), Perry derives an **ergonomic camelCase alias** so consumers can import a spec-faithful name without you writing any wrapper (issue #5621). For `@perryts/webgpu` a manifest symbol `js_webgpu_request_adapter` is importable as `requestAdapter`:
+
+```ts
+// The package's src/index.ts only ambient-declares the raw symbols…
+export declare function js_webgpu_request_adapter(): Promise<number>;
+
+// …and consumers import the derived alias:
+import { requestAdapter } from "@perryts/webgpu"; // → js_webgpu_request_adapter
+```
+
+The alias is a convenience **for packages that only export ambient `declare` signatures**. A *genuine* implemented export always wins over a derived alias (issue #6715): if your `src/index.ts` also exports a real wrapper whose name equals a manifest symbol's derived alias, the import binds to **your wrapper**, not the FFI symbol — your wrapper code runs, and it can call the raw symbol internally:
+
+```ts
+export declare function js_speech_speak(
+  text: string, rate: number, pitch: number, locale: string, voiceId: string): Promise<number>;
+
+// `speak` is the derived alias of `js_speech_speak` — this real wrapper WINS.
+export async function speak(text: string, options?: { rate?: number }): Promise<boolean> {
+  const rate = options?.rate ?? -1;
+  return (await js_speech_speak(text, rate, -1, "", "")) !== 0;
+}
+```
+
+> **Recommended convention.** If you write real wrapper logic (options objects, JSON parsing, bool coercion) around your externs, name the manifest symbols `js_<pkg>_native_<snake>` so their derived aliases become `nativeSpeak`, `nativeDoThing`, etc. — names your package simply doesn't re-export. This keeps the aliases out of your public namespace and removes any chance of a wrapper/alias name clash. If two manifest symbols ever derive the *same* alias, Perry reports a hard compile error rather than binding to one silently.
+
 ### Rust side
 
 Each platform crate is a `staticlib` that implements the declared functions using `#[no_mangle] pub extern "C"`:

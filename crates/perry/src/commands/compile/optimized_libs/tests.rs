@@ -345,6 +345,56 @@ fn explicit_node_fetch_import_still_routes_to_well_known_fetch() {
 }
 
 #[test]
+fn http2_import_enables_http2_constants_cross_feature() {
+    // #6468: importing `node:http2` records "http2" in `native_module_imports`,
+    // which must flip on `perry-runtime/mod-http2-constants` so the constant
+    // tables (`node_http2_constants`) are linked. A program that never imports
+    // it must leave the feature off so the tables dead-strip.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty_features: std::collections::BTreeSet<&'static str> =
+        std::collections::BTreeSet::new();
+
+    let mut with_http2 = CompilationContext::new(dir.path().to_path_buf());
+    with_http2.native_module_imports.insert("http2".to_string());
+    let cross_on = auto_optimized_cross_features(&with_http2, &empty_features, &[]);
+    assert!(
+        cross_on
+            .iter()
+            .any(|f| f == "perry-runtime/mod-http2-constants"),
+        "http2 import should enable mod-http2-constants, got {cross_on:?}"
+    );
+
+    let without = CompilationContext::new(dir.path().to_path_buf());
+    let cross_off = auto_optimized_cross_features(&without, &empty_features, &[]);
+    assert!(
+        !cross_off
+            .iter()
+            .any(|f| f == "perry-runtime/mod-http2-constants"),
+        "no http2 import should leave mod-http2-constants off, got {cross_off:?}"
+    );
+}
+
+#[test]
+fn http2_import_changes_optimized_libs_cache_key() {
+    // #6468: the http2-constants usage bit participates in the auto-build cache
+    // key, so a runtime built without the constant tables is never reused for a
+    // program that imports `node:http2`.
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let base = CompilationContext::new(dir.path().to_path_buf());
+    let key_without = auto_optimized_cache_key("", true, None, &base);
+
+    let mut with_http2 = CompilationContext::new(dir.path().to_path_buf());
+    with_http2.native_module_imports.insert("http2".to_string());
+    let key_with = auto_optimized_cache_key("", true, None, &with_http2);
+
+    assert_ne!(
+        key_without, key_with,
+        "an http2 import must change the auto-optimized cache key"
+    );
+}
+
+#[test]
 fn forced_well_known_env_extends_iteration_set() {
     let _guard = env_lock();
     let old_force_well_known = std::env::var("PERRY_FORCE_WELL_KNOWN").ok();
