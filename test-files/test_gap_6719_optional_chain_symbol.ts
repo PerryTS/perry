@@ -76,11 +76,29 @@ console.log([...obj].join(","));
 console.log(Math.max(...obj)); // spread into a call
 
 // ── a locally-shadowed `Symbol` must NOT fold — normal scoping wins ─────────
-function shadowed(): string {
+// Every binding form that shadows the global must be honored: `const`, `class`,
+// and `function` (the resolver gates on `shadows_unqualified_global`, not just
+// `lookup_local`, which alone would miss the class/function declarations).
+function shadowedConst(): string {
   const Symbol = { iterator: "local-value" } as any;
   return typeof Symbol?.iterator + ":" + Symbol?.iterator;
 }
-console.log(shadowed()); // node: "string:local-value"
+console.log(shadowedConst()); // node: "string:local-value"
+
+function shadowedClass(): string {
+  class Symbol {
+    static iterator = "class-static-iter";
+  }
+  return String(Symbol?.iterator);
+}
+console.log(shadowedClass()); // node: "class-static-iter"
+
+function shadowedFunc(): string {
+  function Symbol() {}
+  (Symbol as any).iterator = "fn-prop-iter";
+  return String(Symbol?.iterator);
+}
+console.log(shadowedFunc()); // node: "fn-prop-iter"
 
 // ── `?.` still short-circuits a genuinely nullish receiver ──────────────────
 const maybe: any = null;

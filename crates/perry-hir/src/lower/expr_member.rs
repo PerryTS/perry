@@ -155,9 +155,11 @@ pub(crate) fn try_fold_symbol_well_known_member(
     let ast::Expr::Ident(obj_ident) = unwrap_transparent(obj) else {
         return Ok(None);
     };
-    // Gated on `Symbol` being the real global — a local binding of that name
-    // resolves normally, matching JS scoping.
-    if obj_ident.sym.as_ref() != "Symbol" || ctx.lookup_local("Symbol").is_some() {
+    // Gated on `Symbol` being the real, unshadowed global — a `let`/`const`,
+    // `function`, `class`, or imported binding of that name resolves normally,
+    // matching JS scoping. `shadows_unqualified_global` covers all four forms
+    // (`lookup_local` alone would miss `class Symbol` / `function Symbol`).
+    if obj_ident.sym.as_ref() != "Symbol" || ctx.shadows_unqualified_global("Symbol") {
         return Ok(None);
     }
     let fold =
