@@ -1,7 +1,7 @@
 //! BigInt comparison and BigInt<->Number / string comparison helpers.
 
-use super::*;
 use super::convert::parse_bigint_string;
+use super::*;
 
 /// Compare two BigInts (-1 if a < b, 0 if equal, 1 if a > b)
 #[no_mangle]

@@ -1564,6 +1564,25 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
 }
 
+/// #6692: the `node:stream/promises` `pipeline` / `finished` callable — the
+/// promise-based implementations Node exposes via
+/// `stream.pipeline[util.promisify.custom]`. Installs the submodule registry
+/// entry first so the lookup succeeds even when the program never imported
+/// `node:stream/promises` itself. Returns NaN-boxed `TAG_TRUE` (the historical
+/// unlisted-export sentinel) if `name` is unknown — callers should verify the
+/// result is a callable closure before using it.
+pub(crate) fn stream_promises_export_callable(name: &str) -> f64 {
+    js_node_submod_install_stream_promises();
+    unsafe {
+        js_node_submodule_export_as_function(
+            b"stream_promises".as_ptr(),
+            "stream_promises".len() as u32,
+            name.as_ptr(),
+            name.len() as u32,
+        )
+    }
+}
+
 /// Returns a namespace-member value for a known Node submodule namespace import.
 ///
 /// This differs from `js_node_submodule_export_as_function`: direct named-import

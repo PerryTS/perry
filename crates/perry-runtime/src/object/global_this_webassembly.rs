@@ -72,7 +72,7 @@ fn value_heap_ptr(value: f64) -> Option<*mut u8> {
     let top16 = bits >> 48;
     let raw = if top16 == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if top16 == 0 && bits > 0x10000 {
+    } else if top16 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
         bits as usize
     } else {
         0
@@ -85,13 +85,10 @@ fn value_heap_ptr(value: f64) -> Option<*mut u8> {
 
 fn value_gc_type(value: f64) -> Option<u8> {
     let ptr = value_heap_ptr(value)?;
-    if (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    unsafe {
-        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        Some((*gc_header).obj_type)
-    }
+    // Magnitude-classify (reject handle band / implausible / small-buf slab)
+    // before dereferencing `ptr - GC_HEADER_SIZE` (#6279).
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize)? };
+    Some(header.obj_type)
 }
 
 fn value_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
@@ -160,7 +157,10 @@ fn webassembly_error_ctor_expected_name(type_ref: f64) -> Option<&'static [u8]> 
     {
         return None;
     }
-    if !crate::value::addr_class::is_valid_obj_ptr(ptr as *const u8) {
+    // `is_valid_obj_ptr` alone does not reject the small-handle band on
+    // Linux/Windows/Android/iOS — use the canonical band+heap-floor pairing
+    // (#6279).
+    if !crate::value::addr_class::is_plausible_heap_addr(ptr as usize) {
         return None;
     }
     unsafe {

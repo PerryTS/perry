@@ -606,7 +606,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // NaN-boxed JSValue (string / array / undefined).
     module.declare_function("js_string_to_locale_lower_case", I64, &[I64, DOUBLE]);
     module.declare_function("js_string_to_locale_upper_case", I64, &[I64, DOUBLE]);
-    module.declare_function("js_string_validate_locales", VOID, &[DOUBLE]);
+    module.declare_function("js_string_validate_collator_args", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_trim", I64, &[I64]);
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
@@ -881,6 +881,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_run_finalization_exit", VOID, &[]);
     module.declare_function("js_promise_report_unhandled_rejections", VOID, &[]);
+    // #6666: the natural-exit epilogue returns the stored `process.exitCode`
+    // (default 0) as the process status instead of a hardcoded 0.
+    module.declare_function("js_process_pending_exit_code", I32, &[]);
     module.declare_function(
         "js_gc_release_current_thread_collection_side_allocations",
         VOID,
@@ -1397,6 +1400,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // #5389 Tier 2: synchronous ambient require(spec) resolution — the codegen
     // fallthrough when a computed require() didn't const-fold to a compiled target.
     module.declare_function("js_module_ambient_require_apply", DOUBLE, &[DOUBLE]);
+    // #6660: dynamic-`import(spec)` unresolved / no-match fallback — builtins
+    // resolve by string (promise-wrapped), everything else rejects with an
+    // `ERR_MODULE_NOT_FOUND` Error (never literal `undefined`). The deferred
+    // variant carries the #5230 compile-time deferral message for unknown
+    // modules.
+    module.declare_function("js_module_dynamic_import_fallback", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_module_dynamic_import_deferred",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // #6644: `module.createRequire(...)` devirt entry — arms the nm/submod
     // install-all hooks before delegating (see js_process_get_builtin_module_devirt).
     module.declare_function("js_module_create_require_devirt", DOUBLE, &[DOUBLE]);

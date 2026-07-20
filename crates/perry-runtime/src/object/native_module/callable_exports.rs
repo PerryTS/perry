@@ -52,7 +52,7 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if let Some(length) = native_callable_export_arity(export_module_name, property_name) {
         set_builtin_closure_length(closure as usize, length);
     }
-    let value = crate::value::js_nanbox_pointer(closure as i64);
+    let mut value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
     if export_module_name == "module" && property_name == "Module" {
@@ -77,6 +77,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         )
     {
         attach_stream_constructor_prototype(value, property_name);
+    }
+    // #6692: Node defines `stream.pipeline[util.promisify.custom]` and
+    // `stream.finished[util.promisify.custom]` pointing at the promise-based
+    // `stream/promises` implementations, so `promisify(stream.pipeline)` returns
+    // that impl rather than the generic callback-appending wrapper. Wire the
+    // same hooks so `custom_promisified_value` (util_promisify.rs) honors them.
+    if export_module_name == "stream" && matches!(property_name, "pipeline" | "finished") {
+        // Reassign: the attach helper roots `value` and allocates (which may
+        // evacuate the closure), so it returns the possibly-relocated pointer.
+        value = attach_stream_promisify_custom(value, property_name);
     }
     if export_module_name == "sqlite" && property_name == "DatabaseSync" {
         attach_sqlite_database_sync_prototype(value);
@@ -215,6 +225,43 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     });
     value
+}
+
+/// #6692: install `stream.pipeline[util.promisify.custom]` (or `.finished`'s)
+/// pointing at the promise-based `stream/promises` export, matching Node. With
+/// the hook present, `promisify(stream.pipeline)` resolves through
+/// `custom_promisified_value` to the promise implementation instead of the
+/// generic wrapper (whose appended callback the `promisify.custom`-aware caller
+/// in `pi`'s bundled node-fetch never provides). `property_name` is `"pipeline"`
+/// or `"finished"` — the matching `stream/promises` export name.
+///
+/// Returns the (possibly relocated) receiver value: the allocations below can
+/// trigger a GC that evacuates the closure, and only the `scope` handle tracks
+/// the move, so the caller must adopt the returned pointer.
+fn attach_stream_promisify_custom(pipeline_value: f64, property_name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(pipeline_value);
+    let promise_impl = crate::node_submodules::stream_promises_export_callable(property_name);
+    // The submodule may be unavailable (returns the `TAG_TRUE` sentinel); only
+    // wire the hook when it resolved to a real callable closure, otherwise leave
+    // the generic promisify fallback in place.
+    let impl_bits = promise_impl.to_bits();
+    let impl_addr = (impl_bits & crate::value::POINTER_MASK) as usize;
+    if (impl_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr(impl_addr)
+    {
+        let impl_handle = scope.root_nanbox_f64(promise_impl);
+        let custom_symbol = crate::util_promisify::promisify_custom_symbol();
+        let symbol_handle = scope.root_nanbox_f64(custom_symbol);
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                target.get_nanbox_f64(),
+                symbol_handle.get_nanbox_f64(),
+                impl_handle.get_nanbox_f64(),
+            );
+        }
+    }
+    target.get_nanbox_f64()
 }
 
 fn async_hooks_static_method_value(

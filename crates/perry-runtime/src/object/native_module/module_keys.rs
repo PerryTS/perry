@@ -1669,6 +1669,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"strict",
         ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        // #6667: `require("crypto")` / `import * as crypto` enumerate the full
+        // export surface so wildcard interop + object spread copy the exports.
+        // The table lives beside crypto's value-resolution in `constants.rs`.
+        "crypto" => Some(super::constants::CRYPTO_NAMESPACE_KEYS),
         "sqlite" => Some(&[
             b"DatabaseSync",
             b"Session",
