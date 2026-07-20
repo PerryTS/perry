@@ -135,7 +135,12 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
+        // Reject the WHOLE handle band, not a bare `> 0x10000` floor: a
+        // common-band registry id (crypto `Hash`, `Blob`, …) can sit above
+        // 0x10000, and the `gc_header_for(obj)` write just below would store into
+        // unmapped memory (SIGSEGV) — `Object.freeze(handle)` is a no-op that
+        // returns the handle (test_gap_handle_band_object_ops `Object.freeze(blob)`).
+        if !obj.is_null() && crate::value::addr_class::is_above_handle_band(obj as usize) {
             let gc = gc_header_for(obj);
             (*gc)._reserved |= crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED

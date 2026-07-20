@@ -379,6 +379,39 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
 
     let obj_addr = obj_val.bits() & 0x0000_FFFF_FFFF_FFFF;
 
+    // A COMMON/small handle-band id (crypto `Hash`, `Blob`, …) that fell through
+    // the fetch-band arm above (`addr >= COMMON_HANDLE_BAND_END`) is a registry
+    // id, NOT a heap object. The probes just below (`fetch_subclass_handle_id`,
+    // `exotic_expando_kind`) and the generic own-property scan dereference
+    // `obj_addr` as an `ObjectHeader`; on Linux a common-band id passes the low
+    // `is_valid_obj_ptr` floor and reads unmapped memory (SIGSEGV) — macOS masks
+    // it behind its 2 TB heap floor. Mirror the fetch-band arm: route a string
+    // key through the same handle property dispatcher reads use (present iff it
+    // resolves to a non-undefined value), and otherwise report absent — never
+    // fall through to a heap deref. (Regression from #6434, which narrowed the
+    // blanket handle-band guard to the fetch band; test_gap_handle_band_object_ops
+    // `"__nope" in Blob/Hash`.)
+    if crate::value::addr_class::is_handle_band(obj_addr as usize) {
+        if key_val.is_any_string() {
+            if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
+                unsafe {
+                    let key_ptr = crate::value::js_get_string_pointer_unified(key)
+                        as *const crate::StringHeader;
+                    if !key_ptr.is_null() {
+                        let name_ptr =
+                            (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let name_len = (*key_ptr).byte_len as usize;
+                        let result = dispatch(obj_addr as i64, name_ptr, name_len);
+                        if result.to_bits() != crate::value::TAG_UNDEFINED {
+                            return nanbox_true;
+                        }
+                    }
+                }
+            }
+        }
+        return nanbox_false;
+    }
+
     // A `class X extends Request/Response` instance is a heap object whose native
     // members (`body`/`method`/`url`/`headers`/…) live on an underlying fetch
     // handle, not the JS prototype chain — property *reads* forward through the

@@ -470,8 +470,17 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     ensure_handle_exists_probe_registered();
     // Reuse a reclaimed id when one is parked, else mint a fresh one. A
     // recycled id was removed from `HANDLES` before being parked, so inserting
-    // under it here cannot collide with a live registration.
-    let handle = pop_free_handle().unwrap_or_else(next_fresh_handle_id);
+    // under it here cannot collide with a live registration. Unlike
+    // `reserve_handle_id`, exhaustion still aborts here: `register_handle` must
+    // return a live key to insert under, and there is no valid id left to hand
+    // out. A leaking `register_handle` workload is a bug (its ids are recycled
+    // by `drop_handle`), so exhaustion here means the concurrent live-handle
+    // count genuinely exceeded the band.
+    let handle = pop_free_handle()
+        .or_else(next_fresh_handle_id)
+        .unwrap_or_else(|| {
+            panic!("perry-ffi handle id range exhausted before reserved Web handle bands")
+        });
     HANDLES.insert(handle, Box::new(value));
     handle
 }
@@ -485,16 +494,87 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
 /// `socket.on('data', …)` on ext-net socket #1 got claimed by ext-http-server
 /// (whose server was also #1) and the mysql2 handshake hung: the listener
 /// registered on the HTTP server and the socket's bytes reached nobody.
+///
+/// Return [`INVALID_HANDLE`] when the visible id band is exhausted rather than
+/// aborting the process (#6441). A reserved id is not recycled until the owning
+/// subsystem calls [`free_handle_id`]; a subsystem that never frees (or frees
+/// more slowly than it reserves) will eventually drain the band, and a
+/// long-running server must degrade that to a recoverable, JS-visible error
+/// (e.g. an `EMFILE`-style throw at the socket-alloc site) instead of a crash.
+/// The `0` sentinel is safe to route on: callers must NOT register an object
+/// under it — `0` is the "no handle" value — so the guard turns exhaustion into
+/// a caught error at the boundary, never a phantom id-0 entry.
 pub fn reserve_handle_id() -> Handle {
-    pop_free_handle().unwrap_or_else(next_fresh_handle_id)
+    pop_free_handle()
+        .or_else(next_fresh_handle_id)
+        .unwrap_or(INVALID_HANDLE)
 }
 
-fn next_fresh_handle_id() -> Handle {
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
-    if handle >= FFI_HANDLE_ID_END {
-        panic!("perry-ffi handle id range exhausted before reserved Web handle bands");
+/// Free a handle id previously minted by [`reserve_handle_id`], returning it to
+/// circulation through the same quarantine [`drop_handle`] uses.
+///
+/// [`reserve_handle_id`] hands a subsystem that keeps its OWN object map (e.g.
+/// perry-ext-net's socket registry) a globally-unique id without storing
+/// anything in [`HANDLES`] — so there is nothing to remove here; this recycles
+/// only the *id*. The caller MUST have already dropped the id from its own map
+/// and must guarantee no further dispatch will resolve it, exactly the contract
+/// [`drop_handle`] places on [`register_handle`] ids.
+///
+/// Like every freed id it is parked in the one-tick quarantine
+/// ([`QUARANTINED_HANDLES`]) and only promoted to the freelist by
+/// [`drain_quarantined_handles`], so a stale bare reference dispatched before
+/// the next tick spends against an empty slot instead of aliasing a freshly
+/// reserved id — the ABA / use-after-recycle class #6407 fixes. See
+/// [`QUARANTINED_HANDLES`]. Passing [`INVALID_HANDLE`] is a no-op, so a caller
+/// can free the result of a possibly-exhausted [`reserve_handle_id`]
+/// unconditionally.
+///
+/// This is the primitive both candidate free-when-unreachable fixes for the
+/// reserved-id leak build on (a GC-finalized socket object, or a handle-band
+/// liveness sweep — #6441). It performs no reachability analysis itself: a
+/// stale JS reference to a `net.Socket` can outlive its `'close'`, so freeing
+/// on `'close'` alone is unsafe and left to that follow-up.
+pub fn free_handle_id(id: Handle) {
+    if id == INVALID_HANDLE {
+        return;
     }
-    handle
+    recycle_handle(id);
+}
+
+/// Deadline-gated twin of [`free_handle_id`]: holds the reserved id in the
+/// [`QUARANTINED_UNTIL`] tier until `Instant::now()` passes `deadline`, rather
+/// than merely until the next tick. For a subsystem that frees an id while a
+/// stale holder may still resume and dispatch on it within a known grace window
+/// (mirrors [`drop_handle_until`]). Passing [`INVALID_HANDLE`] is a no-op.
+pub fn free_handle_id_until(id: Handle, deadline: Instant) {
+    if id == INVALID_HANDLE {
+        return;
+    }
+    recycle_handle_until(id, deadline);
+}
+
+/// Mint a never-before-used id, or `None` once the visible band is exhausted.
+///
+/// Returns `None` rather than panicking so callers choose their own exhaustion
+/// policy: [`reserve_handle_id`] degrades to a recoverable [`INVALID_HANDLE`]
+/// (#6441), while [`register_handle`] — which has no valid key to insert under
+/// — still aborts. The atomic keeps advancing past [`FFI_HANDLE_ID_END`] on
+/// each post-exhaustion call; that is harmless (every such call maps to `None`)
+/// and the `i64` counter cannot realistically wrap.
+fn next_fresh_handle_id() -> Option<Handle> {
+    fresh_id_or_exhausted(NEXT_HANDLE.fetch_add(1, Ordering::SeqCst))
+}
+
+/// Classify a raw counter value as a usable fresh id or band-exhausted.
+/// Factored out so the exhaustion boundary is unit-testable without advancing
+/// the process-wide [`NEXT_HANDLE`] past [`FFI_HANDLE_ID_END`] (which would
+/// break every other test in this binary).
+fn fresh_id_or_exhausted(raw: Handle) -> Option<Handle> {
+    if raw >= FFI_HANDLE_ID_END {
+        None
+    } else {
+        Some(raw)
+    }
 }
 
 /// Look up a handle and run `f` against the borrowed value.
@@ -1277,5 +1357,169 @@ mod tests {
              no-reclaim registry would mint one per allocation and exhaust \
              the band"
         );
+    }
+
+    // ----------------------------------------------------------------
+    // Reserved-id recycling (#6441).
+    //
+    // `reserve_handle_id` mints a globally-unique id WITHOUT storing a
+    // value in `HANDLES` — for a subsystem (perry-ext-net's socket map)
+    // that keeps its own object map. Before `free_handle_id` existed
+    // nothing ever returned a reserved id, so a long-running server
+    // leaked the whole `[1, 0x40000)` band and then crashed. These tests
+    // pin the two halves of the fix: reserved ids now recycle through the
+    // same quarantine as `drop_handle` ids, and exhaustion degrades to
+    // `INVALID_HANDLE` instead of a panic.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn fresh_id_or_exhausted_flags_the_band_boundary() {
+        // Pure boundary logic, tested without advancing the process-wide
+        // `NEXT_HANDLE` past `FFI_HANDLE_ID_END` (which would break every
+        // other test in this binary). Ids strictly below the end are usable;
+        // the end value and anything past it are exhausted (`None`).
+        assert_eq!(fresh_id_or_exhausted(1), Some(1));
+        assert_eq!(
+            fresh_id_or_exhausted(FFI_HANDLE_ID_END - 1),
+            Some(FFI_HANDLE_ID_END - 1)
+        );
+        assert_eq!(fresh_id_or_exhausted(FFI_HANDLE_ID_END), None);
+        assert_eq!(fresh_id_or_exhausted(FFI_HANDLE_ID_END + 4096), None);
+    }
+
+    #[test]
+    fn reserve_free_reserve_recycles_the_id() {
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Reserve/free churn far past the band size while holding at most one
+        // id live. With `free_handle_id` recycling each id through the
+        // quarantine, the fresh counter barely moves — cumulative reservations
+        // decouple from fresh-id consumption, exactly as `register`/`drop` do.
+        //
+        // Before this fix `reserve_handle_id` had no `free_*` twin, so this
+        // loop would advance the counter by `iterations`, exhaust the band, and
+        // (post-#6441) start returning `INVALID_HANDLE` — tripping the
+        // `assert_ne!` below. (Pre-#6441 it panicked outright.) Either way a
+        // no-recycle build cannot complete the loop.
+        let iterations = FFI_HANDLE_ID_END as usize + 8192;
+        let before = NEXT_HANDLE.load(Ordering::SeqCst);
+        for _ in 0..iterations {
+            let id = reserve_handle_id();
+            assert_ne!(
+                id, INVALID_HANDLE,
+                "reserve_handle_id must not run out of ids once freed ids recycle"
+            );
+            free_handle_id(id);
+            // Promote the just-quarantined id back to the freelist (the host
+            // pump's per-tick drain) so the next reserve reuses it.
+            drain_quarantined_handles();
+        }
+        let fresh_minted = (NEXT_HANDLE.load(Ordering::SeqCst) - before) as usize;
+        assert!(
+            fresh_minted < 4096,
+            "fresh-id consumption ({fresh_minted}) over {iterations} \
+             reserve/free cycles should stay tiny once reserved ids recycle"
+        );
+    }
+
+    #[test]
+    fn freed_reserved_id_not_reusable_until_drained() {
+        // The ABA guarantee for reserved ids, mirroring
+        // `freed_id_is_not_reusable_until_drained_no_cross_request_bleed`: a
+        // socket id freed on `'close'` must not be handed to a *new* reservation
+        // within the same tick, or a stale JS `socket` reference dispatched
+        // before the next drain would alias the new socket (the exact aliasing
+        // class #6407 fixes). While quarantined the id maps to nothing, so the
+        // stale dispatch spends against an empty slot.
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let h = reserve_handle_id();
+        assert_ne!(h, INVALID_HANDLE);
+        free_handle_id(h);
+
+        // No drain yet: `h` sits in the quarantine, NOT the freelist, so neither
+        // a fresh reservation nor a registration can re-mint it this tick. Only
+        // the serialized recycle tests call `drain`, and this test holds the
+        // lock, so `h` provably stays quarantined here.
+        let other_reserved = reserve_handle_id();
+        assert_ne!(
+            other_reserved, h,
+            "a just-freed reserved id must not be reusable within the same tick"
+        );
+        let other_registered = register_handle(0_i64);
+        assert_ne!(
+            other_registered, h,
+            "a just-freed reserved id must not leak into register_handle this tick"
+        );
+
+        // After a drain boundary the id is promoted and eventually reused.
+        free_handle_id(other_reserved);
+        let reused = drop_then_register_reusing(other_registered, 55_i64);
+        assert_eq!(with_handle::<i64, _, _>(reused, |v| *v), Some(55));
+        drop_handle(reused);
+        drain_quarantined_handles();
+    }
+
+    #[test]
+    fn free_handle_id_until_holds_reserved_id_past_ticks() {
+        // The deadline-gated twin for reserved ids (the reaper's peer-disconnect
+        // path in handle-registry terms): a reserved id freed with a future
+        // grace deadline stays parked across EVERY drain until the deadline
+        // elapses, then recycles cleanly.
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let h = reserve_handle_id();
+        assert_ne!(h, INVALID_HANDLE);
+        free_handle_id_until(h, Instant::now() + Duration::from_secs(3600));
+
+        for _ in 0..5 {
+            drain_quarantined_handles();
+            let probe = reserve_handle_id();
+            assert_ne!(
+                probe, h,
+                "a deadline-gated reserved id must not recycle before its grace \
+                 deadline elapses"
+            );
+            free_handle_id(probe);
+        }
+
+        // An id parked with an already-elapsed deadline is promoted by the very
+        // next drain and reused (retry to absorb parallel tests racing the
+        // shared freelist, same pattern as `drop_then_register_reusing`).
+        let dead = reserve_handle_id();
+        free_handle_id_until(dead, Instant::now() - Duration::from_secs(1));
+        let mut recycled = false;
+        for _ in 0..10_000 {
+            drain_quarantined_handles();
+            let candidate = reserve_handle_id();
+            if candidate == dead {
+                recycled = true;
+                free_handle_id(candidate);
+                break;
+            }
+            free_handle_id(candidate);
+        }
+        assert!(
+            recycled,
+            "an elapsed-deadline reserved id must recycle once its grace passes"
+        );
+        // `h`'s far-future entry stays parked — the point of the test. The
+        // freelist is bounded, so a single held id leaks nothing that matters.
+        drain_quarantined_handles();
+    }
+
+    #[test]
+    fn free_handle_id_ignores_invalid_handle() {
+        // `reserve_handle_id` returns `INVALID_HANDLE` on exhaustion, so callers
+        // free its result unconditionally; freeing the sentinel must be a no-op
+        // (never park `0` for reuse — it is the "no handle" value).
+        free_handle_id(INVALID_HANDLE);
+        free_handle_id_until(INVALID_HANDLE, Instant::now());
+        drain_quarantined_handles();
+        // `register_handle` never returns `INVALID_HANDLE`, so if `0` had been
+        // parked and handed back this would fail its own non-null invariant.
+        let h = register_handle(1_i64);
+        assert_ne!(h, INVALID_HANDLE);
+        drop_handle(h);
     }
 }

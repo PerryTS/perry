@@ -150,7 +150,10 @@ pub(crate) fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     // that statically without this hint, so without it `createHmac(secretKey, ...)`
     // would route to the string fast-path that misreads buffer bytes as UTF-8.
     if let Expr::Call { callee, .. } = e {
-        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        {
             if matches!(object.as_ref(), Expr::NativeModuleRef(n) if n == "crypto")
                 && matches!(
                     property.as_str(),

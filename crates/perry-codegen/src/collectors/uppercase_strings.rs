@@ -43,7 +43,7 @@ fn find_candidates(stmts: &[Stmt], candidates: &mut HashSet<u32>) {
             } if args.is_empty()
                 && matches!(
                     callee.as_ref(),
-                    Expr::PropertyGet { object, property }
+                    Expr::PropertyGet { object, property, .. }
                         if matches!(object.as_ref(), Expr::LocalGet(_))
                             && property == "toUpperCase"
                 ) =>
@@ -126,7 +126,7 @@ fn check_uses_in_stmts(
                 && matches!(args.as_slice(), [Expr::String(separator)] if !separator.is_empty())
                 && matches!(
                     callee.as_ref(),
-                    Expr::PropertyGet { object, property }
+                    Expr::PropertyGet { object, property, .. }
                         if matches!(object.as_ref(), Expr::LocalGet(_)) && property == "split"
                 )
                 && split_parts_are_length_only(
@@ -412,7 +412,7 @@ fn check_uses_in_expr(
             && matches!(args.as_slice(), [Expr::String(_)])
             && matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property }
+                Expr::PropertyGet { object, property, .. }
                     if matches!(object.as_ref(), Expr::LocalGet(_)) && property == "indexOf"
             )
         {

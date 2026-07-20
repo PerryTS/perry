@@ -561,8 +561,18 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     );
     let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
 
+    // Bind `this` to the object for the call. A class-instance
+    // `[Symbol.toPrimitive]` lives on the prototype and reads `this.field`
+    // (`class Temperature { [Symbol.toPrimitive](h){ return this.celsius } }`),
+    // reading `this` dynamically off IMPLICIT_THIS; without an explicit receiver
+    // `this.celsius` resolved to `undefined`, so `+t` was `NaN` and `` `${t}` ``
+    // was `undefined°C` (test_gap_symbols). The proxy arm above already binds
+    // `this`; mirror it for the closure method.
+    let prev_this = crate::object::js_implicit_this_set(value_handle.get_nanbox_f64());
     // Spec says the return value must be a primitive; if it's still an
     // object pointer, that's a TypeError in JS, but we just return it
     // as-is and let the caller fall back.
-    crate::closure::js_closure_call1(closure_ptr, hint_f64)
+    let result = crate::closure::js_closure_call1(closure_ptr, hint_f64);
+    crate::object::js_implicit_this_set(prev_this);
+    result
 }

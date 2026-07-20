@@ -691,6 +691,12 @@ const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"spawnSync",
 ];
 
+// #6563: node-pty / @lydell/node-pty — `spawn` is the entire module surface
+// the target apps touch; everything else lives on the returned IPty object.
+const NODE_PTY_DEFAULT_KEYS: &[&[u8]] = &[b"spawn"];
+
+const NODE_PTY_NAMESPACE_KEYS: &[&[u8]] = &[b"default", b"spawn"];
+
 const CLUSTER_NAMESPACE_KEYS: &[&[u8]] = &[
     b"SCHED_NONE",
     b"SCHED_RR",
@@ -1663,6 +1669,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"strict",
         ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        // #6667: `require("crypto")` / `import * as crypto` enumerate the full
+        // export surface so wildcard interop + object spread copy the exports.
+        // The table lives beside crypto's value-resolution in `constants.rs`.
+        "crypto" => Some(super::constants::CRYPTO_NAMESPACE_KEYS),
         "sqlite" => Some(&[
             b"DatabaseSync",
             b"Session",
@@ -1672,6 +1682,23 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"default",
         ]),
         "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
+        // bun:ffi (#6562) — stage-1 surface plus the declared-but-throwing
+        // exports (their reads resolve to callables that raise the stage-1
+        // error).
+        "bun:ffi" => Some(&[
+            b"dlopen",
+            b"FFIType",
+            b"ptr",
+            b"CString",
+            b"suffix",
+            b"toArrayBuffer",
+            b"toBuffer",
+            b"JSCallback",
+            b"CFunction",
+            b"linkSymbols",
+            b"viewSource",
+            b"read",
+        ]),
         "sea" => Some(SEA_NAMESPACE_KEYS),
         "sea.default" => Some(SEA_DEFAULT_KEYS),
         "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
@@ -1691,6 +1718,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
         "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
         "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
+        "node-pty" => Some(NODE_PTY_NAMESPACE_KEYS),
+        "node-pty.default" => Some(NODE_PTY_DEFAULT_KEYS),
         "cluster" => Some(CLUSTER_NAMESPACE_KEYS),
         "cluster.default" => Some(CLUSTER_DEFAULT_KEYS),
         "stream" => Some(STREAM_NAMESPACE_KEYS),
@@ -1787,7 +1816,13 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"request",
             b"globalAgent",
         ]),
+        // #6468: the http2 namespace + `http2.constants` key lists live in
+        // `crate::node_http2_constants`, gated behind `mod-http2-constants`.
+        // These keys are only enumerated for an existing http2 namespace object,
+        // which only exists after a `node:http2` import turns the gate on.
+        #[cfg(feature = "mod-http2-constants")]
         "http2" => Some(crate::node_http2_constants::HTTP2_NAMESPACE_KEYS),
+        #[cfg(feature = "mod-http2-constants")]
         "http2.constants" => Some(crate::node_http2_constants::HTTP2_CONSTANTS_KEYS),
         // #3906: native-module default/namespace objects previously enumerated
         // only the internal `__module__` sentinel. List each module's supported

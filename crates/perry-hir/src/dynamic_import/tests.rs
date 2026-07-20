@@ -188,6 +188,7 @@ fn resolve_registry_computed_key_enumerates_all() {
 fn resolve_registry_static_property_enumerates_all() {
     // `import(R.a)` — over-approximate to the whole (relative) chunk set.
     assert_resolves_both_chunks(&Expr::PropertyGet {
+        byte_offset: 0,
         object: Box::new(Expr::LocalGet(5)),
         property: "a".to_string(),
     });
@@ -275,6 +276,7 @@ fn resolve_chained_distinct_registries_resolves() {
     let b = Expr::Object(vec![(
         "y".to_string(),
         Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "x".to_string(),
         },
@@ -297,6 +299,7 @@ fn resolve_chained_distinct_registries_resolves() {
 fn resolve_non_registry_member_access_defers() {
     // `import(cfg.path)` where cfg is opaque — must keep deferring, not panic.
     let arg = Expr::PropertyGet {
+        byte_offset: 0,
         object: Box::new(Expr::LocalGet(7)),
         property: "path".to_string(),
     };
@@ -654,6 +657,7 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
         mutable: true,
         init: Some(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::String(
                     "D:\\tmp\\probe\\node_modules\\node-pty\\lib".to_string(),
                 )),
@@ -670,7 +674,9 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
 
     let filename = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::NativeModuleRef("path".to_string())),
                 property: "default".to_string(),
             }),

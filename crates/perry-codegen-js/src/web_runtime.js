@@ -3153,7 +3153,19 @@ function perry_get_scale_factor()  { return window.devicePixelRatio || 1; }
 function perry_has_hardware_keyboard() { return true; }
 function perry_get_platform() { return "web"; }
 function perry_get_orientation() { return window.innerWidth > window.innerHeight ? "landscape" : "portrait"; }
-function perry_get_device_idiom() { return 0; } // 0 = not a tablet/phone on web
+// Broad form factor per the perry/system contract: "phone" | "pad" |
+// "mac" | "tv" | "watch" | "vision" | "desktop" (was the numeric 0).
+function perry_get_device_idiom() {
+    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+    // iPadOS 13+ Safari reports "Macintosh" in its desktop-mode UA; the
+    // touch-point count is the standard tell.
+    const touchPoints = (typeof navigator !== "undefined" && navigator.maxTouchPoints) || 0;
+    if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && touchPoints > 1)) return "pad";
+    if (/Android/i.test(ua) && !/Mobile/i.test(ua)) return "pad";
+    if (/iPhone|Android|Mobile/i.test(ua)) return "phone";
+    if (/Macintosh/i.test(ua)) return "mac";
+    return "desktop";
+}
 function perry_on_layout_change(callback) {
     if (typeof callback === "function") {
         window.addEventListener("resize", function() { callback(); });

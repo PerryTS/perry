@@ -149,7 +149,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         },
 
         // Property access
-        Expr::PropertyGet { object, property } => Expr::PropertyGet {
+        Expr::PropertyGet {
+            object, property, ..
+        } => Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
         },

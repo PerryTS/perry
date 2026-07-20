@@ -132,9 +132,10 @@ impl OutUsageAnalyzer {
                 self.visit_expr(source);
                 return;
             }
-            Expr::PropertyGet { object, property }
-                if matches!(object.as_ref(), Expr::LocalGet(id) if *id == self.out_id)
-                    && property == "length" =>
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == self.out_id)
+                && property == "length" =>
             {
                 // Safe: out.length read.
                 return;

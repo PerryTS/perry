@@ -133,6 +133,27 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     0
 }
 
+// === Cron scheduler stubs ===
+// The generated event loop calls js_cron_timer_tick /
+// js_cron_timer_has_pending unconditionally each iteration (cron jobs
+// otherwise never fire — the CRON_TIMERS machinery existed but nothing
+// drove it). Runtime-only links (no perry-stdlib) need these no-op
+// fallbacks so the binary links; with perry-stdlib or perry-ext-cron
+// linked, the real queue implementations win. Android's stdlib stubs
+// cover that target independently.
+#[cfg(not(target_os = "android"))]
+#[no_mangle]
+pub extern "C" fn js_cron_timer_tick() -> i32 {
+    // Hot-loop drain — silent stub, same as js_stdlib_process_pending.
+    0
+}
+
+#[cfg(not(target_os = "android"))]
+#[no_mangle]
+pub extern "C" fn js_cron_timer_has_pending() -> i32 {
+    0
+}
+
 #[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn js_stdlib_init_dispatch() {

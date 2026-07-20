@@ -200,6 +200,19 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
 pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promise) {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
 
+    // `outer` is adopting `inner`'s eventual state — `inner`'s rejection (now or
+    // later) is consumed by `outer`, so `inner` is no longer an unhandled
+    // rejection. The synchronous adoption path (`js_promise_resolve_with_promise`)
+    // marks this at then.rs's Pending arm; this deferred native-job path
+    // (V8-hop-parity adoption used by `async fn` return AND by an async fn that
+    // THROWS after an `await` — its step-catch `Promise.reject(e)` wrapper is
+    // assimilated here) must mark it too. Without it the already-rejected wrapper
+    // had no reaction of its own and was spuriously reported "Uncaught (in
+    // promise)" — once PER caught throw-after-await, which floods a server's
+    // `process.on('unhandledRejection')` (Next.js's RSC renders catch such
+    // rejections internally) and can crash it.
+    crate::promise::mark_rejection_handled(inner);
+
     let callback = js_closure_alloc(native_promise_adoption_job as *const u8, 2);
     js_closure_set_capture_ptr(callback, 0, outer as i64);
     js_closure_set_capture_ptr(callback, 1, inner as i64);

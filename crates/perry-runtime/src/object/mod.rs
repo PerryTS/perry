@@ -15,6 +15,14 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::RwLock;
 
+/// Minimum number of inline field slots every object is allocated with, even
+/// when it has fewer fields. This is a corruption-critical invariant: allocation,
+/// every field get/set bounds check, and every direct-slot read MUST use the
+/// SAME floor, or a write/read past the allocated slots corrupts the heap. It is
+/// centralized here so all sites move in lockstep. (Also mirrored in
+/// perry-codegen `lower_call/new.rs` MIN_FIELD_SLOTS for the PERRY_INLINE_NEW path.)
+pub(crate) const INLINE_SLOT_FLOOR: usize = 4;
+
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;

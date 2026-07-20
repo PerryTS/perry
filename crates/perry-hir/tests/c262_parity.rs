@@ -347,6 +347,7 @@ fn implicit_global_property_set_value<'a>(expr: &'a Expr, name: &str) -> Option<
         Expr::PropertyGet {
             object: inner,
             property: gt,
+            ..
         } if gt == "globalThis" && matches!(inner.as_ref(), Expr::GlobalGet(0)) => {
             Some(value.as_ref())
         }

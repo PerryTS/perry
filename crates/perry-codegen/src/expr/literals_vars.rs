@@ -223,7 +223,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // global object as `GlobalGet(0)` lowering to `0.0`, same
                 // misclassification.
                 Expr::GlobalGet(_) => Some("object"),
-                Expr::PropertyGet { object, property } => {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => {
                     // #1380: `typeof set.has` / `typeof map.get` → "function".
                     // Set/Map methods aren't materialized as real function
                     // objects — a bare `set.has` read returns the (absent)

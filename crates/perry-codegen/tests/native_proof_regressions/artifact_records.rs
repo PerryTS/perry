@@ -234,6 +234,7 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
                 value: Box::new(Expr::Number(7.0)),
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "x".to_string(),
             })),

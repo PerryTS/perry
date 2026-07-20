@@ -52,7 +52,10 @@ pub fn try_lower_property_get_method_call(
     // String/array method dispatch (Phase B.12) and class method
     // dispatch (Phase C.2). For PropertyGet receivers, dispatch based
     // on the receiver's static type.
-    let Expr::PropertyGet { object, property } = callee else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    else {
         return Ok(None);
     };
     // #5247: capture this call's source byte offset now, before any argument

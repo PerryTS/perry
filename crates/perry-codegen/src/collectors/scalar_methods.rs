@@ -210,7 +210,9 @@ fn numeric_scalar_method_expr_is_safe(
             ) && numeric_scalar_method_expr_is_safe(classes, class_name, left, numeric_params)
                 && numeric_scalar_method_expr_is_safe(classes, class_name, right, numeric_params)
         }
-        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) => {
             public_numeric_field(classes, class_name, property)
         }
         _ => false,
@@ -237,7 +239,9 @@ fn int32_scalar_method_expr_is_safe(
             ) && int32_scalar_method_expr_is_safe(classes, class_name, left, numeric_params)
                 && int32_scalar_method_expr_is_safe(classes, class_name, right, numeric_params)
         }
-        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) => {
             public_int32_field(classes, class_name, property)
         }
         _ => false,

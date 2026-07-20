@@ -60,8 +60,7 @@ pub(crate) fn try_lower_promise_chain_method(
                     {
                         if let Expr::PropertyGet {
                             object: inner_object,
-                            property: inner_property,
-                        } = inner_callee.as_ref()
+                            property: inner_property, .. } = inner_callee.as_ref()
                         {
                             // #1008: accept both the legacy `Promise` =
                             // GlobalGet shape and the post-#973

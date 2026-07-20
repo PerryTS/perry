@@ -20,6 +20,8 @@
 //! per the design — auth flows reusing a logged-in browser session is usually
 //! a footgun. Opt out via `ephemeral: false` when needed.
 
+use crate::ffi::js_get_string_pointer_unified;
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -34,7 +36,6 @@ extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_is_truthy(value: f64) -> i32;
 }
@@ -83,7 +84,7 @@ fn str_from_header(ptr: *const u8) -> &'static str {
 fn nanbox_str(s: &str) -> f64 {
     let bytes = s.as_bytes();
     unsafe {
-        let p = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+        let p = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         js_nanbox_string(p as i64)
     }
 }
@@ -737,7 +738,6 @@ pub fn set_allowed_domains(handle: i64, domains_arr_handle: i64) {
     extern "C" {
         fn js_array_get_length(arr: i64) -> i64;
         fn js_array_get_element_f64(arr: i64, index: i64) -> f64;
-        fn js_get_string_pointer_unified(value: f64) -> *const u8;
     }
 
     let mut domains = Vec::new();
@@ -745,7 +745,7 @@ pub fn set_allowed_domains(handle: i64, domains_arr_handle: i64) {
         let len = js_array_get_length(domains_arr_handle);
         for i in 0..len {
             let elem = js_array_get_element_f64(domains_arr_handle, i);
-            let str_ptr = js_get_string_pointer_unified(elem);
+            let str_ptr = js_get_string_pointer_unified(elem) as *const u8;
             if !str_ptr.is_null() {
                 domains.push(str_from_header(str_ptr).to_string());
             }

@@ -167,6 +167,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
         }),
         then_expr: Box::new(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_next_id)),
                 property: "call".to_string(),
             }),
@@ -176,6 +177,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
         }),
         else_expr: Box::new(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_iter_id)),
                 property: "next".to_string(),
             }),
@@ -221,6 +223,7 @@ fn emit_yield_star_loop(
     current.push(Stmt::Expr(Expr::LocalSet(
         del_next_id,
         Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(del_iter_id)),
             property: "next".to_string(),
         }),
@@ -251,6 +254,7 @@ fn emit_yield_star_loop(
         // (via `delegate_await` on the pull below).
         Stmt::Expr(Expr::Yield {
             value: Some(Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_result_id)),
                 property: "value".to_string(),
             })),
@@ -271,6 +275,7 @@ fn emit_yield_star_loop(
         condition: Expr::Unary {
             op: UnaryOp::Not,
             operand: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_result_id)),
                 property: "done".to_string(),
             }),
@@ -320,6 +325,7 @@ fn emit_yield_star_loop(
     current.push(Stmt::Expr(Expr::LocalSet(
         del_value_id,
         Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(del_result_id)),
             property: "value".to_string(),
         }),
