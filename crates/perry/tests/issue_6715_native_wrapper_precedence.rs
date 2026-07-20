@@ -1,26 +1,29 @@
-//! Issue #5621: a `perry.nativeLibrary` package that exposes an ergonomic
-//! camelCase binding (`doThing`) over a snake_case `js_<pkg>_*` FFI symbol
-//! (`js_foo_do_thing`) via an ambient `export declare function` must route
-//! the call to the native symbol — there is no wrapper body to run.
+//! Issue #6715: a `perry.nativeLibrary` package whose `src/index.ts`
+//! exports a REAL wrapper function whose name equals the derived ergonomic
+//! alias (#5621) of one of its manifest symbols must run the wrapper — the
+//! derived alias must NOT silently shadow it and bind the import straight to
+//! the FFI symbol.
 //!
-//! Before the #5621 fix, Perry only routed a native-library import to its
-//! FFI symbol when the import binding was byte-for-byte equal to the
-//! manifest symbol name (the `@perryts/storekit` raw-ambient-export
-//! convention). An ergonomic camelCase binding never matched, so the link
-//! failed on the missing `perry_fn_<foo>__doThing` wrapper symbol.
+//! The documented convention (`docs/src/plugins/native-extensions.md`) is an
+//! ambient `declare function js_<pkg>_speak(...)` for the raw FFI symbol PLUS
+//! a real `export function speak(...)` that transforms arguments and calls
+//! the native function. When `<pkg>` happens to make the manifest symbol
+//! follow `js_<pkg>_<snake>` (`js_foo_do_thing`), its derived alias
+//! (`doThing`) collides with the wrapper's name. Before the fix Perry bound
+//! the import to the FFI symbol, so the wrapper body was dead code and the
+//! caller's arguments were passed raw to the native ABI — a silent failure
+//! ("await never resolves") three layers from the cause.
 //!
-//! Issue #6715 refined the rule: the ergonomic alias is a convenience for
-//! packages that only export ambient `declare` signatures. A *genuine*
-//! implemented export of the same name wins over the derived alias (covered
-//! by `issue_6715_native_wrapper_precedence.rs`). This test therefore
-//! exercises the ambient-declare form, which is the case the alias exists
-//! for: `export declare function doThing(): number;` has no body, is
-//! skipped at lowering, and so is resolved purely through the manifest.
+//! After the fix a genuine, implemented module export wins over the derived
+//! alias. Ambient-declare-only packages (no body) keep the #5621 routing
+//! (covered by `issue_5621_native_camel_export_routing.rs`).
 //!
 //! This test links a real one-function static archive (`js_foo_do_thing`
 //! → `42`) via the manifest's `prebuilt` field, then asserts the compiled
-//! program prints `42` — only possible if `doThing()` reached the native
-//! symbol through the ergonomic alias.
+//! program (1) prints the wrapper's side-effect marker and (2) prints the
+//! wrapper's TRANSFORMED result (`42 + 1 == 43`) — neither is possible if
+//! the import bound directly to the FFI symbol (which would print no marker
+//! and yield the raw `42`).
 
 #![cfg(unix)]
 
@@ -79,14 +82,14 @@ fn build_static_lib(pkg_dir: &Path) -> Option<PathBuf> {
 }
 
 #[test]
-fn camel_case_native_export_routes_to_ffi_symbol() {
+fn real_wrapper_wins_over_derived_alias() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
 
-    // The native-library package: an ambient camelCase `doThing` surface
-    // over the `js_foo_do_thing` FFI symbol. `export declare function` has
-    // NO body, so there is nothing to run — the binding resolves purely
-    // through the manifest's ergonomic alias to the native symbol.
+    // The native-library package: an ambient `declare` for the raw FFI
+    // symbol PLUS a real `doThing` wrapper that logs a marker and transforms
+    // the native return value. `doThing` collides with the derived alias of
+    // `js_foo_do_thing` — the wrapper must win.
     let pkg_dir = root.join("node_modules/foo");
     std::fs::create_dir_all(pkg_dir.join("src")).expect("mkdir pkg src");
 
@@ -97,7 +100,13 @@ fn camel_case_native_export_routes_to_ffi_symbol() {
 
     std::fs::write(
         pkg_dir.join("src/index.ts"),
-        r#"export declare function doThing(): number;
+        r#"export declare function js_foo_do_thing(): number;
+
+// Same name as the derived alias of `js_foo_do_thing` → "doThing".
+export function doThing(): number {
+  console.log("wrapper ran");
+  return js_foo_do_thing() + 1;
+}
 "#,
     )
     .expect("write pkg index.ts");
@@ -126,7 +135,7 @@ fn camel_case_native_export_routes_to_ffi_symbol() {
     )
     .expect("write pkg package.json");
 
-    // Host project: allow the native library and import the camelCase API.
+    // Host project: allow the native library and import the wrapper API.
     std::fs::write(
         root.join("package.json"),
         r#"{
@@ -171,11 +180,21 @@ console.log("result:", doThing());
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
         run.status.success(),
-        "binary aborted — the ambient camelCase binding failed to route to \
-         js_foo_do_thing\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        "binary aborted\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    // The wrapper's side effect proves it executed — under the bug the import
+    // bound straight to the FFI symbol and this marker never printed.
     assert!(
-        stdout.contains("result: 42"),
-        "expected the native FFI symbol's return value (42)\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        stdout.contains("wrapper ran"),
+        "the wrapper body never ran — the derived alias shadowed the real \
+         `doThing` export\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // The wrapper's transformed result (native 42 + 1) proves both that the
+    // wrapper ran AND that it reached the native symbol internally. A raw
+    // `42` here would mean the import bound directly to the FFI symbol.
+    assert!(
+        stdout.contains("result: 43"),
+        "expected the wrapper's transformed result (43), not the raw FFI \
+         value (42)\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
