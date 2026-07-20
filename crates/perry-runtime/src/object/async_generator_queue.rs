@@ -471,6 +471,20 @@ fn process_one_queued_request(state_id: usize) {
 }
 
 fn finish_after_pending_result(state_id: usize, out: *mut Promise, fulfilled: bool, value: f64) {
+    // #6709: settle THIS request's promise BEFORE draining the queue, so its
+    // reactions are enqueued ahead of the next request's. Spec order is
+    // AsyncGeneratorResolve (settle the front request's promise) *then*
+    // AsyncGeneratorDrainQueue (resume the next). Draining first let a
+    // synchronously-completing next request — e.g. the terminal
+    // `{value: undefined, done: true}` after the last `yield` — resolve and
+    // fire its `.then` before this (non-terminal) one, reordering the results
+    // of three eagerly-queued `iter.next()` calls. This only surfaced once
+    // async-generator `.next()` began returning a *pending* Promise for every
+    // `yield` (the spec `AsyncGeneratorYield(? Await(value))` tick) so this
+    // pending path is now always taken; before #6709 `.next()` resolved
+    // synchronously (busy-wait) and hit the immediate path, which already
+    // deferred the drain via `schedule_drain`.
+    settle_out(out, fulfilled, value);
     let has_queue = STATES.with(|states| {
         states
             .borrow()
@@ -482,7 +496,6 @@ fn finish_after_pending_result(state_id: usize, out: *mut Promise, fulfilled: bo
     } else {
         mark_inactive(state_id);
     }
-    settle_out(out, fulfilled, value);
 }
 
 fn finish_after_immediate_queued_result(
