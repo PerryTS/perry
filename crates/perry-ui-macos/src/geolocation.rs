@@ -4,9 +4,9 @@
 //! older API; this module ships the issue-#552 surface with a 4-arg success
 //! callback `(lat, lng, accuracy, timestamp)` plus a separate error callback.
 
-use crate::ffi::sel_registerName;
 use crate::ffi::class_addMethod;
 use crate::ffi::js_string_from_bytes;
+use crate::ffi::sel_registerName;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, Encode, Encoding, RefEncode};

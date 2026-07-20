@@ -1,5 +1,5 @@
-use crate::ffi::sel_registerName;
 use crate::ffi::class_addMethod;
+use crate::ffi::sel_registerName;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
@@ -854,7 +854,12 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                     let cls = objc_allocateClassPair(parent_class, subclass_name.as_ptr(), 0);
                     if !cls.is_null() {
                         let sel = sel_registerName(c"canBecomeKeyWindow".as_ptr());
-                        class_addMethod(cls, sel, can_become_key as *const std::ffi::c_void, c"B@:".as_ptr());
+                        class_addMethod(
+                            cls,
+                            sel,
+                            can_become_key as *const std::ffi::c_void,
+                            c"B@:".as_ptr(),
+                        );
                         objc_registerClassPair(cls);
                     }
                     cls

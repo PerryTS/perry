@@ -3,9 +3,8 @@
 
 #![cfg(test)]
 
-use super::*;
 use super::convert::parse_bigint_string;
-
+use super::*;
 
 #[test]
 fn test_bigint_from_u64() {
@@ -523,7 +522,6 @@ fn from_string_radix_hex_ignores_excess_leading_zeros() {
 
 // -- #1781: SSO short-string coercion --
 
-
 /// #1781: `BigInt("123")` — a numeric string <= 5 bytes is an inline SSO
 /// value (tag 0x7FF9). `is_string()` is STRING_TAG-only, so pre-fix it
 /// fell through to the `value as i64` arm (the SSO f64 is NaN → 0), and
@@ -539,8 +537,7 @@ fn bigint_from_f64_parses_sso_numeric_strings() {
         let out = js_bigint_to_string(bi);
         let got = unsafe {
             let len = (*out).byte_len as usize;
-            let data =
-                (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+            let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
             std::str::from_utf8(std::slice::from_raw_parts(data, len))
                 .unwrap()
                 .to_string()

@@ -369,6 +369,24 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             visitor.visit_i64_slot(&mut t.flush_cb);
         }
     }
+    // Parked/deferred transform promises are held only as raw addresses in
+    // these maps (an unawaited write/close has no other root).
+    if let Ok(mut map) = transform::TRANSFORM_WRITE_RELEASES.lock() {
+        for promises in map.values_mut() {
+            for slot in promises.iter_mut() {
+                let mut p = *slot as *mut Promise;
+                visitor.visit_raw_mut_ptr_slot(&mut p);
+                *slot = p as usize;
+            }
+        }
+    }
+    if let Ok(mut map) = transform::TRANSFORM_PENDING_CLOSE.lock() {
+        for slot in map.values_mut() {
+            let mut p = *slot as *mut Promise;
+            visitor.visit_raw_mut_ptr_slot(&mut p);
+            *slot = p as usize;
+        }
+    }
     if let Ok(mut map) = READERS.lock() {
         for r in map.values_mut() {
             visitor.visit_raw_mut_ptr_slot(&mut r.closed_promise);

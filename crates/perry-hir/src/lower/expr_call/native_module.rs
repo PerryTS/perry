@@ -904,10 +904,12 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for Object static methods
+            // Check for Object static methods. #6677: match BOTH the dot form
+            // and the string-literal computed form (`Object["keys"](...)`) so the
+            // computed key does not fall through to generic dispatch (→
+            // `TypeError: value is not a function`).
             if obj_name == "Object" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "keys" => {
                             let obj = args.first().cloned().unwrap_or(Expr::Undefined);
@@ -1225,20 +1227,20 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for RegExp static methods: RegExp.escape (#2899)
+            // Check for RegExp static methods: RegExp.escape (#2899).
+            // #6677: accept the string-literal computed form too.
             if obj_name == "RegExp" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    if method_ident.sym.as_ref() == "escape" {
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
+                    if method_name == "escape" {
                         let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
                         return Ok(Ok(Expr::RegExpEscape(Box::new(arg))));
                     }
                 }
             }
 
-            // Check for Map static methods: Map.groupBy
+            // Check for Map static methods: Map.groupBy. #6677: computed form too.
             if obj_name == "Map" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "groupBy" && args.len() >= 2 {
                         let mut iter = args.into_iter();
                         let items = iter.next().unwrap();
@@ -1253,8 +1255,8 @@ pub(super) fn try_native_module_methods(
             }
 
             if obj_name == "Reflect" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                // #6677: accept the string-literal computed form too.
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "get" => {
                             let mut it = args.into_iter();
@@ -1506,10 +1508,9 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for Array static methods
+            // Check for Array static methods. #6677: computed form too.
             if obj_name == "Array" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "isArray" => {
                             let value = args.first().cloned().unwrap_or(Expr::Undefined);

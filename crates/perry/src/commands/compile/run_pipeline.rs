@@ -2742,10 +2742,33 @@ pub fn run_with_parse_cache(
                             .iter()
                             .find(|f| f.name == exported_name)
                             .map(|f| f.name.clone());
+                        // Issue #6715: a REAL module export wins over a derived
+                        // ergonomic alias. The `js_<pkg>_<snake>` ⇒ camelCase
+                        // routing (#5621) is a convenience for packages whose
+                        // `.ts` only holds ambient `export declare function`
+                        // signatures (no body) — those are skipped at lowering
+                        // (`module_decl.rs`: `body.is_none()`), so they never
+                        // enter `all_module_exports`. But the documented wrapper
+                        // convention (native-extensions.md) is an ambient
+                        // `declare function js_<pkg>_speak(...)` PLUS a real
+                        // `export async function speak(...)` that transforms args
+                        // and calls the FFI symbol. When such a wrapper's name
+                        // collides with a manifest symbol's derived alias
+                        // (`js_speech_speak` → `speak`), the alias must NOT
+                        // shadow it — the import binds to the wrapper, which the
+                        // module emits a `perry_fn_<pkg>__speak` symbol for and
+                        // the fall-through named-import path registers below.
+                        // Only genuine, implemented value exports land here, so
+                        // ambient-declare-only packages keep the #5621 routing.
+                        let has_genuine_module_export = all_module_exports
+                            .get(&resolved_path_str)
+                            .is_some_and(|exports| exports.contains_key(&exported_name));
                         // Collect ALL ergonomic matches so an ambiguous manifest
                         // (two symbols deriving the same camelCase binding) is
                         // rejected rather than silently bound to the first.
-                        let ergonomic_matches: Vec<String> = if exact_symbol.is_some() {
+                        let ergonomic_matches: Vec<String> = if exact_symbol.is_some()
+                            || has_genuine_module_export
+                        {
                             Vec::new()
                         } else {
                             nl.functions

@@ -56,7 +56,7 @@ pub(super) fn canonical_locales_array(list: &[String]) -> f64 {
 /// `null` → `TypeError`; an Array (or array-like Object) → its elements
 /// canonicalized and de-duplicated, in order; any other primitive → `[]`
 /// (`ToObject` yields a wrapper with no integer-indexed entries).
-fn get_canonical_locales(locales: f64) -> f64 {
+pub(super) fn get_canonical_locales(locales: f64) -> f64 {
     let js = JSValue::from_bits(locales.to_bits());
     let mut seen: Vec<String> = Vec::new();
 

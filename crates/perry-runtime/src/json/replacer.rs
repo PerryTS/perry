@@ -194,11 +194,14 @@ unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
 /// Resolve `value.toJSON(key)` (spec `SerializeJSONProperty` step 2 — run
 /// BEFORE the replacer). `key_f64` is the property key passed to `toJSON`.
 #[inline]
-unsafe fn apply_to_json_keyed(value: f64, _key_f64: f64) -> f64 {
-    // `object_get_to_json` calls toJSON with the empty-string key arg, matching
-    // the no-replacer path. (Effect's Inspectable.toJSON ignores its argument;
-    // Node passes the property key. We mirror the no-replacer path's empty key
-    // to stay byte-identical with the rest of Perry's JSON suite.)
+unsafe fn apply_to_json_keyed(value: f64, key_f64: f64) -> f64 {
+    // SerializeJSONProperty step 2.b.i passes the property key to `toJSON`
+    // (#5909, test262 JSON/stringify/value-tojson-arguments). The replacer walk
+    // already carries the key here (empty String at the root, own key for a
+    // member, stringified index for an element); record it so the shared
+    // `object_get_to_json` / `array_get_to_json` / `bigint_apply_to_json` probes
+    // hand it to `toJSON`.
+    set_to_json_key_value(key_f64);
     apply_to_json(value)
 }
 
@@ -391,7 +394,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     // num_fields can be smaller than keys_len — the min() silently DROPPED
     // every overflow property from replacer serialization (react-server-dom's
     // flight props objects routinely exceed 8 keys).
-    let alloc_limit = std::cmp::max(num_fields, 8);
+    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let actual_fields = keys_len;
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
@@ -942,7 +945,7 @@ pub(crate) unsafe fn stringify_object_pretty(
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, 8);
+    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
     let filter_non_enum = crate::object::descriptors_in_use();
@@ -1117,7 +1120,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, 8);
+    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let actual_fields = keys_len;
 
     // Build a map of key_name -> field_value for the object. An own accessor
