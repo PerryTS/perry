@@ -125,6 +125,7 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "_addHeaderLine"
             | "__set_socket"
             | "__set_connection"
+            | "@@asyncIterator"
     ) || matches!(
         name,
         "method"
@@ -144,6 +145,7 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "destroyed"
             | "readable"
             | "readableEnded"
+            | "writable"
             | "socket"
             | "connection"
             | "signal"
@@ -200,6 +202,8 @@ fn is_server_response_member(name: &str) -> bool {
             | "detachSocket"
             | "on"
             | "addListener"
+            | "once"
+            | "prependOnceListener"
             | "setStatus"
             | "getStatus"
     ) || matches!(
@@ -210,6 +214,7 @@ fn is_server_response_member(name: &str) -> bool {
             | "writableEnded"
             | "writableFinished"
             | "finished"
+            | "destroyed"
             | "writableCorked"
             | "writableHighWaterMark"
             | "writableLength"
@@ -231,6 +236,7 @@ fn is_server_response_member(name: &str) -> bool {
             | "__get_writableEnded"
             | "__get_writableFinished"
             | "__get_finished"
+            | "__get_destroyed"
             | "__get_sendDate"
             | "__set_sendDate"
             | "__get_strictContentLength"

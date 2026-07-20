@@ -344,6 +344,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "writableEnded"
                 | "writableFinished"
                 | "finished"
+                | "destroyed"
                 | "writableCorked"
                 | "writableHighWaterMark"
                 | "writableLength"

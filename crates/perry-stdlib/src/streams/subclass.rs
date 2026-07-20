@@ -139,7 +139,7 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
 /// `js_handle_method_dispatch` with a bare numeric handle.
 ///
 /// Because every Web Streams handle now lives in one shared id space based at
-/// `STREAM_HANDLE_ID_START` (see `NEXT_STREAM_ID`), the handle is (a)
+/// `STREAM_HANDLE_ID_START` (see `idalloc::next_stream_id`), the handle is (a)
 /// recognisable by range and (b) present in exactly one of the five registries,
 /// so routing by
 /// `(registry-membership, method-name)` is unambiguous and can never collide

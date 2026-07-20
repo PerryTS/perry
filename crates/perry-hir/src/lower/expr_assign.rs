@@ -495,6 +495,7 @@ pub(crate) fn lower_ident_assignment(
         // "globalThis" }` shape resolves to the real global object.
         Ok(Expr::PropertySet {
             object: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "globalThis".to_string(),
             }),
@@ -1319,6 +1320,7 @@ pub(crate) fn hoist_compound_member_assign(
 
     let read = match (&prop, key_id) {
         (Some(p), _) => Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(base_id)),
             property: p.clone(),
         },

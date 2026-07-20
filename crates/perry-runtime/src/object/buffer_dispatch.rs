@@ -1100,7 +1100,7 @@ pub unsafe fn dispatch_buffer_method(
         // non-callable callback) nor iterating. Delegate any method the Buffer
         // API doesn't claim to the shared uint8 typed-array dispatcher (it
         // validates callbacks and reads the typed store); it returns `None` for
-        // names it doesn't implement, preserving the `undefined` fallback.
+        // names it doesn't implement.
         _ => {
             if super::typed_array_proto_thunks::is_typed_array_buffer(addr) {
                 if let Some(r) = super::typed_array_proto_thunks::dispatch_uint8_buffer_method(
@@ -1111,7 +1111,26 @@ pub unsafe fn dispatch_buffer_method(
                     return r;
                 }
             }
-            f64::from_bits(crate::value::TAG_UNDEFINED)
+            // Internal perry hooks (`using` disposal probes and friends) may
+            // reach any receiver; they are duck-typed and must stay non-throwing.
+            if method_name.starts_with("__perry_") {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            // A method neither the Buffer API nor %TypedArray%.prototype
+            // implements must throw like Node (`buf.charCodeAt is not a
+            // function`), not silently return undefined. The silent fallback
+            // turned a readFileSync-now-returns-Buffer migration into invisible
+            // data corruption downstream: `content.charCodeAt(i)` yielded
+            // undefined in every comparison, so e.g. a NUL-byte binary-file
+            // scan misclassified every text file while the program kept
+            // running as if the calls had worked. Same shape as the string /
+            // number primitive catch-alls, which already route here.
+            crate::error::js_throw_type_error_not_a_function(
+                b"Buffer".as_ptr(),
+                6,
+                method_name.as_ptr(),
+                method_name.len(),
+            )
         }
     }
 }

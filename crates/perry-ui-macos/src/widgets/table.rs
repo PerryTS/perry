@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -553,9 +554,6 @@ pub fn set_filter_text(handle: i64, text_ptr: *const u8) {
 /// arranges NaN-boxing on the codegen side. Pinned to survive GC until the
 /// caller consumes it (mirrors `textfield::get_string_value`).
 pub fn get_filter_text(handle: i64) -> *const u8 {
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
-    }
     let text = if let Some(idx) = find_entry_idx(handle) {
         TABLES.with(|t| {
             t.borrow()
@@ -568,10 +566,10 @@ pub fn get_filter_text(handle: i64) -> *const u8 {
     };
     let bytes = text.as_bytes();
     unsafe {
-        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         // Pin the GC allocation: GcHeader sits at ptr-8, gc_flags at offset 1.
         let gc_flags_ptr = (ptr as *mut u8).sub(8).add(1);
         *gc_flags_ptr |= 0x04; // GC_FLAG_PINNED
-        ptr
+        ptr as *const u8
     }
 }

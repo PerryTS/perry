@@ -633,3 +633,94 @@ fn forwarded_array_stub_propagates_liveness_to_grown_array() {
     assert_eq!(crate::array::js_array_length(live), 64);
     assert_eq!(crate::array::js_array_get_f64_unchecked(live, 63), 63.0);
 }
+
+/// A minor sweep must retain EVERY array-growth forwarding stub, marked or
+/// not. Growth stubs are PERMANENT (#6228 above: stale pre-growth pointers
+/// keep resolving for reads; references to them are never rewritten), and a
+/// minor treats old-gen parents as black leaves — their slots are visited
+/// only via remembered-set dirty pages. A stale pre-growth pointer held in an
+/// old parent whose page is not dirty (a long-lived Map's entries buffer that
+/// hasn't been written since) therefore never marks the stub, so "unmarked"
+/// does NOT imply "unreferenced". The pre-fix sweep freed such stubs once
+/// their block left the recent-allocation window; reads through the stale
+/// pointer then returned reused-memory garbage (observed in a large
+/// esbuild-bundled TUI app: a render cell-cache Map value's `.length` read
+/// back as a heap pointer, aborting every frame). Only a full trace — which
+/// visits every live parent — may reclaim stubs by mark.
+///
+/// Drives `IncrementalSweepState` directly, exactly as `cycle.rs::step_sweep`
+/// constructs it for a minor (`retain_all_forwarded_stubs = true`), with the
+/// stub deliberately UNMARKED and aged out of the recent-allocation window —
+/// the precise pre-fix reclaim conditions.
+#[test]
+fn minor_sweep_retains_window_expired_growth_stub() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _ = &trigger_guard;
+    reset_old_reclaim_pressure();
+    clear_marks();
+    clear_mark_seeds();
+
+    let arr = crate::array::js_array_alloc(4);
+    let pre_growth = arr as usize;
+    // Push past capacity: js_array_grow reallocates and installs the
+    // forwarding stub at `pre_growth`.
+    for i in 0..64 {
+        crate::array::js_array_push(
+            pre_growth as *mut crate::array::ArrayHeader,
+            crate::JSValue::number(i as f64),
+        );
+    }
+    let stub_header = unsafe { header_from_user_ptr(pre_growth as *const u8) };
+    assert!(
+        unsafe { (*stub_header).gc_flags } & GC_FLAG_FORWARDED != 0,
+        "growth past capacity must leave a forwarding stub at the old address"
+    );
+    // Mark the grown TARGET (a live survivor); leave the STUB unmarked, as a
+    // minor does when the only reference sits in an old black-leaf parent
+    // slot on a non-dirty page.
+    let target = unsafe { forwarding_address(stub_header) as usize };
+    unsafe {
+        (*header_from_user_ptr(target as *const u8)).gc_flags |= GC_FLAG_MARKED;
+    }
+    js_shadow_slot_set(0, ptr_bits(target));
+
+    // Age the stub's block out of the recent-allocation window
+    // (`general_block_in_recent_window` keeps `current - 4 ..= current`):
+    // raw arena churn marches the current block index forward.
+    // Small allocations advance the GENERAL bump blocks (large ones are
+    // routed to dedicated blocks and would leave `current` untouched).
+    let general_before = crate::arena::general_block_count();
+    for _ in 0..3_000 {
+        let filler = crate::arena::arena_alloc_gc(4 * 1024, 8, GC_TYPE_STRING);
+        std::hint::black_box(filler);
+    }
+    assert!(
+        crate::arena::general_block_count() >= general_before + 6,
+        "filler churn must advance the general allocation window past the stub's block"
+    );
+
+    // Minor-shaped sweep, exactly as cycle.rs builds it (age-bump minor,
+    // no old-block reclaim, retain_all_forwarded_stubs = true).
+    let mut sweep = IncrementalSweepState::new(true, false, None, false, true);
+    for _ in 0..5_000_000 {
+        if sweep.step(1024) {
+            break;
+        }
+    }
+    let stats = sweep.stats();
+    assert!(
+        stats.retained_forwarded_stub_objects >= 1,
+        "minor sweep must report the retained stub"
+    );
+
+    // The stub must have survived: the header still forwards, and reads
+    // through the stale pre-growth pointer still see the grown array.
+    assert!(
+        unsafe { (*stub_header).gc_flags } & GC_FLAG_FORWARDED != 0,
+        "minor sweep reclaimed a window-expired growth stub it cannot prove unreferenced"
+    );
+    let live = pre_growth as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(live), 64);
+    assert_eq!(crate::array::js_array_get_f64_unchecked(live, 63), 63.0);
+}

@@ -165,6 +165,7 @@ fn rejects_producer_called_inside_closure() {
             },
             // return v.length;
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(30)),
                 property: "length".to_string(),
             })),
@@ -314,6 +315,7 @@ fn deforests_producer_called_from_class_method() {
                 }),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(30)),
                 property: "length".to_string(),
             })),
@@ -521,6 +523,7 @@ fn still_deforests_when_method_has_no_super() {
                 }),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(30)),
                 property: "length".to_string(),
             })),

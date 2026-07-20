@@ -243,4 +243,137 @@ declare module "perry/tui" {
      * restored and the alt screen is left before `run()` returns.
      */
     export function exit(): void;
+
+    // ---- ink-API ergonomics hooks (#679 Phase 1 / Phase 3) ----
+    //
+    // These bind to call-site position within a component body, not
+    // to call count: the `run()` loop resets the position at the top
+    // of every render, so a second render's `useState` at the same
+    // position reads back what the first wrote. Follow the rule of
+    // hooks — call in the same order every render, never inside
+    // `if`/loops, or the position skews and you read the wrong slot.
+    // See docs/src/tui/hooks.md for the full writeup and the ink
+    // equivalence table.
+
+    /**
+     * Per-frame state cell. Returns `[value, setter]`, matching
+     * React/ink's shape — `const [count, setCount] = useState(0)` is
+     * recognized by the compiler and lowered to a real 2-element
+     * array; calling `setCount` writes through to the slot and
+     * triggers a re-render on the next tick if the value changed
+     * (bit-identical writes are a no-op).
+     *
+     * The setter captured by a `useInput` handler reads from *that
+     * frame's* closure, not from the live slot — if you need a
+     * functional update inside a handler that may fire multiple
+     * times per frame (e.g. pasted input), mirror the value in a
+     * `useRef` instead.
+     */
+    export function useState<T>(initial: T): [T, (value: T) => void];
+
+    /**
+     * Run a side effect after first render, and again whenever an
+     * element of `deps` changes (compared by bit-identity, like
+     * `Object.is`). Omitting `deps` runs the effect on every render;
+     * passing `[]` runs it once, on mount only.
+     *
+     * The effect closure runs synchronously inside the component
+     * call. Cleanup-on-dep-change (returning a cleanup function from
+     * `fn`) is not wired yet — a returned function is ignored.
+     */
+    export function useEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void;
+
+    /**
+     * Cache the result of `fn()` keyed by `deps` (same bit-identity
+     * comparison as `useEffect`). Recomputes on first call or when
+     * `deps` change; otherwise returns the cached value.
+     */
+    export function useMemo<T>(fn: () => T, deps: readonly unknown[]): T;
+
+    /**
+     * A stable mutable cell that doesn't trigger a re-render when
+     * written. Identity is stable across renders — `useRef` at the
+     * same call-site position always returns the same handle, so
+     * closures captured in `useEffect` / `useInput` see the latest
+     * value through `.get()`.
+     *
+     * Unlike ink/React, there's no `.current` property: `.get()`
+     * reads, `.set(v)` writes.
+     */
+    export function useRef<T>(initial: T): RefHandle<T>;
+
+    /** Handle returned by `useRef`. */
+    export interface RefHandle<T> {
+        get(): T;
+        /** Writes the cell. Does NOT trigger a re-render. */
+        set(value: T): void;
+    }
+
+    /**
+     * Imperative handle for the running `run()` loop. Stable across
+     * renders — every `useApp()` call returns the same singleton
+     * handle, so it's safe to stash in a `useRef` for a callback that
+     * outlives the render.
+     */
+    export function useApp(): AppHandle;
+
+    /** Handle returned by `useApp`. */
+    export interface AppHandle {
+        /** Tells `run()` to stop at the top of the next iteration. */
+        exit(): void;
+        /**
+         * Blocks (synchronously, on the calling thread) until
+         * `exit()` has been called. Safe to `await` — Perry resolves
+         * an `await` of a non-promise value immediately.
+         */
+        waitUntilExit(): void;
+    }
+
+    /**
+     * Terminal dimensions and a raw-write escape hatch. Stable
+     * singleton handle, like `useApp()`.
+     */
+    export function useStdout(): StdoutHandle;
+
+    /** Handle returned by `useStdout`. */
+    export interface StdoutHandle {
+        /** Write raw bytes to stdout, bypassing the cell-grid diff. */
+        write(s: string): void;
+        /** Terminal width in cells. Falls back to 80 when not a TTY. */
+        columns(): number;
+        /** Terminal height in cells. Falls back to 24 when not a TTY. */
+        rows(): number;
+    }
+
+    /**
+     * Register the calling widget as a focus candidate in the Tab
+     * cycle. Returns `1` when this widget currently has focus, `0`
+     * otherwise — treat as truthy/falsy, there's no boolean wrapper.
+     *
+     * - `autoFocus`: pass `1` for exactly one widget to take focus on
+     *   the first render. Later `useFocus` calls with `autoFocus=1`
+     *   are ignored once focus has been claimed.
+     * - `isActive`: pass `0` to remove this widget from the Tab cycle
+     *   (e.g. a disabled field).
+     *
+     * Tab / Shift-Tab cycle focus automatically — the run loop's
+     * input drain handles `\x09` / `\x1b[Z` before forwarding the
+     * byte chunk to `useInput`.
+     */
+    export function useFocus(autoFocus: number, isActive: number): number;
+
+    /**
+     * Imperative focus control, for driving the Tab cycle from code
+     * instead of (or in addition to) the keyboard. Stable singleton
+     * handle, like `useApp()`.
+     */
+    export function useFocusManager(): FocusManagerHandle;
+
+    /** Handle returned by `useFocusManager`. */
+    export interface FocusManagerHandle {
+        focusNext(): void;
+        focusPrevious(): void;
+        /** Focus a specific widget by its 1-based registration-order id. */
+        focus(id: number): void;
+    }
 }

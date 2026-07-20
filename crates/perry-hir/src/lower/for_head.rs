@@ -286,6 +286,7 @@ pub(crate) fn map_set_delete_safe_for_of(
     // codegen expressions), matching the original loop bound.
     let size_of = |a: Expr| -> Expr {
         Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(a),
             property: "size".to_string(),
         }

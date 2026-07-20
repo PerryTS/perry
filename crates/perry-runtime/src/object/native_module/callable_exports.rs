@@ -52,7 +52,7 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if let Some(length) = native_callable_export_arity(export_module_name, property_name) {
         set_builtin_closure_length(closure as usize, length);
     }
-    let value = crate::value::js_nanbox_pointer(closure as i64);
+    let mut value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
     if export_module_name == "module" && property_name == "Module" {
@@ -77,6 +77,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         )
     {
         attach_stream_constructor_prototype(value, property_name);
+    }
+    // #6692: Node defines `stream.pipeline[util.promisify.custom]` and
+    // `stream.finished[util.promisify.custom]` pointing at the promise-based
+    // `stream/promises` implementations, so `promisify(stream.pipeline)` returns
+    // that impl rather than the generic callback-appending wrapper. Wire the
+    // same hooks so `custom_promisified_value` (util_promisify.rs) honors them.
+    if export_module_name == "stream" && matches!(property_name, "pipeline" | "finished") {
+        // Reassign: the attach helper roots `value` and allocates (which may
+        // evacuate the closure), so it returns the possibly-relocated pointer.
+        value = attach_stream_promisify_custom(value, property_name);
     }
     if export_module_name == "sqlite" && property_name == "DatabaseSync" {
         attach_sqlite_database_sync_prototype(value);
@@ -217,6 +227,43 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     value
 }
 
+/// #6692: install `stream.pipeline[util.promisify.custom]` (or `.finished`'s)
+/// pointing at the promise-based `stream/promises` export, matching Node. With
+/// the hook present, `promisify(stream.pipeline)` resolves through
+/// `custom_promisified_value` to the promise implementation instead of the
+/// generic wrapper (whose appended callback the `promisify.custom`-aware caller
+/// in `pi`'s bundled node-fetch never provides). `property_name` is `"pipeline"`
+/// or `"finished"` — the matching `stream/promises` export name.
+///
+/// Returns the (possibly relocated) receiver value: the allocations below can
+/// trigger a GC that evacuates the closure, and only the `scope` handle tracks
+/// the move, so the caller must adopt the returned pointer.
+fn attach_stream_promisify_custom(pipeline_value: f64, property_name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(pipeline_value);
+    let promise_impl = crate::node_submodules::stream_promises_export_callable(property_name);
+    // The submodule may be unavailable (returns the `TAG_TRUE` sentinel); only
+    // wire the hook when it resolved to a real callable closure, otherwise leave
+    // the generic promisify fallback in place.
+    let impl_bits = promise_impl.to_bits();
+    let impl_addr = (impl_bits & crate::value::POINTER_MASK) as usize;
+    if (impl_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr(impl_addr)
+    {
+        let impl_handle = scope.root_nanbox_f64(promise_impl);
+        let custom_symbol = crate::util_promisify::promisify_custom_symbol();
+        let symbol_handle = scope.root_nanbox_f64(custom_symbol);
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                target.get_nanbox_f64(),
+                symbol_handle.get_nanbox_f64(),
+                impl_handle.get_nanbox_f64(),
+            );
+        }
+    }
+    target.get_nanbox_f64()
+}
+
 fn async_hooks_static_method_value(
     func_ptr: *const u8,
     name: &str,
@@ -317,6 +364,12 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // bun:ffi (#6562).
+        ("bun:ffi", "dlopen") => Some(2),
+        ("bun:ffi", "ptr" | "CString" | "JSCallback" | "CFunction" | "linkSymbols") => Some(1),
+        ("bun:ffi", "toArrayBuffer" | "toBuffer") => Some(3),
+        ("bun:ffi", "viewSource") => Some(2),
+        ("bun:ffi", "read") => Some(0),
         // #3687: node:cluster — module-method `.length` matches Node.
         ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
         ("cluster", "emit") => Some(1),
@@ -333,6 +386,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
             | "listenerCount",
         ) => Some(2),
         ("cluster", "removeAllListeners") => Some(1),
+        // #6563: node-pty `spawn(file, args, options)`.
+        ("node-pty", "spawn") => Some(3),
         ("events", "EventEmitter") => Some(1),
         ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),
@@ -445,6 +500,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
             | "isDestroyed",
         ) => Some(1),
         ("stream", "setDefaultHighWaterMark" | "addAbortSignal") => Some(2),
+        ("net", "connect" | "createConnection") => Some(3),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "BlockList" | "SocketAddress") => Some(0),
@@ -698,18 +754,132 @@ const BUFFER_STATIC_METHODS: &[&str] = &[
     "copyBytesFrom",
 ];
 
+/// Node exposes the WHOLE Buffer method surface on `Buffer.prototype`, and it is
+/// enumerable — `for (const k in Buffer.prototype)` yields ~93 names there.
+/// Perry used to install ELEVEN, which quietly broke any code that walks the
+/// prototype: mysql2 sizes every outgoing packet by no-op'ing the write methods
+/// of a zero-length Buffer
+/// (`for (const k in Buffer.prototype) if (typeof mock[k] === "function") mock[k] = noop`),
+/// so `writeUInt32LE` — absent from the stub list — stayed live, wrote into the
+/// empty measuring buffer, and killed the MySQL handshake with
+/// RangeError [ERR_OUT_OF_RANGE]. Generated from the dispatcher's own
+/// `is_buffer_method_name` table so the two can't drift.
 const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "toString",
-    "equals",
-    "subarray",
-    "readUInt8",
-    "write",
-    "copy",
+    "inspect",
     "slice",
+    "subarray",
+    "set",
+    "copy",
+    "write",
+    "toJSON",
     "fill",
-    "includes",
+    "equals",
+    "compare",
     "indexOf",
     "lastIndexOf",
+    "includes",
+    "at",
+    "swap16",
+    "swap32",
+    "swap64",
+    "values",
+    "keys",
+    "entries",
+    "undefined",
+    "hasOwnProperty",
+    "propertyIsEnumerable",
+    "valueOf",
+    "isPrototypeOf",
+    "toLocaleString",
+    "readUInt8",
+    "readUint8",
+    "readInt8",
+    "readUInt16BE",
+    "readUint16BE",
+    "readUInt16LE",
+    "readUint16LE",
+    "readInt16BE",
+    "readInt16LE",
+    "readUInt32BE",
+    "readUint32BE",
+    "readUInt32LE",
+    "readUint32LE",
+    "readInt32BE",
+    "readInt32LE",
+    "readFloatBE",
+    "readFloatLE",
+    "readDoubleBE",
+    "readDoubleLE",
+    "readBigInt64BE",
+    "readBigInt64LE",
+    "readBigUInt64BE",
+    "readBigUint64BE",
+    "readBigUInt64LE",
+    "readBigUint64LE",
+    "readUIntBE",
+    "readUintBE",
+    "readUIntLE",
+    "readUintLE",
+    "readIntBE",
+    "readIntLE",
+    "writeUInt8",
+    "writeUint8",
+    "writeInt8",
+    "writeUInt16BE",
+    "writeUint16BE",
+    "writeUInt16LE",
+    "writeUint16LE",
+    "writeInt16BE",
+    "writeInt16LE",
+    "writeUInt32BE",
+    "writeUint32BE",
+    "writeUInt32LE",
+    "writeUint32LE",
+    "writeInt32BE",
+    "writeInt32LE",
+    "writeFloatBE",
+    "writeFloatLE",
+    "writeDoubleBE",
+    "writeDoubleLE",
+    "writeBigInt64BE",
+    "writeBigInt64LE",
+    "writeBigUInt64BE",
+    "writeBigUint64BE",
+    "writeBigUInt64LE",
+    "writeBigUint64LE",
+    "writeUIntBE",
+    "writeUintBE",
+    "writeUIntLE",
+    "writeUintLE",
+    "writeIntBE",
+    "writeIntLE",
+    "toBase64",
+    "toHex",
+    "setFromBase64",
+    "setFromHex",
+    "copyWithin",
+    "function",
+    "getInt8",
+    "getUint8",
+    "getInt16",
+    "getUint16",
+    "getInt32",
+    "getUint32",
+    "getFloat32",
+    "getFloat64",
+    "setInt8",
+    "setUint8",
+    "setInt16",
+    "setUint16",
+    "setInt32",
+    "setUint32",
+    "setFloat32",
+    "setFloat64",
+    "getBigInt64",
+    "getBigUint64",
+    "setBigInt64",
+    "setBigUint64",
 ];
 
 const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[

@@ -149,6 +149,16 @@ pub(crate) struct OldPageMeta {
     pub(crate) pinned_bytes: usize,
     pub(crate) pinned_object_count: usize,
     pub(crate) dirty_slots: usize,
+    /// Epoch stamp for `dirty_slots` (#6181). `dirty_slots` is a per-cycle
+    /// count that used to be zeroed for every old page at the start of each
+    /// GC cycle by `old_pages_begin_gc_cycle` — an O(number of old pages)
+    /// walk on every minor whose cost grows with old-gen size. Instead of
+    /// the eager reset, each page records the epoch its `dirty_slots` was
+    /// last stamped in; the cycle-start "reset" is now a single O(1) bump of
+    /// the thread-local `OLD_GEN_PAGE_DIRTY_EPOCH`, and a page whose stamp is
+    /// stale reads as zero (`effective_dirty_slots`). Mirrors the
+    /// generation-counter lazy-invalidation pattern in `native_arena.rs`.
+    pub(crate) dirty_slots_epoch: u64,
     pub(crate) dirty: bool,
     pub(crate) evacuation_eligible: bool,
 }
@@ -169,8 +179,25 @@ impl OldPageMeta {
             pinned_bytes: 0,
             pinned_object_count: 0,
             dirty_slots: 0,
+            // Epoch 0 never matches a live cycle epoch (which starts at 1), so
+            // a freshly materialized page reads zero dirty slots until it is
+            // stamped by the remembered-set scan (#6181).
+            dirty_slots_epoch: 0,
             dirty: false,
             evacuation_eligible: false,
+        }
+    }
+
+    /// `dirty_slots` scoped to `current_epoch`: a page last stamped in an
+    /// earlier cycle (its `dirty_slots_epoch` is stale) has no dirty slots
+    /// this cycle. This is what makes the O(1) epoch bump in
+    /// `old_pages_begin_gc_cycle` equivalent to the old per-page reset (#6181).
+    #[inline]
+    pub(crate) fn effective_dirty_slots(&self, current_epoch: u64) -> usize {
+        if self.dirty_slots_epoch == current_epoch {
+            self.dirty_slots
+        } else {
+            0
         }
     }
 
@@ -234,6 +261,18 @@ thread_local! {
 
     pub(crate) static OLD_GEN_RECLAIM_REUSABLE_BYTES: Cell<usize> = const { Cell::new(0) };
     pub(crate) static OLD_GEN_RECLAIM_RETURNED_BYTES: Cell<usize> = const { Cell::new(0) };
+
+    /// Monotonic per-cycle epoch for old-page `dirty_slots` (#6181). Bumped
+    /// once per GC cycle by `old_pages_begin_gc_cycle` instead of walking every
+    /// old page to zero its `dirty_slots`. Starts at 1 so a freshly allocated
+    /// page (stamp 0, see `OldPageMeta::zero_for_page`) reads as having no
+    /// dirty slots. `u64` never wraps in practice (one bump per collection).
+    static OLD_GEN_PAGE_DIRTY_EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
+#[inline]
+fn old_gen_page_dirty_epoch() -> u64 {
+    OLD_GEN_PAGE_DIRTY_EPOCH.with(|epoch| epoch.get())
 }
 
 #[inline]
@@ -553,11 +592,12 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
 }
 
 pub(crate) fn old_pages_begin_gc_cycle() {
-    OLD_GEN_PAGE_META.with(|meta| {
-        for page_meta in meta.borrow_mut().values_mut() {
-            page_meta.dirty_slots = 0;
-        }
-    });
+    // #6181: the per-page `dirty_slots` reset used to iterate every old page
+    // here (O(old pages) on every minor, growing with old-gen size). It is now
+    // a single epoch bump — a page whose `dirty_slots_epoch` predates the new
+    // epoch reads as zero via `effective_dirty_slots`, and the scan re-stamps
+    // it on first touch this cycle (`old_page_account_dirty_slot`).
+    OLD_GEN_PAGE_DIRTY_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
     OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(0));
     OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(0));
 }
@@ -639,14 +679,24 @@ pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
         return;
     }
     let page = generation_page_for_addr(slot_addr);
+    let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
         if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
-            page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(1);
+            // First dirty slot seen this cycle re-stamps and starts from 1
+            // (the lazy equivalent of the old per-cycle reset-to-zero);
+            // subsequent slots on the same page accumulate (#6181).
+            if page_meta.dirty_slots_epoch == current_epoch {
+                page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(1);
+            } else {
+                page_meta.dirty_slots_epoch = current_epoch;
+                page_meta.dirty_slots = 1;
+            }
         }
     });
 }
 
 pub(crate) fn old_page_summary() -> OldPageSummary {
+    let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
         let meta = meta.borrow();
         let mut summary = OldPageSummary {
@@ -670,10 +720,11 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
             summary.pinned_object_count = summary
                 .pinned_object_count
                 .saturating_add(page_meta.pinned_object_count);
-            if page_meta.dirty || page_meta.dirty_slots > 0 {
+            let dirty_slots = page_meta.effective_dirty_slots(current_epoch);
+            if page_meta.dirty || dirty_slots > 0 {
                 summary.dirty_pages = summary.dirty_pages.saturating_add(1);
             }
-            summary.dirty_slots = summary.dirty_slots.saturating_add(page_meta.dirty_slots);
+            summary.dirty_slots = summary.dirty_slots.saturating_add(dirty_slots);
             if page_meta.live_bytes > 0 && page_meta.dead_bytes > 0 {
                 summary.fragmented_pages = summary.fragmented_pages.saturating_add(1);
             }
@@ -689,11 +740,27 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
 }
 
 pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
+    let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
-        let mut snapshot = meta.borrow().values().copied().collect::<Vec<_>>();
+        let mut snapshot = meta
+            .borrow()
+            .values()
+            .copied()
+            .map(|page_meta| normalize_dirty_slots_for_epoch(page_meta, current_epoch))
+            .collect::<Vec<_>>();
         snapshot.sort_unstable_by_key(|page_meta| page_meta.page_base);
         snapshot
     })
+}
+
+/// Fold a stale `dirty_slots` stamp down to the effective value so a copied
+/// `OldPageMeta` handed to a caller always reports this cycle's dirty-slot
+/// count directly in `dirty_slots`, without the caller needing the epoch (#6181).
+#[inline]
+fn normalize_dirty_slots_for_epoch(mut page_meta: OldPageMeta, current_epoch: u64) -> OldPageMeta {
+    page_meta.dirty_slots = page_meta.effective_dirty_slots(current_epoch);
+    page_meta.dirty_slots_epoch = current_epoch;
+    page_meta
 }
 
 pub(crate) fn old_arena_source_blocks_for_pages(
@@ -844,5 +911,11 @@ pub(crate) fn old_arena_page_index_clear_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn old_page_meta_for_tests(page: usize) -> Option<OldPageMeta> {
-    OLD_GEN_PAGE_META.with(|meta| meta.borrow().get(&page).copied())
+    let current_epoch = old_gen_page_dirty_epoch();
+    OLD_GEN_PAGE_META.with(|meta| {
+        meta.borrow()
+            .get(&page)
+            .copied()
+            .map(|page_meta| normalize_dirty_slots_for_epoch(page_meta, current_epoch))
+    })
 }

@@ -1,9 +1,9 @@
 //! `ReadableStream.pipeTo` implementation details.
 
 use super::{
-    box_promise, js_writable_stream_close, maybe_pull, next_id, reject_type_error, transform_close,
-    writable_stream_write, ReadableState, NEXT_STREAM_ID, READABLE_STREAMS, TAG_UNDEFINED,
-    TRANSFORM_PAIRS, WRITABLE_STREAMS,
+    box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error, transform_close,
+    writable_stream_write, ReadableState, READABLE_STREAMS, TAG_UNDEFINED, TRANSFORM_PAIRS,
+    WRITABLE_STREAMS,
 };
 use perry_runtime::{
     js_nanbox_get_pointer, js_object_get_field_by_name, js_promise_new, js_promise_reject,
@@ -20,8 +20,28 @@ struct PipeLockIds {
 }
 
 fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLockIds, &'static str> {
-    let reader_id = next_id(&NEXT_STREAM_ID);
-    let writer_id = next_id(&NEXT_STREAM_ID);
+    let reader_id = idalloc::next_pipe_lock_id();
+    let writer_id = idalloc::next_pipe_lock_id();
+    // #6602: on failure the two freshly minted ids were never stamped (or were
+    // just unstamped) — recycle them. Runs after every registry guard in
+    // `try_acquire_pipe_locks` is released; a quarantine overflow inside the
+    // retire takes registry locks for eviction cleanup.
+    if let Err(message) = try_acquire_pipe_locks(readable_id, writable_id, reader_id, writer_id) {
+        retire_pipe_lock_ids(reader_id, writer_id);
+        return Err(message);
+    }
+    Ok(PipeLockIds {
+        reader_id,
+        writer_id,
+    })
+}
+
+fn try_acquire_pipe_locks(
+    readable_id: usize,
+    writable_id: usize,
+    reader_id: usize,
+    writer_id: usize,
+) -> Result<(), &'static str> {
     {
         let mut readable = READABLE_STREAMS.lock().unwrap();
         match readable.get_mut(&readable_id) {
@@ -56,10 +76,17 @@ fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLock
             }
         }
     }
-    Ok(PipeLockIds {
-        reader_id,
-        writer_id,
-    })
+    Ok(())
+}
+
+/// #6602: pipe lock ids are stamped as lock markers but never own a registry
+/// entry, so nothing else retires them — without this every pipeTo burned two
+/// band ids for the life of the process. Retirement keys on the allocator's
+/// ownership mark, so a duplicate release (close-fulfilled then a late
+/// rejection) is a no-op.
+fn retire_pipe_lock_ids(reader_id: usize, writer_id: usize) {
+    idalloc::retire_pipe_lock_id(reader_id);
+    idalloc::retire_pipe_lock_id(writer_id);
 }
 
 fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds) {
@@ -73,6 +100,7 @@ fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds
             s.writer_handle = None;
         }
     }
+    retire_pipe_lock_ids(locks.reader_id, locks.writer_id);
 }
 
 #[inline]
@@ -367,7 +395,25 @@ unsafe fn pipe_write_then_continue(
     // and let a tee sibling's reader outrun the pipe — Next.js cold-start
     // head reorder). Chain on the write promise only while it is pending.
     if perry_runtime::promise::js_promise_state(write_promise) == 1 {
-        schedule_pipe_step(readable_id, writable_id, promise, locks, prevent_close);
+        // Tick parity (streamsuite teepipe/teepipe2 wcc/waa): when the
+        // readable's queue is EMPTY, Node's pump has its next read parked
+        // within the write-completion reaction, so the next delivery (a tee
+        // fan-out) resolves it directly and the write lands one tick after
+        // the sibling's read. Deferring the park through a queued step made
+        // that write a tick late. Buffered chunks keep the queued step —
+        // popping synchronously would bunch writes and break the 1/tick
+        // write cadence.
+        let park_now = {
+            let g = READABLE_STREAMS.lock().unwrap();
+            g.get(&readable_id)
+                .map(|s| s.chunks.is_empty() && s.state == ReadableState::Readable)
+                .unwrap_or(false)
+        };
+        if park_now {
+            wait_for_next_read(readable_id, writable_id, promise, locks, prevent_close);
+        } else {
+            schedule_pipe_step(readable_id, writable_id, promise, locks, prevent_close);
+        }
         return;
     }
     let fulfilled = pipe_closure(

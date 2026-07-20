@@ -260,11 +260,132 @@ fn install_collection_size_getter(proto_obj: *mut ObjectHeader, name: &str, func
     }
 }
 
-/// Throw `TypeError: Method <proto>.<method> called on incompatible receiver`.
-/// Mirrors V8's wording closely; Test262's brand-check tests assert only the
-/// error *type*, so the exact message is informational. Never returns.
-fn throw_incompatible_receiver(proto: &str, method: &str) -> ! {
-    let msg = format!("Method {proto}.{method} called on incompatible receiver");
+/// Owned UTF-8 copy of a heap `StringHeader`'s bytes.
+fn string_header_owned(sp: *const crate::string::StringHeader) -> String {
+    if sp.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let bytes = (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let len = (*sp).byte_len as usize;
+        std::str::from_utf8(std::slice::from_raw_parts(bytes, len))
+            .unwrap_or("")
+            .to_string()
+    }
+}
+
+/// Render the brand-check receiver the way V8's `NoSideEffectsToString` does —
+/// node APPENDS it to the incompatible-receiver TypeError (`Method
+/// Set.prototype.add called on incompatible receiver #<Object>` /
+/// `... receiver undefined` / `... receiver [object Array]`), and #6658's
+/// parity fixtures assert the full message. V8 never CALLS a potentially
+/// side-effecting user `toString` here: primitives print their ToString
+/// (`undefined`, `null`, `5.5`, the raw string chars, `Symbol(desc)`, bigint
+/// digits); objects whose `toString` is the default `Object.prototype.toString`
+/// print `#<CtorName>` (`#<Object>`, `#<Set>`, `#<Map>`, `#<Promise>`,
+/// `#<Foo>`); objects that override it (Array, Date, RegExp, an own user
+/// `toString`) print the `Object.prototype.toString` tag instead; errors print
+/// `Name: message`. node prints a function receiver's SOURCE — perry keeps no
+/// source, so the native-code form is the closest stable rendering.
+/// Unclassifiable heap values fall back to `#<Object>`.
+fn render_incompatible_receiver(bits: u64) -> String {
+    use crate::value::JSValue;
+    let value = f64::from_bits(bits);
+    let jv = JSValue::from_bits(bits);
+    if !jv.is_pointer() {
+        // undefined / null / bool / number / bigint / heap+SSO string: plain
+        // side-effect-free ToString.
+        return string_header_owned(crate::value::js_jsvalue_to_string(value));
+    }
+    let ptr = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::symbol::is_registered_symbol(ptr) {
+        // "Symbol(desc)" — Symbol.prototype.toString is side-effect free.
+        return string_header_owned(unsafe { crate::symbol::js_symbol_to_string(value) }
+            as *const crate::string::StringHeader);
+    }
+    if crate::set::is_registered_set(ptr) {
+        return "#<Set>".to_string();
+    }
+    if crate::map::is_registered_map(ptr) {
+        return "#<Map>".to_string();
+    }
+    match crate::weakref::weak_class_id_from_receiver(value) {
+        Some(crate::weakref::CLASS_ID_WEAKSET) => return "#<WeakSet>".to_string(),
+        Some(crate::weakref::CLASS_ID_WEAKMAP) => return "#<WeakMap>".to_string(),
+        _ => {}
+    }
+    if crate::date::is_registered_date_bits(bits) {
+        return "[object Date]".to_string();
+    }
+    if crate::regex::is_registered_regex(ptr) {
+        return "[object RegExp]".to_string();
+    }
+    // Heap-header classification — only a real heap pointer above the
+    // synthetic handle band may be dereferenced (mirrors `as_real_array`).
+    if crate::value::addr_class::is_above_handle_band(ptr)
+        && crate::object::is_valid_obj_ptr(ptr as *const u8)
+    {
+        let obj_type = unsafe {
+            (*((ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader))
+                .obj_type
+        };
+        match obj_type {
+            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+                return "[object Array]".to_string();
+            }
+            crate::gc::GC_TYPE_PROMISE => return "#<Promise>".to_string(),
+            crate::gc::GC_TYPE_ERROR => {
+                let err = ptr as *mut crate::error::ErrorHeader;
+                let name = string_header_owned(crate::error::js_error_get_name(err));
+                let message = string_header_owned(crate::error::js_error_get_message(err));
+                return if message.is_empty() {
+                    name
+                } else {
+                    format!("{name}: {message}")
+                };
+            }
+            crate::gc::GC_TYPE_CLOSURE => {
+                return "function () { [native code] }".to_string();
+            }
+            crate::gc::GC_TYPE_OBJECT => {
+                // An OWN user `toString` overrides the default — V8 refuses to
+                // call it and falls back to the Object.prototype.toString tag.
+                // js_string_from_bytes allocates and can trigger a GC that
+                // relocates the receiver: root it and re-derive the pointer
+                // through the (rewritten) handle after the allocation.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let handle = scope.root_nanbox_f64(f64::from_bits(bits));
+                let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+                let obj = crate::value::JSValue::from_bits(handle.get_nanbox_f64().to_bits())
+                    .as_pointer::<u8>() as *mut ObjectHeader;
+                if unsafe { super::own_data_field_by_name(obj, key) }.is_some() {
+                    return "[object Object]".to_string();
+                }
+                let cid = unsafe { (*obj).class_id };
+                if cid != 0 {
+                    if let Some(name) = crate::object::class_name_for_id(cid) {
+                        if !name.is_empty() {
+                            return format!("#<{name}>");
+                        }
+                    }
+                }
+                return "#<Object>".to_string();
+            }
+            _ => {}
+        }
+    }
+    "#<Object>".to_string()
+}
+
+/// Throw `TypeError: Method <proto>.<method> called on incompatible receiver
+/// <receiver>`. Matches V8/node's wording INCLUDING the appended receiver
+/// rendering (#6658 asserts the full message; Test262's brand-check tests
+/// assert only the error *type*). Never returns.
+fn throw_incompatible_receiver(proto: &str, method: &str, receiver_bits: u64) -> ! {
+    let msg = format!(
+        "Method {proto}.{method} called on incompatible receiver {}",
+        render_incompatible_receiver(receiver_bits)
+    );
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err = crate::error::js_typeerror_new(s);
     crate::exception::js_throw(f64::from_bits(
@@ -277,7 +398,7 @@ fn set_receiver_or_throw(method: &str) -> *mut crate::set::SetHeader {
     let bits = IMPLICIT_THIS.with(|c| c.get());
     match crate::set::set_ptr_from_receiver_bits(bits) {
         Some(p) => p,
-        None => throw_incompatible_receiver("Set.prototype", method),
+        None => throw_incompatible_receiver("Set.prototype", method, bits),
     }
 }
 
@@ -286,7 +407,7 @@ fn map_receiver_or_throw(method: &str) -> *mut crate::map::MapHeader {
     let bits = IMPLICIT_THIS.with(|c| c.get());
     match crate::map::map_ptr_from_receiver_bits(bits) {
         Some(p) => p,
-        None => throw_incompatible_receiver("Map.prototype", method),
+        None => throw_incompatible_receiver("Map.prototype", method, bits),
     }
 }
 
@@ -295,7 +416,7 @@ fn weak_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
     let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     match crate::weakref::weak_class_id_from_receiver(receiver) {
         Some(cid) if cid == expected => receiver,
-        _ => throw_incompatible_receiver(proto, method),
+        _ => throw_incompatible_receiver(proto, method, receiver.to_bits()),
     }
 }
 

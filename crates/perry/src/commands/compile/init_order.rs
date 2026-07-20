@@ -209,12 +209,23 @@ pub(super) fn topo_sort_non_entry_modules(
         }
         visiting.insert(path.clone());
 
-        // Visit dependencies first (so they get initialized before us)
+        // Visit dependencies first (so they get initialized before us).
+        //
+        // #6463 follow-up (effect web.ts "Not a valid effect: undefined"):
+        // visit deps in IMPORT-DECLARATION order, not alphabetically. For a
+        // DAG the two produce equally valid topological orders, but inside a
+        // cycle the visit order decides WHICH edge becomes the broken
+        // back-edge — i.e. which module's body runs first. Node's ESM
+        // evaluation visits requested modules in declaration order, so an
+        // alphabetical order here can break a cycle in the OPPOSITE
+        // direction from node: the module node evaluates first is ordered
+        // last by perry, its init-call edge is dropped as a back-edge
+        // (run_pipeline's #6463 filter), and every alias binding read from
+        // it (`export const x = internal.x`) captures undefined. `deps` is
+        // built in source order (imports first, then re-export sources), so
+        // simply not sorting preserves the ESM visit order.
         if let Some(module_deps) = deps.get(path) {
-            // Sort deps for deterministic order
-            let mut sorted_deps = module_deps.clone();
-            sorted_deps.sort();
-            for dep in &sorted_deps {
+            for dep in module_deps {
                 dfs_visit(dep, deps, path_to_name, visited, visiting, sorted);
             }
         }
@@ -226,7 +237,36 @@ pub(super) fn topo_sort_non_entry_modules(
         }
     }
 
-    // Sort starting nodes for deterministic iteration order
+    // #6463 follow-up: root the DFS at the ENTRY module's imports, in
+    // declaration order — the same place node's ESM evaluation starts. The
+    // previous alphabetical all-paths iteration produced a valid topological
+    // order for DAGs, but whichever alphabetically-early module first reached
+    // a cycle decided its break direction, which could invert node's
+    // evaluation order for that cycle (see the dep-order comment above).
+    // Any module not reachable from the entry through the collected edges
+    // (Deferred dynamic-import targets, etc.) is appended afterwards in
+    // alphabetical order for determinism.
+    if let Some(entry_module) = ctx.native_modules.get(entry_path) {
+        for import in &entry_module.imports {
+            if import.is_dynamic || import.type_only || import.is_deferred_require {
+                continue;
+            }
+            if let Some(ref resolved) = import.resolved_path {
+                let resolved_path = PathBuf::from(resolved);
+                if path_to_name.contains_key(&resolved_path) {
+                    dfs_visit(
+                        &resolved_path,
+                        &deps,
+                        &path_to_name,
+                        &mut visited,
+                        &mut visiting,
+                        &mut sorted,
+                    );
+                }
+            }
+        }
+    }
+
     let mut all_paths: Vec<PathBuf> = path_to_name.keys().cloned().collect();
     all_paths.sort();
 

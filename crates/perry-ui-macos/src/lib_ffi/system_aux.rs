@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use crate::*;
 
 // =============================================================================
@@ -42,21 +43,18 @@ pub extern "C" fn perry_system_image_picker_pick(
 /// window is available (e.g. headless CLI builds) or capture fails.
 #[no_mangle]
 pub extern "C" fn perry_system_take_screenshot() -> i64 {
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-    }
     use base64::Engine as _;
     unsafe {
         let mut len: usize = 0;
         let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
         if ptr.is_null() || len == 0 {
-            return js_string_from_bytes(std::ptr::null(), 0);
+            return js_string_from_bytes(std::ptr::null(), 0) as i64;
         }
         let bytes = std::slice::from_raw_parts(ptr, len);
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         // perry_ui_screenshot_capture allocates with libc::malloc; release it.
         libc::free(ptr as *mut libc::c_void);
-        js_string_from_bytes(encoded.as_ptr(), encoded.len() as i32)
+        js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32) as i64
     }
 }
 
@@ -94,9 +92,6 @@ pub extern "C" fn perry_system_app_on_open_url(callback: f64) {
 pub extern "C" fn perry_system_app_get_launch_url() -> i64 {
     let s = deeplinks::launch_url();
     let bytes = s.as_bytes();
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
-    }
     unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64 }
 }
 
@@ -173,29 +168,26 @@ pub extern "C" fn perry_system_get_device_model() -> i64 {
 /// number too. Returned as a Perry-managed string.
 #[no_mangle]
 pub extern "C" fn perry_system_get_os_version() -> i64 {
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-    }
     unsafe {
         let cls = objc2::runtime::AnyClass::get(c"NSProcessInfo").unwrap();
         let info: *mut objc2::runtime::AnyObject = objc2::msg_send![cls, processInfo];
         if info.is_null() {
-            return js_string_from_bytes(std::ptr::null(), 0);
+            return js_string_from_bytes(std::ptr::null(), 0) as i64;
         }
         let s: *mut objc2::runtime::AnyObject =
             objc2::msg_send![info, operatingSystemVersionString];
         if s.is_null() {
-            return js_string_from_bytes(std::ptr::null(), 0);
+            return js_string_from_bytes(std::ptr::null(), 0) as i64;
         }
         let utf8_ptr: *const u8 = objc2::msg_send![s, UTF8String];
         if utf8_ptr.is_null() {
-            return js_string_from_bytes(std::ptr::null(), 0);
+            return js_string_from_bytes(std::ptr::null(), 0) as i64;
         }
         let utf8_len: usize = objc2::msg_send![s, lengthOfBytesUsingEncoding: 4u64];
         if utf8_len == 0 {
-            return js_string_from_bytes(std::ptr::null(), 0);
+            return js_string_from_bytes(std::ptr::null(), 0) as i64;
         }
-        js_string_from_bytes(utf8_ptr, utf8_len as i32)
+        js_string_from_bytes(utf8_ptr, utf8_len as u32) as i64
     }
 }
 
@@ -237,9 +229,6 @@ pub extern "C" fn perry_system_get_app_icon(path_ptr: i64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn perry_system_get_locale() -> i64 {
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-    }
     unsafe {
         let ns_locale: *mut objc2::runtime::AnyObject = objc2::msg_send![
             objc2::runtime::AnyClass::get(c"NSLocale").unwrap(),
@@ -248,11 +237,11 @@ pub extern "C" fn perry_system_get_locale() -> i64 {
         let lang_code: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_locale, languageCode];
         if lang_code.is_null() {
             let fallback = b"en";
-            return js_string_from_bytes(fallback.as_ptr(), 2);
+            return js_string_from_bytes(fallback.as_ptr(), 2) as i64;
         }
         let utf8: *const u8 = objc2::msg_send![lang_code, UTF8String];
         let len = libc::strlen(utf8 as *const i8);
         let code_len = if len >= 2 { 2 } else { len };
-        js_string_from_bytes(utf8, code_len as i32)
+        js_string_from_bytes(utf8, code_len as u32) as i64
     }
 }

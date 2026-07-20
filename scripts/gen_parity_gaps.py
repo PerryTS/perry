@@ -6,7 +6,11 @@ over-reported gaps (e.g. claimed node:crypto had 124 missing APIs when the
 manifest already declares createCipheriv/createSign/timingSafeEqual/...).
 
 Coverage sources, in priority order:
-  1. Manifest entries  -- crates/perry-api-manifest/src/entries.rs
+  1. Manifest entries  -- crates/perry-api-manifest/src/entries.rs plus any
+     crates/perry-api-manifest/src/entries/*.rs split files (the entry data
+     was split across entries/part_{1..4}.rs on 2026-07-03 to keep files
+     under the 2000-line CI gate; entries.rs now just declares the `mod`s and
+     concatenates them -- see MANIFEST_FILES below):
         method("mod","member",..)  /  property("mod","member",..)
      A CI test asserts every NATIVE_MODULE_TABLE entry has a row here, so this
      is the authoritative set of compile-time-dispatched top-level methods.
@@ -32,7 +36,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INVENTORY = ROOT / "docs" / "runtime-parity.md"
-MANIFEST = ROOT / "crates" / "perry-api-manifest" / "src" / "entries.rs"
+MANIFEST_DIR = ROOT / "crates" / "perry-api-manifest" / "src"
+# The manifest entry table lives in entries.rs and/or split files under
+# entries/ (split out 2026-07-03 to stay under the 2000-line CI gate; see
+# entries.rs's own `mod part_N;` declarations). Glob both shapes rather than
+# hardcoding a single path so a future re-split can't silently zero out most
+# of the manifest again -- a stale single-file path here once undercounted
+# coverage by ~480 entries and swung node:os from 0 gaps to 143.
+MANIFEST_FILES = sorted(MANIFEST_DIR.glob("entries*.rs")) + sorted(
+    MANIFEST_DIR.glob("entries/*.rs")
+)
+# Below this, something is almost certainly wrong with MANIFEST_FILES (a
+# missed split, a moved directory, ...) rather than a genuine drop in
+# manifest size -- fail loudly instead of silently emitting bogus gap counts.
+MIN_PLAUSIBLE_MANIFEST_ENTRIES = 1500
 IR_DIR = ROOT / "crates" / "perry-hir" / "src" / "ir"
 SRC_DIRS = [
     ROOT / "crates" / "perry-runtime" / "src",
@@ -72,7 +89,7 @@ def parse_inventory():
     modules: dict[str, list] = {}
     cur = None
     in_inventory = False
-    for line in INVENTORY.read_text().splitlines():
+    for line in INVENTORY.read_text(encoding="utf-8").splitlines():
         m = SECTION_RE.match(line)
         if m:
             title = m.group(1)
@@ -120,14 +137,29 @@ def extract_member(sig: str) -> str | None:
 
 
 def parse_manifest():
+    if not MANIFEST_FILES:
+        sys.exit(
+            f"gen_parity_gaps: no manifest source files matched under {MANIFEST_DIR} "
+            "(expected entries.rs and/or entries/*.rs) -- has the manifest crate moved?"
+        )
     by_module: dict[str, set] = {}
-    for mod, member in MANIFEST_RE.findall(MANIFEST.read_text()):
-        by_module.setdefault(mod, set()).add(member)
+    total = 0
+    for path in MANIFEST_FILES:
+        for mod, member in MANIFEST_RE.findall(path.read_text(encoding="utf-8")):
+            by_module.setdefault(mod, set()).add(member)
+            total += 1
+    if total < MIN_PLAUSIBLE_MANIFEST_ENTRIES:
+        sys.exit(
+            f"gen_parity_gaps: only parsed {total} manifest entries across "
+            f"{len(MANIFEST_FILES)} file(s) ({', '.join(str(p.relative_to(ROOT)) for p in MANIFEST_FILES)}); "
+            f"expected at least {MIN_PLAUSIBLE_MANIFEST_ENTRIES}. The manifest was likely split/moved again "
+            "and MANIFEST_FILES no longer covers it -- refusing to emit misleadingly-bad gap counts."
+        )
     return by_module
 
 
 def parse_expr_variants() -> set:
-    txt = "\n".join(f.read_text(errors="ignore") for f in IR_DIR.rglob("*.rs"))
+    txt = "\n".join(f.read_text(encoding="utf-8", errors="ignore") for f in IR_DIR.rglob("*.rs"))
     # crude: collect PascalCase enum variant idents inside the Expr enum
     return set(re.findall(r"\b([A-Z][A-Za-z0-9]+)\s*[\({,]", txt))
 
@@ -141,7 +173,7 @@ def scan_ffi_and_dispatch():
         if not d.exists():
             continue
         for f in d.rglob("*.rs"):
-            t = f.read_text(errors="ignore")
+            t = f.read_text(encoding="utf-8", errors="ignore")
             files[str(f)] = t
             for fn in re.findall(r"\bfn (js_[a-z0-9_]+)", t):
                 ffi.add(fn)
@@ -251,8 +283,8 @@ def emit_doc(rows) -> str:
     w("> edit by hand — re-run the script to refresh.\n")
     w("This is a structured gap analysis comparing the public Node.js API surface")
     w("against the APIs Perry can dispatch. Coverage is derived from four sources:")
-    w("the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`,")
-    w("`method`/`property` rows), compound `Expr::*` HIR variants")
+    w("the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`")
+    w("and `entries/*.rs`, `method`/`property` rows), compound `Expr::*` HIR variants")
     w("(`crates/perry-hir/src/ir/`), `js_*` FFI exports across `perry-runtime` /")
     w("`perry-stdlib` / `perry-ext-*`, and module-gated method-dispatch literals.\n")
     w(BEHAVIORAL_NOTE)

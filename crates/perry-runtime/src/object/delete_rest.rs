@@ -34,6 +34,10 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
+    // A delete can rewrite key→slot mappings in place (same keys_array
+    // address), so cached (keys_array, key)→index plans must be flushed
+    // (`object::prop_plan` read-plan cache).
+    super::prop_plan::prop_plan_epoch_bump();
     // A Proxy is a small registered id in the proxy id band, not a heap
     // ObjectHeader. Dereferencing it below (GC header / keys_array reads) would
     // segfault. Route `delete proxy.k` / `delete proxy[k]` through the proxy
@@ -288,7 +292,7 @@ pub extern "C" fn js_object_delete_field(
         // property. Bun and Node remove the property entirely; we
         // match that.
         let field_count = (*obj).field_count;
-        let alloc_limit = std::cmp::max(field_count as usize, 8);
+        let alloc_limit = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
         let new_count = key_count - 1;
 
         // CRITICAL: clone the keys_array before mutating it. The same

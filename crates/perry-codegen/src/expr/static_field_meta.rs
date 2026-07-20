@@ -395,6 +395,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // class_id from this object rather than treating it as an instance.
             ctx.block()
                 .call_void("js_object_mark_class", &[(I64, &obj)]);
+            // #6438: pin THIS evaluation's parent onto the object. The lowering
+            // sequences `RegisterClassParentDynamic` immediately ahead of this
+            // node, so `CLASS_DYNAMIC_PARENT_VALUE[template]` still holds this
+            // evaluation's parent; later evaluations overwrite it, but each
+            // object keeps its own edge. Without this, a factory invoked more
+            // than once (effect's `class DeclareClass extends make(ast) { … }`)
+            // has every instance walk to the LAST parent — reading that
+            // evaluation's `static ast` instead of its own. No-op when the class
+            // expression has no heritage.
+            ctx.block().call_void(
+                "js_class_object_pin_parent",
+                &[(I64, &obj), (I32, &tcid_str)],
+            );
             for (name, init) in named_statics {
                 let key_idx = ctx.strings.intern(name);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -418,6 +431,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let cap_len = captured_args.len().to_string();
                 let mut lowered_caps: Vec<String> = Vec::with_capacity(captured_args.len());
                 let mut caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
+                // #6523: these capture loads are Perry-internal materialization
+                // at the class's DEFINITION site, same as the
+                // `RegisterClassCaptures` snapshot loads above (#6052). A
+                // captured `const` declared AFTER the class (bundled semver's
+                // `class Comparator` + trailing debug/require consts) is still
+                // in its dead zone here — legal JS, since TDZ applies at
+                // method-call time. Without the suppression window the checked
+                // box read threw "Cannot access undefined before
+                // initialization" while merely DEFINING the class. Suppressed
+                // loads snapshot `undefined`; the #6037 refresh statements
+                // re-register the live values right after each captured
+                // binding's initializer runs.
+                ctx.block().call_void("js_tdz_suppress_begin", &[]);
                 for arg in captured_args {
                     let v = lower_expr(ctx, arg)?;
                     caps_arr = ctx.block().call(
@@ -427,6 +453,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     lowered_caps.push(v);
                 }
+                ctx.block().call_void("js_tdz_suppress_end", &[]);
                 let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
                 let key_idx = ctx.strings.intern("__perry_ctor_caps");
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);

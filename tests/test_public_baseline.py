@@ -5,6 +5,7 @@ from benchmarks.public_baseline import (
     EXPECTED_SUITE_BENCHMARKS,
     README_END,
     README_START,
+    _CARGO_VERSION_RE,
     _replace_block,
     _validate_suite,
     distribution,
@@ -120,6 +121,23 @@ class PublicBaselineTests(unittest.TestCase):
         self.assertIn("loss vs both", block)
         self.assertIn("win vs both", block)
         self.assertIn("`abcdef123456`", block)
+
+    def test_cargo_version_bump_does_not_change_fingerprint_input(self):
+        # A workspace version bump must not move the source fingerprint: the
+        # volatile version line is normalized out before hashing. Regression
+        # guard — before this, the freshness gate reddened on every PR that
+        # followed a version bump (Cargo.toml is a fingerprinted source path).
+        def normalize(data):
+            return _CARGO_VERSION_RE.sub(b'version = "0.0.0"', data)
+
+        base = b'[workspace.package]\nversion = "0.5.1258"\nedition = "2021"\n'
+        bumped = b'[workspace.package]\nversion = "0.5.1300"\nedition = "2021"\n'
+        self.assertEqual(normalize(base), normalize(bumped))
+
+        # A benchmark-relevant change (e.g. edition/profile/deps) must still
+        # move the fingerprint input.
+        edition_change = b'[workspace.package]\nversion = "0.5.1258"\nedition = "2024"\n'
+        self.assertNotEqual(normalize(base), normalize(edition_change))
 
     def test_generated_marker_replacement_is_deterministic(self):
         original = f"before\n{README_START}\nold\n{README_END}\nafter\n"

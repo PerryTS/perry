@@ -87,12 +87,14 @@ pub extern "C" fn perry_ui_poll_open_file() -> i64 {
     unsafe { js_string_from_bytes(std::ptr::null(), 0) as i64 }
 }
 
-/// perry_get_device_idiom() → 0 — Linux is always a desktop (not phone or pad).
-/// Called by iOS-specific branches in platform.ts that are dead code on Linux;
-/// the symbol must exist for the linker even though it is never called at runtime.
+/// perry_get_device_idiom() → "desktop" — Linux is always a desktop (not
+/// phone or pad). Returns a raw `*mut StringHeader` (i64); the
+/// `ReturnKind::Str` dispatch row NaN-boxes it with STRING_TAG. (The
+/// dispatch row declares no arguments — the previous `_closure_ptr`
+/// parameter was a copy-paste leftover.)
 #[no_mangle]
-pub extern "C" fn perry_get_device_idiom(_closure_ptr: i64) -> f64 {
-    0.0 // 0 = phone-like; value is irrelevant on Linux (dead code branch)
+pub extern "C" fn perry_get_device_idiom() -> i64 {
+    unsafe { js_string_from_bytes(b"desktop".as_ptr(), 7) as i64 }
 }
 
 // Audio capture (PulseAudio simple API)

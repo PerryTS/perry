@@ -25,6 +25,11 @@ mod locale;
 mod locales;
 use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
 mod date_collator;
+mod date_names;
+#[cfg(feature = "intl-datetime")]
+pub(crate) mod icu_dtf;
+mod time_zone;
+pub(crate) use time_zone::{canonicalize_named_time_zone, resolved_date_time_zone};
 mod install;
 use install::install_constructor;
 mod subclass;
@@ -313,6 +318,21 @@ fn coerce_option_string(value: f64) -> Option<String> {
 
 fn get_option_string(options: f64, key: &str) -> Option<String> {
     coerce_option_string(get_option_value(options, key))
+}
+
+/// Validate the `locales` / `options` arguments of `String.prototype.localeCompare`
+/// exactly as `Construct(%Collator%, « locales, options »)` would (ECMA-402
+/// §22.1.3.10 step 4). Perry's collation ordering stays locale-neutral (full ICU
+/// deferred), so `localeCompare` never actually builds a Collator — but the spec
+/// still requires the *observable throwing* of `CanonicalizeLocaleList(locales)`
+/// followed by `InitializeCollator`'s `CoerceOptionsToObject` + `GetOption` reads
+/// (test262 `localeCompare/throws-same-exceptions-as-Collator`, #5906).
+pub(crate) fn validate_locale_compare(locales: f64, options: f64) {
+    // requestedLocales = ? CanonicalizeLocaleList(locales) — reuse the exact
+    // Intl.getCanonicalLocales machinery for its TypeError/RangeError side effect
+    // (undefined yields an empty list and never throws).
+    let _ = locales::get_canonical_locales(locales);
+    date_collator::validate_collator_options(options);
 }
 
 /// As `get_option_string`, but for the Unicode locale-extension keys (`calendar`,
@@ -940,71 +960,6 @@ fn dt_component_option(
 /// IANA zone identifiers pass; the malformed names ECMA-402 rejects
 /// (`"MEZ"`, `"invalid"`, `"Europe/İstanbul"`, …) do not. Returns the (best
 /// effort, un-recased) canonical identifier, or `None` to signal `RangeError`.
-fn canonicalize_named_time_zone(tz: &str) -> Option<String> {
-    if tz.eq_ignore_ascii_case("UTC") || tz.eq_ignore_ascii_case("Etc/UTC") {
-        return Some("UTC".to_string());
-    }
-    if !tz.is_ascii() {
-        return None;
-    }
-    // Legacy single-component IANA zones / links that carry no '/'.
-    const SINGLE_WORD_ZONES: &[&str] = &[
-        "GMT",
-        "GMT0",
-        "Zulu",
-        "Universal",
-        "UCT",
-        "Greenwich",
-        "Navajo",
-        "Eire",
-        "Iceland",
-        "Cuba",
-        "Egypt",
-        "Hongkong",
-        "Iran",
-        "Israel",
-        "Japan",
-        "Jamaica",
-        "Libya",
-        "Poland",
-        "Portugal",
-        "PRC",
-        "Singapore",
-        "Turkey",
-        "ROC",
-        "ROK",
-        "W-SU",
-        "Factory",
-        "EST",
-        "MST",
-        "HST",
-        "EST5EDT",
-        "CST6CDT",
-        "MST7MDT",
-        "PST8PDT",
-    ];
-    if SINGLE_WORD_ZONES.iter().any(|z| z.eq_ignore_ascii_case(tz)) {
-        return Some(tz.to_string());
-    }
-    let segments: Vec<&str> = tz.split('/').collect();
-    if segments.len() < 2 {
-        return None;
-    }
-    let mut has_alpha = false;
-    for seg in &segments {
-        if seg.is_empty() {
-            return None;
-        }
-        for b in seg.bytes() {
-            if b.is_ascii_alphabetic() {
-                has_alpha = true;
-            } else if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'+' || b == b'-') {
-                return None;
-            }
-        }
-    }
-    has_alpha.then(|| tz.to_string())
-}
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
     let locale = locale_or_default(locales);
     let obj = js_object_alloc(0, 8);
@@ -1133,24 +1088,14 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 }
                 set_internal_field(obj, KEY_HOUR_CYCLE, string_value(&hc));
             }
-            let mut time_zone =
-                get_option_string(options, "timeZone").unwrap_or_else(|| "UTC".to_string());
-            // A timeZone that begins with a sign is an offset identifier: it must
-            // be syntactically valid (ECMA-402 rejects malformed offsets with a
-            // RangeError), and is then canonicalized to `±HH:mm` so
-            // `resolvedOptions().timeZone` matches FormatOffsetTimeZoneIdentifier.
-            // Named zones are validated structurally (Perry has no tz database).
-            if matches!(time_zone.as_bytes().first(), Some(b'+') | Some(b'-')) {
-                if !is_valid_offset_time_zone(&time_zone) {
-                    throw_range_error(&format!("Invalid time zone specified: {time_zone}"));
-                }
-                time_zone = canonicalize_offset_time_zone(&time_zone);
-            } else {
-                match canonicalize_named_time_zone(&time_zone) {
-                    Some(canonical) => time_zone = canonical,
-                    None => throw_range_error(&format!("Invalid time zone specified: {time_zone}")),
-                }
-            }
+            // ECMA-402 DefaultTimeZone(): when no `timeZone` option is given, use
+            // the HOST time zone (Node returns e.g. "Europe/Berlin"), not UTC —
+            // and an explicit invalid zone is a RangeError while an unrecognized
+            // host default falls back to UTC. `resolved_date_time_zone` is the
+            // single source of that logic (it canonicalizes offsets to `±HH:mm`
+            // for FormatOffsetTimeZoneIdentifier and validates named zones
+            // structurally, Perry having no tz database).
+            let time_zone = resolved_date_time_zone(options);
             set_internal_field(obj, KEY_TIME_ZONE, string_value(&time_zone));
             // Date/time component options (ECMA-402 Table 7), read in order. Each
             // out-of-range value is a RangeError.
@@ -1608,6 +1553,13 @@ fn install_bound_instance_function(
     crate::closure::js_closure_set_capture_f64(closure, 0, js_nanbox_pointer(obj as i64));
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
+    // A bound Intl instance method (`nf.format`, `nf.resolvedOptions`, …) is a
+    // built-in non-constructor function: it has NO `[[Construct]]` and therefore
+    // no own `prototype` property (ECMA-262 §17 — built-in functions that aren't
+    // constructors don't get the auto-created `.prototype`). Flag it so
+    // `function_would_have_own_prototype` / the `new` path treat it like any
+    // other builtin (`Math.max`), matching `format-function-builtin.js`.
+    crate::object::set_builtin_closure_non_constructable(closure as usize);
     crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
@@ -1757,6 +1709,13 @@ fn install_function(
     }
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
+    // Intl prototype methods (`formatToParts`, `resolvedOptions`, …), the static
+    // `supportedLocalesOf`, and the this-based instance methods
+    // (`formatRange`/`formatRangeToParts`) installed through here are all
+    // built-in non-constructor functions: no `[[Construct]]`, hence no own
+    // `prototype` property (`builtin.js` asserts `hasOwnProperty("prototype")`
+    // is false and `isConstructor` is false). Flag them like any other builtin.
+    crate::object::set_builtin_closure_non_constructable(closure as usize);
     crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
