@@ -306,7 +306,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // #6709: async-generator activation entry. Like js_async_first_call but
     // the caller supplies the resume value + is_error flag (gen.next(v) /
     // gen.throw(e)) instead of the hard-coded (undefined, false).
-    module.declare_function("js_async_generator_resume", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_async_generator_resume",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
 
     // ========== Slugify ==========
     module.declare_function("js_slugify", I64, &[I64]);

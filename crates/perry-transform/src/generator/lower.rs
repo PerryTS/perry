@@ -141,8 +141,7 @@ fn build_dispatch_while_body(
                             done_id,
                             Box::new(Expr::Bool(true)),
                         )));
-                        case_body
-                            .push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+                        case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
                     }
                 } else {
                     case_body.push(Stmt::Expr(Expr::LocalSet(
@@ -200,9 +199,7 @@ fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
                     wrap_iter_result_returns_in_async_step_done(eb);
                 }
             }
-            Stmt::While { body, .. }
-            | Stmt::DoWhile { body, .. }
-            | Stmt::For { body, .. } => {
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
                 wrap_iter_result_returns_in_async_step_done(body);
             }
             Stmt::Try {
