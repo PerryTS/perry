@@ -51,6 +51,7 @@ fn build_static_lib(pkg_dir: &Path) -> Option<PathBuf> {
         &c_src,
         r#"#include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 extern void *js_string_from_bytes(const uint8_t *data, uint32_t len);
 extern void *perry_ffi_promise_new(void);
@@ -65,7 +66,7 @@ extern void perry_ffi_promise_resolve_bits(void *promise, uint64_t bits);
 void *js_jsonrepro_voices(void) {
     void *p = perry_ffi_promise_new();
     const char *json = "[{\"a\":1},{\"a\":2}]";
-    uint32_t len = (uint32_t)17;
+    uint32_t len = (uint32_t)strlen(json);
     void *s = js_string_from_bytes((const uint8_t *)json, len);
     uint64_t bits = STRING_TAG | ((uint64_t)(uintptr_t)s & POINTER_MASK);
     perry_ffi_promise_resolve_bits(p, bits);
