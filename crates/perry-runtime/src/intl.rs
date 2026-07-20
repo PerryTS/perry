@@ -1553,6 +1553,13 @@ fn install_bound_instance_function(
     crate::closure::js_closure_set_capture_f64(closure, 0, js_nanbox_pointer(obj as i64));
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
+    // A bound Intl instance method (`nf.format`, `nf.resolvedOptions`, …) is a
+    // built-in non-constructor function: it has NO `[[Construct]]` and therefore
+    // no own `prototype` property (ECMA-262 §17 — built-in functions that aren't
+    // constructors don't get the auto-created `.prototype`). Flag it so
+    // `function_would_have_own_prototype` / the `new` path treat it like any
+    // other builtin (`Math.max`), matching `format-function-builtin.js`.
+    crate::object::set_builtin_closure_non_constructable(closure as usize);
     crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
@@ -1702,6 +1709,13 @@ fn install_function(
     }
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
+    // Intl prototype methods (`formatToParts`, `resolvedOptions`, …), the static
+    // `supportedLocalesOf`, and the this-based instance methods
+    // (`formatRange`/`formatRangeToParts`) installed through here are all
+    // built-in non-constructor functions: no `[[Construct]]`, hence no own
+    // `prototype` property (`builtin.js` asserts `hasOwnProperty("prototype")`
+    // is false and `isConstructor` is false). Flag them like any other builtin.
+    crate::object::set_builtin_closure_non_constructable(closure as usize);
     crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
