@@ -1,32 +1,40 @@
-//! V8-interop weak/Rust stubs and AOT no-op stubs for unconditionally-declared
+//! V8-interop no-op stubs and AOT no-op stubs for unconditionally-declared
 //! FFI symbols (lodash, axios, argon2, sharp, ratelimit).
 
-// V8 interop no-op stubs. Real implementations are in perry-jsruntime/src/interop.rs.
-// These stubs ensure symbols are always available even when perry-jsruntime is not linked
-// (iOS, Android, standalone builds). When perry-jsruntime IS linked, its strong symbols
-// override these stubs via linker symbol resolution order.
+// V8 interop no-op stubs. Perry no longer ships a runtime JS engine: the
+// `perry-jsruntime` crate (V8 via `deno_core`) that used to provide the real
+// implementations of these symbols was deleted in #1696 ("remove
+// perry-jsruntime; ship V8-free binaries"). These stubs are now the *only*
+// definitions of `js_load_module`/`js_call_function`/etc. — every build links
+// them, and `js_*` calls always return the "no JS runtime" sentinel below.
+// (`enforce_js_runtime_gate` in
+// `crates/perry/src/commands/compile/bootstrap.rs` hard-errors any build
+// that would actually need one of these to do real work, so in practice a
+// compiled binary never calls through to them for a live JS module — they
+// exist only to satisfy the codegen-side `js_*` FFI declarations that are
+// still unconditionally emitted.)
 //
 // Signatures must match `crates/perry-codegen/src/runtime_decls.rs` exactly — the codegen
 // declarations determine which register the caller reads the result from (rax/x0 for I64,
 // xmm0/d0 for DOUBLE). A signature mismatch reads garbage and silently miscompiles.
 //
-// Stubs return NaN-boxed `TAG_UNDEFINED` (not 0.0) so when V8 isn't linked, downstream
-// `typeof` correctly observes `undefined` instead of `"number"` — making the missing-V8
-// case diagnostically distinct from a successful 0-returning JS call.
+// Stubs return NaN-boxed `TAG_UNDEFINED` (not 0.0) so downstream `typeof`
+// correctly observes `undefined` instead of `"number"` — making the
+// no-JS-runtime case diagnostically distinct from a successful
+// 0-returning JS call, in case any of these symbols is ever reached.
 //
-// On macOS (Mach-O) the stubs are emitted as **weak** symbols via `global_asm!` so
-// perry-jsruntime's strong impls always win, regardless of linker archive scan order.
-// Pre-fix, when user code only referenced FFIs that have stubs (e.g. `js_load_module` +
-// `js_call_function`, but NOT `js_call_method`), the linker resolved those symbols against
-// closure.o and never pulled `interop.o` from libperry_jsruntime.a — yielding a runtime
-// that links V8 nowhere and silently returns undefined for every JS call. The weak
-// attribute forces the linker to keep looking past closure.o's defs and pull in interop.o
-// when jsruntime.a is on the command line. (Issue #257.)
+// On macOS (Mach-O) the stubs are still emitted as **weak** symbols via
+// `global_asm!` (`.weak_definition`) — a holdover from when a strong
+// definition in `libperry_jsruntime.a` needed to be able to override them
+// regardless of linker archive scan order (Issue #257). With
+// `perry-jsruntime` gone there is no strong definition left to win that
+// race, so the weak attribute is currently a no-op; it's left in place
+// rather than downgraded to a plain global so re-adding a real JS runtime
+// wouldn't require rediscovering this mechanism.
 //
-// On other platforms (Linux, iOS, Android, Windows), Rust functions remain — Linux's
-// linker handles duplicate-defs via link order (jsruntime is listed first in link.rs);
-// iOS/Android/Windows don't link jsruntime at all (see compile.rs:2877), so the stubs
-// are the only defs and behave as runtime-only no-ops.
+// On other platforms (Linux, iOS, Android, Windows), the plain Rust
+// functions below are the only definitions and behave the same way —
+// unconditional no-ops.
 
 const _UNDEF_BITS: u64 = crate::value::TAG_UNDEFINED;
 

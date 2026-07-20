@@ -93,7 +93,8 @@ pub use iter_object::{
     dispatch_string_iterator_method, string_values_iter, STRING_ITERATOR_CLASS_ID,
 };
 pub use locale::{
-    js_string_to_locale_lower_case, js_string_to_locale_upper_case, js_string_validate_locales,
+    js_string_to_locale_lower_case, js_string_to_locale_upper_case,
+    js_string_validate_collator_args,
 };
 pub use pad::{js_string_alloc_space, js_string_pad_end, js_string_pad_start, js_string_repeat};
 pub use raw::js_string_raw;

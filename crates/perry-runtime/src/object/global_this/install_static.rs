@@ -84,6 +84,29 @@ extern "C" fn url_parse_thunk(
     }
 }
 
+// #6674: static-factory thunks for `Uint8Array.fromBase64` / `fromHex`. The
+// `str_handle` is the argument's raw NaN-boxed bits reinterpreted as `i64`, the
+// convention `js_u8_from_base64` / `js_u8_from_hex` expect (matching the
+// instance `setFromBase64` dispatch in `buffer_dispatch.rs`). The returned
+// `BufferHeader*` is nan-boxed as a pointer — identical to the value the
+// compile-time `Uint8Array.fromBase64(str)` call path produces.
+extern "C" fn uint8array_from_base64_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    opts: f64,
+) -> f64 {
+    let buf = crate::buffer::js_u8_from_base64(input.to_bits() as i64, opts);
+    crate::value::js_nanbox_pointer(buf as i64)
+}
+
+extern "C" fn uint8array_from_hex_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+) -> f64 {
+    let buf = crate::buffer::js_u8_from_hex(input.to_bits() as i64);
+    crate::value::js_nanbox_pointer(buf as i64)
+}
+
 extern "C" fn subtle_crypto_supports_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -647,6 +670,33 @@ pub(crate) fn install_builtin_constructor_statics(
                 "revocable",
                 proxy_revocable_thunk as *const u8,
                 2,
+                false,
+            );
+        }
+        // #6674: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)` static
+        // factories, materialized as readable own statics on the `Uint8Array`
+        // constructor closure. The direct call form is already intercepted at
+        // compile time (HIR `module_static.rs`), so these thunks back the value
+        // read (`typeof Uint8Array.fromBase64 === "function"`, the jose/Auth.js
+        // feature-detection gate) and the rebound-call form
+        // (`const f = Uint8Array.fromBase64; f(s)`). They route to the same
+        // `js_u8_from_base64` / `js_u8_from_hex` runtime helpers the compile-time
+        // path uses, so the produced value is identical. `fromBase64.length` is
+        // 1 (the optional opts is the 2nd, undefined-padded, ABI slot).
+        "Uint8Array" => {
+            install_constructor_static_with_call_arity(
+                ctor,
+                "fromBase64",
+                uint8array_from_base64_thunk as *const u8,
+                1,
+                2,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "fromHex",
+                uint8array_from_hex_thunk as *const u8,
+                1,
                 false,
             );
         }

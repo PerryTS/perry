@@ -124,6 +124,8 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
 #[cfg(test)]
 mod bun_store_tests;
 #[cfg(test)]
+mod declaration_map_source_tests;
+#[cfg(test)]
 mod extension_resolution_tests;
 #[cfg(test)]
 mod tests;
@@ -632,12 +634,100 @@ pub(super) fn resolve_package_entry(package_dir: &Path, subpath: Option<&str>) -
     resolve_with_extensions(&package_dir.join("index"))
 }
 
+/// Append `.map` to a path's file name (`index.js` → `index.js.map`,
+/// `index.d.ts` → `index.d.ts.map`). `Path::with_extension` cannot be used —
+/// it would rewrite the trailing component instead (`index.d.ts` →
+/// `index.d.map`).
+fn append_map_extension(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".map");
+    PathBuf::from(name)
+}
+
+/// Parse a source/declaration map and return the canonical path of its single
+/// original source, when that source exists on disk and is a real TypeScript
+/// source (`.ts`/`.tsx`/`.mts`/`.cts`, never a `.d.ts`).
+///
+/// Only a 1:1 emit is honored — a map carrying exactly one `sources` entry.
+/// A bundler that folds many inputs into one output lists several `sources`,
+/// and compiling any single one in place of the bundle would silently drop the
+/// rest, so those are left to the emitted-file path.
+fn original_source_from_map_file(map_path: &Path) -> Option<PathBuf> {
+    let content = fs::read_to_string(map_path).ok()?;
+    let map: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let sources = map.get("sources")?.as_array()?;
+    if sources.len() != 1 {
+        return None;
+    }
+    let source = sources[0].as_str()?;
+    let source_root = map
+        .get("sourceRoot")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    // `sources` / `sourceRoot` are resolved relative to the map file's own
+    // directory (the tsc / Node source-map convention). An absolute `source`
+    // (or absolute `sourceRoot`) makes `join` discard the base, as intended.
+    let map_dir = map_path.parent()?;
+    let relative = if source_root.is_empty() {
+        PathBuf::from(source)
+    } else {
+        Path::new(source_root).join(source)
+    };
+    // canonicalize both proves the file exists and normalizes the `../` hops a
+    // `dist/ → src/` map almost always contains. A `webpack://`-style or other
+    // non-filesystem `source` simply fails to canonicalize and is skipped.
+    let canonical = map_dir.join(relative).canonicalize().ok()?;
+    if is_declaration_file(&canonical) {
+        return None;
+    }
+    let is_ts_source = matches!(
+        canonical.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "mts" | "cts")
+    );
+    is_ts_source.then_some(canonical)
+}
+
+/// Recover the ORIGINAL TypeScript source that a compiled package entry was
+/// emitted from by reading the declaration map (`*.d.ts.map`) or source map
+/// (`*.js.map`) written next to it. This is the authoritative pointer to the
+/// source — it survives non-`src/` layouts the name-based conventions in
+/// [`resolve_package_source_entry`] cannot guess. (Issue #2569 step 5: prefer
+/// original TS sources via source maps or declaration maps.)
+///
+/// The declaration map is consulted first: it exists specifically to link a
+/// `.d.ts` back to the `.ts` it describes, so its `sources` are the cleanest
+/// path to the original source. The JS source map is the fallback.
+fn original_source_via_map(entry: &Path) -> Option<PathBuf> {
+    if let Some(declaration) = declaration_sidecar_for_implementation(entry) {
+        if let Some(source) = original_source_from_map_file(&append_map_extension(&declaration)) {
+            return Some(source);
+        }
+    }
+    original_source_from_map_file(&append_map_extension(entry))
+}
+
 /// Resolve package entry preferring TypeScript source over compiled JS output.
 /// Used for compile_packages where we want to compile from TS source, not bundled JS.
 pub(super) fn resolve_package_source_entry(
     package_dir: &Path,
     subpath: Option<&str>,
 ) -> Option<PathBuf> {
+    let normal_entry = resolve_package_entry(package_dir, subpath);
+
+    // #2569 step 5: the most authoritative pointer to a package's original
+    // TypeScript source is the declaration/source map its build wrote next to
+    // the emitted entry — it records the exact source path even when the
+    // layout does not follow the `src/` ⇄ `dist/` naming the heuristics below
+    // assume. Consult it for the actual resolved entry first; fall through to
+    // the name-based conventions when no usable map is present.
+    if let Some(entry) = normal_entry.as_ref() {
+        if is_js_file(entry) {
+            if let Some(original) = original_source_via_map(entry) {
+                return Some(original);
+            }
+        }
+    }
+
     // For subpaths, try src/<subpath>.ts
     if let Some(sub) = subpath {
         let src_path = package_dir.join("src").join(sub);
@@ -657,7 +747,7 @@ pub(super) fn resolve_package_source_entry(
     }
 
     // Try using normal entry resolution but prefer TS over JS
-    let normal_entry = resolve_package_entry(package_dir, subpath)?;
+    let normal_entry = normal_entry?;
     if is_js_file(&normal_entry) {
         // Try .ts equivalent of the .js entry
         let ts_path = normal_entry.with_extension("ts");

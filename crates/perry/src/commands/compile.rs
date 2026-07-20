@@ -76,7 +76,8 @@ use library_search::{
     find_geisterhand_stdlib, find_geisterhand_ui, find_harmonyos_sdk, find_lld_link,
     find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
     find_runtime_library, find_stdlib_library, find_ui_library, find_wasm_host_library,
-    windows_default_output_extension, windows_pe_subsystem_flag, windows_subsystem_needs_ui,
+    find_windows_archiver, windows_archiver_command, windows_default_output_extension,
+    windows_pe_subsystem_flag, windows_subsystem_needs_ui,
 };
 use link::{build_and_run_link, write_link_cache_manifest};
 pub use lock_scan::collect_native_archives_for_lock;

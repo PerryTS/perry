@@ -20,7 +20,7 @@ pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
     matches!(e, Expr::GlobalGet(_))
         || matches!(
             e,
-            Expr::PropertyGet { object, property }
+            Expr::PropertyGet { object, property, .. }
                 if property == name && matches!(object.as_ref(), Expr::GlobalGet(_))
         )
 }
@@ -365,7 +365,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             None
         }
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet { object, property, .. } => {
             if is_process_namespace_version_property(object, property) {
                 return Some(HirType::String);
             }
@@ -410,7 +410,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             // property: "readdirSync" } }` — refine so `entries.includes(...)`
             // hits the array fast path via is_array_expr.
             // Same for realpathSync/mkdtempSync (string-returning).
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet { object, property, .. } = callee.as_ref() {
                 if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "fs") {
                     match property.as_str() {
                         "readdirSync" => {
@@ -484,7 +484,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             // gets typed as Any and chained `fixed.isWellFormed()` routes
             // through dynamic dispatch (which prints `[object Object]`).
             // Mirrors the `is_string_expr` logic just below.
-            if let Expr::PropertyGet { property, object } = callee.as_ref() {
+            if let Expr::PropertyGet { property, object, .. } = callee.as_ref() {
                 let returns_string = matches!(
                     property.as_str(),
                     "toString" | "toLowerCase" | "toUpperCase" | "trim"
@@ -524,6 +524,7 @@ fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     let Expr::PropertyGet {
         property: p1,
         object: o1,
+        ..
     } = callee
     else {
         return None;
@@ -542,6 +543,7 @@ fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     let Expr::PropertyGet {
         property: p2,
         object: o2,
+        ..
     } = c2.as_ref()
     else {
         return None;
@@ -555,6 +557,7 @@ fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     let Expr::PropertyGet {
         property: p3,
         object: o3,
+        ..
     } = c3.as_ref()
     else {
         return None;

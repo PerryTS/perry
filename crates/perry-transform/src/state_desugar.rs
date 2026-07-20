@@ -900,7 +900,10 @@ fn expr_kind_for_diag(e: &Expr) -> &'static str {
 /// after this returns `None`.
 fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>) -> Option<Expr> {
     if let Expr::Call { callee, args, .. } = e {
-        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        {
             if let Expr::LocalGet(state_id) = object.as_ref() {
                 if let Some(binding) = bindings.get(state_id) {
                     return match property.as_str() {
@@ -915,7 +918,10 @@ fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>)
             }
         }
     }
-    if let Expr::PropertyGet { object, property } = e {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = e
+    {
         if property == "value" {
             if let Expr::LocalGet(state_id) = object.as_ref() {
                 if let Some(binding) = bindings.get(state_id) {

@@ -714,6 +714,7 @@ fn async_microtask_effect_blocks_length_and_bounds_proofs_with_artifact_reason()
 fn local_array_alias_generic_receiver_call_blocks_length_and_bounds_proofs() {
     let body = aliased_array_loop(call(
         Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(local(2)),
             property: "push".to_string(),
         },

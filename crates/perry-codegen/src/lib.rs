@@ -22,6 +22,7 @@ pub mod nanbox;
 pub(crate) mod native_value;
 pub(crate) mod nm_install;
 pub mod runtime_decls;
+pub(crate) mod setjmp_abi;
 pub(crate) mod stmt;
 pub mod strings;
 pub mod stubs;

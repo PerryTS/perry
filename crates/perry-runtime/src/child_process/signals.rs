@@ -88,9 +88,22 @@ pub(crate) fn cp_signal_number(name: &str) -> Option<i32> {
     })
 }
 
+/// Non-unix inverse of `cp_signal_name`, using the conventional POSIX numbers
+/// for the names the non-unix `cp_signal_name` can report back. The number is
+/// only a reporting token on Windows — every terminating signal degrades to
+/// `TerminateProcess` at the kill site, exactly like Node — so the table
+/// deliberately mirrors `cp_signal_name` above and nothing more.
 #[cfg(not(unix))]
-pub(crate) fn cp_signal_number(_name: &str) -> Option<i32> {
-    None
+pub(crate) fn cp_signal_number(name: &str) -> Option<i32> {
+    Some(match name {
+        "SIGHUP" => 1,
+        "SIGINT" => 2,
+        "SIGABRT" => 6,
+        "SIGKILL" => 9,
+        "SIGSEGV" => 11,
+        "SIGTERM" => 15,
+        _ => return None,
+    })
 }
 
 pub(crate) fn cp_signal_from_value(signal: f64) -> i32 {

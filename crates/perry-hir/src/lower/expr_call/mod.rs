@@ -96,6 +96,31 @@ fn unwrap_call_callee_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
+/// #6677 — the method name of a namespace-builtin call callee, for EITHER the
+/// dot form (`Math.max(...)`) or the string-literal computed form
+/// (`Math["max"](...)`). Per spec `obj.m()` and `obj["m"]()` are equivalent for
+/// a string key, so the call-dispatch arms that statically devirtualize
+/// `Math`/`JSON`/`Object`/… methods must fire for both forms — otherwise a
+/// string-literal computed key never matches the `MemberProp::Ident`-only gate,
+/// falls through to generic dispatch (which drops the namespace receiver and
+/// lowers the callee to an undefined global), and throws
+/// `TypeError: value is not a function` at runtime. The property-READ side
+/// already normalizes both forms via `expr_member::static_member_prop_name`;
+/// this is the borrowing (`&str`, no allocation) call-side twin, mirroring the
+/// `Symbol['for']`/`Symbol['keyFor']` precedent in `native_module.rs`. Returns
+/// `None` for a dynamic (non-string-literal) computed key, which must keep the
+/// runtime index path.
+pub(super) fn static_call_prop_name(prop: &ast::MemberProp) -> Option<&str> {
+    match prop {
+        ast::MemberProp::Ident(p) => Some(p.sym.as_ref()),
+        ast::MemberProp::Computed(c) => match c.expr.as_ref() {
+            ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
+            _ => None,
+        },
+        ast::MemberProp::PrivateName(_) => None,
+    }
+}
+
 /// Issue #1132 — scope the native-instance param tags that
 /// `lower_call_inner`'s pre-scans register (createServer's
 /// `(req, res)`, http.get's `(res)`, fastify's `(req, reply)`, the

@@ -123,6 +123,7 @@ pub fn build_async_step_driver_direct(
     // symmetry of the async-step driver; not emitted on the current path.
     let _promise_resolve = |arg: Expr| Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(promise_global()),
             property: "resolve".to_string(),
         }),
@@ -132,6 +133,7 @@ pub fn build_async_step_driver_direct(
     };
     let promise_reject = |arg: Expr| Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(promise_global()),
             property: "reject".to_string(),
         }),

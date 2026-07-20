@@ -286,17 +286,28 @@ pub struct CompileOptions {
         perry_api_manifest::NativeAbiType,
     )>,
     /// i18n translation table snapshot — `(translations, key_count,
-    /// locale_count, locale_codes, default_locale_idx)`. The
+    /// locale_count, locale_codes, default_locale_idx, currencies)`. The
     /// `default_locale_idx` is the row index used at compile time to
     /// resolve `Expr::I18nString` to the right translation — without
     /// it, the lowering would have to either pick locale 0 blindly or
-    /// fall back to the verbatim key.
+    /// fall back to the verbatim key. `currencies` is the sorted
+    /// `[i18n.currencies]` map (`locale → ISO 4217 code`) baked into the
+    /// entry `main` prelude's `perry_i18n_set_currencies` call.
     /// Tier 4.6 (v0.5.336): wrapped in `Arc` so the per-module clone
     /// in the `compile_module` rayon worker is a cheap reference bump
     /// instead of duplicating the (potentially large) `Vec<String>` of
-    /// every translated string. The tuple shape is unchanged for the
-    /// downstream destructure at `compile_module` line 597.
-    pub i18n_table: Option<std::sync::Arc<(Vec<String>, usize, usize, Vec<String>, usize)>>,
+    /// every translated string.
+    #[allow(clippy::type_complexity)]
+    pub i18n_table: Option<
+        std::sync::Arc<(
+            Vec<String>,
+            usize,
+            usize,
+            Vec<String>,
+            usize,
+            Vec<(String, String)>,
+        )>,
+    >,
 
     /// When true, emit LLVM `reassoc` per-instruction fast-math flags on
     /// every f64 op. Off by default — Perry produces bit-exact output

@@ -1066,8 +1066,14 @@ pub struct I18nLowerCtx {
     /// Configured locale codes in string-table row order (e.g.
     /// `["en", "de", "fr"]`). Used by the `Expr::I18nString` lowering to
     /// emit the runtime locale-index lookup for keys whose translations
-    /// differ between locales.
+    /// differ between locales, and by the entry `main` prelude to bake
+    /// the `perry_i18n_init` locale registration.
     pub locale_codes: Vec<String>,
+    /// `[i18n.currencies]` overrides from perry.toml as sorted
+    /// `(locale, ISO 4217 code)` pairs. Baked into the entry `main`
+    /// prelude's `perry_i18n_set_currencies` call; empty when the project
+    /// doesn't configure the table.
+    pub currencies: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]

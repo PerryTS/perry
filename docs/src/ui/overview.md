@@ -38,13 +38,16 @@ Every Perry UI app starts with `App()`:
 | `height` | number | Initial window height |
 | `body` | widget | Root widget |
 | `icon` | string | App icon file path (optional) |
+| `windowState` | string | Initial state: `"normal"`, `"maximized"`, `"fullscreen"` (optional) |
 | `frameless` | boolean | Remove title bar (optional) |
 | `level` | string | Window z-order: `"floating"`, `"statusBar"`, `"modal"` (optional) |
 | `transparent` | boolean | Transparent background (optional) |
 | `vibrancy` | string | Native blur material, e.g. `"sidebar"` (optional) |
 | `activationPolicy` | string | `"regular"`, `"accessory"` (no dock icon), `"background"` (optional) |
 
-See [Multi-Window](multi-window.md) for full documentation on window properties.
+See [Multi-Window](multi-window.md#app-window-properties) for full
+documentation on window properties, including the native primitive each
+field maps to per platform.
 
 ### Lifecycle Hooks
 

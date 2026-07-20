@@ -25,31 +25,24 @@ use super::*;
 /// pre-setjmp values. The standard `blk.call()` doesn't support call
 /// attributes, so the instruction is emitted manually.
 ///
-/// setjmp variant selection — must match the declaration in
-/// `runtime_decls.rs`:
-///   - Apple: `_setjmp` (LLVM-IR name) → linker `__setjmp` = fast variant
-///     (skips the sigprocmask / sigaltstack syscalls, ~500 ns each on
-///     macOS arm64).
-///   - Linux: `setjmp` is already fast — no swap needed.
-///   - Windows: `_setjmp(buf, frame_ptr)` (different ABI).
-fn emit_setjmp_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_label: &str) {
+/// setjmp variant selection — decided by `crate::setjmp_abi` from the
+/// compile target's LLVM triple (`ctx.target_triple`), NOT host `cfg!`,
+/// so cross-compiles emit the target's ABI. The same `SetjmpAbi` drives
+/// the extern declaration in `runtime_decls/strings_part2.rs`, so the
+/// call and the prototype can't diverge. See `crate::setjmp_abi` for the
+/// per-target rationale (Windows 2-arg `_setjmp`, Apple fast `_setjmp`,
+/// plain `setjmp` elsewhere).
+///
+/// Also used by the async rejection boundary in `stmt/mod.rs`
+/// (`lower_async_rejecting_stmts_inner`) — same setjmp, different
+/// exception continuation.
+pub(super) fn emit_setjmp_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_label: &str) {
     use crate::types::{I32, PTR};
+    let abi = crate::setjmp_abi::setjmp_abi_for_triple(ctx.target_triple);
     let blk = ctx.block();
     let jmpbuf = blk.call(PTR, "js_try_push", &[]);
     let sjr_reg = blk.next_reg();
-    if cfg!(target_os = "windows") {
-        blk.emit_raw(format!(
-            "{} = call i32 @_setjmp(ptr {}, ptr null) #0",
-            sjr_reg, jmpbuf
-        ));
-    } else if cfg!(target_vendor = "apple") {
-        blk.emit_raw(format!(
-            "{} = call i32 @_setjmp(ptr {}) #0",
-            sjr_reg, jmpbuf
-        ));
-    } else {
-        blk.emit_raw(format!("{} = call i32 @setjmp(ptr {}) #0", sjr_reg, jmpbuf));
-    }
+    blk.emit_raw(abi.call_instruction(&sjr_reg, &jmpbuf));
     let is_exc = blk.icmp_ne(I32, &sjr_reg, "0");
     blk.cond_br(&is_exc, exc_label, normal_label);
 }

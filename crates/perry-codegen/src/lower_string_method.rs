@@ -863,7 +863,22 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             if let Some(loc) = &locales_box {
-                blk.call_void("js_string_validate_locales", &[(DOUBLE, loc)]);
+                // Validate `(locales, options)` exactly as `Construct(%Collator%,
+                // «locales, options»)` would — CanonicalizeLocaleList then the
+                // InitializeCollator GetOption reads — for the throwing side effect
+                // only; collation ordering stays locale-neutral (#2781, #5906).
+                let undef;
+                let opts_ref = match &options_box {
+                    Some(o) => o,
+                    None => {
+                        undef = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+                        &undef
+                    }
+                };
+                blk.call_void(
+                    "js_string_validate_collator_args",
+                    &[(DOUBLE, loc), (DOUBLE, opts_ref)],
+                );
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);

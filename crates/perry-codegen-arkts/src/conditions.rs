@@ -166,7 +166,9 @@ pub(crate) fn serialize_condition(
             // identifier into the page struct (see #410 lines 48/52/68).
             "true".to_string()
         }
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             // `obj.prop` shape — used commonly in conditions like
             // `props.mobile`. Recursively stringify the object access
             // chain. Keeps the predicate syntactically valid; the

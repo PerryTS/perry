@@ -167,6 +167,15 @@ fn hoist_yields_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         lift_logical_with_yield_rhs(expr, next_id, hoisted);
         return;
     }
+    // A sequence (comma) `(e0, e1, …, en)` with a yield in any operand must be
+    // linearized into ordered statements: operands to the LEFT of a yield run
+    // BEFORE it suspends, not after it resumes. The generic child-walk would
+    // hoist only the yield sub-expression, stranding earlier operands behind it
+    // in the now-yield-free comma (#6678).
+    if matches!(expr, Expr::Sequence(_)) && expr_contains_yield(expr) {
+        lift_sequence_with_yield(expr, next_id, hoisted);
+        return;
+    }
 
     // Recurse into children first so inner yields are hoisted before the outer
     // expression's own yield (innermost-first, left-to-right).
@@ -214,6 +223,13 @@ fn hoist_yields_avoiding_top_level(
     }
     if matches!(expr, Expr::Logical { .. }) && logical_rhs_contains_yield(expr) {
         lift_logical_with_yield_rhs(expr, next_id, hoisted);
+        return;
+    }
+    // A statement-positioned comma `push(x), yield …` (esbuild's lowered async
+    // bodies) must run its left operands BEFORE the yield suspends. Lift it
+    // the same way as the conditional/logical forms (#6678).
+    if matches!(expr, Expr::Sequence(_)) && expr_contains_yield(expr) {
+        lift_sequence_with_yield(expr, next_id, hoisted);
         return;
     }
     // Outer is not a yield: children may hold yields, which are nested — fully
@@ -376,5 +392,122 @@ fn lift_logical_with_yield_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
             then_branch,
             else_branch: None,
         });
+    }
+}
+
+/// Replace a sequence (comma) expression `(e0, e1, …, en)` that contains a yield
+/// with `LocalGet(__yseq_N)` and emit, before the containing statement, each
+/// operand in source order so side effects to the LEFT of a yield run BEFORE the
+/// yield suspends — not after it resumes. The final operand carries the
+/// sequence's value into the temp.
+///
+/// Without this, the generic child-walk hoists only the yield sub-expression
+/// into a preceding `let __ygen = yield …;`, leaving the earlier operands behind
+/// in the now-yield-free comma. They then execute on RESUME (in the next state)
+/// instead of before the suspend — the esbuild `__async` lowering emits
+/// `push(x), yield …` bodies exactly, so the pre-yield side effect ran a
+/// microtask late (or was dropped entirely when the generator was `.next()`-ed
+/// only once). See #6678.
+///
+/// Each operand is emitted as its own statement and re-run through
+/// `hoist_yields_in_stmts`, so a yield in any operand lands in a position the
+/// linearizer already splits (`yield E;` / `let x = yield E;`).
+fn lift_sequence_with_yield(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
+    let temp_id = alloc_local(next_id);
+    let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
+    // Both callers gate on `matches!(expr, Expr::Sequence(_))`; asserting it here
+    // panics loudly if that invariant ever drifts rather than silently leaving
+    // the dangling `LocalGet(temp_id)` placeholder in the AST.
+    let Expr::Sequence(mut items) = owned else {
+        unreachable!("lift_sequence_with_yield called on a non-Sequence expr");
+    };
+
+    // The last operand is the sequence's value; everything before it runs only
+    // for its side effects.
+    let Some(last) = items.pop() else {
+        // Degenerate empty sequence — a comma always has ≥2 operands in source,
+        // but guard rather than allocate a dangling temp read.
+        *expr = Expr::Undefined;
+        return;
+    };
+    let mut stmts: Vec<Stmt> = Vec::with_capacity(items.len() + 1);
+    for item in items {
+        stmts.push(Stmt::Expr(item));
+    }
+    stmts.push(Stmt::Let {
+        id: temp_id,
+        name: format!("__yseq_{}", temp_id),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(last),
+    });
+    // Split each operand's own yields (and the value operand's) into the
+    // suspend/resume states the linearizer understands.
+    hoist_yields_in_stmts(&mut stmts, next_id);
+    hoisted.extend(stmts);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_yield(e: &Expr) -> bool {
+        matches!(e, Expr::Yield { .. })
+    }
+
+    /// #6678: `sideEffect, yield x` at statement position must run `sideEffect`
+    /// BEFORE the yield suspends. The old generic child-walk hoisted only the
+    /// yield into a preceding `let __ygen = yield …;` and left the side effect
+    /// stranded in the now-yield-free comma, so it executed on RESUME. The lift
+    /// must decompose the comma into ordered statements: the pre-yield operand
+    /// precedes the hoisted yield-let, and no `Sequence` is left carrying a
+    /// `Yield`.
+    #[test]
+    fn comma_before_yield_runs_left_operand_first() {
+        let side_effect = Expr::LocalSet(5, Box::new(Expr::Integer(1)));
+        let yld = Expr::Yield {
+            value: Some(Box::new(Expr::Null)),
+            delegate: false,
+        };
+        let mut stmts = vec![Stmt::Expr(Expr::Sequence(vec![side_effect, yld]))];
+        let mut next_id: LocalId = 100;
+        hoist_yields_in_stmts(&mut stmts, &mut next_id);
+
+        let side_idx = stmts
+            .iter()
+            .position(|s| matches!(s, Stmt::Expr(Expr::LocalSet(5, _))))
+            .expect("pre-yield side effect kept as its own statement");
+        let yield_let_idx = stmts
+            .iter()
+            .position(|s| matches!(s, Stmt::Let { init: Some(e), .. } if is_yield(e)))
+            .expect("yield hoisted into a `let __yseq = yield …`");
+        assert!(
+            side_idx < yield_let_idx,
+            "side effect must run before the yield suspends: {stmts:?}"
+        );
+
+        // The bug signature: an operand stranded behind a yield inside a comma.
+        for s in &stmts {
+            if let Stmt::Expr(Expr::Sequence(items)) = s {
+                assert!(
+                    !items.iter().any(is_yield),
+                    "sequence still carries a yield: {items:?}"
+                );
+            }
+        }
+    }
+
+    /// A comma with no yield is left intact — the lift must not fire spuriously.
+    #[test]
+    fn comma_without_yield_is_untouched() {
+        let seq = Expr::Sequence(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]);
+        let mut stmts = vec![Stmt::Expr(seq)];
+        let mut next_id: LocalId = 100;
+        hoist_yields_in_stmts(&mut stmts, &mut next_id);
+        assert_eq!(stmts.len(), 1, "no-yield comma should not be decomposed");
+        assert!(
+            matches!(&stmts[0], Stmt::Expr(Expr::Sequence(items)) if items.len() == 3),
+            "sequence should be preserved verbatim: {stmts:?}"
+        );
     }
 }

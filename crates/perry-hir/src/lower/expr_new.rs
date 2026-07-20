@@ -241,6 +241,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: method_name,
                     }),
@@ -318,6 +319,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef(module_name)),
                         property: method_name,
                     }),
@@ -346,6 +348,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: export,
                     }),
@@ -384,6 +387,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("v8".to_string())),
                         property: "GCProfiler".to_string(),
                     }),
@@ -511,16 +515,18 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         new_expr.span,
                     )? {
                         crate::eval_classifier::EvalDecision::Proceed => {}
-                        // #5206: default (defer) mode — compile to a function value
-                        // that throws a descriptive Error only when invoked.
-                        crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => {
-                            return super::const_fold_fn::synth_deferred_eval_value(
-                                ctx,
-                                crate::eval_classifier::EvalSurface::NewFunction,
-                                &message,
-                                new_expr.span,
-                            );
-                        }
+                        // #6559: a runtime-constructed body now EVALUATES —
+                        // fall through to `Expr::New { "Function" }`, which
+                        // codegen routes to `js_function_ctor_from_strings`
+                        // (the perry-runtime dyn-eval interpreter). The site
+                        // stays recorded for the end-of-compile notice, and
+                        // strict-eval mode already refused inside
+                        // `check_site` before this arm can be reached. The
+                        // interpreter throws its own precise error (parse
+                        // SyntaxError / named unsupported-construct
+                        // TypeError) if the generated source is beyond it —
+                        // still catchable, still located, never a crash.
+                        crate::eval_classifier::EvalDecision::DeferToRuntimeError(_message) => {}
                     }
                 }
             }

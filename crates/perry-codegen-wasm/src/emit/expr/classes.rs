@@ -104,8 +104,14 @@ impl<'a> FuncEmitCtx<'a> {
                 let mod_key = (self.emitter.current_mod_idx, name.clone());
                 if let Some(&gidx) = self.emitter.imported_var_globals.get(&mod_key) {
                     func.instruction(&Instruction::GlobalGet(gidx));
-                } else if let Some(&func_idx) = self.emitter.func_name_map.get(name) {
-                    // Create a closure wrapper with 0 captures (like FuncRef)
+                } else if let Some(&func_idx) = self
+                    .emitter
+                    .imported_func_indices
+                    .get(&mod_key)
+                    .or_else(|| self.emitter.func_name_map.get(name))
+                {
+                    // Create a closure wrapper with 0 captures (like FuncRef).
+                    // Consumer import table first — bare names collide.
                     let table_idx = self
                         .emitter
                         .func_to_table_idx
@@ -191,6 +197,28 @@ impl<'a> FuncEmitCtx<'a> {
                             memory_index: 0,
                         }));
                         self.emit_memcall(func, "date_new", 1);
+                        return true;
+                    }
+                    // `new Array()` / `new Array(n)` / `new Array(a, b, ...)`.
+                    // Without this case the constructor fell through to the
+                    // generic `class_new` path, which allocates a plain object
+                    // — element writes landed as properties but Array.isArray
+                    // was false, so `.length` read 0 forever. Mirrors the
+                    // native builtin (perry-codegen lower_call/builtin.rs):
+                    // no args → empty; one arg → runtime type check (number =
+                    // length, ES2015 §22.1.1); ≥2 args → element-list form,
+                    // identical to the array literal.
+                    "Array" => {
+                        if args.is_empty() {
+                            self.emit_frame_begin(func, 0);
+                            self.emit_memcall(func, "array_new", 0);
+                        } else if args.len() == 1 {
+                            self.emit_frame_begin(func, 1);
+                            self.emit_store_arg(func, 0, &args[0]);
+                            self.emit_memcall(func, "array_constructor_single", 1);
+                        } else {
+                            self.emit_expr(func, &Expr::Array(args.clone()));
+                        }
                         return true;
                     }
                     "Map" => {

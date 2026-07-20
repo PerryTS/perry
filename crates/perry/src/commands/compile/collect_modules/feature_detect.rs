@@ -175,6 +175,37 @@ pub(super) fn detect_optional_feature_usage(
         }
     }
 
+    // #6593 (pi bundle) — detect name-heuristic native package lowering.
+    // `detect_native_instance_expr` routes `new LRUCache(...)` / `new
+    // Decimal(...)` / `new Command(...)` etc. to a native module by BINDING
+    // NAME, with no import statement required. An esbuild bundle that
+    // inlines such a package (pi's hosted-git-info inlines `lru-cache`)
+    // therefore emits `NativeMethodCall { module: "lru-cache", … }` calls
+    // while `native_module_imports` never learns about the module — the
+    // per-binding perry-stdlib feature stays off and the link dies with
+    // undefined `_js_lru_cache_*` symbols (from `GitHost.fromUrl`). Same
+    // failure mode and fix as the EventEmitter block above. Scan classes
+    // too: the pi call sites live in a static method body, which the
+    // init+functions-only scans miss.
+    {
+        let hir_debug: String = format!(
+            "{:?}{:?}{:?}",
+            &hir_module.init, &hir_module.functions, &hir_module.classes
+        );
+        for native_module in [
+            "lru-cache",
+            "big.js",
+            "decimal.js",
+            "bignumber.js",
+            "commander",
+        ] {
+            if hir_debug.contains(&format!("module: \"{native_module}\"")) {
+                ctx.needs_stdlib = true;
+                ctx.native_module_imports.insert(native_module.to_string());
+            }
+        }
+    }
+
     // Detect WHATWG URL API usage. The `url`+`idna` host-canonicalization
     // engine (~195 KB) is gated behind `perry-runtime/url-engine`; Perry's URL
     // parsing is otherwise hand-rolled, so a program with no URL API links none
