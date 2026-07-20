@@ -98,6 +98,23 @@ crates/perry-runtime/src/typed_feedback/tests.rs
 # JSON/pretty emitters + self-tests in one file). Splitting the emitters from
 # the schema they render obscures the report contract; revisit if it grows.
 crates/perry/src/commands/compile/lowering_report.rs
+# --- Grew a few lines past the gate on main (2026-07); each is a coupled
+# core whose split is a mechanical follow-up, allowlisted here to unblock the
+# required lint gate rather than fold an unrelated refactor into an in-flight
+# PR. Tracked under #1435. ---
+# HIR member-access lowering: the `Expr::Member` dispatch tree (per-builtin
+# static-method + property arms). 2049 lines; splitting the arm groups into
+# sibling modules is a mechanical follow-up.
+crates/perry-hir/src/lower/expr_member.rs
+# Runtime `js_native_call_method` dispatch trunk (2002 lines): the by-name
+# native method switch; the peeled arms already live in native_call_method/.
+crates/perry-runtime/src/object/native_call_method.rs
+# Inliner call-site rewriter (2056 lines): the single `CallInliner` pass with
+# its argument/return remapping tables threaded through one walker.
+crates/perry-transform/src/inline/call_inliner.rs
+# Windows UI widget registry (2118 lines): the Win32 widget create/dispatch
+# table; a per-widget-family split is a mechanical follow-up.
+crates/perry-ui-windows/src/widgets/mod.rs
 EOF
 )
 
