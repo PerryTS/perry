@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tier-3 fixture: GET round-trip via the `axios` npm package against an in-process node:http server. Tests axios end-to-end + the node:http server path that issue #589 surfaced — both pieces in one fixture so a regression in either side fails this.",
   "dependencies": {
-    "axios": "^1.7.0"
+    "axios": "^1.18.0"
   },
   "perry": {
     "compilePackages": ["axios"],
