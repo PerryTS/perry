@@ -15,6 +15,14 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::RwLock;
 
+/// Minimum number of inline field slots every object is allocated with, even
+/// when it has fewer fields. This is a corruption-critical invariant: allocation,
+/// every field get/set bounds check, and every direct-slot read MUST use the
+/// SAME floor, or a write/read past the allocated slots corrupts the heap. It is
+/// centralized here so all sites move in lockstep. (Also mirrored in
+/// perry-codegen `lower_call/new.rs` MIN_FIELD_SLOTS for the PERRY_INLINE_NEW path.)
+pub(crate) const INLINE_SLOT_FLOOR: usize = 4;
+
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
@@ -41,6 +49,7 @@ mod field_set_by_name;
 mod global_fetch;
 mod global_this;
 pub mod handle_expando;
+pub(crate) mod prop_plan;
 pub(crate) use global_this::{default_prepare_stack_trace_func_ptr, ERROR_CONSTRUCTOR_PTR};
 mod global_this_tables;
 mod groupby;
@@ -54,6 +63,9 @@ mod native_module;
 pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
+pub(crate) use native_module::{
+    build_bound_method_closure, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+};
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;
@@ -154,14 +166,14 @@ pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
     class_instance_set_may_intercept, clear_accessor_descriptor, clear_property_attrs,
-    descriptors_in_use, disable_class_field_inline_guard, get_accessor_descriptor,
-    get_property_attrs, json_object_getter_value, mark_all_keys, note_descriptor_target,
-    object_has_descriptors, object_proto_descriptors_in_use, object_proto_may_intercept_key,
-    plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
-    reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
-    ACCESSORS_IN_USE, ACCESSOR_DESCRIPTORS, GLOBAL_DESCRIPTORS_IN_USE, PROPERTY_ATTRS_IN_USE,
-    PROPERTY_DESCRIPTORS,
+    constructor_accessor_ever_installed, descriptors_in_use, disable_class_field_inline_guard,
+    get_accessor_descriptor, get_property_attrs, json_object_getter_value, mark_all_keys,
+    note_descriptor_target, object_has_descriptors, object_proto_descriptors_in_use,
+    object_proto_may_intercept_key, plain_data_write_may_intercept,
+    prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
+    set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
+    AccessorDescriptor, PropertyAttrs, ACCESSORS_IN_USE, ACCESSOR_DESCRIPTORS,
+    GLOBAL_DESCRIPTORS_IN_USE, PROPERTY_ATTRS_IN_USE, PROPERTY_DESCRIPTORS,
 };
 pub use this_binding::{
     js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
@@ -407,10 +419,77 @@ fn overflow_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
 /// never read).
 ///
 /// Fast path skips the outer HashMap when `obj_ptr` matches the last-
+/// Learned per-class inline sizing: the dynamic-construct path allocates 8
+/// inline slots (it cannot see the constructor body), so a 23-field
+/// ES5-pattern object keeps 15 fields in [`OVERFLOW_FIELDS`] — a `Vec<u64>`
+/// plus map entry per object (~250B, more than the object payload), visited,
+/// rekeyed and finalized by every GC cycle. The FIRST instance that
+/// overflows records its class's high-water field index here; every LATER
+/// `new` of the same (synthetic or registered) class right-sizes its
+/// allocation so all fields land inline. Capped so a pathological dynamic
+/// writer can't inflate every future instance.
+const LEARNED_INLINE_MAX_FIELDS: u32 = 64;
+const LEARNED_INLINE_TABLE_SIZE: usize = 1024;
+
+thread_local! {
+    static LEARNED_INLINE_FIELDS: std::cell::UnsafeCell<[(u32, u32); LEARNED_INLINE_TABLE_SIZE]> =
+        const { std::cell::UnsafeCell::new([(0u32, 0u32); LEARNED_INLINE_TABLE_SIZE]) };
+}
+
+#[inline]
+fn note_learned_inline_fields(class_id: u32, needed_fields: u32) {
+    if class_id == 0 || needed_fields > LEARNED_INLINE_MAX_FIELDS {
+        return;
+    }
+    let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) % LEARNED_INLINE_TABLE_SIZE;
+    LEARNED_INLINE_FIELDS.with(|t| unsafe {
+        let e = &mut (*t.get())[slot];
+        if e.0 != class_id {
+            *e = (class_id, needed_fields);
+        } else if e.1 < needed_fields {
+            e.1 = needed_fields;
+        }
+    });
+}
+
+/// Inline field count to pre-size a dynamic construct of `class_id` with —
+/// the learned high-water mark, or 0 when nothing was learned (caller keeps
+/// its default).
+#[inline]
+pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
+    // Bisection kill-switch: PERRY_LEARNED_INLINE=0 disables consumption.
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_LEARNED_INLINE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    }) {
+        return 0;
+    }
+    if class_id == 0 {
+        return 0;
+    }
+    let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) % LEARNED_INLINE_TABLE_SIZE;
+    LEARNED_INLINE_FIELDS.with(|t| unsafe {
+        let e = (*t.get())[slot];
+        if e.0 == class_id {
+            e.1
+        } else {
+            0
+        }
+    })
+}
+
 /// accessed Vec — the common row-build pattern where an object's
 /// overflow slots fill in sequence.
 #[inline]
 fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
+    // Learn the class's true width so FUTURE instances allocate it inline.
+    unsafe {
+        let hdr = obj_ptr as *const ObjectHeader;
+        note_learned_inline_fields((*hdr).class_id, (field_index as u32).saturating_add(1));
+    }
     let cached_slot = OVERFLOW_LAST.with(|c| unsafe {
         let (cached_obj, cached_vec) = *c.get();
         if cached_obj == obj_ptr && !cached_vec.is_null() {
@@ -758,8 +837,25 @@ pub extern "C" fn perry_key_content_hash(key: *const crate::StringHeader) -> u64
 }
 
 #[inline(always)]
-fn key_content_hash(key: *const crate::StringHeader) -> u64 {
+pub(crate) fn key_content_hash(key: *const crate::StringHeader) -> u64 {
     key_content_hash_impl(key)
+}
+
+/// Resolve `key` to its canonical interned `StringHeader` pointer (as a
+/// `usize`), the identity the `prop_plan` store/read caches key on. Returns 0
+/// for a null / handle-band key. Mirrors the inline interning both field
+/// stores do, so a plan recorded on one store path is found by another.
+#[inline]
+pub(crate) unsafe fn interned_key_ptr(key: *const crate::StringHeader) -> usize {
+    if key.is_null() || !crate::value::addr_class::is_above_handle_band(key as usize) {
+        return 0;
+    }
+    let gc_hdr = (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_hdr).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+        key as usize
+    } else {
+        crate::string::js_string_intern(key, key_content_hash(key)) as usize
+    }
 }
 
 #[inline(always)]
@@ -1009,13 +1105,9 @@ pub fn scan_overflow_fields_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
                 moved.push((owner, new_owner));
             }
-            if crate::gc::layout_visit_pointer_slots_for_user(new_owner, fields.len(), |i| {
-                if let Some(val_bits) = fields.get_mut(i) {
-                    visitor.visit_nanbox_u64_slot(val_bits);
-                }
-            }) {
-                continue;
-            }
+            // #6495: same contract as `visit_overflow_field_slots_mut` — the
+            // layout mask under-reports overflow pointer slots on paths that
+            // skip `layout_note_slot`, so scan every slot.
             for val_bits in fields.iter_mut() {
                 visitor.visit_nanbox_u64_slot(val_bits);
             }
@@ -1046,17 +1138,18 @@ pub(crate) fn visit_overflow_field_slots_mut(owner: usize, mut visit: impl FnMut
         if fields.is_empty() {
             return Vec::new();
         }
-        let mut slots = Vec::new();
+        // #6495: visit EVERY overflow slot — never the layout-mask subset.
+        // The per-object slot mask is maintained by `layout_note_slot` at
+        // store time, but not every overflow write path notes (GC owner
+        // moves merge entries via `merge_overflow_fields` with no notes), so
+        // a usable-looking SIDE_MASK can under-report pointer-bearing
+        // overflow slots; the trace would then skip live children and the
+        // sweep frees them while referenced. The Vec's length is the live
+        // overflow region, and objects with large overflow populations are
+        // in UNKNOWN layout state in practice (dynamic-shape stores degrade
+        // the layout), so the mask bought little here.
+        let mut slots = Vec::with_capacity(fields.len());
         let base = fields.as_ptr() as *mut u64;
-        if crate::gc::layout_visit_pointer_slots_for_user(owner, fields.len(), |i| {
-            if i < fields.len() {
-                unsafe {
-                    slots.push(base.add(i));
-                }
-            }
-        }) {
-            return slots;
-        }
         for i in 0..fields.len() {
             unsafe {
                 slots.push(base.add(i));
@@ -1268,6 +1361,21 @@ pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
         m.insert(owner, vec![value_bits]);
     });
     crate::gc::layout_note_slot(owner, 0, value_bits);
+    OVERFLOW_LAST.with(|c| unsafe {
+        *c.get() = (0, std::ptr::null_mut());
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn debug_overflow_entry_len(owner: usize) -> Option<usize> {
+    OVERFLOW_FIELDS.with(|m| m.borrow().get(&owner).map(|v| v.len()))
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_overflow_fields_vec(owner: usize, values: Vec<u64>) {
+    OVERFLOW_FIELDS.with(|m| {
+        m.borrow_mut().insert(owner, values);
+    });
     OVERFLOW_LAST.with(|c| unsafe {
         *c.get() = (0, std::ptr::null_mut());
     });

@@ -98,3 +98,18 @@ proptest! {
 // |-------------|-----------|-------|
 // | 10.11       | test_list_or_dict_to_map | unit |
 // | 12.6        | prop_compose_spec_json_round_trip | property |
+
+// The compose FFI JSON-parses the TS object literal straight into
+// `ComposeSpec`; `name` drives project scoping (labels + `<name>_`
+// volume/network namespacing) and defaults to "perry-stack" at the
+// stdlib layer when absent. Pin that the field round-trips from JSON,
+// matching the `name?: string` now exposed in the perry/compose d.ts.
+#[test]
+fn test_compose_spec_json_parses_project_name() {
+    let spec: ComposeSpec =
+        serde_json::from_str(r#"{ "name": "myproj", "services": {} }"#).expect("parse");
+    assert_eq!(spec.name.as_deref(), Some("myproj"));
+
+    let unnamed: ComposeSpec = serde_json::from_str(r#"{ "services": {} }"#).expect("parse");
+    assert_eq!(unnamed.name, None);
+}

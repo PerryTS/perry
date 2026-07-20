@@ -2333,6 +2333,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
+name = "fixed_decimal"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79c3c892f121fff406e5dd6b28c1b30096b95111c30701a899d4f2b18da6d1bd"
+dependencies = [
+ "displaydoc",
+ "smallvec",
+ "writeable",
+]
+
+[[package]]
 name = "flagset"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3551,6 +3562,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "icu_datetime"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "989d56ea5bbc43ae2b4e0388874b002884eaf4ed3a76c84a6c8c5ad575e04d72"
+dependencies = [
+ "displaydoc",
+ "fixed_decimal",
+ "icu_calendar",
+ "icu_datetime_data",
+ "icu_decimal",
+ "icu_locale",
+ "icu_locale_core",
+ "icu_pattern",
+ "icu_plurals",
+ "icu_provider",
+ "icu_time",
+ "potential_utf",
+ "tinystr",
+ "writeable",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_datetime_data"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40d3cc1b690d9703202bc319692ac8a1f3a6390686f0930ff40542450fa34f0b"
+
+[[package]]
+name = "icu_decimal"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "288247df2e32aa776ac54fdd64de552149ac43cb840f2761811f0e8d09719dd4"
+dependencies = [
+ "displaydoc",
+ "fixed_decimal",
+ "icu_decimal_data",
+ "icu_locale",
+ "icu_locale_core",
+ "icu_plurals",
+ "icu_provider",
+ "writeable",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_decimal_data"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f14a5ca9e8af29eef62064f269078424283d90dbaffeac5225addf62aaabc22"
+
+[[package]]
 name = "icu_locale"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3606,6 +3669,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da3be0ae77ea334f4da67c12f149704f19f81d1adf7c51cf482943e84a2bad38"
 
 [[package]]
+name = "icu_pattern"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c4c568054ffe735398a9f4c55aec37ad7c768844553cc0978f09cc9b933a1fb"
+dependencies = [
+ "displaydoc",
+ "either",
+ "serde",
+ "writeable",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_plurals"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a50023f1d49ad5c4333380328a0d4a19e4b9d6d842ec06639affd5ba47c8103"
+dependencies = [
+ "fixed_decimal",
+ "icu_locale",
+ "icu_plurals_data",
+ "icu_provider",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_plurals_data"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8485497155dc865f901decb93ecc20d3e467df67bfeceb91e3ba34e2b11e8e1d"
+
+[[package]]
 name = "icu_properties"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3641,6 +3736,29 @@ dependencies = [
  "zerotrie",
  "zerovec",
 ]
+
+[[package]]
+name = "icu_time"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec3af0c141da0a61d4f6970cd1d5f4b388b17ea22f8124f8f6049d3d5147586a"
+dependencies = [
+ "calendrical_calculations",
+ "displaydoc",
+ "icu_calendar",
+ "icu_locale_core",
+ "icu_provider",
+ "icu_time_data",
+ "serde",
+ "zerotrie",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_time_data"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e0ee79a0bb29772465234bfbad6ea04fbc5220bef9fa4f318cc53eb8897070e"
 
 [[package]]
 name = "id-arena"
@@ -5359,7 +5477,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perry"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "base64",
@@ -5419,14 +5537,14 @@ dependencies = [
 
 [[package]]
 name = "perry-api-manifest"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "perry-audio-miniaudio"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "cc",
  "libc",
@@ -5434,7 +5552,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "log",
@@ -5449,7 +5567,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-arkts"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5458,7 +5576,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-glance"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5466,7 +5584,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-js"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-dispatch",
@@ -5476,7 +5594,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-swiftui"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5485,7 +5603,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-wasm"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "base64",
@@ -5498,7 +5616,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-wear-tiles"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5506,7 +5624,7 @@ dependencies = [
 
 [[package]]
 name = "perry-container-compose"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5535,14 +5653,14 @@ dependencies = [
 
 [[package]]
 name = "perry-container-e2e"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "perry-diagnostics"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "serde",
  "serde_json",
@@ -5550,7 +5668,7 @@ dependencies = [
 
 [[package]]
 name = "perry-dispatch"
-version = "0.5.1258"
+version = "0.5.1263"
 
 [[package]]
 name = "perry-doc-fixture-my-bindings"
@@ -5561,7 +5679,7 @@ dependencies = [
 
 [[package]]
 name = "perry-doc-tests"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "clap",
@@ -5576,7 +5694,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ads"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "block2",
  "objc2",
@@ -5586,7 +5704,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-argon2"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "argon2",
  "perry-ffi",
@@ -5594,7 +5712,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-axios"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "reqwest",
@@ -5603,7 +5721,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-bcrypt"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "bcrypt",
  "perry-ffi",
@@ -5611,7 +5729,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-better-sqlite3"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "rusqlite",
@@ -5619,7 +5737,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-cheerio"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "scraper",
@@ -5627,7 +5745,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-commander"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -5635,7 +5753,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-cron"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "chrono",
  "cron",
@@ -5645,7 +5763,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-dayjs"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "chrono",
  "perry-ffi",
@@ -5653,7 +5771,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-decimal"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "rust_decimal",
@@ -5661,7 +5779,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-dotenv"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "serde_json",
@@ -5669,7 +5787,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ethers"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "rand 0.8.6",
@@ -5677,7 +5795,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-events"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -5685,14 +5803,14 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-exponential-backoff"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
 ]
 
 [[package]]
 name = "perry-ext-fastify"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -5710,7 +5828,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-fetch"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "bytes",
  "lazy_static",
@@ -5723,7 +5841,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-http"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "bytes",
  "lazy_static",
@@ -5737,7 +5855,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-http-server"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "bytes",
  "h2",
@@ -5760,7 +5878,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ioredis"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "lazy_static",
  "perry-ffi",
@@ -5770,7 +5888,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-jsonwebtoken"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "jsonwebtoken",
@@ -5781,7 +5899,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-lru-cache"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "lru",
  "perry-ffi",
@@ -5789,7 +5907,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-moment"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "chrono",
  "perry-ffi",
@@ -5797,7 +5915,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-mongodb"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "bson",
  "futures-util",
@@ -5809,7 +5927,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-mysql2"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "chrono",
  "perry-ffi",
@@ -5819,7 +5937,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-nanoid"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "nanoid",
  "perry-ffi",
@@ -5828,7 +5946,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-net"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "bytes",
  "perry-ffi",
@@ -5841,7 +5959,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-nodemailer"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "lettre",
  "perry-ffi",
@@ -5851,7 +5969,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-pdf"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "printpdf",
@@ -5859,7 +5977,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-pg"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "sqlx",
@@ -5868,7 +5986,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ratelimit"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "governor",
  "perry-ffi",
@@ -5876,7 +5994,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-sharp"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "fast_image_resize",
  "image",
@@ -5886,14 +6004,14 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-slugify"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
 ]
 
 [[package]]
 name = "perry-ext-streams"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "lazy_static",
  "perry-ffi",
@@ -5902,7 +6020,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-uuid"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "uuid",
@@ -5910,7 +6028,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-validator"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ffi",
  "regex",
@@ -5920,7 +6038,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ws"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "futures-util",
  "lazy_static",
@@ -5933,7 +6051,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-zlib"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "brotli",
  "flate2",
@@ -5942,7 +6060,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ffi"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "dashmap",
  "once_cell",
@@ -5951,7 +6069,7 @@ dependencies = [
 
 [[package]]
 name = "perry-hir"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-api-manifest",
@@ -5969,7 +6087,7 @@ dependencies = [
 
 [[package]]
 name = "perry-parser"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-diagnostics",
@@ -5981,7 +6099,7 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "base64",
@@ -5990,14 +6108,19 @@ dependencies = [
  "fancy-regex",
  "hickory-proto",
  "hostname",
+ "icu_calendar",
+ "icu_datetime",
  "icu_locale_core",
+ "icu_time",
  "idna",
  "itoa",
  "lazy_static",
  "libc",
  "mach2",
  "mimalloc",
+ "perry-diagnostics",
  "perry-dispatch",
+ "perry-parser",
  "rand 0.8.6",
  "regex",
  "resolv-conf",
@@ -6015,14 +6138,14 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime-static"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-runtime",
 ]
 
 [[package]]
 name = "perry-stdlib"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -6115,14 +6238,14 @@ dependencies = [
 
 [[package]]
 name = "perry-stdlib-static"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-stdlib",
 ]
 
 [[package]]
 name = "perry-transform"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -6132,7 +6255,7 @@ dependencies = [
 
 [[package]]
 name = "perry-types"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "thiserror 1.0.69",
@@ -6140,14 +6263,14 @@ dependencies = [
 
 [[package]]
 name = "perry-ui"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ui-model",
 ]
 
 [[package]]
 name = "perry-ui-android"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "itoa",
@@ -6164,7 +6287,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-geisterhand"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "rand 0.8.6",
  "serde",
@@ -6174,7 +6297,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-gtk4"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "cairo-rs 0.22.0",
@@ -6197,7 +6320,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-ios"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "block2",
@@ -6213,7 +6336,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-macos"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "block2",
@@ -6228,7 +6351,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-model"
-version = "0.5.1258"
+version = "0.5.1263"
 
 [[package]]
 name = "perry-ui-test"
@@ -6236,11 +6359,11 @@ version = "0.1.0"
 
 [[package]]
 name = "perry-ui-testkit"
-version = "0.5.1258"
+version = "0.5.1263"
 
 [[package]]
 name = "perry-ui-tvos"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "block2",
@@ -6256,7 +6379,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-visionos"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "block2",
@@ -6272,7 +6395,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-watchos"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "block2",
  "libc",
@@ -6285,7 +6408,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "base64",
  "libc",
@@ -6302,14 +6425,14 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows-winui"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "perry-ui-windows",
 ]
 
 [[package]]
 name = "perry-updater"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "anyhow",
  "base64",
@@ -6325,7 +6448,7 @@ dependencies = [
 
 [[package]]
 name = "perry-wasm-host"
-version = "0.5.1258"
+version = "0.5.1263"
 dependencies = [
  "wasmi",
 ]
@@ -10374,6 +10497,9 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+dependencies = [
+ "either",
+]
 
 [[package]]
 name = "wyz"

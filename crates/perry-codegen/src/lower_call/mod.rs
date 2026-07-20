@@ -32,12 +32,13 @@ use crate::expr::{variant_name, FnCtx};
 //   extraction of the original `lower_call.rs`'s 4.3k-LOC body so
 //   every file in this directory stays under 2000 lines.
 mod atomics;
-mod buffer_intrinsic;
+pub(crate) mod buffer_intrinsic;
 mod builtin;
 mod builtin_table_gate;
 mod capture_writeback;
 mod closure_analysis;
 mod console_promise;
+mod dataview_intrinsic;
 mod early_branches;
 mod event_target;
 mod extern_func;
@@ -50,6 +51,7 @@ mod native;
 mod native_module_dispatch;
 mod native_table;
 mod new;
+mod new_ctor_args;
 mod new_helpers;
 mod omitted_native_params;
 mod options;
@@ -109,9 +111,9 @@ pub(crate) use native::lower_native_method_call;
 // (codegen.rs / expr.rs / stmt.rs) so `crate::lower_call::lower_new`
 // etc. keep resolving after the split.
 pub(crate) use field_init::{apply_field_initializers_recursive, FieldInitMode};
-pub(crate) use new::{
-    bind_inline_constructor_params, emit_class_capture_writeback, lower_new,
-    lower_new_member_captured, restore_inline_constructor_scope, CaptureFill,
+pub(crate) use new::{emit_class_capture_writeback, lower_new, lower_new_member_captured};
+pub(crate) use new_ctor_args::{
+    bind_inline_constructor_params, restore_inline_constructor_scope, CaptureFill,
 };
 // The derived-ctor no-super static-throw predicates (shared with the
 // standalone-ctor-symbol path in `codegen/method.rs`, which is the default

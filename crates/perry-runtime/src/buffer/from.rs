@@ -377,27 +377,35 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
 /// Create a Buffer from an array of numbers
 #[no_mangle]
 pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut BufferHeader {
-    // Strip NaN-boxing tags: if upper 16 bits are nonzero, this is a NaN-boxed value.
-    // Valid heap pointers on macOS ARM64 have upper 16 bits = 0.
-    let arr_ptr = if (arr_ptr as u64) >> 48 != 0 {
-        ((arr_ptr as u64) & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader
-    } else {
-        arr_ptr
-    };
-    if arr_ptr.is_null() || (arr_ptr as usize) < 0x1000 {
+    // #6486: `clean_arr_ptr` (rather than a manual tag strip + raw deref)
+    // follows the GC_FLAG_FORWARDED chain a `push`-grown array leaves at its
+    // old address (#233). A caller holding the stale pre-grow pointer —
+    // `new Uint8Array(arr)` / `Buffer.from(arr)` after a helper's for-of
+    // push loop grew `arr` past its inline capacity — otherwise reads the
+    // forwarding pointer's bytes as length/capacity and allocates a garbage-
+    // sized buffer. It also validates the header and materializes lazy arrays.
+    let arr_ptr = crate::array::clean_arr_ptr(arr_ptr);
+    if arr_ptr.is_null() {
         return buffer_alloc(0);
     }
 
     unsafe {
-        let len = (*arr_ptr).length as usize;
-        let buf = buffer_alloc(len as u32);
-        (*buf).length = len as u32;
+        let len = (*arr_ptr).length;
+        // Snapshot the bytes BEFORE `buffer_alloc` — the alloc is a GC point
+        // that can move the source array (same rule as the #871 snapshot in
+        // `js_typed_array_new_from_array`). Per-element `js_array_get_f64`
+        // rather than a raw slot walk: `clean_arr_ptr` admits sparse arrays
+        // whose logical length exceeds dense capacity (far slots live in
+        // ARRAY_NAMED_PROPS), so walking `length` raw slots reads out of
+        // bounds; the getter bounds-checks and resolves far indices.
+        let bytes: Vec<u8> = (0..len)
+            .map(|i| buffer_byte_from_js_value(crate::array::js_array_get_f64(arr_ptr, i)))
+            .collect();
 
-        let arr_data = (arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let buf_data = buffer_data_mut(buf);
-
-        for i in 0..len {
-            *buf_data.add(i) = buffer_byte_from_js_value(*arr_data.add(i));
+        let buf = buffer_alloc(len);
+        (*buf).length = len;
+        if !bytes.is_empty() {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), bytes.len());
         }
 
         buf

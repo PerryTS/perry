@@ -52,7 +52,7 @@ pub unsafe extern "C" fn js_node_sqlite_statement_sync_run(
             match rc {
                 ffi::SQLITE_ROW => continue,
                 ffi::SQLITE_DONE => break,
-                _ => throw_sqlite_error(&sqlite_error_message(conn)),
+                _ => throw_sqlite_error_from_conn(conn),
             }
         }
         let read_bigints = stmt.read_bigints.load(Ordering::Relaxed);
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn js_node_sqlite_statement_sync_get(
         match ffi::sqlite3_step(raw_stmt) {
             ffi::SQLITE_ROW => f64_from_jsvalue(node_sqlite_row_value(stmt, raw_stmt)),
             ffi::SQLITE_DONE => undefined_f64(),
-            _ => throw_sqlite_error(&sqlite_error_message(conn)),
+            _ => throw_sqlite_error_from_conn(conn),
         }
     })
 }
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn js_node_sqlite_statement_sync_all(
                     rows = js_array_push(rows, node_sqlite_row_value(stmt, raw_stmt));
                 }
                 ffi::SQLITE_DONE => break,
-                _ => throw_sqlite_error(&sqlite_error_message(conn)),
+                _ => throw_sqlite_error_from_conn(conn),
             }
         }
         rows
@@ -117,8 +117,12 @@ pub unsafe extern "C" fn js_node_sqlite_statement_sync_iterate(
     stmt_handle: Handle,
     params_arr: *const ArrayHeader,
 ) -> f64 {
+    // Rows are materialized eagerly (a known divergence from Node's lazy
+    // stepping — see the module TODO), but the iterator protocol matches
+    // Node (#6561): exhaustion and `return()` produce
+    // `{ done: true, value: null }`, and `return()` terminates iteration.
     let rows = js_node_sqlite_statement_sync_all(stmt_handle, params_arr);
-    perry_runtime::array::array_values_iter(f64_from_jsvalue(JSValue::array_ptr(rows)))
+    perry_runtime::array::array_values_iter_null_done(f64_from_jsvalue(JSValue::array_ptr(rows)))
 }
 
 #[no_mangle]
@@ -297,12 +301,13 @@ pub(crate) unsafe fn sqlite_session_blob(
     );
     if rc != ffi::SQLITE_OK {
         let message = sqlite_error_message(conn);
+        let errcode = ffi::sqlite3_extended_errcode(conn.handle());
         drop(session);
         drop(conn_guard);
         if !data.is_null() {
             ffi::sqlite3_free(data);
         }
-        throw_sqlite_error(&message);
+        throw_sqlite_error_ext(&message, errcode);
     }
 
     let len = len.max(0) as usize;
@@ -408,7 +413,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_create_session(
     validate_optional_object(options_value);
     let db_name = string_option(options_value, "db", Some("main")).unwrap_or_else(|| "main".into());
     let table_name = string_option(options_value, "table", None);
-    ensure_open_node_database_lowercase(db_handle);
+    ensure_open_node_database(db_handle);
 
     let db_name_c = CString::new(db_name)
         .unwrap_or_else(|_| throw_type("The \"options.db\" argument must not contain null bytes"));
@@ -433,8 +438,9 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_create_session(
     let rc = ffi::sqlite3session_create(conn.handle(), db_name_c.as_ptr(), &mut raw_session);
     if rc != ffi::SQLITE_OK {
         let message = sqlite_error_message(conn);
+        let errcode = ffi::sqlite3_extended_errcode(conn.handle());
         drop(conn_guard);
-        throw_sqlite_error(&message);
+        throw_sqlite_error_ext(&message, errcode);
     }
     let table_ptr = table_name_c
         .as_ref()
@@ -443,9 +449,10 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_create_session(
     let rc = ffi::sqlite3session_attach(raw_session, table_ptr);
     if rc != ffi::SQLITE_OK {
         let message = sqlite_error_message(conn);
+        let errcode = ffi::sqlite3_extended_errcode(conn.handle());
         ffi::sqlite3session_delete(raw_session);
         drop(conn_guard);
-        throw_sqlite_error(&message);
+        throw_sqlite_error_ext(&message, errcode);
     }
     drop(conn_guard);
 
@@ -491,7 +498,10 @@ pub(crate) unsafe extern "C" fn node_sqlite_changeset_conflict(
     let Some(on_conflict) = ctx.on_conflict else {
         return ffi::SQLITE_CHANGESET_ABORT;
     };
-    let result = js_closure_call1(on_conflict, f64::from_bits(JSValue::int32(conflict).bits()));
+    let result = js_closure_call1(
+        on_conflict,
+        f64::from_bits(JSValue::number(conflict as f64).bits()),
+    );
     let result = value_from_f64(result);
     if result.is_int32() {
         return result.as_int32() as c_int;
@@ -515,7 +525,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_apply_changeset(
     changeset_value: f64,
     options_value: f64,
 ) -> f64 {
-    ensure_open_node_database_lowercase(db_handle);
+    ensure_open_node_database(db_handle);
     let changeset = changeset_bytes_from_value(changeset_value);
     validate_optional_object(options_value);
     let filter = function_option(options_value, "filter").and_then(closure_ptr_from_value);
@@ -552,8 +562,9 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_apply_changeset(
         ffi::SQLITE_ABORT => bool_f64(false),
         _ => {
             let message = sqlite_error_message(conn);
+            let errcode = ffi::sqlite3_extended_errcode(conn.handle());
             drop(conn_guard);
-            throw_sqlite_error(&message);
+            throw_sqlite_error_ext(&message, errcode);
         }
     }
 }
@@ -572,7 +583,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_enable_load_extension(
     };
 
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     if allow && !db.allow_load_extension {
         throw_invalid_state(
             "Cannot enable extension loading because it was disabled at database creation.",
@@ -582,7 +593,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_enable_load_extension(
     let conn = db
         .conn
         .lock()
-        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|_| throw_invalid_state("database is not open"));
     let config_error = conn
         .as_ref()
         .and_then(|conn| configure_node_sqlite_load_extension(conn, allow).err());
@@ -600,15 +611,15 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_load_extension(
     path_value: f64,
 ) -> i32 {
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     {
         let conn = db
             .conn
             .lock()
-            .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
         if conn.is_none() {
             drop(conn);
-            throw_invalid_state("Database is not open");
+            throw_invalid_state("database is not open");
         }
     }
 
@@ -622,10 +633,10 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_load_extension(
     let conn_guard = db
         .conn
         .lock()
-        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|_| throw_invalid_state("database is not open"));
     let Some(conn) = conn_guard.as_ref() else {
         drop(conn_guard);
-        throw_invalid_state("Database is not open");
+        throw_invalid_state("database is not open");
     };
     let mut error_message = std::ptr::null_mut();
     let rc = ffi::sqlite3_load_extension(
@@ -684,11 +695,11 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_location(
 pub unsafe extern "C" fn js_node_sqlite_database_sync_limits(db_handle: Handle) -> Handle {
     ensure_open_node_database(db_handle);
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     let mut limits_handle = db
         .limits_handle
         .lock()
-        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|_| throw_invalid_state("database is not open"));
     if let Some(handle) = *limits_handle {
         return handle;
     }

@@ -268,12 +268,12 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     let recv = recv_handle.get_nanbox_f64();
     let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
 
-    // Per spec, `toJSON(key)` receives the property key. The pre-#321 own-key
-    // path passed the empty string, and Effect's `Inspectable.toJSON` ignores
-    // its argument, so we keep the empty-string key to stay byte-identical with
-    // the rest of Perry's JSON suite.
-    let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
-    let key_f64_arg = f64::from_bits(STRING_TAG | (empty_str as u64 & POINTER_MASK));
+    // Per spec (§25.5.2.2 step 2.b.i), `toJSON(key)` receives the property key
+    // of the value being serialized — the empty String at the root, the own key
+    // for an object member, the stringified index for an array element (#5909,
+    // test262 JSON/stringify/value-tojson-arguments). The serialization loops
+    // record it in `TO_JSON_KEY` before recursing here.
+    let key_f64_arg = current_to_json_key_arg();
 
     let prev_this = crate::object::js_implicit_this_set(recv);
     let result = crate::closure::js_native_call_value(f64::from_bits(bound), &key_f64_arg, 1);
@@ -310,8 +310,8 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
     let recv = f64::from_bits(make_pointer_bits(arr as *const u8));
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_handle = scope.root_nanbox_f64(recv);
-    let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
-    let key_f64_arg = f64::from_bits(STRING_TAG | (empty_str as u64 & POINTER_MASK));
+    // `toJSON(key)` receives the property key of this array value (#5909).
+    let key_f64_arg = current_to_json_key_arg();
     let prev_this = crate::object::js_implicit_this_set(recv_handle.get_nanbox_f64());
     let result = crate::closure::js_native_call_value(f64::from_bits(method_bits), &key_f64_arg, 1);
     crate::object::js_implicit_this_set(prev_this);
@@ -825,7 +825,90 @@ pub(crate) unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
     stringify_object_inner(ptr, buf, 0)
 }
 
+/// #6519: emit a WHATWG `URL` instance as its `href` string — Node serializes a
+/// URL through `URL.prototype.toJSON()`. A URL is a plain `GC_TYPE_OBJECT` whose
+/// `searchParams` field points back at the URL, so the generic object walk trips
+/// the circular-structure detector; every stringify walker (compact, pretty, and
+/// replacer, in both `stringify.rs` and `replacer.rs`) short-circuits URL objects
+/// through here. Callers must have confirmed `crate::url::is_url_object_shape`.
+/// `href` is a string by construction, so this never recurses into an object and
+/// is depth-independent (emitting it just escapes + quotes the string).
+#[inline]
+pub(crate) unsafe fn write_url_href_json(url: *mut crate::ObjectHeader, buf: &mut String) {
+    let href = crate::url::url_class::js_url_get_href(url);
+    stringify_value(href, TYPE_UNKNOWN, buf);
+}
+
+/// SerializeJSONProperty step 2 (`toJSON`) for a heap-valued object member,
+/// applied by the object walk BEFORE the member's key is written so a member
+/// whose `toJSON` returns `undefined` can be OMITTED per spec (test262
+/// JSON/stringify/value-tojson-arguments) instead of emitting `"k":null` — the
+/// key used to be written first, with `toJSON` running only in the value
+/// recursion below.
+///
+/// Returns `Some(result)` ONLY when a callable `toJSON` actually ran (the value
+/// is a plain object/array carrying one); `result` is what it returned. The
+/// caller then omits the member if `result` is `undefined`/function/Symbol, or
+/// serializes `result` with the one-shot `SUPPRESS_NEXT_TO_JSON` guard armed so
+/// its own walk doesn't re-invoke `toJSON`. Returns `None` when no `toJSON`
+/// applies — a plain object/array without one, or any value that isn't a plain
+/// object/array — so the caller serializes the ORIGINAL value through the
+/// normal dispatch (never arming the guard: arming it for a value that then
+/// doesn't self-probe would leak the one-shot into the next member's `toJSON`).
+/// Because `None` means "serialize normally", a plain data object member keeps
+/// the #6009 fast path (its own walk skips the `toJSON` probe when
+/// `class_id == 0`), so this adds no probe there.
+///
+/// Guards, in an order safe for the `gc_obj_type` read below: handle ids and
+/// buffers/typed arrays carry no `GcHeader`; RegExp shares the
+/// `GC_TYPE_OBJECT` tag but is not an `ObjectHeader`; a boxed primitive is a
+/// real object but must serialize as its primitive (see `stringify_value_depth`)
+/// so it is left to the normal dispatch. Date/Temporal cells carry their own
+/// `GC_TYPE_*` tags, so the `gc_obj_type` match's `_` arm already skips them.
+/// The pending `toJSON` key must already be recorded.
+unsafe fn member_to_json(value: f64) -> Option<f64> {
+    let bits = value.to_bits();
+    let ptr = extract_pointer(bits)?;
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
+        return None;
+    }
+    if crate::buffer::is_registered_buffer(ptr as usize) {
+        return None;
+    }
+    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        return None;
+    }
+    if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
+        return None;
+    }
+    if crate::builtins::boxed_primitive_json_value(value).is_some() {
+        return None;
+    }
+    match gc_obj_type(ptr) {
+        crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
+        crate::gc::GC_TYPE_OBJECT => object_get_to_json(ptr),
+        _ => None,
+    }
+}
+
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    // #6519: a WHATWG `URL` instance is a plain `GC_TYPE_OBJECT` (class_id 0)
+    // whose `searchParams` field points back at the URL — walking its fields
+    // trips the circular-structure detector. Node serializes a URL via
+    // `URL.prototype.toJSON()`, i.e. its `href` string. Top-level
+    // `JSON.stringify(url)` is intercepted at HIR-lowering time
+    // (`UrlInstanceToJSON`, module_static.rs), but a URL *nested* inside another
+    // object/array is invisible to that interception and only reaches this
+    // runtime walker — so detect the URL shape here and emit its href. This is
+    // the single chokepoint every object walk funnels through (the direct
+    // dispatch arms, the array slow loop, and per-field descent all land here);
+    // `is_url_object_shape` validates the GC header before reading any field, so
+    // it is safe to call on the non-object pointers that reach the `TYPE_OBJECT`
+    // hint / catch-all callers.
+    if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+        write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
+        return;
+    }
     // #1704: an object with a null `keys_array` has no own enumerable
     // properties — empty objects come out of `js_object_alloc` with
     // `keys_array == null` and only get one once a field is set. This is the
@@ -958,7 +1041,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // fields and `is_object_pointer`'s `keys_len <= field_count` guard
     // returned false, so `JSON.stringify` emitted the literal string "null"
     // for any parsed object with ≥9 fields.
-    let alloc_limit = std::cmp::max(num_fields, 8);
+    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let read_field_bits = |f: u32| -> u64 {
         let obj = cur_obj();
         if f < alloc_limit {
@@ -1104,7 +1187,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
                 field_bits = gv.to_bits();
             }
         }
-        let field_val = f64::from_bits(field_bits);
+        let mut field_val = f64::from_bits(field_bits);
         // Skip undefined per JSON spec (incl. a getter that returned undefined).
         if field_bits == TAG_UNDEFINED {
             continue;
@@ -1117,11 +1200,8 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             continue;
         }
 
-        if !first {
-            buf.push(',');
-        }
-        first = false;
-
+        // Resolve the member key up front — needed both to record the `toJSON`
+        // key (#5909) and to write the property name below.
         let key_f64 = key_at(f);
         let key_bits = key_f64.to_bits();
         let key_tag = key_bits & 0xFFFF_0000_0000_0000;
@@ -1130,6 +1210,57 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         } else {
             key_bits as *const StringHeader
         };
+
+        // SerializeJSONProperty step 2 (#5909): apply a heap-valued member's
+        // `toJSON` HERE, before the comma/key are written, so a member whose
+        // `toJSON` returns `undefined` (or a function/Symbol) is OMITTED per
+        // spec — the value recursion below runs `toJSON` only AFTER the key, so
+        // such a member wrongly emitted `"k":null`. A member's `toJSON` key is
+        // its own property name; the synthetic `field{f}` fallback name is
+        // unreadable, so pass "" as it did before.
+        let mut member_probed = false;
+        if (field_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG || is_raw_pointer(field_bits) {
+            set_to_json_key_str(str_from_header(key_ptr).unwrap_or(""));
+            if let Some(resolved) = member_to_json(field_val) {
+                let rb = resolved.to_bits();
+                if rb == TAG_UNDEFINED || is_closure_value(rb) || is_symbol_value(rb) {
+                    continue;
+                }
+                field_bits = rb;
+                field_val = resolved;
+                // `toJSON` already ran; arm the one-shot guard so the resolved
+                // value's own serialization doesn't invoke `toJSON` a second
+                // time (SerializeJSONProperty applies it once). Disarmed after
+                // the pointer dispatch below, gated on `member_probed`.
+                arm_to_json_result_guard(resolved);
+                member_probed = true;
+            }
+        }
+
+        // `member_to_json` above may have run a user `toJSON` — a GC /
+        // evacuation point that moves the key string. The raw `key_ptr`
+        // captured before it is then dangling, so re-derive it from the rooted
+        // object header before the property name is written. Without this, a
+        // member whose `toJSON` forces a copying-minor GC (#5909's pre-key
+        // member probe) emitted a corrupted key
+        // (gc::tests …test_json_stringify_object_rederives_fields_after_tojson_minor_gc).
+        let key_ptr = if member_probed {
+            let kb = key_at(f).to_bits();
+            let kt = kb & 0xFFFF_0000_0000_0000;
+            if kt == STRING_TAG || kt == POINTER_TAG {
+                (kb & POINTER_MASK) as *const StringHeader
+            } else {
+                kb as *const StringHeader
+            }
+        } else {
+            key_ptr
+        };
+
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+
         if let Some(key_str) = str_from_header(key_ptr) {
             // A key can itself contain `"`/`\`/control characters (e.g. a
             // `Symbol`-adjacent computed key or `Object.defineProperty`
@@ -1143,7 +1274,9 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             let _ = write!(buf, "\"field{}\":", f);
         }
 
-        // Inline value dispatch for common types to avoid function call overhead
+        // Inline value dispatch for common types to avoid function call
+        // overhead. `field_bits`/`field_val` are the post-`toJSON` value when a
+        // `toJSON` ran above.
         let val_tag = field_bits & 0xFFFF_0000_0000_0000;
         if field_bits == TAG_NULL {
             buf.push_str("null");
@@ -1169,11 +1302,21 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
                 buf.push_str("null");
             }
         } else if val_tag == POINTER_TAG || is_raw_pointer(field_bits) {
-            // Nested object/array — recurse with depth
+            // Nested object/array (or the object/array `toJSON` returned). The
+            // `toJSON` key was recorded above; `member_probed` armed the guard.
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
+            if member_probed {
+                SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+            }
         } else {
             // Number (most common for data objects) — or Date, handled
-            // centrally by `write_number` via DATE_REGISTRY lookup.
+            // centrally by `write_number` via DATE_REGISTRY lookup. A BigInt
+            // member funnels through `write_number` to `serialize_bigint` /
+            // `bigint_apply_to_json`, which reads the pending `toJSON` key, so
+            // record this member's key first (#5909).
+            if val_tag == BIGINT_TAG {
+                set_to_json_key_str(str_from_header(key_ptr).unwrap_or(""));
+            }
             write_number(buf, field_val);
         }
     }
@@ -1291,6 +1434,14 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     if (*obj).class_id != 0 {
         return None;
     }
+    // #6519: a URL instance is a class_id-0 object but must serialize as its
+    // `href` string (handled by `stringify_object_inner`'s URL branch), never
+    // as a templated dump of its 12 internal fields (which would also walk the
+    // `searchParams` back-reference and throw). Bail so an array whose first
+    // element is a URL routes every element through the per-element slow path.
+    if crate::url::is_url_object_shape(obj as *mut crate::ObjectHeader) {
+        return None;
+    }
     let keys_arr = (*obj).keys_array;
     if keys_arr.is_null() {
         return None;
@@ -1354,6 +1505,23 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         shape_fields,
         primitive_only,
     })
+}
+
+/// Record field `f`'s property name (from the shape template's shared
+/// `keys_arr`) as the pending `toJSON` key before recursing into that field
+/// (#5909). Mirrors the key decode in `build_shape_prefix_template`.
+#[inline]
+unsafe fn set_to_json_key_for_template_field(template: &ShapeTemplate, f: usize) {
+    let keys_elements = (template.keys_arr as *const u8)
+        .add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let key_bits = (*keys_elements.add(f)).to_bits();
+    let key_tag = key_bits & 0xFFFF_0000_0000_0000;
+    let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
+        (key_bits & POINTER_MASK) as *const StringHeader
+    } else {
+        key_bits as *const StringHeader
+    };
+    set_to_json_key_str(str_from_header(key_ptr).unwrap_or(""));
 }
 
 /// Fast emission path for an object element that matches the cached shape
@@ -1429,8 +1597,14 @@ pub(crate) unsafe fn try_emit_shape_element(
                     buf.push_str("null");
                 }
             } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
+                set_to_json_key_for_template_field(template, f);
                 stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
             } else {
+                // A BigInt field reaches `serialize_bigint` via `write_number`,
+                // which reads the pending `toJSON` key — record it first (#5909).
+                if vtag == BIGINT_TAG {
+                    set_to_json_key_for_template_field(template, f);
+                }
                 write_number(buf, field_val);
             }
         }
@@ -1490,8 +1664,14 @@ pub(crate) unsafe fn try_emit_shape_element(
                 buf.push_str("null");
             }
         } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
+            set_to_json_key_for_template_field(template, f);
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
         } else {
+            // A BigInt field reaches `serialize_bigint` via `write_number`,
+            // which reads the pending `toJSON` key — record it first (#5909).
+            if vtag == BIGINT_TAG {
+                set_to_json_key_for_template_field(template, f);
+            }
             write_number(buf, field_val);
         }
     }
@@ -1606,6 +1786,10 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             if i > 0 {
                 buf.push(',');
             }
+            // An element's `toJSON` key is its stringified index (#5909). Set
+            // before the shape emit (which may run the element's own `toJSON`)
+            // and the per-element fallback below.
+            set_to_json_key_index(i as usize);
             // Re-derived per element: the previous element's serialization can
             // have run user code / allocated (and moved this array).
             let elem = elem_at(i as usize);
@@ -1656,8 +1840,13 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         } else if elem_bits == TAG_FALSE {
             buf.push_str("false");
         } else if elem_tag == BIGINT_TAG {
+            // A BigInt element's `toJSON` key is its stringified index (#5909).
+            set_to_json_key_index(i as usize);
             serialize_bigint(elem, buf);
         } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
+            // An element's `toJSON` key is its stringified index (#5909) — set
+            // before the object/array `toJSON` probes and the recursion below.
+            set_to_json_key_index(i as usize);
             let elem_ptr = if elem_tag == POINTER_TAG {
                 (elem_bits & POINTER_MASK) as *const u8
             } else {

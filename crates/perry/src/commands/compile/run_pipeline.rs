@@ -1627,16 +1627,39 @@ pub fn run_with_parse_cache(
     // duplicating the (potentially large) `Vec<String>` of every
     // translated string. Pre-fix, a project with N modules cloned the
     // full translations Vec N times during codegen.
-    let i18n_snapshot: Option<std::sync::Arc<(Vec<String>, usize, usize, Vec<String>, usize)>> =
-        i18n_table.as_ref().map(|table| {
-            std::sync::Arc::new((
-                table.translations.clone(),
-                table.keys.len(),
-                table.locale_count,
-                table.locale_codes.clone(),
-                table.default_locale_idx,
-            ))
-        });
+    #[allow(clippy::type_complexity)]
+    let i18n_snapshot: Option<
+        std::sync::Arc<(
+            Vec<String>,
+            usize,
+            usize,
+            Vec<String>,
+            usize,
+            Vec<(String, String)>,
+        )>,
+    > = i18n_table.as_ref().map(|table| {
+        // `[i18n.currencies]` rides along so the entry module's `main`
+        // prelude can bake the `perry_i18n_set_currencies` call. Sorted
+        // for a deterministic object-cache key (the config is a HashMap).
+        let mut currencies: Vec<(String, String)> = i18n_config
+            .as_ref()
+            .map(|c| {
+                c.currencies
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        currencies.sort();
+        std::sync::Arc::new((
+            table.translations.clone(),
+            table.keys.len(),
+            table.locale_count,
+            table.locale_codes.clone(),
+            table.default_locale_idx,
+            currencies,
+        ))
+    });
 
     // Phase J: detect bitcode-link mode. The actual .bc paths aren't known
     // yet (build_optimized_libs runs after compilation), but we decide the
@@ -2148,6 +2171,36 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+                // Drop init-call back-edges (#6463). `topo_sort_non_entry_modules`
+                // breaks import cycles at the back-edge and the eager main
+                // sequence runs inits in that order — but the wrapper's nested
+                // dep-init calls re-derive the order dynamically at runtime.
+                // When the cycle member the sort placed FIRST runs, its broken
+                // edge to the member placed second pulled that module's BODY in
+                // early, before this module's own body had populated anything.
+                // Effect's web.ts died on this: find-my-way-ts
+                // internal/router.ts has `import * as Router from "../index.js"`
+                // used only in type positions (no `type` keyword, so it is a
+                // value edge), forming a cycle index ⇄ internal. The sort
+                // correctly placed internal first — matching node's ESM
+                // evaluation order from the entry — but internal's wrapper then
+                // called index's init, whose body copied
+                // `export const make = internal.make` while internal's global
+                // was still undefined. `FindMyWay.make` stayed undefined
+                // forever: "TypeError: value is not a function" at
+                // Layer.launch. Keeping only forward edges (dep positioned
+                // before this module) is exactly ESM's behavior of skipping a
+                // module already on the evaluation stack. A dep missing from
+                // the position map keeps its edge (conservative).
+                let init_pos: std::collections::HashMap<String, usize> =
+                    non_entry_module_names
+                        .iter()
+                        .enumerate()
+                        .map(|(i, name)| (sanitize_name(name), i))
+                        .collect();
+                if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
+                    deps.retain(|dep| init_pos.get(dep).map_or(true, |&p| p < self_pos));
+                }
                 deps
             };
             // Build import → source-prefix table for cross-module
@@ -2387,6 +2440,120 @@ pub fn run_with_parse_cache(
                     };
                     if let Some(local) = namespace_like_local {
                         namespace_imports.push(local.clone());
+                        // Issue #6586: a namespace import of a CommonJS module
+                        // whose `module.exports` value is itself the export
+                        // (`module.exports = function equal(){}`, no
+                        // `__esModule` marker) is TypeScript's
+                        // esModuleInterop=false interop — `import * as equal
+                        // from "fast-deep-equal"` binds `equal` to the whole
+                        // `require()` result (the default export), so a DIRECT
+                        // call `equal(a, b)` is a call OF that value. ajv's
+                        // `lib/compile/resolve.ts` does exactly this for
+                        // `fast-deep-equal` and `json-schema-traverse`, and
+                        // fast-json-stringify pulls ajv in. The CJS wrap emits
+                        // the value under the module's `default` symbol, but the
+                        // namespace binding had no `import_function_prefixes`
+                        // entry, so the direct call fell through to a bare
+                        // `equal` extern and the link died with
+                        // `Undefined symbols: "_equal"`. Wire the whole-value
+                        // binding to the `default` export exactly like a Default
+                        // specifier does below (member reads `ns.foo` are keyed
+                        // per-namespace via `namespace_member_prefixes` and are
+                        // unaffected). Only genuine namespace imports of a module
+                        // that actually HAS a `default` export qualify — the
+                        // #4872 default-import-of-a-named-only-barrel case that
+                        // also lands here has no `default` and is skipped.
+                        if matches!(spec, perry_hir::ImportSpecifier::Namespace { .. }) {
+                            if let Some(default_origin_path) = all_module_exports
+                                .get(&resolved_path_str)
+                                .and_then(|exports| exports.get("default"))
+                                .cloned()
+                            {
+                                let default_prefix = compute_module_prefix(
+                                    &default_origin_path,
+                                    &ctx.project_root,
+                                );
+                                let default_suffix = all_module_export_origin_names
+                                    .get(&resolved_path_str)
+                                    .and_then(|m| m.get("default"))
+                                    .cloned()
+                                    .unwrap_or_else(|| "default".to_string());
+                                import_function_prefixes
+                                    .entry(local.clone())
+                                    .or_insert(default_prefix.clone());
+                                import_function_origin_names
+                                    .entry(local.clone())
+                                    .or_insert(default_suffix.clone());
+                                // The metadata maps are keyed by
+                                // (declaring-path, exported-name); the default
+                                // is declared at `default_origin_path` under
+                                // `default_suffix` (== "default" unless a
+                                // re-export renamed it).
+                                let key = (default_origin_path.clone(), default_suffix);
+                                // A CJS `module.exports = <expr>` becomes a
+                                // var-shaped default: a value binding emitted as
+                                // a zero-arg getter. A direct call must fetch the
+                                // closure via that getter and THEN invoke it with
+                                // the args (`js_closure_callN`), so mark the local
+                                // as an imported var — otherwise the call site
+                                // treats the getter's return value AS the call
+                                // result and `equal(1, 1)` yields the function
+                                // itself instead of `true`. Mirrors the
+                                // Default-import var classification below.
+                                if exported_var_names.contains(&key)
+                                    || exported_var_names.contains(&(
+                                        resolved_path_str.clone(),
+                                        "default".to_string(),
+                                    ))
+                                {
+                                    imported_vars.insert(local.clone());
+                                }
+                                // A non-var-shaped default — a `module.exports =
+                                // function foo(){}` static-function or a
+                                // `module.exports = class Foo{}` — is called /
+                                // instantiated through the direct
+                                // `perry_fn_<mod>__default` symbol, so it needs
+                                // the same arity / rest / synthetic-arguments /
+                                // return-type / async / class / enum metadata the
+                                // Default specifier propagates below. Without it a
+                                // rest-param default mis-bundles its trailing args
+                                // and a class default has no ImportedClass entry
+                                // (so `new ns()` can't resolve). Key everything by
+                                // the namespace LOCAL, the name the consumer's
+                                // ExternFuncRef carries.
+                                if let Some(&param_count) = exported_func_param_counts.get(&key) {
+                                    imported_param_counts.insert(local.clone(), param_count);
+                                }
+                                if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
+                                    imported_has_rest.insert(local.clone());
+                                }
+                                if exported_func_synthetic_arguments.contains(&key) {
+                                    imported_synthetic_arguments.insert(local.clone());
+                                }
+                                if let Some(return_type) = exported_func_return_types.get(&key) {
+                                    imported_return_types.insert(local.clone(), return_type.clone());
+                                }
+                                if exported_async_funcs.contains(&key) {
+                                    imported_async_set.insert(local.clone());
+                                }
+                                if let Some(class) = exported_classes.get(&key) {
+                                    let class_prefix = canonical_class_source_prefix(
+                                        class,
+                                        &class_canonical_path,
+                                        &ctx.project_root,
+                                        &default_prefix,
+                                    );
+                                    imported_classes.push(imported_class_from_hir(
+                                        class,
+                                        class_prefix,
+                                        Some(local.clone()),
+                                    ));
+                                }
+                                if let Some(members) = exported_enums.get(&key) {
+                                    imported_enums.push((local.clone(), members.clone()));
+                                }
+                            }
+                        }
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
                             for (export_name, origin_path) in exports {
@@ -2575,10 +2742,33 @@ pub fn run_with_parse_cache(
                             .iter()
                             .find(|f| f.name == exported_name)
                             .map(|f| f.name.clone());
+                        // Issue #6715: a REAL module export wins over a derived
+                        // ergonomic alias. The `js_<pkg>_<snake>` ⇒ camelCase
+                        // routing (#5621) is a convenience for packages whose
+                        // `.ts` only holds ambient `export declare function`
+                        // signatures (no body) — those are skipped at lowering
+                        // (`module_decl.rs`: `body.is_none()`), so they never
+                        // enter `all_module_exports`. But the documented wrapper
+                        // convention (native-extensions.md) is an ambient
+                        // `declare function js_<pkg>_speak(...)` PLUS a real
+                        // `export async function speak(...)` that transforms args
+                        // and calls the FFI symbol. When such a wrapper's name
+                        // collides with a manifest symbol's derived alias
+                        // (`js_speech_speak` → `speak`), the alias must NOT
+                        // shadow it — the import binds to the wrapper, which the
+                        // module emits a `perry_fn_<pkg>__speak` symbol for and
+                        // the fall-through named-import path registers below.
+                        // Only genuine, implemented value exports land here, so
+                        // ambient-declare-only packages keep the #5621 routing.
+                        let has_genuine_module_export = all_module_exports
+                            .get(&resolved_path_str)
+                            .is_some_and(|exports| exports.contains_key(&exported_name));
                         // Collect ALL ergonomic matches so an ambiguous manifest
                         // (two symbols deriving the same camelCase binding) is
                         // rejected rather than silently bound to the first.
-                        let ergonomic_matches: Vec<String> = if exact_symbol.is_some() {
+                        let ergonomic_matches: Vec<String> = if exact_symbol.is_some()
+                            || has_genuine_module_export
+                        {
                             Vec::new()
                         } else {
                             nl.functions
@@ -3941,9 +4131,19 @@ pub fn run_with_parse_cache(
             let ext = if bitcode_link { "ll" } else { "o" };
             let obj_path = object_output_dir.join(format!("{}.{}", obj_name, ext));
 
-            if let Some((key, cached_path)) =
-                cache_key.and_then(|k| object_cache.lookup_path(k).map(|path| (k, path)))
+            if let Some((key, cached_path, ffi_symbols)) = cache_key
+                .and_then(|k| object_cache.lookup_path_with_ffi(k).map(|(p, s)| (k, p, s)))
             {
+                // #6439: a hit skips `compile_module`, and `compile_module`
+                // is what populates the ext_registry (`record_ffi_call`
+                // fires from `LlBlock::call`). The registry drives
+                // `needs_stdlib` + the well-known flip further down, so
+                // without this replay the link line depends on whether the
+                // cache happened to be warm: `api.ts` (Effect) linked from
+                // cold and failed from warm with an undefined
+                // `_js_ws_connect_start`. Replaying the manifest makes a hit
+                // record exactly what the skipped codegen would have.
+                perry_codegen::ext_registry::replay_ffi_symbols(&ffi_symbols);
                 return Ok(NativeObjectArtifact {
                     path: cached_path,
                     bytes: None,
@@ -3995,7 +4195,15 @@ pub fn run_with_parse_cache(
                 collected: Some(total_codegen_modules),
                 ..Default::default()
             });
+            // #6439: capture which ext_registry FFI symbols this module's
+            // codegen emits, so the manifest stored beside the `.o` can
+            // replay them on a later cache hit. Scoped tightly around
+            // `compile_module` — `perry-codegen` uses no rayon, so
+            // everything recorded on this worker thread between these two
+            // calls belongs to this module and nothing else.
+            perry_codegen::ext_registry::begin_module_capture();
             let object_code = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
+                perry_codegen::ext_registry::take_module_capture();
                 format!(
                     "Error compiling module '{}' ({}) with --backend llvm: {:#}",
                     hir_module.name,
@@ -4003,12 +4211,17 @@ pub fn run_with_parse_cache(
                     e
                 )
             })?;
+            let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
             let object_fingerprint = cache_key
                 .map(|k| format!("cache:{:016x}", k))
                 .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
-            if let Some(cached_path) =
-                cache_key.and_then(|k| object_cache.store_and_get_path(k, &object_code))
-            {
+            if let Some(cached_path) = cache_key.and_then(|k| {
+                // Manifest first: a `.o` visible without its manifest reads
+                // as a miss to a concurrent build (correct, just a wasted
+                // recompile), whereas the reverse ordering can never mislead.
+                object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
+                object_cache.store_and_get_path(k, &object_code)
+            }) {
                 return Ok(NativeObjectArtifact {
                     path: cached_path,
                     bytes: None,
@@ -4958,12 +5171,32 @@ pub fn run_with_parse_cache(
         // previous build's contents.
         let _ = fs::remove_file(&exe_path);
         let mut cmd = if is_windows_target {
-            // MSVC `lib.exe` is the standard host on Windows; mingw users
-            // can override with `AR=...` since `cc::ar_name()` parity isn't
-            // available here.
-            let mut c = Command::new("lib.exe");
-            c.arg(format!("/OUT:{}", exe_path.display()));
-            c
+            // Archiver precedence (2026-07 audit): MSVC `lib.exe` when a
+            // Visual Studio install (or a vcvars prompt) provides one, else
+            // LLVM's `llvm-lib` — a drop-in lib.exe replacement that ships
+            // with `winget install LLVM.LLVM`, i.e. the lightweight-toolchain
+            // path from `perry setup windows` — else `llvm-ar --format=coff`
+            // as a last resort (rustup's llvm-tools carries llvm-ar but not
+            // llvm-lib). Previously this spawned `lib.exe` unconditionally,
+            // so LLVM+xwin users got a raw "program not found" spawn error.
+            let Some(archiver) = find_windows_archiver() else {
+                return Err(anyhow!(
+                    "No Windows archiver found for --output-type staticlib. Perry needs \
+                     MSVC lib.exe, or LLVM's llvm-lib / llvm-ar. Pick whichever is \
+                     lighter for you:\n\
+                     \n\
+                     \x20  A) Lightweight (LLVM, no Visual Studio needed):\n\
+                     \x20       winget install LLVM.LLVM\n\
+                     \n\
+                     \x20  B) MSVC (Visual Studio Build Tools + C++ workload):\n\
+                     \x20       Visual Studio Installer → Modify → \"Desktop development with C++\"\n\
+                     \x20       or: winget install Microsoft.VisualStudio.2022.BuildTools --override \
+                     \"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"\n\
+                     \n\
+                     Then open a new terminal and retry. Run `perry doctor` to verify."
+                ));
+            };
+            windows_archiver_command(&archiver, &exe_path)
         } else {
             let mut c = Command::new("ar");
             // `c` create, `r` insert/replace, `s` write index. Matches what
@@ -5119,13 +5352,41 @@ pub fn run_with_parse_cache(
             // link fails with LNK2019 on the first unresolved `js_*` symbol
             // and no DLL is emitted.
             //
-            // We use lld-link rather than MSVC link.exe here: lld-link honors
-            // /FORCE:UNRESOLVED on the LLVM .o files that Perry emits (treating
-            // the missing symbols as warnings that produce a runnable DLL),
-            // whereas MSVC link.exe returns 0 without writing the DLL — see
-            // the cross-linker note in `select_linker_command`.
-            let linker = find_lld_link().unwrap_or_else(|| PathBuf::from("lld-link"));
+            // lld-link is preferred here: it has always honored
+            // /FORCE:UNRESOLVED on the LLVM .o files that Perry emits
+            // (treating the missing symbols as warnings that produce a
+            // runnable DLL). MSVC link.exe was historically excluded because
+            // it returned 0 WITHOUT writing the DLL on this input; re-tested
+            // 2026-07 against MSVC 14.50 (VS 2026 Build Tools), link.exe now
+            // writes a loadable DLL (exit 0 + LNK4088, exports resolve via
+            // GetProcAddress), so it is accepted as a fallback when lld-link
+            // is absent. The post-link existence check below turns any older
+            // toolset that still silently drops the output into an
+            // actionable error instead of a mystery "file not found" later.
+            // See also the cross-linker note in `select_linker_command`.
+            let Some(linker) = find_lld_link()
+                .or_else(|| find_llvm_tool("lld-link"))
+                .or_else(find_msvc_link_exe)
+            else {
+                return Err(anyhow!(
+                    "Building a Windows plugin .dll requires a COFF linker and none was \
+                     found. Preferred: LLVM's lld-link — install via:\n\
+                     \x20  winget install LLVM.LLVM\n\
+                     then open a new terminal and retry (or set PERRY_LLD_LINK to an \
+                     existing lld-link.exe).\n\
+                     MSVC link.exe from Visual Studio Build Tools (\"Desktop development \
+                     with C++\" workload) also works as a fallback."
+                ));
+            };
             let mut c = Command::new(linker);
+            // Both linkers need the CRT + SDK lib dirs for /defaultlib:libcmt.
+            // Mirror `select_linker_command`: leave a user-provided LIB alone,
+            // otherwise resolve it (xwin sysroot first, then vswhere).
+            if std::env::var("LIB").is_err() {
+                if let Some(lib_paths) = find_msvc_lib_paths() {
+                    c.env("LIB", lib_paths);
+                }
+            }
             c.arg("/NOLOGO").arg("/DLL").arg("/FORCE:UNRESOLVED");
             let stem = exe_path
                 .file_stem()
@@ -5200,6 +5461,19 @@ pub fn run_with_parse_cache(
         let status = cmd.status()?;
         if !status.success() {
             return Err(anyhow!("Linking dylib failed"));
+        }
+        if is_dylib_windows && !exe_path.exists() {
+            // Guard for the legacy MSVC link.exe failure mode: some toolsets
+            // exit 0 under /FORCE:UNRESOLVED yet never write the DLL (the
+            // reason lld-link is preferred above).
+            return Err(anyhow!(
+                "The linker reported success but did not write {}.\n\
+                 This is a known MSVC link.exe behavior with /FORCE:UNRESOLVED on \
+                 some toolsets. Install LLVM's lld-link and retry:\n\
+                 \x20  winget install LLVM.LLVM\n\
+                 (or set PERRY_LLD_LINK to an existing lld-link.exe).",
+                exe_path.display()
+            ));
         }
 
         match format {

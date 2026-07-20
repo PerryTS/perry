@@ -68,7 +68,10 @@ pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBi
     // Detect `state.set(v)` first (most specific shape).
     if let Expr::Call { callee, args, .. } = e {
         if args.len() == 1 {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "set" {
                     if let Expr::LocalGet(state_id) = object.as_ref() {
                         if let Some(binding) = reg.get(state_id) {

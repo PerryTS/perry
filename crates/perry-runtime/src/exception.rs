@@ -74,6 +74,14 @@ struct ExceptionState {
     /// `call_method_depth_*`). Indexed by try-depth, in lockstep with
     /// `jump_buffers`.
     call_method_depths: Box<[u32]>,
+    /// #6559: dyn-eval interpreter state (rooted-stack length + interpreter
+    /// call depth, packed) captured when each `try` was pushed. A throw
+    /// `longjmp`s past interpreter Rust frames without running their
+    /// epilogues; the unwind path restores the interpreter's rooted value
+    /// stack so caught throws neither leak roots nor leave the depth counter
+    /// wedged. Same savepoint pattern as the two fields above.
+    #[cfg(feature = "dyn-eval")]
+    dyn_eval_savepoints: Box<[u64]>,
     try_depth: usize,
     current_exception: f64,
     has_exception: bool,
@@ -88,6 +96,8 @@ impl ExceptionState {
             jump_buffers: vec![JmpBuf::new(); MAX_TRY_DEPTH].into_boxed_slice(),
             shadow_savepoints: vec![ShadowSavepoint::EMPTY; MAX_TRY_DEPTH].into_boxed_slice(),
             call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
+            #[cfg(feature = "dyn-eval")]
+            dyn_eval_savepoints: vec![0u64; MAX_TRY_DEPTH].into_boxed_slice(),
             try_depth: 0,
             current_exception: 0.0,
             has_exception: false,
@@ -123,6 +133,13 @@ pub extern "C" fn js_try_push() -> *mut i32 {
         // this `try` can restore it — `longjmp` skips the `CallMethodDepthGuard`
         // `Drop`s of the method frames it unwinds (#5591).
         (*s).call_method_depths[depth] = crate::object::call_method_depth_savepoint();
+        // #6559: capture the dyn-eval interpreter's rooted-stack length +
+        // call depth, so a caught throw restores interpreter state exactly
+        // like the shadow stack.
+        #[cfg(feature = "dyn-eval")]
+        {
+            (*s).dyn_eval_savepoints[depth] = crate::dyn_eval::interp_savepoint();
+        }
         (*s).try_depth += 1;
         (*s).jump_buffers[depth].as_mut_ptr()
     })
@@ -197,6 +214,11 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         // per caught throw and eventually wedges every method call into the
         // depth-guard fallback (#5591).
         crate::object::call_method_depth_restore((*s).call_method_depths[depth]);
+        // #6559: restore the dyn-eval interpreter's rooted stack + call depth
+        // (interpreter Rust frames unwound by this longjmp never run their
+        // truncate/decrement epilogues).
+        #[cfg(feature = "dyn-eval")]
+        crate::dyn_eval::interp_restore((*s).dyn_eval_savepoints[depth]);
         (*s).jump_buffers[depth].as_mut_ptr()
     });
     unsafe { longjmp(jb_ptr, 1) }

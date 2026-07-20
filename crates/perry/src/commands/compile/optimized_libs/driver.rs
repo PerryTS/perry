@@ -432,13 +432,13 @@ pub(crate) fn build_optimized_libs(
     }
     // perry-stdlib unconditionally re-bundles perry-updater (so user code
     // calling `perry/updater` resolves at link time without extra wiring).
-    // perry-updater's `perry_updater_verify_signature_v2` references the
-    // extern `js_crypto_ed25519_verify`, which lives in perry-stdlib's
-    // crypto module — gated by `#[cfg(feature = "crypto")]`. With
-    // --no-default-features the symbol is absent and the link fails on
-    // every program (regardless of whether the user touched crypto APIs).
-    // Force `crypto` on whenever the auto-optimize path rebuilds stdlib
-    // so the bundled updater always has a resolvable target.
+    // perry-updater used to reference the extern `js_crypto_ed25519_verify`
+    // from perry-stdlib's `crypto` feature, which is why `crypto` is forced
+    // on here. The updater now verifies in-crate via ed25519-dalek (the
+    // extern is gone — it broke the Windows CLI link, LNK2019), so this
+    // force is no longer load-bearing for the updater; it is kept
+    // conservatively until the no-crypto auto-optimize path is audited
+    // separately for other stragglers.
     features.insert("crypto");
     let feature_arg = features_to_cargo_arg(&features);
 

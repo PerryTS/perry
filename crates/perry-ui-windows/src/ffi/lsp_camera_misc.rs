@@ -1,4 +1,4 @@
-// FFI: LSP bridge stubs, camera stubs (#191), setjmp override, cross-platform
+// FFI: LSP bridge stubs, camera stubs (#191), cross-platform
 // toast + reactive setText stubs (Phase 2 v3.3).
 
 // =============================================================================
@@ -51,14 +51,14 @@ pub extern "C" fn perry_ui_camera_sample_color(_x: f64, _y: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_set_on_tap(_handle: i64, _callback: f64) {}
 
-// Override setjmp with a no-op stub that always returns 0.
-// Perry's try/catch uses setjmp/longjmp but since we make readFileSync
-// return empty string instead of throwing, longjmp is never called.
-// The MSVC CRT setjmp may corrupt the stack on x64.
-#[no_mangle]
-pub extern "C" fn setjmp(_env: *mut i32) -> i32 {
-    0
-}
+// NOTE: a fake no-op `setjmp` stub used to live here so links succeeded when
+// codegen host-cfg-gated the setjmp variant and emitted the bare `setjmp`
+// name into Windows-target objects (MSVCRT only exports `_setjmp`/
+// `_setjmpex`). Codegen now selects the setjmp ABI from the compile target's
+// triple (`perry-codegen/src/setjmp_abi.rs`), so Windows targets always get
+// the real 2-arg `_setjmp` — and a leftover bare-`setjmp` reference failing
+// to link is the DESIRED loud failure, not something to paper over with a
+// stub that silently corrupts try/catch (always-0 return, no saved context).
 
 // --- Cross-platform toast + reactive setText stubs (Phase 2 v3.3) ---
 // Full GTK4 implementation in perry-ui-gtk4. Present here so cross-platform

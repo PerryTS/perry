@@ -5,10 +5,11 @@
 //! NOTHING here names all buckets together (that would re-pin everything).
 use super::native_module_dispatch::{
     nm_dispatch_assert, nm_dispatch_async_hooks, nm_dispatch_bigint, nm_dispatch_buffer,
-    nm_dispatch_child_process, nm_dispatch_cluster, nm_dispatch_console, nm_dispatch_crypto,
-    nm_dispatch_dgram, nm_dispatch_dns, nm_dispatch_domain, nm_dispatch_events, nm_dispatch_fs,
-    nm_dispatch_http, nm_dispatch_inspector, nm_dispatch_module, nm_dispatch_net, nm_dispatch_os,
-    nm_dispatch_path, nm_dispatch_perf, nm_dispatch_process, nm_dispatch_punycode,
+    nm_dispatch_bun, nm_dispatch_bun_ffi, nm_dispatch_child_process, nm_dispatch_cluster,
+    nm_dispatch_console, nm_dispatch_crypto, nm_dispatch_dgram, nm_dispatch_dns,
+    nm_dispatch_domain, nm_dispatch_events, nm_dispatch_fs, nm_dispatch_http,
+    nm_dispatch_inspector, nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty,
+    nm_dispatch_os, nm_dispatch_path, nm_dispatch_perf, nm_dispatch_process, nm_dispatch_punycode,
     nm_dispatch_querystring, nm_dispatch_readline, nm_dispatch_repl, nm_dispatch_sea,
     nm_dispatch_sqlite, nm_dispatch_stream, nm_dispatch_timers, nm_dispatch_tls, nm_dispatch_tty,
     nm_dispatch_url, nm_dispatch_util, nm_dispatch_v8, nm_dispatch_vm, nm_dispatch_wasi,
@@ -25,6 +26,8 @@ enum NmBucket {
     AsyncHooks,
     Bigint,
     Buffer,
+    Bun,
+    BunFfi,
     ChildProcess,
     Cluster,
     Console,
@@ -38,6 +41,7 @@ enum NmBucket {
     Inspector,
     Module,
     Net,
+    NodePty,
     Os,
     Path,
     Perf,
@@ -59,7 +63,10 @@ enum NmBucket {
     Wasi,
     Zlib,
 }
-const NM_BUCKET_COUNT: usize = 37;
+const NM_BUCKET_COUNT: usize = 40;
+// #6580 merge: inserting BunFfi shifted every later NmBucket up one; keep this array
+// big enough to index every variant (Zlib is the last). Guard against silent overflow.
+const _: () = assert!((NmBucket::Zlib as usize) < NM_BUCKET_COUNT);
 
 static NM_DISPATCH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
@@ -72,6 +79,10 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "async_hooks" => Some(NmBucket::AsyncHooks),
         "bigint" => Some(NmBucket::Bigint),
         "buffer" | "buffer.Buffer" => Some(NmBucket::Buffer),
+        "bun" => Some(NmBucket::Bun),
+        // #6562: the `bun:` prefix is part of the name (not stripped like
+        // `node:`).
+        "bun:ffi" => Some(NmBucket::BunFfi),
         "child_process" => Some(NmBucket::ChildProcess),
         "cluster" => Some(NmBucket::Cluster),
         "console" => Some(NmBucket::Console),
@@ -86,6 +97,8 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "inspector" | "inspector.Network" | "inspector/promises" => Some(NmBucket::Inspector),
         "module" => Some(NmBucket::Module),
         "net" => Some(NmBucket::Net),
+        // #6563: node-pty + the API-identical @lydell fork, one bucket.
+        "node-pty" | "@lydell/node-pty" => Some(NmBucket::NodePty),
         "os" => Some(NmBucket::Os),
         "path" | "path.posix" | "path.win32" => Some(NmBucket::Path),
         "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => {
@@ -196,6 +209,21 @@ pub extern "C" fn js_nm_install_buffer() {
         Ordering::Relaxed,
     );
 }
+/// bun:ffi (#6562).
+#[no_mangle]
+pub extern "C" fn js_nm_install_bun_ffi() {
+    NM_DISPATCH_REGISTRY[NmBucket::BunFfi as usize].store(
+        nm_dispatch_bun_ffi as NmDispatchFn as *mut (),
+        Ordering::Relaxed,
+    );
+}
+#[no_mangle]
+pub extern "C" fn js_nm_install_bun() {
+    NM_DISPATCH_REGISTRY[NmBucket::Bun as usize].store(
+        nm_dispatch_bun as NmDispatchFn as *mut (),
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
 pub extern "C" fn js_nm_install_child_process() {
     NM_DISPATCH_REGISTRY[NmBucket::ChildProcess as usize].store(
@@ -283,6 +311,13 @@ pub extern "C" fn js_nm_install_module() {
 pub extern "C" fn js_nm_install_net() {
     NM_DISPATCH_REGISTRY[NmBucket::Net as usize].store(
         nm_dispatch_net as NmDispatchFn as *mut (),
+        Ordering::Relaxed,
+    );
+}
+#[no_mangle]
+pub extern "C" fn js_nm_install_node_pty() {
+    NM_DISPATCH_REGISTRY[NmBucket::NodePty as usize].store(
+        nm_dispatch_node_pty as NmDispatchFn as *mut (),
         Ordering::Relaxed,
     );
 }
@@ -436,6 +471,8 @@ pub extern "C" fn js_nm_install_all() {
     js_nm_install_async_hooks();
     js_nm_install_bigint();
     js_nm_install_buffer();
+    js_nm_install_bun();
+    js_nm_install_bun_ffi();
     js_nm_install_child_process();
     js_nm_install_cluster();
     js_nm_install_console();
@@ -449,6 +486,7 @@ pub extern "C" fn js_nm_install_all() {
     js_nm_install_inspector();
     js_nm_install_module();
     js_nm_install_net();
+    js_nm_install_node_pty();
     js_nm_install_os();
     js_nm_install_path();
     js_nm_install_perf();

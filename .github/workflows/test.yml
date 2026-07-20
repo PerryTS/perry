@@ -599,6 +599,48 @@ jobs:
           exit "$status"
 
   # ---------------------------------------------------------------------------
+  # Windows build gate
+  #
+  # Exists because Windows-only compile/link breaks previously shipped to main
+  # unseen — every other job runs on ubuntu/macos. Two real examples that
+  # landed through green required checks: an MSVC-only rustc error (E0308 on
+  # the `ExitProcess` extern in crates/perry-runtime/src/process/env_misc.rs)
+  # and an MSVC-only link error (LNK2019: `js_crypto_ed25519_verify`
+  # unresolved when linking perry.exe — Unix linkers dead-strip the unused
+  # extern, link.exe errors). Building `perry` LINKS perry.exe, so the LNK2019
+  # class is caught here, not just rustc errors. The perry-dev profile
+  # (opt-level 1, no LTO) keeps a cold Windows build inside a PR-sized budget;
+  # --release would be far too slow for per-PR CI.
+  # ---------------------------------------------------------------------------
+  windows-build:
+    runs-on: windows-latest
+    # Cold Windows builds are slow, and this workflow never runs on pushes to
+    # main, so rust-cache only saves on the nightly cron (github.ref is
+    # refs/heads/main for `schedule`) — PR runs after a quiet night can be
+    # near-cold. 75 leaves headroom over a fully cold build while still
+    # bounding a true hang (same reasoning as conformance-smoke's bump: a
+    # timeout on a required-path job is a deterministic PR blocker).
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # perry-dev (see Cargo.toml [profile.perry-dev]) trades peak optimization
+      # for build speed. The package set covers the compiler binary (link
+      # gate), the runtime/stdlib pair (the usual source of cfg(windows)
+      # externs), and both Windows UI crates — the ones cargo-test's ubuntu
+      # runner must exclude and therefore never compiles.
+      - name: Build compiler + runtime + Windows UI crates (perry-dev)
+        run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-ui-windows -p perry-ui-windows-winui
+
+  # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
   #
   # `crates/perry/tests/gc_write_barrier_stress.rs` runs compiled binaries
@@ -896,11 +938,18 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # Observed 19-37 min/shard on the first real sharded PR run. 40 left only
-    # ~3 min headroom over the slowest shard, so a slow-runner day could trip
-    # the timeout and (once this gate is a required context) flaky-red-block
-    # every PR. 55 gives comfortable headroom without hiding a genuine hang.
-    timeout-minutes: 55
+    # Per-shard wall time has crept up as the gap suite grew: the original
+    # sharded run was 19-37 min/shard, but 2026-07-16 measured 33-44 min for
+    # shards 2-8 and shard 1 (its slice is the heaviest) hit 55:18 — the exact
+    # 55-min cap — and CANCELLED on every run, incl. `gh run rerun --failed`.
+    # On slow-runner days a second shard (observed: shard 3) also grazed 55.
+    # Because `conformance-smoke-complete` is a required context, that
+    # deterministic timeout flaky-red-blocked every PR (#6456). Bump to 75 for
+    # comfortable headroom (~35 min over the normal-day slowest, ~20 over the
+    # heavy shard) while still bounding a genuine hang. Durable fix — raising
+    # the shard count 8->12 so no single slice approaches the cap — tracked as
+    # a follow-up on #6456.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
 

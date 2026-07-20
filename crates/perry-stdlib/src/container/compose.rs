@@ -33,8 +33,8 @@ impl ComposeWrapper {
         self.engine.clone().up(&[], true, false, false).await
     }
 
-    pub async fn down(&self, volumes: bool) -> Result<(), ContainerError> {
-        self.engine.down(&[], false, volumes).await
+    pub async fn down(&self, volumes: bool, remove_orphans: bool) -> Result<(), ContainerError> {
+        self.engine.down(&[], remove_orphans, volumes).await
     }
 
     pub async fn ps(&self) -> Result<Vec<ContainerInfo>, ContainerError> {

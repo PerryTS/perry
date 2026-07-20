@@ -129,8 +129,26 @@ pub(crate) fn lower_string_method(
     let recv_box = if is_string_expr(ctx, object) {
         recv_box
     } else {
+        // A nullish receiver must throw the V8 member-access TypeError —
+        // `undefined.charAt(0)` reads `charAt` off `undefined` FIRST (ECMA-262
+        // §13.3), so it throws `Cannot read properties of undefined (reading
+        // 'charAt')` — NOT coerce `undefined`→`"undefined"` like the general
+        // `js_string_coerce`. The guarded helper does RequireObjectCoercible +
+        // ToString; pass the method name for the diagnostic.
+        let prop_idx = ctx.strings.intern(property);
+        let (prop_global, prop_len) = {
+            let entry = ctx.strings.entry(prop_idx);
+            (
+                format!("@{}", entry.bytes_global),
+                entry.byte_len.to_string(),
+            )
+        };
         let blk = ctx.block();
-        let coerced = blk.call(I64, "js_string_coerce", &[(DOUBLE, &recv_box)]);
+        let coerced = blk.call(
+            I64,
+            "js_string_coerce_method_this",
+            &[(DOUBLE, &recv_box), (PTR, &prop_global), (I64, &prop_len)],
+        );
         nanbox_string_inline(blk, &coerced)
     };
 
@@ -845,7 +863,22 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             if let Some(loc) = &locales_box {
-                blk.call_void("js_string_validate_locales", &[(DOUBLE, loc)]);
+                // Validate `(locales, options)` exactly as `Construct(%Collator%,
+                // «locales, options»)` would — CanonicalizeLocaleList then the
+                // InitializeCollator GetOption reads — for the throwing side effect
+                // only; collation ordering stays locale-neutral (#2781, #5906).
+                let undef;
+                let opts_ref = match &options_box {
+                    Some(o) => o,
+                    None => {
+                        undef = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+                        &undef
+                    }
+                };
+                blk.call_void(
+                    "js_string_validate_collator_args",
+                    &[(DOUBLE, loc), (DOUBLE, opts_ref)],
+                );
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);

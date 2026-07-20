@@ -92,8 +92,14 @@ thread_local! {
     /// Only populated when the program was compiled with `--debug-symbols`
     /// (the flag that gates the codegen emission). `None` in the default
     /// build, so release perf and the `<anonymous>` fallback are unchanged.
-    static CURRENT_CALL_LOCATION: std::cell::RefCell<Option<(String, u32)>> =
-        const { std::cell::RefCell::new(None) };
+    /// Raw `(file_ptr, file_len, line)` of the pending call site. The
+    /// pointer is a codegen string-pool rodata global (process lifetime;
+    /// `js_set_call_location` is a generated-code-only callee), so storing
+    /// it raw and rendering lazily keeps the per-dispatch recording
+    /// allocation-free (#6386 — this runs before EVERY dynamic dispatch in
+    /// a `--debug-symbols` build).
+    static CURRENT_CALL_LOCATION: std::cell::Cell<Option<(usize, usize, u32)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// #5247: record the source location of the call about to be dispatched.
@@ -107,12 +113,10 @@ thread_local! {
 #[no_mangle]
 pub unsafe extern "C" fn js_set_call_location(file_ptr: *const u8, file_len: usize, line: u32) {
     if line == 0 || file_ptr.is_null() || file_len == 0 {
-        CURRENT_CALL_LOCATION.with(|c| *c.borrow_mut() = None);
+        CURRENT_CALL_LOCATION.with(|c| c.set(None));
         return;
     }
-    let bytes = std::slice::from_raw_parts(file_ptr, file_len);
-    let file = String::from_utf8_lossy(bytes).into_owned();
-    CURRENT_CALL_LOCATION.with(|c| *c.borrow_mut() = Some((file, line)));
+    CURRENT_CALL_LOCATION.with(|c| c.set(Some((file_ptr as usize, file_len, line))));
 }
 
 // Generated-code-only callee: anchor against the auto-optimize LTO dead-strip
@@ -124,8 +128,11 @@ static KEEP_JS_SET_CALL_LOCATION: unsafe extern "C" fn(*const u8, usize, u32) =
 /// #5247: render the current call-location frame, or `<anonymous>` when no
 /// location was recorded (default builds, or a synthesized/offset-less site).
 fn current_stack_frame() -> String {
-    CURRENT_CALL_LOCATION.with(|c| match &*c.borrow() {
-        Some((file, line)) => format!("    at {}:{}", file, line),
+    CURRENT_CALL_LOCATION.with(|c| match c.get() {
+        Some((file_ptr, file_len, line)) => {
+            let bytes = unsafe { std::slice::from_raw_parts(file_ptr as *const u8, file_len) };
+            format!("    at {}:{}", String::from_utf8_lossy(bytes), line)
+        }
         None => "    at <anonymous>".to_string(),
     })
 }

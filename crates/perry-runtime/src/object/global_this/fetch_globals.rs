@@ -599,6 +599,52 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             return undef;
         }
     }
+    // #6469: `class X extends Error` lowered with a DYNAMIC parent edge (the
+    // shape a module-top `class Y extends Error {}` takes when its extends
+    // value routes through the dynamic-parent registry): the parent value is
+    // the global Error-family constructor. The ordinary value-super dispatch
+    // below invokes it as a plain call, which builds a FRESH error cell and
+    // drops it — `this` never receives `message`/`name`, so every subclass
+    // instance constructed through this path printed "An error has occurred".
+    // Apply the spec default Error-init directly on `this`, mirroring the
+    // static-`new` arm (#573, `lower_call/new.rs`) and the standalone-ctor arm
+    // (`codegen/method.rs`). The helper carries the spec's "If message is not
+    // undefined" guard.
+    {
+        let err_parent = super::super::class_registry::identify_global_builtin_constructor(
+            parent_val,
+        )
+        .or_else(|| {
+            let obj = subclass_this_object_ptr(this_box)?;
+            let cid = crate::object::js_object_get_class_id(obj);
+            let stash = crate::object::class_registry::js_get_dynamic_parent_value(cid);
+            super::super::class_registry::identify_global_builtin_constructor(stash)
+        });
+        if let Some(kind) = err_parent.filter(|k| {
+            matches!(
+                *k,
+                "Error"
+                    | "TypeError"
+                    | "RangeError"
+                    | "ReferenceError"
+                    | "SyntaxError"
+                    | "URIError"
+                    | "EvalError"
+                    | "AggregateError"
+            )
+        }) {
+            let msg = if !args_ptr.is_null() && args_len >= 1 {
+                *args_ptr
+            } else {
+                undef
+            };
+            let name_str = crate::string::js_string_from_bytes(kind.as_ptr(), kind.len() as u32);
+            crate::object::class_constructors::js_error_subclass_default_init(
+                this_box, msg, name_str,
+            );
+            return undef;
+        }
+    }
     // Resolve the parent constructor kind from the value first. When the
     // `extends` expression is an alias of `global.Request`/`global.Response`
     // (`@hono/node-server`'s `class Request extends GlobalRequest`), the alias
@@ -607,8 +653,37 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // `None`. Fall back to the fetch-parent kind registered against the
     // instance's class at module init (via `js_register_class_parent_dynamic`,
     // where the alias resolved correctly) so the native handle still attaches.
+    // A parent value that resolves to a USER constructor (ClassRef, class
+    // object, or closure) must take the value-super dispatch below — its own
+    // constructor body has to run on `this` (and its own `super()` leg will
+    // attach the native handle when it reaches the builtin). The chain-walk
+    // fallback exists ONLY for a stale/unresolvable alias of the builtin
+    // itself; letting it preempt a live user parent skipped every
+    // intermediate constructor in `class Hint extends NextRequest extends
+    // Request` — Next.js middleware's NextRequestHint lost the parent's
+    // symbol-keyed internal state (`this[INTERNALS]`), so `request.nextUrl`
+    // threw on every request.
+    let parent_is_user_ctor = {
+        let bits = parent_val.to_bits();
+        const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+        const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+        match bits & TAG_MASK {
+            INT32_TAG => true, // ClassRef
+            POINTER_TAG => {
+                let p = (bits & PTR_MASK) as usize;
+                crate::closure::is_closure_ptr(p)
+                    || super::super::class_registry::is_class_object_ptr(p as *const u8)
+            }
+            _ => false,
+        }
+    };
     let kind = super::super::class_registry::identify_global_builtin_constructor(parent_val)
         .or_else(|| {
+            if parent_is_user_ctor {
+                return None;
+            }
             let obj = subclass_this_object_ptr(this_box)?;
             match super::super::class_registry::fetch_parent_kind_in_chain(
                 crate::object::js_object_get_class_id(obj),
@@ -690,6 +765,34 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 // (b) skip the `parent_closure_in_chain` recovery that only
                 // applies to closure/object parents, not a ClassRef.
                 return undef;
+            }
+            // #6530: the parent can be a per-evaluation CLASS OBJECT — what a
+            // capture-carrying class statement materializes as (bundled zod's
+            // `class ZodEffects extends ZodType` where ZodType captures module
+            // helpers, registered via `js_register_class_parent_dynamic`).
+            // Dispatching it through `js_native_call_value` below hits that
+            // helper's class-object arm, which CONSTRUCTS a fresh parent
+            // instance — and this super leg drops the result, so the parent
+            // constructor never ran on `this` and every base-ctor field
+            // (zod's `_def`, the bound methods) stayed undefined. Route
+            // through the same flat constructor-on-`this` dispatch as the
+            // ClassRef arm above, using the template class id stamped on the
+            // class object at `js_object_alloc` time.
+            if bits & TAG_MASK == POINTER_TAG {
+                let p = (bits & PTR_MASK) as usize;
+                if super::super::class_registry::is_class_object_ptr(p as *const u8) {
+                    let parent_cid = crate::object::js_object_get_class_id(
+                        p as *const crate::object::ObjectHeader,
+                    );
+                    if parent_cid != 0 {
+                        if let Some(obj) = subclass_this_object_ptr(this_box) {
+                            super::super::class_constructors::run_class_constructor_on_this_flat(
+                                parent_cid, obj as i64, args_ptr, args_len,
+                            );
+                            return undef;
+                        }
+                    }
+                }
             }
             let usable = if bits & TAG_MASK == POINTER_TAG {
                 let p = (bits & PTR_MASK) as usize;

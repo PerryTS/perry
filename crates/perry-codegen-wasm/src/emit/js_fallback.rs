@@ -329,7 +329,9 @@ impl WasmModuleEmitter {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
                     }
-                    Expr::PropertyGet { object, property } => {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => {
                         let obj = self.emit_js_expr(object, locals);
                         let _args_str = args_js.join(", ");
                         format!(
@@ -383,7 +385,9 @@ impl WasmModuleEmitter {
                 opts.push('}');
                 format!("fromJsValue(await fetch(getString({}), {}))", url_js, opts)
             }
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
                 let obj = self.emit_js_expr(object, locals);
                 format!("fromJsValue(toJsValue({}).{})", obj, property)
             }

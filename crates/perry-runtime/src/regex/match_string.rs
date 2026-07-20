@@ -225,29 +225,34 @@ pub extern "C" fn js_string_match(
                             let str_ptr = js_string_from_str(m.as_str());
                             let nanboxed = js_nanbox_string(str_ptr as i64);
                             let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                            // GC_STORE_AUDIT(BARRIERED): regex capture array slot uses the shared array slot-store helper.
-                            crate::array::store_array_slot(arr, i, nanboxed.to_bits());
+                            // GC_STORE_AUDIT(INIT): fresh match-array slot; layout is
+                            // noted per store and the exact layout/barrier rebuild
+                            // below the loop covers a mid-loop tenuring (#6386).
+                            crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
                         } else {
                             // Undefined capture group - store as undefined (TAG_UNDEFINED = 0x7FFC_0000_0000_0001)
                             let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
                             let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                            // GC_STORE_AUDIT(BARRIERED): regex unmatched capture slot uses the shared array slot-store helper.
-                            crate::array::store_array_slot(arr, i, undefined.to_bits());
+                            // GC_STORE_AUDIT(INIT): fresh match-array slot; see above.
+                            crate::array::note_array_slot_layout_only(arr, i, undefined.to_bits());
                         }
                     }
+                    // GC_STORE_AUDIT(BARRIERED): one exact rebuild replays any
+                    // old-gen barriers for the whole capture prefix.
+                    crate::array::rebuild_array_layout_exact(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                    );
 
                     // Attach .index / .input as real own properties (mirrors
                     // js_regexp_exec) so they survive aliasing and a later match
                     // on another regex, instead of a most-recent-match thread-local.
+                    // Deferred into the combined fresh-array decoration below
+                    // (#6386) so index/input/groups cost one side-table probe
+                    // and the subject string is re-boxed, not copied.
                     let match_char_offset = caps
                         .get(0)
                         .map(|m| super::utf16::byte_index_to_utf16_index(str_data, m.start()))
                         .unwrap_or(0);
-                    set_exec_array_metadata(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        str_data,
-                        match_char_offset as f64,
-                    );
 
                     // Build groups object for named captures (same shape as
                     // `regex.exec(str)` does in `js_regexp_exec`). Stored in
@@ -296,14 +301,18 @@ pub extern "C" fn js_string_match(
                             *g.borrow_mut() =
                                 groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
                         });
-                        set_exec_array_groups(
+                        super::exec_array::set_exec_array_metadata_groups_fresh(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            s,
+                            match_char_offset as f64,
                             groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
                         );
                     } else {
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                        set_exec_array_groups(
+                        super::exec_array::set_exec_array_metadata_groups_fresh(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            s,
+                            match_char_offset as f64,
                             ptr::null_mut(),
                         );
                     }

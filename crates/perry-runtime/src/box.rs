@@ -437,6 +437,36 @@ fn is_registered_box_ptr(ptr: *mut Box) -> bool {
     BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
 }
 
+/// If `slot_bits` (the raw contents of a closure capture slot) is a registered
+/// box pointer, return the JSValue bits stored *inside* that box; otherwise
+/// return `None`.
+///
+/// A closure that captures a boxed local — every body local of an `async`
+/// function (the async-to-generator transform boxes them all), plus any
+/// mutable capture — stores the raw box pointer in its capture slot rather
+/// than a NaN-boxed value (see the codegen closure lowering in
+/// `perry-codegen/src/expr/closure.rs`). That pointer addresses a box in the
+/// *current thread's* thread-local, never-freed `BOX_REGISTRY`, so it is
+/// meaningless on any other thread. The `perry/thread` serializer uses this to
+/// unwrap such a slot to the value the box actually holds before deep-copying
+/// it across the boundary (#6520 — without it the worker read the captured
+/// value as `undefined`/empty).
+///
+/// Registry membership is authoritative: any NaN-boxed value or real double
+/// has its high bits set and fails `is_plausible_box_ptr`, so this only ever
+/// matches a genuine live box pointer, never a coincidental capture value.
+#[inline]
+pub fn box_slot_contents_bits(slot_bits: u64) -> Option<u64> {
+    let ptr = slot_bits as usize as *mut Box;
+    if is_registered_box_ptr(ptr) {
+        // Safety: the address is in BOX_REGISTRY, so it was minted by
+        // `js_box_alloc` and points at a live (never-freed) `Box`.
+        Some(unsafe { (*ptr).value })
+    } else {
+        None
+    }
+}
+
 #[inline]
 fn is_registered_i32_box_ptr(ptr: *mut I32Box) -> bool {
     if !is_plausible_box_ptr(ptr.cast::<Box>()) {
@@ -587,5 +617,34 @@ mod tests {
         assert_eq!(js_i32_box_get(ordinary_box.cast::<I32Box>()), 0);
         js_i32_box_set(ordinary_box.cast::<I32Box>(), 99);
         assert_eq!(js_box_get(ordinary_box), 1.0);
+    }
+
+    /// #6520: the thread-boundary serializer unwraps a capture slot that holds
+    /// a box pointer to the value inside. `box_slot_contents_bits` returns the
+    /// contained JSValue bits for a real box and `None` for anything else — a
+    /// plain NaN-boxed value (high tag bits set → not a plausible box address),
+    /// a plausible-but-unregistered pointer, and a null slot.
+    #[test]
+    fn box_slot_contents_unwraps_only_registered_boxes() {
+        test_clear_box_registry();
+
+        // A real box: returns the bits it holds, not the pointer.
+        let inner = crate::value::JSValue::int32(1234).bits();
+        let b = js_box_alloc_bits(inner as i64);
+        let slot_bits = b as usize as u64; // codegen stores the raw box ptr here
+        assert_eq!(box_slot_contents_bits(slot_bits), Some(inner));
+
+        // A NaN-boxed non-box value (its own tag bits are set) is not a box.
+        assert_eq!(box_slot_contents_bits(inner), None);
+        assert_eq!(box_slot_contents_bits(crate::value::TAG_UNDEFINED), None);
+
+        // A plausible pointer that was never minted as a box.
+        static RODATA: [u64; 2] = [0xDEAD_BEEF, 0xFEED_FACE];
+        let fake = (&RODATA[0] as *const u64) as usize as u64;
+        assert!(is_plausible_box_ptr(fake as usize as *mut Box));
+        assert_eq!(box_slot_contents_bits(fake), None);
+
+        // Null / near-null slots.
+        assert_eq!(box_slot_contents_bits(0), None);
     }
 }

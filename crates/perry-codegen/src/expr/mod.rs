@@ -997,6 +997,12 @@ pub(crate) struct FnCtx<'a> {
     /// Benchmark/debug switch that forces tracked buffers through the existing
     /// helper fallback instead of native GEP/load/store lowering.
     pub disable_buffer_fast_path: bool,
+    /// #6405: this module assigns a Buffer numeric read-method name as an own
+    /// property somewhere (`buf.readUInt8 = fn`), so an own prop may shadow the
+    /// prototype method. When set, `try_emit_buffer_read_intrinsic` deopts the
+    /// inline byte-load fold to the own-prop-aware runtime dispatch. False for
+    /// every program that never shadows a Buffer method (the common case).
+    pub program_shadows_buffer_read_method: bool,
     /// LocalId facts of the form `n = min(src.length, dst.length)`.
     pub min_length_bounds: std::collections::HashMap<u32, Vec<u32>>,
     /// Loop-local facts proving a buffer index is bounded inside the current
@@ -1060,8 +1066,14 @@ pub struct I18nLowerCtx {
     /// Configured locale codes in string-table row order (e.g.
     /// `["en", "de", "fr"]`). Used by the `Expr::I18nString` lowering to
     /// emit the runtime locale-index lookup for keys whose translations
-    /// differ between locales.
+    /// differ between locales, and by the entry `main` prelude to bake
+    /// the `perry_i18n_init` locale registration.
     pub locale_codes: Vec<String>,
+    /// `[i18n.currencies]` overrides from perry.toml as sorted
+    /// `(locale, ISO 4217 code)` pairs. Baked into the entry `main`
+    /// prelude's `perry_i18n_set_currencies` call; empty when the project
+    /// doesn't configure the table.
+    pub currencies: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]

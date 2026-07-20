@@ -28,6 +28,14 @@ use tokio::sync::mpsc;
 /// socket.
 pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
     let id = next_id();
+    // #6441: called from the HTTP accept task (a background tokio thread), so
+    // exhaustion can't throw to a JS frame here. Drop the upgraded stream and
+    // return the `0` sentinel rather than register a phantom socket under it;
+    // the caller aborts the upgrade when it sees `INVALID_HANDLE`.
+    if id == perry_ffi::INVALID_HANDLE {
+        drop(stream);
+        return perry_ffi::INVALID_HANDLE;
+    }
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     let local = stream.local_addr().ok();
     statics::sockets().lock().unwrap().insert(

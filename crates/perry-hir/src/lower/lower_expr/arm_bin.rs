@@ -68,7 +68,19 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         let expr = Box::new(lower_expr(ctx, &bin.left)?);
         // Right side can be an identifier (ClassName) or member expression (Module.ClassName)
         let ty = match bin.right.as_ref() {
-            ast::Expr::Ident(ident) => ident.sym.to_string(),
+            // Honor a scope-local class rename: when two same-named classes
+            // collide (e.g. a bundler flattens two module factories that each
+            // declare `class l`), the SECOND is registered under a suffixed
+            // name (`l$0`) and `class_renames` maps the raw name to it. `extends`
+            // / `new` already resolve through this map, but `instanceof <name>`
+            // used the RAW ident — so `x instanceof l` resolved to the OTHER
+            // factory's `l` (class_id mismatch) and returned false even though
+            // the prototype chain was correct. This broke Auth.js's
+            // `error instanceof AuthError` guard (AuthError was the renamed
+            // class), so a `CredentialsSignin` was mis-wrapped in a
+            // `CallbackRouteError` and the login redirect fell back to
+            // `?error=Configuration` instead of `?error=CredentialsSignin`.
+            ast::Expr::Ident(ident) => ctx.resolve_class_name(ident.sym.as_ref()),
             ast::Expr::Member(member) => {
                 // Handle Module.ClassName - extract the full qualified name
                 let obj_name = if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {

@@ -826,8 +826,12 @@ pub fn select_linker_command(
         .arg("/ENTRY:mainCRTStartup")
         .arg("/NOLOGO")
         // Perry generates large init functions for TS modules (one function
-        // per module). Large codebases (100+ modules) can overflow the
-        // default 1MB stack. Reserve 8MB.
+        // per module), and compiled TS + game workloads recurse deeply
+        // (Bloom-engine scene graphs, recursive descent over user data).
+        // Large codebases (100+ modules) overflow the default 1 MB stack.
+        // Reserve 64 MiB (67108864 = 64 * 1024 * 1024) — this bakes in the
+        // `editbin /STACK:67108864` post-link step users previously had to
+        // run by hand.
         .arg("/STACK:67108864")
         // Native libs (hone_editor_windows etc) bundle perry_runtime objects
         // that can't be fully stripped. Identical symbols are safe to merge.

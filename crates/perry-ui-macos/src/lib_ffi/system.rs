@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use crate::*;
 
 // =============================================================================
@@ -187,10 +188,7 @@ pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
 /// the issue: "" if absent).
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-    }
-    let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) };
+    let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) as i64 };
     let key = appgroup_str_from_header(key_ptr as *const u8);
     if key.is_empty() {
         return empty();
@@ -215,7 +213,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
         if utf8_len == 0 {
             return empty();
         }
-        js_string_from_bytes(utf8_ptr, utf8_len as i32)
+        js_string_from_bytes(utf8_ptr, utf8_len as u32) as i64
     }
 }
 
@@ -357,7 +355,6 @@ pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
         }
     }
     extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
         fn js_nanbox_string(ptr: i64) -> f64;
     }
     let key = str_from_header(key_ptr as *const u8);
@@ -379,7 +376,7 @@ pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
                     &*(obj as *const objc2_foundation::NSString);
                 let rust_str = ns_str.to_string();
                 let bytes = rust_str.as_bytes();
-                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 return js_nanbox_string(str_ptr as i64);
             }
         }

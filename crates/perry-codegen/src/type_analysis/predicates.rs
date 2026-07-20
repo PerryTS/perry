@@ -43,7 +43,10 @@ pub(crate) fn is_global_builtin_named(expr: &Expr, name: &str) -> bool {
     if matches!(expr, Expr::GlobalGet(_)) {
         return true;
     }
-    if let Expr::PropertyGet { object, property } = expr {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
         if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == name {
             return true;
         }
@@ -74,7 +77,9 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         },
         // Promise.resolve / reject / all / race / allSettled / any
         Expr::Call { callee, .. } => match callee.as_ref() {
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
                 // `Promise.resolve(...)` etc. The receiver `Promise` can
                 // appear in two shapes:
                 //   - Legacy: bare ident → `Expr::GlobalGet(_)` directly.
@@ -195,6 +200,55 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// The built-in JS error constructors. `AggregateError` is the only one
+/// with an `errors` data field, but a user subclass can extend any of
+/// them, so the whole family is recognized as "error-shaped".
+pub(crate) fn is_error_class_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Error"
+            | "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "AggregateError"
+            | "SuppressedError"
+    )
+}
+
+/// True when the receiver is statically known to be an Error (or an Error
+/// subclass). Gates the `.errors` codegen fast-path (`js_error_get_errors`)
+/// so it only fires for genuine error receivers: that helper returns a raw
+/// `ArrayHeader*`, which can't represent a stored `null`, so applying it to
+/// a function/plain-object `.errors` expando that holds `null` yielded a
+/// bogus pointer sentinel instead of null (#6588). Every other receiver
+/// falls through to the generic property read, which returns the stored
+/// value (including `null`) correctly.
+pub(crate) fn receiver_is_error_type(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    let Some(name) = receiver_class_name(ctx, e) else {
+        return false;
+    };
+    if is_error_class_name(&name) {
+        return true;
+    }
+    // Walk the user-declared `extends` chain: `class MyErr extends Error`.
+    let mut current = Some(name);
+    let mut hops = 0;
+    while let Some(n) = current {
+        if is_error_class_name(&n) {
+            return true;
+        }
+        hops += 1;
+        if hops > 64 {
+            break;
+        }
+        current = ctx.classes.get(&n).and_then(|c| c.extends_name.clone());
+    }
+    false
+}
+
 /// If the expression is a known instance of a Named class type, return
 /// the class name. Used by the class method dispatch in lower_call to
 /// pick the right `perry_method_<class>_<name>` function.
@@ -259,7 +313,9 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // `this.field` or `obj.field` where the field's declared type
         // is a class. Walk the class definition to find the field's
         // type. Honors the parent inheritance chain.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             let owner_class_name = receiver_class_name(ctx, object)?;
             let class = ctx.classes.get(&owner_class_name)?;
             // Look in own fields, then walk parent chain.
@@ -405,7 +461,9 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             })
             .map(|method| method.return_type.clone()),
         e if net_result_type(e).is_some() => net_result_type(e),
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return Some(HirType::Number);
             }
@@ -521,7 +579,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Call { callee, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { property, object } if matches!(
+                Expr::PropertyGet { property, object, .. } if matches!(
                     property.as_str(), "split" | "match"
                 ) && is_string_expr(ctx, object)
             ) =>
@@ -545,7 +603,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Call { callee, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { property, object }
+                Expr::PropertyGet { property, object, .. }
                     if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto")
                         && matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves")
             ) =>
@@ -618,5 +676,46 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             }
         }
         _ => hir_inferred_static_type(ctx, e),
+    }
+}
+
+#[cfg(test)]
+mod error_class_tests {
+    use super::is_error_class_name;
+
+    #[test]
+    fn recognizes_every_builtin_error_constructor() {
+        for name in [
+            "Error",
+            "TypeError",
+            "RangeError",
+            "SyntaxError",
+            "ReferenceError",
+            "EvalError",
+            "URIError",
+            "AggregateError",
+            "SuppressedError",
+        ] {
+            assert!(is_error_class_name(name), "{name} should be error-shaped");
+        }
+    }
+
+    #[test]
+    fn rejects_non_error_receivers() {
+        // Function / plain-object / typed-array receivers must NOT be treated
+        // as error-shaped — that is exactly the #6588 mis-routing that sent a
+        // stored-null `.errors` expando through the Error-only helper.
+        for name in [
+            "Function",
+            "Object",
+            "Array",
+            "Map",
+            "Set",
+            "Promise",
+            "Uint8Array",
+            "MyError",
+        ] {
+            assert!(!is_error_class_name(name), "{name} is not a builtin error");
+        }
     }
 }

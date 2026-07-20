@@ -208,6 +208,14 @@ impl ContainerBackend for MockBackend {
         self.run(spec).await
     }
 
+    async fn create_with_security(
+        &self,
+        spec: &ContainerSpec,
+        _profile: &SecurityProfile,
+    ) -> Result<ContainerHandle> {
+        self.create(spec).await
+    }
+
     async fn inspect_network(&self, _name: &str) -> Result<()> {
         let state = self.state.lock().unwrap();
         if state.networks.contains(&_name.to_string()) {
