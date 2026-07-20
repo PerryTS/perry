@@ -205,6 +205,17 @@ pub(super) fn try_global_builtins(
                 }
             }
             "queueMicrotask" => {
+                // #6718: a spread call `queueMicrotask(...[fn])` collapses the
+                // spread operand into a single positional `args[0]` (the array
+                // `[fn]`), so the `Expr::QueueMicrotask` fast path below would
+                // hand the array to the callback validator ("callback must be a
+                // function"). Decline so the generic tail builds an
+                // `Expr::CallSpread`; `queueMicrotask` resolves to its callable
+                // globalThis thunk, and the spread is materialized and applied —
+                // the same path `setTimeout(...[fn], 0)` already uses.
+                if has_spread {
+                    return Ok(Err(args));
+                }
                 let callback = if !args.is_empty() {
                     args.remove(0)
                 } else {

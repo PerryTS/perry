@@ -19,6 +19,22 @@ pub(super) fn try_inline_array_methods(
         if let ast::Expr::Member(member) = expr.as_ref() {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();
+                // #6718: a spread-call of a callback-taking array method
+                // (`[1,2].map(...[fn])`, `[1,2].reduce(...args)`) collapses the
+                // spread operand into a single positional `args[0]`, so the
+                // callback arms below would read the spread SOURCE array as the
+                // callback ("object is not a function"). Decline so the generic
+                // tail builds an `Expr::CallSpread`, whose member-callee arm
+                // flattens the spread into one argument array and dispatches the
+                // native method by name with `this` bound to the receiver
+                // (`js_native_call_method_apply_by_id`). Mirrors the #6668 crypto
+                // spread guard; variadic methods with dedicated spread arms
+                // (push/concat/unshift/splice) are intentionally excluded.
+                if call.args.iter().any(|a| a.spread.is_some())
+                    && super::is_spread_unsafe_callback_method(method_name)
+                {
+                    return Ok(Err(args));
+                }
                 if let ast::Expr::Array(_arr_lit) = member.obj.as_ref() {
                     // Lower the array literal
                     let array_expr = lower_expr(ctx, &member.obj)?;
