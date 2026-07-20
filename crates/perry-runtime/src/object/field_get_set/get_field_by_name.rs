@@ -139,7 +139,7 @@ pub extern "C" fn js_object_get_field_by_name(
                             && ((keys as u64) >> 48) == 0
                             && crate::value::addr_class::is_above_handle_band(keys as usize)
                         {
-                            let alloc_limit = std::cmp::max((*o).field_count, 8) as usize;
+                            let alloc_limit = std::cmp::max((*o).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
                             if let Some(idx) = super::super::prop_plan::read_plan_lookup(
                                 keys as usize,
                                 key as usize,

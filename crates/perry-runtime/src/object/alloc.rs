@@ -114,7 +114,7 @@ pub extern "C" fn js_object_alloc_with_parent(
     // assumption (max(field_count, 8)). Without this, empty objects ({}) with field_count=0
     // would have 0 field slots but js_object_set_field_by_name writes up to 8 fields inline,
     // causing heap buffer overflow into adjacent arena objects.
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -149,7 +149,7 @@ pub extern "C" fn js_object_alloc_with_parent(
 #[no_mangle]
 pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut ObjectHeader {
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -182,7 +182,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
     }
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -226,7 +226,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         register_class(class_id, parent_class_id);
     }
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -344,7 +344,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     }
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -506,7 +506,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     };
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
@@ -551,7 +551,7 @@ pub extern "C" fn js_object_alloc_with_shape(
 ) -> *mut ObjectHeader {
     let header_size = std::mem::size_of::<ObjectHeader>();
     // Allocate extra field slots for dynamic property growth (plain objects may get new fields)
-    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * 8;
     let total_size = header_size + fields_size;
     let obj_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
@@ -663,7 +663,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
             Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT
         );
     if !src_is_object {
-        let phys_slots = std::cmp::max(extra_count, 8);
+        let phys_slots = std::cmp::max(extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
         let total_size = header_size + phys_slots as usize * 8;
         let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
         (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -688,7 +688,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // Physical slot capacity: src_field_count + extra_count, but at least max(fc, 8) to match
     // js_object_set_field's alloc_limit check. Extra slots are scratch space for subsequent
     // js_object_set_field_by_name calls.
-    let phys_slots = std::cmp::max(src_field_count + extra_count, 8);
+    let phys_slots = std::cmp::max(src_field_count + extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
     let total_size = header_size + phys_slots as usize * 8;
     let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -820,7 +820,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     }
     let key_count = crate::array::js_array_length(src_keys) as usize;
     let src_field_count = (*src).field_count as usize;
-    let alloc_limit = std::cmp::max(src_field_count, 8);
+    let alloc_limit = std::cmp::max(src_field_count, crate::object::INLINE_SLOT_FLOOR);
     let header_size = std::mem::size_of::<ObjectHeader>();
     let src_fields = (src as *const u8).add(header_size) as *const u64;
 

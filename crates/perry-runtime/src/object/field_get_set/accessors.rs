@@ -94,7 +94,7 @@ pub(crate) unsafe fn own_data_field_by_name(
     if key_count > 65536 {
         return None;
     }
-    let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+    let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         // #1781: accept inline SSO short keys — `is_string()` is

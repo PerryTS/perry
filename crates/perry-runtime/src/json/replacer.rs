@@ -394,7 +394,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     // num_fields can be smaller than keys_len — the min() silently DROPPED
     // every overflow property from replacer serialization (react-server-dom's
     // flight props objects routinely exceed 8 keys).
-    let alloc_limit = std::cmp::max(num_fields, 8);
+    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let actual_fields = keys_len;
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
@@ -945,7 +945,7 @@ pub(crate) unsafe fn stringify_object_pretty(
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, 8);
+    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
     let filter_non_enum = crate::object::descriptors_in_use();
@@ -1120,7 +1120,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, 8);
+    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let actual_fields = keys_len;
 
     // Build a map of key_name -> field_value for the object. An own accessor

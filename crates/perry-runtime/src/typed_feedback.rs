@@ -1355,7 +1355,7 @@ fn object_key_matches_field(
     }
     unsafe {
         let obj = object_addr as *mut ObjectHeader;
-        let alloc_limit = std::cmp::max((*obj).field_count, 8);
+        let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
         if field_index >= alloc_limit {
             return false;
         }

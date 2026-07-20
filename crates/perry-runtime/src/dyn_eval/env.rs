@@ -179,7 +179,7 @@ fn scope_probe(env: f64, key: *const crate::string::StringHeader) -> ScopeProbe 
         if keys.is_null() {
             return ScopeProbe::Bail;
         }
-        let alloc_limit = std::cmp::max((*o).field_count, 8);
+        let alloc_limit = std::cmp::max((*o).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
         if let Some(idx) = crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize) {
             if idx < alloc_limit {
                 let v = crate::object::js_object_get_field(o, idx);

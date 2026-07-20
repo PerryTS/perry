@@ -125,7 +125,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         // We use a generous limit of max(field_count, 8) to avoid false positives from
         // js_object_alloc_with_shape's extra padding while still catching real overflows.
         let stored_field_count = (*obj).field_count;
-        let alloc_limit = std::cmp::max(stored_field_count, 8);
+        let alloc_limit = std::cmp::max(stored_field_count, crate::object::INLINE_SLOT_FLOOR as u32);
         if field_index >= alloc_limit {
             eprintln!(
                 "[PERRY WARN] js_object_set_field: OOB write field_index={} alloc_limit={} (field_count={}) obj={:p} class_id={}",
@@ -278,7 +278,7 @@ pub extern "C" fn js_object_set_unboxed_f64_field(
             return;
         }
         let stored_field_count = (*obj).field_count;
-        let alloc_limit = std::cmp::max(stored_field_count, 8);
+        let alloc_limit = std::cmp::max(stored_field_count, crate::object::INLINE_SLOT_FLOOR as u32);
         if field_index >= alloc_limit {
             eprintln!(
                 "[PERRY WARN] js_object_set_unboxed_f64_field: OOB write field_index={} alloc_limit={} (field_count={}) obj={:p} class_id={}",
