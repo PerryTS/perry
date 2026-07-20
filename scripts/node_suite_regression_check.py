@@ -74,7 +74,12 @@ def main():
         elif cur["pass"] > floor["pass"]:
             improvements.append(f"{mod}: {cur['pass']}/{cur['total']}  (+{cur['pass'] - floor['pass']})")
 
+    # Overall is derived, not stored (avoids cross-PR merge conflicts on a
+    # shared aggregate). Compute it from the per-module floors at report time.
+    bp = sum(m["pass"] for m in baseline.values())
+    bt = sum(m["total"] for m in baseline.values())
     print("\n=== node-suite regression check ===")
+    print(f"baseline floor overall: {bp}/{bt} ({round(100 * bp / bt, 1)}%)")
     if improvements:
         print("improvements (ratchet the baseline up):")
         for s in improvements:

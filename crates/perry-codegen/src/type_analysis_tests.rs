@@ -89,6 +89,7 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
         hir_inferred_static_type_from_locals(
             &local_types,
             &Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::Object(vec![(
                     "answer".to_string(),
                     Expr::Number(1.0)
@@ -312,6 +313,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "label".to_string(),
             },
@@ -323,6 +325,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         infer_expr_type(
             &Expr::Call {
                 callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "score".to_string(),
                 }),

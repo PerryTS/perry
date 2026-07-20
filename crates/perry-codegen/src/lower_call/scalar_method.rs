@@ -971,7 +971,10 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
-    let Expr::PropertyGet { object, property } = callee else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    else {
         return Ok(None);
     };
     let Expr::LocalGet(receiver_id) = object.as_ref() else {

@@ -35,6 +35,11 @@ App({
     title: "QuickLaunch",
     width: 600,
     height: 80,
+    frameless: true,             // borderless window, movable by background
+    level: "floating",           // stays above normal windows
+    transparent: true,           // desktop shows through non-opaque regions
+    vibrancy: "sidebar",         // native translucent background material
+    activationPolicy: "accessory", // no dock icon — launcher-style app
     body: VStack(8, [
         Text("Search..."),
         Button("Open Settings", () => settings.show()),

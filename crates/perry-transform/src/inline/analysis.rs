@@ -518,7 +518,9 @@ pub fn construction_expr_can_affect_method_lookup(
 ) -> bool {
     match expr {
         Expr::This => true,
-        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) => {
             property == method_name
                 || !data_fields.contains(property)
                 || getter_names.contains(property)

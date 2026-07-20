@@ -23,6 +23,14 @@ use crate::OutputFormat;
 
 use super::{CompilationContext, CompileArgs, CompileResult, NativeBackend};
 
+/// Historical leftover from the pre-#1696 V8/`deno_core` fallback runtime
+/// (`perry-jsruntime`, removed). `ctx.js_modules` is only ever populated
+/// alongside `ctx.js_runtime_importers` (see `collect_modules.rs`), and
+/// `enforce_js_runtime_gate` (`bootstrap.rs`) hard-errors the build as soon
+/// as `js_runtime_importers` is non-empty — well before this function's
+/// caller runs. In current builds `ctx.js_modules` is therefore always
+/// empty here, so this function is effectively dead code kept around
+/// for the (currently unreachable) day a JS engine ships again.
 pub(super) fn generate_js_bundle(ctx: &CompilationContext, output_dir: &Path) -> Result<PathBuf> {
     let bundle_path = output_dir.join("__perry_js_bundle.js");
 
@@ -50,17 +58,21 @@ pub(super) fn generate_js_bundle(ctx: &CompilationContext, output_dir: &Path) ->
     Ok(bundle_path)
 }
 
-/// Issue #818 follow-up: emit a generated C file whose constructor
-/// registers every bundled JS module (and bare-specifier alias) into
-/// `perry-jsruntime`'s embedded-module map at startup. Returns the path
-/// to the compiled `.o`, ready to be appended to `obj_paths` ahead of
-/// the final link. The result is a self-contained binary: the V8
-/// fallback `ModuleLoader` consults the in-memory map before touching
-/// disk, so `node_modules/` is no longer required at runtime.
+/// Issue #818 follow-up, now historical: this generated a C constructor
+/// that registered every bundled JS module (and bare-specifier alias)
+/// into `perry-jsruntime`'s embedded-module map at startup, so the V8
+/// fallback `ModuleLoader` could consult the in-memory map before
+/// touching disk. `perry-jsruntime` (V8 via `deno_core`) was removed in
+/// #1696 — Perry ships no JS engine and compiles TypeScript ahead-of-time
+/// only, so `js_register_embedded_module`/`js_register_embedded_alias`
+/// (declared as `extern` below) no longer have any implementation to
+/// link against.
 ///
-/// Constructor priority `101` lands before any normal user constructors
-/// and before `main`'s call to `js_runtime_init`, so by the time the
-/// runtime asks for a module the map is fully populated.
+/// Like `generate_js_bundle` above, this function is effectively dead
+/// code today: `ctx.js_modules` can't be non-empty by the time its
+/// caller runs, because `enforce_js_runtime_gate` hard-errors the build
+/// as soon as any entry lands in `ctx.js_modules` (see that function's
+/// doc comment). Kept for reference / in case a JS engine returns.
 pub(super) fn generate_embedded_js_object(
     ctx: &CompilationContext,
     output_dir: &Path,

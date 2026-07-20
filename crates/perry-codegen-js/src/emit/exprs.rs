@@ -200,7 +200,7 @@ impl JsEmitter {
             }
 
             // --- Property access ---
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet { object, property, .. } => {
                 self.emit_expr(object);
                 if is_valid_identifier(property) {
                     let _ = write!(self.output, ".{}", property);

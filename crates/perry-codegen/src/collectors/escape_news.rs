@@ -214,7 +214,9 @@ fn collect_used_new_fields_in_expr(
     use perry_hir::{ArrayElement, CallArg, Expr};
 
     match expr {
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet {
+            object, property, ..
+        }
         | Expr::PropertyUpdate {
             object, property, ..
         } => {

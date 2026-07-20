@@ -3,10 +3,13 @@
 //! `#[cfg(test)] mod windows_link_tests;` in compile.rs.
 
 use super::library_search::newest_mt_dir_under;
+use super::library_search::{choose_windows_archiver, WindowsArchiver};
 use super::link::{embed_app_manifest, linker_is_msvc_link_exe, WINDOWS_APP_MANIFEST};
+use super::windows_archiver_command;
 use super::windows_default_output_extension;
 use super::windows_pe_subsystem_flag;
 use super::windows_subsystem_needs_ui;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // Regression guard for issue #120: without an explicit subsystem flag the
@@ -102,6 +105,68 @@ fn windows_output_extension_defaults_by_type() {
     assert_eq!(windows_default_output_extension(false, false), "exe");
     assert_eq!(windows_default_output_extension(true, false), "dll");
     assert_eq!(windows_default_output_extension(false, true), "lib");
+}
+
+// 2026-07 audit: a Windows `--output-type staticlib` no longer hard-requires
+// MSVC lib.exe. Precedence: lib.exe → llvm-lib (drop-in replacement, ships
+// with `winget install LLVM.LLVM`) → llvm-ar (rustup llvm-tools); None when
+// nothing is installed, which the pipeline turns into the two-toolchain
+// install hint instead of a raw spawn error.
+#[test]
+fn windows_archiver_precedence_prefers_lib_exe_then_llvm() {
+    let lib_exe = PathBuf::from(r"C:/VS/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lib.exe");
+    let llvm_lib = PathBuf::from(r"C:/Program Files/LLVM/bin/llvm-lib.exe");
+    let llvm_ar = PathBuf::from(r"C:/Program Files/LLVM/bin/llvm-ar.exe");
+    assert_eq!(
+        choose_windows_archiver(
+            Some(lib_exe.clone()),
+            Some(llvm_lib.clone()),
+            Some(llvm_ar.clone())
+        ),
+        Some(WindowsArchiver::LibExe(lib_exe))
+    );
+    assert_eq!(
+        choose_windows_archiver(None, Some(llvm_lib.clone()), Some(llvm_ar.clone())),
+        Some(WindowsArchiver::LibExe(llvm_lib))
+    );
+    assert_eq!(
+        choose_windows_archiver(None, None, Some(llvm_ar.clone())),
+        Some(WindowsArchiver::LlvmAr(llvm_ar))
+    );
+    assert_eq!(choose_windows_archiver(None, None, None), None);
+}
+
+// lib.exe / llvm-lib take the MSVC-style `/OUT:` argument (objects appended
+// by the caller).
+#[test]
+fn lib_exe_archiver_command_uses_out_flag() {
+    let archiver = WindowsArchiver::LibExe(PathBuf::from("lib.exe"));
+    let cmd = windows_archiver_command(&archiver, Path::new("app.lib"));
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(args, vec!["/OUT:app.lib".to_string()]);
+}
+
+// llvm-ar needs the COFF archive flavor spelled out, plus the same `crs`
+// modifiers the Unix `ar` branch uses.
+#[test]
+fn llvm_ar_archiver_command_uses_coff_format() {
+    let archiver = WindowsArchiver::LlvmAr(PathBuf::from("llvm-ar.exe"));
+    let cmd = windows_archiver_command(&archiver, Path::new("app.lib"));
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        args,
+        vec![
+            "--format=coff".to_string(),
+            "crs".to_string(),
+            "app.lib".to_string()
+        ]
+    );
 }
 
 // Issue #4681 / discussion #3486: the embedded app manifest must declare the

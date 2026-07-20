@@ -3,6 +3,93 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
+
+// #6667: `node:crypto` export surface. Node 22–26 enumerate 70 own keys on the
+// CJS namespace (`Object.keys(require("crypto")).length === 70`); order matches
+// Node's insertion order. Every key resolves to a live value through this
+// module's crypto property-resolution (callable exports, sub-namespaces,
+// constants) with the single exception of `setEngine`, whose OpenSSL-engine
+// implementation Perry does not ship — it is listed for enumeration/interop
+// parity and reads `undefined`, mirroring the module's other yet-unimplemented
+// tails. Consumed by `module_keys::native_module_enumerable_keys` and, through
+// it, by `copy_native_module_exports` for object spread / `Object.assign`.
+// Before this table existed, `Object.keys`/for-in/spread saw only the internal
+// `__module__` sentinel, so every enumeration-based interop layer (turbopack
+// `e.i`, Babel `interopRequireWildcard`, plain `{ ...crypto }`) produced an
+// empty namespace — e.g. jose's HKDF fell back to `(0, ns.createHmac)(...)` on
+// `undefined` and threw on the Auth.js success path.
+pub(super) const CRYPTO_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"argon2",
+    b"argon2Sync",
+    b"checkPrime",
+    b"checkPrimeSync",
+    b"createCipheriv",
+    b"createDecipheriv",
+    b"createDiffieHellman",
+    b"createDiffieHellmanGroup",
+    b"createECDH",
+    b"createHash",
+    b"createHmac",
+    b"createPrivateKey",
+    b"createPublicKey",
+    b"createSecretKey",
+    b"createSign",
+    b"createVerify",
+    b"diffieHellman",
+    b"generatePrime",
+    b"generatePrimeSync",
+    b"getCiphers",
+    b"getCipherInfo",
+    b"getCurves",
+    b"getDiffieHellman",
+    b"getHashes",
+    b"hkdf",
+    b"hkdfSync",
+    b"pbkdf2",
+    b"pbkdf2Sync",
+    b"generateKeyPair",
+    b"generateKeyPairSync",
+    b"generateKey",
+    b"generateKeySync",
+    b"privateDecrypt",
+    b"privateEncrypt",
+    b"publicDecrypt",
+    b"publicEncrypt",
+    b"randomBytes",
+    b"randomFill",
+    b"randomFillSync",
+    b"randomInt",
+    b"randomUUID",
+    b"randomUUIDv7",
+    b"scrypt",
+    b"scryptSync",
+    b"sign",
+    b"setEngine",
+    b"timingSafeEqual",
+    b"getFips",
+    b"setFips",
+    b"verify",
+    b"hash",
+    b"encapsulate",
+    b"decapsulate",
+    b"Certificate",
+    b"Cipheriv",
+    b"Decipheriv",
+    b"DiffieHellman",
+    b"DiffieHellmanGroup",
+    b"ECDH",
+    b"Hash",
+    b"Hmac",
+    b"KeyObject",
+    b"Sign",
+    b"Verify",
+    b"X509Certificate",
+    b"secureHeapUsed",
+    b"constants",
+    b"webcrypto",
+    b"subtle",
+    b"getRandomValues",
+];
 fn dns_lookup_flag_constant(property: &str) -> Option<f64> {
     #[cfg(unix)]
     fn ai_addrconfig() -> f64 {
@@ -148,6 +235,16 @@ pub(crate) unsafe fn get_native_module_constant(
             submodule.as_ptr(),
             submodule.len(),
         ));
+    }
+
+    // bun:ffi (#6562): `FFIType` is a plain enum object (cached, GC-rooted
+    // in `bun_ffi::types`); `suffix` is the platform dylib suffix string.
+    if module_name == "bun:ffi" {
+        match property {
+            "FFIType" => return Some(crate::bun_ffi::types::ffi_type_object_value()),
+            "suffix" => return Some(crate::bun_ffi::types::suffix_value()),
+            _ => {}
+        }
     }
 
     let o_nofollow: f64 = {
@@ -1452,6 +1549,13 @@ pub(crate) unsafe fn get_native_module_constant(
         // `createSecureServer` exports are handled elsewhere (#1651).
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
+            // #6468: `sensitiveHeaders` / `http2.constants` are the only http2
+            // props backed by `crate::node_http2_constants`, gated behind
+            // `mod-http2-constants`. This whole `"http2"` arm is only reached
+            // through the http2 namespace object, which materializes on a
+            // `node:http2` import — the same signal that enables the gate — so
+            // the `None` fallback when the gate is off is never observed.
+            #[cfg(feature = "mod-http2-constants")]
             "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
             // `Http2ServerRequest` / `Http2ServerResponse` imported as VALUES are
             // used by libraries purely for `req instanceof Http2ServerRequest`
@@ -1473,6 +1577,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" => Some(native_namespace_or_create("http2", namespace_obj)),
             _ => None,
         },
+        #[cfg(feature = "mod-http2-constants")]
         "http2.constants" => crate::node_http2_constants::constant(property),
         "dns" => dns_const(property),
         // node:cluster — primary-side settings and Worker handles are backed

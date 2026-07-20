@@ -193,6 +193,10 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // #4101: retain source text for `fn.toString()`.
     capture_function_source(ctx, func_id, &arrow.span, arrow.is_async);
     let scope_mark = ctx.enter_scope();
+    // #6604: truncate mark for capturing class expressions recorded while
+    // lowering THIS arrow — placed at scope entry so default-param
+    // expressions are covered too; see the truncate below the body match.
+    let body_class_expr_captures_mark = ctx.body_class_expr_captures.len();
     let strict = ctx.current_strict_mode()
         || match &*arrow.body {
             ast::BlockStmtOrExpr::BlockStmt(block) => {
@@ -377,6 +381,17 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             vec![Stmt::Return(Some(return_expr))]
         }
     };
+    // #6604: a capturing class expression in an EXPRESSION-bodied arrow
+    // (`x => new (class { … })(x)`) records a body-class-expr entry that no
+    // body twin will drain (the block-bodied arm drains its own inside
+    // `lower_fn_body_block_stmt`; default-param entries are self-truncated by
+    // `get_param_default`). Truncate on exit so the entry — whose ids are
+    // only meaningful in the arrow's own local numbering — never leaks into
+    // the ENCLOSING body's refresh statements. Nothing is lost: a
+    // single-expression body has no later statements that could reassign the
+    // class's captured locals.
+    ctx.body_class_expr_captures
+        .truncate(body_class_expr_captures_mark);
     ctx.current_strict = outer_strict;
 
     // Prepend destructuring statements to body
@@ -579,6 +594,13 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         fn_expr.function.is_async,
     );
     let scope_mark = ctx.enter_scope();
+    // #6604: capturing class EXPRESSIONS lowered in THIS function register
+    // from here for the end-of-body refresh (twin of
+    // `lower_fn_body_block_stmt`); the mark sits at scope entry so nothing
+    // recorded for this function can leak into the enclosing body.
+    // (Default-param entries never reach the drain — `get_param_default`
+    // self-truncates.)
+    let body_class_expr_captures_mark = ctx.body_class_expr_captures.len();
     // A plain function has its own `arguments` object, so a direct `eval`
     // inside its body may reference `arguments` even when the function sits
     // in a class field initializer. Cleared here, restored at the end.
@@ -1220,6 +1242,26 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     }
                 }
             }
+        }
+        // #6604: capturing class EXPRESSIONS lowered directly in this body —
+        // the semver/esbuild `__commonJS` wrapper shape `var Comparator =
+        // class _Comparator { … }; …; var parseOptions = require_…()` — join
+        // the same refresh machinery as class declarations, so the snapshot
+        // tracks captured vars assigned AFTER the class. Recorded by
+        // `lower_class_expr` under the RESOLVED registration name; see the
+        // block-body twin (`lower_fn_body_block_stmt`) for why no
+        // `append_new_args_stmt` pass runs for expressions.
+        for (cname, ids) in ctx
+            .body_class_expr_captures
+            .split_off(body_class_expr_captures_mark)
+        {
+            let captures: Vec<Expr> = ids.iter().map(|id| Expr::LocalGet(*id)).collect();
+            let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
+                class_name: cname,
+                captures,
+            });
+            re_reg_capsets.push((re_reg.clone(), ids.iter().copied().collect()));
+            re_regs.push(re_reg);
         }
         if !re_regs.is_empty() {
             // Audit P0-B twin of the block-body path: refresh after every

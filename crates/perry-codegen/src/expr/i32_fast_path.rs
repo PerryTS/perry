@@ -687,14 +687,37 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             }
         }
         Expr::Uint8ArrayGet { array, index } => {
-            Some(super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?.value)
+            let lowered = super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?;
+            Some(i32_from_indexed_get_lowered(ctx, lowered))
         }
         Expr::BufferIndexGet { buffer, index } => {
-            Some(super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?.value)
+            let lowered = super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?;
+            Some(i32_from_indexed_get_lowered(ctx, lowered))
         }
         _ => None,
     };
     Ok(value)
+}
+
+/// Bridge an indexed-get helper's `LoweredValue` into a guaranteed-i32 SSA
+/// value. `lower_uint8array_get_i32`'s unproven-key escape (the mysql2
+/// MockBuffer probe fix in `arrays_finds.rs`) returns the polymorphic
+/// property read as a boxed JS VALUE (`F64` rep). The i32-context callers
+/// here used to grab `.value` blindly and label that double register `i32`,
+/// emitting malformed IR — `error: '%rN' defined with type 'double' but
+/// expected 'i32'` — which the pi bundle hit (#6593) once its inliner
+/// frontier left a `buf[k]` index insufficiently proven-numeric. Apply the
+/// JS `ToInt32(ToNumber(v))` bridge instead.
+fn i32_from_indexed_get_lowered(ctx: &mut FnCtx<'_>, lowered: LoweredValue) -> String {
+    match lowered.rep {
+        NativeRep::I32 | NativeRep::U32 => lowered.value,
+        _ => {
+            let number = ctx
+                .block()
+                .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &lowered.value)]);
+            ctx.block().toint32(&number)
+        }
+    }
 }
 
 fn lower_packed_i32_loop_index_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<LoweredValue>> {
@@ -1052,10 +1075,12 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             }
         }
         Expr::Uint8ArrayGet { array, index } => {
-            super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?.value
+            let lowered = super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?;
+            i32_from_indexed_get_lowered(ctx, lowered)
         }
         Expr::BufferIndexGet { buffer, index } => {
-            super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?.value
+            let lowered = super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?;
+            i32_from_indexed_get_lowered(ctx, lowered)
         }
         // Fallback for other expressions.
         _ => {

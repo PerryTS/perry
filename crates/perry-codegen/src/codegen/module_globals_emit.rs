@@ -207,7 +207,45 @@ pub(crate) fn emit_module_globals(
     // globals + getter functions for cross-module access.
     let exported_var_names: std::collections::HashSet<String> =
         hir.exported_objects.iter().cloned().collect();
-    for s in &hir.init {
+    // #6649: module-level array-destructuring declarations (`var [Prime, Size]
+    // = [BigInt(...), BigInt(...)]` — TypeBox's FNV-1a table in the pi bundle)
+    // lower their leaf `Stmt::Let`s inside the iterator-protocol `Stmt::Try`
+    // scaffolding (IteratorClose on abrupt completion), so the previous
+    // top-level-only scan never saw them. The leaves then stayed
+    // un-globalized and every function/method/closure reference compiled to
+    // the not-in-scope fallback (`undefined`): TypeBox's `Accumulator * Prime`
+    // saw `ToNumeric(undefined) = NaN` and threw a spurious "Cannot mix BigInt
+    // and other types" during pi-native init. Walk through Try scaffolding
+    // (body/catch/finally, transitively for nested patterns) when collecting
+    // candidate lets — a module-init try body runs at most once, so its
+    // bindings are single-instance and safe to promote. Loop and if bodies
+    // intentionally stay out of the walk: their `let`s are genuinely
+    // block-scoped (fresh binding per iteration) and remain handled by the
+    // boxed-capture machinery.
+    fn collect_init_lets<'a>(stmts: &'a [perry_hir::Stmt], out: &mut Vec<&'a perry_hir::Stmt>) {
+        for s in stmts {
+            match s {
+                perry_hir::Stmt::Let { .. } => out.push(s),
+                perry_hir::Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    collect_init_lets(body, out);
+                    if let Some(c) = catch {
+                        collect_init_lets(&c.body, out);
+                    }
+                    if let Some(f) = finally {
+                        collect_init_lets(f, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut init_lets: Vec<&perry_hir::Stmt> = Vec::new();
+    collect_init_lets(&hir.init, &mut init_lets);
+    for s in init_lets {
         if let perry_hir::Stmt::Let { id, name, ty, .. } = s {
             // Always record the declared type for module-level lets
             // so all functions see it (not just the entry function).

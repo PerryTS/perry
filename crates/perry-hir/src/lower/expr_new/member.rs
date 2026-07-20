@@ -157,6 +157,7 @@ pub(crate) fn lower_new_member_native(
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Some(Expr::NewDynamic {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: prop_ident.sym.to_string(),
                     }),

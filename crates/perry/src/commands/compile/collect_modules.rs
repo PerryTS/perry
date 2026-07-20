@@ -1233,6 +1233,17 @@ fn collect_module_one(
                             // UIFeedbackGenerator / VibrationEffect /
                             // NSHapticFeedbackManager), not perry-stdlib.
                             | "hapticPlay"
+                            // Device identity: perry_get_device_idiom and
+                            // perry_system_get_device_model also live only
+                            // in the platform UI crates (UIDevice /
+                            // sysctl hw.model / JNI Build.MODEL). Without
+                            // this trigger, a console program importing
+                            // only these fails to link ("undefined symbol:
+                            // perry_get_device_idiom") — the #5972
+                            // regression test had to import a perry/ui
+                            // widget just to make the link succeed.
+                            | "getDeviceIdiom"
+                            | "getDeviceModel"
                     ),
                     // Namespace imports — opt in conservatively (covers
                     // `import * as system from "perry/system"; system.audioStartRecording()`).

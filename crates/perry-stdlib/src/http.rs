@@ -925,6 +925,8 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
     let req_handle = handle;
     spawn(async move {
         let mut builder = reqwest::Client::builder();
+        // Node's http client never follows redirects; disable reqwest's default (rationale: `apply_node_proxy_policy` in `perry-ext-http`).
+        builder = builder.redirect(reqwest::redirect::Policy::none());
         builder = if let Some(timeout) = timeout_ms {
             builder.timeout(std::time::Duration::from_millis(timeout))
         } else {

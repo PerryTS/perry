@@ -228,7 +228,10 @@ pub(crate) fn lower_new_non_ident(
         })
         .transpose()?
         .unwrap_or_default();
-    if let Expr::PropertyGet { object, property } = callee.as_ref() {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    {
         if is_global_object_expr(ctx, object.as_ref())
             && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
         {

@@ -50,6 +50,16 @@ struct ForEachBinding {
     render_closure: f64,
 }
 
+/// Issue #5203 — a forEach rebuild deferred because a system modal (StoreKit
+/// sheet, ASWebAuthenticationSession, Perry alert, …) was presented. Keyed by
+/// container handle so repeated heartbeat rebuilds of the same container
+/// coalesce to a single replay once the modal dismisses.
+struct DeferredRebuild {
+    container_handle: i64,
+    render_closure: f64,
+    state_handle: i64,
+}
+
 thread_local! {
     static STATES: RefCell<Vec<StateEntry>> = RefCell::new(Vec::new());
     static TEXT_BINDINGS: RefCell<HashMap<i64, Vec<TextBinding>>> = RefCell::new(HashMap::new());
@@ -61,6 +71,10 @@ thread_local! {
     static VISIBILITY_BINDINGS: RefCell<HashMap<i64, Vec<VisibilityBinding>>> = RefCell::new(HashMap::new());
     static FOR_EACH_BINDINGS: RefCell<HashMap<i64, Vec<ForEachBinding>>> = RefCell::new(HashMap::new());
     static ON_CHANGE_CALLBACKS: RefCell<HashMap<i64, Vec<f64>>> = RefCell::new(HashMap::new());
+    /// Issue #5203 — forEach rebuilds deferred while a system modal was on
+    /// screen. Drained by the pump (`replay_deferred_rebuilds`) once no modal
+    /// is presented.
+    static DEFERRED_REBUILDS: RefCell<Vec<DeferredRebuild>> = RefCell::new(Vec::new());
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
@@ -208,9 +222,24 @@ pub fn state_set(handle: i64, value: f64) {
             })
             .unwrap_or_default()
     });
-    for (container, closure) in foreach_snapshot {
-        widgets::clear_children(container);
-        render_for_each(container, closure, value);
+    if !foreach_snapshot.is_empty() {
+        // Issue #5203 — a forEach rebuild clears+rebuilds its container. Doing
+        // that while a system modal (StoreKit purchase sheet,
+        // ASWebAuthenticationSession, share sheet, or a Perry alert) is
+        // presented can SIGSEGV on iOS 26+, and a rebuild under a modal is
+        // invisible anyway. Defer it (coalesced per container) and let the pump
+        // replay the freshest state once the modal dismisses. This mirrors the
+        // touch-processing hazard the button path already avoids, but for
+        // presented modals rather than touch dispatch.
+        let modal_up = crate::app::system_modal_presented();
+        for (container, closure) in foreach_snapshot {
+            if modal_up {
+                defer_foreach_rebuild(container, closure, handle);
+            } else {
+                widgets::clear_children(container);
+                render_for_each(container, closure, value);
+            }
+        }
     }
 
     // Invoke onChange callbacks.
@@ -269,6 +298,44 @@ fn render_for_each(container: i64, closure: f64, count: f64) {
         let child_f64 = unsafe { js_closure_call1(closure_ptr, i as f64) };
         let child_handle = unsafe { js_nanbox_get_pointer(child_f64) };
         widgets::add_child(container, child_handle);
+    }
+}
+
+/// Issue #5203 — queue a forEach rebuild that can't run now because a system
+/// modal is presented. Coalesces per container so a heartbeat that fires many
+/// times under a modal only replays once (latest closure/state wins).
+fn defer_foreach_rebuild(container: i64, closure: f64, state_handle: i64) {
+    DEFERRED_REBUILDS.with(|d| {
+        let mut d = d.borrow_mut();
+        if let Some(existing) = d.iter_mut().find(|e| e.container_handle == container) {
+            existing.render_closure = closure;
+            existing.state_handle = state_handle;
+        } else {
+            d.push(DeferredRebuild {
+                container_handle: container,
+                render_closure: closure,
+                state_handle,
+            });
+        }
+    });
+}
+
+/// Issue #5203 — whether any forEach rebuild is waiting for a modal to dismiss.
+pub fn has_deferred_rebuilds() -> bool {
+    DEFERRED_REBUILDS.with(|d| !d.borrow().is_empty())
+}
+
+/// Issue #5203 — replay forEach rebuilds deferred while a system modal was
+/// presented, using the freshest state value. Called by the pump once no modal
+/// is on screen. The queue is taken before invoking user closures so a
+/// re-entrant `state_set` sees an empty queue.
+pub fn replay_deferred_rebuilds() {
+    let pending: Vec<DeferredRebuild> =
+        DEFERRED_REBUILDS.with(|d| std::mem::take(&mut *d.borrow_mut()));
+    for item in pending {
+        let value = state_get(item.state_handle);
+        widgets::clear_children(item.container_handle);
+        render_for_each(item.container_handle, item.render_closure, value);
     }
 }
 

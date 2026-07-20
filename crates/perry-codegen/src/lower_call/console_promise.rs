@@ -151,7 +151,10 @@ pub fn try_lower_console_call(
     // already adds a newline, so multi-arg console.log will be
     // separated by newlines instead of spaces. Spec-compliant
     // separator handling lives in a future Phase I tweak.
-    if let Expr::PropertyGet { object, property } = callee {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    {
         if matches!(object.as_ref(), Expr::GlobalGet(_))
             && matches!(
                 property.as_str(),
@@ -521,7 +524,10 @@ pub fn try_lower_promise_static_call(
     // The HIR doesn't have dedicated PromiseResolve/Reject variants. Depending
     // on the lowering path they appear either as a bare GlobalGet receiver or
     // as `globalThis.Promise.<method>`.
-    if let Expr::PropertyGet { object, property } = callee {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    {
         if is_global_constructor_expr(object, "Promise") {
             match property.as_str() {
                 "resolve" => {
@@ -657,7 +663,10 @@ pub fn try_lower_native_method_str_dispatch(
     // method name as a raw rodata byte pointer (the StringPool already
     // emits the bytes as `[N+1 x i8]` for every interned string), and
     // materialize the args into a stack `[N x double]` slot.
-    if let Expr::PropertyGet { object, property } = callee {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    {
         if is_message_port_closure_method(object, property) {
             return Ok(None);
         }
@@ -1161,7 +1170,10 @@ pub fn try_lower_closure_call_fallthrough(
     // default build) → no emission, unchanged `<anonymous>` frame.
     let call_byte_offset = ctx.strings.pending_call_offset();
     let prelowered_recv: Option<(String, String)> =
-        if let Expr::PropertyGet { object, property } = callee {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee
+        {
             if receiver_must_eval_once(object.as_ref()) {
                 Some((lower_expr(ctx, object)?, property.clone()))
             } else {

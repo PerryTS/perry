@@ -60,8 +60,8 @@ use exec_array::{
 };
 #[cfg(feature = "regex-engine")]
 use grammar::{
-    has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape,
-    has_unicode_forbidden_pattern, js_regex_to_rust,
+    collapse_redos_guard_quantifiers, has_invalid_repeated_quantifier,
+    has_unicode_forbidden_legacy_escape, has_unicode_forbidden_pattern, js_regex_to_rust,
 };
 #[cfg(feature = "regex-engine")]
 pub use match_all::{
@@ -225,7 +225,13 @@ const REGEX_SIZE_LIMIT: usize = 64 * 1024 * 1024;
 /// `CompiledTooBig`. Drop-in replacement for `regex::Regex::new`.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn build_std_regex(pattern: &str) -> Result<Regex, regex::Error> {
-    regex::RegexBuilder::new(pattern)
+    // Collapse ReDoS-guard bounded quantifiers (`{m,N}`, large N) to unbounded before
+    // compiling. The linear `regex` engine expands `x{0,N}` into N states, so the semver
+    // package's `\d{0,256}` patterns became 8–16 MB automata each (~183 MB in a large
+    // bundle). This engine can't ReDoS, so the bound is safely removable here. See
+    // `grammar::collapse_redos_guard_quantifiers`.
+    let collapsed = collapse_redos_guard_quantifiers(pattern);
+    regex::RegexBuilder::new(&collapsed)
         .size_limit(REGEX_SIZE_LIMIT)
         .build()
 }

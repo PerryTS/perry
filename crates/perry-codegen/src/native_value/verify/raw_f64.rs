@@ -283,3 +283,80 @@ pub(crate) fn validate_packed_f64_loop_record(record: &NativeRepRecord, errors: 
         }
     }
 }
+
+/// #1849 Slice 3 (native-loop region gates): the fast-path packed-numeric loop
+/// consumers below run inside a proven hot loop region. Acceptance requires such
+/// a region to "prove no unexpected runtime calls" - the guarded fast clone must
+/// keep its value region-local and must never materialize back to a JS value or
+/// route through a dynamic runtime helper. The dynamic side-exit / fallback
+/// consumers (`*_fallback`, `*_store_side_exit`) are the runtime-call boundary
+/// itself and are deliberately excluded here; they carry an explicit
+/// `RuntimeApi` materialization and are checked by
+/// [`raw_f64_dynamic_fallback_record`].
+pub(crate) fn packed_loop_region_positive_consumer(consumer: &str) -> bool {
+    matches!(
+        consumer,
+        "packed_f64_loop_guard"
+            | "packed_i32_loop_guard"
+            | "packed_u32_loop_guard"
+            | "packed_f64_loop_load"
+            | "packed_i32_loop_load"
+            | "packed_u32_loop_load"
+            | "packed_i32_loop_load_f64"
+            | "packed_u32_loop_load_f64"
+            | "packed_f64_loop_store"
+            | "packed_i32_loop_store"
+            | "packed_u32_loop_store"
+    )
+}
+
+/// Enforce that a positive packed-loop hot-region record stays call-free: it
+/// must remain region-local and carry neither a materialization reason, a
+/// fallback reason, nor a dynamic-fallback access mode. Emitters keep these
+/// records region-local today; the gate makes that guarantee explicit so a
+/// future regression that lets a hot loop iteration escape to a boxed/runtime
+/// path (without recording it as a proper side-exit) is rejected.
+pub(crate) fn validate_packed_loop_region_call_free(
+    record: &NativeRepRecord,
+    errors: &mut Vec<String>,
+) {
+    if !packed_loop_region_positive_consumer(record.consumer.as_str()) {
+        return;
+    }
+    let prefix = || {
+        format!(
+            "{}:{} {}",
+            record.function, record.block_label, record.consumer
+        )
+    };
+    if record.native_value_state != NativeValueState::RegionLocal {
+        errors.push(format!(
+            "{} packed-loop hot region must stay region-local, found {:?}",
+            prefix(),
+            record.native_value_state
+        ));
+    }
+    if let Some(reason) = record.materialization_reason.as_ref() {
+        errors.push(format!(
+            "{} packed-loop hot region emitted an unexpected runtime-call materialization ({:?})",
+            prefix(),
+            reason
+        ));
+    }
+    if let Some(reason) = record.fallback_reason.as_ref() {
+        errors.push(format!(
+            "{} packed-loop hot region emitted an unexpected dynamic fallback ({:?})",
+            prefix(),
+            reason
+        ));
+    }
+    if matches!(
+        record.access_mode.as_ref(),
+        Some(BufferAccessMode::DynamicFallback)
+    ) {
+        errors.push(format!(
+            "{} packed-loop hot region used a dynamic-fallback access mode",
+            prefix()
+        ));
+    }
+}
