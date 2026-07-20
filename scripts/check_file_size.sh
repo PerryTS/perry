@@ -120,6 +120,11 @@ crates/perry-ui-windows/src/widgets/mod.rs
 # split of the character-class / quantifier sub-parsers is a mechanical
 # follow-up.
 crates/perry-runtime/src/regex/grammar.rs
+# Web Streams core (2011 lines): #6476's throwing-pull resilience fix added the
+# js_call_catching wiring, 11 lines over. A split of the reader/tee/BYOB
+# sub-controllers into siblings (tee.rs / byob already peeled) is a mechanical
+# follow-up.
+crates/perry-stdlib/src/streams.rs
 EOF
 )
 
