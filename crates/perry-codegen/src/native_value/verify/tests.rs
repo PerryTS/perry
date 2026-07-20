@@ -156,6 +156,110 @@ fn verifier_rejects_packed_f64_loop_store_without_canonicalization_notes() {
     );
 }
 
+/// A clean positive packed-loop record that is *not* also subject to the
+/// raw-f64 note/fact gates, so the call-free checks are exercised in isolation.
+fn packed_i32_loop_store_record() -> NativeRepRecord {
+    let mut r = record();
+    r.expr_kind = "PackedI32LoopStore".to_string();
+    r.consumer = "packed_i32_loop_store".to_string();
+    r.native_rep = NativeRep::I32;
+    r.native_rep_name = "i32".to_string();
+    r.llvm_ty = I32;
+    r.access_mode = Some(BufferAccessMode::CheckedNative);
+    r.bounds_state = Some(BoundsState::Guarded {
+        guard_id: "packed_i32_array_loop_guard".to_string(),
+    });
+    r
+}
+
+#[test]
+fn verifier_accepts_call_free_packed_loop_region_record() {
+    // #1849 Slice 3: a guarded fast-clone store stays region-local with no
+    // materialization or fallback, so it proves "no unexpected runtime calls".
+    assert!(verify_native_rep_records(&[packed_i32_loop_store_record()]).is_ok());
+}
+
+#[test]
+fn verifier_rejects_packed_loop_region_runtime_materialization() {
+    let mut r = packed_i32_loop_store_record();
+    r.materialization_reason = Some(MaterializationReason::RuntimeApi);
+    r.native_value_state = NativeValueState::Materialized;
+    let err = verify_native_rep_records(&[r])
+        .expect_err("packed-loop hot region must not materialize to a runtime value");
+    assert!(
+        err.to_string()
+            .contains("packed-loop hot region emitted an unexpected runtime-call materialization"),
+        "{err}"
+    );
+}
+
+#[test]
+fn verifier_rejects_packed_loop_region_escaping_region_local_state() {
+    let mut r = packed_i32_loop_store_record();
+    r.native_value_state = NativeValueState::Materialized;
+    let err =
+        verify_native_rep_records(&[r]).expect_err("packed-loop hot region must stay region-local");
+    assert!(
+        err.to_string()
+            .contains("packed-loop hot region must stay region-local"),
+        "{err}"
+    );
+}
+
+#[test]
+fn verifier_rejects_packed_loop_region_dynamic_fallback_access_mode() {
+    let mut r = packed_i32_loop_store_record();
+    r.access_mode = Some(BufferAccessMode::DynamicFallback);
+    r.native_value_state = NativeValueState::DynamicFallback;
+    r.materialization_reason = Some(MaterializationReason::RuntimeApi);
+    r.fallback_reason = Some(MaterializationReason::RuntimeApi);
+    let err = verify_native_rep_records(&[r])
+        .expect_err("packed-loop hot region must not use a dynamic-fallback access mode");
+    assert!(
+        err.to_string()
+            .contains("packed-loop hot region used a dynamic-fallback access mode"),
+        "{err}"
+    );
+}
+
+#[test]
+fn packed_loop_positive_consumers_exclude_runtime_boundaries() {
+    use super::raw_f64::packed_loop_region_positive_consumer;
+    for positive in [
+        "packed_f64_loop_guard",
+        "packed_i32_loop_guard",
+        "packed_u32_loop_guard",
+        "packed_f64_loop_load",
+        "packed_i32_loop_load",
+        "packed_u32_loop_load",
+        "packed_i32_loop_load_f64",
+        "packed_u32_loop_load_f64",
+        "packed_f64_loop_store",
+        "packed_i32_loop_store",
+        "packed_u32_loop_store",
+    ] {
+        assert!(
+            packed_loop_region_positive_consumer(positive),
+            "{positive} should be a positive hot-region consumer"
+        );
+    }
+    // The dynamic side-exit / fallback consumers are the runtime-call boundary
+    // itself and must NOT be held to the call-free invariant.
+    for boundary in [
+        "packed_f64_loop_fallback",
+        "packed_i32_loop_fallback",
+        "packed_u32_loop_fallback",
+        "packed_f64_loop_store_side_exit",
+        "packed_i32_loop_store_side_exit",
+        "packed_u32_loop_store_side_exit",
+    ] {
+        assert!(
+            !packed_loop_region_positive_consumer(boundary),
+            "{boundary} is a runtime-call boundary, not a positive hot-region consumer"
+        );
+    }
+}
+
 fn pod_layout() -> crate::native_value::PodLayoutManifest {
     super::recompute_layout_from_fields(
         "pod_test".to_string(),

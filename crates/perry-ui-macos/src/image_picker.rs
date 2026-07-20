@@ -1,6 +1,8 @@
 //! Photo-library image picker (issue #552) — macOS NSOpenPanel filtered
 //! to common image UTIs. Returns an array of absolute filesystem paths.
 
+use crate::ffi::js_array_push_f64;
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2_app_kit::NSOpenPanel;
 use objc2_foundation::{MainThreadMarker, NSArray, NSString};
@@ -10,10 +12,8 @@ extern "C" {
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_array_alloc(capacity: u32) -> *mut std::ffi::c_void;
-    fn js_array_push_f64(arr: *mut std::ffi::c_void, value: f64) -> *mut std::ffi::c_void;
     fn js_nanbox_pointer(ptr: i64) -> f64;
 }
 

@@ -165,6 +165,18 @@ pub fn inline_calls_in_stmts(
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
 ) {
+    // Same cap as `inline_calls_in_expr`, sharing one thread-local depth
+    // budget: the two functions are mutually recursive, and a stmts-side
+    // chain (nested blocks, closure bodies, re-walks of freshly inlined
+    // bodies) that never passes through the expr-side guard would otherwise
+    // recurse unbounded — half of #6593. Bailing out skips further inlining
+    // in this subtree, which is semantics-preserving (the inliner is an
+    // optimization pass); clear `exact_receiver_facts` because we no longer
+    // track what the skipped statements may reference or mutate.
+    let Some(_recursion_guard) = enter_inline_expr_recursion() else {
+        exact_receiver_facts.clear();
+        return;
+    };
     let mut i = 0;
     while i < stmts.len() {
         // Track local variable types from Let statements
@@ -1517,6 +1529,7 @@ pub fn try_inline_simple_call(
         if let Expr::PropertyGet {
             object,
             property: method_name,
+            ..
         } = callee.as_ref()
         {
             // Method inlining requires an exact `let obj = new C(...)`
@@ -1771,6 +1784,7 @@ pub fn try_inline_call(
         if let Expr::PropertyGet {
             object,
             property: method_name,
+            ..
         } = callee.as_ref()
         {
             // Method inlining requires an exact `let obj = new C(...)`
@@ -1974,6 +1988,65 @@ mod tests {
                 );
 
                 assert!(hoisted.is_empty());
+                assert!(exact_receiver_facts.is_empty());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Deeply nested `if (…) { leaf } else { <next level> }` chain — the
+    /// #6593 shape. Unlike the linear closure fixture above, every level
+    /// makes MULTIPLE guarded descents (condition expr, then-branch stmts,
+    /// else-branch stmts), which is exactly what made the pi bundle
+    /// unbounded twice over:
+    ///  1. `inline_calls_in_stmts` had no guard at all, so the
+    ///     stmts→stmts else-chain recursed once per level; and
+    ///  2. even with the stmts guard, the eager
+    ///     `then_some(InlineExprRecursionGuard)` refunded a depth unit on
+    ///     every bail, so the condition's bail at cap let the else-branch
+    ///     descend one level deeper — forever.
+    fn nested_if_else_chain(depth: usize) -> Vec<Stmt> {
+        let mut stmts = vec![Stmt::Expr(Expr::Integer(0))];
+        for _ in 0..depth {
+            stmts = vec![Stmt::If {
+                condition: Expr::Integer(1),
+                then_branch: vec![Stmt::Expr(Expr::Integer(2))],
+                else_branch: Some(stmts),
+            }];
+        }
+        stmts
+    }
+
+    #[test]
+    fn inline_stmts_skips_extremely_deep_branching_stmt_trees() {
+        // Deep enough that one stack frame per level overflows the 32MB
+        // test stack if either the stmts-entry guard is missing or the
+        // guard's bail path refunds budget (both variants crashed here
+        // before the #6593 fix); shallow enough that the fixture's own
+        // recursive drop glue stays far from the limit.
+        const DEPTH: usize = MAX_INLINE_EXPR_RECURSION_DEPTH * 200;
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut stmts = nested_if_else_chain(DEPTH);
+                let mut local_types = HashMap::new();
+                let mut exact_receiver_facts = ExactReceiverFacts::new();
+                let mut next_local_id = 1;
+
+                inline_calls_in_stmts(
+                    &mut stmts,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &mut local_types,
+                    &mut exact_receiver_facts,
+                    &mut next_local_id,
+                    None,
+                    &HashMap::new(),
+                );
+
+                assert_eq!(stmts.len(), 1);
                 assert!(exact_receiver_facts.is_empty());
             })
             .unwrap()

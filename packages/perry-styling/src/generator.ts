@@ -112,6 +112,17 @@ export function generateTheme(tokens: TokenSet, originalColorValues: { [key: str
     lines.push("  fontSize: " + fsType + ";");
   }
 
+  const borderWidthKeys = Object.keys(tokens.borderWidth);
+  if (borderWidthKeys.length > 0) {
+    let bwType = "{ ";
+    for (let i = 0; i < borderWidthKeys.length; i = i + 1) {
+      bwType = bwType + formatKey(borderWidthKeys[i]) + ": number;";
+      if (i < borderWidthKeys.length - 1) { bwType = bwType + " "; }
+    }
+    bwType = bwType + " }";
+    lines.push("  borderWidth: " + bwType + ";");
+  }
+
   lines.push("}");
   lines.push("");
 
@@ -174,6 +185,18 @@ export function generateTheme(tokens: TokenSet, originalColorValues: { [key: str
     }
     fsLine = fsLine + " },";
     lines.push(fsLine);
+  }
+
+  // BorderWidth
+  if (borderWidthKeys.length > 0) {
+    let bwLine = "  borderWidth: { ";
+    for (let i = 0; i < borderWidthKeys.length; i = i + 1) {
+      const k = borderWidthKeys[i];
+      bwLine = bwLine + formatKey(k) + ": " + String(tokens.borderWidth[k]);
+      if (i < borderWidthKeys.length - 1) { bwLine = bwLine + ", "; }
+    }
+    bwLine = bwLine + " },";
+    lines.push(bwLine);
   }
 
   lines.push("};");

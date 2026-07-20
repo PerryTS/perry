@@ -10,7 +10,43 @@ impl<'a> FuncEmitCtx<'a> {
         match expr {
             Expr::Call { callee, args, .. } => {
                 // Check for method call patterns: obj.method(args)
-                if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::PropertyGet {
+                    object, property, ..
+                } = callee.as_ref()
+                {
+                    // Namespace-import member call (`import * as W from "./mod";
+                    // W.fn(args)`): resolve to a DIRECT wasm call of the source
+                    // module's function — the same lowering `fn(args)` gets via
+                    // a named import. Without this the callee fell through to
+                    // the class-dispatch fallback with an undefined receiver
+                    // and silently returned undefined (never executing fn).
+                    if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                        let key = (
+                            self.emitter.current_mod_idx,
+                            format!("{}.{}", name, property),
+                        );
+                        if let Some(&idx) =
+                            self.emitter.imported_ns_funcs.get(&key).copied().as_ref()
+                        {
+                            for arg in args {
+                                self.emit_expr(func, arg);
+                            }
+                            // Pad-up / drop-excess — see the FuncRef arm below (#183).
+                            if let Some(&expected) = self.emitter.func_param_counts.get(&idx) {
+                                for _ in args.len()..expected {
+                                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                                }
+                                for _ in expected..args.len() {
+                                    func.instruction(&Instruction::Drop);
+                                }
+                            }
+                            func.instruction(&Instruction::Call(idx));
+                            if self.emitter.void_funcs.contains(&idx) {
+                                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                            }
+                            return true;
+                        }
+                    }
                     // console.log/warn/error
                     if let Expr::GlobalGet(_) = object.as_ref() {
                         match property.as_str() {
@@ -147,10 +183,19 @@ impl<'a> FuncEmitCtx<'a> {
                     Expr::ExternFuncRef {
                         name, return_type, ..
                     } => {
-                        // Cross-module or FFI function call — look up by name.
-                        // See FuncRef arm above for why both pad-up and drop-excess
-                        // are required (#183).
-                        if let Some(&idx) = self.emitter.func_name_map.get(name) {
+                        // Cross-module or FFI function call. The consumer's
+                        // own import table wins (resolved through re-export
+                        // chains); the whole-program name map is only a
+                        // fallback, since its bare-name keys collide across
+                        // modules. See FuncRef arm above for why both pad-up
+                        // and drop-excess are required (#183).
+                        let consumer_key = (self.emitter.current_mod_idx, name.clone());
+                        if let Some(&idx) = self
+                            .emitter
+                            .imported_func_indices
+                            .get(&consumer_key)
+                            .or_else(|| self.emitter.func_name_map.get(name))
+                        {
                             if let Some(&expected) = self.emitter.func_param_counts.get(&idx) {
                                 for _ in args.len()..expected {
                                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));

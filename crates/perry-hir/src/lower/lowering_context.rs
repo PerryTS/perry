@@ -777,6 +777,23 @@ pub struct LoweringContext {
     /// here so the `Expr::New { class_name }` lowering can append
     /// `LocalGet(id)` for each captured id at every construction site.
     pub(crate) class_captures: Vec<(String, Vec<LocalId>)>,
+    /// #6604: capturing class EXPRESSIONS lowered while the CURRENT function
+    /// body is being lowered — `(registration_name, captured_outer_ids)`,
+    /// pushed by `lower_class_expr` (skipped at module top, where
+    /// `filter_module_level_captures` already strips module-level ids). The
+    /// #6037/#6052 end-of-body capture-refresh machinery previously scanned
+    /// only `ast::Decl::Class` DECLARATION statements, so `var Comparator =
+    /// class _Comparator { … }` (semver's shape in every bundled class file)
+    /// never got refresh statements: a captured var assigned AFTER the class
+    /// (`var parseOptions = require_parse_options()` at file bottom) stayed
+    /// `undefined` in the snapshot forever, and dynamic construction of the
+    /// escaped class value threw "value is not a function" at pi-native init.
+    /// Both body twins (`lower_fn_body_block_stmt` and `lower_fn_expr`) mark
+    /// this list's length at entry and drain their own suffix at body end;
+    /// every other body-lowering path must truncate back to its entry mark so
+    /// entries (whose ids are only meaningful in THEIR OWN function scope)
+    /// never leak into an enclosing body's refresh statements.
+    pub(crate) body_class_expr_captures: Vec<(String, Vec<LocalId>)>,
     /// Issue #740: `let_name → class_name` for `let/const/var <name> = <ClassRef>`
     /// initializers. Lets `Expr::New { class_name }` (where `class_name` is
     /// the source-level identifier of an alias binding) resolve to the

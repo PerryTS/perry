@@ -51,7 +51,7 @@ de: "Population: 1.234.567,89"
 fr: "Population: 1 234 567,89"
 ```
 
-### ShortDate / LongDate / FormatDate
+### ShortDate / LongDate
 
 Formats a timestamp (milliseconds since epoch) as a date:
 
@@ -68,7 +68,7 @@ ShortDate
 LongDate
   en: "Event: March 22, 2026"
   de: "Event: 22. März 2026"
-  fr: "Event: 22 mars 2026"
+  fr: "Event: 22. mars 2026"
 ```
 
 ### FormatTime
@@ -130,4 +130,4 @@ de = "EUR"
 fr = "EUR"
 ```
 
-When `Currency(value)` is called, the locale's configured currency code determines the symbol and formatting rules.
+When `Currency(value)` is called, the active locale's configured ISO 4217 code determines the **symbol** (`USD` → `$`, `EUR` → `€`, `GBP` → `£`, …; codes without a well-known symbol render as the code itself), while the locale keeps controlling the **layout** — separators and symbol placement. With `en = "GBP"`, English output becomes `£1,234.50`; with `de = "USD"`, German output becomes `1.234,50 $`. Locales without an entry (exact locale first, then base language) use their built-in default symbol.

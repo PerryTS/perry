@@ -175,6 +175,7 @@ pub(super) fn is_fs_dir_for_await_target(ctx: &LoweringContext, expr: &ast::Expr
 pub(super) fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     let call = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "return".to_string(),
         }),

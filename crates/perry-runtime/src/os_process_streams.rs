@@ -18,41 +18,94 @@ fn jsvalue_to_write_bytes(value: f64) -> Vec<u8> {
     }
 }
 
+/// Node's `stream.write(chunk[, encoding][, callback])` passes an optional
+/// completion callback as the last argument (whichever of the two trailing args
+/// is a function). Node invokes it — asynchronously, never synchronously — once
+/// the chunk has been handled, with no error argument on success.
+///
+/// #6672: perry's write stubs used to ignore it entirely, so
+/// `await new Promise(r => process.stdout.write(x, r))` never resolved — the
+/// promise hung, its awaiter never resumed, and the event loop drained and
+/// exited with the continuation (and any `process.exitCode` it would have set)
+/// left unrun. That is the pi print-mode exit-code divergence: pi's
+/// `flushRawStdout` awaits exactly this callback, so on a request error the
+/// natural-exit code stayed 0 where Node exits 1.
+///
+/// Pick the trailing callback and schedule it on the next tick (matching Node's
+/// async completion contract). A missing/non-function arg is a no-op.
+fn schedule_write_callback(arg2: f64, arg3: f64) {
+    // `write(chunk, cb)` puts the callback at arg2; `write(chunk, encoding, cb)`
+    // at arg3. Prefer the later slot, falling back to arg2.
+    let cb_ptr = match callable_closure_ptr(arg3) {
+        0 => callable_closure_ptr(arg2),
+        p => p,
+    };
+    if cb_ptr != 0 {
+        // `js_queue_next_tick` takes the raw closure pointer (drained as
+        // `*const ClosureHeader`); no error argument is forwarded, so on the
+        // JS side `cb(err)` sees `err === undefined` and reports success.
+        crate::builtins::js_queue_next_tick(cb_ptr as i64);
+    }
+}
+
+/// The closure pointer of `value` if it is a callable function, else 0.
+fn callable_closure_ptr(value: f64) -> usize {
+    let bits = value.to_bits();
+    if crate::value::JSValue::from_bits(bits).is_pointer() {
+        let ptr = (bits & crate::value::POINTER_MASK) as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return ptr;
+        }
+    }
+    0
+}
+
 /// `write` impl for process.stdout. Writes the value's display bytes to fd 1
-/// without appending a newline, matching Node.js semantics.
+/// without appending a newline, matching Node.js semantics, then fires the
+/// optional completion callback (see [`schedule_write_callback`]).
 extern "C" fn process_stdout_write_stub(
     _closure: *const crate::closure::ClosureHeader,
-    arg: f64,
+    chunk: f64,
+    arg2: f64,
+    arg3: f64,
 ) -> f64 {
     use std::io::Write;
-    let bytes = jsvalue_to_write_bytes(arg);
+    let bytes = jsvalue_to_write_bytes(chunk);
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     let _ = handle.write_all(&bytes);
     let _ = handle.flush();
+    schedule_write_callback(arg2, arg3);
     f64::from_bits(crate::value::TAG_TRUE)
 }
 
 /// `write` impl for process.stderr. Same as stdout, targeting fd 2.
 extern "C" fn process_stderr_write_stub(
     _closure: *const crate::closure::ClosureHeader,
-    arg: f64,
+    chunk: f64,
+    arg2: f64,
+    arg3: f64,
 ) -> f64 {
     use std::io::Write;
-    let bytes = jsvalue_to_write_bytes(arg);
+    let bytes = jsvalue_to_write_bytes(chunk);
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();
     let _ = handle.write_all(&bytes);
     let _ = handle.flush();
+    schedule_write_callback(arg2, arg3);
     f64::from_bits(crate::value::TAG_TRUE)
 }
 
 /// `write` impl for process.stdin. Reading from stdin via `.write` is
-/// nonsensical; keep it as a no-op that returns `true`.
+/// nonsensical; keep it as a no-op that returns `true`, but still honor the
+/// optional completion callback so an awaited `stdin.write(x, cb)` resolves.
 extern "C" fn process_stdin_write_noop_stub(
     _closure: *const crate::closure::ClosureHeader,
-    _arg: f64,
+    _chunk: f64,
+    arg2: f64,
+    arg3: f64,
 ) -> f64 {
+    schedule_write_callback(arg2, arg3);
     f64::from_bits(crate::value::TAG_TRUE)
 }
 
@@ -190,12 +243,20 @@ fn ensure_stdin_reader() {
             let _guard = ReaderGuard;
             let stdin = std::io::stdin();
             let mut handle = stdin.lock();
-            let mut byte = [0u8; 1];
+            // Read in chunks, not one byte at a time. A paste or a fast-typed
+            // burst arrives as many bytes; the old `[0u8; 1]` read did one
+            // `read` syscall + one STDIN_BUFFER lock + one main-thread notify
+            // (and thus one event-loop wake + pump) PER BYTE, so an N-byte
+            // burst paid N round trips. `read` still returns as soon as any
+            // bytes are available (it does not wait to fill the buffer), so a
+            // lone keystroke is unaffected — it returns 1 byte immediately —
+            // while a burst collapses into one lock + one notify.
+            let mut buf = [0u8; 4096];
             loop {
                 if stdin_is_detached() {
                     break;
                 }
-                match handle.read(&mut byte) {
+                match handle.read(&mut buf) {
                     Ok(0) => {
                         // EOF: record it so the main-thread pump can fire JS
                         // `'end'`/`'close'` listeners after the buffer drains,
@@ -205,9 +266,9 @@ fn ensure_stdin_reader() {
                         crate::event_pump::js_notify_main_thread();
                         break;
                     }
-                    Ok(_) => {
+                    Ok(n) => {
                         if let Ok(mut q) = STDIN_BUFFER.lock() {
-                            q.push(byte[0]);
+                            q.extend_from_slice(&buf[..n]);
                         }
                         crate::event_pump::js_notify_main_thread();
                     }
@@ -756,7 +817,7 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
 
 /// Build a stream object with a `write` field bound to the given stub.
 fn build_stream_object_with_write(
-    write_stub: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
+    write_stub: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64, f64) -> f64,
     fd: f64,
     writable: f64,
 ) -> *mut crate::object::ObjectHeader {
@@ -837,6 +898,11 @@ fn build_stream_object_with_write(
             packed.len() as u32,
         )
     };
+    // `write` takes up to three positional args — `write(chunk[, encoding][,
+    // callback])`. Register its arity so dispatch pads/truncates to exactly the
+    // three the stub declares (Direct dispatch would otherwise size the call to
+    // the call site, dropping the trailing callback — #6672).
+    crate::closure::js_register_closure_arity(write_stub as *const u8, 3);
     let closure = js_closure_alloc(write_stub as *const u8, 0);
     let cval = JSValue::pointer(closure as *const u8);
     js_object_set_field(obj, 0, cval);

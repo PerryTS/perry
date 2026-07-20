@@ -812,6 +812,14 @@ fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
     None
 }
 
+/// Test-only: whether `key` names a registered submodule spec. #6651 —
+/// `process::builtin_submodule_key`'s cross-check (the spec type and its
+/// fields are private to this module).
+#[cfg(test)]
+pub(crate) fn is_registered_submodule_key(key: &str) -> bool {
+    ALL_SUBMODULE_SPECS.iter().any(|spec| spec.key == key)
+}
+
 /// Test-only: every submodule spec, for exhaustiveness checks (the production
 /// `find_submodule` resolves through the registry, not an iterable array).
 #[cfg(test)]
@@ -1554,6 +1562,25 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
     };
     let closure_ptr = ensure_export_singleton(submod, export);
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
+}
+
+/// #6692: the `node:stream/promises` `pipeline` / `finished` callable — the
+/// promise-based implementations Node exposes via
+/// `stream.pipeline[util.promisify.custom]`. Installs the submodule registry
+/// entry first so the lookup succeeds even when the program never imported
+/// `node:stream/promises` itself. Returns NaN-boxed `TAG_TRUE` (the historical
+/// unlisted-export sentinel) if `name` is unknown — callers should verify the
+/// result is a callable closure before using it.
+pub(crate) fn stream_promises_export_callable(name: &str) -> f64 {
+    js_node_submod_install_stream_promises();
+    unsafe {
+        js_node_submodule_export_as_function(
+            b"stream_promises".as_ptr(),
+            "stream_promises".len() as u32,
+            name.as_ptr(),
+            name.len() as u32,
+        )
+    }
 }
 
 /// Returns a namespace-member value for a known Node submodule namespace import.

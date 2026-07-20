@@ -64,6 +64,7 @@ pub(super) fn try_process_memory_usage_rss(
                             if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
                                 if method_ident.sym.as_ref() == "rss" {
                                     return Ok(Expr::PropertyGet {
+                                        byte_offset: 0,
                                         object: Box::new(Expr::ProcessMemoryUsage),
                                         property: "rss".to_string(),
                                     });

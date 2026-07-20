@@ -59,6 +59,7 @@ pub(in crate::lower_call) fn lower_abort_controller_call(
         if let Expr::PropertyGet {
             object: inner_obj,
             property: inner_prop,
+            ..
         } = object
         {
             if inner_prop == "signal" && is_abort_controller_expr(ctx, inner_obj) {
@@ -122,6 +123,7 @@ pub(in crate::lower_call) fn lower_abort_controller_call(
         if let Expr::PropertyGet {
             object: inner_obj,
             property: inner_prop,
+            ..
         } = object
         {
             if inner_prop == "signal" && is_abort_controller_expr(ctx, inner_obj) {

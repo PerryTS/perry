@@ -352,6 +352,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         if let Some(method) = method_name {
             if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
                 return Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
                     property: method.to_string(),
                 };
@@ -363,6 +364,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         if let Some(method) = method_name {
             if method == "workerData" {
                 return Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
                     property: "workerData".to_string(),
                 };
@@ -381,6 +383,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
             }
         }
         return Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
             property: method.to_string(),
         };
@@ -389,6 +392,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         && is_cjs_style_native_default_import(module_name)
     {
         return Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
             property: "default".to_string(),
         };

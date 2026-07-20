@@ -32,9 +32,15 @@ pub extern "C" fn perry_get_orientation() -> i64 {
     0
 }
 
+/// perry_get_device_idiom() → "desktop" (raw `*mut StringHeader`,
+/// NaN-boxed by the `ReturnKind::Str` dispatch row). Was the bare
+/// numeric phone code 0.0.
 #[no_mangle]
-pub extern "C" fn perry_get_device_idiom() -> f64 {
-    0.0
+pub extern "C" fn perry_get_device_idiom() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(b"desktop".as_ptr(), 7) }
 }
 
 // Audio capture (WASAPI)

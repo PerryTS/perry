@@ -339,7 +339,7 @@ pub(crate) fn try_lower_static_dispatch(
         // really is a class.
         let receiver_is_dispatchable_class = matches!(object, Expr::ClassRef(_))
             || matches!(object, Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name))
-            || matches!(object, Expr::PropertyGet { object: inner, property }
+            || matches!(object, Expr::PropertyGet { object: inner, property, .. }
                 if matches!(inner.as_ref(), Expr::ExternFuncRef { .. }) && ctx.class_ids.contains_key(property));
         if receiver_is_dispatchable_class {
             let recv_box = lower_expr(ctx, object)?;

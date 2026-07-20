@@ -93,7 +93,10 @@ pub fn try_lower_native_chain_method_call(
     // already the authoritative source for "what method names this
     // native module exposes"). Scoped narrowly — falls back to the
     // existing call lowering if the lookup misses.
-    if let Expr::PropertyGet { object, property } = callee {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    {
         if let Some(module) = native_receiver_module(object.as_ref()) {
             if super::native_module_lookup(module, true, property, None).is_some() {
                 return Ok(Some(super::lower_native_method_call(
@@ -131,7 +134,10 @@ fn native_receiver_module(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::NativeMethodCall { module, .. } => Some(module.as_str()),
         Expr::Call { callee, .. } => {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 let module = native_receiver_module(object.as_ref())?;
                 if native_method_returns_self_instance(module, property) {
                     return Some(module);

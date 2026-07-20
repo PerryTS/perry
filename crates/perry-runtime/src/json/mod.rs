@@ -86,7 +86,9 @@ pub(crate) use stringify_buffer::{
 };
 #[allow(unused_imports)]
 pub(crate) use stringify_tojson_probe::{
-    invalidate_object_proto_tojson_state, to_json_definitely_absent, PROTO_TOJSON_DIRTY,
+    current_to_json_key_arg, invalidate_object_proto_tojson_state, reset_to_json_key,
+    set_to_json_key_index, set_to_json_key_str, set_to_json_key_value, to_json_definitely_absent,
+    PROTO_TOJSON_DIRTY,
 };
 
 // ─── Circular reference detection ────────────────────────────────────────────
@@ -162,6 +164,20 @@ thread_local! {
     /// result object emits its own fields while its children recurse normally.
     pub(crate) static SUPPRESS_NEXT_TO_JSON: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+
+    /// The property key handed to `toJSON` for the value currently being
+    /// serialized (#5909 — test262 JSON/stringify/value-tojson-arguments).
+    /// ECMA-262 §25.5.2.2 SerializeJSONProperty step 2.b.i is
+    /// `Call(toJSON, value, « key »)`, where `key` is the empty String at the
+    /// root, an object's own property name for a member, and the stringified
+    /// index for an array element. Set right before recursing into each child
+    /// and read by `object_get_to_json` / `array_get_to_json` /
+    /// `bigint_apply_to_json`. Held as an owned Rust `String` (not a JS heap
+    /// pointer) so it never roots a movable GC allocation across the string
+    /// allocation the probes perform, and reset at every top-level stringify
+    /// entry so a key from one call can't leak into the next.
+    pub(crate) static TO_JSON_KEY: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
 
     /// Cached verdict on whether the default `Object.prototype` carries a
     /// `toJSON` property (#6009). One of `PROTO_TOJSON_DIRTY` /

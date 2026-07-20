@@ -25,14 +25,15 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     read_string(handle).map(String::from)
 }
 
+/// Same handle scheme as perry-ext-dayjs: the JS-visible moment value
+/// is `f64::from_bits(handle)` — a tiny denormal whose raw bits ARE the
+/// handle. Instance methods receive the handle back as an i64 first arg
+/// (the dispatch table's has_receiver unbox is bitcast+mask, identity
+/// for small handles); other-moment args arrive as raw NA_JSV bits,
+/// which equal the handle for the same reason.
 #[inline]
 fn handle_to_f64(handle: Handle) -> f64 {
     f64::from_bits(handle as u64)
-}
-
-#[inline]
-fn f64_to_handle(value: f64) -> Handle {
-    value.to_bits() as Handle
 }
 
 #[inline]
@@ -82,14 +83,21 @@ pub unsafe extern "C" fn js_moment_parse(date_str_ptr: *const StringHeader) -> f
         }
     };
 
+    // Note: the bare-date form must go through NaiveDate
+    // (NaiveDateTime::parse_from_str("%Y-%m-%d") always errors on the
+    // missing time part, which silently made moment('2024-01-15')
+    // invalid).
     let datetime = date_str
         .parse::<DateTime<Utc>>()
         .or_else(|_| {
-            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S").map(|dt| dt.and_utc())
+            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S%.f").map(|dt| dt.and_utc())
         })
-        .or_else(|_| NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d").map(|dt| dt.and_utc()))
         .or_else(|_| {
-            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%dT%H:%M:%S").map(|dt| dt.and_utc())
+            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%dT%H:%M:%S%.f").map(|dt| dt.and_utc())
+        })
+        .or_else(|_| {
+            chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+                .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc())
         });
 
     match datetime {
@@ -104,14 +112,59 @@ pub unsafe extern "C" fn js_moment_parse(date_str_ptr: *const StringHeader) -> f
     }
 }
 
+extern "C" {
+    /// perry-runtime: extract the StringHeader pointer from any
+    /// string-tagged NaN-boxed value (materializes short strings).
+    fn js_get_string_pointer_unified(value: f64) -> i64;
+}
+
+/// moment(input?) — the factory with its real argument surface.
+/// `value_bits` is the raw NaN-boxed first argument (TAG_UNDEFINED when
+/// absent). undefined → now; string → parse; number → epoch ms.
+///
+/// # Safety
+/// `value_bits` must be valid NaN-box bits.
+#[no_mangle]
+pub unsafe extern "C" fn js_moment_factory(value_bits: i64) -> f64 {
+    use perry_ffi::JsValue;
+    let bits = value_bits as u64;
+    let jv = JsValue::from_bits(bits);
+    if jv.is_any_string() {
+        let ptr = js_get_string_pointer_unified(f64::from_bits(bits)) as *const StringHeader;
+        return js_moment_parse(ptr);
+    }
+    if jv.is_int32() {
+        return js_moment_from_timestamp(jv.to_int32() as f64);
+    }
+    if jv.is_number() {
+        let n = f64::from_bits(bits);
+        if n.is_finite() {
+            return js_moment_from_timestamp(n);
+        }
+        // NaN / ±∞ → Invalid Date.
+        return handle_to_f64(register_handle(MomentHandle {
+            datetime: Utc::now(),
+            is_valid: false,
+        }));
+    }
+    if jv.is_undefined() {
+        return js_moment_now();
+    }
+    // `null` (and any other non-undefined, non-number, non-string input)
+    // → Invalid Date, matching moment(null); only undefined maps to now.
+    handle_to_f64(register_handle(MomentHandle {
+        datetime: Utc::now(),
+        is_valid: false,
+    }))
+}
+
 /// # Safety
 /// `format_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_moment_format(
-    handle: f64,
+    handle: i64,
     format_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    let handle = f64_to_handle(handle);
     let format_str = read_str(format_ptr).unwrap_or_else(|| "YYYY-MM-DDTHH:mm:ssZ".to_string());
 
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
@@ -140,89 +193,83 @@ pub unsafe extern "C" fn js_moment_format(
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_to_iso_string(handle: f64) -> *mut StringHeader {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_to_iso_string(handle: i64) -> *mut StringHeader {
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
-        return alloc_string(&moment.datetime.to_rfc3339()).as_raw();
+        return alloc_string(
+            &moment
+                .datetime
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        )
+        .as_raw();
     }
     std::ptr::null_mut()
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_value_of(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_value_of(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.timestamp_millis() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_unix(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_unix(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.timestamp() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_year(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_year(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.year() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_month(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_month(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| (m.datetime.month() - 1) as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_date(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_date(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.day() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_day(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_day(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.weekday().num_days_from_sunday() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_hour(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_hour(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.hour() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_minute(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_minute(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.minute() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_second(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_second(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.second() as f64)
         .unwrap_or(0.0)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_millisecond(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_millisecond(handle: i64) -> f64 {
     get_handle::<MomentHandle>(handle)
         .map(|m| m.datetime.timestamp_subsec_millis() as f64)
         .unwrap_or(0.0)
@@ -232,11 +279,11 @@ pub extern "C" fn js_moment_millisecond(handle: f64) -> f64 {
 /// `unit_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_moment_add(
-    handle: f64,
+    handle: i64,
     amount: f64,
     unit_ptr: *const StringHeader,
 ) -> f64 {
-    let handle_v = f64_to_handle(handle);
+    let handle_v = handle;
     let unit = read_str(unit_ptr).unwrap_or_else(|| "days".to_string());
 
     if let Some(moment) = get_handle::<MomentHandle>(handle_v) {
@@ -259,14 +306,14 @@ pub unsafe extern "C" fn js_moment_add(
         });
         return handle_to_f64(new_handle);
     }
-    handle
+    handle_to_f64(handle)
 }
 
 /// # Safety
 /// `unit_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_moment_subtract(
-    handle: f64,
+    handle: i64,
     amount: f64,
     unit_ptr: *const StringHeader,
 ) -> f64 {
@@ -276,8 +323,8 @@ pub unsafe extern "C" fn js_moment_subtract(
 /// # Safety
 /// `unit_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
-pub unsafe extern "C" fn js_moment_start_of(handle: f64, unit_ptr: *const StringHeader) -> f64 {
-    let handle_v = f64_to_handle(handle);
+pub unsafe extern "C" fn js_moment_start_of(handle: i64, unit_ptr: *const StringHeader) -> f64 {
+    let handle_v = handle;
     let unit = read_str(unit_ptr).unwrap_or_else(|| "day".to_string());
 
     if let Some(moment) = get_handle::<MomentHandle>(handle_v) {
@@ -304,14 +351,14 @@ pub unsafe extern "C" fn js_moment_start_of(handle: f64, unit_ptr: *const String
         });
         return handle_to_f64(new_handle);
     }
-    handle
+    handle_to_f64(handle)
 }
 
 /// # Safety
 /// `unit_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
-pub unsafe extern "C" fn js_moment_end_of(handle: f64, unit_ptr: *const StringHeader) -> f64 {
-    let handle_v = f64_to_handle(handle);
+pub unsafe extern "C" fn js_moment_end_of(handle: i64, unit_ptr: *const StringHeader) -> f64 {
+    let handle_v = handle;
     let unit = read_str(unit_ptr).unwrap_or_else(|| "day".to_string());
 
     if let Some(moment) = get_handle::<MomentHandle>(handle_v) {
@@ -347,19 +394,19 @@ pub unsafe extern "C" fn js_moment_end_of(handle: f64, unit_ptr: *const StringHe
         });
         return handle_to_f64(new_handle);
     }
-    handle
+    handle_to_f64(handle)
 }
 
 /// # Safety
 /// `unit_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_moment_diff(
-    handle: f64,
-    other_handle: f64,
+    handle: i64,
+    other_handle: i64,
     unit_ptr: *const StringHeader,
 ) -> f64 {
-    let handle_v = f64_to_handle(handle);
-    let other_v = f64_to_handle(other_handle);
+    let handle_v = handle;
+    let other_v = other_handle;
     let unit = read_str(unit_ptr).unwrap_or_else(|| "milliseconds".to_string());
 
     if let (Some(moment), Some(other)) = (
@@ -382,9 +429,7 @@ pub unsafe extern "C" fn js_moment_diff(
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_is_before(handle: f64, other_handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
-    let other_handle = f64_to_handle(other_handle);
+pub extern "C" fn js_moment_is_before(handle: i64, other_handle: i64) -> f64 {
     if let (Some(moment), Some(other)) = (
         get_handle::<MomentHandle>(handle),
         get_handle::<MomentHandle>(other_handle),
@@ -395,9 +440,7 @@ pub extern "C" fn js_moment_is_before(handle: f64, other_handle: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_is_after(handle: f64, other_handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
-    let other_handle = f64_to_handle(other_handle);
+pub extern "C" fn js_moment_is_after(handle: i64, other_handle: i64) -> f64 {
     if let (Some(moment), Some(other)) = (
         get_handle::<MomentHandle>(handle),
         get_handle::<MomentHandle>(other_handle),
@@ -411,12 +454,10 @@ pub extern "C" fn js_moment_is_after(handle: f64, other_handle: f64) -> f64 {
 /// `unit_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_moment_is_same(
-    handle: f64,
-    other_handle: f64,
+    handle: i64,
+    other_handle: i64,
     unit_ptr: *const StringHeader,
 ) -> f64 {
-    let handle = f64_to_handle(handle);
-    let other_handle = f64_to_handle(other_handle);
     let unit = read_str(unit_ptr);
 
     if let (Some(moment), Some(other)) = (
@@ -456,11 +497,7 @@ pub unsafe extern "C" fn js_moment_is_same(
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_is_between(handle: f64, start_handle: f64, end_handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
-    let start_handle = f64_to_handle(start_handle);
-    let end_handle = f64_to_handle(end_handle);
-
+pub extern "C" fn js_moment_is_between(handle: i64, start_handle: i64, end_handle: i64) -> f64 {
     if let (Some(moment), Some(start), Some(end)) = (
         get_handle::<MomentHandle>(handle),
         get_handle::<MomentHandle>(start_handle),
@@ -472,8 +509,7 @@ pub extern "C" fn js_moment_is_between(handle: f64, start_handle: f64, end_handl
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_is_valid(handle: f64) -> f64 {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_is_valid(handle: i64) -> f64 {
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
         return js_bool(moment.is_valid);
     }
@@ -481,20 +517,19 @@ pub extern "C" fn js_moment_is_valid(handle: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_clone(handle: f64) -> f64 {
-    let handle_v = f64_to_handle(handle);
+pub extern "C" fn js_moment_clone(handle: i64) -> f64 {
+    let handle_v = handle;
     if let Some(moment) = get_handle::<MomentHandle>(handle_v) {
         return handle_to_f64(register_handle(MomentHandle {
             datetime: moment.datetime,
             is_valid: moment.is_valid,
         }));
     }
-    handle
+    handle_to_f64(handle)
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_from_now(handle: f64) -> *mut StringHeader {
-    let handle = f64_to_handle(handle);
+pub extern "C" fn js_moment_from_now(handle: i64) -> *mut StringHeader {
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
         let now = Utc::now();
         let diff = now.signed_duration_since(moment.datetime);
@@ -544,7 +579,7 @@ pub extern "C" fn js_moment_from_now(handle: f64) -> *mut StringHeader {
 }
 
 #[no_mangle]
-pub extern "C" fn js_moment_to_date(handle: f64) -> f64 {
+pub extern "C" fn js_moment_to_date(handle: i64) -> f64 {
     js_moment_value_of(handle)
 }
 
@@ -552,64 +587,99 @@ pub extern "C" fn js_moment_to_date(handle: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// JS-value f64 → i64 handle, the same bitcast the dispatch table's
+    /// receiver unbox performs.
+    fn h(v: f64) -> i64 {
+        v.to_bits() as i64
+    }
+
     #[test]
     fn now_returns_valid_handle() {
         let f = js_moment_now();
         assert_ne!(f, 0.0);
-        let valid = js_moment_is_valid(f);
+        let valid = js_moment_is_valid(h(f));
         assert_eq!(valid.to_bits(), TAG_TRUE);
     }
 
     #[test]
     fn from_timestamp_round_trip() {
         let ts = 1_700_000_000_000.0_f64;
-        let h = js_moment_from_timestamp(ts);
-        assert_eq!(js_moment_value_of(h), ts);
+        let m = js_moment_from_timestamp(ts);
+        assert_eq!(js_moment_value_of(h(m)), ts);
     }
 
     #[test]
     fn add_subtract_days_round_trip() {
-        let h = js_moment_from_timestamp(1_700_000_000_000.0);
+        let m = js_moment_from_timestamp(1_700_000_000_000.0);
         let unit = alloc_string("days");
-        let h2 = unsafe { js_moment_add(h, 1.0, unit.as_raw()) };
-        let h3 = unsafe { js_moment_subtract(h2, 1.0, unit.as_raw()) };
-        assert_eq!(js_moment_value_of(h), js_moment_value_of(h3));
+        let m2 = unsafe { js_moment_add(h(m), 1.0, unit.as_raw()) };
+        let m3 = unsafe { js_moment_subtract(h(m2), 1.0, unit.as_raw()) };
+        assert_eq!(js_moment_value_of(h(m)), js_moment_value_of(h(m3)));
     }
 
     #[test]
     fn comparison_predicates() {
         let earlier = js_moment_from_timestamp(1_000_000_000_000.0);
         let later = js_moment_from_timestamp(2_000_000_000_000.0);
-        assert_eq!(js_moment_is_before(earlier, later).to_bits(), TAG_TRUE);
-        assert_eq!(js_moment_is_after(later, earlier).to_bits(), TAG_TRUE);
+        assert_eq!(
+            js_moment_is_before(h(earlier), h(later)).to_bits(),
+            TAG_TRUE
+        );
+        assert_eq!(js_moment_is_after(h(later), h(earlier)).to_bits(), TAG_TRUE);
         let null = std::ptr::null::<StringHeader>();
         assert_eq!(
-            unsafe { js_moment_is_same(earlier, earlier, null) }.to_bits(),
+            unsafe { js_moment_is_same(h(earlier), h(earlier), null) }.to_bits(),
             TAG_TRUE
         );
     }
 
     #[test]
     fn clone_preserves_datetime() {
-        let h = js_moment_from_timestamp(1_700_000_000_000.0);
-        let h2 = js_moment_clone(h);
-        assert_eq!(js_moment_value_of(h), js_moment_value_of(h2));
+        let m = js_moment_from_timestamp(1_700_000_000_000.0);
+        let m2 = js_moment_clone(h(m));
+        assert_eq!(js_moment_value_of(h(m)), js_moment_value_of(h(m2)));
     }
 
     #[test]
     fn parse_iso_marks_valid() {
         let s = alloc_string("2024-01-15T10:30:00Z");
-        let h = unsafe { js_moment_parse(s.as_raw()) };
-        assert_eq!(js_moment_year(h), 2024.0);
-        assert_eq!(js_moment_month(h), 0.0);
-        assert_eq!(js_moment_date(h), 15.0);
-        assert_eq!(js_moment_is_valid(h).to_bits(), TAG_TRUE);
+        let m = unsafe { js_moment_parse(s.as_raw()) };
+        assert_eq!(js_moment_year(h(m)), 2024.0);
+        assert_eq!(js_moment_month(h(m)), 0.0);
+        assert_eq!(js_moment_date(h(m)), 15.0);
+        assert_eq!(js_moment_is_valid(h(m)).to_bits(), TAG_TRUE);
+    }
+
+    #[test]
+    fn parse_bare_date_is_valid_utc_midnight() {
+        let s = alloc_string("2024-01-15");
+        let m = unsafe { js_moment_parse(s.as_raw()) };
+        assert_eq!(js_moment_is_valid(h(m)).to_bits(), TAG_TRUE);
+        assert_eq!(js_moment_year(h(m)), 2024.0);
+        assert_eq!(js_moment_hour(h(m)), 0.0);
     }
 
     #[test]
     fn parse_garbage_marks_invalid() {
         let s = alloc_string("not a date");
-        let h = unsafe { js_moment_parse(s.as_raw()) };
-        assert_eq!(js_moment_is_valid(h).to_bits(), TAG_FALSE);
+        let m = unsafe { js_moment_parse(s.as_raw()) };
+        assert_eq!(js_moment_is_valid(h(m)).to_bits(), TAG_FALSE);
+    }
+
+    #[test]
+    fn factory_routes_string_number_undefined() {
+        const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+        // string → parse
+        let s = alloc_string("2024-01-15T10:30:00Z");
+        let sv = perry_ffi::JsValue::from_string_ptr(s.as_raw());
+        let m = unsafe { js_moment_factory(sv.bits() as i64) };
+        assert_eq!(js_moment_year(h(m)), 2024.0);
+        // number → epoch ms
+        let n = 1_700_000_000_000.0_f64;
+        let m2 = unsafe { js_moment_factory(n.to_bits() as i64) };
+        assert_eq!(js_moment_value_of(h(m2)), n);
+        // undefined → now (valid)
+        let m3 = unsafe { js_moment_factory(TAG_UNDEFINED as i64) };
+        assert_eq!(js_moment_is_valid(h(m3)).to_bits(), TAG_TRUE);
     }
 }

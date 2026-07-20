@@ -666,7 +666,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call_void("js_removeenv", &[(I64, &key_handle)]);
                     Ok(blk.bitcast_i64_to_double(crate::nanbox::TAG_TRUE_I64))
                 }
-                Expr::PropertyGet { object, property } => {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => {
                     let obj_box = lower_expr(ctx, object)?;
                     // `delete null.x` / `delete undefined.x` → TypeError. The
                     // `delete` algorithm calls `ToObject(GetBase)` on a property

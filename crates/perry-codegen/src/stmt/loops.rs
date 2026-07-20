@@ -217,7 +217,7 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
 
     let is_len_bound = matches!(
         &matched.bound,
-        perry_hir::Expr::PropertyGet { object, property }
+        perry_hir::Expr::PropertyGet { object, property, .. }
             if property == "length"
                 && matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == matched.array_id)
     );
@@ -1061,7 +1061,9 @@ fn class_field_loop_pure_expr_collect(
 ) -> bool {
     use perry_hir::Expr;
     match expr {
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             let Expr::LocalGet(obj_id) = object.as_ref() else {
                 return false;
             };
@@ -2011,7 +2013,9 @@ fn expr_is_packed_f64_loop_safe(
                 && expr_is_packed_f64_loop_safe(ctx, value, arr_id, counter_id)
         }
         Expr::Update { id, .. } => *id != arr_id && *id != counter_id,
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id) {
                 property == "length"
             } else {
@@ -2451,6 +2455,7 @@ fn lower_for_after_init_with_i32_bound(
         let arr_box_loaded = lower_expr(
             ctx,
             &perry_hir::Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(perry_hir::Expr::LocalGet(hoist.arr_id)),
                 property: "length".to_string(),
             },
@@ -3154,7 +3159,9 @@ fn classify_for_length_hoist(
         return None;
     }
     let arr_id = match right {
-        Expr::PropertyGet { object, property } if property == "length" => match object.as_ref() {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" => match object.as_ref() {
             Expr::LocalGet(id) => *id,
             _ => return None,
         },
@@ -3239,7 +3246,9 @@ fn classify_for_length_hoist_rejection(
         return None;
     }
     let arr_id = match right {
-        Expr::PropertyGet { object, property } if property == "length" => match object.as_ref() {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" => match object.as_ref() {
             Expr::LocalGet(id) => *id,
             _ => return None,
         },
@@ -4032,7 +4041,10 @@ fn expr_array_length_effect(
             }
         }
         Expr::Call { callee, args, .. } => {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
                 {
                     return first_blocking_loop_effect(
@@ -4480,7 +4492,10 @@ pub(crate) fn expr_preserves_array_length(
         // outer scope would make the cached length and bounded-index facts
         // unsound.
         Expr::Call { callee, args, .. } => {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
                 {
                     return walk(object) && args.iter().all(&walk);

@@ -99,6 +99,66 @@ pub fn new_ptr_hash_map<K: std::hash::Hash + Eq, V>() -> PtrHashMap<K, V> {
     HashMap::with_hasher(PtrHasher)
 }
 
+/// FNV-1a constants (64-bit): offset basis and prime (standard values).
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Fast, non-cryptographic hasher for composite keys that mix a `usize` and a
+/// byte string — specifically the property/accessor descriptor side tables'
+/// `(usize, String)` key. [`PtrHasher`] is tuned for a *bare* `usize` pointer
+/// key (a single multiply, no per-byte work) and its generic byte `write` is
+/// only a weak fallback, so it is the wrong tool for a key whose second half is
+/// a program-supplied property name. This hasher folds every byte of the key
+/// with FNV-1a — one xor plus one multiply per byte — which is far cheaper than
+/// SipHash and needs no keyed (random-seed) initialization.
+///
+/// DoS-resistance is unnecessary for the same reason it is for [`PtrHasher`]:
+/// no external / attacker-controlled input ever reaches these keys (the first
+/// half is a runtime heap address, the second a property name baked into the
+/// compiled program), so hash-flooding is not a concern.
+#[derive(Default, Clone, Copy)]
+pub struct FastKeyHasher;
+
+impl BuildHasher for FastKeyHasher {
+    type Hasher = FastKeyHasherImpl;
+    #[inline]
+    fn build_hasher(&self) -> FastKeyHasherImpl {
+        FastKeyHasherImpl(FNV_OFFSET_BASIS)
+    }
+}
+
+pub struct FastKeyHasherImpl(u64);
+
+impl Hasher for FastKeyHasherImpl {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    /// FNV-1a byte fold. A `(usize, String)` key hashes its `usize` half via the
+    /// default `write_usize` (which forwards to `write(&n.to_ne_bytes())`) and
+    /// its `String` half via `str`'s `Hash` (`write(bytes)` + a `write_u8(0xff)`
+    /// terminator, both routed here), so this one method covers every byte of
+    /// the composite key deterministically.
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = self.0;
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(FNV_PRIME);
+        }
+        self.0 = h;
+    }
+}
+
+/// `HashMap` keyed by a byte-hashable composite key (e.g. `(usize, String)`)
+/// using the non-cryptographic [`FastKeyHasher`] instead of SipHash.
+pub type FastKeyHashMap<K, V> = HashMap<K, V, FastKeyHasher>;
+
+#[inline]
+pub fn new_fast_key_hash_map<K: std::hash::Hash + Eq, V>() -> FastKeyHashMap<K, V> {
+    HashMap::with_hasher(FastKeyHasher)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +199,30 @@ mod tests {
             assert!(s.contains(&(base + i * 8)));
         }
         assert!(!s.contains(&(base + 1000 * 8)));
+    }
+
+    /// The descriptor side tables key on `(usize, String)`. Verify the FNV-1a
+    /// composite-key hasher round-trips: distinct owner addresses and distinct
+    /// key strings must not alias, and lookups by borrowed `&str`/`&(…)` keys
+    /// must find the same slot the owned key inserted.
+    #[test]
+    fn fast_key_map_composite_round_trip() {
+        let mut m = new_fast_key_hash_map::<(usize, String), u8>();
+        let base = 0x100_0000_0000usize;
+        for i in 0..500 {
+            m.insert((base + i * 8, format!("key{i}")), i as u8);
+            // Same address, different key must be a distinct slot.
+            m.insert((base + i * 8, "length".to_string()), 0x07);
+        }
+        for i in 0..500 {
+            assert_eq!(m.get(&(base + i * 8, format!("key{i}"))), Some(&(i as u8)));
+            assert_eq!(m.get(&(base + i * 8, "length".to_string())), Some(&0x07));
+            // Distinct address, same key name must miss.
+            assert_eq!(m.get(&(base + i * 8 + 4, format!("key{i}"))), None);
+        }
+        assert_eq!(m.len(), 500 + 500);
+        m.remove(&(base, "key0".to_string()));
+        assert_eq!(m.get(&(base, "key0".to_string())), None);
+        assert_eq!(m.get(&(base, "length".to_string())), Some(&0x07));
     }
 }

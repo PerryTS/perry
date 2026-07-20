@@ -119,6 +119,7 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
         "randomUUID" if args.is_empty() => Some(Expr::CryptoRandomUUID),
         "randomUUID" => Some(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                 property: "randomUUID".to_string(),
             }),
@@ -141,6 +142,7 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
                 // Expr::CryptoRandomBytes that targets only the sync form.
                 return Some(Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: "randomBytes".to_string(),
                     }),
@@ -207,6 +209,7 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
         | "createCipheriv"
         | "createDecipheriv" => Some(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                 property: method.to_string(),
             }),
@@ -228,10 +231,13 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
             let enc = iter.next().unwrap_or_else(|| Expr::String("hex".into()));
             Some(Expr::Call {
                 callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::Call {
                         callee: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::Call {
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                     property: "createHash".to_string(),
                                 }),

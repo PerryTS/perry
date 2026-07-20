@@ -186,6 +186,23 @@ pub(crate) fn lower_class_expr(
     // expressions inside a function body (factories like effect's
     // `make()`), which produce a distinct class object per call.
     let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
+    // #6604: register this capturing class EXPRESSION with the enclosing
+    // body's end-of-body capture-refresh machinery (#6037/#6052), which
+    // previously scanned class DECLARATION statements only. Without the
+    // refresh, a captured var assigned AFTER the class expression (semver's
+    // `var Comparator = class _Comparator { … }; …; var parseOptions =
+    // require_parse_options()`) stays `undefined` in the decl-site snapshot,
+    // and dynamic construction of the escaped class value replays that stale
+    // snapshot. Recording the RESOLVED registration name here (post
+    // rename/dedup) sidesteps re-deriving it from the AST at body end. Module
+    // top is skipped — module-level ids are stripped from capture lists by
+    // `filter_module_level_captures`, so there is nothing to refresh.
+    if !at_module_top && !captured_args.is_empty() {
+        if let Some(ids) = ctx.lookup_class_captures(&synthetic_name) {
+            ctx.body_class_expr_captures
+                .push((synthetic_name.clone(), ids.to_vec()));
+        }
+    }
     if !at_module_top
         && (!named_statics.is_empty()
             || !static_symbol_registrations.is_empty()
