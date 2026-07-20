@@ -48,6 +48,24 @@ pub(crate) fn lower_opt_chain_expr(
                     }
                 }
             }
+            // #6719: `Symbol?.iterator` (and `Symbol?.["iterator"]` /
+            // `Symbol?.[name]`) must resolve the well-known symbol, exactly like
+            // the non-optional `Symbol.iterator` / `Symbol["iterator"]` (#6676)
+            // forms — the dot/bracket folds live in `lower_member_inner`, which
+            // this optional-chain arm never reaches, so without this a
+            // well-known symbol read via `?.` fell through to a generic property
+            // get on the `Symbol` constructor and returned `undefined` (a class
+            // keyed with `[Symbol?.iterator]` was then not iterable). `Symbol` is
+            // a non-nullish global, so `Symbol?.iterator === Symbol.iterator` and
+            // the `?.` short-circuit is dead — the resolver returns the fold
+            // directly.
+            if let Some(folded) = expr_member::try_fold_symbol_well_known_member(
+                ctx,
+                member.obj.as_ref(),
+                &member.prop,
+            )? {
+                return Ok(folded);
+            }
             // obj?.prop -> obj == null ? undefined : obj.prop
             let obj_expr = lower_expr(ctx, &member.obj)?;
 
