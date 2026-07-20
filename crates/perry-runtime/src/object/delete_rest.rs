@@ -292,7 +292,7 @@ pub extern "C" fn js_object_delete_field(
         // property. Bun and Node remove the property entirely; we
         // match that.
         let field_count = (*obj).field_count;
-        let alloc_limit = std::cmp::max(field_count as usize, 8);
+        let alloc_limit = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
         let new_count = key_count - 1;
 
         // CRITICAL: clone the keys_array before mutating it. The same

@@ -255,6 +255,11 @@ pub struct ServerResponse {
     /// #4904: `res.write(chunk, cb)` callbacks, invoked in order when the
     /// buffered body flushes on `.end()`.
     pub pending_write_callbacks: Vec<i64>,
+    /// #4975: `outgoingMessage.destroy()` state. Node's `OutgoingMessage`
+    /// (and its `ServerResponse` subclass) exposes a `destroyed` getter that
+    /// flips `true` after `destroy()`, and a post-destroy `write(chunk, cb)`
+    /// invokes `cb` with an `ERR_STREAM_DESTROYED` error instead of buffering.
+    pub destroyed: bool,
 }
 
 /// Owned shape produced by `.end()` — the per-request oneshot channel
@@ -412,6 +417,7 @@ impl ServerResponse {
             standalone_socket: f64::from_bits(TAG_UNDEFINED),
             standalone_req_method: None,
             pending_write_callbacks: Vec::new(),
+            destroyed: false,
         }
     }
 
@@ -1748,6 +1754,23 @@ pub extern "C" fn js_node_http_res_detach_socket(handle: i64, _socket: f64) {
 /// flushes on `.end()`, preserving call order (#4904).
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callback: i64) -> i32 {
+    // #4975: `write()` after `destroy()` must not buffer; Node invokes the
+    // callback with an `ERR_STREAM_DESTROYED` error and returns `false` (no
+    // `'error'` event is emitted, so an `on('error', …)` listener stays silent).
+    if get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.destroyed)
+        .unwrap_or(false)
+    {
+        if callback != 0 {
+            let err = perry_ffi::error_value_with_code(
+                "Cannot call write after a stream was destroyed",
+                "ERR_STREAM_DESTROYED",
+                perry_ffi::ErrorKind::Error,
+            );
+            crate::http2_server::call1(callback, f64::from_bits(err.bits()));
+        }
+        return 0;
+    }
     let bytes = jsvalue_to_body_bytes(chunk);
     // Honor streaming mode (after `res.flushHeaders()` / a prior streamed
     // `res.write`) exactly like `js_node_http_res_write`: the chunk must go down

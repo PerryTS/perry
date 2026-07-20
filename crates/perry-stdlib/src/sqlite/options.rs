@@ -98,9 +98,19 @@ pub(crate) fn throw_load_sqlite_extension(message: &str) -> ! {
     perry_runtime::fs::validate::throw_error_with_code(message, "ERR_LOAD_SQLITE_EXTENSION")
 }
 
-pub(crate) unsafe fn node_sqlite_exec_batch(conn: &Connection, sql: &str) -> Result<(), String> {
-    let c_sql =
-        CString::new(sql).map_err(|_| "SQL string must not contain null bytes".to_string())?;
+/// Run a multi-statement SQL batch. On failure returns the error message
+/// plus the extended result code so callers can raise Node-shaped
+/// `ERR_SQLITE_ERROR`s carrying `errcode`/`errstr` (#6561).
+pub(crate) unsafe fn node_sqlite_exec_batch(
+    conn: &Connection,
+    sql: &str,
+) -> Result<(), (String, i32)> {
+    let c_sql = CString::new(sql).map_err(|_| {
+        (
+            "SQL string must not contain null bytes".to_string(),
+            ffi::SQLITE_MISUSE,
+        )
+    })?;
     let mut error_message = std::ptr::null_mut();
     let rc = ffi::sqlite3_exec(
         conn.handle(),
@@ -113,6 +123,7 @@ pub(crate) unsafe fn node_sqlite_exec_batch(conn: &Connection, sql: &str) -> Res
         return Ok(());
     }
 
+    let errcode = ffi::sqlite3_extended_errcode(conn.handle());
     let message = if error_message.is_null() {
         CStr::from_ptr(ffi::sqlite3_errmsg(conn.handle()))
             .to_string_lossy()
@@ -122,7 +133,7 @@ pub(crate) unsafe fn node_sqlite_exec_batch(conn: &Connection, sql: &str) -> Res
         ffi::sqlite3_free(error_message.cast());
         message
     };
-    Err(message)
+    Err((message, errcode))
 }
 
 pub(crate) unsafe fn string_from_value(value: f64, name: &str) -> String {
@@ -290,7 +301,7 @@ pub(crate) unsafe fn parse_node_sqlite_options(options_value: f64) -> NodeSqlite
         return options;
     }
     if js.is_null() || !is_object_like(options_value) {
-        throw_type("The \"options\" argument must be an object");
+        throw_type("The \"options\" argument must be an object.");
     }
 
     options.open = bool_option(options_value, "open", options.open);
@@ -325,7 +336,7 @@ pub(crate) unsafe fn parse_node_sqlite_options(options_value: f64) -> NodeSqlite
     if !limits.is_undefined() {
         let limits_value = f64::from_bits(limits.bits());
         if limits.is_null() || !is_object_like(limits_value) {
-            throw_type("The \"limits\" option must be an object");
+            throw_type("The \"options.limits\" argument must be an object.");
         }
         for name in [
             "length",

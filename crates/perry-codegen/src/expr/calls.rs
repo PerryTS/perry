@@ -113,7 +113,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property }
+                Expr::PropertyGet { object, property, .. }
                     if property == "from"
                         && matches!(
                             object.as_ref(),
@@ -145,15 +145,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ..
         } if matches!(
             outer_callee.as_ref(),
-            Expr::PropertyGet { property: p, object } if p == "digest" && matches!(
+            Expr::PropertyGet { property: p, object, .. } if p == "digest" && matches!(
                 object.as_ref(),
                 Expr::Call { callee: c2, .. } if matches!(
                     c2.as_ref(),
-                    Expr::PropertyGet { property: p2, object: obj2 } if p2 == "update" && matches!(
+                    Expr::PropertyGet { property: p2, object: obj2, .. } if p2 == "update" && matches!(
                         obj2.as_ref(),
                         Expr::Call { callee: c3, .. } if matches!(
                             c3.as_ref(),
-                            Expr::PropertyGet { property: p3, object: obj3 } if (p3 == "createHash" || p3 == "Hash" || p3 == "createHmac" || p3 == "Hmac") && matches!(
+                            Expr::PropertyGet { property: p3, object: obj3, .. } if (p3 == "createHash" || p3 == "Hash" || p3 == "createHmac" || p3 == "Hmac") && matches!(
                                 obj3.as_ref(),
                                 Expr::NativeModuleRef(n) if n == "crypto"
                             )
@@ -178,7 +178,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createHash" || property == "Hash") && matches!(
+                Expr::PropertyGet { object, property, .. } if (property == "createHash" || property == "Hash") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -193,7 +193,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createSign" || property == "Sign" || property == "createVerify" || property == "Verify") && matches!(
+                Expr::PropertyGet { object, property, .. } if (property == "createSign" || property == "Sign" || property == "createVerify" || property == "Verify") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -208,7 +208,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "createECDH" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "createECDH" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -224,7 +224,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "DiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup" || property == "DiffieHellmanGroup") && matches!(
+                Expr::PropertyGet { object, property, .. } if (property == "createDiffieHellman" || property == "DiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup" || property == "DiffieHellmanGroup") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -240,7 +240,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createPrivateKey" || property == "createPublicKey") && matches!(
+                Expr::PropertyGet { object, property, .. } if (property == "createPrivateKey" || property == "createPublicKey") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -255,7 +255,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "generateKeyPair" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "generateKeyPair" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -269,7 +269,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "generateKeyPairSync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "generateKeyPairSync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -283,7 +283,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "diffieHellman" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "diffieHellman" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -297,7 +297,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "encapsulate" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "encapsulate" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -311,7 +311,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "decapsulate" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "decapsulate" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -332,7 +332,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createHmac" || property == "Hmac") && matches!(
+                Expr::PropertyGet { object, property, .. } if (property == "createHmac" || property == "Hmac") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -352,7 +352,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property }
+                Expr::PropertyGet { object, property, .. }
                     if (property == "createCipheriv" || property == "createDecipheriv")
                         && matches!(
                             object.as_ref(),
@@ -369,7 +369,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "randomBytes" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "randomBytes" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -382,7 +382,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "randomFill" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "randomFill" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -399,7 +399,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property }
+                Expr::PropertyGet { object, property, .. }
                     if (property == "createSign" || property == "createVerify")
                         && matches!(
                             object.as_ref(),
@@ -414,7 +414,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "randomBytes" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "randomBytes" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -427,7 +427,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "randomUUID" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "randomUUID" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -440,7 +440,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "randomUUIDv7" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "randomUUIDv7" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -458,7 +458,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "randomInt" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "randomInt" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -472,7 +472,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "timingSafeEqual" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "timingSafeEqual" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -490,7 +490,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if matches!(property.as_str(), "generatePrimeSync" | "generatePrime" | "checkPrimeSync" | "checkPrime") && matches!(
+                Expr::PropertyGet { object, property, .. } if matches!(property.as_str(), "generatePrimeSync" | "generatePrime" | "checkPrimeSync" | "checkPrime") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -505,7 +505,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves") && matches!(
+                Expr::PropertyGet { object, property, .. } if matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -519,7 +519,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "getCipherInfo" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "getCipherInfo" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -532,7 +532,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "getFips" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "getFips" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -546,7 +546,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "setFips" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "setFips" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -560,7 +560,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "secureHeapUsed" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "secureHeapUsed" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -575,7 +575,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "sign" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "sign" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -587,7 +587,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "verify" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "verify" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -603,7 +603,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "publicEncrypt" || property == "privateDecrypt" || property == "privateEncrypt" || property == "publicDecrypt") && matches!(
+                Expr::PropertyGet { object, property, .. } if (property == "publicEncrypt" || property == "privateDecrypt" || property == "privateEncrypt" || property == "publicDecrypt") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -620,7 +620,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "createSecretKey" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "createSecretKey" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -635,7 +635,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "generateKeySync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "generateKeySync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -650,7 +650,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "generateKey" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "generateKey" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -663,7 +663,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "argon2Sync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "argon2Sync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -676,7 +676,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "argon2" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "argon2" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -689,7 +689,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "hkdfSync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "hkdfSync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -702,7 +702,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "hkdf" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "hkdf" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -715,7 +715,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "scrypt" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "scrypt" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -732,7 +732,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "pbkdf2Sync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "pbkdf2Sync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -745,7 +745,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "pbkdf2" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "pbkdf2" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -762,7 +762,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "scryptSync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "scryptSync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -777,7 +777,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "hkdfSync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "hkdfSync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -793,7 +793,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "generateKeyPairSync" && matches!(
+                Expr::PropertyGet { object, property, .. } if property == "generateKeyPairSync" && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -812,7 +812,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 callee.as_ref(),
                 Expr::PropertyGet { object, .. } if matches!(
                     object.as_ref(),
-                    Expr::PropertyGet { object: inner, property: p }
+                    Expr::PropertyGet { object: inner, property: p, .. }
                         if p == "promises" && matches!(
                             inner.as_ref(),
                             Expr::NativeModuleRef(name) if name == "fs"

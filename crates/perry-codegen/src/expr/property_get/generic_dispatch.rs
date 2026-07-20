@@ -43,8 +43,18 @@ pub(crate) fn lower_generic_property_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
+    byte_offset: u32,
 ) -> Result<String> {
     let obj_box = lower_expr(ctx, object)?;
+    // #5247: record this access's source location right after the receiver is
+    // evaluated and before the nullish-receiver throw path (the inline diamond
+    // OR the full-outline `js_object_get_field_ic` helper — both throw "Cannot
+    // read properties of null/undefined"). No-op unless compiled with
+    // `--debug-symbols` (the offset resolves to `None` without the debug
+    // context) or when `byte_offset` is 0 (a synthesized node). Emitted after
+    // the receiver so a nested `a.b.c` chain keeps the inner `.b` access's more
+    // specific location when *it* is the throwing read.
+    crate::expr::calls::emit_call_location_at(ctx, byte_offset);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();

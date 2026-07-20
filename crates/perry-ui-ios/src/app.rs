@@ -673,6 +673,11 @@ define_class!(
                         perry_geisterhand_pump();
                     }
                 }
+                // Issue #5203 — root-window health check. Replays root
+                // rebuilds deferred while a system modal was presented and
+                // re-asserts the window if a dismissed modal left it detached
+                // ("white, frozen, unrecoverable by rebuild").
+                run_root_health_check();
             }));
         }
     }
@@ -682,6 +687,183 @@ impl PerryPumpTarget {
     fn new() -> Retained<Self> {
         let this = Self::alloc().set_ivars(PerryPumpTargetIvars);
         unsafe { msg_send![super(this), init] }
+    }
+}
+
+// ============================================================================
+// Root-window resilience while a system modal is presented (#5203)
+// ============================================================================
+//
+// Mutating the root widget tree — an app's `rebuild()` that clears+rebuilds the
+// root container — while a *system-presented modal* is on screen (the StoreKit
+// purchase sheet, GoogleSignIn's ASWebAuthenticationSession, a share sheet, or
+// a Perry alert) can SIGSEGV on iOS 26, and replacing the root can leave the
+// window detached ("white, frozen, unrecoverable by rebuild") after the sheet
+// dismisses. This is the same hazard class the button path already avoids by
+// deferring touch-driven work, but for presented modals.
+//
+// Two guards cooperate:
+//   1. `state::state_set` defers destructive forEach rebuilds while
+//      `system_modal_presented()` is true, coalescing per container.
+//   2. `run_root_health_check()` (below, driven by the pump) replays those
+//      deferred rebuilds and re-asserts the window once no modal is on screen.
+
+thread_local! {
+    static HEALTH_TICK: std::cell::Cell<u32> = std::cell::Cell::new(0);
+    static WAS_MODAL_PRESENTED: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
+/// Issue #5203 — true when a modal view controller is presented over the key
+/// window's root view controller (StoreKit / ASWebAuthenticationSession / share
+/// sheet / Perry alert). Callers gate destructive root-container rebuilds on
+/// this and defer them until it returns false.
+pub(crate) fn system_modal_presented() -> bool {
+    unsafe {
+        let root_vc = key_window_root_vc();
+        if root_vc.is_null() {
+            return false;
+        }
+        let presented: *mut AnyObject = msg_send![root_vc, presentedViewController];
+        !presented.is_null()
+    }
+}
+
+/// The key window's rootViewController via the scene graph (iOS 13+), with a
+/// deprecated `keyWindow` fallback. Null when none is found.
+unsafe fn key_window_root_vc() -> *mut AnyObject {
+    let app_cls = match AnyClass::get(c"UIApplication") {
+        Some(c) => c,
+        None => return std::ptr::null_mut(),
+    };
+    let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+    if app.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let mut root_vc: *mut AnyObject = std::ptr::null_mut();
+    let scenes: *mut AnyObject = msg_send![app, connectedScenes];
+    if !scenes.is_null() {
+        let enumerator: *mut AnyObject = msg_send![scenes, objectEnumerator];
+        if !enumerator.is_null() {
+            loop {
+                let scene: *mut AnyObject = msg_send![enumerator, nextObject];
+                if scene.is_null() {
+                    break;
+                }
+                if let Some(ws_cls) = AnyClass::get(c"UIWindowScene") {
+                    let is_ws: bool = msg_send![scene, isKindOfClass: ws_cls];
+                    if !is_ws {
+                        continue;
+                    }
+                }
+                let windows: *mut AnyObject = msg_send![scene, windows];
+                if windows.is_null() {
+                    continue;
+                }
+                let count: i64 = msg_send![windows, count];
+                for i in 0..count {
+                    let w: *mut AnyObject = msg_send![windows, objectAtIndex: i as u64];
+                    if w.is_null() {
+                        continue;
+                    }
+                    let is_key: bool = msg_send![w, isKeyWindow];
+                    if is_key {
+                        root_vc = msg_send![w, rootViewController];
+                        break;
+                    }
+                }
+                if !root_vc.is_null() {
+                    break;
+                }
+            }
+        }
+    }
+
+    if root_vc.is_null() {
+        let key_window: *mut AnyObject = msg_send![app, keyWindow];
+        if !key_window.is_null() {
+            root_vc = msg_send![key_window, rootViewController];
+        }
+    }
+    root_vc
+}
+
+/// Issue #5203 — pump-driven recovery, throttled off the 8 ms cadence. When no
+/// modal is on screen, replays root rebuilds deferred while one was up and
+/// re-asserts the window if a dismissed modal left it detached. No-op in the
+/// normal case (no modal, window key & visible).
+fn run_root_health_check() {
+    // ~every 6th pump tick (~48 ms at 120 Hz): keep the scene-graph walk off
+    // the hot path. Recovery within ~48 ms of a modal dismissing is
+    // imperceptible.
+    let due = HEALTH_TICK.with(|c| {
+        let n = c.get().wrapping_add(1);
+        c.set(n);
+        n % 6 == 0
+    });
+    if !due {
+        return;
+    }
+
+    let now = system_modal_presented();
+    let was = WAS_MODAL_PRESENTED.with(|c| c.replace(now));
+    if now {
+        // A modal is up: leave deferred rebuilds queued and don't touch the
+        // window — it belongs to the presentation for now.
+        return;
+    }
+
+    // No modal on screen. Recover only when there is evidence of modal-related
+    // work: a modal we observed going away (`was`), or a rebuild deferred while
+    // one was up. The defer-and-dismiss race can slip a modal entirely between
+    // throttled samples (state_set checks live, every tick), so a queued
+    // deferral is the more reliable "a modal was just up" signal than `was`
+    // alone. Without such evidence, leave the window alone — don't resurrect an
+    // unrelated hidden window and break the no-modal behavior contract.
+    if !was && !crate::state::has_deferred_rebuilds() {
+        return;
+    }
+    crate::state::replay_deferred_rebuilds();
+    // A dismissed modal can leave the window visible but no longer key (the
+    // ASWebAuthenticationSession "white/frozen" case), not just hidden — so
+    // recover both here, unconditionally, now that we know a modal was up.
+    reassert_root_window();
+}
+
+/// Issue #5203 — re-make the app's window key & visible if a dismissed modal
+/// left it detached (hidden, or visible-but-no-longer-key). Only called from
+/// the recovery path (a modal was just up), and only while the app is
+/// foreground-active so we don't fight background/inactive transitions.
+///
+/// Iterating every `APPS` entry is exact rather than approximate here: Perry's
+/// generated Info.plist sets `UIApplicationSupportsMultipleScenes=false`
+/// (`bundle_ios.rs`), so there is a single scene/window and this loop touches
+/// exactly the window whose modal just dismissed.
+fn reassert_root_window() {
+    unsafe {
+        let app_cls = match AnyClass::get(c"UIApplication") {
+            Some(c) => c,
+            None => return,
+        };
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        // UIApplicationStateActive == 0.
+        let state: i64 = msg_send![app, applicationState];
+        if state != 0 {
+            return;
+        }
+        APPS.with(|a| {
+            for entry in a.borrow().iter() {
+                let win: &UIWindow = &entry.window;
+                let hidden: bool = msg_send![win, isHidden];
+                let is_key: bool = msg_send![win, isKeyWindow];
+                if hidden || !is_key {
+                    win.makeKeyAndVisible();
+                }
+            }
+        });
     }
 }
 

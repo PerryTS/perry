@@ -344,6 +344,17 @@ pub(crate) fn build_and_run_link(
                                 "[strip-dedup] bundled-runtime drop skipped for {} (non-fatal): {e}",
                                 wk.display()
                             );
+                            // #5779: skipping this leaves two copies of perry-runtime's
+                            // mutable globals; an in-process HTTP server + fetch program
+                            // can then deadlock. It fails when no LLVM tool new enough to
+                            // read the archives' bitcode is found — install the toolchain's
+                            // llvm-tools (`rustup component add llvm-tools`) or a current LLVM.
+                            eprintln!(
+                                "[strip-dedup] warning: could not de-duplicate the bundled \
+                                 perry-runtime — an in-process server+fetch program may \
+                                 deadlock (#5779). Install `rustup component add llvm-tools` \
+                                 or a current LLVM (e.g. `brew install llvm`)."
+                            );
                             wk.clone()
                         }),
                     None => wk.clone(),

@@ -992,7 +992,10 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
     use perry_hir::Expr;
     // Same mutating-method detection as the closure walker.
     if let Expr::Call { callee, .. } = expr {
-        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        {
             if let Expr::LocalGet(id) = object.as_ref() {
                 // Array-specific mutating methods only. "add"/"set"/
                 // "delete"/"clear" collide with user-defined custom
@@ -1202,7 +1205,10 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
     use perry_hir::Expr;
     // Mutating method calls count as writes on the receiver.
     if let Expr::Call { callee, .. } = expr {
-        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        {
             if let Expr::LocalGet(id) = object.as_ref() {
                 // Array-specific mutating methods only. "add"/"set"/
                 // "delete"/"clear" collide with user-defined custom

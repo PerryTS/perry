@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1955 entries across 115 modules
+// Coverage: 1981 entries across 119 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -52,6 +52,14 @@ interface NativeMemoryConstructor {
   copy(dst: NativeMemoryTypedView, src: NativeMemoryTypedView): void;
 }
 declare const NativeMemory: NativeMemoryConstructor;
+
+declare module "@lydell/node-pty" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function spawn(...args: any[]): any;
+}
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -261,6 +269,54 @@ declare module "buffer" {
   export function resolveObjectURL(...args: any[]): any;
   /** stdlib */
   export function transcode(...args: any[]): any;
+}
+
+declare module "bun" {
+  /** stdlib */
+  export const stderr: any;
+  /** stdlib */
+  export const stdin: any;
+  /** stdlib */
+  export const stdout: any;
+  /** stdlib */
+  export function file(...args: any[]): any;
+  /** stdlib */
+  export function fileURLToPath(...args: any[]): any;
+  /** stdlib */
+  export function hash(...args: any[]): any;
+  /** stdlib */
+  export function pathToFileURL(...args: any[]): any;
+  /** stdlib */
+  export function stringWidth(...args: any[]): any;
+  /** stdlib */
+  export function write(...args: any[]): any;
+}
+
+declare module "bun:ffi" {
+  /** stdlib */
+  export const FFIType: any;
+  /** stdlib */
+  export const suffix: any;
+  /** stdlib @perryStub stage 3 — not yet implemented, throws at runtime (#6562) */
+  export function CFunction(...args: any[]): any;
+  /** stdlib */
+  export function CString(...args: any[]): any;
+  /** stdlib @perryStub stage 3 — not yet implemented, throws at runtime (#6562) */
+  export function JSCallback(...args: any[]): any;
+  /** stdlib */
+  export function dlopen(...args: any[]): any;
+  /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
+  export function linkSymbols(...args: any[]): any;
+  /** stdlib */
+  export function ptr(...args: any[]): any;
+  /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
+  export function read(...args: any[]): any;
+  /** stdlib @perryStub stage 2 — not yet implemented, throws at runtime (#6562) */
+  export function toArrayBuffer(...args: any[]): any;
+  /** stdlib @perryStub stage 2 — not yet implemented, throws at runtime (#6562) */
+  export function toBuffer(...args: any[]): any;
+  /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
+  export function viewSource(...args: any[]): any;
 }
 
 declare module "cheerio" {
@@ -862,6 +918,8 @@ declare module "constants" {
 
 declare module "cron" {
   /** stdlib */
+  export class CronJob { [key: string]: any; }
+  /** stdlib */
   export function describe(expr: string): string;
   /** stdlib */
   export function schedule(expr: string, handler: any): any;
@@ -1037,9 +1095,9 @@ declare module "date-fns" {
 
 declare module "dayjs" {
   /** stdlib */
-  export function dayjs(...args: any[]): any;
+  export function dayjs(input?: any): any;
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (input?: any): any;
 }
 
 declare module "dgram" {
@@ -2014,9 +2072,9 @@ declare module "module" {
 
 declare module "moment" {
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (input?: any): any;
   /** stdlib */
-  export function moment(...args: any[]): any;
+  export function moment(input?: any): any;
 }
 
 declare module "mongodb" {
@@ -2114,6 +2172,14 @@ declare module "node-fetch" {
   export class Response { [key: string]: any; }
   /** stdlib */
   export default function (...args: any[]): any;
+}
+
+declare module "node-pty" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function spawn(...args: any[]): any;
 }
 
 declare module "nodemailer" {
@@ -3426,9 +3492,9 @@ declare module "sharp" {
 
 declare module "slugify" {
   /** stdlib */
-  export default function (p0: string, p1: string, p2: string): string;
+  export default function (p0: string, p1?: any): string;
   /** stdlib */
-  export function slugify(p0: string, p1: string, p2: string): string;
+  export function slugify(p0: string, p1?: any): string;
 }
 
 declare module "sqlite" {

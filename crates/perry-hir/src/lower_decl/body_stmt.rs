@@ -87,6 +87,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                                 ty: Type::Array(Box::new(Type::Any)),
                                                 mutable: true,
                                                 init: Some(Expr::PropertyGet {
+                                                    byte_offset: 0,
                                                     object: Box::new(Expr::This),
                                                     property: field_name.clone(),
                                                 }),
@@ -1015,6 +1016,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         ty: Type::Any,
                         mutable: false,
                         init: Some(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(res_id)),
                             property: "value".to_string(),
                         }),
@@ -1028,6 +1030,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         Stmt::Expr(Expr::LocalSet(res_id, Box::new(read_call()))),
                         Stmt::If {
                             condition: Expr::PropertyGet {
+                                byte_offset: 0,
                                 object: Box::new(Expr::LocalGet(res_id)),
                                 property: "done".to_string(),
                             },
@@ -1166,6 +1169,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 } else if is_node_readable_for_await {
                     Expr::Call {
                         callee: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(iter_expr_raw),
                             property: "iterator".to_string(),
                         }),
@@ -1200,6 +1204,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
                 let raw_next_call = Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(iter_id)),
                         property: "next".to_string(),
                     }),
@@ -1227,6 +1232,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         None
                     };
                 let value_expr = Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(result_id)),
                     property: "value".to_string(),
                 };
@@ -1284,6 +1290,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
                     Stmt::If {
                         condition: Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(result_id)),
                             property: "done".to_string(),
                         },
@@ -1852,6 +1859,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         property: "length".to_string(),
                     }),
@@ -1937,6 +1945,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(keys_id)),
                         property: "length".to_string(),
                     }),

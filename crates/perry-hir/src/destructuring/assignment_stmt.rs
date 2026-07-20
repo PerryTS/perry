@@ -176,6 +176,7 @@ fn iterator_next_value_stmts(
         },
         Stmt::If {
             condition: Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(step_id)),
                 property: "done".to_string(),
             },
@@ -186,6 +187,7 @@ fn iterator_next_value_stmts(
             else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                 value_id,
                 Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(step_id)),
                     property: "value".to_string(),
                 }),
@@ -245,6 +247,7 @@ fn lower_object_assignment_from_expr(
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(source.clone()),
                         property: name.clone(),
                     }),
@@ -325,6 +328,7 @@ fn object_property_get_expr(
         ast::PropName::Ident(ident) => Ok((
             Vec::new(),
             Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(source),
                 property: ident.sym.to_string(),
             },
@@ -332,6 +336,7 @@ fn object_property_get_expr(
         ast::PropName::Str(s) => Ok((
             Vec::new(),
             Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(source),
                 property: s.value.as_str().unwrap_or("").to_string(),
             },
@@ -339,6 +344,7 @@ fn object_property_get_expr(
         ast::PropName::Num(n) => Ok((
             Vec::new(),
             Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(source),
                 property: n.value.to_string(),
             },

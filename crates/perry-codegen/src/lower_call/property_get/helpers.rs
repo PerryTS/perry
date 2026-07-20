@@ -195,9 +195,10 @@ pub(crate) fn resolve_static_dispatch_cls(
     match expr {
         Expr::ClassRef(name) => Some(name.clone()),
         Expr::ExternFuncRef { name, .. } if class_ids.contains_key(name) => Some(name.clone()),
-        Expr::PropertyGet { object, property }
-            if matches!(object.as_ref(), Expr::ExternFuncRef { .. })
-                && class_ids.contains_key(property) =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::ExternFuncRef { .. })
+            && class_ids.contains_key(property) =>
         {
             Some(property.clone())
         }

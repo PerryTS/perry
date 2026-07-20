@@ -101,9 +101,9 @@ pub use self::iter_methods::{
     js_validate_array_map_callback,
 };
 pub use self::iter_object::{
-    array_entries_iter, array_keys_iter, array_values_iter, dispatch_array_iterator_method,
-    js_array_entries_iter_obj, js_array_keys_iter_obj, js_array_values_iter_obj,
-    ARRAY_ITERATOR_CLASS_ID,
+    array_entries_iter, array_keys_iter, array_values_iter, array_values_iter_null_done,
+    dispatch_array_iterator_method, js_array_entries_iter_obj, js_array_keys_iter_obj,
+    js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::is_builtin_iterator_class_id;
 pub(crate) use self::iterator::iter_bt_dump;

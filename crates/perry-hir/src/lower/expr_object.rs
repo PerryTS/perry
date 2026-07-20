@@ -65,6 +65,7 @@ fn builtin_global_value_expr(ctx: &mut LoweringContext, name: &str) -> Option<Ex
         ctx.uses_fetch = true;
     }
     Some(Expr::PropertyGet {
+        byte_offset: 0,
         object: Box::new(Expr::GlobalGet(0)),
         property: name.to_string(),
     })

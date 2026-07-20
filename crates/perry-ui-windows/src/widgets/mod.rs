@@ -464,6 +464,134 @@ pub fn find_handle_by_hwnd(_hwnd: isize) -> i64 {
     0
 }
 
+// =============================================================================
+// Geisterhand (UI test automation) hooks — Windows ports of the macOS
+// implementations in `perry-ui-macos/src/widgets/mod.rs`. These are what a
+// test harness needs to ASSERT on Windows UI (the crate previously only
+// registered state_set / screenshot / textfield_set / apply_style, so
+// widget state was write-only from a harness's point of view). Returned
+// buffers are `libc::malloc`'d — the geisterhand host frees them with
+// `free()`, so the allocators must match.
+// =============================================================================
+
+/// Copy `s` into a malloc'd buffer, writing its length to `out_len`.
+/// Contract (mirrors macOS): null return = "not found / not readable";
+/// non-null with `*out_len == 0` = "found, empty value" (`len.max(1)`
+/// keeps malloc(0) well-defined).
+#[cfg(all(feature = "geisterhand", target_os = "windows"))]
+fn alloc_string_result(s: &str, out_len: *mut usize) -> *mut u8 {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let buf = unsafe { libc::malloc(len.max(1)) as *mut u8 };
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
+    if len > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+        }
+    }
+    unsafe {
+        *out_len = len;
+    }
+    buf
+}
+
+/// Read the current value of a widget by handle. Kind mapping mirrors the
+/// macOS hook: text-bearing widgets → their text, Slider → its numeric
+/// value (user units), Toggle/Button → checked state as "true"/"false".
+#[cfg(all(feature = "geisterhand", target_os = "windows"))]
+#[no_mangle]
+pub extern "C" fn perry_ui_read_widget_value(handle: i64, out_len: *mut usize) -> *mut u8 {
+    unsafe {
+        *out_len = 0;
+    }
+    let Some(info) = get_widget_info(handle) else {
+        return std::ptr::null_mut();
+    };
+    let Some(hwnd) = get_hwnd(handle) else {
+        return std::ptr::null_mut();
+    };
+    match info.kind {
+        WidgetKind::Text
+        | WidgetKind::TextField
+        | WidgetKind::SecureField
+        | WidgetKind::TextArea => unsafe {
+            let len = GetWindowTextLengthW(hwnd);
+            let mut buf = vec![0u16; (len + 1) as usize];
+            let copied = GetWindowTextW(hwnd, &mut buf);
+            let s = String::from_utf16_lossy(&buf[..copied.max(0) as usize]);
+            alloc_string_result(&s, out_len)
+        },
+        WidgetKind::Slider => match slider::get_value(handle) {
+            Some(v) => alloc_string_result(&format!("{}", v), out_len),
+            None => std::ptr::null_mut(),
+        },
+        WidgetKind::Toggle | WidgetKind::Button => unsafe {
+            // BM_GETCHECK: BST_CHECKED == 1. Plain push buttons report
+            // "false", same as macOS's NSButton state for momentary buttons.
+            const BM_GETCHECK: u32 = 0x00F0;
+            let checked = SendMessageW(hwnd, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 == 1;
+            alloc_string_result(if checked { "true" } else { "false" }, out_len)
+        },
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// Query all widgets: JSON array of handle / visible / frame, where frame
+/// is in the widget's top-level window's client coordinates (stable
+/// regardless of window position on screen). Shape mirrors macOS.
+#[cfg(all(feature = "geisterhand", target_os = "windows"))]
+#[no_mangle]
+pub extern "C" fn perry_ui_query_widget_tree(out_len: *mut usize) -> *mut u8 {
+    let json = WIDGETS.with(|w| {
+        let widgets = w.borrow();
+        let mut s = String::from("[");
+        for (i, entry) in widgets.iter().enumerate() {
+            let handle = (i + 1) as i64;
+            if i > 0 {
+                s.push(',');
+            }
+            unsafe {
+                let visible = !entry.hidden && IsWindowVisible(entry.hwnd).as_bool();
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(entry.hwnd, &mut rect);
+                let root = GetAncestor(entry.hwnd, GA_ROOT);
+                let mut origin = POINT {
+                    x: rect.left,
+                    y: rect.top,
+                };
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(root, &mut origin);
+                s.push_str(&format!(
+                    r#"{{"handle":{},"visible":{},"frame":{{"x":{},"y":{},"width":{},"height":{}}}}}"#,
+                    handle,
+                    visible,
+                    origin.x,
+                    origin.y,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top
+                ));
+            }
+        }
+        s.push(']');
+        s
+    });
+    let bytes = json.into_bytes();
+    let len = bytes.len();
+    let buf = unsafe { libc::malloc(len.max(1)) as *mut u8 };
+    if buf.is_null() {
+        unsafe {
+            *out_len = 0;
+        }
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+        *out_len = len;
+    }
+    buf
+}
+
 /// Find widget handle by control ID.
 pub fn find_handle_by_control_id(id: u16) -> i64 {
     WIDGETS.with(|w| {

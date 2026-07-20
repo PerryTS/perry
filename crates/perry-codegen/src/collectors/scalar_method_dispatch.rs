@@ -167,7 +167,9 @@ fn note_prototype_effect(expr: &Expr, facts: &mut ModuleDispatchFacts) {
         Expr::RegisterFunctionPrototypeMethod { .. } | Expr::SetFunctionPrototype { .. } => {}
         // Any expression that so much as NAMES a prototype object: the value
         // can be aliased into a local and written through later.
-        Expr::PropertyGet { object, property } if is_prototype_key(property) => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if is_prototype_key(property) => {
             note_prototype_holder(object, facts);
         }
         Expr::PropertySet {
@@ -277,7 +279,10 @@ pub fn mark_unstable_scalar_method_receivers(
         let Expr::Call { callee, args, .. } = expr else {
             return;
         };
-        let Expr::PropertyGet { object, property } = callee.as_ref() else {
+        let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        else {
             return;
         };
         let Expr::LocalGet(id) = object.as_ref() else {
@@ -437,6 +442,7 @@ mod tests {
                 params: Vec::new(),
                 return_type: Type::Number,
                 body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "value".to_string(),
                 }))],
@@ -482,6 +488,7 @@ mod tests {
     fn call_method_stmt(method: &str) -> Stmt {
         Stmt::Return(Some(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(RECEIVER)),
                 property: method.to_string(),
             }),
@@ -614,6 +621,7 @@ mod tests {
         let mut module = Module::new("m.ts");
         module.init.push(Stmt::Expr(Expr::ObjectDefineProperty(
             Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::ClassRef("C".to_string())),
                 property: "prototype".to_string(),
             }),
@@ -639,6 +647,7 @@ mod tests {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(6)),
                 property: "prototype".to_string(),
             }),
