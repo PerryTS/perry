@@ -212,17 +212,25 @@ pub(crate) fn print_deferred_eval_notice(format: OutputFormat) {
         ("", "", "")
     };
     eprintln!();
-    eprintln!(
-        "{y}{b}notice:{r}{y} {n} ahead-of-time-unsupported {plural} compiled to a deferred runtime error (throws only if reached):{r}"
-    );
-    // Align the locations into a column for readability.
+    eprintln!("{y}{b}notice:{r}{y} {n} ahead-of-time-unsupported {plural} handled at runtime:{r}");
+    // Align the locations into a column for readability. #6559: dynamic-code
+    // sites (`eval(...)` / `new Function(...)`) now run on the runtime
+    // interpreter; every other kind still compiles to a deferred runtime
+    // error that throws only if reached.
     let kind_width = sites.iter().map(|s| s.kind.len()).max().unwrap_or(0);
+    let loc_width = sites.iter().map(|s| s.location.len()).max().unwrap_or(0);
     for s in &sites {
+        let disposition = if s.kind.contains("eval") || s.kind.contains("Function") {
+            "runtime interpreter (#6559)"
+        } else {
+            "deferred runtime error (throws only if reached)"
+        };
         eprintln!(
-            "  - {:<width$}   {}",
+            "  - {:<kw$}   {:<lw$}   → {disposition}",
             s.kind,
             s.location,
-            width = kind_width
+            kw = kind_width,
+            lw = loc_width,
         );
     }
     eprintln!(

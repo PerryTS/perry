@@ -231,6 +231,35 @@ export function App(config: {
      * Issue #1280.
      */
     windowState?: "normal" | "maximized" | "fullscreen";
+    /**
+     * Remove the window title bar and frame (borderless window, movable
+     * by background). v0.4.11 launcher-style option.
+     */
+    frameless?: boolean;
+    /**
+     * Window z-order level: `"floating"` stays above normal windows,
+     * `"statusBar"` above floating ones, `"modal"` is the modal-panel
+     * level, `"normal"` (default) is the ordinary level.
+     */
+    level?: "normal" | "floating" | "statusBar" | "modal";
+    /** Transparent window background (desktop shows through). */
+    transparent?: boolean;
+    /**
+     * Native translucent background material (NSVisualEffectView on
+     * macOS, Mica/Acrylic on Windows 11, best-effort CSS alpha on GTK4).
+     * macOS materials: "sidebar" (default fallback), "titlebar",
+     * "selection", "menu", "popover", "headerView", "sheet",
+     * "windowBackground", "hudWindow", "fullScreenUI", "tooltip",
+     * "contentBackground", "underWindowBackground", "underPageBackground".
+     */
+    vibrancy?: string;
+    /**
+     * Dock/taskbar presence: `"regular"` (default) shows a dock icon,
+     * `"accessory"` hides the dock icon (launcher/utility apps),
+     * `"background"` hides the app from dock and app switcher entirely.
+     * Also available at runtime via `appSetActivationPolicy(policy)`.
+     */
+    activationPolicy?: "regular" | "accessory" | "background";
 }): void;
 
 /** Vertical stack layout. */

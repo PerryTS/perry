@@ -436,8 +436,30 @@ fn visit_expr_for_dyn_imports<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
 }
 
 fn visit_expr_for_dyn_imports_ref<F: FnMut(&Expr)>(expr: &Expr, f: &mut F) {
-    if matches!(expr, Expr::DynamicImport { .. }) {
+    if let Expr::DynamicImport { arg, .. } = expr {
         f(expr);
+        // Mirror the `_mut` sibling: after reporting the node, still descend
+        // into the `arg` so nested dynamic imports are visited.
+        visit_expr_for_dyn_imports_ref(arg, f);
+        return;
+    }
+    // Closure bodies — descend manually (the walker intentionally doesn't).
+    //
+    // #6660: this MUST stay in traversal lockstep with the `_mut` sibling
+    // above. The driver's resolution pass walks the read-only visitor and
+    // records one outcome per site; the fill pass walks the `_mut` visitor
+    // and applies them 1:1 by order. This arm used to be missing here, so
+    // every `import()` inside a closure (`const imp = (s) => import(s)`) was
+    // invisible to the resolver but still visited by the fill pass — the
+    // outcome stream ran dry (or mis-assigned), the site kept empty `paths`
+    // with no `deferred_error`, and codegen's defensive arm lowered it to
+    // `js_promise_rejected(undefined)`: an uncatchable-looking
+    // `Uncaught (in promise) undefined` at runtime instead of the resolved
+    // namespace.
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            visit_stmt_for_dyn_imports_ref(s, f);
+        }
     }
     walk_expr_children(expr, &mut |child| visit_expr_for_dyn_imports_ref(child, f));
 }

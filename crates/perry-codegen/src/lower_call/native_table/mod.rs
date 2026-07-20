@@ -13,6 +13,7 @@
 use std::sync::LazyLock;
 
 mod async_decimal;
+mod bun;
 mod databases;
 mod dates;
 mod extras;
@@ -154,6 +155,7 @@ pub(super) const NR_VOID: NativeRetKind = NativeRetKind::Void;
 pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::new(|| {
     let mut v: Vec<NativeModSig> = Vec::new();
     v.extend_from_slice(node_core::NODE_CORE_ROWS);
+    v.extend_from_slice(bun::BUN_ROWS);
     v.extend_from_slice(node_core_process::NODE_CORE_PROCESS_ROWS);
     v.extend_from_slice(node_core_util::NODE_CORE_UTIL_ROWS);
     v.extend_from_slice(node_dns::NODE_DNS_ROWS);

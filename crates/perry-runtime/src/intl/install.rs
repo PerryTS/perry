@@ -64,6 +64,10 @@ pub(super) fn install_constructor(
         crate::closure::js_register_closure_arity(ptr, 0);
         crate::object::set_bound_native_closure_name(closure, &format!("get {getter_name}"));
         crate::object::set_builtin_closure_length(closure as usize, 0);
+        // The `get Intl.X.prototype.format` accessor is a built-in
+        // non-constructor function — no `[[Construct]]`, no own `prototype`
+        // property (`format/builtin.js` reads the getter and asserts both).
+        crate::object::set_builtin_closure_non_constructable(closure as usize);
         crate::object::set_builtin_property_attrs(
             closure as usize,
             "name".to_string(),

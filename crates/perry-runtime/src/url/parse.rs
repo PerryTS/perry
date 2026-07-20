@@ -367,7 +367,7 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         String::new()
     };
     let href = if protocol == "file:" {
-        format!("{}//{}{}{}", protocol, host, pathname, search) + &hash
+        format!("{}//{}{}{}{}", protocol, host, pathname, search, hash)
     } else if host.is_empty() {
         // Opaque schemes (`mailto:`, `data:`, `urn:`) — keep the scheme prefix.
         format!("{}{}{}{}", protocol, pathname, search, hash)
@@ -474,7 +474,7 @@ pub(crate) unsafe fn rebuild_url_href(url: *mut ObjectHeader) {
         String::new()
     };
     let href = if protocol == "file:" {
-        format!("{}//{}{}{}", protocol, host, pathname, search) + &hash
+        format!("{}//{}{}{}{}", protocol, host, pathname, search, hash)
     } else if host.is_empty() {
         // Opaque schemes (`mailto:`, `data:`, `urn:`) — keep the scheme prefix.
         format!("{}{}{}{}", protocol, pathname, search, hash)

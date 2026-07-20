@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
@@ -15,7 +16,6 @@ thread_local! {
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -55,7 +55,7 @@ define_class!(
                         let rust_str = text.to_string();
                         let bytes = rust_str.as_bytes();
 
-                        let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
+                        let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) };
                         let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
 
                         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };

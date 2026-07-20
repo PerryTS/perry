@@ -7,8 +7,11 @@
 //!   2. a visible end-of-compile NOTICE lists the degraded site(s)
 //!      (count + kind + `file:line`),
 //!   3. the binary runs fine when the eval path is never reached, and
-//!   4. if the eval path IS reached at runtime it throws a descriptive,
-//!      catchable `Error` (not a crash, not a silent no-op).
+//!   4. if the eval path IS reached at runtime it is handled by the #6559
+//!      dyn-eval interpreter: INVALID source (this fixture's `return (not
+//!      json)`) throws a catchable `SyntaxError` — matching Node — rather
+//!      than crashing or silently no-opping; valid subset-supported source
+//!      now actually runs.
 //!
 //! Strict-eval mode (CLI `--strict-eval` or `perry.eval = "error"` /
 //! `perry.strict = true` config) restores the historical hard compile-time
@@ -142,7 +145,10 @@ fn default_defer_compiles_prints_notice_and_runs() {
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert_eq!(stdout.trim(), "1", "JSON path must print 1; got:\n{stdout}");
 
-    // Forcing the deferred path throws a descriptive, catchable Error.
+    // Forcing the deferred path: `new Function("return (not json)")` is
+    // invalid source, so the #6559 interpreter throws a catchable
+    // SyntaxError at construction (Node behavior) — the descriptive,
+    // catchable signal this test has always demanded.
     let run2 = Command::new(&bin)
         .arg("--force-eval")
         .output()
@@ -150,11 +156,11 @@ fn default_defer_compiles_prints_notice_and_runs() {
     let stdout2 = String::from_utf8_lossy(&run2.stdout);
     assert!(
         stdout2.contains("CAUGHT:"),
-        "the invoked deferred site must throw a catchable Error; got:\n{stdout2}"
+        "the invoked deferred site must throw a catchable error; got:\n{stdout2}"
     );
     assert!(
-        stdout2.contains("ahead-of-time compiled binary"),
-        "the thrown Error must be descriptive; got:\n{stdout2}"
+        stdout2.contains("invalid or unsupported source"),
+        "the thrown error must be descriptive; got:\n{stdout2}"
     );
     assert!(
         !stdout2.contains("NO_THROW"),

@@ -218,22 +218,23 @@ pub(crate) fn track_decl_aliases(
                     ctx.array_static_method_aliases.insert(id, method_name);
                 }
             }
-            Expr::PropertyGet { object, property }
-                if is_global_this_value(ctx, object.as_ref())
-                    && matches!(
-                        property.as_str(),
-                        "URL"
-                            | "URLSearchParams"
-                            | "TextEncoder"
-                            | "TextDecoder"
-                            | "Blob"
-                            | "File"
-                            | "FormData"
-                            | "Headers"
-                            | "Request"
-                            | "Response"
-                            | "WebSocket"
-                    ) =>
+            Expr::PropertyGet {
+                object, property, ..
+            } if is_global_this_value(ctx, object.as_ref())
+                && matches!(
+                    property.as_str(),
+                    "URL"
+                        | "URLSearchParams"
+                        | "TextEncoder"
+                        | "TextDecoder"
+                        | "Blob"
+                        | "File"
+                        | "FormData"
+                        | "Headers"
+                        | "Request"
+                        | "Response"
+                        | "WebSocket"
+                ) =>
             {
                 ctx.register_let_class_alias(name.to_string(), property.clone());
                 if matches!(
@@ -243,10 +244,11 @@ pub(crate) fn track_decl_aliases(
                     ctx.uses_fetch = true;
                 }
             }
-            Expr::PropertyGet { object, property }
-                if matches!(object.as_ref(), Expr::NativeModuleRef(module)
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::NativeModuleRef(module)
                     if module == "buffer" || module == "node:buffer")
-                    && matches!(property.as_str(), "Blob" | "File") =>
+                && matches!(property.as_str(), "Blob" | "File") =>
             {
                 ctx.register_let_class_alias(name.to_string(), property.clone());
                 ctx.uses_fetch = true;
@@ -268,7 +270,9 @@ pub(crate) fn track_decl_aliases(
             // assignment recogniser can route to the
             // function-flavoured prototype-method registration
             // path (synthetic class id allocated at runtime).
-            Expr::PropertyGet { object, property } if property == "prototype" => {
+            Expr::PropertyGet {
+                object, property, ..
+            } if property == "prototype" => {
                 match object.as_ref() {
                     Expr::ClassRef(class_name) => {
                         ctx.prototype_aliases.insert(id, class_name.clone());

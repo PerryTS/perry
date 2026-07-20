@@ -6,7 +6,7 @@ fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
     matches!(expr, Expr::GlobalGet(_))
         || matches!(
             expr,
-            Expr::PropertyGet { object, property }
+            Expr::PropertyGet { object, property, .. }
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
                     && property == "globalThis"
         )
@@ -123,6 +123,7 @@ fn iterator_next_value_stmts(
         },
         Stmt::If {
             condition: Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(step_id)),
                 property: "done".to_string(),
             },
@@ -133,6 +134,7 @@ fn iterator_next_value_stmts(
             else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                 value_id,
                 Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(step_id)),
                     property: "value".to_string(),
                 }),
@@ -540,6 +542,7 @@ pub(crate) fn lower_pattern_binding_into(
                                     }
                                 }
                                 Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -563,6 +566,7 @@ pub(crate) fn lower_pattern_binding_into(
                                     }
                                 }
                                 Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -571,6 +575,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 let key = n.value.to_string();
                                 static_keys.push(key.clone());
                                 Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -682,6 +687,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 ty: Type::Any,
                                 mutable: false,
                                 init: Some(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: name.clone(),
                                 }),
@@ -697,6 +703,7 @@ pub(crate) fn lower_pattern_binding_into(
                             }
                         } else {
                             Expr::PropertyGet {
+                                byte_offset: 0,
                                 object: Box::new(Expr::LocalGet(tmp_id)),
                                 property: name.clone(),
                             }

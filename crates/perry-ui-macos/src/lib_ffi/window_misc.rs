@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use crate::*;
 
 // =============================================================================
@@ -206,9 +207,16 @@ pub extern "C" fn perry_get_orientation() -> i64 {
 #[no_mangle]
 pub extern "C" fn perry_on_layout_change(_callback: f64) {}
 
+/// perry_get_device_idiom() → "mac" — the device form-factor string for
+/// macOS per the perry/system contract ("phone" / "pad" / "mac" / "tv" /
+/// "watch" / "vision" / "desktop"). Returns a raw `*mut StringHeader`
+/// (i64); the dispatch row is `ReturnKind::Str`, so codegen NaN-boxes it
+/// with STRING_TAG. Not a screen-detection stub: this used to return the
+/// numeric phone code (0.0) here, which both violated the string contract
+/// and misreported a Mac as a phone.
 #[no_mangle]
-pub extern "C" fn perry_get_device_idiom() -> f64 {
-    0.0
+pub extern "C" fn perry_get_device_idiom() -> i64 {
+    unsafe { js_string_from_bytes(b"mac".as_ptr(), 3) as i64 }
 }
 
 // --- TabBar stubs (not yet implemented for macOS) ---

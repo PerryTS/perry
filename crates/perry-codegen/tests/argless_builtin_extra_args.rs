@@ -101,6 +101,7 @@ fn module_with_init(init: Vec<Stmt>) -> Module {
 fn string_trim_with_extra_arg_compiles() {
     let stmt = Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::String("  x  ".to_string())),
             property: "trim".to_string(),
         }),
@@ -124,6 +125,7 @@ fn string_trim_with_extra_arg_compiles() {
 fn array_pop_with_extra_arg_compiles() {
     let stmt = Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::Array(vec![Expr::Number(1.0)])),
             property: "pop".to_string(),
         }),

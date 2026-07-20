@@ -195,7 +195,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // LLVM from doing GVN/LICM on the load. The class field
         // walker matches `class_field_global_index`'s inheritance
         // traversal so the type of any inherited field is also seen.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
@@ -284,7 +286,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
         Expr::Call { callee, .. } => {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if is_fixed_width_buffer_numeric_read(property)
                     && receiver_class_name(ctx, object)
                         .as_deref()

@@ -29,7 +29,10 @@ pub fn try_lower_namespace_member_call(
     // through `js_closure_callN`. If it's a function declaration
     // (`export function make(s)`), call the symbol directly with rest
     // bundling — same as the existing FuncRef path.
-    let Expr::PropertyGet { object, property } = callee else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    else {
         return Ok(None);
     };
     let Expr::ExternFuncRef { name: ns_name, .. } = object.as_ref() else {

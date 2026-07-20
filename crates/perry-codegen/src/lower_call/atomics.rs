@@ -10,7 +10,7 @@ use crate::types::{DOUBLE, PTR};
 fn is_global_this_atomics_expr(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet { object, property, .. }
             if property == "Atomics" && matches!(object.as_ref(), Expr::GlobalGet(_))
     )
 }
@@ -20,7 +20,10 @@ pub fn try_lower_atomics_static_call(
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
-    let Expr::PropertyGet { object, property } = callee else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    else {
         return Ok(None);
     };
     if !is_global_this_atomics_expr(object) {

@@ -169,6 +169,15 @@ pub enum Expr {
     PropertyGet {
         object: Box<Expr>,
         property: String,
+        /// #5247: byte offset (`member.span.lo.0`) of this member access in its
+        /// module source, captured at AST→HIR lowering. Codegen (under
+        /// `--debug-symbols`) resolves it to `file:line` and attaches it to the
+        /// runtime "Cannot read properties of null/undefined" TypeError thrown
+        /// when the receiver is nullish, so `.stack` shows `at <file>:<line>`
+        /// instead of `<anonymous>`. `0` when unknown (nodes synthesized by
+        /// transforms/desugaring) — resolves to no location. Mirrors
+        /// `Call.byte_offset` / `New::byte_offset`; excluded from stable-hashing.
+        byte_offset: u32,
     },
     PropertySet {
         object: Box<Expr>,

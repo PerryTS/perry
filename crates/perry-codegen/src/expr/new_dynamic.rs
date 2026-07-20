@@ -261,7 +261,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // ObjectHeader. Pre-fix the NewDynamic fallback returned a
             // placeholder object — `cloned.getTime()` then read garbage
             // and the equality failed. Refs date-fns blocker.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "constructor" {
                     if let Expr::LocalGet(id) = object.as_ref() {
                         let is_date = matches!(
@@ -287,7 +290,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // make_assertion_error path the failing-assert helpers
             // already use, so the resulting instance has the same
             // class_id-extends-Error registration).
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "AssertionError" {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "assert" || mod_name == "assert/strict" {
@@ -327,7 +333,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `PropertyGet { NativeModuleRef("net"), ... }` rather than a bare
             // built-in class name. Route them through `lower_new` so the
             // handle-producing constructor arms allocate registered net handles.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if matches!(property.as_str(), "BlockList" | "SocketAddress") {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "net" || mod_name == "node:net" {
@@ -339,7 +348,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "WebSocket" {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "http" || mod_name == "node:http" {
@@ -356,7 +368,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // helper methods as `crypto.Certificate.*`. Represent instances as
             // the `crypto.Certificate` native namespace so method calls dispatch
             // through the existing native-module path.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "Certificate" && args.is_empty() {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "crypto" {
@@ -383,7 +398,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `new crypto.DiffieHellman(...)` /
             // `new crypto.DiffieHellmanGroup(name)` are legacy constructor
             // aliases for the existing classic-DH factory helpers.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if matches!(property.as_str(), "DiffieHellman" | "DiffieHellmanGroup") {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "crypto" {
@@ -428,7 +446,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `new v8.GCProfiler()` (#3142) — allocate a fresh native-module
             // instance whose `start()` / `stop()` methods dispatch through the
             // runtime native-module method table.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "GCProfiler" {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "v8" {
@@ -466,7 +487,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `.on()`/`.write()`/`.pipe()` throw "is not a function". Route to
             // the same `lower_builtin_new` stream handler the named-import path
             // uses so the runtime allocates the fully-methoded stream object.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                     if mod_name == "stream"
                         && matches!(
@@ -485,7 +509,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `Default*` subclasses) (#3680) — route to the runtime
             // constructors that allocate a codec-backed instance object whose
             // methods dispatch through the native-module method table.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                     if mod_name == "v8" {
                         match property.as_str() {
@@ -537,7 +564,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // handled in lower_call/builtin.rs. Route to the same runtime
             // registrar so the no-callback TypeError (and normal construction)
             // fire. Refs #1388.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "PerformanceObserver" {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "perf_hooks" {
@@ -572,7 +602,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `lower_new_member_captured` which fills the synthesized
             // `__perry_cap_*` ctor params from the class's decl-site capture
             // snapshot instead of binding them to `undefined`.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if let Expr::LocalGet(obj_id) = object.as_ref() {
                     if let Some(class_name) = ctx
                         .local_class_field_aliases

@@ -244,6 +244,7 @@ pub fn synthesize_class_captures(
                     class_name: name.to_string(),
                     index: index as u32,
                     fallback: Some(Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::This),
                         property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                     })),

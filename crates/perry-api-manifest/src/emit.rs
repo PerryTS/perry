@@ -461,16 +461,23 @@ fn source_dts_tag(entry: &ApiEntry) -> &'static str {
     }
 }
 
-/// Markdown anchor for a heading. mdbook lowercases and replaces
-/// non-alphanum with `-`. Matches its slugifier closely enough for
-/// the in-page TOC to land.
+/// Markdown anchor for a heading, matching mdbook's `normalize_id`
+/// (github-slugifier): keep alphanumerics + `_`/`-`, lowercase, turn
+/// whitespace into `-`, and DROP every other punctuation character.
+///
+/// The distinction matters for module names with punctuation: mdbook
+/// slugs `bun:ffi` → `bunffi` and `mysql2/promise` → `mysql2promise`
+/// (the `:` / `/` are removed, NOT turned into `-`). The previous
+/// "replace every non-alphanumeric with `-`" produced `bun-ffi` /
+/// `mysql2-promise`, so the in-page TOC links jumped nowhere. (#6580)
 fn anchor(s: &str) -> String {
     s.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || c.is_whitespace())
         .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
+            if c.is_whitespace() {
                 '-'
+            } else {
+                c.to_ascii_lowercase()
             }
         })
         .collect()

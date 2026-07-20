@@ -1,3 +1,4 @@
+use crate::ffi::js_get_string_pointer_unified;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -42,7 +43,6 @@ pub fn show(title_ptr: *const u8, message_ptr: *const u8, arr_ptr: i64, callback
         extern "C" {
             fn js_array_get_length(arr: i64) -> i64;
             fn js_array_get_element(arr: i64, index: i64) -> f64;
-            fn js_get_string_pointer_unified(val: f64) -> i64;
         }
 
         let len = if arr_ptr != 0 {
