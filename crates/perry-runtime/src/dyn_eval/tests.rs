@@ -31,7 +31,11 @@ fn as_num(v: f64) -> f64 {
     if jv.is_int32() {
         jv.as_int32() as f64
     } else {
-        assert!(jv.is_number(), "expected a number, got bits {:x}", v.to_bits());
+        assert!(
+            jv.is_number(),
+            "expected a number, got bits {:x}",
+            v.to_bits()
+        );
         v
     }
 }
@@ -258,14 +262,12 @@ fn named_function_expression_recursion_and_expando() {
     // ajv's exact shape: `return function validateN(...) { …
     // validateN.errors = …; return … }` — the name binds inside the body and
     // expando properties stick on the returned closure.
-    let f = dyn_fn(&[
-        r#"
+    let f = dyn_fn(&[r#"
         return function fact(n) {
             if (n <= 1) { fact.calls = (fact.calls || 0) + 1; return 1; }
             return n * fact(n - 1);
         };
-        "#,
-    ]);
+        "#]);
     let fact_idx = root_push(call(f, &[]));
     let r = call(root_get(fact_idx), &[num(5.0)]);
     assert_eq!(as_num(r), 120.0);
@@ -276,15 +278,13 @@ fn named_function_expression_recursion_and_expando() {
 
 #[test]
 fn closures_capture_interpreter_scope() {
-    let f = dyn_fn(&[
-        r#"
+    let f = dyn_fn(&[r#"
         let count = 0;
         const inc = function () { count += 1; return count; };
         inc(); inc();
         const get = () => count;
         return get();
-        "#,
-    ]);
+        "#]);
     assert_eq!(as_num(call(f, &[])), 2.0);
 }
 
@@ -331,7 +331,10 @@ fn var_hoisting_across_sibling_blocks() {
         return _valid0;
         "#,
     ]);
-    assert_eq!(as_str(call(f, &[f64::from_bits(crate::value::TAG_TRUE)])), "yes");
+    assert_eq!(
+        as_str(call(f, &[f64::from_bits(crate::value::TAG_TRUE)])),
+        "yes"
+    );
 }
 
 #[test]
@@ -418,10 +421,7 @@ fn generator_body_rejected_at_construction() {
 
 // ── host bridging: interpreted → host ──────────────────────────────────────
 
-extern "C" fn host_double_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    v: f64,
-) -> f64 {
+extern "C" fn host_double_thunk(_closure: *const crate::closure::ClosureHeader, v: f64) -> f64 {
     num(as_num_raw(v) * 2.0)
 }
 
@@ -587,7 +587,10 @@ fn depd_fast_path_still_intact() {
     // uses `arguments`, which the interpreter deliberately rejects) — guard
     // that the interpreter path doesn't regress it by checking `arguments`
     // stays a named diagnostic.
-    let f = dyn_fn(&["fn", "return function () { return fn.apply(this, arguments); }"]);
+    let f = dyn_fn(&[
+        "fn",
+        "return function () { return fn.apply(this, arguments); }",
+    ]);
     let wrapper_maker_result = catch_throw(|| {
         let wrapped_idx = root_push(call(f, &[host_double_fn()]));
         let r = call(root_get(wrapped_idx), &[num(21.0)]);
@@ -670,8 +673,8 @@ fn probe_compiled_path_reads_closure_expando_null() {
     "#]);
     let g_idx = root_push(call(f, &[]));
     let key = crate::string::js_string_from_bytes("errors".as_ptr(), 6);
-    let obj = crate::value::js_nanbox_get_pointer(root_get(g_idx))
-        as *const crate::object::ObjectHeader;
+    let obj =
+        crate::value::js_nanbox_get_pointer(root_get(g_idx)) as *const crate::object::ObjectHeader;
     let read = crate::object::js_object_get_field_by_name_f64(obj, key);
     roots_truncate(g_idx);
     let jv = crate::value::JSValue::from_bits(read.to_bits());
@@ -705,9 +708,8 @@ fn probe_all_readers_of_null_closure_expando() {
     let dyn_r = crate::value::js_dyn_index_get(root_get(g_idx), key_v);
     eprintln!("dyn_index bits:    {:016x}", dyn_r.to_bits());
 
-    let prop_r = unsafe {
-        crate::value::js_get_property(root_get(g_idx), "errors".as_ptr() as i64, 6)
-    };
+    let prop_r =
+        unsafe { crate::value::js_get_property(root_get(g_idx), "errors".as_ptr() as i64, 6) };
     eprintln!("get_property bits: {:016x}", prop_r.to_bits());
     roots_truncate(g_idx);
 
