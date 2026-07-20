@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1980 entries across 119 modules
+// Coverage: 1981 entries across 119 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -918,6 +918,8 @@ declare module "constants" {
 
 declare module "cron" {
   /** stdlib */
+  export class CronJob { [key: string]: any; }
+  /** stdlib */
   export function describe(expr: string): string;
   /** stdlib */
   export function schedule(expr: string, handler: any): any;
@@ -1093,9 +1095,9 @@ declare module "date-fns" {
 
 declare module "dayjs" {
   /** stdlib */
-  export function dayjs(...args: any[]): any;
+  export function dayjs(input?: any): any;
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (input?: any): any;
 }
 
 declare module "dgram" {
@@ -2070,9 +2072,9 @@ declare module "module" {
 
 declare module "moment" {
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (input?: any): any;
   /** stdlib */
-  export function moment(...args: any[]): any;
+  export function moment(input?: any): any;
 }
 
 declare module "mongodb" {
@@ -3490,9 +3492,9 @@ declare module "sharp" {
 
 declare module "slugify" {
   /** stdlib */
-  export default function (p0: string, p1: string, p2: string): string;
+  export default function (p0: string, p1?: any): string;
   /** stdlib */
-  export function slugify(p0: string, p1: string, p2: string): string;
+  export function slugify(p0: string, p1?: any): string;
 }
 
 declare module "sqlite" {

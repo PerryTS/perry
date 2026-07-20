@@ -1822,6 +1822,55 @@ pub(crate) fn compare_strings(locale: &str, left: &str, right: &str) -> f64 {
     }
 }
 
+/// `GetOption(options, key, "string", allowed, undefined)` for a Collator string
+/// option: only `undefined` selects the default (absent); every other value —
+/// `null` included — is coerced via `ToString` and rejected with a RangeError
+/// when it is not in `allowed`.
+fn collator_enum_option(options: f64, key: &str, allowed: &[&str]) {
+    if let Some(value) = get_option_string(options, key) {
+        if !allowed.contains(&value.as_str()) {
+            throw_range_error(&format!(
+                "Value {value} out of range for Intl.Collator options property {key}"
+            ));
+        }
+    }
+}
+
+/// `InitializeCollator` option reads, run for their observable throwing side
+/// effects only (Perry's collation is locale-neutral, so the resolved values are
+/// discarded). `CoerceOptionsToObject` returns an empty bag for `undefined` and
+/// otherwise `ToObject`s the argument — which wraps primitives (numbers, strings,
+/// booleans, bigints) rather than throwing, and only rejects `null`. Each
+/// `GetOption` then runs in spec order so the first invalid option is the one
+/// that throws; a primitive/array/function argument simply has no matching own
+/// properties, so every read is absent and nothing throws.
+pub(super) fn validate_collator_options(options: f64) {
+    let js = JSValue::from_bits(options.to_bits());
+    if js.is_undefined() {
+        return;
+    }
+    // CoerceOptionsToObject delegates to ToObject, which throws only for `null`
+    // (`undefined` handled above). A wrapped primitive exposes no option props,
+    // so `get_option_*` reads below return `undefined` and never throw.
+    if js.is_null() {
+        throw_type_error("Cannot convert undefined or null to object");
+    }
+    collator_enum_option(options, "usage", &["sort", "search"]);
+    collator_enum_option(options, "localeMatcher", &["lookup", "best fit"]);
+    // `collation` (string, no enum), `numeric` / `ignorePunctuation` (boolean via
+    // ToBoolean) never throw for an in-range value; read them so the GetOption
+    // getter sequence still matches, but coerce a Symbol `collation` per ToString.
+    let _ = get_option_string(options, "collation");
+    let _ = get_option_value(options, "numeric");
+    collator_enum_option(options, "caseFirst", &["upper", "lower", "false"]);
+    collator_enum_option(
+        options,
+        "sensitivity",
+        &["base", "accent", "case", "variant"],
+    );
+    let _ = get_option_value(options, "ignorePunctuation");
+}
+
 pub(crate) extern "C" fn collator_compare_thunk(
     _closure: *const ClosureHeader,
     left: f64,

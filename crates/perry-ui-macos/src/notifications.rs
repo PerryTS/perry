@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{define_class, msg_send, AnyThread};
@@ -23,7 +24,6 @@ thread_local! {
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
-    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut crate::string_header::StringHeader;
     fn js_closure_call1(closure: *const u8, arg0: f64) -> f64;
     fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
     fn js_json_parse(text_ptr: *const crate::string_header::StringHeader) -> u64;

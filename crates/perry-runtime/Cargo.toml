@@ -246,6 +246,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
 ] }
 
 # #855: libc::mach_host_self is deprecated; the mach2 crate is the

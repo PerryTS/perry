@@ -161,7 +161,8 @@ fn eval_template(ctx: &Ctx, tpl: &ast::Tpl, env_idx: usize) -> f64 {
         super::root_set(acc_idx, joined);
         roots_truncate(v_idx);
         let quasi = bridge::make_string(cooked_str(&tpl.quasis[i + 1]).as_ref());
-        let joined = unsafe { crate::value::js_dynamic_string_or_number_add(root_get(acc_idx), quasi) };
+        let joined =
+            unsafe { crate::value::js_dynamic_string_or_number_add(root_get(acc_idx), quasi) };
         super::root_set(acc_idx, joined);
     }
     let result = root_get(acc_idx);
@@ -225,11 +226,7 @@ fn eval_object_lit(ctx: &Ctx, o: &ast::ObjectLit, env_idx: usize) -> f64 {
                     let key_idx = root_push(key);
                     let value = bridge::get_index(root_get(src_idx), root_get(key_idx));
                     let value_idx = root_push(value);
-                    bridge::set_index(
-                        root_get(obj_idx),
-                        root_get(key_idx),
-                        root_get(value_idx),
-                    );
+                    bridge::set_index(root_get(obj_idx), root_get(key_idx), root_get(value_idx));
                     roots_truncate(key_idx);
                 }
                 roots_truncate(src_idx);
@@ -278,13 +275,7 @@ fn eval_object_lit(ctx: &Ctx, o: &ast::ObjectLit, env_idx: usize) -> f64 {
     obj
 }
 
-fn set_prop_by_name(
-    ctx: &Ctx,
-    obj_idx: usize,
-    key: &ast::PropName,
-    value: f64,
-    env_idx: usize,
-) {
+fn set_prop_by_name(ctx: &Ctx, obj_idx: usize, key: &ast::PropName, value: f64, env_idx: usize) {
     let value_idx = root_push(value);
     match key {
         ast::PropName::Ident(i) => {
@@ -319,7 +310,8 @@ fn eval_unary(ctx: &Ctx, u: &ast::UnaryExpr, env_idx: usize) -> f64 {
             // `typeof missingIdent` must not throw.
             if let ast::Expr::Ident(i) = u.arg.as_ref() {
                 if !env::is_bound(root_get(env_idx), &i.sym) && !global_has_own(&i.sym) {
-                    let special = matches!(&*i.sym, "undefined" | "NaN" | "Infinity" | "globalThis");
+                    let special =
+                        matches!(&*i.sym, "undefined" | "NaN" | "Infinity" | "globalThis");
                     if !special {
                         return bridge::make_string("undefined");
                     }
@@ -592,12 +584,7 @@ fn eval_assign_target_read(ctx: &Ctx, target: &ast::AssignTarget, env_idx: usize
     }
 }
 
-fn assign_to_assign_target(
-    ctx: &Ctx,
-    target: &ast::AssignTarget,
-    value: f64,
-    env_idx: usize,
-) {
+fn assign_to_assign_target(ctx: &Ctx, target: &ast::AssignTarget, value: f64, env_idx: usize) {
     match target {
         ast::AssignTarget::Simple(simple) => match simple {
             ast::SimpleAssignTarget::Ident(b) => {
@@ -789,11 +776,8 @@ fn eval_new(ctx: &Ctx, n: &ast::NewExpr, env_idx: usize) -> f64 {
                 };
                 let msg =
                     crate::string::js_string_from_bytes(msg_str.as_ptr(), msg_str.len() as u32);
-                let err = crate::error::js_error_new_kind_with_options(
-                    kind,
-                    msg,
-                    bridge::undefined(),
-                );
+                let err =
+                    crate::error::js_error_new_kind_with_options(kind, msg, bridge::undefined());
                 roots_truncate(msg_idx);
                 return crate::value::js_nanbox_pointer(err as i64);
             }

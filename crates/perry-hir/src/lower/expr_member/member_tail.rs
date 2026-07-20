@@ -358,10 +358,28 @@ pub(crate) fn lower_member_tail(
                     // `Math.PI`, … depend on it — so lifting it for those needs a
                     // complete per-builtin intrinsic-member table and is tracked
                     // separately.
+                    //
+                    // #5908: the `Function` constructor is the same safe case as
+                    // `RegExp`. It has no intrinsic static-member fast path keyed
+                    // on the collapsed shape (`Function.length` folds off either
+                    // the bare `GlobalGet(0)` or the `PropertyGet { GlobalGet(0),
+                    // "Function" }` value-form in the `.length` arm below, and
+                    // `Function.name` / `Function.prototype` / `Function.{call,
+                    // apply,bind}` are handled by their own dedicated arms), so
+                    // collapsing only LOSES the receiver — after
+                    // `Function.prototype.indicator = 1`, reading `Function.indicator`
+                    // (inherited via the ctor's [[Prototype]] = `%Function.prototype%`)
+                    // came back `undefined` instead of `1` (test262
+                    // built-ins/Function/S15.3.3_A2_T2). Keeping the receiver lets the
+                    // runtime walk the prototype chain, which already resolves the
+                    // inherited property (`closure_get_dynamic_prop`'s
+                    // `function_prototype_fallback_target`).
                     let receiver_is_regexp_ctor = property == "RegExp";
+                    let receiver_is_function_ctor = property == "Function";
                     if !outer_is_prototype_or_proto
                         && !receiver_is_namespace_value
                         && !receiver_is_regexp_ctor
+                        && !receiver_is_function_ctor
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
                         && !outer_is_reified_builtin_static_value

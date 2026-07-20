@@ -10,6 +10,7 @@
 //! (POSIX-locale formatter, stable across user locales) — matching the
 //! `Calendar` twin.
 
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -22,7 +23,6 @@ use std::collections::HashMap;
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -56,7 +56,7 @@ define_class!(
                     }
                     let iso = format_iso_date(date_obj);
                     let bytes = iso.as_bytes();
-                    let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                    let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                     let arg = js_nanbox_string(header as i64);
                     let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
                     js_closure_call1(closure_ptr, arg);
@@ -178,7 +178,7 @@ pub fn get_selected_date(handle: i64) -> f64 {
         }
         let iso = format_iso_date(date_obj);
         let bytes = iso.as_bytes();
-        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         js_nanbox_string(header as i64)
     }
 }

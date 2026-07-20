@@ -369,6 +369,24 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             visitor.visit_i64_slot(&mut t.flush_cb);
         }
     }
+    // Parked/deferred transform promises are held only as raw addresses in
+    // these maps (an unawaited write/close has no other root).
+    if let Ok(mut map) = transform::TRANSFORM_WRITE_RELEASES.lock() {
+        for promises in map.values_mut() {
+            for slot in promises.iter_mut() {
+                let mut p = *slot as *mut Promise;
+                visitor.visit_raw_mut_ptr_slot(&mut p);
+                *slot = p as usize;
+            }
+        }
+    }
+    if let Ok(mut map) = transform::TRANSFORM_PENDING_CLOSE.lock() {
+        for slot in map.values_mut() {
+            let mut p = *slot as *mut Promise;
+            visitor.visit_raw_mut_ptr_slot(&mut p);
+            *slot = p as usize;
+        }
+    }
     if let Ok(mut map) = READERS.lock() {
         for r in map.values_mut() {
             visitor.visit_raw_mut_ptr_slot(&mut r.closed_promise);
@@ -697,9 +715,11 @@ pub(super) unsafe fn maybe_pull(stream_id: usize) {
     // `pull_cb` of its own; the source's enqueue fans the chunk out to both
     // branches. `force` so a highWaterMark-0 flight producer actually pulls.
     if let Some(source) = tee_source_of(stream_id) {
-        // Tick parity: the pull travels a microtask cycle (buffered chunks +
-        // close discovery included); a live producer is driven from that job.
-        tee::tee_schedule_pull(source);
+        // Tick parity: a demand-initiated pull travels TWO microtask cycles
+        // (Node's sourceReader.read() resolution + .then(fanout) reaction);
+        // buffered chunks + close discovery included. A live producer is
+        // driven from the pull job.
+        tee::tee_schedule_pull_demand(source);
         return;
     }
     maybe_pull_inner(stream_id, false);
