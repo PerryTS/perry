@@ -300,7 +300,9 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         // PropertyGet/Set/Update with `this.<field>` is the safe pattern —
         // scalar replacement intercepts it. With `this.<method>` it falls
         // through to the heap-dispatch path which materializes `this`.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if matches!(object.as_ref(), Expr::This) {
                 return !fields.contains(property);
             }
@@ -545,6 +547,7 @@ mod tests {
         child.constructor = Some(function(
             "constructor",
             vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "value".to_string(),
             }))],

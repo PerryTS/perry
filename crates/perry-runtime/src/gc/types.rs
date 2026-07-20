@@ -907,6 +907,13 @@ pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
 // `GC_TYPE_OBJECT`. Set-only (clearing a descriptor leaves it set; the slow
 // path is always correct).
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+// This specific object's [[Prototype]] was overridden per-instance
+// (`Object.setPrototypeOf` / `__proto__` recording via
+// `object_set_static_prototype`). Class-keyed interception caches
+// (`object::prop_plan`) must not apply a class-chain verdict to an object
+// whose own chain diverges. Bit 12; only meaningful for `GC_TYPE_OBJECT`.
+// Set-only, travels with the object across evacuation.
+pub const OBJ_FLAG_PROTO_OVERRIDE: u16 = 0x1000;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached

@@ -110,12 +110,45 @@ pub unsafe extern "C" fn js_node_sqlite_backup(
     }
 }
 
+/// Validate the `DatabaseSync` `path` argument per Node: a string,
+/// Uint8Array/Buffer, or `file:` URL, none of which may contain null
+/// bytes — with Node's exact `ERR_INVALID_ARG_TYPE` message (#6561).
+pub(crate) unsafe fn node_sqlite_database_path(value: f64) -> String {
+    const PATH_TYPE_MSG: &str =
+        "The \"path\" argument must be a string, Uint8Array, or URL without null bytes.";
+    let js = value_from_f64(value);
+    let path = if js.is_any_string() {
+        let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
+        string_from_header(ptr).unwrap_or_else(|| throw_type(PATH_TYPE_MSG))
+    } else if let Some(bytes) = bytes_from_path_like(value) {
+        if bytes.contains(&0) {
+            throw_type(PATH_TYPE_MSG);
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    } else if js.is_pointer() {
+        // URL object — accept `file:` URLs, decoding the percent-encoded
+        // pathname like Node's `fileURLToPath`.
+        let protocol = string_from_jsvalue(object_field(value, "protocol")).unwrap_or_default();
+        let pathname = string_from_jsvalue(object_field(value, "pathname")).unwrap_or_default();
+        if protocol != "file:" || pathname.is_empty() {
+            throw_type(PATH_TYPE_MSG);
+        }
+        percent_decode_pathname(&pathname)
+    } else {
+        throw_type(PATH_TYPE_MSG);
+    };
+    if path.as_bytes().contains(&0) {
+        throw_type(PATH_TYPE_MSG);
+    }
+    path
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_node_sqlite_database_sync_new(
     path_value: f64,
     options_value: f64,
 ) -> Handle {
-    let path = string_from_value(path_value, "path");
+    let path = node_sqlite_database_path(path_value);
     let options = parse_node_sqlite_options(options_value);
     let open = options.open;
     let handle = register_handle(NodeSqliteDbHandle {
@@ -147,20 +180,24 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_new(
 #[no_mangle]
 pub unsafe extern "C" fn js_node_sqlite_database_sync_open(db_handle: Handle) -> i32 {
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     {
         let conn = db
             .conn
             .lock()
-            .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
         if conn.is_some() {
             drop(conn);
-            throw_invalid_state("Database is already open");
+            throw_invalid_state("database is already open");
         }
     }
     let opened = match open_node_sqlite_connection(db) {
         Ok(opened) => opened,
-        Err(err) => throw_sqlite_error(&err.to_string()),
+        // Carry the SQLite result code through (`errcode`/`errstr`), e.g.
+        // errcode 14 "unable to open database file" — matching Node (#6561).
+        Err(err) => {
+            perry_runtime::exception::js_throw(sqlite_error_value(sqlite_error_from_rusqlite(err)))
+        }
     };
     if let Err(err) = configure_node_sqlite_defensive(&opened, db.defensive.load(Ordering::Relaxed))
     {
@@ -175,7 +212,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_open(db_handle: Handle) ->
     let mut conn = db
         .conn
         .lock()
-        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|_| throw_invalid_state("database is not open"));
     *conn = Some(opened);
     1
 }
@@ -183,15 +220,15 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_open(db_handle: Handle) ->
 #[no_mangle]
 pub unsafe extern "C" fn js_node_sqlite_database_sync_close(db_handle: Handle) -> i32 {
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     {
         let conn = db
             .conn
             .lock()
-            .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
         if conn.is_none() {
             drop(conn);
-            throw_invalid_state("Database is not open");
+            throw_invalid_state("database is not open");
         }
     }
     finalize_node_sqlite_statements(db);
@@ -202,7 +239,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_close(db_handle: Handle) -
     let mut conn = db
         .conn
         .lock()
-        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|_| throw_invalid_state("database is not open"));
     if conn.is_some() {
         *conn = None;
     }
@@ -247,7 +284,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_exec(
     let result = with_open_node_connection(db_handle, |conn| node_sqlite_exec_batch(conn, &sql));
     match result {
         Ok(_) => 1,
-        Err(err) => throw_sqlite_error(&err),
+        Err((message, errcode)) => throw_sqlite_error_ext(&message, errcode),
     }
 }
 
@@ -265,7 +302,7 @@ pub(crate) unsafe fn parse_statement_options(
         };
     }
     if js.is_null() || !is_object_like(options_value) {
-        throw_type("The \"options\" argument must be an object");
+        throw_type("The \"options\" argument must be an object.");
     }
     NodeSqliteStmtOptions {
         read_bigints: bool_option(options_value, "readBigInts", db.read_bigints),
@@ -292,7 +329,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_prepare(
     ensure_open_node_database(db_handle);
     let sql = string_from_value(sql_value, "sql");
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     let options = parse_statement_options(db, options_value);
     let expanded_sql = with_open_node_connection(db_handle, |conn| {
         let raw = prepare_node_raw_statement(conn, &sql);
@@ -403,8 +440,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_function(
         if unregister_node_sqlite_custom_function(info) {
             drop(Box::from_raw(info));
         }
-        let message = with_open_node_connection(db_handle, |conn| sqlite_error_message(conn));
-        throw_sqlite_error(&message);
+        with_open_node_connection(db_handle, |conn| throw_sqlite_error_from_conn(conn))
     }
     1
 }
@@ -485,8 +521,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_aggregate(
         if unregister_node_sqlite_custom_aggregate(aggregate) {
             drop(Box::from_raw(aggregate));
         }
-        let message = with_open_node_connection(db_handle, |conn| sqlite_error_message(conn));
-        throw_sqlite_error(&message);
+        with_open_node_connection(db_handle, |conn| throw_sqlite_error_from_conn(conn))
     }
     1
 }
@@ -554,7 +589,7 @@ pub(crate) unsafe extern "C" fn node_sqlite_authorizer_callback(
         return ffi::SQLITE_OK;
     };
     let args = [
-        f64_from_jsvalue(JSValue::int32(action_code)),
+        f64_from_jsvalue(JSValue::number(action_code as f64)),
         f64_from_jsvalue(sqlite_c_string_value(arg1)),
         f64_from_jsvalue(sqlite_c_string_value(arg2)),
         f64_from_jsvalue(sqlite_c_string_value(db_name)),
@@ -615,11 +650,10 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_set_authorizer(
         )
     });
     if rc != ffi::SQLITE_OK {
-        let message = with_open_node_connection(db_handle, |conn| sqlite_error_message(conn));
-        throw_sqlite_error(&message);
+        with_open_node_connection(db_handle, |conn| throw_sqlite_error_from_conn(conn))
     }
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     if let Ok(mut stored) = db.authorizer_callback.lock() {
         *stored = callback;
     }

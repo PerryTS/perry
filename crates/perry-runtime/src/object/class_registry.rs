@@ -53,19 +53,20 @@ pub(crate) use state::{
     class_decl_prototype_value, class_decl_prototype_value_for_instance_class,
     class_delete_own_dynamic_prop, class_dynamic_prop_root_store, class_has_own_dynamic_prop,
     class_id_for_decl_prototype_object, class_is_key_deleted, class_mark_key_deleted,
-    class_own_enumerable_field_names, class_own_static_field_value, class_parent_closure,
-    class_parent_closure_root_store, class_prototype_method_is_enumerable,
-    class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
-    class_prototype_object_root_store, global_object_prototype_bits,
-    is_bound_native_method_closure_value, is_non_constructable_builtin_function_value,
-    parent_closure_in_chain, throw_non_constructable_builtin_function,
+    class_object_value_for_cid, class_object_value_root_store, class_own_enumerable_field_names,
+    class_own_static_field_value, class_parent_closure, class_parent_closure_root_store,
+    class_prototype_method_is_enumerable, class_prototype_method_set_enumerable,
+    class_prototype_method_value_cache_root_store, class_prototype_object_root_store,
+    global_object_prototype_bits, is_bound_native_method_closure_value,
+    is_non_constructable_builtin_function_value, parent_closure_in_chain,
+    throw_non_constructable_builtin_function,
 };
 pub use state::{
     ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,
-    CLASS_METHOD_BIND_LENGTHS, CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_METHOD_NONENUM,
-    CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS,
-    CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_METHODS,
-    CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
+    CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES, CLASS_PARENT_CLOSURES,
+    CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS,
+    CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_SYMBOL_ACCESSORS,
+    CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
@@ -149,18 +150,22 @@ pub use registration::{
 };
 
 // ── dispatch.rs ─────────────────────────────────────────────────────────────
+#[cfg(test)]
+pub(crate) use dispatch::test_bump_vtable_generation;
 pub(crate) use dispatch::{
-    call_vtable_method, fetch_parent_kind_in_chain, vtable_ic_insert, vtable_ic_lookup, VTABLE_GEN,
+    call_vtable_method, fetch_parent_kind_in_chain, vtable_generation, vtable_ic_insert,
+    vtable_ic_lookup, VTABLE_GEN,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────
 pub(crate) use parent_static::{
     call_registered_static_method, call_static_method, class_chain_has_instance_accessor,
     class_has_instance_getter, class_has_own_static_method, class_has_symbol_member_in_chain,
-    class_instance_setter_apply, class_method_bind_length, class_own_symbol_member_keys,
-    class_static_accessor_getter_value, class_static_accessor_setter_apply,
-    class_symbol_getter_value, class_symbol_setter_apply, get_parent_class_id,
-    lookup_class_symbol_method_in_chain, lookup_static_method_in_chain, register_class,
+    class_instance_setter_apply, class_method_bind_length, class_object_own_field_bytes,
+    class_object_pinned_parent, class_own_symbol_member_keys, class_static_accessor_getter_value,
+    class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
+    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
+    register_class,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

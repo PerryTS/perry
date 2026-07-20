@@ -235,6 +235,10 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             visitor.visit_nanbox_u64_slot(value_bits);
         }
     });
+    // #6468: only present when the program imports `node:http2`; when the gate
+    // is off the `sensitiveHeaders` symbol slot doesn't exist, so there's no
+    // root to scan.
+    #[cfg(feature = "mod-http2-constants")]
     crate::node_http2_constants::scan_roots_mut(visitor);
     scan_stream_event_emitter_prototype_roots_mut(visitor);
 }
@@ -435,6 +439,9 @@ pub(crate) fn normalize_native_module_alias(module_name: &str) -> &str {
         }
         "path/posix" => "path.posix",
         "path/win32" => "path.win32",
+        // #6563: `@lydell/node-pty` is an API-identical fork of node-pty
+        // (opencode's import); both names resolve to the one runtime pty.
+        "@lydell/node-pty" => "node-pty",
         _ => module_name,
     }
 }
@@ -474,6 +481,7 @@ pub(crate) fn cjs_default_base_module(module_name: &str) -> Option<&'static str>
         "inspector.default" => Some("inspector"),
         "inspector/promises.default" => Some("inspector/promises"),
         "module.default" => Some("module"),
+        "node-pty.default" => Some("node-pty"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "path.posix.default" => Some("path.posix"),
@@ -500,6 +508,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "inspector" => Some("inspector.default"),
         "inspector/promises" => Some("inspector/promises.default"),
         "module" => Some("module.default"),
+        "node-pty" => Some("node-pty.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "path.posix" => Some("path.posix.default"),
@@ -539,9 +548,11 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             "process".len(),
         )),
         "module" => Some(bound_native_callable_export_value("module", "Module")),
-        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
-        | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl" | "sea" | "url"
-        | "util" | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
+        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "node-pty"
+        | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl"
+        | "sea" | "url" | "util" | "inspector" | "inspector/promises" => {
+            create_cjs_default_namespace(module_name)
+        }
         _ => None,
     }
 }
@@ -618,6 +629,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "inspector/promises"
             | "inspector/promises.default"
             | "module"
+            | "node-pty"
+            | "node-pty.default"
             | "os"
             | "os.default"
             | "path"
@@ -787,6 +800,16 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     }
     if module_name == "url" && property_name == "URLPattern" {
         return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
+    }
+    // #6560 — Bun globals shim pack: `Bun.stdin` / `Bun.stdout` / `Bun.stderr`
+    // are object-valued reads (BunFile-like handles built by `bun_compat`).
+    if module_name == "bun" {
+        match property_name {
+            "stdin" => return crate::bun_compat::js_bun_stdin(),
+            "stdout" => return crate::bun_compat::js_bun_stdout(),
+            "stderr" => return crate::bun_compat::js_bun_stderr(),
+            _ => {}
+        }
     }
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
@@ -1189,6 +1212,44 @@ pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
         if class_id_from_method_receiver(call_this).is_some() {
             return call_this;
         }
+        // #6699: a PROXY call-site `this` is a legitimate spec receiver for a
+        // class method reached through the proxy's get trap. `proxy.method()`
+        // is `Get(proxy, "method")` (the trap forwards to the real instance's
+        // method) then `Call(method, proxy)`, so the body must run with
+        // `this === proxy` — its `this.field` accesses then route back through
+        // the trap. A proxy id lives in the handle band, so
+        // `class_id_from_method_receiver` (which requires an above-band heap
+        // object) rejects it and we would otherwise fall through and leak the
+        // INT32 owner-marker as `this` (`typeof this === "number"`), exactly the
+        // marker-leak the #6475 closure case below guards against. pi's TUI
+        // theme is a `new Proxy({}, …)` whose get trap forwards to the real
+        // Theme; `theme.fg()` → `this.fgColors.get(...)` threw
+        // `Cannot read properties of undefined (reading 'get')` without this.
+        if crate::proxy::js_proxy_is_proxy(call_this) != 0 {
+            return call_this;
+        }
+        // #6475: a FUNCTION-object call-site `this` — effect's `TagClass`, a
+        // plain function given the Tag class prototype via
+        // `Object.setPrototypeOf(TagClass, Object.getPrototypeOf(tagInstance))` —
+        // is a legitimate spec receiver for an inherited class method
+        // (`TagClass.pipe(...)`: `pipe` lives on the Tag class prototype and
+        // must run with `this === TagClass`). `class_id_from_method_receiver`
+        // deliberately rejects closures (reading `class_id` off a
+        // `ClosureHeader` is type confusion), but that guard protects
+        // RESOLUTION — and `dispatch_bound_method` resolves the method from
+        // the CAPTURED owner proto-ref, never from this substituted receiver.
+        // Passing the closure through only changes the `this` the body
+        // observes, which previously leaked the INT32 proto-ref marker
+        // (`typeof this === "number"`): effect's Pipeable composed against
+        // it, `HttpApiBuilder.group(...)` returned a curried function instead
+        // of a Layer, and web.ts died with "Not a valid effect: undefined".
+        let jv = JSValue::from_bits(call_this.to_bits());
+        if jv.is_pointer() {
+            let raw = (call_this.to_bits() & crate::value::POINTER_MASK) as usize;
+            if crate::closure::is_closure_ptr(raw) {
+                return call_this;
+            }
+        }
     }
     captured
 }
@@ -1506,4 +1567,71 @@ pub(crate) unsafe fn vt_own_keys_array(
         crate::array::js_array_push(out, JSValue::string_ptr(key_str));
     }
     Some(out)
+}
+
+/// #6667: materialize a native-module namespace's exports into `dst` during
+/// object spread (`{ ...crypto }`) or `Object.assign(dst, crypto)`. A
+/// native-module object physically stores only the internal `__module__`
+/// sentinel — every real export resolves lazily through the vtable — so the
+/// raw `keys_array` walk both copy helpers use otherwise copies nothing, and
+/// every enumeration-based interop layer (turbopack `e.i`, Babel
+/// `interopRequireWildcard`, plain spread) produced an empty namespace. Here
+/// we enumerate the module's export names (`native_module_enumerable_keys`, the
+/// same list `Object.keys` returns) and resolve each to its live value through
+/// the authoritative `[[Get]]` path, handing `(key, value)` to `set`.
+///
+/// Returns `true` when `src` is a native-module namespace with a known export
+/// set (the caller then skips its fallback walk); `false` otherwise, so a
+/// namespace with no key table degrades to the pre-existing behavior.
+///
+/// GC: a callable export resolves to a freshly allocated bound-method closure,
+/// so `src`, the key string, and the resolved value are each rooted across the
+/// allocations that would otherwise move them out from under the raw pointers.
+///
+/// # Safety
+/// `src` must point to a live `ObjectHeader`.
+pub(crate) unsafe fn copy_native_module_exports(
+    mut src: *const ObjectHeader,
+    mut set: impl FnMut(*const crate::StringHeader, f64),
+) -> bool {
+    if (*src).class_id != NATIVE_MODULE_CLASS_ID {
+        return false;
+    }
+    let Some(module_name) = read_native_module_name(src) else {
+        return false;
+    };
+    let Some(keys) = native_module_enumerable_keys(&module_name) else {
+        return false;
+    };
+    let include_permission = matches!(
+        module_name.as_str(),
+        "process" | "process.namespace" | "process.default"
+    ) && crate::process::process_permission_enabled();
+
+    for key_bytes in keys
+        .iter()
+        .copied()
+        .chain(include_permission.then_some(b"permission" as &[u8]))
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src_h = scope.root_raw_const_ptr(src);
+        let key_ptr =
+            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let key_h = scope.root_string_ptr(key_ptr);
+        let value = js_object_get_field_by_name(
+            src_h.get_raw_const_ptr::<ObjectHeader>(),
+            key_h.get_raw_const_ptr::<crate::StringHeader>(),
+        );
+        let value_h = scope.root_nanbox_f64(f64::from_bits(value.bits()));
+        set(
+            key_h.get_raw_const_ptr::<crate::StringHeader>(),
+            value_h.get_nanbox_f64(),
+        );
+        // The allocations above (key string, resolved-export closure, the `set`
+        // store) can trigger a minor GC that evacuates `src`. `src_h` tracked
+        // the move; write the refreshed pointer back before its scope drops so
+        // the next iteration re-roots the live location, not a stale one.
+        src = src_h.get_raw_const_ptr::<ObjectHeader>();
+    }
+    true
 }

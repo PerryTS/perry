@@ -22,7 +22,9 @@
 //!
 //! Issue #2153.
 
-use perry_ffi::{alloc_string, get_handle, js_object_alloc_with_shape, JsValue, StringHeader};
+use perry_ffi::{
+    alloc_string, get_handle, get_handle_mut, js_object_alloc_with_shape, JsValue, StringHeader,
+};
 
 use crate::http2_server::Http2SecureServer;
 use crate::https_server::HttpsServer;
@@ -788,7 +790,16 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             js_node_http_res_write_processing(handle);
             undef
         }
-        "destroy" => self_ref,
+        // #4975: `outgoingMessage.destroy()` flips the `destroyed` flag (read
+        // back by the `destroyed` getter) and returns `this`. A subsequent
+        // `write()` then errors its callback with `ERR_STREAM_DESTROYED`
+        // rather than buffering (see `js_node_http_res_write_with_cb`).
+        "destroy" => {
+            if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+                sr.destroyed = true;
+            }
+            self_ref
+        }
         "assignSocket" if !args.is_empty() => {
             crate::response::js_node_http_res_assign_socket(handle, args[0]);
             undef
@@ -834,6 +845,13 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         "__get_writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
         "__get_writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
         "__get_finished" | "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        // #4975: `outgoingMessage.destroyed` getter, also reachable through the
+        // `__get_destroyed` codegen form.
+        "__get_destroyed" | "destroyed" => bool_value(
+            get_handle::<ServerResponse>(handle)
+                .map(|sr| sr.destroyed)
+                .unwrap_or(false),
+        ),
         "__get_sendDate" | "sendDate" => bool_value(js_node_http_res_send_date(handle) != 0),
         "__set_sendDate" if !args.is_empty() => {
             js_node_http_res_set_send_date(handle, args[0]);
@@ -952,6 +970,12 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
         "writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
         "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        // #4975: `outgoingMessage.destroyed` — false until `destroy()`.
+        "destroyed" => bool_value(
+            get_handle::<ServerResponse>(handle)
+                .map(|sr| sr.destroyed)
+                .unwrap_or(false),
+        ),
         "writableCorked" => 0.0,
         "writableHighWaterMark" => 65_536.0,
         "writableLength" => get_handle::<ServerResponse>(handle)

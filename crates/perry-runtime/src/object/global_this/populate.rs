@@ -345,6 +345,19 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     );
                 }
             }
+            // #6674: the TC39 base64/hex conversion methods
+            // (`toBase64`/`toHex`/`setFromBase64`/`setFromHex`) are Uint8Array-ONLY
+            // (they don't exist on other typed arrays), so install them as own
+            // methods on the `Uint8Array` per-kind prototype — not the shared
+            // `%TypedArray%.prototype` intrinsic. This materializes the value read
+            // `typeof Uint8Array.prototype.toBase64 === "function"`; the static
+            // factories `fromBase64`/`fromHex` are installed on the constructor by
+            // `install_builtin_constructor_statics`.
+            if name == "Uint8Array" {
+                super::super::typed_array_proto_thunks::install_uint8array_base64_hex_proto_methods(
+                    proto_obj,
+                );
+            }
             // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
             // constructor and its prototype, matching Node's descriptor
             // `{ value, writable:false, enumerable:false, configurable:false }`.

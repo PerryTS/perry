@@ -137,7 +137,7 @@ fn malloc_sweep_pauses_mid_list_and_eventually_frees_dead_malloc() {
     }
     let dead_headers = allocate_dead_malloc_churn_headers(32);
 
-    let mut sweep = IncrementalSweepState::new(false, false, None, true);
+    let mut sweep = IncrementalSweepState::new(false, false, None, true, false);
     assert!(!sweep.step(1));
     assert!(
         tracked_malloc_headers_matching(&dead_headers) > 0,
@@ -238,7 +238,7 @@ fn arena_sweep_pauses_before_block_cleanup_and_preserves_live_objects() {
     }
     let in_use_after_alloc = crate::arena::arena_in_use_bytes();
 
-    let mut sweep = IncrementalSweepState::new(true, false, None, false);
+    let mut sweep = IncrementalSweepState::new(true, false, None, false, true);
     assert!(
         !sweep.step(1),
         "first tiny step should only enter arena sweep"
@@ -295,6 +295,7 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
         false,
         Some(targeted_blocks.block_indices.clone()),
         false,
+        false,
     );
     assert!(
         !targeted_sweep.step(1),
@@ -315,7 +316,7 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
     let _full_dead_a = crate::arena::arena_alloc_gc_old(900 * 1024, 8, GC_TYPE_STRING) as usize;
     let _full_dead_b = crate::arena::arena_alloc_gc_old(900 * 1024, 8, GC_TYPE_STRING) as usize;
     crate::arena::old_pages_begin_gc_cycle();
-    let mut full_sweep = IncrementalSweepState::new(false, true, None, false);
+    let mut full_sweep = IncrementalSweepState::new(false, true, None, false, false);
     assert!(
         !full_sweep.step(1),
         "full old reclaim should not complete in one work unit"

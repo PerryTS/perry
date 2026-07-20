@@ -75,7 +75,7 @@ fn lower_async_rejecting_stmts_inner(
     stmts: &[Stmt],
     emit_shadow_clears: bool,
 ) -> Result<()> {
-    use crate::types::{I32, I64, PTR};
+    use crate::types::I64;
 
     // Direct async functions that were not rewritten into generator state
     // machines still need the ECMAScript async boundary: any abrupt
@@ -91,24 +91,10 @@ fn lower_async_rejecting_stmts_inner(
     let catch_label = ctx.block_label(catch_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let blk = ctx.block();
-    let jmpbuf = blk.call(PTR, "js_try_push", &[]);
-    let sjr_reg = blk.next_reg();
-    if cfg!(target_os = "windows") {
-        blk.emit_raw(format!(
-            "{} = call i32 @_setjmp(ptr {}, ptr null) #0",
-            sjr_reg, jmpbuf
-        ));
-    } else if cfg!(target_vendor = "apple") {
-        blk.emit_raw(format!(
-            "{} = call i32 @_setjmp(ptr {}) #0",
-            sjr_reg, jmpbuf
-        ));
-    } else {
-        blk.emit_raw(format!("{} = call i32 @setjmp(ptr {}) #0", sjr_reg, jmpbuf));
-    }
-    let is_exc = blk.icmp_ne(I32, &sjr_reg, "0");
-    blk.cond_br(&is_exc, &catch_label, &body_label);
+    // js_try_push + target-ABI setjmp + branch — shared with `lower_try` so
+    // the setjmp variant (chosen from `ctx.target_triple`, see
+    // `crate::setjmp_abi`) is decided in exactly one place.
+    try_stmt::emit_setjmp_dispatch(ctx, &catch_label, &body_label);
 
     ctx.current_block = body_idx;
     ctx.try_depth += 1;

@@ -76,6 +76,20 @@ pub(super) struct WasmModuleEmitter {
     /// `GlobalGet(gidx)` reading the live module-let slot, matching the
     /// LLVM target's `perry_fn_<src>__<name>()` getter path.
     pub(super) imported_var_globals: BTreeMap<(usize, String), u32>,
+    /// Namespace-import member FUNCTIONS: `(consumer_module_idx, "W.fn")` →
+    /// wasm function index. Companion to the dotted-key entries in
+    /// `imported_var_globals`: `import * as W from "./mod"` followed by
+    /// `W.fn(args)` resolves to a direct call (calls.rs), and `W.fn` as a
+    /// value to a zero-capture closure (objects.rs) — the same two shapes a
+    /// named import gets via ExternFuncRef.
+    pub(super) imported_ns_funcs: BTreeMap<(usize, String), u32>,
+    /// Named-import FUNCTIONS, per consumer: `(consumer_module_idx, local)`
+    /// → wasm function index, resolved through re-export chains. Consulted
+    /// BEFORE the whole-program `func_name_map`, whose bare-name keys
+    /// collide the moment two modules define a same-named function (a local
+    /// serializer helper `vec3(v): string` must not capture the math
+    /// library's `vec3(x,y,z)` for every caller in the program).
+    pub(super) imported_func_indices: BTreeMap<(usize, String), u32>,
 }
 
 impl WasmModuleEmitter {
@@ -108,6 +122,8 @@ impl WasmModuleEmitter {
             func_param_counts: BTreeMap::new(),
             async_js_code: Vec::new(),
             imported_var_globals: BTreeMap::new(),
+            imported_ns_funcs: BTreeMap::new(),
+            imported_func_indices: BTreeMap::new(),
         }
     }
 

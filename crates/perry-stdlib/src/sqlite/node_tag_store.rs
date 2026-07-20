@@ -96,7 +96,7 @@ pub(crate) unsafe fn node_sqlite_tag_store_statement(
 ) -> (Handle, Vec<f64>, bool) {
     let store = get_handle::<NodeSqliteTagStoreHandle>(tag_store_handle)
         .unwrap_or_else(|| throw_invalid_state("SQLTagStore is not open"));
-    ensure_open_node_database_lowercase(store.db_handle);
+    ensure_open_node_database(store.db_handle);
 
     let (sql, values) = node_sqlite_tag_store_template_args(args_arr);
     if store.capacity == 0 {
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_create_tag_store(
     db_handle: Handle,
     max_size_value: f64,
 ) -> Handle {
-    ensure_open_node_database_lowercase(db_handle);
+    ensure_open_node_database(db_handle);
     register_handle(NodeSqliteTagStoreHandle {
         db_handle,
         capacity: node_sqlite_tag_store_capacity(max_size_value),

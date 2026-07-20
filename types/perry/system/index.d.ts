@@ -9,7 +9,10 @@
 /** Returns true if the system is in dark mode. */
 export function isDarkMode(): boolean;
 
-/** Returns the device idiom (e.g. "phone", "pad", "mac", "tv"). */
+/**
+ * Returns the device form factor: "phone" | "pad" | "mac" | "tv" |
+ * "watch" | "vision" | "desktop" ("desktop" on Windows/Linux).
+ */
 export function getDeviceIdiom(): string;
 
 /** The device's safe-area insets in points (status bar / Dynamic Island,

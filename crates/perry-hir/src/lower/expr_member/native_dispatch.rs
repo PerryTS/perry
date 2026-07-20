@@ -127,6 +127,15 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
         // user own-property surface in the bundle walls, so keep dispatching
         // for any member to preserve existing behaviour.
         "events" | "net" => true,
+        // #6364 — DisposableStack / AsyncDisposableStack: `disposed` is the
+        // only native data getter (its value comes from the FFI helper
+        // `js_disposable_stack_disposed`), so a bare read must dispatch as a
+        // 0-arg `NativeMethodCall` through the `__disposable__` NativeModSig
+        // row. Every other member (`use`/`adopt`/`defer`/`dispose`/
+        // `disposeAsync`/`move`) is a method: a method CALL arrives via the
+        // call-expression path, and a bare method-VALUE read must stay a plain
+        // PropertyGet (a bound-method read), never a 0-arg invoking dispatch.
+        "__disposable__" => prop == "disposed",
         // Other native modules historically routed every uncovered member to
         // the dispatching fallback. They have no observed user-own-property
         // surface, so preserve that: dispatch any member not handled by the

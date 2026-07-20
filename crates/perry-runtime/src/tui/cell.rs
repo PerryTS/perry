@@ -1,6 +1,7 @@
-//! Packed cell grid. Each cell is 8 bytes (char=4, fg=1, bg=1, style=1,
-//! pad=1) so an 80x24 terminal fits in 15 KB and an 200x80 in 128 KB
-//! — well within L2.
+//! Packed cell grid. Each cell is 16 bytes (char=4, fg=4, bg=4, style=1,
+//! plus padding) now that `Color` carries truecolor RGB (see color.rs;
+//! grew from 1 byte/color to 4 bytes/color), so an 80x24 terminal fits
+//! in ~30 KB and a 200x80 one in ~250 KB — still well within L2.
 
 use super::color::Color;
 

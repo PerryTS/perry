@@ -417,13 +417,21 @@ fn cic_decl(d: &ast::Decl, in_cl: bool, out: &mut std::collections::HashSet<Stri
             }
         }),
         // A nested function declaration's body is a closure scope.
-        ast::Decl::Fn(f) => {
-            if let Some(b) = &f.function.body {
-                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
-            }
-        }
+        ast::Decl::Fn(f) => cic_function(&f.function, out),
         ast::Decl::Class(c) => cic_class(&c.class, in_cl, out),
         _ => {}
+    }
+}
+
+/// Param patterns (defaults evaluate at CALL time) + body of a closure-scoped
+/// `ast::Function` — nested fn declarations/expressions and class methods all
+/// share this traversal.
+fn cic_function(f: &ast::Function, out: &mut std::collections::HashSet<String>) {
+    for p in &f.params {
+        cic_pat(&p.pat, true, out);
+    }
+    if let Some(b) = &f.body {
+        b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
     }
 }
 
@@ -433,13 +441,29 @@ fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<St
     }
     for m in &c.body {
         match m {
-            ast::ClassMember::Method(mm) => {
-                if let Some(b) = &mm.function.body {
-                    b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+            ast::ClassMember::Method(mm) => cic_function(&mm.function, out),
+            ast::ClassMember::PrivateMethod(mm) => cic_function(&mm.function, out),
+            // #6523: the CONSTRUCTOR body runs at `new` time, not at class
+            // definition — a binding it references that is declared AFTER the
+            // class (`class C { constructor(){ a() } } const a = ...`) must be
+            // pre-registered as a forward-captured lexical exactly like a
+            // method-body reference. This arm was missing, so such refs never
+            // got a box: `collect_method_captures` dropped them (not in
+            // `ctx.locals` at the class decl) and the ref fell through to the
+            // global lookup — "a is not defined" at construction (bundled
+            // semver's Comparator debug/constant pattern).
+            ast::ClassMember::Constructor(ctor) => {
+                for p in &ctor.params {
+                    match p {
+                        ast::ParamOrTsParamProp::Param(p) => cic_pat(&p.pat, true, out),
+                        ast::ParamOrTsParamProp::TsParamProp(tp) => {
+                            if let ast::TsParamPropParam::Assign(a) = &tp.param {
+                                cic_expr(&a.right, true, out);
+                            }
+                        }
+                    }
                 }
-            }
-            ast::ClassMember::PrivateMethod(mm) => {
-                if let Some(b) = &mm.function.body {
+                if let Some(b) = &ctor.body {
                     b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
                 }
             }
@@ -452,6 +476,9 @@ fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<St
                 if let Some(v) = &p.value {
                     cic_expr(v, true, out);
                 }
+            }
+            ast::ClassMember::StaticBlock(sb) => {
+                sb.body.stmts.iter().for_each(|st| cic_stmt(st, true, out));
             }
             _ => {}
         }
@@ -477,14 +504,7 @@ fn cic_expr(e: &ast::Expr, in_cl: bool, out: &mut std::collections::HashSet<Stri
                 ast::BlockStmtOrExpr::Expr(ex) => cic_expr(ex, true, out),
             }
         }
-        Fn(f) => {
-            for p in &f.function.params {
-                cic_pat(&p.pat, true, out);
-            }
-            if let Some(b) = &f.function.body {
-                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
-            }
-        }
+        Fn(f) => cic_function(&f.function, out),
         Class(c) => cic_class(&c.class, in_cl, out),
         Array(a) => a
             .elems
@@ -1106,6 +1126,10 @@ pub fn lower_fn_body_block_stmt(
     // Used by the Phase 1.6 forward `let`/`const` pre-registration so a const
     // that shadows an outer binding still gets a fresh this-body local.
     let body_entry_locals_len = ctx.locals.len();
+    // #6604: entries pushed while lowering THIS body belong to THIS body's
+    // capture-refresh pass (their ids are this function's locals); drain the
+    // suffix at body end, truncate on the error path so nothing leaks upward.
+    let body_class_expr_captures_mark = ctx.body_class_expr_captures.len();
     let hoisted_var_slots = predefine_var_bindings_in_function_body(ctx, block);
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
@@ -1204,6 +1228,8 @@ pub fn lower_fn_body_block_stmt(
     let mut body = match lower_block_stmt(ctx, block) {
         Ok(body) => body,
         Err(err) => {
+            ctx.body_class_expr_captures
+                .truncate(body_class_expr_captures_mark);
             ctx.current_strict = parent_strict;
             ctx.forward_class_names = saved_forward_class_names;
             ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
@@ -1270,6 +1296,30 @@ pub fn lower_fn_body_block_stmt(
                     }
                 }
             }
+        }
+        // #6604: capturing class EXPRESSIONS lowered directly in this body
+        // (`var Comparator = class _Comparator { … }`, argument-position
+        // `register(class { … })`, …) need the same assignment-tracking
+        // refresh as class declarations: semver assigns the captured
+        // `parseOptions`/`debug` vars AFTER the class, so the snapshot (and
+        // the per-evaluation `__perry_ctor_caps` array, whose stale-undefined
+        // slots the runtime construct path now backfills from this snapshot)
+        // must be re-registered with the live values. Entries were recorded
+        // by `lower_class_expr` under the RESOLVED registration name; no
+        // `append_new_args_stmt` pass — a class expression's construct sites
+        // are either static (binding-name `new C()`, live locals appended at
+        // the site) or dynamic (replayed through the snapshot).
+        for (cname, ids) in ctx
+            .body_class_expr_captures
+            .split_off(body_class_expr_captures_mark)
+        {
+            let captures: Vec<Expr> = ids.iter().map(|id| Expr::LocalGet(*id)).collect();
+            let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
+                class_name: cname,
+                captures,
+            });
+            re_reg_capsets.push((re_reg.clone(), ids.iter().copied().collect()));
+            re_regs.push(re_reg);
         }
         if !re_regs.is_empty() {
             // Audit P0-B: the decl-site snapshot is authoritative at
@@ -1761,6 +1811,7 @@ fn lower_stmts_using_aware_inner(
                 for &id in &decl_ids {
                     let check_call = Expr::Call {
                         callee: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(id)),
                             property: "__perry_using_check__".to_string(),
                         }),
@@ -1841,6 +1892,7 @@ fn lower_stmts_using_aware_inner(
                 };
                 let mut call_expr = Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(id)),
                         property: method_name.to_string(),
                     }),
@@ -1871,6 +1923,7 @@ fn lower_stmts_using_aware_inner(
                                 ],
                                 type_args: Vec::new(),
                                 byte_offset: 0,
+                                cap_args_appended: 0,
                             }),
                         ))],
                         else_branch: Some(vec![

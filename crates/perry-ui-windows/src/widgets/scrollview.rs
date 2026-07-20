@@ -367,6 +367,16 @@ pub fn get_offset(scroll_handle: i64) -> f64 {
     })
 }
 
+/// Geisterhand automation hook — same registered shape as the macOS
+/// `perry_ui_scroll_set_offset` (handle, x, y). The Windows ScrollView is
+/// vertical-only, so `x` is accepted for cross-platform harness parity
+/// and ignored.
+#[cfg(all(feature = "geisterhand", target_os = "windows"))]
+#[no_mangle]
+pub extern "C" fn perry_ui_scroll_set_offset(handle: i64, _x: f64, y: f64) {
+    set_offset(handle, y);
+}
+
 /// Set the vertical scroll offset.
 pub fn set_offset(scroll_handle: i64, offset: f64) {
     let new_offset = offset as i32;

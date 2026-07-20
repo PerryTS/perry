@@ -449,11 +449,15 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
     }
 }
 
+/// True when `user_ptr`'s object currently has a canonical `TypedLayoutDescriptor`
+/// installed in `TYPED_LAYOUTS`. Reads the O(1) `GC_OBJ_TYPED_LAYOUT_INTACT`
+/// header bit instead of probing the thread-local map: the bit is maintained in
+/// lock-step with every map insert/remove (intact set ⟺ descriptor present — see
+/// the invariant documented on `GC_OBJ_TYPED_LAYOUT_INTACT`), so it answers the
+/// same question without a per-call TLS hashmap touch. This is on the dynamic
+/// object-store hot path via `mark_object_dynamic_shape_unknown` (#5094).
 pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
-    if user_ptr == 0 {
-        return false;
-    }
-    TYPED_LAYOUTS.with(|m| m.borrow().contains_key(&user_ptr))
+    layout_typed_intact_for_user(user_ptr)
 }
 
 pub(super) unsafe fn layout_set_typed_unknown(header: *mut GcHeader, user_ptr: usize) {
@@ -486,23 +490,36 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
             return;
         }
-        if let Some(typed) = TYPED_LAYOUTS.with(|m| m.borrow().get(&parent_user).cloned()) {
-            if slot_index >= typed.slot_count {
-                layout_set_typed_unknown(header, parent_user);
-                return;
-            }
-            if typed.raw_f64_mask.contains_slot(slot_index) {
-                if !layout_raw_f64_bits(value_bits) {
+        // The canonical typed-shape descriptor probe below is a thread-local
+        // hashmap lookup, paid on every field/element store. Gate it on the
+        // O(1) `GC_OBJ_TYPED_LAYOUT_INTACT` header bit: that bit is set and
+        // cleared in lock-step with every `TYPED_LAYOUTS` insert/remove (see the
+        // invariant documented on `GC_OBJ_TYPED_LAYOUT_INTACT`), so a clear bit
+        // proves the map has no entry for this object — the probe would return
+        // `None` and fall through to the pointer-mask path below. Skipping it
+        // removes the per-write TLS touch on the common dynamic-shape /
+        // pointer-free object and array store path (#5094). The inner `if let`
+        // still tolerates a `None` defensively, so a transiently desynced bit
+        // can only cost an extra fall-through, never mis-track a slot.
+        if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+            if let Some(typed) = TYPED_LAYOUTS.with(|m| m.borrow().get(&parent_user).cloned()) {
+                if slot_index >= typed.slot_count {
                     layout_set_typed_unknown(header, parent_user);
+                    return;
+                }
+                if typed.raw_f64_mask.contains_slot(slot_index) {
+                    if !layout_raw_f64_bits(value_bits) {
+                        layout_set_typed_unknown(header, parent_user);
+                    }
+                    return;
+                }
+                let pointer = layout_pointer_bearing_bits(value_bits);
+                if pointer && !typed.pointer_mask.contains_slot(slot_index) {
+                    layout_set_typed_unknown(header, parent_user);
+                    return;
                 }
                 return;
             }
-            let pointer = layout_pointer_bearing_bits(value_bits);
-            if pointer && !typed.pointer_mask.contains_slot(slot_index) {
-                layout_set_typed_unknown(header, parent_user);
-                return;
-            }
-            return;
         }
         let pointer = layout_pointer_bearing_bits(value_bits);
         // A result array built by a runtime helper can declare that its live

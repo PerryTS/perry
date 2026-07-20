@@ -124,6 +124,53 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
         Expr::Update { .. } => true,
         Expr::DateNow => true,
+        // Math.* builtins always evaluate to a real numeric double: every
+        // lowering coerces its operands internally (ToNumber via
+        // `lower_math_operand` / `js_math_to_number` — BigInt and Symbol
+        // throw) and emits a raw-f64-returning intrinsic or runtime helper,
+        // never a NaN-tagged value. Without these arms, `Math.sqrt(x) *
+        // Math.sin(y)` fails the "statically numeric" test and the multiply
+        // is routed through the BigInt-aware dynamic helper — two non-leaf
+        // re-coercion calls per operation instead of an inline `fmul`
+        // (#6511, a ~1.45x regression introduced by the #5970 routing).
+        Expr::MathFloor(..)
+        | Expr::MathCeil(..)
+        | Expr::MathRound(..)
+        | Expr::MathTrunc(..)
+        | Expr::MathSign(..)
+        | Expr::MathAbs(..)
+        | Expr::MathSqrt(..)
+        | Expr::MathLog(..)
+        | Expr::MathLog2(..)
+        | Expr::MathLog10(..)
+        | Expr::MathPow(..)
+        | Expr::MathMin(..)
+        | Expr::MathMax(..)
+        | Expr::MathMinSpread(..)
+        | Expr::MathMaxSpread(..)
+        | Expr::MathImul(..)
+        | Expr::MathRandom
+        | Expr::MathSin(..)
+        | Expr::MathCos(..)
+        | Expr::MathTan(..)
+        | Expr::MathAsin(..)
+        | Expr::MathAcos(..)
+        | Expr::MathAtan(..)
+        | Expr::MathAtan2(..)
+        | Expr::MathCbrt(..)
+        | Expr::MathHypot(..)
+        | Expr::MathFround(..)
+        | Expr::MathF16round(..)
+        | Expr::MathClz32(..)
+        | Expr::MathExpm1(..)
+        | Expr::MathLog1p(..)
+        | Expr::MathSinh(..)
+        | Expr::MathCosh(..)
+        | Expr::MathTanh(..)
+        | Expr::MathAsinh(..)
+        | Expr::MathAcosh(..)
+        | Expr::MathAtanh(..)
+        | Expr::MathExp(..) => true,
         // Unary `-x` / `+x` / `~x` always evaluate to a JS number by
         // ToNumber/ToInt32 semantics, so the result feeds the native f64
         // path (#5497, Lever E). The unary lowering coerces the operand
@@ -148,7 +195,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // LLVM from doing GVN/LICM on the load. The class field
         // walker matches `class_field_global_index`'s inheritance
         // traversal so the type of any inherited field is also seen.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
@@ -237,7 +286,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
         Expr::Call { callee, .. } => {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if is_fixed_width_buffer_numeric_read(property)
                     && receiver_class_name(ctx, object)
                         .as_deref()
@@ -333,3 +385,6 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1124,6 +1124,14 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         trace_phase_record(trace, "evacuation_verify", phase_start);
     }
 
+    // Diagnostic (PERRY_GC_VERIFY_MARK): before from-space reset frees the dead
+    // young objects, check that no MARKED (survived) object references an
+    // UNMARKED (about-to-be-freed) child — i.e. a live parent whose child is
+    // being swept. Non-fatal; logs parent/child obj_types.
+    if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
+        super::verify::verify_marked_heap_report_nonfatal("copying-minor");
+    }
+
     crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
     finalize_dead_copied_minor_from_space_side_allocations();
     let reset = crate::arena::copying_reset_from_spaces_and_flip();

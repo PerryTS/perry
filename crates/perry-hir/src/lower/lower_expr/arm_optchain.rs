@@ -41,6 +41,7 @@ pub(crate) fn lower_opt_chain_expr(
                         // fold hardcoded the enclosing class name (wrong
                         // leaf) and undefined for `.prototype`.
                         return Ok(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::NewTarget),
                             property: prop_name.to_string(),
                         });
@@ -61,6 +62,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // stored result correct after an intervening match
                     // on another regex.
                     Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(obj_expr.clone()),
                         property: prop_name,
                     }
@@ -80,7 +82,11 @@ pub(crate) fn lower_opt_chain_expr(
                         &property,
                         expr_member::PRIV_OP_READ,
                     );
-                    Expr::PropertyGet { object, property }
+                    Expr::PropertyGet {
+                        byte_offset: 0,
+                        object,
+                        property,
+                    }
                 }
             };
 
@@ -157,6 +163,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let obj = lower_expr(ctx, &member.obj)?;
                     let prop = match &member.prop {
                         ast::MemberProp::Ident(id) => Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(obj.clone()),
                             property: id.sym.to_string(),
                         },
@@ -176,6 +183,7 @@ pub(crate) fn lower_opt_chain_expr(
                                 expr_member::PRIV_OP_READ,
                             );
                             Expr::PropertyGet {
+                                byte_offset: 0,
                                 object: guarded,
                                 property,
                             }
@@ -269,6 +277,7 @@ pub(crate) fn lower_opt_chain_expr(
                 // Build the callee with inner_else as the object (not the full Conditional)
                 let fixed_callee = match callee_expr {
                     Expr::PropertyGet { property, .. } => Expr::PropertyGet {
+                        byte_offset: 0,
                         object: inner_else,
                         property,
                     },
