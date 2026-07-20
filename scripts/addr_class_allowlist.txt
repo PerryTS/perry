@@ -125,6 +125,7 @@ crates/perry-runtime/src/value/dynamic_object.rs | * | pre-existing GcHeader pro
 crates/perry-runtime/src/value/to_string.rs | * | pre-existing GcHeader probe predating addr_class; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up
 crates/perry-runtime/src/wasi.rs | * | pre-existing GcHeader probe predating addr_class; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up
 crates/perry-runtime/src/weakref.rs | * | pre-existing GcHeader probe predating addr_class; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up
+crates/perry-runtime/src/object/collection_proto_thunks.rs | * | pre-existing GcHeader probe predating addr_class; address validated by is_above_handle_band + is_valid_obj_ptr immediately before the read -- migrate to addr_class::try_read_gc_header in a follow-up
 #
 # Split-file siblings (chore: split large files off the size-gate allowlist, #1435).
 # These directories hold code moved verbatim out of the grandfathered trunks
