@@ -688,6 +688,22 @@ impl WasmModuleEmitter {
             for &(fid, idx) in &per_module_async[mod_idx] {
                 module_fm.insert(fid, idx);
             }
+            // Function names are NOT globally unique across modules (a
+            // serializer's local `function vec3(v): string` coexists with the
+            // math library's exported `vec3(x, y, z)`), but `func_name_map` —
+            // the ExternFuncRef cross-module resolution table — is keyed by
+            // bare name. Prefer EXPORTED functions (the only legitimate
+            // cross-module call targets); a module-local helper only claims a
+            // name nobody exported.
+            let exported_names: std::collections::HashSet<&str> = module
+                .exported_functions
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .chain(module.exports.iter().filter_map(|e| match e {
+                    perry_hir::ir::Export::Named { local, .. } => Some(local.as_str()),
+                    _ => None,
+                }))
+                .collect();
             for func in &module.functions {
                 if func.is_async {
                     continue; // already registered as bridge import
@@ -707,8 +723,16 @@ impl WasmModuleEmitter {
                     self.void_funcs.insert(user_func_idx);
                 }
                 self.func_param_counts.insert(user_func_idx, param_count);
-                // Build func_name_map for ExternFuncRef resolution (name is globally unique)
-                self.func_name_map.insert(func.name.clone(), user_func_idx);
+                // Build func_name_map for ExternFuncRef resolution. Exported
+                // functions win the name; module-local helpers only fill a
+                // vacant slot (see exported_names above).
+                if exported_names.contains(func.name.as_str()) {
+                    self.func_name_map.insert(func.name.clone(), user_func_idx);
+                } else {
+                    self.func_name_map
+                        .entry(func.name.clone())
+                        .or_insert(user_func_idx);
+                }
                 user_func_idx += 1;
             }
             self.module_func_maps.push(module_fm);
@@ -864,11 +888,13 @@ impl WasmModuleEmitter {
         // the driver) and `Module.name` is a relative-from-project-root path.
         // We compare paths by file-stem match against `Module.name` (which is
         // a leaf "name.ts" or "subdir/name.ts" string), falling back to a
-        // basename match. Re-exports (`Export::ReExport`) point at another
-        // module by `source`; we don't chase those here — a one-hop re-export
-        // is handled by the source's own exports list (the re-export pass
-        // typically flattens through), and complex chains can be added later
-        // with a visited-set on demand.
+        // basename match. Re-exports (`Export::ReExport`, `ExportAll`, and the
+        // import-then-`export { x }` shape) are chased by
+        // `resolve_export_to_let` with a depth cap — a library facade like
+        // bloom's `index.ts` re-exporting `Key` from `core/keys.ts` is two to
+        // three hops deep, and stopping at the first module made every
+        // re-exported const OBJECT read undefined (scalars sometimes survived
+        // via other paths, which made the failure look random).
         {
             // module.name → source module index
             let name_to_idx: std::collections::HashMap<&str, usize> = modules
@@ -904,31 +930,95 @@ impl WasmModuleEmitter {
                     let src_lets = &src_let_names[src_idx];
                     for spec in &import.specifiers {
                         if let perry_hir::ir::ImportSpecifier::Named { imported, local } = spec {
-                            // Walk the source module's exports to map the
-                            // public `imported` name back to a source-local
-                            // identifier, then look up that identifier's let.
-                            let src_module = &modules[src_idx].1;
-                            let mut resolved_local: Option<&str> = None;
-                            for export in &src_module.exports {
-                                if let perry_hir::ir::Export::Named {
-                                    local: src_local,
-                                    exported,
-                                } = export
-                                {
-                                    if exported == imported {
-                                        resolved_local = Some(src_local.as_str());
-                                        break;
-                                    }
-                                }
+                            // Resolve the public `imported` name to a let
+                            // global, following re-export chains (see
+                            // resolve_export_to_let).
+                            let resolved = resolve_export_to_let(
+                                modules,
+                                &src_let_names,
+                                &name_to_idx,
+                                src_idx,
+                                imported,
+                                8,
+                            );
+                            if std::env::var("PERRY_WASM_DEBUG_IMPORTS").is_ok() {
+                                eprintln!(
+                                    "[wasm-imports] {} imports {{ {} }} from {} -> module #{} ({}) => {:?}",
+                                    modules[consumer_idx].1.name,
+                                    imported,
+                                    import.source,
+                                    src_idx,
+                                    modules[src_idx].1.name,
+                                    resolved,
+                                );
                             }
-                            // Direct fall-through: if no Export::Named matched
-                            // but a Let with the imported name exists, use it.
-                            // (Some HIR lowering shapes register exports out-of-
-                            // band; this keeps `export const X = ...` robust.)
-                            let key = resolved_local.unwrap_or(imported.as_str());
-                            if let Some(&gidx) = src_lets.get(key) {
+                            if let Some(gidx) = resolved {
                                 self.imported_var_globals
                                     .insert((consumer_idx, local.clone()), gidx);
+                            }
+                            // Function imports resolve per-consumer too — the
+                            // whole-program func_name_map's bare-name keys
+                            // collide across modules.
+                            if let Some(fidx) = resolve_export_to_func(
+                                modules,
+                                &self.module_func_maps,
+                                &name_to_idx,
+                                src_idx,
+                                imported,
+                                8,
+                            ) {
+                                self.imported_func_indices
+                                    .insert((consumer_idx, local.clone()), fidx);
+                            }
+                        }
+                        // Namespace import (`import * as W from "./mod"`):
+                        // register every exported module-level let under a
+                        // DOTTED key ("W.MESH_COUNT"), so PropertyGet on the
+                        // namespace ident resolves to the source module's
+                        // promoted-let global — the same mechanism the Named
+                        // arm above uses. Without this, every `W.member` read
+                        // emitted a class_get_field on an undefined receiver
+                        // and produced undefined (functions kept working via
+                        // the whole-program name map, which made the failure
+                        // maddeningly partial).
+                        if let perry_hir::ir::ImportSpecifier::Namespace { local } = spec {
+                            // Register `W.<member>` for exactly the source
+                            // module's PUBLIC surface — its named/re-exported/
+                            // function/object exports, plus everything reached
+                            // through `export * from "..."` (recursively). This
+                            // replaced a blanket "register every module-level
+                            // let" loop, which both exposed PRIVATE locals as
+                            // `W.private` (not valid JS namespace members) and
+                            // missed `export *` re-exports entirely.
+                            let mut public: std::collections::BTreeSet<String> =
+                                std::collections::BTreeSet::new();
+                            collect_exported_names(modules, src_idx, 8, &mut public);
+                            for name in &public {
+                                if let Some(gidx) = resolve_export_to_let(
+                                    modules,
+                                    &src_let_names,
+                                    &name_to_idx,
+                                    src_idx,
+                                    name,
+                                    8,
+                                ) {
+                                    self.imported_var_globals.insert(
+                                        (consumer_idx, format!("{}.{}", local, name)),
+                                        gidx,
+                                    );
+                                }
+                                if let Some(fidx) = resolve_export_to_func(
+                                    modules,
+                                    &self.module_func_maps,
+                                    &name_to_idx,
+                                    src_idx,
+                                    name,
+                                    8,
+                                ) {
+                                    self.imported_ns_funcs
+                                        .entry((consumer_idx, format!("{}.{}", local, name)))
+                                        .or_insert(fidx);
+                                }
                             }
                         }
                     }
@@ -1311,6 +1401,13 @@ impl WasmModuleEmitter {
             // Initialize globals — swap in per-module func_map for correct FuncRef resolution
             for (mod_idx, (_, module)) in modules.iter().enumerate() {
                 self.func_map = self.module_func_maps[mod_idx].clone();
+                // Per-consumer import resolution (imported_var_globals /
+                // imported_func_indices / imported_ns_funcs) is keyed by
+                // current_mod_idx; a module-scope initializer that calls an
+                // imported symbol (e.g. `const P = vec3(...)`) resolves
+                // against a stale consumer without this and could bind
+                // another module's like-named export.
+                self.current_mod_idx = mod_idx;
                 for global in &module.globals {
                     if let Some(init) = &global.init {
                         let mut ctx =
@@ -1331,6 +1428,7 @@ impl WasmModuleEmitter {
             // Register class methods with the bridge and set up inheritance
             for (mod_idx, (_, module)) in modules.iter().enumerate() {
                 self.func_map = self.module_func_maps[mod_idx].clone();
+                self.current_mod_idx = mod_idx; // see the globals loop above
                 for class in &module.classes {
                     let class_name_id = self
                         .string_map

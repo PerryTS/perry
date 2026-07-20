@@ -45,7 +45,10 @@ pub(crate) fn emit_widget(
     // registered synth_id + initial value (uses the v3.2 path).
     if let Expr::Call { callee, args, .. } = expr {
         if args.is_empty() {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if property == "text" {
                     if let Expr::LocalGet(state_id) = object.as_ref() {
                         if let Some(binding) = state_registry.get(state_id) {

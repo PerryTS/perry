@@ -599,6 +599,48 @@ jobs:
           exit "$status"
 
   # ---------------------------------------------------------------------------
+  # Windows build gate
+  #
+  # Exists because Windows-only compile/link breaks previously shipped to main
+  # unseen — every other job runs on ubuntu/macos. Two real examples that
+  # landed through green required checks: an MSVC-only rustc error (E0308 on
+  # the `ExitProcess` extern in crates/perry-runtime/src/process/env_misc.rs)
+  # and an MSVC-only link error (LNK2019: `js_crypto_ed25519_verify`
+  # unresolved when linking perry.exe — Unix linkers dead-strip the unused
+  # extern, link.exe errors). Building `perry` LINKS perry.exe, so the LNK2019
+  # class is caught here, not just rustc errors. The perry-dev profile
+  # (opt-level 1, no LTO) keeps a cold Windows build inside a PR-sized budget;
+  # --release would be far too slow for per-PR CI.
+  # ---------------------------------------------------------------------------
+  windows-build:
+    runs-on: windows-latest
+    # Cold Windows builds are slow, and this workflow never runs on pushes to
+    # main, so rust-cache only saves on the nightly cron (github.ref is
+    # refs/heads/main for `schedule`) — PR runs after a quiet night can be
+    # near-cold. 75 leaves headroom over a fully cold build while still
+    # bounding a true hang (same reasoning as conformance-smoke's bump: a
+    # timeout on a required-path job is a deterministic PR blocker).
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # perry-dev (see Cargo.toml [profile.perry-dev]) trades peak optimization
+      # for build speed. The package set covers the compiler binary (link
+      # gate), the runtime/stdlib pair (the usual source of cfg(windows)
+      # externs), and both Windows UI crates — the ones cargo-test's ubuntu
+      # runner must exclude and therefore never compiles.
+      - name: Build compiler + runtime + Windows UI crates (perry-dev)
+        run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-ui-windows -p perry-ui-windows-winui
+
+  # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
   #
   # `crates/perry/tests/gc_write_barrier_stress.rs` runs compiled binaries

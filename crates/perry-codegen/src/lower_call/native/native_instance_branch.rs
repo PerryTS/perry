@@ -266,8 +266,7 @@
                 }
                 Expr::PropertyGet {
                     object: obj_expr,
-                    property,
-                } => {
+                    property, .. } => {
                     let obj_box = lower_expr(ctx, obj_expr)?;
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
@@ -353,8 +352,7 @@
                 }
                 Expr::PropertyGet {
                     object: obj_expr,
-                    property,
-                } => {
+                    property, .. } => {
                     let obj_box = lower_expr(ctx, obj_expr)?;
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =

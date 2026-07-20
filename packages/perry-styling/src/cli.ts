@@ -113,7 +113,8 @@ if (args.length < 3 || args[2] === "--help" || args[2] === "-h") {
         const spacingCount = Object.keys(tokens.spacing).length;
         const radiusCount = Object.keys(tokens.radius).length;
         const fontSizeCount = Object.keys(tokens.fontSize).length;
-        console.log("  " + String(colorCount) + " color(s), " + String(spacingCount) + " spacing token(s), " + String(radiusCount) + " radius token(s), " + String(fontSizeCount) + " fontSize token(s)");
+        const borderWidthCount = Object.keys(tokens.borderWidth).length;
+        console.log("  " + String(colorCount) + " color(s), " + String(spacingCount) + " spacing token(s), " + String(radiusCount) + " radius token(s), " + String(fontSizeCount) + " fontSize token(s), " + String(borderWidthCount) + " borderWidth token(s)");
       } catch (e) {
         console.log("Error: Could not write output file: " + outPath);
       }

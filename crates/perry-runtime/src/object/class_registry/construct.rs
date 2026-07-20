@@ -1185,7 +1185,7 @@ fn bound_function_target_ptr(value: f64) -> Option<*mut crate::closure::ClosureH
     }
 }
 
-fn is_bound_function_closure_value(value: f64) -> bool {
+pub(crate) fn is_bound_function_closure_value(value: f64) -> bool {
     bound_function_target_ptr(value).is_some()
 }
 

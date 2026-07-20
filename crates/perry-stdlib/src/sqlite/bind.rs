@@ -105,7 +105,7 @@ pub(crate) unsafe fn prepare_node_raw_statement(conn: &Connection, sql: &str) ->
         std::ptr::null_mut(),
     );
     if rc != ffi::SQLITE_OK {
-        throw_sqlite_error(&sqlite_error_message(conn));
+        throw_sqlite_error_from_conn(conn);
     }
     RawNodeStatement { ptr: raw }
 }
@@ -143,7 +143,7 @@ pub(crate) fn bigint_to_i64(ptr: *const BigIntHeader) -> Option<i64> {
 
 pub(crate) unsafe fn node_sqlite_bind_error(conn: &Connection, rc: c_int) {
     if rc != ffi::SQLITE_OK {
-        throw_sqlite_error(&sqlite_error_message(conn));
+        throw_sqlite_error_from_conn(conn);
     }
 }
 
@@ -172,23 +172,19 @@ pub(crate) unsafe fn bind_node_sqlite_value(
             ffi::sqlite3_bind_text(raw_stmt, index, data_ptr, len, ffi::SQLITE_TRANSIENT())
         }
     } else if js.is_int32() {
-        ffi::sqlite3_bind_int64(raw_stmt, index, js.as_int32() as i64)
+        // Node binds every JS number via sqlite3_bind_double — even
+        // integral values (a column with no affinity stores them as REAL,
+        // and `stmt.expandedSQL` renders `5.0`). Match that instead of
+        // promoting integral numbers to SQLite INTEGERs (#6561); only
+        // BigInt binds as INTEGER.
+        ffi::sqlite3_bind_double(raw_stmt, index, js.as_int32() as f64)
     } else if js.is_bigint() {
         let Some(value) = bigint_to_i64(js.as_bigint_ptr()) else {
             throw_arg_value("BigInt value is too large to bind.");
         };
         ffi::sqlite3_bind_int64(raw_stmt, index, value)
     } else if js.is_number() {
-        let number = js.as_number();
-        if number.is_finite()
-            && number.fract() == 0.0
-            && number >= i64::MIN as f64
-            && number <= i64::MAX as f64
-        {
-            ffi::sqlite3_bind_int64(raw_stmt, index, number as i64)
-        } else {
-            ffi::sqlite3_bind_double(raw_stmt, index, number)
-        }
+        ffi::sqlite3_bind_double(raw_stmt, index, js.as_number())
     } else {
         let raw = raw_addr_from_value(value);
         if raw != 0 && is_registered_buffer(raw) {
@@ -337,7 +333,10 @@ pub(crate) unsafe fn bind_node_sqlite_params(
 
     let positional_count = args.len().saturating_sub(positional_start);
     if positional_count > anonymous_indices.len() {
-        throw_sqlite_error("column index out of range");
+        // Node raises ERR_SQLITE_ERROR with errcode 25 (SQLITE_RANGE) when
+        // more anonymous values are supplied than the statement has
+        // anonymous parameters (#6561).
+        throw_sqlite_error_ext("column index out of range", ffi::SQLITE_RANGE);
     }
     for (offset, index) in anonymous_indices.into_iter().enumerate() {
         if let Some(value) = args.get(positional_start + offset).copied() {
@@ -367,11 +366,14 @@ pub(crate) unsafe fn node_sqlite_integer_value(value: i64, read_bigints: bool) -
             value
         ));
     }
-    if (i32::MIN as i64..=i32::MAX as i64).contains(&value) {
-        JSValue::int32(value as i32)
-    } else {
-        JSValue::number(value as f64)
-    }
+    // Always hand out a NUMBER-tagged double, never an INT32-tagged value
+    // (#6561). Node's node:sqlite returns plain JS numbers, and perry's
+    // INT32 tag shares its storage shape with `Expr::ClassRef`
+    // (`INT32_TAG | class_id`, see #618): when a small integer like a
+    // rowid `1` escapes into an any-typed context, `js_value_typeof`
+    // cannot tell it apart from a registered class id and reports
+    // "function" instead of "number".
+    JSValue::number(value as f64)
 }
 
 pub(crate) unsafe fn node_sqlite_column_value(
@@ -829,17 +831,17 @@ where
         throw_invalid_state("statement has been finalized");
     }
     let db = get_handle::<NodeSqliteDbHandle>(stmt.db_handle)
-        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
     let conn_ptr = {
         let conn_guard = db
             .conn
             .lock()
-            .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
         if let Some(conn) = conn_guard.as_ref() {
             conn as *const Connection
         } else {
             drop(conn_guard);
-            throw_invalid_state("Database is not open");
+            throw_invalid_state("database is not open");
         }
     };
     let conn = &*conn_ptr;

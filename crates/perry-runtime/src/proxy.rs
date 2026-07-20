@@ -1354,8 +1354,23 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             let key_ptr = crate::builtins::js_string_coerce(key)
                                 as *const crate::StringHeader;
                             let interned = crate::object::interned_key_ptr(key_ptr);
+                            // #6595: a per-evaluation CLASS OBJECT (what a
+                            // capture-carrying class materializes as,
+                            // `object_type == OBJECT_TYPE_CLASS`) shares its
+                            // template cid with its instances, and its own-data
+                            // writes must reach the #6530
+                            // `mirror_class_object_static_write` hook in
+                            // `js_object_set_field_by_name`. Recording a plan
+                            // here armed the mirror-free fast lane for the very
+                            // store being vetted, so from the second same-shaped
+                            // class on (shape-transition cache hit) post-class
+                            // statics like bundled zod's `ZodX.create` vanished
+                            // from ClassRef static dispatch. Class objects
+                            // neither record nor honor store plans.
                             let plan_eligible = header._reserved & CHAIN_DIVERGE == 0
                                 && class_id != crate::object::NATIVE_MODULE_CLASS_ID
+                                && (*(addr as *const crate::ObjectHeader)).object_type
+                                    == crate::error::OBJECT_TYPE_REGULAR
                                 && interned != 0;
                             if plan_eligible
                                 && crate::object::prop_plan::store_plan_check(class_id, interned)

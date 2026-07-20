@@ -48,7 +48,22 @@ pub extern "C" fn js_atob(value: f64) -> *const StringHeader {
         throw_invalid_character();
     }
     match base64::engine::general_purpose::STANDARD_NO_PAD.decode(&cleaned) {
-        Ok(decoded) => js_string_from_bytes(decoded.as_ptr(), decoded.len() as u32),
+        Ok(decoded) => {
+            // Spec (`atob`): the result is a "binary string" — each UTF-16
+            // code unit equals one decoded byte (0-255), so `charCodeAt(i)`
+            // returns byte `i`. Perry strings are UTF-8 backed, so the raw
+            // decoded bytes CANNOT be handed straight to `js_string_from_bytes`:
+            // any byte >= 0x80 is invalid UTF-8 on its own and `charCodeAt`
+            // then mis-decodes it (jose/Auth.js decode a JWE's random binary
+            // IV/ciphertext/tag through `atob`, so high bytes silently
+            // corrupted the session token → login "JWTSessionError"). Map each
+            // byte to its Latin-1 code point (U+0000..U+00FF) and encode THAT
+            // as UTF-8, which round-trips back to the byte value under
+            // `charCodeAt`. `btoa` already reads char code points and rejects
+            // > 0xff, so this is its exact inverse.
+            let s: String = decoded.iter().map(|&b| b as char).collect();
+            js_string_from_bytes(s.as_ptr(), s.len() as u32)
+        }
         Err(_) => throw_invalid_character(),
     }
 }

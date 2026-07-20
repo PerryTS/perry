@@ -1,18 +1,26 @@
-//! Issue #5621: a `perry.nativeLibrary` package that exposes ergonomic
-//! camelCase exports (`doThing`) over snake_case `js_<pkg>_*` FFI symbols
-//! (`js_foo_do_thing`) must route the call to the native symbol — NOT run
-//! the throwing TypeScript wrapper body.
+//! Issue #5621: a `perry.nativeLibrary` package that exposes an ergonomic
+//! camelCase binding (`doThing`) over a snake_case `js_<pkg>_*` FFI symbol
+//! (`js_foo_do_thing`) via an ambient `export declare function` must route
+//! the call to the native symbol — there is no wrapper body to run.
 //!
-//! Before the fix, Perry only routed a native-library import to its FFI
-//! symbol when the import binding was byte-for-byte equal to the manifest
-//! symbol name (the `@perryts/storekit` raw-ambient-export convention). An
-//! ergonomic camelCase binding never matched, so the call silently fell
-//! through to the package's `.ts` body (here: a `throw`).
+//! Before the #5621 fix, Perry only routed a native-library import to its
+//! FFI symbol when the import binding was byte-for-byte equal to the
+//! manifest symbol name (the `@perryts/storekit` raw-ambient-export
+//! convention). An ergonomic camelCase binding never matched, so the link
+//! failed on the missing `perry_fn_<foo>__doThing` wrapper symbol.
+//!
+//! Issue #6715 refined the rule: the ergonomic alias is a convenience for
+//! packages that only export ambient `declare` signatures. A *genuine*
+//! implemented export of the same name wins over the derived alias (covered
+//! by `issue_6715_native_wrapper_precedence.rs`). This test therefore
+//! exercises the ambient-declare form, which is the case the alias exists
+//! for: `export declare function doThing(): number;` has no body, is
+//! skipped at lowering, and so is resolved purely through the manifest.
 //!
 //! This test links a real one-function static archive (`js_foo_do_thing`
 //! → `42`) via the manifest's `prebuilt` field, then asserts the compiled
-//! program prints `42` — which is only possible if `doThing()` reached the
-//! native symbol rather than the throwing wrapper.
+//! program prints `42` — only possible if `doThing()` reached the native
+//! symbol through the ergonomic alias.
 
 #![cfg(unix)]
 
@@ -75,9 +83,10 @@ fn camel_case_native_export_routes_to_ffi_symbol() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
 
-    // The native-library package: camelCase `doThing` surface over the
-    // `js_foo_do_thing` FFI symbol. The body THROWS — if Perry runs it,
-    // the program aborts instead of printing 42, which is exactly the bug.
+    // The native-library package: an ambient camelCase `doThing` surface
+    // over the `js_foo_do_thing` FFI symbol. `export declare function` has
+    // NO body, so there is nothing to run — the binding resolves purely
+    // through the manifest's ergonomic alias to the native symbol.
     let pkg_dir = root.join("node_modules/foo");
     std::fs::create_dir_all(pkg_dir.join("src")).expect("mkdir pkg src");
 
@@ -88,9 +97,7 @@ fn camel_case_native_export_routes_to_ffi_symbol() {
 
     std::fs::write(
         pkg_dir.join("src/index.ts"),
-        r#"export function doThing(): number {
-  throw new Error("native only — must route to js_foo_do_thing");
-}
+        r#"export declare function doThing(): number;
 "#,
     )
     .expect("write pkg index.ts");
@@ -164,8 +171,8 @@ console.log("result:", doThing());
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
         run.status.success(),
-        "binary aborted — the camelCase export ran its throwing TS body \
-         instead of routing to js_foo_do_thing\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        "binary aborted — the ambient camelCase binding failed to route to \
+         js_foo_do_thing\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert!(
         stdout.contains("result: 42"),

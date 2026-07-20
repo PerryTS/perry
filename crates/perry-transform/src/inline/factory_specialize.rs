@@ -86,7 +86,9 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     args,
                     ..
                 },
-                Expr::PropertyGet { object, property },
+                Expr::PropertyGet {
+                    object, property, ..
+                },
             ) => {
                 if let Expr::LocalGet(o_ref) = object.as_ref() {
                     if *o_ref != *bound_id {

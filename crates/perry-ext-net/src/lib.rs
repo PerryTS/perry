@@ -70,6 +70,8 @@ mod lifecycle;
 pub use lifecycle::*;
 mod classes;
 pub use classes::*;
+mod handle_ids;
+pub(crate) use handle_ids::{next_id, next_id_or_throw};
 mod dispatch;
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
@@ -428,26 +430,6 @@ extern "C" {
     fn js_net_callback_ptr(value: f64) -> i64;
 }
 
-/// Socket / server / block-list ids come from perry-ffi's SHARED handle-id
-/// allocator, not a private counter.
-///
-/// Every ext staticlib that mints ids privately from 1 aliases the others
-/// inside the shared `[1, 0x40000)` band, and the composite handle-method
-/// dispatch (`class_handles.rs::composite_handle_method_dispatch`) asks each
-/// registered extension "is this handle yours?" — so the FIRST extension whose
-/// private counter reached that number claims the call. Next.js's HTTP server
-/// (perry-ext-http-server handle 1, via `register_handle`) therefore claimed
-/// `socket.on('data', …)` on this crate's socket 1: the listener landed on the
-/// HTTP server, the reader delivered the MySQL greeting to an empty listener
-/// list, and mysql2's handshake hung to ETIMEDOUT.
-///
-/// `reserve_handle_id` consumes an id from the same counter `register_handle`
-/// uses, so ids stay globally unique across every ext library while this
-/// crate keeps its own object map.
-pub(crate) fn next_id() -> i64 {
-    perry_ffi::reserve_handle_id()
-}
-
 fn push_event(ev: PendingNetEvent) {
     statics::pending_events().lock().unwrap().push(ev);
     // Wake the main thread so its `js_wait_for_event` returns
@@ -626,7 +608,7 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
 pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
-    let id = next_id();
+    let id = next_id_or_throw();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     statics::sockets().lock().unwrap().insert(
         id,
@@ -661,7 +643,7 @@ pub unsafe extern "C" fn js_net_create_server(
 ) -> i64 {
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
-    let id = next_id();
+    let id = next_id_or_throw();
     statics::listeners()
         .lock()
         .unwrap()
@@ -833,6 +815,20 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // call `run_socket_task` directly with
                             // the accepted stream.
                             let socket_id = next_id();
+                            // #6441: on a background thread there is no JS frame
+                            // to unwind to, so exhaustion can't throw here.
+                            // Drop the accepted stream — closing the connection,
+                            // the EMFILE-style degradation Node applies when it
+                            // can't accept — rather than register a phantom
+                            // socket under the `0` sentinel. Refuse quietly: once
+                            // the band is exhausted every accept fails, so an
+                            // 'error' event per connection would flood a hot
+                            // loop; the synchronous client-facing entry points
+                            // still surface a throwable EMFILE.
+                            if socket_id == perry_ffi::INVALID_HANDLE {
+                                drop(stream);
+                                continue;
+                            }
                             let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
                             // Node sets TCP_NODELAY on every accepted socket by
                             // default (Nagle off). Match that so small writes
@@ -1103,7 +1099,7 @@ pub(crate) fn spawn_socket_task(
 ) -> i64 {
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
-    let id = next_id();
+    let id = next_id_or_throw();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
 
     statics::sockets().lock().unwrap().insert(

@@ -875,15 +875,34 @@ pub unsafe extern "C" fn js_native_call_method(
             | "sort"
             | "forEach"
     ) {
-        let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-        if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
-            if let Some(result) = crate::url::search_params::url_search_params_dynamic_call(
-                recv_ptr,
-                method_name,
-                args_ptr,
-                args_len,
-            ) {
-                return result;
+        // Only a pointer-shaped receiver (NaN-boxed pointer above the handle
+        // band, or a raw untagged heap address) may be shape-probed. A plain
+        // double must NOT have its low 48 bits read as an address: a Web
+        // Streams handle id (`1049102.0`) extracts to `(id - 2^20) * 2^32`,
+        // which passes the macOS 2 TB heap floor once ~512 stream ids are
+        // live and the probe then dereferences unmapped memory — the
+        // gscmaster request-12 SIGSEGV (`for await` resolves @@asyncIterator
+        // to a bound `values` re-dispatch landing here with the numeric
+        // handle as receiver; Linux's 0x1000 floor probes low memory from
+        // id 1). Numeric stream receivers fall through to the
+        // primitive-methods stream dispatch that owns them.
+        let bits = object.to_bits();
+        let top16 = bits >> 48;
+        let payload = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let pointer_shaped = (top16 == 0x7FFD
+            && crate::value::addr_class::is_above_handle_band(payload))
+            || (top16 == 0 && payload >= 0x10000);
+        if pointer_shaped {
+            let recv_ptr = payload as *mut ObjectHeader;
+            if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
+                if let Some(result) = crate::url::search_params::url_search_params_dynamic_call(
+                    recv_ptr,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                ) {
+                    return result;
+                }
             }
         }
     }
@@ -1203,7 +1222,10 @@ pub unsafe extern "C" fn js_native_call_method(
         let method_handle = root_scope.root_nanbox_f64(method_value);
         let args = refreshed_args();
         // Bind `this` to the proxy for the duration of the call, matching the
-        // receiver semantics of a normal `obj.method(args)` invocation.
+        // receiver semantics of a normal `obj.method(args)` invocation. A
+        // canonical class-method value reads its receiver from IMPLICIT_THIS via
+        // `canonical_bound_method_receiver` (#6699 routes a proxy receiver
+        // through there).
         let prev_this = IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
         let result = crate::closure::js_native_call_value(
             method_handle.get_nanbox_f64(),

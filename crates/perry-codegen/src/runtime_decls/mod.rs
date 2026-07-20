@@ -60,6 +60,20 @@ pub fn declare_phase1(module: &mut LlModule) {
     // StringHeader handle, default row index) -> resolved row index. Lazily
     // detects + matches the system locale on first call, cached after.
     module.declare_function("perry_i18n_locale_index_for", I32, &[I64, I32]);
+    // i18n startup init, emitted once in the entry `main` prelude when the
+    // project configures `[i18n]`: (locale-code ptr array, locale-code len
+    // array, count, default row index). Registers the locale-code list for
+    // the plural rules + format wrappers and eagerly resolves LOCALE_INDEX
+    // from the system locale.
+    module.declare_function("perry_i18n_init", VOID, &[PTR, PTR, I32, I32]);
+    // `[i18n.currencies]` registration: comma-separated `locale=CODE`
+    // pairs baked as a byte constant, passed as (ptr, len).
+    module.declare_function("perry_i18n_set_currencies", VOID, &[PTR, I32]);
+    // CLDR plural category selection for `t('key', { count })` sites whose
+    // key carries `.one`/`.other`/… plural variants: (locale row index,
+    // NaN-boxed count value) -> category (0=zero 1=one 2=two 3=few 4=many
+    // 5=other).
+    module.declare_function("perry_i18n_plural_category", I32, &[I32, DOUBLE]);
     // Function-name registry — populated by `main()` once per top-level
     // named function so `console.log(named)` prints `[Function: named]`
     // instead of `[Function (anonymous)]`. See #1202.
