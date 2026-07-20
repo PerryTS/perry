@@ -17,7 +17,9 @@ use crate::ir::Expr;
 use crate::lower_decl::lower_class_from_ast;
 use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::expr_new_builtins::{global_member_constructor_name, module_constructor_name};
+use super::expr_new_builtins::{
+    global_member_constructor_name, is_reified_global_builtin_constructor, module_constructor_name,
+};
 use super::{lower_expr, LoweringContext};
 
 mod helpers;
@@ -138,6 +140,41 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // instance so subsequent method calls dispatch correctly.
     if let Some(expr) = lower_new_member_native(ctx, new_expr, callee_expr, new_byte_offset)? {
         return Ok(expr);
+    }
+
+    // #6726: `new globalThis.<Builtin>(...)` must construct the exact same
+    // intrinsic as `new <Builtin>(...)`. The bare-identifier arm below routes
+    // every built-in constructor to its real allocator (`Set` → `Expr::SetNew`,
+    // `Map` → `MapNew`, `Date` → `DateNew`, `RegExp`, the Error family, the
+    // typed arrays, boxed primitives, `Proxy`, `WeakRef`, …), but the
+    // member-expression callee never reaches it — it fell through to
+    // `lower_new_non_ident` → `Expr::NewDynamic`, and for the data-structure
+    // builtins (whose construction lives in a dedicated HIR variant, not in
+    // codegen's `lower_builtin_new`) codegen's `try_static_class_name` reroute
+    // dead-ended at an empty-object placeholder. So `new globalThis.Set().has(x)`
+    // threw "has is not a function". Detect the `globalThis.<Ident>` callee
+    // (the real global object — `globalThis` not lexically rebound — and a
+    // built-in constructor name that isn't already handled by
+    // `lower_new_member_native` above) and re-dispatch through a synthesized
+    // bare-identifier `new <Ident>(...)`. The recursion terminates because the
+    // synthesized callee is an `Ident`, not a `Member`.
+    if let ast::Expr::Member(member) = callee_expr {
+        if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
+            (peel_new_callee(member.obj.as_ref()), &member.prop)
+        {
+            if obj_ident.sym.as_ref() == "globalThis"
+                && ctx.lookup_local("globalThis").is_none()
+                && is_reified_global_builtin_constructor(prop_ident.sym.as_ref())
+            {
+                let mut synthetic = new_expr.clone();
+                synthetic.callee = Box::new(ast::Expr::Ident(ast::Ident::new(
+                    prop_ident.sym.clone(),
+                    prop_ident.span,
+                    Default::default(),
+                )));
+                return lower_new(ctx, &synthetic);
+            }
+        }
     }
 
     // Issue #237: pre-register the controller param of every
