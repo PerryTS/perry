@@ -1,5 +1,0 @@
-# Formatting commits that should be skipped by `git blame`.
-# Local setup: git config blame.ignoreRevsFile .git-blame-ignore-revs
-#
-# cargo fmt --all baseline (issue #245 PR-A)
-# SHA will be filled in after the commit lands on main.

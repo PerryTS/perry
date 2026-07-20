@@ -218,3 +218,13 @@ test-files/.perry-cache/
 /tiny_test
 /wasm_test
 /t1
+/clusterAg
+/isoA
+/m
+/m5
+/tests/modules/main
+# generated outputs (perry --target wasm / android builds / i18n emit)
+/wasm_ui_demo.html
+/examples/wasm_ui_demo.html
+android-build/app/src/main/jniLibs/
+/res/

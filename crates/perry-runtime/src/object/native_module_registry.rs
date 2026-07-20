@@ -1,5 +1,5 @@
 //! Per-module native-module method-dispatch registry (devirtualization).
-//! GENERATED scaffolding — see NM_DEVIRT_PLAN.md. Each `js_nm_install_<m>()` is
+//! GENERATED scaffolding (native-module devirtualization, #5256). Each `js_nm_install_<m>()` is
 //! the SOLE static reference to its `nm_dispatch_<m>` bucket fn; codegen emits a
 //! call per statically-imported native module so the linker dead-strips the rest.
 //! NOTHING here names all buckets together (that would re-pin everything).
