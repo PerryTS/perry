@@ -1940,11 +1940,15 @@ mod macos_host_candidate_tests {
     #[test]
     fn macos_target_probes_bare_target_dirs() {
         let cands = collect_library_candidates("libperry_ui_macos.a", Some("macos"));
-        // Triple-qualified dir is still searched...
+        // Triple-qualified dir is still searched — derive the triple from the
+        // same mapping the production code uses rather than hardcoding it, so
+        // this stays in sync if the `macos` → triple mapping ever changes.
+        let triple = super::rust_target_triple(Some("macos"))
+            .expect("macos target should resolve to a triple");
         assert!(
-            cands.contains(&PathBuf::from(
-                "target/aarch64-apple-darwin/release/libperry_ui_macos.a"
-            )),
+            cands.contains(&PathBuf::from(format!(
+                "target/{triple}/release/libperry_ui_macos.a"
+            ))),
             "missing triple dir in {cands:?}"
         );
         // ...and so is the bare host-native dir the suggested build command writes to.
