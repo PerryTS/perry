@@ -338,18 +338,18 @@ pub(super) fn try_array_only_methods(
         if let ast::Expr::Member(member) = expr.as_ref() {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();
-                // #6718: a spread-call of a callback-taking array method
-                // (`Object.keys(x).map(...[fn])`, `expr.reduce(...args)`)
-                // collapses the spread operand into a single positional
-                // `args[0]`, so the callback arms below would read the spread
-                // SOURCE array as the callback ("object is not a function").
-                // Decline so the generic tail builds an `Expr::CallSpread`, whose
-                // member-callee arm flattens the spread into one argument array
-                // and dispatches the native method by name with `this` bound to
-                // the receiver (`js_native_call_method_apply_by_id`).
-                if call.args.iter().any(|a| a.spread.is_some())
-                    && super::is_spread_unsafe_callback_method(method_name)
-                {
+                // #6718: the `args` vector holds the EVALUATED spread expression
+                // with the spread token dropped, so any arm reading a positional
+                // slot (callback, comparator, index, search value, …) would bind
+                // the spread SOURCE array itself — `Object.keys(x).map(...[fn])` →
+                // "object is not a function", `expr.slice(...[1,3])` → the whole
+                // array. Decline on any spread so the generic tail builds an
+                // `Expr::CallSpread`, whose member-callee arm flattens the spread
+                // into one argument array and dispatches the array method by name
+                // with `this` bound to the receiver (`js_native_call_method_apply_by_id`).
+                // `push` is excluded: it has a dedicated spread-aware arm below
+                // (`push_spread`) that materializes the spread correctly.
+                if call.args.iter().any(|a| a.spread.is_some()) && method_name != "push" {
                     return Ok(Err(args));
                 }
                 // Helper: skip array-method dispatch when the receiver is a

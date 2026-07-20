@@ -21,15 +21,17 @@ pub(super) fn try_imported_array_methods(
         if let ast::Expr::Member(member) = expr.as_ref() {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();
-                // NOTE (#6718): a spread callback-method call on an IMPORTED array
-                // (`CHAIN_NAMES.map(...[fn])`) is intentionally NOT declined here.
-                // The imported binding lowers to an `ExternFuncRef` receiver, and
-                // the generic `Expr::CallSpread` member-callee arm skips
-                // `ExternFuncRef` objects (they may be imported *functions*), so
-                // routing there would fail to dispatch the native method. This
-                // niche form is out of scope for #6718 (whose repro covers inline
-                // literals + local receivers + queueMicrotask); it stays at its
-                // pre-existing behavior rather than trading one failure for another.
+                // NOTE (#6718): a spread method call on an IMPORTED array
+                // (`CHAIN_NAMES.map(...[fn])`, `CHAIN_NAMES.slice(...[1,3])`) is
+                // intentionally NOT declined here — unlike the local/inline/
+                // array-only fast paths, which decline any spread to the generic
+                // `Expr::CallSpread` tail. The imported binding lowers to an
+                // `ExternFuncRef` receiver, which that tail's member-callee arm
+                // skips (it may be an imported *function*), so routing there would
+                // fail to dispatch the native method. This niche receiver stays at
+                // its pre-existing behavior rather than trading one failure for
+                // another; the #6718 repro covers inline literals + local
+                // receivers + queueMicrotask.
                 if let ast::Expr::Ident(arr_ident) = member.obj.as_ref() {
                     let arr_name = arr_ident.sym.to_string();
                     // A module namespace import (`import * as NS from "..."`) is

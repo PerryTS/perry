@@ -30,6 +30,25 @@ console.log([1, 2, 3].reduceRight(...[(a: string, b: number) => a + b, "z"])); /
 const arr = [10, 20];
 console.log(arr.map(...[(x: number) => x + 1]).join(","));               // 11,21
 
+// --- positional (non-callback) array methods: same root cause ------------
+console.log([1, 2, 3, 4].slice(...[1, 3]).join(","));                   // 2,3
+console.log([10, 20, 30].indexOf(...[20]));                             // 1
+console.log([1, 2, 3].includes(...[2]));                               // true
+console.log([1, 2, 3].at(...[-1]));                                    // 3
+console.log([1, 2, 3].join(...[","]));                                 // 1,2,3
+const spl = [9, 8, 7, 6, 5];
+spl.splice(...[1, 2]);
+console.log(spl.join(","));                                            // 9,6,5
+
+// --- variadic methods with dedicated spread arms must still work ---------
+const pushed: number[] = [1, 2];
+pushed.push(...[3, 4, 5]);
+console.log(pushed.join(","));                                         // 1,2,3,4,5
+console.log([1, 2].concat(...[[3, 4], [5]]).join(","));                // 1,2,3,4,5
+const uns: number[] = [3, 4];
+uns.unshift(...[1, 2]);
+console.log(uns.join(","));                                            // 1,2,3,4
+
 // --- general `...variable` spread (not just an inline literal) -----------
 const cb = [(x: number) => x * 100] as const;
 console.log([1, 2].map(...cb).join(","));                                // 100,200

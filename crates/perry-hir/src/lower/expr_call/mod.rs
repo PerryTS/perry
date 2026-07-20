@@ -96,34 +96,6 @@ fn unwrap_call_callee_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
-/// #6718 — Array.prototype methods whose FIRST positional argument is a callback
-/// (or comparator) that the dense HIR fast paths read as `args[0]`. A spread call
-/// (`arr.map(...[fn])`) collapses the spread operand into that single slot, so the
-/// fast path would hand the spread SOURCE array to the callback slot ("object is
-/// not a function"). When any spread is present these methods must decline to the
-/// generic `Expr::CallSpread` tail, which flattens the spread and dispatches the
-/// native method by name with `this` bound to the receiver. Variadic methods with
-/// their own spread-aware arms (`push`/`concat`/`unshift`/`splice`) are excluded —
-/// they already materialize the spread correctly.
-pub(super) fn is_spread_unsafe_callback_method(method_name: &str) -> bool {
-    matches!(
-        method_name,
-        "map"
-            | "filter"
-            | "forEach"
-            | "find"
-            | "findIndex"
-            | "findLast"
-            | "findLastIndex"
-            | "some"
-            | "every"
-            | "reduce"
-            | "reduceRight"
-            | "sort"
-            | "flatMap"
-    )
-}
-
 /// #6677 — the method name of a namespace-builtin call callee, for EITHER the
 /// dot form (`Math.max(...)`) or the string-literal computed form
 /// (`Math["max"](...)`). Per spec `obj.m()` and `obj["m"]()` are equivalent for
