@@ -87,6 +87,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                                 ty: Type::Array(Box::new(Type::Any)),
                                                 mutable: true,
                                                 init: Some(Expr::PropertyGet {
+                                                    byte_offset: 0,
                                                     object: Box::new(Expr::This),
                                                     property: field_name.clone(),
                                                 }),
@@ -309,16 +310,40 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // class VALUE (`exports.C = C; new mod.C()`) can fill the
                 // synthesized `__perry_cap_<id>` ctor params. Static `new C()`
                 // sites still pass captures as trailing args directly.
-                if let Some(captured) = ctx.lookup_class_captures(&class.name) {
-                    if !captured.is_empty() {
-                        let captures: Vec<Expr> =
-                            captured.iter().map(|id| Expr::LocalGet(*id)).collect();
-                        result.push(Stmt::Expr(Expr::RegisterClassCaptures {
-                            class_name: class.name.clone(),
-                            captures,
-                        }));
-                    }
+                let captured_exprs: Vec<Expr> = ctx
+                    .lookup_class_captures(&class.name)
+                    .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
+                    .unwrap_or_default();
+                if !captured_exprs.is_empty() {
+                    result.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                        class_name: class.name.clone(),
+                        captures: captured_exprs.clone(),
+                    }));
                 }
+                // #6465: a capturing class DECLARATION in a factory needs
+                // per-evaluation semantics, same as a class expression.
+                // `RegisterClassCaptures` above is a class-id-keyed,
+                // last-wins registry — when the enclosing function runs more
+                // than once (effect's `makeException`, called once per
+                // exception kind), every escaped class value replayed the
+                // LAST call's captures: all of effect's core error classes
+                // reported `_tag` "TimeoutException", masking the real error
+                // in any `Cause.pretty` output and breaking every
+                // `catchTag`-style dispatch. Bind the declared name to a
+                // `ClassExprFresh` value (the #1772/#1787 machinery class
+                // EXPRESSIONS already use) so each evaluation carries its own
+                // captured environment on its own heap class object. Scoped
+                // to capture-only classes: one with static state keeps the
+                // shared-template path, whose interleaved static-init
+                // statements below target the template by name. Prototype
+                // identity is still shared per template — the remaining gap
+                // tracked on #6465.
+                let has_static_state = !class.static_fields.is_empty()
+                    || class
+                        .static_methods
+                        .iter()
+                        .any(|m| m.name.starts_with("__perry_static_init_"));
+                let fresh_binding = !captured_exprs.is_empty() && !has_static_state;
                 // Static field initializers + static blocks for a
                 // function-nested class. The module-level path
                 // (`lower/stmt.rs`) emits these into `module.init`; here they
@@ -335,7 +360,31 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     &class.static_fields,
                     &class.static_methods,
                 ));
+                let template_name = class.name.clone();
                 ctx.pending_classes.push(class);
+                // #6465 (see `fresh_binding` above): bind the declared name to
+                // a per-evaluation heap class object. The local shadows the
+                // class-registry fallback for every in-scope read — including
+                // the factory's `return C` — so the escaped value carries THIS
+                // evaluation's captures instead of the registry's last-wins
+                // snapshot. `new C()` sites that statically resolve the
+                // template still pass the live captures as trailing args, so
+                // in-factory construction is per-evaluation on both paths.
+                if fresh_binding {
+                    let class_local = ctx.define_local(class_name.clone(), Type::Any);
+                    result.push(Stmt::Let {
+                        id: class_local,
+                        name: class_name.clone(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassExprFresh {
+                            template: template_name,
+                            named_statics: Vec::new(),
+                            symbol_statics: Vec::new(),
+                            captured_args: captured_exprs,
+                        }),
+                        mutable: false,
+                    });
+                }
                 // #5251 follow-up — a function-nested `class X { … }` whose
                 // name collides with an OUTER same-named local must SHADOW
                 // that local within this scope, exactly as a nested
@@ -354,7 +403,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // `local_class_aliases`) so the in-scope read resolves to the
                 // class. Gated on a pre-existing outer binding so working
                 // packages (no collision) are byte-for-byte unaffected.
-                if ctx.lookup_local(&class_name).is_some() {
+                if !fresh_binding && ctx.lookup_local(&class_name).is_some() {
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
                     result.push(Stmt::Let {
                         id: class_local,
@@ -967,6 +1016,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         ty: Type::Any,
                         mutable: false,
                         init: Some(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(res_id)),
                             property: "value".to_string(),
                         }),
@@ -980,6 +1030,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         Stmt::Expr(Expr::LocalSet(res_id, Box::new(read_call()))),
                         Stmt::If {
                             condition: Expr::PropertyGet {
+                                byte_offset: 0,
                                 object: Box::new(Expr::LocalGet(res_id)),
                                 property: "done".to_string(),
                             },
@@ -1118,6 +1169,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 } else if is_node_readable_for_await {
                     Expr::Call {
                         callee: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(iter_expr_raw),
                             property: "iterator".to_string(),
                         }),
@@ -1152,6 +1204,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
                 let raw_next_call = Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(iter_id)),
                         property: "next".to_string(),
                     }),
@@ -1179,6 +1232,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         None
                     };
                 let value_expr = Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(result_id)),
                     property: "value".to_string(),
                 };
@@ -1236,6 +1290,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
                     Stmt::If {
                         condition: Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(result_id)),
                             property: "done".to_string(),
                         },
@@ -1804,6 +1859,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         property: "length".to_string(),
                     }),
@@ -1889,6 +1945,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(keys_id)),
                         property: "length".to_string(),
                     }),

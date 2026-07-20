@@ -153,6 +153,72 @@ fn lower_os_module_method_call(
     }
 }
 
+/// Recognize a bundled-mysql2 `createPool` / `createConnection` call by the
+/// shape of its config object, so it can be routed to perry-ext-mysql2 even
+/// when a bundler inlined mysql2 under a numeric module id (the import-keyed
+/// native lowering can't see through that — see the call site).
+///
+/// The signature is deliberately tight so it cannot hijack an unrelated
+/// `createPool`/`createConnection`: the sole config argument must be an object
+/// LITERAL that carries BOTH a mysql connection key (`uri`/`host`/`socketPath`)
+/// AND at least one mysql2-specific driver/pool option (`connectionLimit`,
+/// `waitForConnections`, `queueLimit`, `namedPlaceholders`, …). generic-pool's
+/// `createPool(factory, opts)` passes a factory object with `create`/`destroy`
+/// (no connection key); pg uses `new Pool()`, not `.createPool({...})`. The
+/// older `mysql` package shares mysql2's exact API and wire protocol, so
+/// routing it to perry-ext-mysql2 is correct too. A non-literal config
+/// (variable / spread) returns `None` and falls through to normal lowering.
+///
+/// Returns the canonical method name (`"createPool"` / `"createConnection"`).
+///
+/// Pure signature check over a config object's field names.
+fn mysql2_config_signature(method_name: &str, keys: &[&str]) -> Option<&'static str> {
+    let canonical = match method_name {
+        "createPool" => "createPool",
+        "createConnection" => "createConnection",
+        _ => return None,
+    };
+    let mut has_conn_key = false;
+    let mut has_mysql2_opt = false;
+    for key in keys {
+        match *key {
+            "uri" | "host" | "socketPath" => has_conn_key = true,
+            "connectionLimit" | "waitForConnections" | "queueLimit" | "maxIdle" | "idleTimeout"
+            | "namedPlaceholders" | "rowsAsArray" | "enableKeepAlive" | "multipleStatements"
+            | "typeCast" => has_mysql2_opt = true,
+            _ => {}
+        }
+    }
+    if has_conn_key && has_mysql2_opt {
+        Some(canonical)
+    } else {
+        None
+    }
+}
+
+/// Recover the config object's keys and run the mysql2 signature check. A closed
+/// object literal is lowered to `New { class_name: "__AnonShape_*" }` with the
+/// keys stripped into the shape class, so recover them from the lowering
+/// context's `anon_shape_fields` map; a literal that stayed `Expr::Object`
+/// (small / open shape) is inspected directly.
+fn detect_bundled_mysql2_create(
+    ctx: &LoweringContext,
+    method_name: &str,
+    args: &[Expr],
+) -> Option<&'static str> {
+    let keys: Vec<&str> = match args.first()? {
+        Expr::Object(pairs) => pairs.iter().map(|(k, _)| k.as_str()).collect(),
+        Expr::New { class_name, .. } => ctx
+            .anon_shape_fields
+            .get(class_name)?
+            .iter()
+            .map(|s| s.as_str())
+            .collect(),
+        _ => return None,
+    };
+    mysql2_config_signature(method_name, &keys)
+}
+
 pub(super) fn try_native_module_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -161,6 +227,36 @@ pub(super) fn try_native_module_methods(
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // Check for native module method calls (e.g., mysql.createConnection())
     if let ast::Expr::Member(member) = expr {
+        // Bundled mysql2 (webpack/turbopack): when a bundler inlines mysql2
+        // under a numeric module id, the `createPool(...)` receiver is an
+        // opaque `E.i(87205).default`, not a tracked native import — so the
+        // identifier-keyed lowering below never fires and the call runs the
+        // inlined JS mysql2, which JIT-compiles its row parsers with
+        // `new Function` (via `generate-function`). An AOT binary cannot
+        // execute a function built from a runtime string, so every query
+        // throws. Recognize the call by its mysql2 config-object SIGNATURE
+        // (tight enough to be mysql/mysql2-exclusive) and route it to
+        // perry-ext-mysql2 regardless of how mysql2 was imported/bundled.
+        // The receiver is intentionally dropped: we don't want the JS module
+        // loaded at all. Downstream typing (`detect_native_instance_creation`)
+        // sees `NativeMethodCall{module:"mysql2/promise", method:"createPool"}`
+        // and tags the result `Pool`, so `pool.execute`/`pool.query` dispatch
+        // natively too; the emitted `js_mysql2_*` FFIs flip the "mysql2"
+        // well-known (see perry-codegen `ext_registry`) to link the staticlib.
+        if let ast::MemberProp::Ident(method_ident) = &member.prop {
+            if let Some(canonical) =
+                detect_bundled_mysql2_create(ctx, method_ident.sym.as_ref(), &args)
+            {
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "mysql2/promise".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: canonical.to_string(),
+                    args,
+                }));
+            }
+        }
+
         // Inline `require("node:os").platform()` reaches this outer member
         // call before the inner bare `require(...)` lowering can produce a
         // NativeModuleRef. Recognize the same literal-native namespace shape
@@ -748,6 +844,7 @@ pub(super) fn try_native_module_methods(
                             let b = iter.next().unwrap();
                             return Ok(Ok(Expr::Call {
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),
                                 }),
@@ -807,10 +904,12 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for Object static methods
+            // Check for Object static methods. #6677: match BOTH the dot form
+            // and the string-literal computed form (`Object["keys"](...)`) so the
+            // computed key does not fall through to generic dispatch (→
+            // `TypeError: value is not a function`).
             if obj_name == "Object" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "keys" => {
                             let obj = args.first().cloned().unwrap_or(Expr::Undefined);
@@ -1128,20 +1227,20 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for RegExp static methods: RegExp.escape (#2899)
+            // Check for RegExp static methods: RegExp.escape (#2899).
+            // #6677: accept the string-literal computed form too.
             if obj_name == "RegExp" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    if method_ident.sym.as_ref() == "escape" {
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
+                    if method_name == "escape" {
                         let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
                         return Ok(Ok(Expr::RegExpEscape(Box::new(arg))));
                     }
                 }
             }
 
-            // Check for Map static methods: Map.groupBy
+            // Check for Map static methods: Map.groupBy. #6677: computed form too.
             if obj_name == "Map" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "groupBy" && args.len() >= 2 {
                         let mut iter = args.into_iter();
                         let items = iter.next().unwrap();
@@ -1156,8 +1255,8 @@ pub(super) fn try_native_module_methods(
             }
 
             if obj_name == "Reflect" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                // #6677: accept the string-literal computed form too.
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "get" => {
                             let mut it = args.into_iter();
@@ -1261,6 +1360,7 @@ pub(super) fn try_native_module_methods(
                                                 args: new_args,
                                                 type_args: vec![],
                                                 byte_offset: 0,
+                                                cap_args_appended: 0,
                                             }));
                                         }
                                     }
@@ -1408,10 +1508,9 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for Array static methods
+            // Check for Array static methods. #6677: computed form too.
             if obj_name == "Array" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
+                if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "isArray" => {
                             let value = args.first().cloned().unwrap_or(Expr::Undefined);
@@ -1757,4 +1856,73 @@ pub(super) fn try_native_module_methods(
     }
 
     Ok(Err(args))
+}
+
+#[cfg(test)]
+mod bundled_mysql2_tests {
+    use super::mysql2_config_signature;
+
+    #[test]
+    fn matches_pool_with_uri_and_pool_option() {
+        // gscmaster's exact config: uri + mysql2 pool options.
+        let keys = [
+            "uri",
+            "waitForConnections",
+            "connectionLimit",
+            "maxIdle",
+            "idleTimeout",
+            "queueLimit",
+        ];
+        assert_eq!(
+            mysql2_config_signature("createPool", &keys),
+            Some("createPool")
+        );
+    }
+
+    #[test]
+    fn matches_host_credentials_with_pool_option() {
+        let keys = ["host", "user", "password", "database", "connectionLimit"];
+        assert_eq!(
+            mysql2_config_signature("createPool", &keys),
+            Some("createPool")
+        );
+    }
+
+    #[test]
+    fn matches_create_connection_with_mysql2_option() {
+        let keys = ["host", "user", "password", "namedPlaceholders"];
+        assert_eq!(
+            mysql2_config_signature("createConnection", &keys),
+            Some("createConnection")
+        );
+    }
+
+    #[test]
+    fn rejects_without_connection_key() {
+        // Pool options but no connection key — not enough to be sure it's mysql2.
+        let keys = ["connectionLimit", "waitForConnections"];
+        assert_eq!(mysql2_config_signature("createPool", &keys), None);
+    }
+
+    #[test]
+    fn rejects_without_mysql2_option() {
+        // A bare connection config could be any driver; require a mysql2 option.
+        let keys = ["host", "user", "password", "database"];
+        assert_eq!(mysql2_config_signature("createPool", &keys), None);
+    }
+
+    #[test]
+    fn rejects_generic_pool_factory() {
+        // generic-pool's `createPool(factory, opts)` — first arg is a factory
+        // object with create/destroy, no connection or mysql2 keys.
+        let keys = ["create", "destroy", "validate"];
+        assert_eq!(mysql2_config_signature("createPool", &keys), None);
+    }
+
+    #[test]
+    fn rejects_unrelated_method() {
+        let keys = ["uri", "connectionLimit"];
+        assert_eq!(mysql2_config_signature("connect", &keys), None);
+        assert_eq!(mysql2_config_signature("createServer", &keys), None);
+    }
 }

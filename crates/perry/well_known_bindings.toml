@@ -8,7 +8,11 @@
 #
 # Resolution precedence (see docs/src/native-libraries/manifest-v1.md):
 #   1. node_modules/<name>/  with  perry.nativeLibrary  →  use it
-#   2. node_modules/<name>/  without manifest           →  V8 fallback
+#   2. node_modules/<name>/  without manifest           →  hard compile
+#      error naming the package and pointing at
+#      `perry.compilePackages` (Perry ships no JS runtime — see
+#      `enforce_js_runtime_gate` in
+#      crates/perry/src/commands/compile/bootstrap.rs)
 #   3. well_known_bindings.toml (this file)             →  bundled crate
 #   4. nothing matches                                  →  resolution error
 #

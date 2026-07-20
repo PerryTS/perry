@@ -22,7 +22,9 @@
 //!
 //! Issue #2153.
 
-use perry_ffi::{alloc_string, get_handle, js_object_alloc_with_shape, JsValue, StringHeader};
+use perry_ffi::{
+    alloc_string, get_handle, get_handle_mut, js_object_alloc_with_shape, JsValue, StringHeader,
+};
 
 use crate::http2_server::Http2SecureServer;
 use crate::https_server::HttpsServer;
@@ -117,6 +119,8 @@ extern "C" {
     fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_remote_port(handle: i64) -> f64;
     fn js_node_http_im_raw_body(handle: i64) -> f64;
+    // #6432: perry-runtime helper — an async iterator that yields `value` once.
+    fn js_make_single_value_async_iterator(value: f64) -> f64;
     fn js_node_http_im_pause(handle: i64);
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
@@ -162,6 +166,11 @@ extern "C" {
     fn js_node_http_res_write_continue(handle: i64);
     fn js_node_http_res_write_processing(handle: i64);
     fn js_node_http_res_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
+    fn js_node_http_res_once(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+        callback: i64,
+    ) -> f64;
 }
 
 /// Probe: is `handle` a live `HttpServer`?
@@ -548,6 +557,12 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             js_node_http_im_on(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
+        // #6432: `for await (const chunk of req)` — reads the buffered request
+        // body. Perry delivers the whole body as one buffer (its `.on('data')`
+        // emits `body_bytes` in a single shot), so a one-shot async iterator over
+        // `req.rawBody` reproduces Node's observable result (same total bytes)
+        // for Next.js's `requestToBodyStream` / any `for await` body reader.
+        "@@asyncIterator" => js_make_single_value_async_iterator(js_node_http_im_raw_body(handle)),
         "setEncoding" if !args.is_empty() => {
             let encoding_ptr = string_value_arg(args[0]);
             if !encoding_ptr.is_null() {
@@ -775,7 +790,16 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             js_node_http_res_write_processing(handle);
             undef
         }
-        "destroy" => self_ref,
+        // #4975: `outgoingMessage.destroy()` flips the `destroyed` flag (read
+        // back by the `destroyed` getter) and returns `this`. A subsequent
+        // `write()` then errors its callback with `ERR_STREAM_DESTROYED`
+        // rather than buffering (see `js_node_http_res_write_with_cb`).
+        "destroy" => {
+            if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+                sr.destroyed = true;
+            }
+            self_ref
+        }
         "assignSocket" if !args.is_empty() => {
             crate::response::js_node_http_res_assign_socket(handle, args[0]);
             undef
@@ -796,6 +820,14 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             js_node_http_res_on(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
+        "once" | "prependOnceListener" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            js_node_http_res_once(handle, event_ptr, closure_arg(Some(args[1])));
+            self_ref
+        }
         "setStatus" | "__set_statusCode" if !args.is_empty() => {
             js_node_http_res_set_status(handle, number_arg(Some(args[0]), 200.0));
             undef
@@ -813,6 +845,13 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         "__get_writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
         "__get_writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
         "__get_finished" | "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        // #4975: `outgoingMessage.destroyed` getter, also reachable through the
+        // `__get_destroyed` codegen form.
+        "__get_destroyed" | "destroyed" => bool_value(
+            get_handle::<ServerResponse>(handle)
+                .map(|sr| sr.destroyed)
+                .unwrap_or(false),
+        ),
         "__get_sendDate" | "sendDate" => bool_value(js_node_http_res_send_date(handle) != 0),
         "__set_sendDate" if !args.is_empty() => {
             js_node_http_res_set_send_date(handle, args[0]);
@@ -879,6 +918,20 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         // and `@Body()` resolved to `undefined`.
         "readable" => bool_value(js_node_http_im_readable(handle) != 0),
         "readableEnded" => bool_value(js_node_http_im_complete(handle) != 0),
+        // `req.writable` — Node's real `req.socket` is the Duplex TCP socket,
+        // whose `writable` is true while the RESPONSE side of the connection is
+        // still open. `res.socket` aliases the request handle (see
+        // `response_socket_value`), so `on-finished`'s `isFinished(res)` —
+        // `Boolean(res.finished || (socket && !socket.writable))` — reads
+        // `socket.writable` HERE. Without it `writable` was `undefined`, so
+        // `!socket.writable` was true → on-finished reported the response
+        // finished the instant a stream was piped → `send` (Next.js static
+        // serving via `serve-static`) destroyed the read stream after the first
+        // high-water-mark (64 KB) chunk, truncating every static file past that
+        // size. Symmetric with the `readable` accessor above (request-body side).
+        "writable" => bool_value(
+            js_node_http_im_destroyed(handle) == 0 && js_node_http_im_aborted(handle) == 0,
+        ),
         "socket" | "connection" => crate::request::incoming_socket_override(handle)
             .unwrap_or_else(|| handle_to_pointer_f64(handle)),
         "signal" => js_node_http_im_signal(handle),
@@ -917,6 +970,12 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
         "writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
         "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        // #4975: `outgoingMessage.destroyed` — false until `destroy()`.
+        "destroyed" => bool_value(
+            get_handle::<ServerResponse>(handle)
+                .map(|sr| sr.destroyed)
+                .unwrap_or(false),
+        ),
         "writableCorked" => 0.0,
         "writableHighWaterMark" => 65_536.0,
         "writableLength" => get_handle::<ServerResponse>(handle)
@@ -1154,6 +1213,9 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
         // #4904: internal-by-convention header-merge API, exercised
         // directly by Node's own tests on standalone IncomingMessages.
         "_addHeaderLine" => Some(b"_addHeaderLine"),
+        // #6432: `req[Symbol.asyncIterator]()` — makes `for await…of req` read
+        // the buffered request body (Next.js `requestToBodyStream`).
+        "@@asyncIterator" => Some(b"@@asyncIterator"),
         _ => None,
     }
 }
@@ -1186,6 +1248,8 @@ fn server_response_method_bytes(name: &str) -> Option<&'static [u8]> {
         "pipe" => Some(b"pipe"),
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "prependOnceListener" => Some(b"prependOnceListener"),
         _ => None,
     }
 }

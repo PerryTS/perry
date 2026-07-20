@@ -179,6 +179,9 @@ pub(crate) fn lower_new_non_ident(
             .lookup_class_captures(&synthetic_name)
             .map(|c| c.to_vec())
             .unwrap_or_default();
+        // #6538: record the appended cap-forward count explicitly (see the
+        // named-class arm in `expr_new.rs` and the `Expr::New` docs).
+        let cap_args_appended = class_captures.len() as u32;
         for cid in class_captures {
             args.push(Expr::LocalGet(cid));
         }
@@ -197,6 +200,7 @@ pub(crate) fn lower_new_non_ident(
             args,
             type_args,
             byte_offset: new_byte_offset,
+            cap_args_appended,
         };
         // The `Sequence` yields its LAST element, so the `new` site still sees
         // the constructed instance — the registration is pure side effect,
@@ -224,7 +228,10 @@ pub(crate) fn lower_new_non_ident(
         })
         .transpose()?
         .unwrap_or_default();
-    if let Expr::PropertyGet { object, property } = callee.as_ref() {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    {
         if is_global_object_expr(ctx, object.as_ref())
             && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
         {
@@ -244,6 +251,7 @@ pub(crate) fn lower_new_non_ident(
                 args,
                 type_args: Vec::new(),
                 byte_offset: new_byte_offset,
+                cap_args_appended: 0,
             });
         }
         if matches!(object.as_ref(), Expr::NativeModuleRef(module)
@@ -256,6 +264,7 @@ pub(crate) fn lower_new_non_ident(
                 args,
                 type_args: Vec::new(),
                 byte_offset: new_byte_offset,
+                cap_args_appended: 0,
             });
         }
     }

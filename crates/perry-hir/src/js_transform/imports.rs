@@ -546,7 +546,7 @@ pub fn transform_expr(
         // Call expressions - may be method calls on JS objects or direct function calls
         Expr::Call { callee, args, .. } => {
             // First check if this is a method call on a JS object: obj.method(args)
-            if let Expr::PropertyGet { object, property } = callee.as_mut() {
+            if let Expr::PropertyGet { object, property, .. } = callee.as_mut() {
                 // Transform the object first
                 transform_expr(object.as_mut(), js_imports, extern_func_to_js, local_name_to_js, tracker);
 
@@ -728,7 +728,7 @@ pub fn transform_expr(
         }
 
         // Property access - may be on JS objects
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet { object, property, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
 
             // Check if the object is a JS value

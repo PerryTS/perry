@@ -323,8 +323,23 @@ pub extern "C" fn js_typed_array_new_from_array(
     // misaddressed as `*const ArrayHeader`. The two headers differ in
     // layout, so reading element data as raw f64 produces garbage.
     // Detect via the registry and route through the typed-array copy.
+    // (This must stay ahead of `clean_arr_ptr`: typed arrays are old-arena
+    // allocations that can land below its macOS heap floor, #5484.)
     if lookup_typed_array_kind(arr as usize).is_some() {
         return typed_array_copy_from_typed_array(kind, arr as *const TypedArrayHeader);
+    }
+    // #6486: an array grown past its capacity by `push` moves, leaving a
+    // GC_FLAG_FORWARDED header at the old address — and the caller may
+    // still hold that stale pre-grow pointer. `clean_arr_ptr` follows the
+    // forwarding chain (#233) exactly like every element read below does
+    // via `js_array_get_f64`; raw-dereferencing `(*arr).length` instead
+    // read the forwarding pointer's bytes as length/capacity, so
+    // `new Float32Array(arr)` saw a garbage element count while
+    // `arr.length` and indexed reads (which follow the chain) stayed
+    // correct. It also validates the header and materializes lazy arrays.
+    let arr = crate::array::clean_arr_ptr(arr);
+    if arr.is_null() {
+        return typed_array_alloc(kind, 0);
     }
     unsafe {
         let len = (*arr).length;

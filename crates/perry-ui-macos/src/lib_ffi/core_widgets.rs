@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use crate::*;
 
 // =============================================================================
@@ -79,15 +80,9 @@ pub extern "C" fn perry_ui_poll_open_file() -> i64 {
     let path = app::poll_open_file();
     if path.is_empty() {
         // Return empty string
-        extern "C" {
-            fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-        }
-        unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+        unsafe { js_string_from_bytes(std::ptr::null(), 0) as i64 }
     } else {
-        extern "C" {
-            fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-        }
-        unsafe { js_string_from_bytes(path.as_ptr(), path.len() as i32) }
+        unsafe { js_string_from_bytes(path.as_ptr(), path.len() as u32) as i64 }
     }
 }
 

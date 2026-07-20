@@ -112,8 +112,12 @@ fn executable_exit_releases_collection_side_allocations_last() {
     let release = exit_block
         .find("call void @js_gc_release_current_thread_collection_side_allocations()")
         .expect("collection side-allocation release should be emitted");
+    // The exit code is now the process's pending exit code (#6671), so the
+    // return operand is an SSA value (`ret i32 %N`), not the literal
+    // `ret i32 0`. Match the return generically — this assertion only pins the
+    // *ordering* (release before return), not the exit-code value.
     let ret = exit_block
-        .find("ret i32 0")
+        .find("ret i32 ")
         .expect("exit return should be emitted");
 
     assert!(finalization < rejections);

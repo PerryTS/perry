@@ -68,23 +68,35 @@ pub fn is_strictly_i32_bounded_expr(
             }
             ok
         }
-        // `expr | 0` / `expr >>> 0` ToInt32/ToUint32 idioms — explicit i32
-        // coercion, hard-bounded.
-        Expr::Binary { op, right, .. }
-            if matches!(op, BinaryOp::BitOr | BinaryOp::UShr)
-                && matches!(right.as_ref(), Expr::Integer(0)) =>
-        {
-            true
+        // `expr | 0` ToInt32 idiom — explicit *signed* i32 coercion,
+        // hard-bounded. `>>> 0` is deliberately NOT here (#6359): it is
+        // ToUint32, whose result (0..2^32-1) does NOT round-trip through a
+        // signed i32 slot. A write like `seedCopy = 0x9e3779b9 >>> 0` was
+        // admitted as strict, `seedCopy` took a signed i32 shadow, and the
+        // read `sitofp`'d it back to -1640531527. `>>> 0` falls to the UShr
+        // arm below, which rejects it.
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            right,
+            ..
+        } if matches!(right.as_ref(), Expr::Integer(0)) => true,
+        // `x >>> k` is ToUint32 (0..2^32-1). It fits in a *signed* i32 slot
+        // only when the effective shift `k & 31` is nonzero — that drops the
+        // top bit, capping the result at 2^31-1. `>>> 0` (a u32 cast),
+        // `>>> 32` (== `>>> 0`), and `>>> <variable>` (which can be a
+        // shift-by-0 at runtime) can all exceed 2^31-1 and must NOT take a
+        // signed i32 slot (#6359).
+        Expr::Binary {
+            op: BinaryOp::UShr,
+            right,
+            ..
+        } => {
+            matches!(right.as_ref(), Expr::Integer(k) if k & 31 != 0)
         }
-        // Pure bitwise — always i32 per JS spec.
+        // Pure bitwise — always signed i32 per JS spec.
         Expr::Binary { op, .. } => matches!(
             op,
-            BinaryOp::BitAnd
-                | BinaryOp::BitOr
-                | BinaryOp::BitXor
-                | BinaryOp::Shl
-                | BinaryOp::Shr
-                | BinaryOp::UShr
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
         ),
         Expr::Call { callee, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {

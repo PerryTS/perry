@@ -65,6 +65,7 @@ fn builtin_global_value_expr(ctx: &mut LoweringContext, name: &str) -> Option<Ex
         ctx.uses_fetch = true;
     }
     Some(Expr::PropertyGet {
+        byte_offset: 0,
         object: Box::new(Expr::GlobalGet(0)),
         property: name.to_string(),
     })
@@ -752,6 +753,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 args,
                 type_args: Vec::new(),
                 byte_offset: 0,
+                cap_args_appended: 0,
             });
         }
     }

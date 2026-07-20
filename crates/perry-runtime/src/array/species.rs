@@ -95,6 +95,37 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
     if crate::value::js_is_truthy(crate::array::js_array_is_array(original)) == 0 {
         return SpeciesChoice::Default;
     }
+    // #6386 fast path: a plain dense `ArrayHeader` (not a proxy / subclass
+    // instance) whose own-`constructor` cannot exist — no `"constructor"`
+    // accessor was ever installed process-wide and the array's named-props
+    // side table has no `constructor` entry — resolves through the by-name
+    // walk to the intrinsic `Array`, i.e. `Default`. Behavior-identical to
+    // the walk: the array property walk does not model prototype-level
+    // `Array.prototype.constructor` mutation (verified against pre-change
+    // main), and both own-`constructor` stores land in the two tables
+    // consulted here. Skips the per-call key-string allocation and the
+    // full property walk.
+    {
+        let jv = JSValue::from_bits(original.to_bits());
+        if jv.is_pointer() {
+            let raw = crate::value::js_nanbox_get_pointer(original) as usize;
+            let arr = raw as *const crate::array::ArrayHeader;
+            // Proxy check FIRST: a masked proxy id is not a heap pointer, so
+            // the GcHeader deref below would read unmapped memory for one.
+            if crate::array::array_ptr_as_proxy(arr).is_none()
+                && raw >= crate::gc::GC_HEADER_SIZE + 0x1000
+            {
+                let hdr =
+                    (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+                    && !crate::object::constructor_accessor_ever_installed()
+                    && crate::array::array_named_property_get_by_name(arr, "constructor").is_none()
+                {
+                    return SpeciesChoice::Default;
+                }
+            }
+        }
+    }
     // step 3: C = Get(O, "constructor"). step 5: if Type(C) is Object,
     // C = Get(C, @@species); a null species → undefined.
     let mut c = read_constructor(original);
@@ -133,14 +164,46 @@ fn throw_not_constructor() -> ! {
 /// elements (via [[Set]] / CreateDataProperty for the custom case). May throw
 /// (poisoned constructor/@@species getter, or a non-constructor species).
 pub(crate) unsafe fn array_species_create(original: f64, length: usize) -> f64 {
+    array_species_create_with_capacity(original, length, 0).0
+}
+
+/// [`array_species_create`] with a result-capacity hint (#6386). Capacity is
+/// unobservable, so when the default species applies the plain result can be
+/// allocated at its final size up front — sparing the concat/slice-style
+/// callers the grow-doubling allocations and copies of populating a
+/// `MIN_ARRAY_CAPACITY` array element-by-element. The hint must come from
+/// pure header peeks (no user code); a custom species constructor ignores it.
+///
+/// The second return is `true` only when the DEFAULT species branch ran —
+/// i.e. the result is a freshly allocated, empty, unfrozen plain array. A
+/// custom `@@species` constructor can RETURN a plain-typed array too (frozen,
+/// sealed, or pre-populated), so callers wanting raw-write access must gate
+/// on this flag, not on the result's GC type.
+pub(crate) unsafe fn array_species_create_with_capacity(
+    original: f64,
+    length: usize,
+    capacity_hint: u32,
+) -> (f64, bool) {
     match resolve_species(original) {
         SpeciesChoice::Default => {
-            let out = crate::array::js_array_alloc_with_length(length as u32);
-            f64::from_bits(JSValue::pointer(out as *const u8).bits())
+            let out = if capacity_hint > length as u32 {
+                let arr = crate::array::js_array_alloc(capacity_hint);
+                (*arr).length = length as u32;
+                arr
+            } else {
+                crate::array::js_array_alloc_with_length(length as u32)
+            };
+            (
+                f64::from_bits(JSValue::pointer(out as *const u8).bits()),
+                true,
+            )
         }
         SpeciesChoice::Custom(c) => {
             let args = [length as f64];
-            crate::object::js_new_function_construct(c, args.as_ptr(), args.len())
+            (
+                crate::object::js_new_function_construct(c, args.as_ptr(), args.len()),
+                false,
+            )
         }
     }
 }

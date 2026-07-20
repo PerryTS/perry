@@ -445,7 +445,10 @@ impl<'a> FuncEmitCtx<'a> {
             }
             // console.log/warn/error via Call + PropertyGet pattern
             Expr::Call { callee, .. } => {
-                if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::PropertyGet {
+                    object, property, ..
+                } = callee.as_ref()
+                {
                     if let Expr::GlobalGet(_) = object.as_ref() {
                         if matches!(property.as_str(), "log" | "warn" | "error") {
                             return false;

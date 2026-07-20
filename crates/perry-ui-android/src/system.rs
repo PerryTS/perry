@@ -564,11 +564,15 @@ pub fn notification_on_tap(callback: f64) {
     NOTIFICATION_TAP_KEY.store(key, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// JNI entry point — fired from `PerryNotificationReceiver.onReceive` when
-/// the user taps a notification. Looks up the registered tap callback and
-/// invokes it with `(id, undefined)`. The `action` parameter (from the TS
-/// surface) is always `undefined` for #97 because action-button registration
-/// isn't wired yet — same shape as the Apple side.
+/// JNI entry point — fired via `PerryBridge.handleNotificationTapIntent`
+/// when the user taps a notification (the tap PendingIntent launches
+/// `PerryActivity` directly: apps targeting API 31+ may not start an
+/// activity from a receiver reached through a notification tap, so the
+/// receiver only handles scheduled fires). Looks up the registered tap
+/// callback and invokes it with `(id, undefined)`. The `action` parameter
+/// (from the TS surface) is always `undefined` for #97 because
+/// action-button registration isn't wired yet — same shape as the Apple
+/// side.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationTap(
     mut env: jni::JNIEnv,
@@ -595,9 +599,13 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationTap(
 
 /// Register the JS closure that fires when FCM hands us a device token
 /// (#95). Stores the closure in the global callback table, saves the key in
-/// `NOTIFICATION_REMOTE_TOKEN_KEY` for the JNI side to look up, and asks
-/// `PerryBridge.registerForRemoteNotifications` to kick off the initial
-/// `FirebaseMessaging.getInstance().token` fetch.
+/// `NOTIFICATION_REMOTE_TOKEN_KEY` for the JNI side to look up, and calls
+/// `PerryBridge.registerForRemoteNotifications`. The scaffolded template
+/// ships without Firebase (no `google-services.json`), so that method logs
+/// a warning describing the required app-side Firebase Messaging setup and
+/// returns; once the app adds Firebase and forwards `onNewToken` to
+/// `PerryBridge.nativeNotificationToken`, the closure registered here fires
+/// with the token.
 pub fn notification_register_remote(callback: f64) {
     let key = crate::callback::register(callback);
     NOTIFICATION_REMOTE_TOKEN_KEY.store(key, std::sync::atomic::Ordering::Relaxed);

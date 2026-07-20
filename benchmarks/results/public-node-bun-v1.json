@@ -5,8 +5,8 @@
   "perry_version": "perry 0.5.1258",
   "generated_at": "2026-07-13T14:10:04Z",
   "freshness": {
-    "source_fingerprint": "6015afdb3a8ef4fb1410bf570e4b6b05d7314837d728121a87e3305ec347758f",
-    "harness_fingerprint": "e3d9291d775d9f5fc9f9e5a70b5eaed1cead9059bc1a0de754189809bf4b274f"
+    "source_fingerprint": "4ff76a2ff69d1cde787770e9ae81f615be56c74e9a1bcb208890810fd079799d",
+    "harness_fingerprint": "437f64a8020aebd4d677405b4e5c8d915b2c76b10977df397ed324eef7b3ae23"
   },
   "host": {
     "os_version": "26.5.1",

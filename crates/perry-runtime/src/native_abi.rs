@@ -4,7 +4,7 @@
 //! used by the rest of the runtime. Manifest lowering calls them before handing
 //! raw scalars, pointers, buffer spans, strings, or promises to native code.
 
-use crate::buffer::{buffer_data, is_registered_buffer, BufferHeader};
+use crate::buffer::{is_registered_buffer, resolve_span_data_ptr, BufferHeader};
 use crate::object::ObjectHeader;
 use crate::promise::Promise;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_TRUE};
@@ -284,9 +284,14 @@ pub extern "C" fn js_native_abi_check_ptr(value: f64) -> i64 {
 }
 
 /// Validate and lower the data pointer half of a manifest `buffer+len` span.
+///
+/// Resolves a registered view (`new Uint8Array(arrayBuffer)`, `slice`,
+/// `subarray`) to `backing_data + byteOffset` — the same storage JS reads and
+/// writes go through — so a native callee that writes `len` bytes touches the
+/// bytes the script observes, not the view's stale local copy (#6515).
 #[no_mangle]
 pub extern "C" fn js_native_abi_check_buffer_data_ptr(value: f64) -> *const u8 {
-    buffer_data(strict_buffer_from_value(value))
+    unsafe { resolve_span_data_ptr(strict_buffer_from_value(value)) }
 }
 
 /// Validate and lower the byte-length half of a manifest `buffer+len` span.
@@ -475,6 +480,79 @@ mod tests {
         assert!(catch_runtime_throw(|| {
             js_native_abi_check_buffer_byte_len(42.0);
         }));
+    }
+
+    // #6515: a `Uint8Array` view over an `ArrayBuffer` is a registered view
+    // whose own storage is a copy; the backing ArrayBuffer is what JS reads
+    // and writes go through. The `buffer+len` data pointer must resolve to the
+    // backing window, otherwise a native write lands in the view's stale copy
+    // and the script never observes it (silent corruption).
+    #[test]
+    fn buffer_data_ptr_resolves_view_over_arraybuffer_to_backing() {
+        let ab = crate::buffer::js_array_buffer_new(64);
+        let view = crate::buffer::js_uint8array_new(boxed_ptr(ab));
+        assert_ne!(view as usize, ab as usize, "view must be a distinct header");
+
+        // Resolves to the backing's storage — NOT the view's own local copy.
+        let resolved = js_native_abi_check_buffer_data_ptr(boxed_ptr(view));
+        assert_eq!(resolved, crate::buffer::buffer_data(ab));
+        assert_ne!(resolved, crate::buffer::buffer_data(view));
+        assert_eq!(js_native_abi_check_buffer_byte_len(boxed_ptr(view)), 64);
+
+        // End-to-end: a native write through the resolved pointer is observed
+        // by a JS-value index read of the view. Before the fix this read 0 —
+        // the byte landed in the view's copy while the read came from `ab`.
+        unsafe {
+            *(resolved as *mut u8) = 0xAB;
+        }
+        assert_eq!(
+            crate::buffer::js_buffer_index_get_value(view, 0),
+            0xAB as f64
+        );
+
+        // Offset views (`new Uint8Array(ab, 16, 8)`) resolve to
+        // `backing_data + byteOffset`, and the write is visible at the
+        // absolute backing offset too.
+        let with_offset = crate::buffer::js_uint8array_view(boxed_ptr(ab), 16.0, 8.0);
+        let resolved_off = js_native_abi_check_buffer_data_ptr(boxed_ptr(with_offset));
+        assert_eq!(resolved_off, unsafe {
+            crate::buffer::buffer_data(ab).add(16)
+        });
+        assert_eq!(
+            js_native_abi_check_buffer_byte_len(boxed_ptr(with_offset)),
+            8
+        );
+        unsafe {
+            *(resolved_off as *mut u8) = 0xCD;
+        }
+        assert_eq!(
+            crate::buffer::js_buffer_index_get_value(with_offset, 0),
+            0xCD as f64
+        );
+        assert_eq!(
+            crate::buffer::js_buffer_index_get_value(ab, 16),
+            0xCD as f64
+        );
+
+        // A standalone `new Uint8Array(64)` is not a view: it keeps resolving
+        // to its own storage (the working case in the report).
+        let standalone = crate::buffer::js_uint8array_alloc(64);
+        assert_eq!(
+            js_native_abi_check_buffer_data_ptr(boxed_ptr(standalone)),
+            crate::buffer::buffer_data(standalone)
+        );
+
+        // Hardening: if the backing shrinks after the view is registered so the
+        // recorded window no longer fits, resolution falls back to the view's
+        // own (correctly-sized) storage rather than hand back a backing pointer
+        // that a `len`-byte native write would overrun.
+        unsafe {
+            (*ab).length = 8;
+        }
+        assert_eq!(
+            js_native_abi_check_buffer_data_ptr(boxed_ptr(view)),
+            crate::buffer::buffer_data(view)
+        );
     }
 
     #[test]

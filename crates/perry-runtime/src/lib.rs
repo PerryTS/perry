@@ -45,6 +45,8 @@ pub mod bigint;
 pub mod r#box;
 pub mod buffer;
 pub mod builtins;
+pub mod bun_compat;
+pub mod bun_ffi;
 pub mod child_process;
 pub mod closure;
 pub mod cluster;
@@ -82,6 +84,11 @@ pub mod native_arena;
 pub mod native_handle;
 pub mod navigator;
 pub mod net_validate;
+// #6468: the `node:http2` constant tables are only reachable through the
+// `http2` native-module namespace, so a program that never imports `node:http2`
+// links none of them. The auto-optimizer enables `mod-http2-constants` on an
+// `http2` import; every callsite has a benign `None`/no-op fallback when off.
+#[cfg(feature = "mod-http2-constants")]
 pub mod node_http2_constants;
 pub mod node_inspector;
 pub mod node_repl;
@@ -94,6 +101,12 @@ pub mod yoga;
 pub mod node_v8;
 // #3127/#3128/#3130/#3283: public `node:vm` import/require and narrowed execution.
 pub mod node_vm;
+// #6559: scoped tree-walking interpreter behind `new Function(p1, …, body)`
+// with a runtime-constructed body (ajv / fast-json-stringify / find-my-way
+// codegen). Parses via perry-parser (SWC) and bridges into the real runtime
+// value model in both directions.
+#[cfg(feature = "dyn-eval")]
+pub mod dyn_eval;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
 pub use node_submodules::{
@@ -106,6 +119,7 @@ pub mod perf_hooks;
 pub mod pointer_event;
 pub mod process;
 pub mod promise;
+pub mod pty;
 pub mod punycode;
 pub mod readline_helpers;
 pub mod regex;
@@ -406,6 +420,10 @@ mod stdlib_pump {
         // so it runs even when perry-stdlib isn't linked. Zero-cost (one relaxed
         // atomic load) when there are no live children.
         crate::child_process::reactor::cp_reactor_pump();
+        // #6563: drive the node-pty reactor — deliver pending onData/onExit
+        // for live ptys. Zero-cost (one relaxed load) when none are live.
+        #[cfg(unix)]
+        crate::pty::reactor::pty_reactor_pump();
         // #4911: deliver queued UDP datagrams as `'message'` events. Lives in
         // perry-runtime so node:dgram works without perry-stdlib linked.
         // Zero-cost (one relaxed load) when no sockets are bound.
@@ -445,6 +463,12 @@ mod stdlib_pump {
         // #1934: a live spawn-reactor child keeps the event loop alive even when
         // perry-stdlib isn't linked (or reports no handles).
         if crate::child_process::reactor::cp_reactor_has_live() {
+            return 1;
+        }
+        // #6563: a live pty keeps the event loop alive (its onData/onExit
+        // handlers are still pending), like a live spawn-reactor child.
+        #[cfg(unix)]
+        if crate::pty::reactor::pty_reactor_has_live() {
             return 1;
         }
         // #4911: a bound + `ref`'d node:dgram socket keeps the loop alive.

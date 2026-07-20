@@ -1,3 +1,4 @@
+use crate::ffi::js_get_string_pointer_unified;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -7,7 +8,6 @@ use crate::widgets;
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_get_string_pointer_unified(value: f64) -> *const u8;
 }
 
 struct StateEntry {
@@ -111,7 +111,7 @@ fn is_nanboxed_string(value: f64) -> bool {
 /// pointer (the SSO payload bytes look like a bogus address to
 /// `js_nanbox_get_pointer`).
 fn extract_nanboxed_string(value: f64) -> String {
-    let ptr = unsafe { js_get_string_pointer_unified(value) };
+    let ptr = unsafe { js_get_string_pointer_unified(value) as *const u8 };
     str_from_header(ptr).to_string()
 }
 
