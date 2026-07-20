@@ -536,33 +536,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // #5230: a non-resolvable (runtime-computed) specifier was
             // *deferred* (the default, non-strict policy — analog of #5206's
-            // eval deferral). Evaluate the arg for its side effects, then
-            // reject the promise with a descriptive `Error` so
-            // `await import(spec)` throws only if this site is actually
-            // reached, instead of failing the whole build.
+            // eval deferral). Evaluate the arg, then hand the runtime value to
+            // the deferred-fallback helper (#6660): a specifier that names a
+            // node BUILTIN at runtime (`imp("node:os")` through a helper the
+            // resolver couldn't fold) resolves to the builtin namespace like
+            // Node; anything else rejects with the descriptive deferral
+            // `Error` so `await import(spec)` throws only if this site is
+            // actually reached, instead of failing the whole build.
             if let Some(msg) = deferred_error {
-                let _ = lower_expr(ctx, arg)?;
-                // Build the `Error(msg)` value the same way `new Error(<str>)`
-                // does (see `Expr::ErrorNew`): intern the message as a string
-                // literal handle, then `js_error_new_from_value`.
+                let spec_val = lower_expr(ctx, arg)?;
                 let msg_val = lower_expr(ctx, &Expr::String(msg.clone()))?;
-                let blk = ctx.block();
-                let err_ptr = blk.call(I64, "js_error_new_from_value", &[(DOUBLE, &msg_val)]);
-                let err_box = nanbox_pointer_inline(blk, &err_ptr);
-                let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &err_box)]);
-                return Ok(nanbox_pointer_inline(blk, &p));
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_module_dynamic_import_deferred",
+                    &[(DOUBLE, &spec_val), (DOUBLE, &msg_val)],
+                ));
             }
 
             // Defensive: an empty `paths` list means the resolver pass
             // failed to populate this node, which `collect_modules`
-            // should have raised as a compile error. Fall through to a
-            // rejected promise rather than crashing the IR.
+            // should have raised as a compile error. Fall through to the
+            // runtime fallback (#6660: builtin-or-`ERR_MODULE_NOT_FOUND`
+            // rejection — historically this arm rejected with literal
+            // `undefined`, which surfaced as a reasonless
+            // `Uncaught (in promise) undefined`) rather than crashing the IR.
             if paths.is_empty() {
-                let _ = lower_expr(ctx, arg)?;
-                let blk = ctx.block();
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
-                return Ok(nanbox_pointer_inline(blk, &p));
+                let spec_val = lower_expr(ctx, arg)?;
+                let hooked = ctx.block().call(
+                    DOUBLE,
+                    "js_module_dynamic_import_apply_hooks",
+                    &[(DOUBLE, &spec_val)],
+                );
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_module_dynamic_import_fallback",
+                    &[(DOUBLE, &hooked)],
+                ));
             }
 
             // Single-target fast path. Skip the runtime string compare
@@ -642,11 +651,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix))
                     }
                     None => {
-                        // Driver didn't resolve this path to a target
-                        // module — surface a rejected promise.
-                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                        let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
-                        return Ok(nanbox_pointer_inline(blk, &p));
+                        // Driver didn't resolve this path to a target module —
+                        // route through the runtime fallback (#6660: builtin
+                        // specifiers resolve like Node, everything else rejects
+                        // with `ERR_MODULE_NOT_FOUND` instead of the old
+                        // literal-`undefined` rejection).
+                        return Ok(blk.call(
+                            DOUBLE,
+                            "js_module_dynamic_import_fallback",
+                            &[(DOUBLE, &path_val)],
+                        ));
                     }
                 };
                 let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
@@ -772,14 +786,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.current_block = next_label;
             }
 
-            // No-match fallthrough: rejected promise. Reuses the same
-            // pattern as the empty-paths defensive arm.
+            // No-match fallthrough: runtime fallback (#6660) — a builtin
+            // specifier resolves like Node, everything else rejects with
+            // `ERR_MODULE_NOT_FOUND` (this arm used to reject with literal
+            // `undefined`).
             let join_label = ctx.block_label(join_block_idx);
             let blk = ctx.block();
-            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
-            let boxed = nanbox_pointer_inline(blk, &p);
-            blk.store(DOUBLE, &boxed, &result_slot);
+            let fallback = blk.call(
+                DOUBLE,
+                "js_module_dynamic_import_fallback",
+                &[(DOUBLE, &path_val)],
+            );
+            blk.store(DOUBLE, &fallback, &result_slot);
             blk.br(&join_label);
 
             // Join: load result and return.

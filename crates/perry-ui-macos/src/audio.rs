@@ -1,3 +1,5 @@
+use crate::ffi::js_array_push_f64;
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -144,9 +146,7 @@ thread_local! {
 // =============================================================================
 
 extern "C" {
-    fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     fn js_array_create() -> i64;
-    fn js_array_push_f64(array_ptr: i64, value: f64);
 }
 
 /// ObjC type encoding for AVAudioPCMBuffer block:
@@ -291,7 +291,7 @@ pub fn get_waveform(count: f64) -> f64 {
             // Read from ring buffer, starting from oldest
             let idx = (write_idx + WAVEFORM_SIZE - n + i) % WAVEFORM_SIZE;
             let sample = WAVEFORM_BUFFER[idx];
-            js_array_push_f64(array, sample);
+            js_array_push_f64(array as *mut std::ffi::c_void, sample);
         }
         // Return as f64 (NaN-boxed pointer)
         f64::from_bits(array as u64)
@@ -305,7 +305,7 @@ pub fn get_waveform(count: f64) -> f64 {
 /// pointer bits through as a double and callers read `NaN`).
 pub fn get_device_model() -> i64 {
     let model = get_sysctl_model();
-    unsafe { js_string_from_bytes(model.as_ptr(), model.len() as i32) }
+    unsafe { js_string_from_bytes(model.as_ptr(), model.len() as u32) as i64 }
 }
 
 /// Set the output filename a subsequent `start_recording()` will write to.

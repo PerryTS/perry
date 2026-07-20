@@ -25,6 +25,13 @@ lazy_static::lazy_static! {
     static ref TEE_BRANCH_SOURCE: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
     /// Tee sources with a pull job already queued (one job per source at a time).
     static ref TEE_PULLING: Mutex<HashSet<usize>> = Mutex::new(HashSet::new());
+    /// Tee sources whose pull pipeline has delivered at least once. The
+    /// COLD-START demand pull pays Node's full two-hop pipeline latency
+    /// (`sourceReader.read()` resolution + `.then(fanout)` reaction); once
+    /// the pipeline is warm, mid-stream re-parks resolve on the calibrated
+    /// one-hop cadence (Node's pipelined stages overlap, so only the first
+    /// delivery exposes the latency).
+    static ref TEE_STARTED: Mutex<HashSet<usize>> = Mutex::new(HashSet::new());
 }
 
 /// Sentinel `reader_handle` stamped on a tee'd source so it can't be read
@@ -155,6 +162,7 @@ fn tee_unlink(source: usize, a: usize, b: usize) {
         bs.remove(&a);
         bs.remove(&b);
     }
+    TEE_STARTED.lock().unwrap().remove(&source);
     // #6602: the unlinked source is terminal (close flow: Closed and drained
     // by pull discovery; error flow: stamped Errored above) — retire its id.
     // Its `TEE_LOCK_SENTINEL` reader_handle matches no READERS entry.
@@ -191,6 +199,12 @@ pub(super) fn evict_ids(batch: &[usize]) {
     }
     {
         let mut g = TEE_PULLING.lock().unwrap();
+        for id in batch {
+            g.remove(id);
+        }
+    }
+    {
+        let mut g = TEE_STARTED.lock().unwrap();
         for id in batch {
             g.remove(id);
         }
@@ -262,6 +276,44 @@ pub(super) unsafe fn tee_schedule_pull(source: usize) {
     perry_runtime::builtins::js_queue_microtask(job as i64);
 }
 
+/// Demand-initiated pull entry — a branch read parked against an empty branch
+/// queue (`maybe_pull` routing). On a COLD pipeline Node pays TWO microtask
+/// hops before that read resolves: the `sourceReader.read()` promise
+/// resolution plus the `.then(fanout)` reaction (streamsuite first-delivery
+/// cadence: node's first chunk lands after t2, Perry's landed after t1 — the
+/// one-hop-short residual behind the Next.js RSC Flight row-reorder). Once
+/// the pipeline has delivered, Node's stages overlap and a mid-stream re-park
+/// resolves on the one-hop cadence — so only the cold-start entry pays the
+/// extra hop. CHAINED cycles and producer-side arrivals keep their existing
+/// calibrated cadence throughout.
+pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
+    if TEE_STARTED.lock().unwrap().contains(&source) {
+        tee_schedule_pull(source);
+        return;
+    }
+    if !TEE_PULLING.lock().unwrap().insert(source) {
+        return;
+    }
+    let f = tee_demand_hop as *const u8;
+    perry_runtime::closure::js_register_closure_arity(f, 0);
+    let job = perry_runtime::closure::js_closure_alloc(f, 1);
+    perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
+    perry_runtime::builtins::js_queue_microtask(job as i64);
+}
+
+/// The extra demand-entry hop: hand off to the real pull job one microtask
+/// later. `TEE_PULLING` stays held across the hop (single-threaded microtask
+/// dispatch — the remove+insert below has no interleaving window), so
+/// coalescing against enqueue/close reroutes keeps working.
+extern "C" fn tee_demand_hop(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let source = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        TEE_PULLING.lock().unwrap().remove(&source);
+        tee_schedule_pull(source);
+    }
+    f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
+}
+
 /// The extra tick a byte-stream tee's CHAINED pull pays before the next
 /// cycle (see the chain decision in `tee_pull_microtask`).
 extern "C" fn tee_byte_chain_hop(closure: *const ClosureHeader) -> f64 {
@@ -312,6 +364,9 @@ extern "C" fn tee_pull_microtask(closure: *const ClosureHeader) -> f64 {
         };
         match chunk {
             Some(bits) => {
+                // Pipeline is warm from the first delivery on — later
+                // demand entries skip the cold-start hop.
+                TEE_STARTED.lock().unwrap().insert(source);
                 // Spec order: branch-a sees the chunk before branch-b,
                 // regardless of which branch's read triggered the pull.
                 // Byte tees clone the chunk for branch-b (CloneAsUint8Array)
@@ -336,13 +391,21 @@ extern "C" fn tee_pull_microtask(closure: *const ClosureHeader) -> f64 {
                     tee_branch_demand(a, b) || source_backlog
                 };
                 if more {
-                    if is_byte {
+                    let close_only = {
+                        let g = READABLE_STREAMS.lock().unwrap();
+                        g.get(&source)
+                            .map(|s| s.chunks.is_empty() && s.state == ReadableState::Closed)
+                            .unwrap_or(true)
+                    };
+                    if is_byte && !close_only {
                         // Byte-stream tee (bytetee.js): Node's CHAINED pulls
                         // pay one extra tick per cycle (the byte path's
-                        // clone/view hop); the first demand pull does not.
-                        // Each extra hop cedes a task-generation to racing
-                        // promise cascades (the Next.js module-require chain
-                        // must win that race).
+                        // clone/view hop); the first demand pull does not,
+                        // and neither does the CLOSE-discovery cycle after
+                        // the last chunk (node's done lands one tick after
+                        // the final delivery pair). Each extra hop cedes a
+                        // task-generation to racing promise cascades (the
+                        // Next.js module-require chain must win that race).
                         let f = tee_byte_chain_hop as *const u8;
                         perry_runtime::closure::js_register_closure_arity(f, 0);
                         let job = perry_runtime::closure::js_closure_alloc(f, 1);

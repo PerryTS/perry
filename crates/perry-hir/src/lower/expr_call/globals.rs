@@ -19,6 +19,8 @@ pub(super) fn try_global_builtins(
     // Check for global built-in function calls (parseInt, parseFloat, Number, String, isNaN, isFinite)
     if let ast::Expr::Ident(ident) = expr {
         let func_name = ident.sym.as_ref();
+        // #6668: used by the crypto named-import spread guard below.
+        let has_spread = call.args.iter().any(|a| a.spread.is_some());
         if ctx.lookup_local(func_name).is_some()
             || ctx.lookup_func(func_name).is_some()
             || ctx.lookup_imported_func(func_name).is_some()
@@ -515,6 +517,19 @@ pub(super) fn try_global_builtins(
             // aliased local (`p`) matched no arm and fell through to a generic
             // path that evaluated to `undefined` — e.g. `p(home, ".x").normalize()`.
             let func_name = method.unwrap_or(func_name);
+            // #6668: a spread call of a crypto method imported by name
+            // (`import { hkdf } from "crypto"; hkdf(...args, cb)`) must not be
+            // collapsed by the per-module fast-path arms below nor the generic
+            // `Expr::NativeMethodCall` further down — a spread operand would be
+            // passed as the array itself, so the codegen fast-path sees too few
+            // args and silently no-ops (the callback never fires). Decline so the
+            // generic tail builds an `Expr::CallSpread`, routed through the same
+            // bound-native dispatch the value-read form (`const f = hkdf; f(...)`)
+            // already uses. Scoped to crypto — the reported module, whose runtime
+            // dispatcher resolves every callable export by name.
+            if has_spread && module_name == "crypto" {
+                return Ok(Err(args));
+            }
             if module_name == "child_process" {
                 match func_name {
                     "execSync" if !args.is_empty() => {
