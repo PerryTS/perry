@@ -407,6 +407,8 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);
+    // bun:ffi (#6562): the cached FFIType enum object.
+    gc_register_mutable_root_scanner(crate::bun_ffi::scan_bun_ffi_roots_mut);
     gc_register_budgeted_mutable_root_scanner_with_source(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,
@@ -438,6 +440,10 @@ pub fn gc_init() {
     // fire-and-forget spawn). Scan + rewrite them so a GC between ticks doesn't
     // reclaim the object whose `data`/`exit` handlers are still pending.
     gc_register_mutable_root_scanner(crate::child_process::reactor::cp_reactor_scan_roots_mut);
+    // #6563: live node-pty IPty objects are likewise reachable only from the
+    // pty reactor's registry while their onData/onExit handlers are pending.
+    #[cfg(unix)]
+    gc_register_mutable_root_scanner(crate::pty::reactor::pty_reactor_scan_roots_mut);
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC
     // between ticks doesn't reclaim the object whose `message` handlers fire.
@@ -490,6 +496,12 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_class_capture_value_roots_mut);
     gc_register_mutable_root_scanner(crate::node_vm::scan_vm_roots_mut);
+    // #6559: the dyn-eval interpreter's rooted value stack (environments,
+    // temporaries, arguments of in-flight interpreted frames). Mark +
+    // REWRITE — interpreter state must survive moving collections triggered
+    // from inside interpreted code.
+    #[cfg(feature = "dyn-eval")]
+    gc_register_mutable_root_scanner(crate::dyn_eval::scan_dyn_eval_roots_mut);
     gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);

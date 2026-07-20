@@ -1021,6 +1021,22 @@ pub(crate) fn promise_has_own_property(promise_addr: usize, name: &str) -> bool 
     )
 }
 
+// True iff `c` is the intrinsic `Promise` or a `class … extends Promise`
+// constructor — the constructors that inherit the standard
+// `Promise[Symbol.species]` getter (which returns `this`). Used by
+// `promise_species_constructor` to decide whether an absent `@@species` read
+// should emulate that getter (return `C`) or fall back to the `%Promise%`
+// default.
+fn is_promise_brand_constructor(c: f64) -> bool {
+    if super::spec_combinators::is_default_promise_constructor(c) {
+        return true;
+    }
+    match crate::object::class_ref_id(c) {
+        Some(class_id) => crate::object::promise_parent_in_chain(class_id),
+        None => false,
+    }
+}
+
 // SpeciesConstructor(promiseReceiver, %Promise%) per ECMA-262 §7.3.25.
 // Reads `this.constructor` once, then `C[@@species]`, returns the resolved constructor.
 // Throws TypeError for null/non-object constructor, non-constructor species, or getter throws.
@@ -1046,7 +1062,12 @@ fn promise_species_constructor(receiver: f64) -> f64 {
         throw_type_error_thunk("Promise.prototype.then: constructor property is not an object");
     }
 
-    // Step 4: S = Get(C, @@species) — getter throws → propagate.
+    // Step 4: S = Get(C, @@species) — getter throws → propagate. A user
+    // `@@species` accessor runs arbitrary code that can allocate and evacuate
+    // the (movable, heap-pointer) constructor, so root `C` across the read and
+    // reload it from the rewritten handle before any later reuse below.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let c_handle = scope.root_nanbox_f64(c);
     let sp = crate::symbol::well_known_symbol("species");
     let s = if sp.is_null() {
         f64::from_bits(TAG_UNDEFINED)
@@ -1054,9 +1075,32 @@ fn promise_species_constructor(receiver: f64) -> f64 {
         let sym_val = f64::from_bits(crate::value::JSValue::pointer(sp as *const u8).bits());
         unsafe { crate::symbol::js_object_get_symbol_property(c, sym_val) }
     };
+    let c = c_handle.get_nanbox_f64();
 
-    // Step 5: undefined or null → use intrinsic %Promise%.
-    if s.to_bits() == TAG_UNDEFINED || s.to_bits() == TAG_NULL {
+    // Step 5: `null` species → spec default (%Promise%).
+    if s.to_bits() == TAG_NULL {
+        return get_intrinsic_promise();
+    }
+
+    // Step 5 (cont.): `undefined` species. Perry does not install the standard
+    // `Promise[Symbol.species]` accessor — an inherited getter that returns
+    // `this` — so `Get(C, @@species)` genuinely reads `undefined` for the
+    // intrinsic `Promise` and every subclass of it (a user override, if any,
+    // is stored and surfaces above). Emulate that getter: an `undefined`
+    // species resolves to `C` itself, the value real engines observe. For the
+    // intrinsic `Promise`, `C` IS `%Promise%`, so plain promises keep the
+    // native fast path unchanged; for a `class X extends Promise`, `C` is the
+    // subclass, so `X.prototype.{then,catch,finally}` chain a subclass promise
+    // through `NewPromiseCapability(X)` (ECMA-262 27.2.5.4.1) instead of
+    // silently collapsing to the intrinsic fast path. The standard getter is
+    // inherited only by `Promise` and its subclasses, so restrict the emulation
+    // to Promise-branded constructors — a non-Promise `constructor` reassigned
+    // onto the receiver carries no such getter and keeps the `%Promise%`
+    // default.
+    if s.to_bits() == TAG_UNDEFINED {
+        if is_promise_brand_constructor(c) {
+            return c;
+        }
         return get_intrinsic_promise();
     }
 

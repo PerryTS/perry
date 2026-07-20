@@ -11,7 +11,7 @@ use perry_hir::{Expr, Stmt};
 fn expr_uses_global_crypto_namespace(expr: &Expr) -> bool {
     if matches!(
         expr,
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet { object, property, .. }
             if property == "crypto" && matches!(object.as_ref(), Expr::GlobalGet(0))
     ) {
         return true;

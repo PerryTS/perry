@@ -738,7 +738,9 @@ fn local_buffer_length_expr(expr: &Expr) -> Option<u32> {
             Expr::LocalGet(id) => Some(*id),
             _ => None,
         },
-        Expr::PropertyGet { object, property } if property == "length" => match object.as_ref() {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" => match object.as_ref() {
             Expr::LocalGet(id) => Some(*id),
             _ => None,
         },

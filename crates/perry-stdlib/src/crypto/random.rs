@@ -346,6 +346,32 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         "generateKeySync" => {
             pointer_value(js_crypto_generate_key_sync(str_ptr(0), arg(1)) as *mut u8)
         }
+        // #6675: the key-material constructors reached as a VALUE — a named
+        // import (`import { createPrivateKey } from "crypto"`), a computed
+        // property access, or a bundled `require('crypto').createPrivateKey`
+        // (turbopack/webpack) — route here instead of through the codegen
+        // fast-path. Without these arms they fell to `_ => undefined`, so
+        // `createPrivateKey(secret)` returned `undefined` rather than THROWING
+        // on non-key material. jsonwebtoken's sign()/verify() depend on the
+        // throw: `try { createPrivateKey(secret) } catch { createSecretKey(...) }`.
+        // The missing throw left `secretOrPrivateKey` undefined and crashed at
+        // `secretOrPrivateKey.type` ("Cannot read properties of undefined").
+        // The runtime helpers throw on invalid material, matching Node.
+        "createSecretKey" => {
+            let encoding = if args_len >= 2 && JSValue::from_bits(arg(1).to_bits()).is_any_string()
+            {
+                str_ptr(1)
+            } else {
+                0
+            };
+            pointer_value(js_crypto_create_secret_key(bytes_ptr(0), encoding) as *mut u8)
+        }
+        "createPrivateKey" => {
+            f64::from_bits(JSValue::string_ptr(js_crypto_create_private_key_value(arg(0))).bits())
+        }
+        "createPublicKey" => {
+            f64::from_bits(JSValue::string_ptr(js_crypto_create_public_key_value(arg(0))).bits())
+        }
         "generatePrime" if args_len >= 3 => js_crypto_generate_prime_async(arg(0), arg(1), arg(2)),
         "generatePrime" | "generatePrimeSync" => js_crypto_generate_prime_sync(arg(0), arg(1)),
         "checkPrime" if args_len >= 3 => js_crypto_check_prime_async(arg(0), arg(1), arg(2)),

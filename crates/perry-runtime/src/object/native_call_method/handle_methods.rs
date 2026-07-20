@@ -219,6 +219,45 @@ pub(super) unsafe fn dispatch_handle(
                         return Some(result);
                     }
                 }
+                // #6658: an explicit `thisArg` (2nd argument) must bind the
+                // callback's `this`. The dense helpers the arms below dispatch
+                // to deliberately bind `undefined` (spec: absent thisArg) and
+                // take no thisArg parameter, so routing a 2-arg call through
+                // them silently DROPS the thisArg — an extracted builtin
+                // method used as the callback (`arr.forEach(set.add, set)`,
+                // @babel/types' alias-expansion loop) then brand-checks
+                // `this === undefined` and throws "Method Set.prototype.add
+                // called on incompatible receiver". Mirror the static lowering
+                // rule (lower_array_method.rs): with a thisArg present, route
+                // through the spec-generic array-like engine, which binds it
+                // for each callback call (real-array receivers keep a fast
+                // element path there). `flatMap` has no engine entry (the
+                // static path shares that thisArg gap) and falls through
+                // unchanged.
+                if args_len >= 2
+                    && !args_ptr.is_null()
+                    && matches!(
+                        method_name,
+                        "forEach"
+                            | "map"
+                            | "filter"
+                            | "some"
+                            | "every"
+                            | "find"
+                            | "findIndex"
+                            | "findLast"
+                            | "findLastIndex"
+                    )
+                {
+                    if let Some(result) = crate::array::dispatch_arraylike_read_method(
+                        object,
+                        method_name,
+                        args_ptr,
+                        args_len,
+                    ) {
+                        return Some(result);
+                    }
+                }
                 match method_name {
                     "toString" => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;

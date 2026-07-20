@@ -307,6 +307,73 @@ pub unsafe extern "C" fn js_cron_schedule(expr_ptr: *const StringHeader, callbac
     })
 }
 
+/// `new CronJob(cronTime, onTick, onComplete?, start?)` — the npm `cron`
+/// package's constructor. Unlike node-cron's `schedule()` factory, a
+/// CronJob does **not** start automatically: it only begins firing when
+/// the 4th constructor argument is truthy or `job.start()` is called.
+///
+/// `callback` is the raw closure pointer (i64), same convention as
+/// `js_cron_schedule`. `start` is the NaN-boxed 4th argument
+/// (TAG_UNDEFINED when absent → not started).
+///
+/// # Safety
+/// `expr_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_cron_job_new(
+    expr_ptr: *const StringHeader,
+    callback: i64,
+    start: f64,
+) -> Handle {
+    ensure_gc_scanner_registered();
+
+    let expr = match string_from_header(expr_ptr) {
+        Some(e) => e,
+        None => return -1,
+    };
+    // The `cron` package accepts 5-field (no seconds) and 6-field forms.
+    let expr = if expr.split_whitespace().count() == 5 {
+        format!("0 {}", expr)
+    } else {
+        expr
+    };
+    let schedule = match Schedule::from_str(&expr) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let start_now = perry_runtime::value::js_is_truthy(start) != 0;
+
+    let timer_id = {
+        let mut next = CRON_NEXT_TIMER_ID.lock().unwrap();
+        let id = *next;
+        *next += 1;
+        id
+    };
+    let running = Arc::new(AtomicBool::new(start_now));
+
+    if start_now {
+        if let Some(next_deadline) = next_cron_instant(&schedule) {
+            if let Ok(mut q) = CRON_TIMERS.lock() {
+                q.push(CronTimer {
+                    id: timer_id,
+                    schedule: schedule.clone(),
+                    callback,
+                    next_deadline,
+                    running: running.clone(),
+                    cleared: false,
+                });
+            }
+        }
+    }
+
+    register_handle(CronJobHandle {
+        schedule,
+        running,
+        callback,
+        timer_id,
+    })
+}
+
 /// job.start() -> void
 ///
 /// Start (or re-start) the scheduled job. After `stop()` removed it, `start()`

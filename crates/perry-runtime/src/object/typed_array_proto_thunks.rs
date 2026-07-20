@@ -889,3 +889,117 @@ pub(super) extern "C" fn ta_generic_thunk(
         brand_then_dispatch(name, &all)
     }
 }
+
+// ---------------------------------------------------------------------------
+// #6674: `Uint8Array.prototype` base64/hex conversion methods.
+//
+// `toBase64`/`toHex`/`setFromBase64`/`setFromHex` are Uint8Array-ONLY in the
+// spec (they do not exist on `Int8Array.prototype` etc.), so they are installed
+// as own methods on the Uint8Array per-kind prototype via
+// `install_uint8array_base64_hex_proto_methods`, NOT on the shared
+// `%TypedArray%.prototype` intrinsic (`TYPED_ARRAY_PROTO_METHODS`).
+//
+// Pre-fix these methods dispatched on CALL (`b.toBase64(…)` reaches
+// `dispatch_buffer_method` because Uint8Array instances are Buffer-backed) but
+// were not materialized as readable property VALUES on the prototype, so
+// `typeof Uint8Array.prototype.toBase64` read `"undefined"` and feature
+// detection (`Uint8Array.prototype.toBase64 ? native : fallback`, as jose /
+// Auth.js do) took the fallback path. These thunks make the value read report a
+// function and route a reflective `.call`/`.apply` through the same
+// `dispatch_buffer_method` base64/hex arms the instance fast path already uses.
+// ---------------------------------------------------------------------------
+
+/// Throw `TypeError: Method Uint8Array.prototype.<m> called on incompatible
+/// receiver` (Test262 brand checks assert only the error *type*; the wording is
+/// informational). Never returns.
+fn throw_not_uint8_array(method: &str) -> ! {
+    let msg = format!("Method Uint8Array.prototype.{method} called on incompatible receiver");
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(f64::from_bits(
+        crate::value::JSValue::pointer(err as *const u8).bits(),
+    ))
+}
+
+/// Resolve the `IMPLICIT_THIS` receiver to a Uint8Array-backed buffer address.
+/// The base64/hex methods only exist on Uint8Array, so a multi-byte typed-array
+/// receiver (`Uint8Array.prototype.toBase64.call(new Int8Array())`) is rejected
+/// with a `TypeError` just like Node's `ValidateUint8Array`.
+#[inline]
+unsafe fn uint8_receiver_or_throw(method: &str) -> usize {
+    match ta_receiver_or_throw(method) {
+        TypedArrayProtoReceiver::Uint8Buffer(addr) => addr,
+        TypedArrayProtoReceiver::TypedArray(_) => throw_not_uint8_array(method),
+    }
+}
+
+pub(super) extern "C" fn u8_to_base64_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    opts: f64,
+    _b: f64,
+    _d: f64,
+) -> f64 {
+    unsafe {
+        let addr = uint8_receiver_or_throw("toBase64");
+        let args = [opts];
+        super::dispatch_buffer_method(addr, "toBase64", args.as_ptr(), args.len())
+    }
+}
+
+pub(super) extern "C" fn u8_to_hex_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _a: f64,
+    _b: f64,
+    _d: f64,
+) -> f64 {
+    unsafe {
+        let addr = uint8_receiver_or_throw("toHex");
+        super::dispatch_buffer_method(addr, "toHex", std::ptr::null(), 0)
+    }
+}
+
+pub(super) extern "C" fn u8_set_from_base64_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    str_arg: f64,
+    opts: f64,
+    _d: f64,
+) -> f64 {
+    unsafe {
+        let addr = uint8_receiver_or_throw("setFromBase64");
+        let args = [str_arg, opts];
+        super::dispatch_buffer_method(addr, "setFromBase64", args.as_ptr(), args.len())
+    }
+}
+
+pub(super) extern "C" fn u8_set_from_hex_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    str_arg: f64,
+    _b: f64,
+    _d: f64,
+) -> f64 {
+    unsafe {
+        let addr = uint8_receiver_or_throw("setFromHex");
+        let args = [str_arg];
+        super::dispatch_buffer_method(addr, "setFromHex", args.as_ptr(), args.len())
+    }
+}
+
+/// Install the Uint8Array-only base64/hex methods as readable own methods on the
+/// `Uint8Array.prototype` object (#6674). Each `(name, thunk, spec_length)` pair
+/// gets the spec `.length` recorded by `install_proto_method`, then the ABI call
+/// arity is widened to 3 (the uniform native thunk signature) so omitted trailing
+/// arguments are padded with `undefined` instead of reading unset register slots
+/// — the same convention `install_typed_array_proto_methods` uses.
+pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut ObjectHeader) {
+    use super::global_this::install_proto_method as ipm;
+    let methods: &[(&str, *const u8, u32)] = &[
+        ("toBase64", u8_to_base64_thunk as *const u8, 0),
+        ("toHex", u8_to_hex_thunk as *const u8, 0),
+        ("setFromBase64", u8_set_from_base64_thunk as *const u8, 1),
+        ("setFromHex", u8_set_from_hex_thunk as *const u8, 1),
+    ];
+    for &(name, func_ptr, spec_length) in methods {
+        ipm(proto_obj, name, func_ptr, spec_length);
+        crate::closure::js_register_closure_arity(func_ptr, 3);
+    }
+}

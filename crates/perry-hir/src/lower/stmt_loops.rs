@@ -250,6 +250,7 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
 fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     let call = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "return".to_string(),
         }),
@@ -319,6 +320,7 @@ pub(crate) fn lazy_or_index_elem(
 ) -> Expr {
     if use_lazy_iter {
         Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         }
@@ -349,6 +351,7 @@ fn iterator_result_validated(call: Expr) -> Expr {
 pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
     iterator_result_validated(Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "next".to_string(),
         }),
@@ -378,6 +381,7 @@ fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) 
         Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
         Stmt::If {
             condition: Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(result_id)),
                 property: "done".to_string(),
             },
@@ -415,6 +419,7 @@ pub(crate) fn lazy_iter_for_stmt(
         condition: Some(Expr::Unary {
             op: UnaryOp::Not,
             operand: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(result_id)),
                 property: "done".to_string(),
             }),
@@ -436,6 +441,7 @@ pub(crate) fn iterator_close_guarded_stmt(iter_id: LocalId) -> Stmt {
         condition: Expr::Compare {
             op: CompareOp::LooseNe,
             left: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "return".to_string(),
             }),
@@ -487,6 +493,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
             condition: Expr::Compare {
                 op: CompareOp::LooseNe,
                 left: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(iter_id)),
                     property: "return".to_string(),
                 }),
@@ -704,6 +711,7 @@ fn lower_runtime_for_await_iterator(
         .push((format!("__result_{}", result_id), result_id, Type::Any));
     let raw_next_call = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "next".to_string(),
         }),
@@ -741,6 +749,7 @@ fn lower_runtime_for_await_iterator(
         ctx,
         binding_pat,
         Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         },
@@ -902,6 +911,7 @@ pub(crate) fn lower_stmt_for_of(
         } else if is_node_readable_for_await {
             Expr::Call {
                 callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(iter_expr),
                     property: "iterator".to_string(),
                 }),
@@ -942,6 +952,7 @@ pub(crate) fn lower_stmt_for_of(
         // (`{value, done}`) is what's stored, not the Promise.
         let raw_next_call = Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "next".to_string(),
             }),
@@ -974,6 +985,7 @@ pub(crate) fn lower_stmt_for_of(
                 None
             };
         let value_expr = Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         };
@@ -1176,6 +1188,7 @@ pub(crate) fn lower_stmt_for_of(
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(res_id)),
                     property: "value".to_string(),
                 }),
@@ -1668,6 +1681,7 @@ pub(crate) fn lower_stmt_for_of(
                 let item_expr = if use_lazy_iter {
                     // Lazy path: the element is `__result.value`.
                     Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(result_id)),
                         property: "value".to_string(),
                     }
@@ -1862,6 +1876,7 @@ pub(crate) fn lower_stmt_for_of(
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(arr_id)),
                 property: "length".to_string(),
             }),
@@ -1968,6 +1983,7 @@ pub(crate) fn lower_stmt_for_in(
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 property: "length".to_string(),
             }),

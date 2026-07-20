@@ -59,7 +59,10 @@ use constants::{
     f64_const, EnumResolvedValue, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 use func_emit_ctx::FuncEmitCtx;
-use locals::{collect_locals, collect_module_let_ids, resolve_source_module_idx};
+use locals::{
+    collect_exported_names, collect_locals, collect_module_let_ids, resolve_export_to_func,
+    resolve_export_to_let, resolve_source_module_idx,
+};
 use module_emitter::WasmModuleEmitter;
 use runtime_imports::RuntimeImports;
 use stmt::has_return;

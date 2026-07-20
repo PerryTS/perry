@@ -15,6 +15,7 @@
 //! cover the inline-formatting commands; toolbar + block commands +
 //! markdown ship in a follow-up.
 
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -27,7 +28,6 @@ use std::collections::HashMap;
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -84,7 +84,7 @@ define_class!(
                 let plain = get_string_inner(handle);
                 unsafe {
                     let bytes = plain.as_bytes();
-                    let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                    let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                     let arg = js_nanbox_string(header as i64);
                     let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
                     js_closure_call1(closure_ptr, arg);
@@ -176,7 +176,7 @@ pub fn get_string(handle: i64) -> f64 {
     let s = get_string_inner(handle);
     unsafe {
         let bytes = s.as_bytes();
-        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         js_nanbox_string(header as i64)
     }
 }
@@ -253,7 +253,7 @@ pub fn get_html(handle: i64) -> f64 {
         };
         let html = str_obj.to_string();
         let bytes = html.as_bytes();
-        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         js_nanbox_string(header as i64)
     }
 }

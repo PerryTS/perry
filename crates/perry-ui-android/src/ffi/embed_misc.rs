@@ -137,10 +137,17 @@ pub extern "C" fn perry_get_scale_factor() -> f64 {
     query_display_metrics().2
 }
 
+/// perry_get_device_idiom() → "phone" (raw `*mut StringHeader`, NaN-boxed
+/// by the `ReturnKind::Str` dispatch row). Android tablets are not yet
+/// discriminated (needs a JNI smallest-width check); report the phone
+/// form factor, matching the previous numeric code 0.
 #[no_mangle]
 pub extern "C" fn perry_get_device_idiom() -> i64 {
-    0
-} // 0 = phone
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(b"phone".as_ptr(), 5) }
+}
 
 // Audio capture (AudioRecord via JNI)
 #[no_mangle]

@@ -26,15 +26,17 @@ Translation files use the same `{param}` syntax:
 
 Parameters are substituted at runtime after the locale-appropriate template is selected. The substitution handles any value type (numbers, strings, dates) by converting to string.
 
-### Compile-Time Validation
+### Diagnostics & Fallbacks
 
-Perry validates parameters across all locales during compilation:
+Perry reports translation-table problems as build warnings and falls back safely at runtime:
 
-| Condition | Severity |
+| Condition | Behavior |
 |-----------|----------|
-| `{param}` in translation but not provided in code | Error |
-| Param in code but `{param}` not in translation | Error |
-| Parameter set differs between locales for same key | Error |
+| Key missing from a locale file | Build **warning**; that locale renders the default locale's text |
+| Key present in a locale file but never used in code | Build **warning** ("unused i18n key") |
+| Translation cell left empty (`""`, the "needs translation" marker) | Renders the source key's text |
+| `{param}` in the template but not passed at the call site | Renders the literal `{param}` text so the mismatch is visible |
+| Param passed at the call site but not referenced by the template | Value is evaluated (side effects run in source order) and ignored |
 
 ## Plural Rules
 
@@ -72,7 +74,7 @@ Reference the base key without any suffix. Perry detects the plural variants aut
 {{#include ../../examples/i18n/snippets.ts:interp-plural}}
 ```
 
-Perry determines which plural form to use based on the `count` parameter value and the current locale's CLDR rules.
+Perry detects the plural parameter from the first `{param}` placeholder in the key (here `{count}`). At runtime, each call site evaluates the current locale's CLDR rules against the passed value and selects the matching form's translation — a compiled binary run with `LANG=de_DE.UTF-8` picks the German `.one` form for `count: 1` and the German `.other` form for `count: 3`. A call site that doesn't pass the plural parameter renders the base (non-plural) key.
 
 ### Supported Locales
 
@@ -89,13 +91,16 @@ Perry includes hand-rolled CLDR plural rules for 30+ locales:
 | one/few/other | Romanian, Lithuanian |
 | zero/one/other | Latvian |
 
-### Compile-Time Validation
+### Fallback Order
 
-| Condition | Severity |
+When the selected CLDR category has no corresponding form:
+
+| Situation | Behavior |
 |-----------|----------|
-| `.other` form missing for any locale | Error |
-| Required CLDR category missing (e.g., `.few` for Polish) | Error |
-| Extra category locale doesn't use (e.g., `.few` for English) | Warning |
+| Category matches a defined form (e.g. `.one`) | That form's translation, in the active locale |
+| Category has no defined form, `.other` exists | The `.other` form |
+| Category has no defined form, no `.other` | The base key's translation |
+| A locale file is missing a form key | Build **warning**; that locale renders the default locale's form |
 
 ## Explicit API for Non-UI Strings
 
@@ -105,4 +110,4 @@ For strings outside UI components (API responses, notifications, etc.), use `t()
 {{#include ../../examples/i18n/snippets.ts:interp-explicit-t}}
 ```
 
-This uses the same key lookup, validation, and interpolation as UI strings.
+This uses the same key lookup, locale selection, and interpolation as UI strings.
