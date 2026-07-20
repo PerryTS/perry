@@ -33,32 +33,30 @@
 //! generators work — the poll loop sees the Promise settled immediately — so
 //! this is specific to *pending* awaits.
 //!
-//! ## Impact (the reported symptom)
+//! ## Impact
 //!
-//! pi's interactive TUI wires agent → session → UI events through a hand-rolled
-//! `EventStream` async generator (`for await (const event of stream)` on the
-//! consumer side, `stream.push(event)` on the producer side, the generator
-//! `await`ing `new Promise(r => waiting.push(r))`). Under perry the async
-//! generator deadlocks on the first pending `await`, so `agent_start` /
-//! `message_*` / the 401 `error` events never reach the UI subscriber: pressing
-//! Enter runs the whole submit → `session.prompt` → `agent.prompt` chain (the
-//! HTTP request even fires) but no "Working…" and no error ever render. Node,
-//! running the identical bundle, submits and shows the 401.
+//! The push/pull async-iterator shape below (a generator `await`ing
+//! `new Promise(r => waiting.push(r))`, resolved by a later `push()`) is how
+//! pi's interactive TUI wires agent → session → UI events (its hand-rolled
+//! `EventStream`), so this deadlock is on that path. NOTE: fixing this alone
+//! does NOT restore pi's interactivity — an *earlier* keypress→submit
+//! divergence (#6728) means Enter never fires submit under perry, so the
+//! EventStream never runs regardless. This test targets the async-generator
+//! deadlock in isolation, which is a real bug in its own right.
 //!
-//! ## The fix (scoped follow-up)
+//! ## The fix (landed in this PR)
 //!
-//! Make `async function*` bodies suspend on `await` like plain async functions:
-//! split the generator state machine at `await` points (distinct from consumer
-//! `yield` points) and drive them through the existing `AsyncStepChain`
+//! `async function*` bodies now suspend on `await` like plain async functions:
+//! the generator state machine is split at `await` points (distinct from
+//! consumer `yield` points) and driven through the existing `AsyncStepChain`
 //! async-step machinery, so `.next()` returns a pending Promise immediately and
 //! resumes on the microtask queue when the awaited Promise settles. This
-//! touches the async generator lowering (`generator/lower.rs`,
-//! `generator/linearize.rs`) + the `Expr::Yield` discriminator and must be
-//! validated against the full async-generator test262 suite; it is intentionally
-//! not squeezed into this diagnosis change.
+//! touched the async generator lowering (`generator/lower.rs`,
+//! `generator/linearize.rs`) + the `Expr::Yield` discriminator, validated
+//! against the full async-generator test262 suite.
 //!
-//! `#[ignore]`d until that fix lands (the buggy runtime deadlocks; the test uses
-//! a hard timeout so it fails deterministically rather than hanging).
+//! With the fix landed the test is active (no `#[ignore]`); it uses a hard
+//! timeout so a regression fails deterministically rather than hanging.
 
 use std::io::Read;
 use std::path::PathBuf;
