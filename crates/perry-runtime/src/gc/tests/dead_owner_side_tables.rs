@@ -441,6 +441,28 @@ fn test_closure_dead_payload_arm_clears_side_tables() {
     assert!(!crate::closure::closure_is_key_deleted(owner, "length"));
 }
 
+/// The `ObjectOverflowFields` dead-payload arm pruned only OVERFLOW_FIELDS;
+/// its address-keyed sibling KEYS_INDEX (the key→slot sidecar built for
+/// objects past KEYS_INDEX_THRESHOLD own keys) was never removed on death, so
+/// entries accumulated forever under recycled addresses — an unbounded leak.
+/// Assert the arm now clears the KEYS_INDEX entry alongside the overflow one.
+#[test]
+fn test_object_dead_payload_arm_clears_keys_index() {
+    let _global = global_side_table_test_lock();
+    let owner: usize = 0x0BEC_1DE0_0000_2026;
+    crate::object::test_seed_keys_index_entry(owner);
+    assert!(crate::object::test_keys_index_entry_exists(owner));
+
+    gc_type_clear_dead_payload_side_tables(GC_TYPE_OBJECT, owner);
+
+    assert!(
+        !crate::object::test_keys_index_entry_exists(owner),
+        "dead object's KEYS_INDEX entry must be pruned by the \
+         ObjectOverflowFields dead-payload arm (else it leaks forever \
+         keyed on the recycled address)"
+    );
+}
+
 #[test]
 fn test_dead_arguments_object_entry_pruned_on_full_gc() {
     let _guard = GcTestIsolationGuard::new();

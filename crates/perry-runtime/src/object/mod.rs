@@ -1411,6 +1411,19 @@ pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
 }
 
 #[cfg(test)]
+pub(crate) fn test_seed_keys_index_entry(owner: usize) {
+    KEYS_INDEX.with(|m| {
+        m.borrow_mut()
+            .insert(owner, (0, std::collections::HashMap::new()));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_keys_index_entry_exists(owner: usize) -> bool {
+    KEYS_INDEX.with(|m| m.borrow().get(&owner).is_some())
+}
+
+#[cfg(test)]
 pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_this_ptr: i64) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
     crate::gc::runtime_store_root_atomic_nanbox_u64(
@@ -1529,6 +1542,21 @@ pub fn clear_overflow_for_ptr(obj_ptr: usize) {
         if (*c.get()).0 == obj_ptr {
             *c.get() = (0, std::ptr::null_mut());
         }
+    });
+}
+
+/// Remove the `KEYS_INDEX` sidecar entry for a freed object pointer.
+/// Sibling of `clear_overflow_for_ptr`: called from the same GC
+/// dead-owner dispatch when a `GC_TYPE_OBJECT` header is reclaimed.
+/// `KEYS_INDEX` is keyed on the object address, so without this prune
+/// the entry (a whole `HashMap<u64, Vec<u32>>`) would persist forever
+/// keyed by a recycled address — a monotonic leak over a long-running
+/// process, and a stale index a fresh object at the same address could
+/// read. Unlike `clear_overflow_for_ptr` there is no last-accessed
+/// cache to invalidate: `keys_index_lookup` always goes through the map.
+pub fn clear_keys_index_for_ptr(obj_ptr: usize) {
+    KEYS_INDEX.with(|m| {
+        m.borrow_mut().remove(&obj_ptr);
     });
 }
 
