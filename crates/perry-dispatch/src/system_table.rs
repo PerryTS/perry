@@ -9,11 +9,20 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[],
         ret: ReturnKind::F64,
     },
+    // Returns the broad device form factor as a JS string: "phone",
+    // "pad", "mac", "tv", "watch", "vision", or "desktop" — the contract
+    // documented in types/perry/system/index.d.ts and docs/src/system/.
+    // The platform FFIs return a raw `*mut StringHeader` (i64) via
+    // `js_string_from_bytes`, so the return kind MUST be `Str` (NaN-box
+    // with STRING_TAG) — same shape as `getDeviceModel` below. This row
+    // was `F64` while the impls returned numeric codes (0 = phone,
+    // 1 = pad, 4 = watch) that nothing ever mapped to the documented
+    // strings, so `getDeviceIdiom() === "mac"` could never be true.
     MethodRow {
         method: "getDeviceIdiom",
         runtime: "perry_get_device_idiom",
         args: &[],
-        ret: ReturnKind::F64,
+        ret: ReturnKind::Str,
     },
     // #1475 — safe-area insets. Returns `{ top, right, bottom, left }` (points)
     // read from `UIWindow.safeAreaInsets` (iOS) / `WindowInsets.systemBars()`

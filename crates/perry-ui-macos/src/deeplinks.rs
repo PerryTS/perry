@@ -22,6 +22,7 @@
 //! handler is held in `PENDING_COLD_START` and replayed synchronously
 //! when the handler eventually arrives.
 
+use crate::ffi::js_string_from_bytes;
 use std::cell::RefCell;
 
 use objc2::msg_send;
@@ -33,7 +34,6 @@ extern "C" {
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
-    fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 

@@ -250,7 +250,19 @@ fn node_env_proxy_enabled() -> bool {
 
 /// Apply the Node-conformant proxy policy to a reqwest client builder: honor
 /// the standard proxy env vars only when `NODE_USE_ENV_PROXY=1`, matching Node.
+///
+/// Also disables reqwest's default redirect-following. Node's
+/// `http.request`/`http.get`/`https.request` NEVER follow redirects — a 3xx is
+/// delivered to the caller verbatim (only `fetch` follows, per its WHATWG
+/// redirect mode). reqwest follows up to 10 hops by default, which is
+/// observably wrong for the Node client and, worse, turned Next.js's
+/// `proxyRequest` (its bundled `http-proxy` runs over this client) into an
+/// infinite loop: a proxied sub-request that 307-redirects back to the entry
+/// path was auto-followed here instead of relayed for a transparent response,
+/// so the router re-resolved the same middleware rewrite forever (a locale
+/// middleware where `/` rewrites to `/en` and `/en` 307s back to `/`).
 pub(crate) fn apply_node_proxy_policy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    let builder = builder.redirect(reqwest::redirect::Policy::none());
     if node_env_proxy_enabled() {
         builder
     } else {

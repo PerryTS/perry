@@ -31,8 +31,15 @@ Both options produce identical binaries — Perry picks Option A when the xwin'd
 
 ## Building
 
-```bash
+```powershell
 perry compile app.ts -o app.exe --target windows
+```
+
+For a runnable starting point, see [`examples/windows_ui_demo.ts`](https://github.com/PerryTS/perry/blob/main/examples/windows_ui_demo.ts) — a small window exercising Text, Button, TextField, Slider, and a `setInterval` timer:
+
+```powershell
+perry examples/windows_ui_demo.ts -o windows_ui_demo
+.\windows_ui_demo.exe
 ```
 
 ## UI Toolkit
@@ -65,6 +72,37 @@ Perry maps UI widgets to Win32 controls:
 - **File dialogs**: IFileOpenDialog / IFileSaveDialog (COM)
 - **Alerts**: MessageBoxW
 - **Open URL**: ShellExecuteW
+
+## Troubleshooting
+
+### `LNK1181: cannot open input file 'user32.lib'`
+
+The linker couldn't find the Windows SDK libraries. Perry probes the registry (`KitsRoot10`) and the standard `Windows Kits\10\Lib\<ver>\um\x64` install paths; when the probe fails it prints a warning listing the paths it tried. Fixes, in order of preference:
+
+- Run `vcvars64.bat` before `perry compile` (it sets the `LIB` environment variable)
+- Install the Windows 10/11 SDK via the Visual Studio Installer
+- Set `LIB` manually to your SDK's `um\x64;ucrt\x64` directories
+
+### `LNK1158: cannot run 'mt.exe'`
+
+MSVC `link.exe` shells out to the Windows SDK's `mt.exe` to embed the UI visual-styles manifest, and `mt.exe` isn't normally on `PATH` outside a `vcvars64.bat` shell. Perry locates the SDK `bin` directory and puts it on the linker's `PATH` automatically (issue #6023), so you shouldn't see this error anymore. If `mt.exe` isn't installed anywhere, Perry skips the manifest embed with a warning instead of failing — common controls render in the classic (unthemed) look until you install the Windows 10/11 SDK. `lld-link` (Option A) never needs `mt.exe`.
+
+### `--staticlib` / `--dylib` each need one tool from the *other* toolchain
+
+The two toolchain options currently cover plain `.exe` builds equally, but the library output modes each depend on a tool the other option provides:
+
+- `--staticlib` archives with MSVC `lib.exe`. Option A (LLVM + `perry setup windows`) alone doesn't include it — install the MSVC Build Tools (Option B).
+- `--dylib` links with LLVM `lld-link`; MSVC `link.exe` can't produce Perry's plugin DLLs (it reports success without writing the DLL under `/FORCE:UNRESOLVED`). Option B alone doesn't include it — `winget install LLVM.LLVM`.
+
+A fix removing this cross-dependency is in flight; until it lands, the workaround is to install the missing half.
+
+### SmartScreen blocks a downloaded `perry.exe`
+
+Release binaries are not code-signed, so a `perry.exe` downloaded from GitHub Releases triggers "Windows protected your PC". Click **More info** → **Run anyway**. Installing via `winget` is generally less noisy than a raw download.
+
+### Link fails with `os error 32` or `os error 5`
+
+A previous build of your app is still running and holds a lock on the output `.exe`, so the linker can't overwrite it. Close the app (or `taskkill /IM app.exe /F`) and re-run the compile.
 
 ## Next Steps
 

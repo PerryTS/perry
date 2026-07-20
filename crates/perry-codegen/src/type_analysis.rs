@@ -46,7 +46,7 @@ pub(crate) use pod::{
 };
 pub(crate) use predicates::{
     is_array_expr, is_global_builtin_named, is_native_module_dynamic_index, is_promise_expr,
-    receiver_class_name, static_type_of,
+    receiver_class_name, receiver_is_error_type, static_type_of,
 };
 // Re-exported so the `#[cfg(test)] mod tests` (which reaches trunk items via
 // `super::*`) can keep calling `tuple_index_literal` directly.

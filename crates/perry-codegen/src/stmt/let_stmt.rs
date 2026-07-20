@@ -43,7 +43,7 @@ fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
     matches!(expr, perry_hir::Expr::GlobalGet(_))
         || matches!(
             expr,
-            perry_hir::Expr::PropertyGet { object, property }
+            perry_hir::Expr::PropertyGet { object, property, .. }
                 if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
                     && property == "globalThis"
         )
@@ -148,7 +148,9 @@ pub(crate) fn lower_let(
         // literal that holds a class ref under "Inner" — promote
         // X to a class alias so `new X(args)` dispatches to the
         // real class instead of the empty-object placeholder.
-        Some(perry_hir::Expr::PropertyGet { object, property }) => {
+        Some(perry_hir::Expr::PropertyGet {
+            object, property, ..
+        }) => {
             if is_global_this_value(object.as_ref())
                 && matches!(
                     property.as_str(),
@@ -421,7 +423,7 @@ pub(crate) fn lower_let(
             && args.is_empty()
             && matches!(
                 callee.as_ref(),
-                perry_hir::Expr::PropertyGet { object, property }
+                perry_hir::Expr::PropertyGet { object, property, .. }
                     if is_string_expr(ctx, object) && property == "toUpperCase"
             )
         {
@@ -452,7 +454,7 @@ pub(crate) fn lower_let(
             && matches!(args.as_slice(), [perry_hir::Expr::String(s)] if !s.is_empty())
             && matches!(
                 callee.as_ref(),
-                perry_hir::Expr::PropertyGet { object, property }
+                perry_hir::Expr::PropertyGet { object, property, .. }
                     if is_string_expr(ctx, object)
                         && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
                         && property == "split"
@@ -1760,12 +1762,12 @@ fn length_of_local_buffer_id(expr: &perry_hir::Expr) -> Option<u32> {
                 _ => None,
             }
         }
-        perry_hir::Expr::PropertyGet { object, property } if property == "length" => {
-            match object.as_ref() {
-                perry_hir::Expr::LocalGet(id) => Some(*id),
-                _ => None,
-            }
-        }
+        perry_hir::Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" => match object.as_ref() {
+            perry_hir::Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        },
         _ => None,
     }
 }

@@ -9,7 +9,7 @@ use crate::types::{DOUBLE, I64, PTR};
 fn is_web_storage_global_expr(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet { object, property, .. }
             if matches!(property.as_str(), "localStorage" | "sessionStorage")
                 && matches!(object.as_ref(), Expr::GlobalGet(_))
     )

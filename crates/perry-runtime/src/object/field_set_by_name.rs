@@ -138,7 +138,8 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         set_object_keys_array(obj, next_keys as *mut ArrayHeader);
         super::mark_object_dynamic_shape_unknown(obj);
 
-        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
         let slot_usize = slot_idx as usize;
         let vbits = value.to_bits();
         let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
@@ -308,10 +309,24 @@ pub extern "C" fn js_object_set_field_by_name(
     // the value is a *registered* proxy so a real heap object whose masked
     // address happens to be small isn't misrouted.
     {
+        // #6699 (mirror of the read side): the class-field IC-miss fallback
+        // (`js_class_field_set_fallback`, reached when a typed-`this` field set
+        // rejects an off-shape receiver) forwards the *full NaN-box* value with
+        // the `0x7FFD` heap-pointer tag still set, whereas the `obj.prop++`
+        // path (#5135) hands us the bare masked band. A tagged proxy value is
+        // not itself in the proxy id band, so the un-normalized test missed it
+        // and a `this.field = v` write whose `this` is a Proxy skipped the set
+        // trap. Strip the tag first (the FAST LANE below already does) so both
+        // encodings route to `js_proxy_set` identically.
         let addr = obj as u64;
-        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+        let raw_addr = if (addr >> 48) == 0x7FFD {
+            addr & 0x0000_FFFF_FFFF_FFFF
+        } else {
+            addr
+        };
+        if crate::value::addr_class::is_proxy_id_band(raw_addr as usize) && !key.is_null() {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 crate::proxy::js_proxy_set(boxed, key_f64, value);
@@ -363,7 +378,14 @@ pub extern "C" fn js_object_set_field_by_name(
                 {
                     let o = raw as *mut ObjectHeader;
                     let class_id = (*o).class_id;
-                    if class_id != 0
+                    // #6595: a per-evaluation CLASS OBJECT must never take
+                    // this lane — it skips the #6530
+                    // `mirror_class_object_static_write` hook every in-body
+                    // completion runs, and (template cid, key) plans recorded
+                    // by instances sharing the cid would falsely certify it.
+                    // See the matching gates at the plan record sites.
+                    if (*o).object_type == crate::error::OBJECT_TYPE_REGULAR
+                        && class_id != 0
                         && class_id != NATIVE_MODULE_CLASS_ID
                         && super::prop_plan::store_plan_check(class_id, key as usize)
                     {
@@ -416,7 +438,11 @@ pub extern "C" fn js_object_set_field_by_name(
                                     // pointer-ness may change — degrade the
                                     // layout to full-visit before the store.
                                     super::mark_object_dynamic_shape_unknown(o);
-                                    let alloc_limit = std::cmp::max((*o).field_count, 8) as usize;
+                                    let alloc_limit = std::cmp::max(
+                                        (*o).field_count,
+                                        crate::object::INLINE_SLOT_FLOOR as u32,
+                                    )
+                                        as usize;
                                     if (idx as usize) < alloc_limit {
                                         let fields_ptr = (o as *mut u8)
                                             .add(std::mem::size_of::<ObjectHeader>())
@@ -454,7 +480,10 @@ pub extern "C" fn js_object_set_field_by_name(
                                 };
                                 set_object_keys_array(o, next_keys as *mut ArrayHeader);
                                 super::mark_object_dynamic_shape_unknown(o);
-                                let alloc_limit = std::cmp::max((*o).field_count, 8) as usize;
+                                let alloc_limit = std::cmp::max(
+                                    (*o).field_count,
+                                    crate::object::INLINE_SLOT_FLOOR as u32,
+                                ) as usize;
                                 if (slot_idx as usize) < alloc_limit {
                                     let fields_ptr = (o as *mut u8)
                                         .add(std::mem::size_of::<ObjectHeader>())
@@ -1035,9 +1064,14 @@ pub extern "C" fn js_object_set_field_by_name(
             | crate::gc::OBJ_FLAG_NULL_PROTO
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
         let obj_class_id = (*obj).class_id;
+        // #6595: class objects (`OBJECT_TYPE_CLASS`) are excluded — their
+        // writes must always reach the `mirror_class_object_static_write`
+        // completions, and their cid is shared with their instances so a
+        // plan keyed on it conflates two different prototype chains.
         let plan_eligible = !key.is_null()
             && obj_class_id != 0
             && obj_class_id != NATIVE_MODULE_CLASS_ID
+            && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
             && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0;
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
@@ -1203,6 +1237,7 @@ pub extern "C" fn js_object_set_field_by_name(
             if !plan_fast
                 && obj_class_id != 0
                 && obj_class_id != NATIVE_MODULE_CLASS_ID
+                && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
             {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
@@ -1222,7 +1257,9 @@ pub extern "C" fn js_object_set_field_by_name(
                 };
                 set_object_keys_array(obj, next_keys as *mut ArrayHeader);
                 super::mark_object_dynamic_shape_unknown(obj);
-                let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+                let alloc_limit =
+                    std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32)
+                        as usize;
                 if (slot_idx as usize) < alloc_limit {
                     // Inline the field write — `obj` has already been
                     // validated (GC header read, type check, closure
@@ -1366,7 +1403,8 @@ pub extern "C" fn js_object_set_field_by_name(
 
         // Search through the keys array for a match
         let key_count = crate::array::js_array_length(keys) as usize;
-        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
 
         // Sidecar O(1) lookup when keys_array has grown past the
         // linear-scan break-even. Without this, the build-then-fill

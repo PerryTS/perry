@@ -543,6 +543,14 @@ pub(super) fn try_static_method_and_instance(
                         }
                         ("pg", "connect") => Some("PoolClient"),
                         ("ioredis", "duplicate") => Some("Redis"),
+                        // dayjs / moment manipulation methods return a NEW
+                        // date handle — lets `d.add(7, 'day').format(...)`
+                        // dispatch against the result. "App" matches the
+                        // factory-result registration class.
+                        ("dayjs", "add" | "subtract" | "startOf" | "endOf") => Some("App"),
+                        ("moment", "add" | "subtract" | "startOf" | "endOf" | "clone") => {
+                            Some("App")
+                        }
                         _ => None,
                     };
                 if let Some(result_class) = chained_class {

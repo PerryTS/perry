@@ -254,10 +254,13 @@ fn same_side_effect_free_receiver(target: &Expr, receiver: &Expr) -> bool {
         (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) => id == receiver_id,
         (Expr::This, Expr::This) => true,
         (
-            Expr::PropertyGet { object, property },
+            Expr::PropertyGet {
+                object, property, ..
+            },
             Expr::PropertyGet {
                 object: receiver_object,
                 property: receiver_property,
+                ..
             },
         ) => {
             property == receiver_property
@@ -349,10 +352,12 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
             Expr::PropertyGet {
                 object: a_object,
                 property: a_property,
+                ..
             },
             Expr::PropertyGet {
                 object: b_object,
                 property: b_property,
+                ..
             },
         ) => a_property == b_property && same_put_value_receiver_expr(a_object, b_object),
         (
