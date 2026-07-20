@@ -115,7 +115,9 @@ pub(crate) fn fix_imported_enums_in_expr(
 ) {
     match expr {
         // The key pattern: PropertyGet on an ExternFuncRef that's actually an enum
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if let Some(members) = enums.get(name.as_str()) {
                     // Look up the member value

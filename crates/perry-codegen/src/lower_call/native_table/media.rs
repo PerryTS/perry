@@ -677,13 +677,18 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_F64,
     },
+    // schedule's callback must be the raw ClosureHeader pointer (NA_PTR
+    // unbox) — the cron tick invokes it via js_closure_call0 on the raw
+    // pointer, so passing tagged NaN-box bits (the old NA_JSV) threw
+    // "value is not a function" on the first fire. Latent until the
+    // event loop actually drove js_cron_timer_tick.
     NativeModSig {
         module: "cron",
         has_receiver: false,
         method: "schedule",
         class_filter: None,
         runtime: "js_cron_schedule",
-        args: &[NA_STR, NA_JSV],
+        args: &[NA_STR, NA_PTR],
         ret: NR_PTR,
     },
     NativeModSig {

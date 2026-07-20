@@ -1312,21 +1312,17 @@ pub(crate) fn get_field_by_name_object_tail(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            // #4949: heap class-expression values (`ClassExprFresh`) are real
-            // OBJECT_TYPE_CLASS objects, not INT32 class refs. Their `.prototype`
-            // read must still expose the live declared-class prototype object so
-            // tsc/tslib decorator code can inspect and mutate method descriptors.
-            if key_bytes == b"prototype"
-                && (*obj).object_type == crate::error::OBJECT_TYPE_CLASS
-                && (*obj).class_id != 0
-            {
-                let class_id = (*obj).class_id;
-                let value = super::super::class_registry::class_decl_prototype_value(class_id);
-                if value.to_bits() == crate::value::TAG_UNDEFINED {
-                    let value = super::super::class_prototype_ref_value(class_id);
-                    return JSValue::from_bits(value.to_bits());
+            // #4949 `.prototype` / #6497 `.name` on heap class-expression
+            // values — see `class_object_props`.
+            if (*obj).object_type == crate::error::OBJECT_TYPE_CLASS && (*obj).class_id != 0 {
+                if key_bytes == b"prototype" {
+                    return super::class_object_props::class_object_prototype_value(obj);
                 }
-                return JSValue::from_bits(value.to_bits());
+                if key_bytes == b"name" {
+                    if let Some(v) = super::class_object_props::class_object_name_value(obj, key) {
+                        return v;
+                    }
+                }
             }
             if (*obj).class_id == CLASS_ID_BOXED_STRING {
                 if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(
@@ -1338,75 +1334,8 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
             }
             if key_bytes == b"constructor" {
-                if let Some(v) = own_data_field_by_name(obj, key) {
+                if let Some(v) = super::class_object_props::instance_constructor_value(obj, key) {
                     return v;
-                }
-                let class_id = (*obj).class_id;
-                // #5834: WeakMap/WeakSet instances carry a reserved class_id
-                // (not a registered declared-class one), so none of the
-                // arms below resolve them and `(new WeakMap()).constructor`
-                // fell through to `undefined`.
-                if class_id == crate::weakref::CLASS_ID_WEAKMAP
-                    || class_id == crate::weakref::CLASS_ID_WEAKSET
-                {
-                    let name: &[u8] = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
-                        b"WeakMap"
-                    } else {
-                        b"WeakSet"
-                    };
-                    let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
-                    return JSValue::from_bits(v.to_bits());
-                }
-                if class_id != 0 && class_has_own_method(class_id, "constructor") {
-                    let value = class_prototype_method_value_for_name(class_id, "constructor");
-                    return JSValue::from_bits(value.to_bits());
-                }
-                if matches!(
-                    class_id,
-                    CLASS_ID_BOXED_NUMBER
-                        | CLASS_ID_BOXED_STRING
-                        | CLASS_ID_BOXED_BOOLEAN
-                        | CLASS_ID_BOXED_BIGINT
-                        | CLASS_ID_BOXED_SYMBOL
-                ) {
-                    let name = match class_id {
-                        CLASS_ID_BOXED_NUMBER => b"Number".as_slice(),
-                        CLASS_ID_BOXED_STRING => b"String".as_slice(),
-                        CLASS_ID_BOXED_BOOLEAN => b"Boolean".as_slice(),
-                        CLASS_ID_BOXED_BIGINT => b"BigInt".as_slice(),
-                        CLASS_ID_BOXED_SYMBOL => b"Symbol".as_slice(),
-                        _ => unreachable!(),
-                    };
-                    let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
-                    return JSValue::from_bits(v.to_bits());
-                }
-                // Object-literal instances (`{ x: 1 }`) carry a synthetic
-                // `__AnonShape_*` class id. Spec says their `.constructor`
-                // is the global `Object`, not the synthetic class — so
-                // resolve through the globalThis singleton so the value
-                // matches the bare `Object` identifier (`x.constructor
-                // === Object`, date-fns `constructFrom`, drizzle's
-                // `isPlainObject` duck check).
-                if class_id != 0 && is_anon_shape_class_id(class_id) {
-                    let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-                    return JSValue::from_bits(v.to_bits());
-                }
-                if let Some(func_value) =
-                    super::super::class_registry::function_value_for_class_id(class_id)
-                {
-                    return JSValue::from_bits(func_value.to_bits());
-                }
-                if class_id != 0 && is_class_id_registered(class_id) {
-                    let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
-                    return JSValue::from_bits(bits);
-                }
-                // class_id == 0 fallback: plain ObjectHeader allocated
-                // without an HIR shape (Object.create(null) hybrids, raw
-                // empty `{}` produced by JSON.parse, etc.). Report
-                // `Object` so duck-type tests don't trip undefined.
-                if class_id == 0 {
-                    let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-                    return JSValue::from_bits(v.to_bits());
                 }
             }
         }
@@ -1665,7 +1594,8 @@ pub(crate) fn get_field_by_name_object_tail(
         // Slow path: linear scan through keys array
         let _field_count = (*obj).field_count as usize;
 
-        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
 
         // #5054: wide objects get a validated key→index map so per-key reads
         // stay O(1) instead of O(key_count). A `None` falls through to the

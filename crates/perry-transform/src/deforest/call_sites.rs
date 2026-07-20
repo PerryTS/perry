@@ -297,7 +297,9 @@ fn match_consume_loop(
                 return None;
             }
             match right.as_ref() {
-                Expr::PropertyGet { object, property } if property == "length" => {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if property == "length" => {
                     if !matches!(object.as_ref(), Expr::LocalGet(id) if *id == child_id) {
                         return None;
                     }
@@ -334,7 +336,9 @@ fn match_consume_loop(
             Some(*array_id)
         }
         Expr::Call { callee, args, .. } => match callee.as_ref() {
-            Expr::PropertyGet { object, property } if property == "push" => {
+            Expr::PropertyGet {
+                object, property, ..
+            } if property == "push" => {
                 let outer_id = match object.as_ref() {
                     Expr::LocalGet(id) => *id,
                     _ => return None,

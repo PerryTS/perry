@@ -149,7 +149,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         },
 
         // Property access
-        Expr::PropertyGet { object, property } => Expr::PropertyGet {
+        Expr::PropertyGet {
+            object, property, ..
+        } => Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
         },
@@ -260,6 +263,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             args,
             type_args,
             byte_offset,
+            cap_args_appended,
         } => Expr::New {
             class_name: class_name.clone(),
             args: args
@@ -271,6 +275,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .map(|t| substitute_type(t, substitutions))
                 .collect(),
             byte_offset: *byte_offset,
+            // Type substitution rewrites arg/type contents but preserves arg
+            // COUNT and order, so the appended cap forwards stay trailing.
+            cap_args_appended: *cap_args_appended,
         },
 
         // Class/Enum references

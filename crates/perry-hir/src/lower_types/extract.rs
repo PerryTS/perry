@@ -566,6 +566,7 @@ fn lower_decorator_arg(ctx: &mut LoweringContext, expr: &ast::Expr) -> Option<Ex
             Some(Expr::PropertyGet {
                 object: ref obj,
                 property: _,
+                ..
             }) if matches!(obj.as_ref(), Expr::GlobalGet(0)) => {
                 Some(Expr::ClassRef(ident.sym.to_string()))
             }

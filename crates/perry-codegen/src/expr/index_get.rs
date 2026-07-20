@@ -271,6 +271,7 @@ pub(crate) fn index_object_is_class_or_proto_ref(ctx: &FnCtx<'_>, object: &Expr)
         Expr::PropertyGet {
             object: inner,
             property,
+            ..
         } if property.as_str() == "prototype" => {
             index_object_is_class_or_proto_ref(ctx, inner.as_ref())
         }

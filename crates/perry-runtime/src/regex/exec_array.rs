@@ -53,6 +53,50 @@ pub(super) fn set_exec_array_metadata_value(arr: *mut ArrayHeader, input_value: 
     );
 }
 
+/// Combined `index`/`input`/`groups` decoration for a FRESHLY built
+/// match-result array (#6386). Differences from calling
+/// [`set_exec_array_metadata`] + [`set_exec_array_groups`]:
+///
+/// * `input` re-boxes the already-heap-allocated subject `StringHeader`
+///   instead of copying the whole subject per match (the string is demoted
+///   to shared so a later in-place `s += x` on the source local can't edit
+///   the stored property).
+/// * all three properties land in the named-props side table with ONE probe
+///   and no key-string allocations
+///   (`crate::array::array_named_props_install_fresh`).
+///
+/// Sound only because the array was allocated moments ago in the same
+/// helper: it has no descriptors, no freeze/seal state, and no existing
+/// named props, so the generic `js_array_set_string_key` ladder is
+/// observationally skipped. Performs no GC allocation, so no rooting needed.
+pub(super) fn set_exec_array_metadata_groups_fresh(
+    arr: *mut ArrayHeader,
+    input: *const crate::string::StringHeader,
+    index: f64,
+    groups_obj: *mut ObjectHeader,
+) {
+    if arr.is_null() {
+        return;
+    }
+    let input_value = js_nanbox_string(input as i64);
+    crate::string::js_string_addref_if_heap_string(input_value);
+    let groups_value = if groups_obj.is_null() {
+        f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
+    } else {
+        crate::value::js_nanbox_pointer(groups_obj as i64)
+    };
+    unsafe {
+        crate::array::array_named_props_install_fresh(
+            arr,
+            &[
+                ("index", index),
+                ("input", input_value),
+                ("groups", groups_value),
+            ],
+        );
+    }
+}
+
 /// Attach the `groups` own property to a regex match-result array.
 ///
 /// Mirrors `set_exec_array_metadata` for `index`/`input`: the result of

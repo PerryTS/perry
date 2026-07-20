@@ -1012,7 +1012,9 @@ fn receiver_expr_is_typed_f64_safe(
         Expr::Number(_) | Expr::Integer(_) => Ok(()),
         Expr::LocalGet(id) if matches!(locals.get(id), Some(TypedParamRep::F64)) => Ok(()),
         Expr::LocalGet(_) => Err(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe),
-        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) => {
             let index = typed_receiver_own_field_index(class, property)?;
             if used_field_names.insert(property.clone()) {
                 used_fields.push(TypedReceiverField {
@@ -1625,7 +1627,9 @@ fn lower_typed_f64_receiver_expr_with_env(
             .get(id)
             .cloned()
             .unwrap_or_else(|| format!("%arg{id}"))),
-        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) => {
             let Some(field_index) = receiver.field_index(property) else {
                 anyhow::bail!("typed-f64 receiver clone cannot lower unproven receiver field")
             };

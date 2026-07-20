@@ -600,17 +600,18 @@ pub(super) unsafe fn dispatch_string(
                 }
                 "localeCompare" => {
                     // ToString(that) is required even for undefined ("undefined").
-                    // Root it — `js_string_validate_locales` below may allocate.
+                    // Root it — `js_string_validate_collator_args` below may allocate.
                     let other_raw = crate::builtins::js_string_coerce(
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
                     );
                     let other_h = root_scope.root_string_ptr(other_raw);
-                    // `locales` (2nd arg) validated for its RangeError side effect.
-                    if let Some(loc) = arg_at(1) {
-                        let jv = JSValue::from_bits(loc.to_bits());
-                        if !jv.is_undefined() {
-                            crate::string::js_string_validate_locales(loc);
-                        }
+                    // `locales` (2nd) + `options` (3rd) validated for the throwing
+                    // side effect of `Construct(%Collator%, «locales, options»)`.
+                    if arg_at(1).is_some() || arg_at(2).is_some() {
+                        let undef = f64::from_bits(JSValue::undefined().bits());
+                        let loc = arg_at(1).unwrap_or(undef);
+                        let opts = arg_at(2).unwrap_or(undef);
+                        crate::string::js_string_validate_collator_args(loc, opts);
                     }
                     let s = receiver_string();
                     let other = other_h.get_raw_const_ptr::<crate::StringHeader>();

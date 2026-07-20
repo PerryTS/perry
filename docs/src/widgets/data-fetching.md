@@ -95,10 +95,32 @@ return {
 };
 ```
 
+The refresh interval is read **at compile time**: the compiler scans the
+provider's `return` statements for a literal
+`reloadPolicy: { after: { minutes: N } }` (where `N` is a numeric literal;
+fractional values round to the nearest second) and bakes the interval into
+the generated platform code. A `reloadPolicy` computed at runtime (a
+variable, a function call, …) cannot be read — the compiler warns and the
+platform default applies.
+
 | Policy | Behavior |
 |--------|----------|
-| `{ after: { minutes: N } }` | Re-fetch after N minutes. Compiles to `.after(Date().addingTimeInterval(N*60))` on iOS and `setFreshnessIntervalMillis(N*60000)` on Wear OS. |
-| *(omitted)* | Defaults to 30 minutes on iOS, 30 minutes on Android/Wear OS. |
+| `{ after: { minutes: N } }` | Re-fetch after N minutes. Compiles to `.after(Date().addingTimeInterval(N*60))` on iOS/watchOS, `android:updatePeriodMillis="N*60000"` on Android, and `setFreshnessIntervalMillis(N*60000)` on Wear OS. |
+| *(omitted)* | Platform default: 30 minutes on iOS/watchOS, 30 minutes on Android, 60 minutes on Wear OS. |
+
+**Platform floors:** each platform ignores refresh requests below a minimum
+interval, so the compiler clamps and warns:
+
+| Platform | Default | Minimum (clamped) |
+|----------|---------|-------------------|
+| iOS / watchOS (WidgetKit) | 30 minutes | 15 minutes (refresh budget) |
+| Android (Glance, `updatePeriodMillis`) | 30 minutes | 30 minutes (hard framework floor) |
+| Wear OS (Tiles freshness) | 60 minutes | 15 minutes |
+
+If different `return` statements carry different literal policies (e.g. a
+short error-retry interval and a longer happy-path one), the smallest one
+wins — the interval is a single compile-time constant per widget — and the
+compiler emits a warning naming the value it chose.
 
 **Budget limits:** iOS restricts widget refreshes. Typical budget is 40--70 refreshes per day. watchOS is stricter (see [watchOS Complications](watchos.md)). Request only what you need.
 
@@ -152,6 +174,11 @@ Widget({
 ```
 
 The `placeholder` field provides data shown in the widget gallery and during loading. If the provider throws an unhandled exception, the generated Swift/Kotlin code catches it and renders the placeholder instead.
+
+Note that with two distinct literal policies (5 and 15 minutes above), the
+compiled widget uses the smaller one — 5 minutes, which the platform floor
+then raises to its minimum (15 minutes on iOS) — and the compiler warns
+about the choice. See [Reload Policies](#reload-policies).
 
 ## Multiple Timeline Entries
 

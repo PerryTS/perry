@@ -863,7 +863,13 @@ pub fn lower_class_decl(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
-                if prop.declare {
+                // `declare` and `abstract` fields are type-only: TypeScript
+                // erases them entirely (`node --experimental-strip-types`
+                // emits no runtime slot). Materializing an abstract base-class
+                // field creates a phantom slot that shadows the concrete
+                // subclass initializer of the same name — a base/union-typed
+                // read then resolves to the (undefined) base slot. Skip both.
+                if prop.declare || prop.is_abstract {
                     continue;
                 }
                 // Computed-key fields (`[Symbol.for("k")] = init`) flow through
@@ -1684,7 +1690,13 @@ pub fn lower_class_from_ast(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
-                if prop.declare {
+                // `declare` and `abstract` fields are type-only: TypeScript
+                // erases them entirely (`node --experimental-strip-types`
+                // emits no runtime slot). Materializing an abstract base-class
+                // field creates a phantom slot that shadows the concrete
+                // subclass initializer of the same name — a base/union-typed
+                // read then resolves to the (undefined) base slot. Skip both.
+                if prop.declare || prop.is_abstract {
                     continue;
                 }
                 // Computed-key fields (`[Symbol.for("k")] = init`) flow through

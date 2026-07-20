@@ -78,8 +78,8 @@ use super::hoist_yields::expr_contains_yield;
 use crate::unroll::escape_analysis::{
     count_local_refs_expr, count_local_refs_stmt, count_local_refs_stmts,
 };
-use perry_hir::walker::walk_expr_children_mut;
-use perry_hir::{Expr, Stmt};
+use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
+use perry_hir::{BinaryOp, Expr, Stmt, UpdateOp, WithSetFallback};
 use perry_types::{LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
@@ -739,4 +739,318 @@ fn count_decl_sites(stmts: &[Stmt], out: &mut HashMap<LocalId, usize>) {
         }
         each_child_stmt_list(s, &mut |list| count_decl_sites(list, out));
     }
+}
+
+// ---------------------------------------------------------------------------
+// #6354: per-iteration bindings a closure WRITES that also outlive a suspend
+// ---------------------------------------------------------------------------
+//
+// `snapshot_suspended_loop_captures` (part 2 above) can only hand a closure a
+// per-iteration binding when nobody writes it after capture — it copies the
+// *value*, and a value snapshot would silently drop any later write. It is
+// therefore gated to `captures \ mutable_captures`. A binding a closure assigns
+// (`let acc = i; const bump = () => { acc += 100; }`) stays in `mutable_captures`,
+// keeps its single activation-wide box, and every closure created in the loop
+// then observes the LAST iteration's value:
+//
+// ```ignore
+// for (let i = 0; i < 9; i++) {
+//   let acc = i;
+//   const bump = () => { acc += 100; };  // WRITES acc
+//   bump();
+//   await tick();                        // acc read after the suspend
+//   fns.push(() => acc);                 // node: 100..108   perry: 108 x9
+// }
+// ```
+//
+// The fix reduces this WRITE case to the already-solved READ-ONLY case by
+// backing the binding with a one-element heap cell. The binding VARIABLE then
+// holds a per-iteration array *reference* that is never reassigned (only its
+// element is), so it lands in `captures \ mutable_captures` and part 2 snapshots
+// the reference per iteration; writes go to the shared element and stay visible
+// to every closure of the same iteration. Concretely `acc` above becomes:
+//
+// ```ignore
+// let acc = [i];
+// const bump = () => { acc[0] += 100; };
+// bump();
+// await tick();
+// fns.push(() => acc[0]);
+// ```
+//
+// which perry already compiles correctly. The rewrite runs BEFORE part 1/part 2
+// so those passes see the cell form.
+
+/// Loop-body block-scoped `let` bindings that (a) some closure in the loop lists
+/// in its `mutable_captures` and (b) are live across a suspend inside the loop.
+/// These are exactly the bindings #6345 leaves collapsed: read-only captures are
+/// snapshotted, and bindings whose live range stays in one state keep their
+/// per-iteration declaration, so neither path covers a written binding that also
+/// outlives an `await`. Each returned id should be rewritten to a heap cell by
+/// [`rewrite_written_captures_to_cells`].
+pub(crate) fn collect_written_suspended_loop_captures(body: &[Stmt]) -> HashSet<LocalId> {
+    // The union of every closure's `mutable_captures` (including nested
+    // closures) — HIR marks an id here iff it is assigned somewhere it is
+    // captured, whether by a closure or by the enclosing scope after capture.
+    let mut mutably_captured: HashSet<LocalId> = HashSet::new();
+    collect_mutable_captures_stmts(body, &mut mutably_captured);
+    if mutably_captured.is_empty() {
+        return HashSet::new();
+    }
+
+    let mut total: HashMap<LocalId, usize> = HashMap::new();
+    count_local_refs_stmts(body, &mut total);
+    let mut decl_sites: HashMap<LocalId, usize> = HashMap::new();
+    count_decl_sites(body, &mut decl_sites);
+
+    let mut out = HashSet::new();
+    scan_written_loops(body, &total, &decl_sites, &mutably_captured, &mut out);
+
+    // Exclude anything referenced in a form the cell rewrite cannot express (a
+    // bare-`LocalId` array/set mutation intrinsic, or a `with` fallback). Such a
+    // binding is left as-is — the pre-existing collapse persists for that rare
+    // shape, but no new corruption is introduced.
+    if !out.is_empty() {
+        let mut unsafe_ids: HashSet<LocalId> = HashSet::new();
+        collect_cell_unsafe_ids(body, &mut unsafe_ids);
+        out.retain(|id| !unsafe_ids.contains(id));
+    }
+    out
+}
+
+/// Ids that appear in a reference form [`rewrite_written_captures_to_cells`]
+/// does NOT rewrite: array/set mutation intrinsics keyed on a bare `LocalId`
+/// (`arr.push(x)` → `ArrayPush { array_id }`, `set.add(x)`, `arr.pop()`, …) and
+/// `with`-statement fallbacks. Turning such a binding into a cell would leave
+/// the intrinsic pointing at the one-element cell array instead of the value it
+/// holds, so these ids are excluded from the candidate set.
+fn collect_cell_unsafe_ids(stmts: &[Stmt], out: &mut HashSet<LocalId>) {
+    for s in stmts {
+        each_expr(s, &mut |e| collect_cell_unsafe_ids_expr(e, out));
+        each_child_stmt_list(s, &mut |list| collect_cell_unsafe_ids(list, out));
+    }
+}
+
+fn collect_cell_unsafe_ids_expr(e: &Expr, out: &mut HashSet<LocalId>) {
+    match e {
+        Expr::ArrayPush { array_id, .. }
+        | Expr::ArrayPushSpread { array_id, .. }
+        | Expr::ArrayUnshift { array_id, .. }
+        | Expr::ArraySplice { array_id, .. }
+        | Expr::ArrayCopyWithin { array_id, .. } => {
+            out.insert(*array_id);
+        }
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
+            out.insert(*id);
+        }
+        Expr::SetAdd { set_id, .. } => {
+            out.insert(*set_id);
+        }
+        Expr::WithSet { fallback, .. } => {
+            if let WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) = fallback {
+                out.insert(*id);
+            }
+        }
+        // A closure body can mutate a captured binding the same way — descend.
+        Expr::Closure { body, .. } => collect_cell_unsafe_ids(body, out),
+        _ => {}
+    }
+    walk_expr_children(e, &mut |child| collect_cell_unsafe_ids_expr(child, out));
+}
+
+fn scan_written_loops(
+    stmts: &[Stmt],
+    total: &HashMap<LocalId, usize>,
+    decl_sites: &HashMap<LocalId, usize>,
+    mutably_captured: &HashSet<LocalId>,
+    out: &mut HashSet<LocalId>,
+) {
+    for s in stmts {
+        if let Some(l) = as_loop(s) {
+            analyze_written_loop(l, total, decl_sites, mutably_captured, out);
+        }
+        each_child_stmt_list(s, &mut |list| {
+            scan_written_loops(list, total, decl_sites, mutably_captured, out)
+        });
+    }
+}
+
+fn analyze_written_loop(
+    loop_stmt: &Stmt,
+    total: &HashMap<LocalId, usize>,
+    decl_sites: &HashMap<LocalId, usize>,
+    mutably_captured: &HashSet<LocalId>,
+    out: &mut HashSet<LocalId>,
+) {
+    let mut inside: HashMap<LocalId, usize> = HashMap::new();
+    count_local_refs_stmt(loop_stmt, &mut inside);
+    let block_scoped = |id: LocalId| -> bool {
+        decl_sites.get(&id).copied().unwrap_or(0) == 1
+            && total.get(&id).copied().unwrap_or(0) == inside.get(&id).copied().unwrap_or(0)
+    };
+    classify_written_block(loop_body(loop_stmt), &block_scoped, mutably_captured, out);
+}
+
+/// Mirror of `classify_block`, but selecting the bindings part 2 CANNOT fix: a
+/// block-scoped loop-body `let` that some closure writes (`mutably_captured`)
+/// and that is read at or after a suspend following its declaration. Descends
+/// through non-loop nesting; nested loops are reached by `scan_written_loops`.
+fn classify_written_block(
+    block: &[Stmt],
+    block_scoped: &dyn Fn(LocalId) -> bool,
+    mutably_captured: &HashSet<LocalId>,
+    out: &mut HashSet<LocalId>,
+) {
+    for (i, stmt) in block.iter().enumerate() {
+        if let Stmt::Let { id, init, .. } = stmt {
+            let splits_state = init.as_ref().is_some_and(expr_contains_yield);
+            if !splits_state
+                && mutably_captured.contains(id)
+                && block_scoped(*id)
+                && used_after_suspend(*id, &block[i + 1..])
+            {
+                out.insert(*id);
+            }
+        }
+        if !is_loop(stmt) {
+            each_child_stmt_list(stmt, &mut |list| {
+                classify_written_block(list, block_scoped, mutably_captured, out)
+            });
+        }
+    }
+}
+
+/// Union every closure's `mutable_captures` in these statements, descending into
+/// nested closure bodies (a deeper closure's write still makes the binding
+/// "assigned after capture").
+fn collect_mutable_captures_stmts(stmts: &[Stmt], out: &mut HashSet<LocalId>) {
+    for s in stmts {
+        each_expr(s, &mut |e| collect_mutable_captures_expr(e, out));
+        each_child_stmt_list(s, &mut |list| collect_mutable_captures_stmts(list, out));
+    }
+}
+
+fn collect_mutable_captures_expr(e: &Expr, out: &mut HashSet<LocalId>) {
+    if let Expr::Closure {
+        mutable_captures,
+        body,
+        ..
+    } = e
+    {
+        out.extend(mutable_captures.iter().copied());
+        collect_mutable_captures_stmts(body, out);
+    }
+    walk_expr_children(e, &mut |child| collect_mutable_captures_expr(child, out));
+}
+
+/// Rewrite each id in `cells` from a scalar binding into a one-element heap
+/// cell: its declaration becomes `let c = [init]`, every read/write/update of
+/// `c` becomes an indexed access on `c[0]`, and every closure that captured `c`
+/// keeps it as a now read-only capture (dropped from `mutable_captures`). See
+/// the module docs — after this, `c`'s VALUE (the array reference) is never
+/// reassigned, so part 2 hands each iteration its own cell.
+pub(crate) fn rewrite_written_captures_to_cells(body: &mut [Stmt], cells: &HashSet<LocalId>) {
+    if cells.is_empty() {
+        return;
+    }
+    for s in body.iter_mut() {
+        rewrite_cells_in_stmt(s, cells);
+    }
+}
+
+fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>) {
+    match stmt {
+        // The candidate's declaration: wrap its initializer in a one-element
+        // array so the slot holds a fresh cell each iteration. `let c;` (no
+        // init) seeds `[undefined]`.
+        Stmt::Let { id, init, ty, .. } if cells.contains(id) => {
+            let mut inner = init.take().unwrap_or(Expr::Undefined);
+            rewrite_cells_in_expr(&mut inner, cells);
+            *init = Some(Expr::Array(vec![inner]));
+            *ty = Type::Array(Box::new(Type::Any));
+        }
+        _ => {
+            each_expr_mut(stmt, &mut |e| rewrite_cells_in_expr(e, cells));
+        }
+    }
+    each_child_stmt_list_mut(stmt, &mut |list| {
+        for s in list.iter_mut() {
+            rewrite_cells_in_stmt(s, cells);
+        }
+    });
+}
+
+fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
+    match e {
+        Expr::LocalGet(id) if cells.contains(id) => {
+            let id = *id;
+            *e = Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(id)),
+                index: Box::new(Expr::Integer(0)),
+            };
+            // Do NOT descend — the freshly built `LocalGet(id)` is the cell
+            // reference itself, not another read of the (now indexed) binding.
+            return;
+        }
+        Expr::LocalSet(id, value) if cells.contains(id) => {
+            let id = *id;
+            // Rewrite reads of other cells (and of this cell) inside the value
+            // BEFORE lifting it out, e.g. `c = c + 1` → `c[0] = c[0] + 1`.
+            rewrite_cells_in_expr(value, cells);
+            let value = std::mem::replace(value.as_mut(), Expr::Undefined);
+            *e = Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(id)),
+                index: Box::new(Expr::Integer(0)),
+                value: Box::new(value),
+            };
+            return;
+        }
+        Expr::Update { id, op, prefix } if cells.contains(id) => {
+            let id = *id;
+            let op = match op {
+                UpdateOp::Increment => BinaryOp::Add,
+                UpdateOp::Decrement => BinaryOp::Sub,
+            };
+            let prefix = *prefix;
+            *e = Expr::IndexUpdate {
+                object: Box::new(Expr::LocalGet(id)),
+                index: Box::new(Expr::Integer(0)),
+                op,
+                prefix,
+            };
+            return;
+        }
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            body,
+            ..
+        } => {
+            // The cell is now mutated only through `IndexSet`/`IndexUpdate` on
+            // its element — the VARIABLE is never reassigned — so it is a
+            // read-only capture. Drop it from `mutable_captures` (keeping it in
+            // `captures` so the body can still read the array reference) so part
+            // 2's `captures \ mutable_captures` gate snapshots it per iteration.
+            let demoted: Vec<LocalId> = mutable_captures
+                .iter()
+                .copied()
+                .filter(|c| cells.contains(c))
+                .collect();
+            mutable_captures.retain(|c| !cells.contains(c));
+            for c in demoted {
+                if !captures.contains(&c) {
+                    captures.push(c);
+                }
+            }
+            for s in body.iter_mut() {
+                rewrite_cells_in_stmt(s, cells);
+            }
+            // Fall through to `walk_expr_children_mut`, which for a closure
+            // visits ONLY its param defaults (not the body — handled above) —
+            // so a cell referenced in a default (`(x = acc) => …`) is rewritten
+            // too. It does not re-descend into the body, so no double-rewrite.
+        }
+        _ => {}
+    }
+    walk_expr_children_mut(e, &mut |child| rewrite_cells_in_expr(child, cells));
 }

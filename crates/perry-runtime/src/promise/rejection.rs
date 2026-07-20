@@ -112,7 +112,80 @@ pub(super) fn track_unhandled_rejection(promise: *mut Promise) {
     if promise.is_null() {
         return;
     }
+    if rejection_diag_enabled() {
+        rejection_diag("track", promise);
+    }
     REJECTIONS.with(|t| t.borrow_mut().unhandled.push(promise as usize));
+}
+
+/// `PERRY_REJECTION_DIAG=1`: dump the raw rejection reason (tag class, bits,
+/// value preview) plus a native backtrace when a rejection is first tracked as
+/// unhandled — the backtrace there is the rejecting call site — and again when
+/// it is reported at a checkpoint. Diagnostic aid for compiled bundles, where
+/// an `Uncaught (in promise) undefined` line gives no way to tell whether the
+/// reason was genuinely `undefined` or was lost en route (used to root-cause
+/// #6660; same opt-in pattern as `PERRY_BIGINT_MIX_DIAG`). Only consulted on
+/// the already-cold unhandled-rejection paths.
+fn rejection_diag_enabled() -> bool {
+    std::env::var_os("PERRY_REJECTION_DIAG").is_some()
+}
+
+#[cold]
+fn rejection_diag(stage: &str, promise: *mut Promise) {
+    let (state, reason) = unsafe { ((*promise).state, (*promise).reason) };
+    eprintln!(
+        "[rejection-diag] {stage} promise=0x{:x} state={state:?} reason_bits=0x{:016x} reason={}",
+        promise as usize,
+        reason.to_bits(),
+        describe_rejection_reason(reason),
+    );
+    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+}
+
+/// Tag-class + preview description of a rejection reason for the
+/// `PERRY_REJECTION_DIAG=1` dump. Pointer reasons additionally note whether
+/// they are an Error object (and if so include its `stack`, which begins
+/// `<Name>: <message>`).
+#[cold]
+fn describe_rejection_reason(v: f64) -> String {
+    let jv = crate::value::JSValue::from_bits(v.to_bits());
+    if jv.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jv.is_null() {
+        return "null".to_string();
+    }
+    if jv.is_bool() {
+        return format!("bool({})", jv.as_bool());
+    }
+    if jv.is_int32() {
+        return format!("int32({})", jv.as_int32());
+    }
+    if jv.is_any_string() {
+        let ptr =
+            crate::value::js_get_string_pointer_unified(v) as *const crate::string::StringHeader;
+        let mut s = unsafe { crate::exception::string_header_to_string(ptr) };
+        if s.len() > 120 {
+            let cut = (0..=120)
+                .rev()
+                .find(|i| s.is_char_boundary(*i))
+                .unwrap_or(0);
+            s.truncate(cut);
+        }
+        return format!("string({s:?})");
+    }
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::value::addr_class::is_plausible_heap_addr(ptr)
+            && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR
+        {
+            let eh = ptr as *const crate::error::ErrorHeader;
+            let stack = unsafe { crate::exception::string_header_to_string((*eh).stack) };
+            return format!("error(0x{ptr:x}) stack={stack:?}");
+        }
+        return format!("pointer(0x{ptr:x})");
+    }
+    format!("number({v})")
 }
 
 /// A handler was attached to `promise` — it is no longer an unhandled
@@ -326,6 +399,9 @@ fn with_listener_uncaught_trap<F: FnOnce()>(f: F) {
 ///    `'unhandledRejection'` — and still suppresses the crash.
 /// 3. else print the diagnostic and exit(1).
 fn report_unhandled(promise: *mut Promise) {
+    if rejection_diag_enabled() {
+        rejection_diag("report", promise);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
     let reason_handle =

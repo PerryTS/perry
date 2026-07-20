@@ -279,9 +279,9 @@ pub(crate) fn emit_v8_member_method_call(
 fn is_global_object_expr(expr: &Expr) -> bool {
     match expr {
         Expr::GlobalGet(_) => true,
-        Expr::PropertyGet { object, property } if property == "globalThis" => {
-            is_global_object_expr(object)
-        }
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "globalThis" => is_global_object_expr(object),
         _ => false,
     }
 }
@@ -300,7 +300,9 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
         // empty-object placeholder path with class_id=0 and method dispatch
         // breaks on the resulting instance.
         Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => Some(name.as_str()),
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if is_global_object_expr(object.as_ref()) {
                 return Some(property.as_str());
             }

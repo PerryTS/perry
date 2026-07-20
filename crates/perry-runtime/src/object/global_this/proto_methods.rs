@@ -574,9 +574,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // (`getOwnPropertyDescriptor(RegExp.prototype, "source").get`) and
             // brand-checked `.call(this)` work, and instances inherit them.
             super::super::regex_proto_thunks::install_regex_proto_accessors(proto_obj);
-            // Real brand-checking `exec`/`test`/`toString`; `compile` stays a
-            // no-op (Annex B).
+            // Real brand-checking `exec`/`test`/`toString`/`compile` (Annex B).
             super::super::regex_proto_thunks::install_regex_proto_methods(proto_obj);
+            // `compile` is installed as a real brand-checking thunk by
+            // `install_regex_proto_methods` when `regex-engine` is on; without an
+            // engine it falls back to the Annex-B no-op here.
+            #[cfg(not(feature = "regex-engine"))]
             install_noop_proto_methods(proto_obj, &[("compile", 2)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }

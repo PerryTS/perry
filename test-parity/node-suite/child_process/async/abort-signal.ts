@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 function valueText(value) {
-  return value === null ? "null" : value === undefined ? "undefined" : String(value);
+  return value === null
+    ? "null"
+    : value === undefined
+      ? "undefined"
+      : String(value);
 }
 
 function errSummary(err) {
@@ -18,7 +22,9 @@ function errSummary(err) {
 }
 
 function close(child) {
-  return new Promise((resolve) => child.on("close", (code, signal) => resolve([code, signal])));
+  return new Promise((resolve) =>
+    child.on("close", (code, signal) => resolve([code, signal])),
+  );
 }
 
 function invalidSignal(label, start) {
@@ -47,28 +53,43 @@ function execWithAbort(label, run) {
 async function liveAbort(label, child) {
   const events = [];
   child.on("spawn", () => {
-    events.push(`spawn:${valueText(child.killed)}:${valueText(child.signalCode)}`);
+    events.push(
+      `spawn:${valueText(child.killed)}:${valueText(child.signalCode)}`,
+    );
   });
   child.on("error", (err) => {
-    events.push(`error:${errSummary(err)}:${valueText(child.killed)}:${valueText(child.signalCode)}`);
+    events.push(
+      `error:${errSummary(err)}:${valueText(child.killed)}:${valueText(child.signalCode)}`,
+    );
   });
   child.on("exit", (code, signal) => {
-    events.push(`exit:${valueText(code)}:${valueText(signal)}:${valueText(child.killed)}:${valueText(child.signalCode)}`);
+    events.push(
+      `exit:${valueText(code)}:${valueText(signal)}:${valueText(child.killed)}:${valueText(child.signalCode)}`,
+    );
   });
   const [code, signal] = await close(child);
-  events.push(`close:${valueText(code)}:${valueText(signal)}:${valueText(child.killed)}:${valueText(child.signalCode)}`);
+  events.push(
+    `close:${valueText(code)}:${valueText(signal)}:${valueText(child.killed)}:${valueText(child.signalCode)}`,
+  );
   console.log(`${label}:`, events.join(">"));
 }
 
 invalidSignal("spawn", () => spawn("node", ["-e", ""], { signal: {} }));
-invalidSignal("exec", () => exec("node -e \"\"", { signal: {} }, () => {}));
-invalidSignal("execFile", () => execFile("node", ["-e", ""], { signal: {} }, () => {}));
+invalidSignal("exec", () => exec('node -e ""', { signal: {} }, () => {}));
+invalidSignal("execFile", () =>
+  execFile("node", ["-e", ""], { signal: {} }, () => {}),
+);
 
 await execWithAbort("exec aborted", (signal, cb) =>
-  exec("sleep 1; printf exec-after", { signal, encoding: "utf8" }, cb)
+  exec("sleep 1; printf exec-after", { signal, encoding: "utf8" }, cb),
 );
 await execWithAbort("execFile aborted", (signal, cb) =>
-  execFile("sh", ["-c", "sleep 1; printf execfile-after"], { signal, encoding: "utf8" }, cb)
+  execFile(
+    "sh",
+    ["-c", "sleep 1; printf execfile-after"],
+    { signal, encoding: "utf8" },
+    cb,
+  ),
 );
 
 const spawnController = new AbortController();
@@ -92,3 +113,39 @@ await liveAbort("fork aborted", forked);
 try {
   unlinkSync(childFile);
 } catch {}
+
+const lifecycle = spawn("node", ["-e", "setInterval(() => {}, 1000)"]);
+try {
+  await new Promise((resolve, reject) => {
+    lifecycle.once("spawn", resolve);
+    lifecycle.once("error", reject);
+  });
+  console.log(
+    "kill initial:",
+    lifecycle.killed,
+    valueText(lifecycle.exitCode),
+    valueText(lifecycle.signalCode),
+  );
+  console.log("kill probe:", lifecycle.kill(0), lifecycle.killed);
+  console.log("kill terminate:", lifecycle.kill("SIGTERM"), lifecycle.killed);
+  const lifecycleEvents = [];
+  lifecycle.on("exit", (code, signal) =>
+    lifecycleEvents.push(`exit:${valueText(code)}:${valueText(signal)}`),
+  );
+  await new Promise((resolve) =>
+    lifecycle.on("close", (code, signal) => {
+      lifecycleEvents.push(`close:${valueText(code)}:${valueText(signal)}`);
+      resolve();
+    }),
+  );
+  console.log("kill events:", lifecycleEvents.join(">"));
+  console.log(
+    "kill final:",
+    valueText(lifecycle.exitCode),
+    valueText(lifecycle.signalCode),
+  );
+  console.log("kill after close:", lifecycle.kill(), lifecycle.killed);
+} finally {
+  if (lifecycle.exitCode === null && lifecycle.signalCode === null)
+    lifecycle.kill("SIGKILL");
+}

@@ -1533,10 +1533,15 @@ pub extern "C" fn perry_get_scale_factor() -> f64 {
 pub extern "C" fn perry_get_orientation() -> f64 {
     0.0
 }
+/// perry_get_device_idiom() → "watch" (raw `*mut StringHeader`, NaN-boxed
+/// by the `ReturnKind::Str` dispatch row). Was the bare numeric code 4.0.
 #[no_mangle]
-pub extern "C" fn perry_get_device_idiom() -> f64 {
-    4.0
-} // 4 = watch
+pub extern "C" fn perry_get_device_idiom() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(b"watch".as_ptr(), 5) }
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_create() -> i64 {
     0

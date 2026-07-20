@@ -55,6 +55,7 @@ impl WasmModuleEmitter {
             "object_has_property",
             "object_assign",
             "array_new",
+            "array_constructor_single",
             "array_push",
             "array_pop",
             "array_get",
@@ -500,7 +501,9 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(v);
                 }
             }
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
                 self.collect_strings_in_expr(object);
                 self.intern_string(property);
             }

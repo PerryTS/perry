@@ -189,11 +189,16 @@ pub extern "C" fn perry_get_orientation() -> f64 {
     }
 }
 
-/// perry_get_device_idiom() → 0 = phone, 1 = pad
+/// perry_get_device_idiom() → "phone" | "pad" — the device form-factor
+/// string per the perry/system contract. Returns a raw `*mut StringHeader`
+/// (i64); the `ReturnKind::Str` dispatch row NaN-boxes it with STRING_TAG.
 /// Uses UIDevice.model string comparison (more reliable than userInterfaceIdiom
 /// which can return 0 before full UIApplication init on iOS 26 simulator).
 #[no_mangle]
-pub extern "C" fn perry_get_device_idiom() -> f64 {
+pub extern "C" fn perry_get_device_idiom() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
     unsafe {
         let device_cls = objc2::runtime::AnyClass::get(c"UIDevice").unwrap();
         let current: *mut objc2::runtime::AnyObject = objc2::msg_send![device_cls, currentDevice];
@@ -202,17 +207,13 @@ pub extern "C" fn perry_get_device_idiom() -> f64 {
         let model: *mut objc2::runtime::AnyObject = objc2::msg_send![current, model];
         let utf8: *const u8 = objc2::msg_send![model, UTF8String];
         if !utf8.is_null() {
-            // "iPad" starts with 'i' (0x69) then 'P' (0x50)
-            // "iPhone" starts with 'i' (0x69) then 'P' (0x50) too...
-            // Actually: "iPad" has 4 chars, "iPhone" has 6 chars
-            // Check 3rd char: 'a' (0x61) for iPad vs 'h' (0x68) for iPhone
+            // "iPad" vs "iPhone": check 3rd char, 'a' (iPad) vs 'h' (iPhone).
             let third = *utf8.add(2);
             if third == b'a' {
-                // "iPad"
-                return 1.0;
+                return js_string_from_bytes(b"pad".as_ptr(), 3);
             }
         }
-        0.0
+        js_string_from_bytes(b"phone".as_ptr(), 5)
     }
 }
 

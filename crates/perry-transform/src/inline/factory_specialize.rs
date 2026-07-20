@@ -86,7 +86,9 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     args,
                     ..
                 },
-                Expr::PropertyGet { object, property },
+                Expr::PropertyGet {
+                    object, property, ..
+                },
             ) => {
                 if let Expr::LocalGet(o_ref) = object.as_ref() {
                     if *o_ref != *bound_id {
@@ -162,9 +164,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             .as_ref()
             .map(|c| {
                 c.params.iter().any(|p| {
-                    p.name
-                        .strip_prefix("__perry_cap_")
-                        .and_then(|suffix| suffix.parse::<LocalId>().ok())
+                    perry_hir::cap_fields::cap_field_outer_id(&p.name)
                         .map(|outer_id| param_set.contains(&outer_id))
                         .unwrap_or(false)
                 })
@@ -786,8 +786,8 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             .collect();
         if let Some(ctor) = &class.constructor {
             for p in &ctor.params {
-                if let Some(suffix) = p.name.strip_prefix("__perry_cap_") {
-                    if let Ok(outer_id) = suffix.parse::<LocalId>() {
+                if let Some(outer_id) = perry_hir::cap_fields::cap_field_outer_id(&p.name) {
+                    {
                         if let Some(idx) = param_ids.iter().position(|id| *id == outer_id) {
                             let arg_expr = padded_args[idx].clone();
                             subst.insert(p.id, arg_expr);
@@ -823,6 +823,15 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         *next_class_counter += 1;
         let mut cloned = class.clone();
         cloned.name = cloned_name.clone();
+        // When the parent arg specializes to a runtime value rather than a
+        // static class (`Serializable(Mid)` where `Mid` is a local binding, not
+        // a `ClassRef`), we can't wire a static `extends_name`. The factory
+        // Call — including the `RegisterClassParentDynamic` its lowered Sequence
+        // carried — is about to be replaced by a bare `ClassRef` below, which
+        // would drop the parent edge entirely: `new Top()` would then inherit
+        // nothing from `Mid` (no fields, no methods, `instanceof Mid` false).
+        // Re-emit the dynamic registration at the call site instead (#6356).
+        let mut dynamic_parent_expr: Option<Expr> = None;
         if let Some(extends_expr) = cloned.extends_expr.as_mut() {
             substitute_locals(extends_expr, &param_subst, &mut next_id_seed);
             if let Expr::ClassRef(parent_name) = extends_expr.as_ref() {
@@ -837,6 +846,8 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             .find(|c| &c.name == parent_name)
                             .map(|c| c.id)
                     });
+            } else {
+                dynamic_parent_expr = Some((**extends_expr).clone());
             }
         }
         // Filter out the capture ctor params + matching synthetic fields +
@@ -914,13 +925,42 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 cloned.constructor = None;
             }
         }
+        // Assign a FRESH, unique class id. `class.clone()` above copied the
+        // template's id, and codegen keys the runtime class registry (methods,
+        // constructor, parent edges) by `c.id` (`codegen/mod.rs` builds
+        // `class_ids` from each class's `id`). Leaving the copy in place makes a
+        // clone collide with its template AND with sibling clones of the same
+        // template (`Serializable(Greetable(Base))` and `Serializable(Mid)` both
+        // clone `__anon_class_N`) — the distinct classes then share one registry
+        // slot, last-writer-wins on the constructor/parent edge, and a two-level
+        // dynamic mixin chain loses its intermediate parent (#6356). Ids past
+        // the current max are free: codegen derives its imported-class fallback
+        // range from the post-specialization max, and static parent edges are
+        // resolved by NAME, so only the numeric id has to be unique here. Later
+        // clones referencing this one as a static parent (see the `extends`
+        // lookup above) read the id assigned here, so assign before pushing.
+        let base_class_id = classes.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        cloned.id = base_class_id + new_classes.len() as u32;
         new_classes.push(cloned);
         // Replace the Call with `ClassRef(cloned_name)`. The Let's init is
         // now a plain ClassRef — the regular inliner won't touch it and
         // subsequent `new <X>()` sites will see it as an alias for the
         // specialized class via the existing `local_class_aliases`
-        // mechanism in codegen.
-        *expr = Expr::ClassRef(cloned_name);
+        // mechanism in codegen. When the parent is a runtime value, sequence
+        // the dynamic parent registration ahead of the ClassRef (the Sequence
+        // still yields the ClassRef as its value) so the parent edge is wired
+        // when this init runs — mirroring the class-expression lowering in
+        // `perry-hir`'s `arm_class.rs`.
+        *expr = match dynamic_parent_expr {
+            Some(parent_expr) => Expr::Sequence(vec![
+                Expr::RegisterClassParentDynamic {
+                    class_name: cloned_name.clone(),
+                    parent_expr: Box::new(parent_expr),
+                },
+                Expr::ClassRef(cloned_name),
+            ]),
+            None => Expr::ClassRef(cloned_name),
+        };
         true
     }
 
@@ -942,13 +982,21 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
     // lets `lower_new` walk through the specialized class for inherited
     // constructors and field initializers instead of the unspecialized
     // anonymous original.
+    //
+    // `parent_expr` may be an `Expr::Sequence([RegisterClassParentDynamic, …,
+    // ClassRef(<inline>)])` when a class DECLARATION extends a factory call
+    // with a runtime-value arg (`class Child extends Factory(runtimeVar) {}`):
+    // `rewrite_call_init` rewrote the inner factory Call to that Sequence
+    // (see `rewrite_to_specialized_class`). Resolve through `classref_name`,
+    // which unwraps a Sequence to its trailing `ClassRef`, so the child's
+    // static parent still hoists rather than falling back to the runtime edge.
     for stmt in &module.init {
         if let Stmt::Expr(Expr::RegisterClassParentDynamic {
             class_name,
             parent_expr,
         }) = stmt
         {
-            if let Expr::ClassRef(parent_name) = parent_expr.as_ref() {
+            if let Some(ref parent_name) = classref_name(parent_expr.as_ref()) {
                 if let Some(child) = module.classes.iter_mut().find(|c| &c.name == class_name) {
                     child.extends_name = Some(parent_name.clone());
                     if let Some(parent_cls) = new_classes

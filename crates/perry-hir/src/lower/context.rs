@@ -169,6 +169,7 @@ impl LoweringContext {
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
+            body_class_expr_captures: Vec::new(),
             let_class_aliases: Vec::new(),
             global_this_aliases: HashSet::new(),
             prototype_aliases: HashMap::new(),
@@ -1147,6 +1148,13 @@ impl LoweringContext {
             .iter()
             .find(|(n, _, _)| n == name)
             .map(|(_, params, ret)| (params, ret))
+    }
+
+    /// Stable per-module salt for class-capture field names (see
+    /// `crate::cap_fields`). Reuses the tagged-template site salt — a stable
+    /// hash of the module's source path.
+    pub(crate) fn cap_salt(&self) -> u64 {
+        self.tagged_template_site_salt
     }
 
     pub(crate) fn register_native_module(

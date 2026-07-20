@@ -205,6 +205,41 @@ The wired constructor takes the npm v7+ options-object shape
 {{#include ../../examples/stdlib/other/snippets.ts:child-process}}
 ```
 
+## node-pty (Pseudo-terminals)
+
+A runtime-native pty (#6563) — `openpty`/`fork` with the slave as the child's
+controlling terminal, no N-API addon. Importable as both `node-pty` and the
+API-identical `@lydell/node-pty` fork, statically or via dynamic `import()`.
+POSIX only for now (macOS + Linux); on other hosts `spawn` throws, which
+triggers consumers' non-pty fallback paths.
+
+`onData` delivers UTF-8 strings (multi-byte sequences split across reads are
+reassembled); `onExit` fires `{ exitCode, signal }` with the numeric signal
+for a signal death and `undefined` otherwise; `kill()` defaults to `SIGHUP`
+like node-pty. `TERM` in the child comes from `name`.
+
+```typescript,no-test
+import { spawn } from "node-pty";
+
+const term = spawn("bash", [], {
+  name: "xterm-256color",
+  cols: 80,
+  rows: 24,
+  cwd: process.cwd(),
+  env: process.env,
+});
+
+const sub = term.onData((data) => process.stdout.write(data));
+term.onExit(({ exitCode, signal }) => {
+  console.log(`exited: code=${exitCode} signal=${signal ?? "none"}`);
+});
+
+term.write("echo hello\n");
+term.resize(120, 40);   // TIOCSWINSZ → child sees SIGWINCH
+term.kill("SIGTERM");   // no argument = SIGHUP
+sub.dispose();          // unsubscribe onData
+```
+
 ## External native bindings
 
 Two packages live in their own GitHub repos with their own semver — they're

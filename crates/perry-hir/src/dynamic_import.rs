@@ -1697,7 +1697,9 @@ fn static_string_replace_target<'a>(callee: &'a Expr, args: &[Expr]) -> Option<&
         return None;
     }
     match callee {
-        Expr::PropertyGet { object, property } if property == "replace" => Some(object),
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "replace" => Some(object),
         _ => None,
     }
 }
@@ -1744,7 +1746,10 @@ fn resolve_string_replace_parts<V: Borrow<Expr>>(
 }
 
 fn is_static_path_join_call(callee: &Expr) -> bool {
-    let Expr::PropertyGet { object, property } = callee else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    else {
         return false;
     };
     property == "join" && is_static_path_module_expr(object)
@@ -1753,9 +1758,9 @@ fn is_static_path_join_call(callee: &Expr) -> bool {
 fn is_static_path_module_expr(expr: &Expr) -> bool {
     match expr {
         Expr::NativeModuleRef(module) => module == "path" || module == "node:path",
-        Expr::PropertyGet { object, property } if property == "default" => {
-            is_static_path_module_expr(object)
-        }
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "default" => is_static_path_module_expr(object),
         _ => false,
     }
 }

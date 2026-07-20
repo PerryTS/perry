@@ -101,9 +101,9 @@ pub use self::iter_methods::{
     js_validate_array_map_callback,
 };
 pub use self::iter_object::{
-    array_entries_iter, array_keys_iter, array_values_iter, dispatch_array_iterator_method,
-    js_array_entries_iter_obj, js_array_keys_iter_obj, js_array_values_iter_obj,
-    ARRAY_ITERATOR_CLASS_ID,
+    array_entries_iter, array_keys_iter, array_values_iter, array_values_iter_null_done,
+    dispatch_array_iterator_method, js_array_entries_iter_obj, js_array_keys_iter_obj,
+    js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::is_builtin_iterator_class_id;
 pub(crate) use self::iterator::iter_bt_dump;
@@ -152,9 +152,10 @@ pub(crate) use self::flat_clone::flattenable_array_ptr;
 pub(crate) use self::header::{
     array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_named_property_delete,
     array_named_property_get, array_named_property_get_by_name, array_named_property_has,
-    array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
-    array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
-    array_ptr_as_proxy, canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
+    array_named_property_names, array_named_property_set, array_named_props_install_fresh,
+    array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
+    array_numeric_raw_f64_set_inbounds, array_object_flags, array_ptr_as_proxy,
+    canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
     mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
     note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,

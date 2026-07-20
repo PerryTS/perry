@@ -587,6 +587,23 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_VERIFY_NATIVE_REGIONS",
         "PERRY_UNBOXED_OBJECT_FIELDS",
         "PERRY_TARGET_CPU",
+        // Codegen tuning/emission toggles (#6394).
+        "PERRY_TYPED_FEEDBACK",
+        "PERRY_TYPED_FEEDBACK_TRACE",
+        "PERRY_FULL_OUTLINE_IC",
+        "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
+        "PERRY_OUTLINE_METHOD_DISPATCH",
+        "PERRY_INLINE_NEW",
+        "PERRY_INLINE_CTOR",
+        "PERRY_STRING_INIT_CHUNK_SIZE",
+        "PERRY_LL_O0_THRESHOLD_BYTES",
+        "PERRY_LL_SIZE_OPT",
+        "PERRY_LL_SIZE_OPT_MAX_FN_BYTES",
+        "PERRY_ENTRY_SYMBOL",
+        "PERRY_CODEGEN_UNITS",
+        "PERRY_CODEGEN_UNIT_SIZE",
+        "PERRY_SETJMP_VOLATILE",
+        "PERRY_GC_MOVING_LOOP_POLLS",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.
