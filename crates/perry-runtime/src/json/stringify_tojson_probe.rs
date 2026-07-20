@@ -222,3 +222,70 @@ pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
     }
     true
 }
+
+// ─── SerializeJSONProperty key (#5909) ───────────────────────────────────────
+// ECMA-262 §25.5.2.2 SerializeJSONProperty step 2.b.i calls `toJSON` with the
+// property key. `TO_JSON_KEY` carries that key from each serialization loop
+// (which knows the child's key) down to the three `toJSON` probes (which don't).
+// See the thread-local's doc comment in `mod.rs`.
+
+/// Reset the pending `toJSON` key to the empty String — the root key, and the
+/// safe default at every top-level `JSON.stringify` entry so a key set during
+/// a previous call can't leak into the next.
+#[inline]
+pub(crate) fn reset_to_json_key() {
+    TO_JSON_KEY.with(|c| c.borrow_mut().clear());
+}
+
+/// Record an object's own property name as the key to hand `toJSON` for the
+/// member about to be serialized.
+#[inline]
+pub(crate) fn set_to_json_key_str(key: &str) {
+    TO_JSON_KEY.with(|c| {
+        let mut s = c.borrow_mut();
+        s.clear();
+        s.push_str(key);
+    });
+}
+
+/// Record an array index (its stringified form) as the key to hand `toJSON`
+/// for the element about to be serialized.
+#[inline]
+pub(crate) fn set_to_json_key_index(index: usize) {
+    use std::fmt::Write;
+    TO_JSON_KEY.with(|c| {
+        let mut s = c.borrow_mut();
+        s.clear();
+        let _ = write!(s, "{index}");
+    });
+}
+
+/// Record a NaN-boxed JS string value as the pending `toJSON` key. The
+/// replacer walk (`apply_to_json_keyed`) already carries the property key as a
+/// value rather than a `&str`, so decode it here. Copies the bytes into the
+/// owned `String`, so nothing borrows the source header afterward.
+#[inline]
+pub(crate) unsafe fn set_to_json_key_value(key: f64) {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    match crate::string::str_bytes_from_jsvalue(key, &mut scratch) {
+        Some((ptr, len)) => {
+            let bytes = std::slice::from_raw_parts(ptr, len as usize);
+            TO_JSON_KEY.with(|c| {
+                let mut s = c.borrow_mut();
+                s.clear();
+                s.push_str(&String::from_utf8_lossy(bytes));
+            });
+        }
+        None => reset_to_json_key(),
+    }
+}
+
+/// Allocate the current pending `toJSON` key as a JS string value to pass as
+/// the `toJSON(key)` argument. The bytes are copied out of the thread-local
+/// first so the string allocation can't observe the cell still borrowed.
+#[inline]
+pub(crate) unsafe fn current_to_json_key_arg() -> f64 {
+    let bytes = TO_JSON_KEY.with(|c| c.borrow().as_bytes().to_vec());
+    let key = crate::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    f64::from_bits(STRING_TAG | (key as u64 & POINTER_MASK))
+}

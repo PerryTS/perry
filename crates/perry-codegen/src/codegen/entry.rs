@@ -1051,11 +1051,11 @@ pub(super) fn compile_module_entry(
                 // we ret. Mirrors Node's "event loop drained → one
                 // beforeExit pass" semantics.
                 //
-                // We pass `0` as the code today: Perry doesn't yet wire
-                // `process.exitCode` into this codegen path, and the test
-                // surface in #2135 only pins the firing + the default
-                // code. Explicit `process.exit(N)` bypasses this whole
-                // block via libc::_exit.
+                // We still pass `0` to the `beforeExit` emit (the #2135 test
+                // surface only pins the firing + default code); the *process*
+                // status, by contrast, now consults `process.exitCode` at the
+                // `ret` below (#6666). Explicit `process.exit(N)` bypasses this
+                // whole block via libc::_exit.
                 ctx.current_block = exit_idx;
                 let zero_code = "0x0".to_string();
                 ctx.block()
@@ -1080,7 +1080,15 @@ pub(super) fn compile_module_entry(
                     "js_gc_release_current_thread_collection_side_allocations",
                     &[],
                 );
-                ctx.block().ret(I32, "0");
+                // #6666: natural exit (event loop drained / main returned with
+                // no explicit `process.exit()`) returns the stored
+                // `process.exitCode` (default 0), matching Node. An uncaught
+                // throw (exits 1 via `js_throw`) or an unhandled rejection
+                // (exits 1 via `js_promise_report_unhandled_rejections` above)
+                // has already terminated the process before reaching here, so
+                // those keep their own status and never fall through to this.
+                let final_exit_code = ctx.block().call(I32, "js_process_pending_exit_code", &[]);
+                ctx.block().ret(I32, &final_exit_code);
             }
         }
         let ic_globals = std::mem::take(&mut ctx.ic_globals);

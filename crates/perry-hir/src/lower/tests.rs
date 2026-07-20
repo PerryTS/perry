@@ -507,3 +507,44 @@ fn test_plain_class_to_class_heritage_keeps_static_extends_name() {
         "static class-to-class heritage keeps its extends_name"
     );
 }
+
+/// #6679: a NAMED class EXPRESSION's `.name` is its own explicit name
+/// (`Named` in `const B = class Named {}`), not the outer binding name. Per
+/// spec a named class expression is not an anonymous function definition, so
+/// the assignment's NamedEvaluation (`SetFunctionName` from `const B =`) must
+/// not clobber the declared name. The module-top-level `const X = class {…}`
+/// fast path registers the class under the binding name so `new B()` /
+/// `instanceof B` resolve statically, and records a `class_display_names`
+/// override to the explicit name for codegen to emit as `.name`. An ANONYMOUS
+/// `const A = class {}` takes the inferred binding name and needs no override.
+#[test]
+fn test_named_class_expression_var_decl_reports_explicit_name() {
+    let source = r#"
+        const B = class Named {};
+        const A = class {};
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let named = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "B")
+        .expect("class registered under binding name `B`");
+    assert_eq!(
+        hir.class_display_names.get(&named.id).map(String::as_str),
+        Some("Named"),
+        "named class expression must report its explicit name as `.name`"
+    );
+
+    let anon = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "A")
+        .expect("anonymous class registered under inferred name `A`");
+    assert_eq!(
+        hir.class_display_names.get(&anon.id),
+        None,
+        "anonymous class expression uses the inferred binding name, no override"
+    );
+}

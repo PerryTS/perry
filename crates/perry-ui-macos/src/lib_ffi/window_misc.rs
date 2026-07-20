@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use crate::*;
 
 // =============================================================================
@@ -215,10 +216,7 @@ pub extern "C" fn perry_on_layout_change(_callback: f64) {}
 /// and misreported a Mac as a phone.
 #[no_mangle]
 pub extern "C" fn perry_get_device_idiom() -> i64 {
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-    }
-    unsafe { js_string_from_bytes(b"mac".as_ptr(), 3) }
+    unsafe { js_string_from_bytes(b"mac".as_ptr(), 3) as i64 }
 }
 
 // --- TabBar stubs (not yet implemented for macOS) ---

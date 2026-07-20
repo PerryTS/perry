@@ -104,7 +104,10 @@ fn heap_ptr_from_value(value: f64) -> Option<usize> {
         return None;
     }
     let addr = js.as_pointer::<u8>() as usize;
-    if addr < 0x10000 {
+    // Reject the whole small-handle band, not just a hand-rolled floor: a
+    // fetch/zlib/proxy handle id sits in [0x10000, 0x100000) and would be
+    // dereferenced as an ObjectHeader here, segfaulting on Linux (#6279).
+    if crate::value::addr_class::is_handle_band(addr) {
         None
     } else {
         Some(addr)

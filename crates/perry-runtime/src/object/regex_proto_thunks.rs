@@ -258,6 +258,23 @@ pub(super) extern "C" fn regex_proto_test_thunk(
     f64::from_bits(crate::value::JSValue::bool(matched).bits())
 }
 
+/// `RegExp.prototype.compile(pattern, flags)` (Annex B §B.2.5.1) — brand-checks
+/// `this` has a `[[RegExpMatcher]]` internal slot (a registered RegExp; a
+/// non-Object or non-RegExp receiver throws `TypeError`), then re-initializes
+/// the receiver in place. Reflective: `RegExp.prototype.compile.call(re, p, f)`
+/// and the extracted-then-called form both route here; a direct `re.compile(p,
+/// f)` is fast-pathed in `native_call_method` but ends in the same
+/// `js_regexp_compile_value`.
+#[cfg(feature = "regex-engine")]
+pub(super) extern "C" fn regex_proto_compile_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    pattern: f64,
+    flags: f64,
+) -> f64 {
+    let re = regex_instance_or_throw("compile");
+    crate::regex::js_regexp_compile_value(re as *mut crate::regex::RegExpHeader, pattern, flags)
+}
+
 /// `RegExp.prototype.toString()` — per spec reads `source`/`flags` off the
 /// (generic) receiver via `Get` and returns `/source/flags`. Throws `TypeError`
 /// only when `this` is not an Object, so
@@ -312,14 +329,26 @@ fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
     ))
 }
 
-/// Install the real (brand-checking) `exec`/`test`/`toString` prototype methods.
-/// `compile` stays a no-op (Annex B, rarely exercised).
+/// Install the real (brand-checking) `exec`/`test`/`toString`/`compile`
+/// prototype methods. `compile` is only installed here when the `regex-engine`
+/// feature is on; the fallback no-op (for builds without an engine) is installed
+/// by the caller.
 pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method as ipm;
     #[cfg(feature = "regex-engine")]
     ipm(proto_obj, "exec", regex_proto_exec_thunk as *const u8, 1);
     #[cfg(feature = "regex-engine")]
     ipm(proto_obj, "test", regex_proto_test_thunk as *const u8, 1);
+    // Annex B `compile` re-initializes the receiver in place. It needs a real
+    // brand check so `RegExp.prototype.compile.call(non-regexp)` throws a
+    // `TypeError` (test262 annexB `.../compile/this-{not-object,obj-not-regexp}`).
+    #[cfg(feature = "regex-engine")]
+    ipm(
+        proto_obj,
+        "compile",
+        regex_proto_compile_thunk as *const u8,
+        2,
+    );
     ipm(
         proto_obj,
         "toString",

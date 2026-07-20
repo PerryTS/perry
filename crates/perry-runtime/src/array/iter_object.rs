@@ -358,9 +358,106 @@ unsafe fn collection_iter_obj_for_receiver(arr: *const ArrayHeader, kind: u8) ->
     }
 }
 
+/// Receiver router for the any-typed `.values()/.keys()/.entries()` fold
+/// (#597). Codegen passes the receiver's FULL NaN-box bits (bitcast, no
+/// 48-bit mask) so a non-pointer receiver stays distinguishable from a heap
+/// address. Before this, a Web Streams handle id (a raw numeric f64, band
+/// `0x100000+`, #1545) was masked to `(id - 2^20) * 2^32`; once the id
+/// offset crossed 512 that "address" passed the macOS 2 TB heap floor and
+/// the registry shape probes dereferenced unmapped memory (the gscmaster
+/// request-12 SIGSEGV family; on Linux the 0x1000 floor makes low ids probe
+/// low memory immediately). Raw heap pointers — runtime-internal callers
+/// and objects compiled before the codegen change — arrive with top16 == 0
+/// and keep the legacy path bit-for-bit.
+enum IterReceiver {
+    Ptr(*const ArrayHeader),
+    Done(i64),
+}
+
+unsafe fn route_iter_obj_receiver(arr: *const ArrayHeader, kind: u8) -> IterReceiver {
+    let bits = arr as u64;
+    let top16 = bits >> 48;
+    if top16 == 0 {
+        // Runtime-internal callers (and objects from pre-change codegen)
+        // pass raw heap pointers here. `0.0` and denormal-range doubles
+        // share the untagged shape — only a plausible heap address may be
+        // treated as a pointer, so `(0 as any).entries()` reaches the
+        // TypeError below instead of dereferencing null (#6599 review).
+        if crate::value::addr_class::is_plausible_heap_addr(bits as usize) {
+            return IterReceiver::Ptr(arr);
+        }
+    }
+    let masked = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+    if top16 == 0x7FFD {
+        return IterReceiver::Ptr(masked);
+    }
+    if top16 == 0x7FFC {
+        // undefined (1) / null (2): keep the small payload so
+        // `guard_coercible_this` renders its coercibility TypeError.
+        // Booleans (3/4) are ordinary non-iterable primitives — they used
+        // to fall through to the junk-pointer deref path; route them to
+        // the TypeError below instead (#6599 review).
+        let payload = masked as usize;
+        if payload == 1 || payload == 2 {
+            return IterReceiver::Ptr(masked);
+        }
+    }
+    let method: &[u8] = match kind {
+        1 => b"keys",
+        2 => b"entries",
+        _ => b"values",
+    };
+    // A Web Streams handle is a plain finite whole-number f64 that owns the
+    // requested method — route it through the dynamic dispatch that reaches
+    // the stdlib stream arms (mirrors the fetch-band block in
+    // `collection_iter_obj_for_receiver`; `js_readable_stream_values`
+    // returns a heap iterator object, so the pointer extraction below is
+    // sound).
+    let value = f64::from_bits(bits);
+    if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
+        if let Some(probe) = crate::object::stream_handle_probe() {
+            if probe(value as usize) {
+                let result = crate::object::js_native_call_method(
+                    value,
+                    method.as_ptr() as *const i8,
+                    method.len(),
+                    std::ptr::null(),
+                    0,
+                );
+                let rv = JSValue::from_bits(result.to_bits());
+                if !rv.is_undefined() && !rv.is_null() {
+                    let ptr = (result.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    if ptr != 0 {
+                        return IterReceiver::Done(ptr);
+                    }
+                }
+            }
+        }
+    }
+    // Any other primitive receiver (number, string, int32, bigint) does not
+    // own these methods — spec TypeError, as Node throws. The old masked
+    // path either dereferenced the primitive's bits as an ArrayHeader (UB)
+    // or iterated garbage.
+    let method_str = match kind {
+        1 => "keys",
+        2 => "entries",
+        _ => "values",
+    };
+    crate::error::js_throw_type_error_not_a_function(
+        std::ptr::null(),
+        0,
+        method_str.as_ptr(),
+        method_str.len(),
+    );
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        let arr = match route_iter_obj_receiver(arr, 0) {
+            IterReceiver::Ptr(p) => p,
+            IterReceiver::Done(it) => return it,
+        };
         if let Some(it) = collection_iter_obj_for_receiver(arr, 0) {
             return it;
         }
@@ -373,6 +470,10 @@ pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        let arr = match route_iter_obj_receiver(arr, 1) {
+            IterReceiver::Ptr(p) => p,
+            IterReceiver::Done(it) => return it,
+        };
         if let Some(it) = collection_iter_obj_for_receiver(arr, 1) {
             return it;
         }
@@ -385,6 +486,10 @@ pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        let arr = match route_iter_obj_receiver(arr, 2) {
+            IterReceiver::Ptr(p) => p,
+            IterReceiver::Done(it) => return it,
+        };
         if let Some(it) = collection_iter_obj_for_receiver(arr, 2) {
             return it;
         }

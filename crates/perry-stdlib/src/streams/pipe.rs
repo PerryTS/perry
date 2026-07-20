@@ -395,7 +395,25 @@ unsafe fn pipe_write_then_continue(
     // and let a tee sibling's reader outrun the pipe — Next.js cold-start
     // head reorder). Chain on the write promise only while it is pending.
     if perry_runtime::promise::js_promise_state(write_promise) == 1 {
-        schedule_pipe_step(readable_id, writable_id, promise, locks, prevent_close);
+        // Tick parity (streamsuite teepipe/teepipe2 wcc/waa): when the
+        // readable's queue is EMPTY, Node's pump has its next read parked
+        // within the write-completion reaction, so the next delivery (a tee
+        // fan-out) resolves it directly and the write lands one tick after
+        // the sibling's read. Deferring the park through a queued step made
+        // that write a tick late. Buffered chunks keep the queued step —
+        // popping synchronously would bunch writes and break the 1/tick
+        // write cadence.
+        let park_now = {
+            let g = READABLE_STREAMS.lock().unwrap();
+            g.get(&readable_id)
+                .map(|s| s.chunks.is_empty() && s.state == ReadableState::Readable)
+                .unwrap_or(false)
+        };
+        if park_now {
+            wait_for_next_read(readable_id, writable_id, promise, locks, prevent_close);
+        } else {
+            schedule_pipe_step(readable_id, writable_id, promise, locks, prevent_close);
+        }
         return;
     }
     let fulfilled = pipe_closure(
