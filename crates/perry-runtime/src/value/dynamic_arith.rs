@@ -19,11 +19,62 @@ unsafe fn coerce_to_bigint_ptr(val: f64) -> *mut crate::bigint::BigIntHeader {
     }
 }
 
+/// Describe a mixed-BigInt-throw operand for the `PERRY_BIGINT_MIX_DIAG=1`
+/// stderr dump (tag class + value preview). Diagnostic aid for "Cannot mix
+/// BigInt" throws in compiled bundles, where the JS stack is unavailable —
+/// pairing the operand dump with the native backtrace pinpointed the #6649
+/// pi-bundle init throw (TypeBox FNV-1a `Accumulator * Prime` with `Prime`
+/// compiled to `undefined`) in a single run. Only reachable from the `#[cold]`
+/// throw path, and only active when the env var is set.
+#[cold]
+unsafe fn describe_mix_operand(v: f64) -> String {
+    let jv = JSValue::from_bits(v.to_bits());
+    if jv.is_bigint() {
+        let s = crate::bigint::js_bigint_to_string(jv.as_bigint_ptr());
+        format!("bigint({}n)", crate::exception::string_header_to_string(s))
+    } else if jv.is_int32() {
+        format!("int32({})", jv.as_int32())
+    } else if jv.is_bool() {
+        format!("bool({})", jv.as_bool())
+    } else if jv.is_undefined() {
+        "undefined".to_string()
+    } else if jv.is_null() {
+        "null".to_string()
+    } else if jv.is_any_string() {
+        let ptr = js_get_string_pointer_unified(v) as *const crate::string::StringHeader;
+        let mut s = crate::exception::string_header_to_string(ptr);
+        // Char-boundary-safe preview cap: byte-index truncate panics when the
+        // 80th byte lands inside a multi-byte UTF-8 sequence.
+        if s.len() > 80 {
+            let cut = (0..=80).rev().find(|i| s.is_char_boundary(*i)).unwrap_or(0);
+            s.truncate(cut);
+        }
+        format!("string({s:?})")
+    } else if jv.is_pointer() {
+        format!("pointer(0x{:x})", jv.as_pointer::<u8>() as usize)
+    } else {
+        format!("number({v}) bits=0x{:016x}", v.to_bits())
+    }
+}
+
 /// Throw `TypeError: Cannot mix BigInt and other types, use explicit
 /// conversions`, matching Node when a BigInt operand is combined with a
 /// non-BigInt operand in an arithmetic / bitwise operation (#2908).
 #[cold]
-unsafe fn throw_mix_bigint() -> ! {
+unsafe fn throw_mix_bigint(a: f64, b: f64) -> ! {
+    if std::env::var_os("PERRY_BIGINT_MIX_DIAG").is_some() {
+        // describe_mix_operand can allocate (BigInt → decimal string); root
+        // both operands and reload `b` through its handle so the first
+        // describe's allocations cannot leave the second reading a stale
+        // pointer. Cold diagnostic path — the scope cost is irrelevant.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a_handle = scope.root_nanbox_f64(a);
+        let b_handle = scope.root_nanbox_f64(b);
+        let a_desc = describe_mix_operand(a_handle.get_nanbox_f64());
+        let b_desc = describe_mix_operand(b_handle.get_nanbox_f64());
+        eprintln!("[bigint-mix-diag] a={a_desc} b={b_desc}");
+        eprintln!("{}", std::backtrace::Backtrace::force_capture());
+    }
     let msg = b"Cannot mix BigInt and other types, use explicit conversions";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err = crate::error::js_typeerror_new(s);
@@ -87,7 +138,7 @@ unsafe fn both_bigint_or_throw(a: f64, b: f64) -> bool {
     if a_big && b_big {
         true
     } else if a_big || b_big {
-        throw_mix_bigint();
+        throw_mix_bigint(a, b);
     } else {
         false
     }
@@ -667,15 +718,27 @@ pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
 }
 
 /// Dynamic unsigned right shift. BigInts have no `>>>` operator in
-/// ECMAScript, so any BigInt operand throws TypeError (#2908); otherwise
-/// numeric ToUint32 `>>>`.
+/// ECMAScript, so two BigInt operands throw the dedicated "no unsigned right
+/// shift" TypeError (#2908) — but a MIXED bigint/other pair throws the
+/// standard mixed-operand TypeError first, exactly like Node (the spec's
+/// both-BigInt type check precedes the operator lookup; #6649 parity
+/// fixture bigint/arithmetic/mixed-operand-errors.ts). Otherwise numeric
+/// ToUint32 `>>>`.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
-    let a_big = JSValue::from_bits(a.to_bits()).is_bigint();
-    let b_big = JSValue::from_bits(b.to_bits()).is_bigint();
-    if a_big || b_big {
+    // Root both operands across the coercions: to_numeric(a) can invoke a
+    // user ToPrimitive (allocate → GC → evacuation), which would leave the
+    // raw NaN-boxed `b` — and the freshly coerced `a`, if it is a BigInt
+    // pointer — dangling. Reload through the handles after each GC-capable
+    // call (same discipline as dynamic_bigint_binary_op above).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_in = scope.root_nanbox_f64(a);
+    let b_in = scope.root_nanbox_f64(b);
+    let a_num = to_numeric(a_in.get_nanbox_f64());
+    let a_handle = scope.root_nanbox_f64(a_num);
+    let b = to_numeric(b_in.get_nanbox_f64());
+    let a = a_handle.get_nanbox_f64();
+    if both_bigint_or_throw(a, b) {
         let msg = b"BigInts have no unsigned right shift, use >> instead";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err = crate::error::js_typeerror_new(s);

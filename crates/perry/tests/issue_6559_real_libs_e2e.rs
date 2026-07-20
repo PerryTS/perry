@@ -405,5 +405,8 @@ console.log("handlers:", f1.handler(), f2.handler(), f5.handler());
     assert!(stdout.contains("host: true"), "stdout:\n{stdout}");
     assert!(stdout.contains("wild: a/b.png"), "stdout:\n{stdout}");
     assert!(stdout.contains("miss: true"), "stdout:\n{stdout}");
-    assert!(stdout.contains("handlers: user book wild"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("handlers: user book wild"),
+        "stdout:\n{stdout}"
+    );
 }

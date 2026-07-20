@@ -764,6 +764,13 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         hoist_awaits_in_expr_full(expr, next_id, hoisted);
         return;
     }
+    // `{ a: f(), v: await p, ...src }` — the object-with-spread lowering
+    // wraps the build in a synthetic IIFE, trapping the await inside a
+    // NON-async closure the pre-pass would otherwise skip. Inline it so
+    // the awaits reach the enclosing async context (see the fn comment).
+    if inline_obj_iife_with_await(expr, next_id, hoisted) {
+        return;
+    }
     // Recurse into children first (innermost-first hoisting).
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
@@ -906,11 +913,92 @@ fn hoist_awaits_avoiding_top_level(
         hoist_awaits_avoiding_top_level(expr, next_id, hoisted);
         return;
     }
+    // Top-level awaited obj-IIFE, e.g. `return { v: await p, ...src };` —
+    // see the matching arm in `hoist_awaits_in_expr_full`.
+    if inline_obj_iife_with_await(expr, next_id, hoisted) {
+        return;
+    }
     // Outer is NOT an await. Children may contain awaits which ARE
     // nested — fully hoist them.
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
     });
+}
+
+/// `{ a: f(), v: await p, ...src }` lowers (lower/expr_object.rs) to a
+/// synthetic single-param IIFE (`__perry_obj_iife`) that builds the object —
+/// which traps a property-value `await` inside a NON-async closure. The
+/// pre-pass (correctly) never descends into closures, so that await stayed
+/// raw and codegen's fallback BLOCKED the frame on the re-entrant microtask
+/// pump — draining unrelated tasks mid-expression (the Next.js Flight
+/// row-reorder: next-intl's provider wrapper has exactly this shape). The
+/// IIFE runs exactly once at its own sequence point and HIR closure bodies
+/// reference enclosing locals by their original ids, so inline it: bind the
+/// seed object to the param's id, replay the body statements in evaluation
+/// order (hoisting their awaits into the enclosing async context), and
+/// replace the call with a read of the object local. Non-await obj-IIFEs
+/// keep the closure form untouched.
+fn inline_obj_iife_with_await(
+    expr: &mut Expr,
+    next_id: &mut LocalId,
+    hoisted: &mut Vec<Stmt>,
+) -> bool {
+    {
+        let Expr::Call { callee, args, .. } = &*expr else {
+            return false;
+        };
+        let Expr::Closure {
+            params,
+            body,
+            is_async,
+            is_generator,
+            ..
+        } = callee.as_ref()
+        else {
+            return false;
+        };
+        if *is_async
+            || *is_generator
+            || params.len() != 1
+            || args.len() != 1
+            || params[0].name != "__perry_obj_iife"
+            || !body_contains_await(body)
+        {
+            return false;
+        }
+    }
+    let Expr::Call { callee, args, .. } = expr else {
+        unreachable!()
+    };
+    let Expr::Closure { params, body, .. } = callee.as_mut() else {
+        unreachable!()
+    };
+    let obj_id = params[0].id;
+    let seed = args.remove(0);
+    hoisted.push(Stmt::Let {
+        id: obj_id,
+        name: "__perry_obj_iife".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(seed),
+    });
+    let stmts = std::mem::take(body);
+    for mut stmt in stmts {
+        match &mut stmt {
+            // The synthesized body ends with `return __perry_obj_iife` —
+            // any return terminates the replay.
+            Stmt::Return(_) => break,
+            Stmt::Expr(e) => {
+                hoist_awaits_in_expr_full(e, next_id, hoisted);
+                hoisted.push(stmt);
+            }
+            // Lowered obj-IIFE bodies are flat Expr/Return statements today;
+            // forward anything else untouched.
+            _ => hoisted.push(stmt),
+        }
+    }
+    *expr = Expr::LocalGet(obj_id);
+    true
 }
 
 /// Lift a sequence (comma) expression's non-final operands into statements
@@ -957,7 +1045,14 @@ fn expr_contains_await(expr: &Expr) -> bool {
     if matches!(expr, Expr::Await(_)) {
         return true;
     }
-    if matches!(expr, Expr::Closure { .. }) {
+    if let Expr::Closure { params, body, .. } = expr {
+        // The synthetic object-with-spread IIFE executes inline at its own
+        // sequence point — an await inside it IS an await of the enclosing
+        // function (`inline_obj_iife_with_await` surfaces it during the
+        // hoist). Every other closure owns its awaits.
+        if params.len() == 1 && params[0].name == "__perry_obj_iife" {
+            return body_contains_await(body);
+        }
         return false;
     }
     let mut found = false;
@@ -1684,7 +1779,17 @@ fn expr_contains_await_shallow(expr: &Expr, found: &mut bool) -> bool {
         *found = true;
         return true;
     }
-    if matches!(expr, Expr::Closure { .. }) {
+    if let Expr::Closure { params, body, .. } = expr {
+        // See `expr_contains_await`: the synthetic object-with-spread IIFE's
+        // awaits belong to the enclosing function — without this, an async
+        // closure whose ONLY awaits sit in an obj-IIFE never enters the
+        // collect work set, stays un-rewritten, and its raw awaits BLOCK the
+        // frame on the busy-wait pump (next-intl's provider wrapper in the
+        // Next.js Flight row-reorder).
+        if params.len() == 1 && params[0].name == "__perry_obj_iife" && body_contains_await(body) {
+            *found = true;
+            return true;
+        }
         return false;
     }
     perry_hir::walker::walk_expr_children(expr, &mut |e| {

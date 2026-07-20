@@ -143,7 +143,7 @@ pub unsafe extern "C" fn js_ratelimit_new_from_options(options_bits: i64) -> Han
     let jv = JSValue::from_bits(options_bits as u64);
     if jv.is_pointer() {
         let obj = jv.as_pointer::<ObjectHeader>();
-        if !obj.is_null() && (obj as usize) >= 0x100000 {
+        if !obj.is_null() && perry_runtime::value::addr_class::is_above_handle_band(obj as usize) {
             let field = |name: &[u8]| -> f64 {
                 let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
                 perry_runtime::object::js_object_get_field_by_name_f64(obj, key)

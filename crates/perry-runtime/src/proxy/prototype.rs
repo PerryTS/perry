@@ -2,7 +2,7 @@
 //! entry point. Split out of `proxy.rs` to keep that file under the size gate.
 
 use super::{
-    call_trap, handler_trap, is_callable_function, lookup, nanbox_bool,
+    call_trap, handler_trap, is_callable_function, js_reflect_is_extensible, lookup, nanbox_bool,
     reflect_non_object_typeerror, reflect_target_get_prototype_of, reflect_value_is_object,
     revoked_return, throw_type_error, PROXIES, TAG_NULL, TAG_UNDEFINED,
 };
@@ -74,32 +74,46 @@ fn proxy_set_prototype_of(proxy_boxed: f64, proto: f64) -> f64 {
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "setPrototypeOf");
-    let trap_bits = trap.to_bits();
-    if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
-        // No trap — forward to the target's [[SetPrototypeOf]].
-        return js_reflect_set_prototype_of(target, proto);
-    }
-    if !is_callable_function(trap) {
-        return throw_type_error("proxy setPrototypeOf trap is not a function");
-    }
+    // Root target/proto/handler before `handler_trap`, which allocates a key
+    // string (and may fire a handler getter) — either can trigger a GC that
+    // evacuates these heap values. Rooted handles are rewritten on evacuation,
+    // so every read below stays valid across user code.
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_h = scope.root_nanbox_f64(target);
     let proto_h = scope.root_nanbox_f64(proto);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let trap_h = scope.root_nanbox_f64(handler_trap(handler_h.get_nanbox_f64(), "setPrototypeOf"));
+    let trap_bits = trap_h.get_nanbox_f64().to_bits();
+    if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
+        // No trap — forward to the target's [[SetPrototypeOf]].
+        return js_reflect_set_prototype_of(target_h.get_nanbox_f64(), proto_h.get_nanbox_f64());
+    }
+    if !is_callable_function(trap_h.get_nanbox_f64()) {
+        return throw_type_error("proxy setPrototypeOf trap is not a function");
+    }
     let trap_result = call_trap(
-        handler,
-        trap,
+        handler_h.get_nanbox_f64(),
+        trap_h.get_nanbox_f64(),
         &[target_h.get_nanbox_f64(), proto_h.get_nanbox_f64()],
     );
     if crate::value::js_is_truthy(trap_result) == 0 {
         return nanbox_bool(false);
     }
-    // Invariant: if the target is non-extensible, the proto must not change.
-    let target = target_h.get_nanbox_f64();
-    let proto = proto_h.get_nanbox_f64();
-    if crate::object::obj_value_no_extend(target) {
-        let current = reflect_target_get_prototype_of(target);
-        if current.to_bits() != proto.to_bits() {
+    // Invariant (ECMA-262 §10.5.2 steps 10-14): re-validate against the
+    // target's own `[[IsExtensible]]` / `[[GetPrototypeOf]]`. When the target
+    // is itself a Proxy these run ITS isExtensible / getPrototypeOf traps,
+    // which may observe state or throw — a bare `obj_value_no_extend` flag read
+    // dispatched neither, so the target-proxy's throwing trap never fired
+    // (test262 setPrototypeOf/return-abrupt-from-isextensible-target and
+    // return-abrupt-from-target-getprototypeof). An extensible target accepts
+    // the change; otherwise the new proto must SameValue the target's current
+    // proto. `reflect_target_get_prototype_of` already recurses through a proxy
+    // target's getPrototypeOf trap.
+    let extensible =
+        crate::value::js_is_truthy(js_reflect_is_extensible(target_h.get_nanbox_f64())) != 0;
+    if !extensible {
+        let current = reflect_target_get_prototype_of(target_h.get_nanbox_f64());
+        if current.to_bits() != proto_h.get_nanbox_f64().to_bits() {
             return throw_type_error(
                 "proxy setPrototypeOf trap violates non-extensible target invariant",
             );

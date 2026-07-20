@@ -183,6 +183,12 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
     // String::reserve. `push_str` grows on overflow for the rare
     // single-call output that exceeds that, so skip the estimate call
     // (issue #67: it was ~10ns of wasted work per call for small values).
+    //
+    // The root value's `toJSON` key is the empty String (§25.5.2.2). Reset it
+    // unconditionally so a nested `JSON.stringify` inside a `toJSON`/replacer
+    // callback also sees `""` at its own root, and so a key left by a prior
+    // top-level call can't leak in (#5909).
+    super::reset_to_json_key();
     stringify_value(value, type_hint, &mut buf);
     let ptr = json_string_from_output_bytes(buf.as_bytes());
     restore_stringify_buf(buf);

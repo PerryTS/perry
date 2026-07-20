@@ -100,17 +100,79 @@ pub(crate) fn is_function_value(value: f64) -> bool {
     crate::value::js_handle_is_function(value)
 }
 
-pub(crate) fn supported_builtin_module_name(name: &str) -> Option<&str> {
-    match name {
-        "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
-        | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
-        | "http" | "http2" | "https" | "module" | "net" | "os" | "path" | "perf_hooks"
-        | "process" | "punycode" | "querystring" | "readline" | "readline/promises" | "sea"
-        | "stream" | "stream/promises" | "string_decoder" | "sys" | "test" | "test/reporters"
-        | "timers" | "timers/promises" | "tty" | "url" | "util" | "util/types" | "vm"
-        | "worker_threads" | "zlib" => Some(name),
+/// #6651: single source of truth for the RUNTIME dynamic builtin resolvers.
+/// `process.getBuiltinModule(id)` and the `require` returned by
+/// `module.createRequire(...)` accept exactly the module set of
+/// `module.builtinModules` (`MODULE_BUILTIN_MODULES`), so the three surfaces
+/// can never drift apart again — pi walls #3 (#6644, `diagnostics_channel`)
+/// and #5 (#6651, `v8`) were both a module implemented and statically
+/// importable but missing from one hand-copied allowlist. Two carve-outs:
+///
+/// - `_`-prefixed legacy internals (`_http_agent`, …): Node still serves
+///   them, Perry has no implementation — they must keep failing with an
+///   error that names the module, not resolve to a method-dead namespace.
+/// - Scheme-only builtins (`node:sea`, `node:sqlite`, `node:test`,
+///   `node:test/reporters` — stored WITH the prefix, exactly as Node spells
+///   them in `module.builtinModules`): resolve only when the caller wrote
+///   the `node:` prefix. The bare spelling is an ordinary npm package name
+///   in Node (`require('sqlite')` is `MODULE_NOT_FOUND`,
+///   `getBuiltinModule('sqlite')` is `undefined`).
+///
+/// Takes the RAW specifier (either spelling); returns the prefixless name.
+pub(crate) fn supported_builtin_module_name(specifier: &str) -> Option<&str> {
+    let (name, had_node_prefix) = match specifier.strip_prefix("node:") {
+        Some(stripped) => (stripped, true),
+        None => (specifier, false),
+    };
+    if name.starts_with('_') {
+        return None;
+    }
+    // A residual `node:` after one strip is a double-prefixed specifier
+    // (`node:node:test`). Node rejects those; without this check the
+    // stripped form matches the scheme-only entries (stored WITH their
+    // prefix in MODULE_BUILTIN_MODULES) and a prefixed "prefixless" name
+    // escapes to the value router.
+    if name.starts_with("node:") {
+        return None;
+    }
+    if MODULE_BUILTIN_MODULES.contains(&name)
+        || (had_node_prefix && MODULE_BUILTIN_MODULES.contains(&specifier))
+    {
+        return Some(name);
+    }
+    None
+}
+
+/// Builtin modules the dynamic resolvers must route through the
+/// `node_submodules` registry (submodule-spec exports) instead of a
+/// native-module namespace. These have no native-module dispatch bucket —
+/// `js_create_native_module_namespace` would hand back a method-dead object.
+/// The registry key differs from the module name (`/` → `_`).
+pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "diagnostics_channel" => Some("diagnostics_channel"),
+        "fs/promises" => Some("fs_promises"),
+        "stream/consumers" => Some("stream_consumers"),
+        "stream/web" => Some("stream_web"),
+        "test/reporters" => Some("test_reporters"),
+        "timers/promises" => Some("timers_promises"),
+        "trace_events" => Some("trace_events"),
         _ => None,
     }
+}
+
+/// Shared value resolver behind `process.getBuiltinModule` and createRequire's
+/// `require` (#6651): submodule-spec modules resolve through the
+/// `node_submodules` registry, everything else through the native-module
+/// namespace (whose dispatch the caller's devirt entry armed via the
+/// install-all hooks).
+pub(crate) fn builtin_module_value(module_name: &str) -> f64 {
+    if let Some(key) = builtin_submodule_key(module_name) {
+        return unsafe {
+            crate::node_submodules::js_node_submodule_namespace(key.as_ptr(), key.len() as u32)
+        };
+    }
+    crate::object::native_module_get_builtin_module_value(module_name)
 }
 
 pub(crate) const MODULE_BUILTIN_MODULES: &[&str] = &[
@@ -687,4 +749,84 @@ thread_local! {
     pub(crate) static PROCESS_TITLE: std::cell::RefCell<Option<String>> = const {
         std::cell::RefCell::new(None)
     };
+}
+
+/// #6651 family regression guard: the dynamic builtin resolvers
+/// (`createRequire(...)`'s `require` + `process.getBuiltinModule`) derive from
+/// `MODULE_BUILTIN_MODULES`, so every module Perry lists in
+/// `module.builtinModules` must resolve through them — and only through the
+/// spellings Node itself accepts.
+#[cfg(test)]
+mod builtin_module_list_tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_resolvers_cover_every_builtin_modules_entry() {
+        for &entry in MODULE_BUILTIN_MODULES {
+            if entry.starts_with('_') {
+                // Legacy internals: listed for `module.builtinModules` parity,
+                // but unimplemented — both spellings must keep failing.
+                assert_eq!(supported_builtin_module_name(entry), None, "{entry}");
+                let prefixed = format!("node:{entry}");
+                assert_eq!(supported_builtin_module_name(&prefixed), None, "{prefixed}");
+            } else if let Some(bare) = entry.strip_prefix("node:") {
+                // Scheme-only builtins (node:sea, node:sqlite, node:test,
+                // node:test/reporters): the prefixed spelling resolves, the
+                // bare spelling is an ordinary npm name (Node parity).
+                assert_eq!(supported_builtin_module_name(entry), Some(bare), "{entry}");
+                assert_eq!(supported_builtin_module_name(bare), None, "{bare}");
+            } else {
+                // Ordinary builtins: both spellings resolve to the bare name.
+                assert_eq!(supported_builtin_module_name(entry), Some(entry), "{entry}");
+                let prefixed = format!("node:{entry}");
+                assert_eq!(
+                    supported_builtin_module_name(&prefixed),
+                    Some(entry),
+                    "{prefixed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_builtins_are_rejected() {
+        for specifier in [
+            "lodash",
+            "node:nope",
+            "./file.js",
+            "/abs/file.js",
+            "",
+            // Double-prefixed spellings must not reach the scheme-only
+            // entries via the single strip (Node rejects them).
+            "node:node:test",
+            "node:node:fs",
+        ] {
+            assert_eq!(
+                supported_builtin_module_name(specifier),
+                None,
+                "{specifier}"
+            );
+        }
+    }
+
+    /// Every submodule-routed builtin must (a) itself be a resolvable builtin
+    /// name and (b) map to a registered `node_submodules` spec key — a typo'd
+    /// key would silently produce the empty unresolved-namespace stub.
+    #[test]
+    fn submodule_routes_point_at_real_specs() {
+        for &entry in MODULE_BUILTIN_MODULES {
+            let name = entry.strip_prefix("node:").unwrap_or(entry);
+            if let Some(key) = builtin_submodule_key(name) {
+                assert_eq!(
+                    supported_builtin_module_name(entry),
+                    Some(name),
+                    "submodule-routed {name} must be resolvable"
+                );
+                assert!(
+                    crate::node_submodules::is_registered_submodule_key(key),
+                    "builtin_submodule_key({name:?}) = {key:?} names no registered spec"
+                );
+            }
+        }
+    }
 }

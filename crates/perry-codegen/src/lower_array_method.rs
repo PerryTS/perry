@@ -997,7 +997,10 @@ pub(crate) fn lower_array_method(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
+            // Full bits, not the 48-bit mask: the runtime router classifies
+            // non-pointer receivers (Web Streams handle ids are plain
+            // doubles whose masked bits look like heap addresses).
+            let recv_handle = blk.bitcast_double_to_i64(&recv_box);
             let result = blk.call(I64, "js_array_entries_iter_obj", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
@@ -1006,7 +1009,7 @@ pub(crate) fn lower_array_method(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let recv_handle = blk.bitcast_double_to_i64(&recv_box);
             let result = blk.call(I64, "js_array_keys_iter_obj", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
@@ -1015,7 +1018,7 @@ pub(crate) fn lower_array_method(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let recv_handle = blk.bitcast_double_to_i64(&recv_box);
             let result = blk.call(I64, "js_array_values_iter_obj", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }

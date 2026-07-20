@@ -341,7 +341,10 @@ try {
         stdout.contains(r#"out: {"id":7,"name":"x\"y","active":true,"list":[1,2.5,3]}"#),
         "stdout:\n{stdout}"
     );
-    assert!(stdout.contains(r#"caught: "id" is required!"#), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains(r#"caught: "id" is required!"#),
+        "stdout:\n{stdout}"
+    );
     assert!(stdout.contains("caught2: true"), "stdout:\n{stdout}");
     assert!(!stdout.contains("NO_THROW"), "stdout:\n{stdout}");
 }
@@ -416,7 +419,10 @@ console.log("derived:", derived.version, derived.host);
     assert!(stdout.contains("prefix: true false"), "stdout:\n{stdout}");
     assert!(stdout.contains("handler hit: h0"), "stdout:\n{stdout}");
     assert!(stdout.contains("handler miss: null"), "stdout:\n{stdout}");
-    assert!(stdout.contains("derived: 1.2.0 example.com"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("derived: 1.2.0 example.com"),
+        "stdout:\n{stdout}"
+    );
 }
 
 /// zod probe regression: the feature probe now SUCCEEDS (interpreter path)
@@ -476,7 +482,10 @@ console.log("bad:", badPayload.issues.length, badPayload.issues[0].path.join("/"
     let (stdout, _stderr) = compile_and_run(fixture);
     assert!(stdout.contains("probe: true"), "stdout:\n{stdout}");
     assert!(stdout.contains("ok: ada 0"), "stdout:\n{stdout}");
-    assert!(stdout.contains("bad: 1 name invalid_type"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("bad: 1 name invalid_type"),
+        "stdout:\n{stdout}"
+    );
 }
 
 /// Unsupported constructs throw the named diagnostic — catchable, no crash.

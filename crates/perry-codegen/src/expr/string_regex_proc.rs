@@ -140,7 +140,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let code_val = if let Some(e) = code {
                 lower_expr(ctx, e)?
             } else {
-                "0.0".to_string()
+                // #6666: bare `process.exit()` passes `undefined` (not `0`) so
+                // the runtime falls back to the stored `process.exitCode` —
+                // matching Node, where `process.exit()` honours a previously
+                // set `process.exitCode`. An explicit `process.exit(0)` still
+                // forces 0.
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             ctx.block()
                 .call_void("js_process_exit", &[(DOUBLE, &code_val)]);
