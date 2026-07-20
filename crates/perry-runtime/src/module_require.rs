@@ -91,23 +91,16 @@ fn validate_create_require_base(filename_or_url: f64) {
     throw_invalid_value("filename", filename_or_url);
 }
 
+/// #6651 (pi wall #5, same family as #6644's wall #3): this used to be a
+/// hand-copied allowlist that drifted from `process.getBuiltinModule`'s and
+/// from the static-import tables — `v8` (and `sea`, `fs/promises`,
+/// `stream/consumers`, `stream/web`, `trace_events`, `test/reporters`) were
+/// implemented and statically importable but rejected here as "package/file".
+/// Both resolvers now share one source of truth (`MODULE_BUILTIN_MODULES`,
+/// i.e. `module.builtinModules`), including the `node:` normalization and the
+/// scheme-only / `_`-internal carve-outs.
 fn supported_require_builtin(specifier: &str) -> Option<&str> {
-    let name = specifier.strip_prefix("node:").unwrap_or(specifier);
-    match name {
-        "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
-        | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
-        | "http" | "http2" | "https" | "module" | "net" | "os" | "path" | "path/posix"
-        | "path/win32" | "perf_hooks" | "process" | "punycode" | "querystring" | "readline"
-        | "readline/promises" | "stream" | "stream/promises" | "string_decoder" | "sys"
-        | "test" | "test/reporters" | "timers" | "timers/promises" | "tls" | "tty" | "url"
-        | "util" | "util/types" | "vm" | "wasi" | "worker_threads" | "zlib"
-        // Implemented native modules that were missing from the createRequire
-        // allowlist (they have runtime registry buckets + dispatch, but
-        // `require('tls')` etc. via createRequire was rejected as "package/file").
-        | "dgram" | "domain" | "inspector" | "inspector/promises" | "repl"
-        | "sqlite" => Some(name),
-        _ => None,
-    }
+    crate::process::supported_builtin_module_name(specifier)
 }
 
 fn resolve_builtin(specifier: &str) -> Option<&str> {
@@ -115,15 +108,11 @@ fn resolve_builtin(specifier: &str) -> Option<&str> {
 }
 
 fn require_builtin_value(module_name: &str) -> f64 {
-    if module_name == "timers/promises" {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(
-                b"timers_promises".as_ptr(),
-                "timers_promises".len() as u32,
-            )
-        };
-    }
-    crate::object::native_module_get_builtin_module_value(module_name)
+    // #6651: shared routing with `process.getBuiltinModule` — submodule-spec
+    // modules (diagnostics_channel, timers/promises, fs/promises, …) resolve
+    // through the node_submodules registry, the rest through the native-module
+    // namespace.
+    crate::process::builtin_module_value(module_name)
 }
 
 fn throw_module_not_found(specifier: &str) -> ! {
@@ -221,6 +210,24 @@ fn make_require(main_value: f64) -> f64 {
 pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
     make_require(undefined())
+}
+
+/// Devirt codegen entry for `module.createRequire(...)` (#6644). The require
+/// closure it returns resolves builtins from a RUNTIME string, so — exactly like
+/// `js_process_get_builtin_module_devirt` — codegen could not emit the precise
+/// per-module dispatch installs. Arm both install-all hooks so a dynamically
+/// required module's methods (`require('node:diagnostics_channel').channel(...)`,
+/// `require('tls').connect(...)`) can dispatch. Codegen targets THIS symbol, so
+/// the all-buckets `js_nm_install_all` / `js_node_submod_install_all` are
+/// referenced only by programs whose source actually calls `createRequire`; the
+/// plain `js_module_create_require` (reachable from the always-pinned ambient
+/// require keepalives via the module dispatch bucket) stays free of that
+/// reference, preserving per-module stripping.
+#[no_mangle]
+pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
+    crate::object::js_nm_enable_install_all();
+    crate::node_submodules::js_node_submod_enable_install_all();
+    js_module_create_require(filename_or_url)
 }
 
 /// Next.js wall 54: registry mapping an AOT-compiled CJS module's absolute
@@ -506,3 +513,109 @@ pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
 #[used]
 static KEEP_JS_MODULE_AMBIENT_REQUIRE_APPLY: extern "C" fn(f64) -> f64 =
     js_module_ambient_require_apply;
+
+/// #6660 (pi wall #8): shared runtime fallback for a dynamic `import(spec)`
+/// whose specifier did not match a compiled-module target at the dispatch
+/// site. The `import()` analog of `js_module_ambient_require_apply` (#5389
+/// Tier 2): builtins (`node:fs/promises`, `os`, …) resolve by string to the
+/// same namespace `require(spec)` / `process.getBuiltinModule(spec)` produce,
+/// wrapped in a resolved promise; anything else becomes a promise rejected
+/// with a descriptive `Error` (`code: 'ERR_MODULE_NOT_FOUND'`, Node's dynamic
+/// import failure family) — never a rejection with literal `undefined`, which
+/// is what the old codegen fallthrough arms produced and what surfaced as the
+/// reasonless `Uncaught (in promise) undefined` one-shot wall.
+///
+/// `deferred_note` carries the compile-time deferral message for #5230 sites
+/// (runtime-computed specifier, non-strict policy) so a genuinely unknown
+/// module still reports the site's `file:line`.
+fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> f64 {
+    // Arm the install-all hooks the way `getBuiltinModule`'s devirt entry does
+    // (#6644): the namespace handed back below must dispatch methods even when
+    // no static import of the module exists anywhere in the program. Codegen
+    // references this symbol only from dynamic-import fallback sites, so
+    // programs without them keep per-module stripping.
+    crate::object::js_nm_enable_install_all();
+    crate::node_submodules::js_node_submod_enable_install_all();
+    // `import()` performs ToString on the specifier: a string resolves
+    // directly, any other value participates via its string form.
+    let jv = JSValue::from_bits(spec.to_bits());
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let spec_str = match unsafe { crate::string::js_string_key_bytes(jv, &mut sso) } {
+        Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        None => unsafe {
+            crate::exception::string_header_to_string(crate::value::js_jsvalue_to_string(spec))
+        },
+    };
+    if let Some(module_name) = supported_require_builtin(&spec_str) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ns_handle = scope.root_nanbox_f64(require_builtin_value(module_name));
+        let promise = crate::promise::js_promise_resolved(ns_handle.get_nanbox_f64());
+        return js_nanbox_pointer(promise as i64);
+    }
+    let message = deferred_note.unwrap_or_else(|| format!("Cannot find module '{spec_str}'"));
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_MODULE_NOT_FOUND");
+    let err = crate::error::js_error_new_with_message(msg_ptr);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let err_handle = scope.root_nanbox_f64(js_nanbox_pointer(err as i64));
+    let promise = crate::promise::js_promise_rejected(err_handle.get_nanbox_f64());
+    js_nanbox_pointer(promise as i64)
+}
+
+/// Codegen entry for the unresolved / no-match dynamic-`import()` fallthrough
+/// arms (#6660). Returns a NaN-boxed promise; never throws synchronously
+/// (`import()` always rejects, per spec).
+#[no_mangle]
+pub extern "C" fn js_module_dynamic_import_fallback(spec: f64) -> f64 {
+    dynamic_import_fallback_promise(spec, None)
+}
+
+/// Keepalive anchor (same pattern as the ambient-require anchors above).
+#[used]
+static KEEP_JS_MODULE_DYNAMIC_IMPORT_FALLBACK: extern "C" fn(f64) -> f64 =
+    js_module_dynamic_import_fallback;
+
+/// Codegen entry for #5230 *deferred* dynamic-import sites (runtime-computed
+/// specifier under the default non-strict policy). Same builtin-or-reject
+/// fallback, but a genuinely unknown module rejects with the compile-time
+/// deferral message (which names the site's `file:line`) instead of the
+/// generic `Cannot find module` text. `msg` is the NaN-boxed deferral string.
+#[no_mangle]
+pub extern "C" fn js_module_dynamic_import_deferred(spec: f64, msg: f64) -> f64 {
+    let note = {
+        let jv = JSValue::from_bits(msg.to_bits());
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        unsafe { crate::string::js_string_key_bytes(jv, &mut sso) }
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+    };
+    dynamic_import_fallback_promise(spec, note)
+}
+
+/// Keepalive anchor (same pattern as the ambient-require anchors above).
+#[used]
+static KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED: extern "C" fn(f64, f64) -> f64 =
+    js_module_dynamic_import_deferred;
+
+/// #6651 family regression guard: createRequire's resolver must never drift
+/// from `process.getBuiltinModule`'s again. Today they are the same function;
+/// this pins the contract so a future re-split of the implementations still
+/// has to keep the module sets identical across both spellings.
+#[cfg(test)]
+mod builtin_allowlist_parity_tests {
+    use super::*;
+
+    #[test]
+    fn createrequire_allowlist_matches_get_builtin_module() {
+        for &entry in crate::process::MODULE_BUILTIN_MODULES {
+            let bare = entry.strip_prefix("node:").unwrap_or(entry);
+            let prefixed = format!("node:{bare}");
+            for specifier in [bare, prefixed.as_str()] {
+                assert_eq!(
+                    supported_require_builtin(specifier),
+                    crate::process::supported_builtin_module_name(specifier),
+                    "{specifier}"
+                );
+            }
+        }
+    }
+}

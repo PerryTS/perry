@@ -23,6 +23,8 @@
 //! advertises copy. When no provider is set, `mouseDown:` forwards to the
 //! original class's implementation so interactive controls keep working.
 
+use crate::ffi::js_array_push_f64;
+use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Imp, Sel};
 use objc2::{msg_send, sel};
@@ -39,11 +41,9 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
-    fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut c_void;
     fn js_object_alloc(class_id: u32, field_count: u32) -> *mut c_void;
     fn js_object_set_field_by_name(obj: *mut c_void, key: *const c_void, value: f64);
     fn js_array_alloc(capacity: u32) -> *mut c_void;
-    fn js_array_push_f64(arr: *mut c_void, value: f64) -> *mut c_void;
     fn js_jsvalue_to_string(value: f64) -> *const u8;
 }
 

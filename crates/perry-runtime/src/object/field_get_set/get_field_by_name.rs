@@ -49,10 +49,29 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         // Proxy ids live in the proxy id band; `js_proxy_is_proxy` confirms
         // it is a *registered* proxy before we route to the proxy getter.
+        //
+        // #6699: the receiver arrives in two encodings. A generic property read
+        // passes the raw small proxy-id pointer (`top16 == 0`). The class-field
+        // IC-miss fallback (`js_object_get_field_by_name_f64`, reached when the
+        // typed-`this` field guard rejects an off-shape receiver) instead
+        // forwards the *full NaN-box* value with the `0x7FFD` heap-pointer tag
+        // still set — exactly the tagged encoding the FAST LANE below already
+        // strips. A tagged proxy value (`0x7FFD_0000_000F_xxxx`) is not itself
+        // in the proxy id band, so the un-normalized band test missed it and the
+        // read fell through to `undefined` instead of the get trap. This bit a
+        // typed-`this` field read whose `this` is a Proxy — e.g. pi's TUI theme
+        // is a `new Proxy({}, …)` whose `get` trap forwards to the real Theme;
+        // `theme.fg()` runs with `this === proxy`, and `this.fgColors` must hit
+        // the trap. Normalize the tag first so both encodings route identically.
         let addr = obj as u64;
-        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+        let raw_addr = if (addr >> 48) == 0x7FFD {
+            addr & 0x0000_FFFF_FFFF_FFFF
+        } else {
+            addr
+        };
+        if crate::value::addr_class::is_proxy_id_band(raw_addr as usize) && !key.is_null() {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 let v = crate::proxy::js_proxy_get(boxed, key_f64);
@@ -60,6 +79,116 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // FAST LANE (store-plan-cache follow-up): resolve an OWN data field on a
+    // provably-plain arena class instance with no rooting scope, no
+    // exotic-registry probes, and no key hashing. Every gate proves a property
+    // the skipped slow-path checks would have tested:
+    //  - band/tag checks: not a proxy (above) / handle / stream encoding;
+    //  - `classify_heap_generation != Unknown`: the address is inside a
+    //    registered arena page, so its GcHeader is real — and no malloc-backed
+    //    exotic (BufferHeader / TypedArrayHeader / DateCell / RegExpHeader /
+    //    Temporal cell, all mi- or gc-malloc'd) can classify as arena;
+    //  - `GC_TYPE_OBJECT`: not a closure / array / error / Map / Set;
+    //  - `class_id != 0` (and not the native-module id): not an arguments
+    //    object (allocated with class 0), URL-shape object, builtin prototype
+    //    host, or plain literal — those keep their existing paths;
+    //  - `OBJ_FLAG_HAS_DESCRIPTORS` clear: no own accessor can shadow the
+    //    slot (an own data property shadows inherited accessors per [[Get]]);
+    //    `OBJ_FLAG_TYPED_ARRAY_PROTO` clear: not the per-kind TypedArray
+    //    prototype host (its reflection accessors have empty backing fields).
+    // The (keys_array, interned key) → index mapping comes from the
+    // epoch-guarded read-plan cache (flushed on GC, descriptor / prototype /
+    // vtable mutations, and property deletes); a lane-local bounded scan
+    // populates it. An absent own key falls through — prototype and getter
+    // resolution stay on the existing path.
+    unsafe {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let raw = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if raw >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && !crate::value::addr_class::is_small_handle(raw)
+            && !crate::value::addr_class::is_stream_id_band(raw)
+            && crate::value::addr_class::is_above_handle_band(key as usize)
+        {
+            let key_gc =
+                (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0
+                && crate::arena::classify_heap_generation(raw)
+                    != crate::arena::HeapGeneration::Unknown
+            {
+                let gc_hdr =
+                    (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                const LANE_BLOCKING: u16 =
+                    crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && (*gc_hdr)._reserved & LANE_BLOCKING == 0
+                {
+                    let o = raw as *const ObjectHeader;
+                    let class_id = (*o).class_id;
+                    if class_id != 0
+                        && class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
+                    {
+                        let keys = (*o).keys_array;
+                        if !keys.is_null()
+                            && ((keys as u64) >> 48) == 0
+                            && crate::value::addr_class::is_above_handle_band(keys as usize)
+                        {
+                            let alloc_limit = std::cmp::max(
+                                (*o).field_count,
+                                crate::object::INLINE_SLOT_FLOOR as u32,
+                            ) as usize;
+                            if let Some(idx) = super::super::prop_plan::read_plan_lookup(
+                                keys as usize,
+                                key as usize,
+                            ) {
+                                return if (idx as usize) < alloc_limit {
+                                    super::accessors::js_object_get_field(o, idx)
+                                } else {
+                                    match super::super::overflow_get(raw, idx as usize) {
+                                        Some(b) => JSValue::from_bits(b),
+                                        None => JSValue::undefined(),
+                                    }
+                                };
+                            }
+                            let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                                as *const crate::gc::GcHeader;
+                            if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                                let key_count =
+                                    crate::array::keys_array_len_capped_to_capacity(keys);
+                                if key_count <= 4096 {
+                                    for i in 0..key_count {
+                                        let kv = crate::array::js_array_get(keys, i as u32);
+                                        if crate::string::js_string_key_matches(kv, key) {
+                                            super::super::prop_plan::read_plan_record(
+                                                keys as usize,
+                                                key as usize,
+                                                i as u32,
+                                            );
+                                            return if i < alloc_limit {
+                                                super::accessors::js_object_get_field(o, i as u32)
+                                            } else {
+                                                match super::super::overflow_get(raw, i) {
+                                                    Some(b) => JSValue::from_bits(b),
+                                                    None => JSValue::undefined(),
+                                                }
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // A receiver that LOOKS like a bare heap pointer (top 16 bits clear) but does
     // not land in the platform heap range is a MIS-decoded primitive, not an
     // object. The common case is a `number` whose raw f64 bits alias a sub-heap
@@ -243,18 +372,28 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return JSValue::from_bits(v.to_bits());
                 }
-                if let Some(parent) = crate::object::class_registry::class_object_pinned_parent(obj)
-                {
-                    let pbits = parent.to_bits();
-                    if (pbits >> 48) == 0x7FFD {
-                        let praw = (pbits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-                        if praw as usize != obj as usize
-                            && crate::value::addr_class::is_above_handle_band(praw as usize)
-                            && crate::object::is_valid_obj_ptr(praw as *const u8)
-                        {
-                            let v = js_object_get_field_by_name(praw, key);
-                            if !v.is_undefined() {
-                                return v;
+                // #6530: `name` and `prototype` are OWN properties of every
+                // constructor — never inherited through the parent edge. Skip
+                // the pinned-parent recursion for them so the generic tail
+                // below synthesizes both from THIS object's class_id (the
+                // recursion otherwise answered with the BASE class's `.name`
+                // for every capture-carrying subclass — bundled zod's
+                // identity collapse to "ZodType").
+                if want != b"name" && want != b"prototype" {
+                    if let Some(parent) =
+                        crate::object::class_registry::class_object_pinned_parent(obj)
+                    {
+                        let pbits = parent.to_bits();
+                        if (pbits >> 48) == 0x7FFD {
+                            let praw = (pbits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+                            if praw as usize != obj as usize
+                                && crate::value::addr_class::is_above_handle_band(praw as usize)
+                                && crate::object::is_valid_obj_ptr(praw as *const u8)
+                            {
+                                let v = js_object_get_field_by_name(praw, key);
+                                if !v.is_undefined() {
+                                    return v;
+                                }
                             }
                         }
                     }
@@ -909,34 +1048,72 @@ pub extern "C" fn js_object_get_field_by_name(
                     // this covers the data-field case that was returning `undefined`
                     // (Auth.js sets `SignInError.kind = "signIn"` and reads it off a
                     // `CredentialsSignin` subclass to pick the sign-in vs error page).
-                    {
-                        let mut cid = class_id;
+                    //
+                    // #6530: `name` is an OWN property of every constructor — a
+                    // subclass never inherits its parent's `.name` (spec:
+                    // ClassDefinitionEvaluation installs it per class). Skip the
+                    // chain walk so the #2059 own-name synthesis below answers
+                    // with THIS class's registered name instead of an ancestor's.
+                    if name != "name" {
+                        // Walk the class-object proto chain for an inherited static
+                        // DATA field. At EACH level the class's pinned
+                        // per-evaluation parent OBJECT is consulted BEFORE the
+                        // parent's registry props (`CLASS_DYNAMIC_PROPS`).
+                        //
+                        // #6552: a subclass of a class-EXPRESSION value evaluated
+                        // more than once (`function make(a){return class{static
+                        // ast=a}}`, then `class Number$ extends make(x) {}` /
+                        // `class Widget$ extends make(y) {}`) records THIS
+                        // evaluation's parent object as its static prototype
+                        // (`class_prototype_object`, #1788), but the parent's
+                        // `CLASS_DYNAMIC_PROPS` are keyed by the class-expression
+                        // TEMPLATE id — shared, last-wins across every evaluation.
+                        // Reading the registry entry for such a parent collapses
+                        // sibling subclasses to the LAST `make(...)` (effect Schema:
+                        // `Number$.ast`/`Widget$.ast` both read the last parent's
+                        // `ast`). The pinned object carries this evaluation's own
+                        // edge, so it is authoritative; the registry read remains
+                        // the fallback for a plain declaration parent (#6443:
+                        // Auth.js `SignInError.kind`), which has no pinned object.
+                        let mut child = class_id;
                         let mut depth = 0usize;
                         while depth < 32 {
-                            match get_parent_class_id(cid) {
-                                Some(p) if p != 0 && p != cid => {
-                                    cid = p;
-                                    depth += 1;
+                            let proto = super::super::class_registry::class_prototype_object(child);
+                            if !proto.is_null() {
+                                let v = js_object_get_field_by_name(proto as *const _, key);
+                                // Return a value present on the pinned object even
+                                // when it is `null` — a static explicitly set to
+                                // `null` on THIS evaluation is authoritative and
+                                // must not fall through to the last-wins registry
+                                // entry (a sibling evaluation's value). Only
+                                // `undefined` means "absent here", which continues
+                                // the walk to the parent's registry props / a higher
+                                // ancestor.
+                                if !v.is_undefined() {
+                                    return v;
                                 }
+                            }
+                            let p = match get_parent_class_id(child) {
+                                Some(p) if p != 0 && p != child => p,
                                 _ => break,
+                            };
+                            // A key deleted on THIS ancestor is not provided by it,
+                            // but a higher ancestor may still define it — `delete
+                            // Mid.foo` must let `Sub.foo` inherit `Base.foo`, not
+                            // resolve to undefined. Skip the registry read for the
+                            // deleted level and keep walking up.
+                            if !super::super::class_registry::class_is_key_deleted(p, name) {
+                                let inherited = CLASS_DYNAMIC_PROPS.with(|m| {
+                                    m.borrow()
+                                        .get(&p)
+                                        .and_then(|props| props.get(name).copied())
+                                });
+                                if let Some(v) = inherited {
+                                    return JSValue::from_bits(v.to_bits());
+                                }
                             }
-                            if super::super::class_registry::class_is_key_deleted(cid, name) {
-                                // A key deleted on THIS ancestor is not provided by
-                                // it, but a higher ancestor may still define it —
-                                // `delete Mid.foo` must let `Sub.foo` inherit
-                                // `Base.foo`, not resolve to undefined. Skip this
-                                // level and keep walking up (safe: `cid`/`depth`
-                                // advance at the top of every iteration).
-                                continue;
-                            }
-                            let inherited = CLASS_DYNAMIC_PROPS.with(|m| {
-                                m.borrow()
-                                    .get(&cid)
-                                    .and_then(|props| props.get(name).copied())
-                            });
-                            if let Some(v) = inherited {
-                                return JSValue::from_bits(v.to_bits());
-                            }
+                            child = p;
+                            depth += 1;
                         }
                     }
                     if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
@@ -979,11 +1156,18 @@ pub extern "C" fn js_object_get_field_by_name(
                     // parent object was recorded as `class_id`'s static
                     // prototype at `extends` time; walk that chain (also
                     // covering multi-level `class Leaf extends Mid {}`).
-                    if let Some(v) =
-                        super::super::class_registry::resolve_proto_chain_field(class_id, key)
-                    {
-                        if !v.is_undefined() && !v.is_null() {
-                            return v;
+                    // #6530: except `name` — an own property of every
+                    // constructor, never inherited; without the guard a
+                    // subclass of a per-evaluation class object reported its
+                    // BASE's synthesized `.name` (bundled zod:
+                    // `z.string().constructor.name` gave "ZodType").
+                    if name != "name" {
+                        if let Some(v) =
+                            super::super::class_registry::resolve_proto_chain_field(class_id, key)
+                        {
+                            if !v.is_undefined() && !v.is_null() {
+                                return v;
+                            }
                         }
                     }
                     // #36 / #321: the subclass extends a FUNCTION value

@@ -21,6 +21,14 @@ pub(crate) fn is_bigint_kind(kind: u8) -> bool {
 
 #[cold]
 pub(crate) fn throw_bigint_number_mix() -> ! {
+    // PERRY_BIGINT_MIX_DIAG=1: print a native backtrace before throwing so a
+    // compiled bundle's stackless "Cannot mix BigInt" error can be traced to
+    // its JS frame (same diagnostic hook as dynamic_arith's mixed-operand
+    // gate; used to root-cause #6649).
+    if std::env::var_os("PERRY_BIGINT_MIX_DIAG").is_some() {
+        eprintln!("[bigint-mix-diag] typedarray mix gate");
+        eprintln!("{}", std::backtrace::Backtrace::force_capture());
+    }
     throw_type_error(b"Cannot mix BigInt and other types, use explicit conversions")
 }
 

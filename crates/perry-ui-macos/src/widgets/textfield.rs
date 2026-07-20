@@ -1,3 +1,4 @@
+use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
@@ -20,7 +21,6 @@ thread_local! {
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -61,7 +61,7 @@ define_class!(
                         let rust_str = text.to_string();
                         let bytes = rust_str.as_bytes();
 
-                        let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
+                        let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) };
                         let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
 
                         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
@@ -136,7 +136,7 @@ define_class!(
                         let rust_str = text.to_string();
                         let bytes = rust_str.as_bytes();
 
-                        let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
+                        let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) };
                         let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
 
                         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
@@ -262,7 +262,7 @@ pub fn get_string_value(handle: i64) -> *const u8 {
             let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
             let value = tf.stringValue();
             let bytes = value.to_string();
-            let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+            let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
             // Pin the GC allocation so it won't be collected before the caller uses it.
             // GcHeader layout: obj_type(u8) + gc_flags(u8) + reserved(u16) + size(u32) = 8 bytes
             // GcHeader sits BEFORE the user pointer (ptr - 8). gc_flags is at offset 1.
@@ -270,10 +270,10 @@ pub fn get_string_value(handle: i64) -> *const u8 {
             // Pin the GC allocation so it survives until the caller consumes it
             let gc_flags_ptr = (ptr as *mut u8).sub(8).add(1);
             *gc_flags_ptr |= 0x04; // GC_FLAG_PINNED
-            return ptr;
+            return ptr as *const u8;
         }
     }
-    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) as *const u8 }
 }
 
 /// Set an onSubmit callback (fires when user presses Enter/Return).

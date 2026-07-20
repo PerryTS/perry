@@ -10,7 +10,8 @@
     "nativeModule": true
   },
   "scripts": {
-    "build:cli": "perry compile src/cli.ts -o dist/cli"
+    "build:cli": "perry compile src/cli.ts -o dist/cli",
+    "test": "mkdir -p dist && perry compile src/tokens.test.ts -o dist/tokens-test && ./dist/tokens-test"
   },
   "keywords": ["perry", "ui", "design-tokens", "theming"],
   "license": "MIT"

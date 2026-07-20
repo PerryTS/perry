@@ -85,9 +85,10 @@ pub(crate) fn pod_record_field_is_numeric(ctx: &FnCtx<'_>, object: &Expr, field:
 
 fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut Vec<u32>) {
     match expr {
-        Expr::PropertyGet { object, property }
-            if matches!(object.as_ref(), Expr::LocalGet(_))
-                && pod_record_field_is_numeric(ctx, object, property) =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::LocalGet(_))
+            && pod_record_field_is_numeric(ctx, object, property) =>
         {
             if let Expr::LocalGet(id) = object.as_ref() {
                 out.push(*id);
@@ -167,15 +168,16 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
 fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) -> bool {
     match expr {
         Expr::LocalGet(id) => *id == target_id && ctx.pod_records.contains_key(id),
-        Expr::PropertyGet { object, property }
-            if matches!(object.as_ref(), Expr::LocalGet(id) if *id == target_id)
-                && ctx.pod_records.get(&target_id).is_some_and(|local| {
-                    local
-                        .layout
-                        .fields
-                        .iter()
-                        .any(|field| field.name == *property)
-                }) =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == target_id)
+            && ctx.pod_records.get(&target_id).is_some_and(|local| {
+                local
+                    .layout
+                    .fields
+                    .iter()
+                    .any(|field| field.name == *property)
+            }) =>
         {
             false
         }
@@ -411,7 +413,9 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
     expr: &Expr,
 ) -> bool {
     match expr {
-        Expr::PropertyGet { object, property } => receiver_class_name(ctx, object)
+        Expr::PropertyGet {
+            object, property, ..
+        } => receiver_class_name(ctx, object)
             .and_then(|class_name| class_field_declared_type(ctx, &class_name, property))
             .as_ref()
             .is_some_and(crate::typed_shape::type_is_raw_f64_candidate),

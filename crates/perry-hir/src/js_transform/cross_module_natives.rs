@@ -776,7 +776,10 @@ pub fn fix_native_instance_expr(
         // The key case: method calls that might be on native instances
         Expr::Call { callee, args, .. } => {
             // Check if this is a method call: obj.method(args)
-            if let Expr::PropertyGet { object, property } = callee.as_mut() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_mut()
+            {
                 // Check if the object is a native instance (ExternFuncRef or LocalGet)
                 if let Some((native_module, native_class)) =
                     resolve_native_instance(object.as_ref(), native_instances, local_id_instances)
@@ -893,7 +896,10 @@ pub fn fix_native_instance_expr(
         Expr::Await(inner) => {
             // Handle Await(Call{PropertyGet{obj...}}) pattern for native instances
             if let Expr::Call { callee, args, .. } = inner.as_mut() {
-                if let Expr::PropertyGet { object, property } = callee.as_mut() {
+                if let Expr::PropertyGet {
+                    object, property, ..
+                } = callee.as_mut()
+                {
                     if let Some((native_module, native_class)) = resolve_native_instance(
                         object.as_ref(),
                         native_instances,

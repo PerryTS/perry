@@ -443,6 +443,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 
 fn length(local_id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_offset: 0,
         object: Box::new(local(local_id)),
         property: "length".to_string(),
     }
@@ -459,6 +460,7 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
 fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
     call(
         Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(local(buffer_id)),
             property: method.to_string(),
         },
@@ -605,6 +607,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
         buffer_let(1, "buf", int(8)),
         Stmt::Return(Some(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "readUInt32BE".to_string(),
             }),
@@ -657,6 +660,7 @@ fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
             length(1),
             vec![Stmt::Expr(call(
                 Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(local(1)),
                     property: "readUInt32BE".to_string(),
                 },
@@ -689,6 +693,7 @@ fn artifact_records_buffer_read_double_as_f64() {
         buffer_let(1, "buf", int(8)),
         Stmt::Return(Some(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "readDoubleLE".to_string(),
             }),
@@ -727,6 +732,7 @@ fn artifact_records_buffer_read_float_as_f32_and_float_extend_materialization() 
         buffer_let(1, "buf", int(8)),
         Stmt::Return(Some(call(
             Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "readFloatLE".to_string(),
             },

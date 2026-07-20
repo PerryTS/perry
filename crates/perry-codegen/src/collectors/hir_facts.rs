@@ -1990,6 +1990,7 @@ mod tests {
                 else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                     1,
                     Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(99)),
                         property: "value".to_string(),
                     }),
@@ -2067,6 +2068,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
                 }),
@@ -2118,6 +2120,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
                 }),
@@ -2187,6 +2190,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
                 }),
@@ -2217,6 +2221,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
                 }),

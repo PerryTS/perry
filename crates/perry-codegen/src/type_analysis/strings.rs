@@ -25,7 +25,9 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         ),
         // `this.field` where the field is declared as `Set<T>` on the
         // enclosing class. Same rationale as is_map_expr.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if let Some(cls_name) = receiver_class_name(ctx, object) {
                 if let Some(cls) = ctx.classes.get(&cls_name) {
                     if let Some(field) = cls.fields.iter().find(|f| f.name == *property) {
@@ -50,7 +52,9 @@ pub(crate) fn set_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&
             }
             _ => None,
         },
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             let cls_name = receiver_class_name(ctx, object)?;
             let cls = ctx.classes.get(&cls_name)?;
             let field = cls.fields.iter().find(|f| f.name == *property)?;
@@ -80,7 +84,9 @@ pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // PropertyGet (the URL HIR variant only fires for direct typed
         // receivers in `lower_member`). Detect the chained access here
         // so `url.searchParams.size` works without an intermediate let.
-        Expr::PropertyGet { object, property } if property == "searchParams" => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "searchParams" => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 return matches!(
                     ctx.local_types.get(id),
@@ -105,7 +111,9 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // `this.handlers.get(...)` inside class methods dispatch
         // through the Map fast path instead of the dynamic field-set
         // fallback.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if let Some(cls_name) = receiver_class_name(ctx, object) {
                 if let Some(cls) = ctx.classes.get(&cls_name) {
                     if let Some(field) = cls.fields.iter().find(|f| f.name == *property) {
@@ -130,7 +138,9 @@ pub(crate) fn map_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&
             }
             _ => None,
         },
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             let cls_name = receiver_class_name(ctx, object)?;
             let cls = ctx.classes.get(&cls_name)?;
             let field = cls.fields.iter().find(|f| f.name == *property)?;
@@ -251,11 +261,9 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             else_expr,
             ..
         } => is_definitely_string_expr(ctx, then_expr) && is_definitely_string_expr(ctx, else_expr),
-        Expr::PropertyGet { object, property }
-            if is_process_namespace_version_property(object, property) =>
-        {
-            true
-        }
+        Expr::PropertyGet {
+            object, property, ..
+        } if is_process_namespace_version_property(object, property) => true,
         _ => false,
     }
 }
@@ -404,7 +412,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Call { callee, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { property, object } if matches!(
+                Expr::PropertyGet { property, object, .. } if matches!(
                     property.as_str(),
                     "toString" | "toLowerCase" | "toUpperCase" | "trim"
                         | "trimStart" | "trimEnd" | "slice" | "substring"
@@ -434,7 +442,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // to a concrete declared field type, defer to it; only fall
         // back to the Error-string assumption when the receiver's type
         // is genuinely unknown (a real caught `Error`/`unknown`/`any`).
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet { object, property, .. }
             // `.stack` excluded — may be an array via `Error.prepareStackTrace`.
             if matches!(property.as_str(), "message" | "name") =>
         {
@@ -452,7 +460,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // surface as bare `process`. Keep the string method dispatch
         // available for namespace imports:
         // `import * as process from "node:process"; process.version.startsWith("v")`.
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet { object, property, .. }
             if is_process_namespace_version_property(object, property) =>
         {
             true
@@ -460,7 +468,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Perry's native crypto.generateKeyPairSync returns a plain object
         // with PEM string fields. Refining these fields keeps
         // `pair.publicKey.includes(...)` on the string fast path.
-        Expr::PropertyGet { object, property }
+        Expr::PropertyGet { object, property, .. }
             if matches!(property.as_str(), "publicKey" | "privateKey")
                 && matches!(
                     static_type_of(ctx, object),
@@ -470,7 +478,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             true
         }
         // PropertyGet on a known class field with declared type String.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet { object, property, .. } => {
             let Some(class_name) = receiver_class_name(ctx, object) else {
                 return false;
             };

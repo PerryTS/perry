@@ -15,18 +15,40 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-fn module_has_strict_mode(ast_module: &ast::Module) -> bool {
+fn module_has_strict_mode(ast_module: &ast::Module, source_file_path: &str) -> bool {
+    // A file is strict-mode code exactly when Node runs it as an ES module. Three
+    // independent signals make it one (#6542); any is sufficient:
+    //
+    // 1. The module FORMAT — an ESM extension (`.mjs`/`.mts`) or an ESM package
+    //    context (`"type":"module"`). This holds even with NO in-file import/
+    //    export syntax: e.g. Perry's own test-suite `.ts` files carry no module
+    //    syntax yet run strict because the repo's `package.json` sets
+    //    `"type":"module"`, so `Object.freeze(o); o.x = 1` must throw there.
+    if perry_parser::file_is_es_module_by_format(source_file_path) {
+        return true;
+    }
+    // 2. An ES `import`/`export` ANYWHERE in the body makes the source a Module
+    //    (Source Text Module Record) even outside any package context — the
+    //    declaration need not precede other statements, so a trailing
+    //    `export {}` or a `const x = 1; export function f() {}` both count.
+    if ast_module
+        .body
+        .iter()
+        .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
+    {
+        return true;
+    }
+    // 3. Otherwise this is CommonJS script text; it is strict only if the
+    //    directive prologue opens with a `"use strict"` directive.
     for item in &ast_module.body {
-        match item {
-            ast::ModuleItem::ModuleDecl(_) => return true,
-            ast::ModuleItem::Stmt(stmt) => {
-                let Some(directive) = string_directive_stmt_lit(stmt) else {
-                    break;
-                };
-                if is_raw_use_strict_directive(directive) {
-                    return true;
-                }
-            }
+        let ast::ModuleItem::Stmt(stmt) = item else {
+            break;
+        };
+        let Some(directive) = string_directive_stmt_lit(stmt) else {
+            break;
+        };
+        if is_raw_use_strict_directive(directive) {
+            return true;
         }
     }
     false
@@ -393,7 +415,7 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
-    ctx.module_strict = module_has_strict_mode(ast_module);
+    ctx.module_strict = module_has_strict_mode(ast_module, source_file_path);
     ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);

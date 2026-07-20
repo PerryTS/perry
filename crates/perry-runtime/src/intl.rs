@@ -26,6 +26,8 @@ mod locales;
 use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
 mod date_collator;
 mod date_names;
+#[cfg(feature = "intl-datetime")]
+pub(crate) mod icu_dtf;
 mod time_zone;
 pub(crate) use time_zone::{canonicalize_named_time_zone, resolved_date_time_zone};
 mod install;
@@ -316,6 +318,21 @@ fn coerce_option_string(value: f64) -> Option<String> {
 
 fn get_option_string(options: f64, key: &str) -> Option<String> {
     coerce_option_string(get_option_value(options, key))
+}
+
+/// Validate the `locales` / `options` arguments of `String.prototype.localeCompare`
+/// exactly as `Construct(%Collator%, « locales, options »)` would (ECMA-402
+/// §22.1.3.10 step 4). Perry's collation ordering stays locale-neutral (full ICU
+/// deferred), so `localeCompare` never actually builds a Collator — but the spec
+/// still requires the *observable throwing* of `CanonicalizeLocaleList(locales)`
+/// followed by `InitializeCollator`'s `CoerceOptionsToObject` + `GetOption` reads
+/// (test262 `localeCompare/throws-same-exceptions-as-Collator`, #5906).
+pub(crate) fn validate_locale_compare(locales: f64, options: f64) {
+    // requestedLocales = ? CanonicalizeLocaleList(locales) — reuse the exact
+    // Intl.getCanonicalLocales machinery for its TypeError/RangeError side effect
+    // (undefined yields an empty list and never throws).
+    let _ = locales::get_canonical_locales(locales);
+    date_collator::validate_collator_options(options);
 }
 
 /// As `get_option_string`, but for the Unicode locale-extension keys (`calendar`,
@@ -1536,6 +1553,13 @@ fn install_bound_instance_function(
     crate::closure::js_closure_set_capture_f64(closure, 0, js_nanbox_pointer(obj as i64));
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
+    // A bound Intl instance method (`nf.format`, `nf.resolvedOptions`, …) is a
+    // built-in non-constructor function: it has NO `[[Construct]]` and therefore
+    // no own `prototype` property (ECMA-262 §17 — built-in functions that aren't
+    // constructors don't get the auto-created `.prototype`). Flag it so
+    // `function_would_have_own_prototype` / the `new` path treat it like any
+    // other builtin (`Math.max`), matching `format-function-builtin.js`.
+    crate::object::set_builtin_closure_non_constructable(closure as usize);
     crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
@@ -1685,6 +1709,13 @@ fn install_function(
     }
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
+    // Intl prototype methods (`formatToParts`, `resolvedOptions`, …), the static
+    // `supportedLocalesOf`, and the this-based instance methods
+    // (`formatRange`/`formatRangeToParts`) installed through here are all
+    // built-in non-constructor functions: no `[[Construct]]`, hence no own
+    // `prototype` property (`builtin.js` asserts `hasOwnProperty("prototype")`
+    // is false and `isConstructor` is false). Flag them like any other builtin.
+    crate::object::set_builtin_closure_non_constructable(closure as usize);
     crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),

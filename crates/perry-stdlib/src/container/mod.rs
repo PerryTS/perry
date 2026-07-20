@@ -347,7 +347,7 @@ async fn drain_compose_handles() {
     for id in ids {
         if let Some(engine) = types::take_compose_handle(id) {
             let wrapper = compose::ComposeWrapper::new_from_engine(engine);
-            let _ = wrapper.down(false).await;
+            let _ = wrapper.down(false, false).await;
         }
     }
 }

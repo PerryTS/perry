@@ -378,4 +378,79 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // ========== rate-limiter-flexible ==========
+    // `new RateLimiterMemory({...})` is constructed by the
+    // lower_builtin_new arm (js_ratelimit_new_from_options); these rows
+    // wire the instance methods. All async methods resolve (or, for an
+    // exceeded quota, reject) a RateLimiterRes-shaped object. The key is
+    // NA_STR (numbers stringify, matching npm's string keys); points is
+    // NA_F64 and pads to undefined → runtime default 1.
+    NativeModSig {
+        module: "rate-limiter-flexible",
+        has_receiver: true,
+        method: "consume",
+        class_filter: None,
+        runtime: "js_ratelimit_consume",
+        args: &[NA_STR, NA_F64],
+        ret: NR_PROMISE,
+    },
+    NativeModSig {
+        module: "rate-limiter-flexible",
+        has_receiver: true,
+        method: "get",
+        class_filter: None,
+        runtime: "js_ratelimit_get",
+        args: &[NA_STR],
+        ret: NR_PROMISE,
+    },
+    NativeModSig {
+        module: "rate-limiter-flexible",
+        has_receiver: true,
+        method: "delete",
+        class_filter: None,
+        runtime: "js_ratelimit_delete",
+        args: &[NA_STR],
+        ret: NR_PROMISE,
+    },
+    NativeModSig {
+        module: "rate-limiter-flexible",
+        has_receiver: true,
+        method: "block",
+        class_filter: None,
+        runtime: "js_ratelimit_block",
+        args: &[NA_STR, NA_F64],
+        ret: NR_PROMISE,
+    },
+    NativeModSig {
+        module: "rate-limiter-flexible",
+        has_receiver: true,
+        method: "penalty",
+        class_filter: None,
+        runtime: "js_ratelimit_penalty",
+        args: &[NA_STR, NA_F64],
+        ret: NR_PROMISE,
+    },
+    NativeModSig {
+        module: "rate-limiter-flexible",
+        has_receiver: true,
+        method: "reward",
+        class_filter: None,
+        runtime: "js_ratelimit_reward",
+        args: &[NA_STR, NA_F64],
+        ret: NR_PROMISE,
+    },
+    // ========== node-pty (#6563: runtime-native pty) ==========
+    // `spawn(file, args, options)` → IPty (already NaN-boxed by the runtime).
+    // NA_JSV keeps `undefined` slots distinguishable from numeric 0 across
+    // the FFI boundary. `@lydell/node-pty` call sites reach this row through
+    // the alias normalization in `native_module_lookup`.
+    NativeModSig {
+        module: "node-pty",
+        has_receiver: false,
+        method: "spawn",
+        class_filter: None,
+        runtime: "js_pty_spawn",
+        args: &[NA_JSV, NA_JSV, NA_JSV],
+        ret: NR_F64,
+    },
 ];

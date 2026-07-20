@@ -36,6 +36,15 @@ lazy_static::lazy_static! {
         Mutex::new(HashMap::new());
 }
 
+/// #6602: eviction hook — drop the (drained) BYOB queue slot of an evicted id.
+pub(super) fn evict_ids(batch: &[usize]) {
+    if let Ok(mut map) = BYOB_PENDING.lock() {
+        for id in batch {
+            map.remove(id);
+        }
+    }
+}
+
 /// True while at least one `read(view)` is parked on this stream — feeds
 /// the ShouldCallPull check in `maybe_pull`.
 pub(super) fn has_pending(stream_id: usize) -> bool {
@@ -221,7 +230,7 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
         drop(g);
         throw_type_error("ReadableStream is locked");
     }
-    let reader_id = next_id(&NEXT_STREAM_ID);
+    let reader_id = next_stream_id();
     let closed_p = internal_promise();
     if s.state == ReadableState::Closed {
         js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));

@@ -62,7 +62,7 @@ impl SH for Expr {
             Expr::ExternFuncRef { name, param_types, return_type, } => { tag(h, 21); name.hash(h); param_types.hash(h); return_type.hash(h); }
             Expr::NativeModuleRef(s) => { tag(h, 22); s.hash(h); }
             Expr::NativeMethodCall { module, class_name, object, method, args, } => { tag(h, 23); module.hash(h); class_name.hash(h); object.hash(h); method.hash(h); args.hash(h); }
-            Expr::PropertyGet { object, property } => { tag(h, 24); object.as_ref().hash(h); property.hash(h); }
+            Expr::PropertyGet { object, property, .. } => { tag(h, 24); object.as_ref().hash(h); property.hash(h); }
             Expr::PropertySet { object, property, value, } => { tag(h, 25); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); }
             Expr::PropertyUpdate { object, property, op, prefix, } => { tag(h, 26); object.as_ref().hash(h); property.hash(h); op.hash(h); prefix.hash(h); }
             Expr::IndexGet { object, index } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }

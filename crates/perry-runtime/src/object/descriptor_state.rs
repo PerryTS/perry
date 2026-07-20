@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::arena::arena_alloc_gc;
+use crate::fast_hash::{new_fast_key_hash_map, FastKeyHashMap};
 use crate::ArrayHeader;
 use crate::JSValue;
 use std::cell::{Cell, RefCell, UnsafeCell};
@@ -52,7 +53,11 @@ impl PropertyAttrs {
 }
 
 thread_local! {
-    pub(crate) static PROPERTY_DESCRIPTORS: RefCell<HashMap<(usize, String), PropertyAttrs>> = RefCell::new(HashMap::new());
+    // Hasher: `FastKeyHasher` (FNV-1a) rather than std's SipHash `RandomState`.
+    // The key is `(owner_addr, key_string)` — a runtime heap pointer plus a
+    // program-supplied property name, so no external input reaches it and
+    // DoS-resistant hashing buys nothing on this hot property-access path.
+    pub(crate) static PROPERTY_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), PropertyAttrs>> = RefCell::new(new_fast_key_hash_map());
 }
 
 /// Accessor descriptor storage: maps (obj_ptr, key) -> (get_closure_bits, set_closure_bits).
@@ -67,7 +72,9 @@ pub(crate) struct AccessorDescriptor {
 }
 
 thread_local! {
-    pub(crate) static ACCESSOR_DESCRIPTORS: RefCell<HashMap<(usize, String), AccessorDescriptor>> = RefCell::new(HashMap::new());
+    // Hasher: `FastKeyHasher` (FNV-1a); see `PROPERTY_DESCRIPTORS` above for the
+    // same-shape `(owner_addr, key_string)` key and rationale.
+    pub(crate) static ACCESSOR_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), AccessorDescriptor>> = RefCell::new(new_fast_key_hash_map());
     /// Fast-path gate: `false` when no accessor descriptors have ever been installed
     /// on this thread, so hot `js_object_get_field_by_name` / `set_field_by_name`
     /// can skip the `ACCESSOR_DESCRIPTORS` HashMap lookup entirely.
@@ -402,6 +409,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
     PROPERTY_ATTRS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
@@ -414,6 +422,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
+    super::prop_plan::prop_plan_epoch_bump();
     PROPERTY_DESCRIPTORS.with(|m| {
         m.borrow_mut().remove(&(obj, key.to_string()));
     });
@@ -530,12 +539,33 @@ pub(crate) unsafe fn json_object_getter_value(
     Some(result)
 }
 
+/// Monotonic (#6386): has an accessor descriptor keyed `"constructor"` ever
+/// been installed on ANY object? While false, `ArraySpeciesCreate`'s
+/// own-`constructor`-accessor probe on a plain array cannot hit, so the
+/// species fast path skips the `(addr, String)` descriptor-table lookup (a
+/// per-call `String` allocation + SipHash probe). Set (release) before the
+/// insert, so a false (acquire) read can't race a completed install.
+static CONSTRUCTOR_ACCESSOR_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn constructor_accessor_ever_installed() -> bool {
+    CONSTRUCTOR_ACCESSOR_EVER.load(Ordering::Acquire)
+}
+
+fn note_accessor_descriptor_key(key: &str) {
+    if key == "constructor" {
+        CONSTRUCTOR_ACCESSOR_EVER.store(true, Ordering::Release);
+    }
+}
+
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
+    super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
     ACCESSORS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_class_field_inline_guard_for_target(obj);
+    note_accessor_descriptor_key(&key);
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), acc);
     });
@@ -544,6 +574,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
+    super::prop_plan::prop_plan_epoch_bump();
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().remove(&(obj, key.to_string()));
     });
@@ -569,6 +600,8 @@ pub(crate) fn set_builtin_accessor_descriptor(
     acc: AccessorDescriptor,
     attrs: PropertyAttrs,
 ) {
+    super::prop_plan::prop_plan_epoch_bump();
+    note_accessor_descriptor_key(&key);
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key.clone()), acc);
     });
@@ -593,6 +626,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
 /// `PROPERTY_DESCRIPTORS` per-object and unconditionally. The gate stays
 /// down, so the object get/set hot path is unaffected for every program.
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
     PROPERTY_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), attrs);

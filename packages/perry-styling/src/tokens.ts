@@ -20,6 +20,7 @@ export interface TokenSet {
   spacing: NumberMap;
   radius: NumberMap;
   fontSize: NumberMap;
+  borderWidth: NumberMap;
 }
 
 // Parse a flat JSON token object into a TokenSet.
@@ -34,6 +35,7 @@ export function parseTokens(json: string): TokenSet {
   const spacing: NumberMap = {};
   const radius: NumberMap = {};
   const fontSize: NumberMap = {};
+  const borderWidth: NumberMap = {};
 
   // Process colors section
   if (raw !== null && typeof raw === "object") {
@@ -115,7 +117,20 @@ export function parseTokens(json: string): TokenSet {
         }
       }
     }
+
+    // Process borderWidth section
+    const borderWidthRaw = raw["borderWidth"];
+    if (borderWidthRaw !== null && typeof borderWidthRaw === "object") {
+      const keys = Object.keys(borderWidthRaw);
+      for (let i = 0; i < keys.length; i = i + 1) {
+        const k = keys[i];
+        const v = borderWidthRaw[k];
+        if (typeof v === "number") {
+          borderWidth[k] = v;
+        }
+      }
+    }
   }
 
-  return { lightColors, darkColors, colorKeys, spacing, radius, fontSize };
+  return { lightColors, darkColors, colorKeys, spacing, radius, fontSize, borderWidth };
 }

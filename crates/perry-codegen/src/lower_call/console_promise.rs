@@ -151,7 +151,10 @@ pub fn try_lower_console_call(
     // already adds a newline, so multi-arg console.log will be
     // separated by newlines instead of spaces. Spec-compliant
     // separator handling lives in a future Phase I tweak.
-    if let Expr::PropertyGet { object, property } = callee {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    {
         if matches!(object.as_ref(), Expr::GlobalGet(_))
             && matches!(
                 property.as_str(),
@@ -521,7 +524,10 @@ pub fn try_lower_promise_static_call(
     // The HIR doesn't have dedicated PromiseResolve/Reject variants. Depending
     // on the lowering path they appear either as a bare GlobalGet receiver or
     // as `globalThis.Promise.<method>`.
-    if let Expr::PropertyGet { object, property } = callee {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    {
         if is_global_constructor_expr(object, "Promise") {
             match property.as_str() {
                 "resolve" => {
@@ -657,7 +663,10 @@ pub fn try_lower_native_method_str_dispatch(
     // method name as a raw rodata byte pointer (the StringPool already
     // emits the bytes as `[N+1 x i8]` for every interned string), and
     // materialize the args into a stack `[N x double]` slot.
-    if let Expr::PropertyGet { object, property } = callee {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    {
         if is_message_port_closure_method(object, property) {
             return Ok(None);
         }
@@ -795,6 +804,28 @@ pub fn try_lower_native_method_str_dispatch(
                         crate::native_value::MaterializationReason::FunctionAbi,
                     );
                     return Ok(Some(materialized));
+                }
+            }
+            // #6386 fast path: `dv.getFloat64(off, le)` / `dv.setInt32(off, v)`
+            // lowers to one `js_data_view_{get,set}_direct` call instead of
+            // the generic dispatch tower. Fires for a statically-typed
+            // DataView receiver AND for an unknown-typed receiver (a mutable
+            // `var v = new DataView(b)` is widened to Any by the local-type
+            // fixpoint) whose method name matches the accessor family — the
+            // runtime entry re-validates the receiver against the DataView
+            // registry and re-enters `js_native_call_method` otherwise, so a
+            // non-DataView receiver that happens to share the method name
+            // keeps its generic dispatch semantics (same #5525 guarded-
+            // fast-path shape as typed-array index access).
+            if matches!(class_name_opt.as_deref(), Some("DataView") | None) {
+                if let Some(reg) = super::dataview_intrinsic::try_emit_data_view_accessor(
+                    ctx,
+                    object,
+                    property,
+                    args,
+                    call_byte_offset,
+                )? {
+                    return Ok(Some(reg));
                 }
             }
             let recv_box = lower_expr(ctx, object)?;
@@ -1139,7 +1170,10 @@ pub fn try_lower_closure_call_fallthrough(
     // default build) → no emission, unchanged `<anonymous>` frame.
     let call_byte_offset = ctx.strings.pending_call_offset();
     let prelowered_recv: Option<(String, String)> =
-        if let Expr::PropertyGet { object, property } = callee {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee
+        {
             if receiver_must_eval_once(object.as_ref()) {
                 Some((lower_expr(ctx, object)?, property.clone()))
             } else {
@@ -1220,11 +1254,29 @@ pub fn try_lower_closure_call_fallthrough(
         // `js_closure_callN` as a wild `*const ClosureHeader` and SIGSEGV on
         // the header read. The checked unbox throws `TypeError: value is not
         // a function` for any non-`POINTER_TAG` value.
-        let closure_handle = blk.call(
-            I64,
-            "js_closure_unbox_callee_checked",
-            &[(DOUBLE, &recv_box)],
-        );
+        // #6475: a member-shaped call (`o.m(args)`) must rebind an
+        // object-literal method's baked `this` capture slot to the receiver —
+        // the slot wins over the IMPLICIT_THIS cell set above, so a method
+        // inherited via `Object.setPrototypeOf(obj, proto)` otherwise runs
+        // with `this` bound to the proto literal (effect's Pipeable
+        // `TagClass.pipe(...)` composed against the wrong `this` and
+        // HttpApiBuilder.group returned a curried function instead of a
+        // Layer). The rebind variant is a no-op for closures that don't
+        // capture `this`, so plain functions and arrows are untouched;
+        // receiverless calls keep the plain checked unbox.
+        let closure_handle = if let Some(ref this_val) = method_recv {
+            blk.call(
+                I64,
+                "js_closure_unbox_callee_checked_rebind",
+                &[(DOUBLE, &recv_box), (DOUBLE, this_val)],
+            )
+        } else {
+            blk.call(
+                I64,
+                "js_closure_unbox_callee_checked",
+                &[(DOUBLE, &recv_box)],
+            )
+        };
         let runtime_fn = format!("js_closure_call{}", lowered_args.len());
         let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
         for v in &lowered_args {
@@ -1250,11 +1302,29 @@ pub fn try_lower_closure_call_fallthrough(
         // `js_closure_callN` as a wild `*const ClosureHeader` and SIGSEGV on
         // the header read. The checked unbox throws `TypeError: value is not
         // a function` for any non-`POINTER_TAG` value.
-        let closure_handle = blk.call(
-            I64,
-            "js_closure_unbox_callee_checked",
-            &[(DOUBLE, &recv_box)],
-        );
+        // #6475: a member-shaped call (`o.m(args)`) must rebind an
+        // object-literal method's baked `this` capture slot to the receiver —
+        // the slot wins over the IMPLICIT_THIS cell set above, so a method
+        // inherited via `Object.setPrototypeOf(obj, proto)` otherwise runs
+        // with `this` bound to the proto literal (effect's Pipeable
+        // `TagClass.pipe(...)` composed against the wrong `this` and
+        // HttpApiBuilder.group returned a curried function instead of a
+        // Layer). The rebind variant is a no-op for closures that don't
+        // capture `this`, so plain functions and arrows are untouched;
+        // receiverless calls keep the plain checked unbox.
+        let closure_handle = if let Some(ref this_val) = method_recv {
+            blk.call(
+                I64,
+                "js_closure_unbox_callee_checked_rebind",
+                &[(DOUBLE, &recv_box), (DOUBLE, this_val)],
+            )
+        } else {
+            blk.call(
+                I64,
+                "js_closure_unbox_callee_checked",
+                &[(DOUBLE, &recv_box)],
+            )
+        };
         let argc = n.to_string();
         blk.call(
             DOUBLE,

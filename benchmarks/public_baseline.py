@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import shutil
 import statistics
 import subprocess
@@ -82,13 +83,29 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
+# The workspace package version is bumped on every release and does not
+# affect benchmark behaviour, but `Cargo.toml` is a fingerprinted source
+# input. Hashing its raw bytes made every version bump invalidate the
+# recorded baseline, reddening the freshness gate on every subsequent PR.
+# Normalize the version line so only benchmark-relevant Cargo.toml changes
+# (dependencies, profiles) move the fingerprint.
+_CARGO_VERSION_RE = re.compile(rb'(?m)^version = "[^"]*"')
+
+
+def _fingerprint_bytes(name: str) -> bytes:
+    data = (ROOT / name).read_bytes()
+    if name == "Cargo.toml":
+        data = _CARGO_VERSION_RE.sub(b'version = "0.0.0"', data)
+    return data
+
+
 def tracked_fingerprint(paths: Iterable[str]) -> str:
     names = _git("ls-files", "-z", "--", *paths).split("\0")
     digest = hashlib.sha256()
     for name in sorted(filter(None, names)):
         digest.update(name.encode())
         digest.update(b"\0")
-        digest.update((ROOT / name).read_bytes())
+        digest.update(_fingerprint_bytes(name))
         digest.update(b"\0")
     return digest.hexdigest()
 

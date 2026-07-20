@@ -20,6 +20,13 @@ compose `up()`:
 | `cap_add` | `string[]` | Linux capabilities to add. Specific (e.g. `["NET_BIND_SERVICE"]`), not blanket. | All backends |
 | `cap_drop` | `string[]` | Capabilities to drop. `["ALL"]` is the canonical "drop everything" starting point. | All backends |
 | `seccomp` | `string` | Seccomp profile path or `"default"` (uses the runtime's default profile). | Docker / Podman / Lima only — apple/container has no equivalent and **drops the field** with a warning |
+| `no_new_privileges` | `boolean` | Sets `--security-opt no-new-privileges` — SUID/SGID binaries inside the container can't gain privileges via execve. | Docker / Podman / Lima only — dropped on apple/container |
+
+On a compose service the last two are spelled in compose-spec form
+instead: `security_opt: ["seccomp=<path-or-default>",
+"no-new-privileges"]`. The engine parses those entries into the same
+internal `SecurityProfile` that `run()`/`create()` build from the
+spec-level fields, so both APIs hand the backend identical flags.
 
 > ⚠️ **Cross-backend security caveat.** `privileged`, `seccomp`,
 > `--security-opt no-new-privileges`, IPC/PID namespace sharing, and

@@ -102,6 +102,7 @@ pub fn make_iter_result(value: Expr, done: bool) -> Expr {
 pub fn wrap_in_promise_resolve(value: Expr) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "resolve".to_string(),
         }),

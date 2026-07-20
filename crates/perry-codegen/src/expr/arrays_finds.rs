@@ -1193,21 +1193,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ArrayEntries(arr) => {
             let arr_box = lower_expr(ctx, arr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            // Full bits, not the 48-bit mask: the runtime router classifies
+            // non-pointer receivers (Web Streams handle ids are plain
+            // doubles whose masked bits look like heap addresses).
+            let arr_handle = blk.bitcast_double_to_i64(&arr_box);
             let result = blk.call(I64, "js_array_entries_iter_obj", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         Expr::ArrayKeys(arr) => {
             let arr_box = lower_expr(ctx, arr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.bitcast_double_to_i64(&arr_box);
             let result = blk.call(I64, "js_array_keys_iter_obj", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         Expr::ArrayValues(arr) => {
             let arr_box = lower_expr(ctx, arr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.bitcast_double_to_i64(&arr_box);
             let result = blk.call(I64, "js_array_values_iter_obj", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }

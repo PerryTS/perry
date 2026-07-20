@@ -537,6 +537,23 @@ pub fn take_deferred_eval_sites() -> Vec<DeferredEvalSite> {
         .unwrap_or_default()
 }
 
+/// #6559: non-draining peek — does this compile contain at least one deferred
+/// dynamic-code site (`eval(...)` / `new Function(...)`)? The auto-optimize
+/// runtime build consults this AFTER lowering (which records the sites) and
+/// BEFORE the notice drain, to decide whether `libperry_runtime.a` must carry
+/// the `dyn-eval` interpreter feature. Dynamic-`import(...)` and
+/// unimplemented-API deferrals don't count — they never reach the Function
+/// constructor.
+pub fn has_deferred_dynamic_code_sites() -> bool {
+    EVAL_DEFERRED_SITES
+        .lock()
+        .map(|v| {
+            v.iter()
+                .any(|s| s.kind.contains("eval") || s.kind.contains("Function"))
+        })
+        .unwrap_or(false)
+}
+
 /// What the lowering site should do with a classified call (#5206).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalDecision {
