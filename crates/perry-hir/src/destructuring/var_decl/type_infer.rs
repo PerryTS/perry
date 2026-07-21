@@ -2,18 +2,11 @@
 //! `let/const/var` identifier binding (extracted from `var_decl.rs`'s
 //! `Pat::Ident` arm).
 
-use super::*;
-
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
-use crate::lower_patterns::*;
+use crate::lower::LoweringContext;
 use crate::lower_types::{extract_ts_type, infer_type_from_expr};
-
-use crate::destructuring::var_decl_sources::*;
 
 /// Computes the declared/inferred `Type` for the binding and records the
 /// `plain_object_locals` tag where applicable. Mirrors the original inline

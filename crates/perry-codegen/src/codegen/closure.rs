@@ -4,7 +4,6 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context, Result};
-use perry_hir::Stmt;
 
 use crate::collectors::{collect_let_ids, collect_ref_ids_in_stmts};
 use crate::expr::FnCtx;

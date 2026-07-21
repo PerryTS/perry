@@ -22,12 +22,8 @@ mod sign;
 pub(crate) mod util;
 mod x509;
 
-#[allow(unused_imports)]
 // Private imports keep sibling modules able to share `pub(super)` helpers.
-use self::{
-    certificate::*, cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*,
-    prime::*, random::*, sign::*, util::*, x509::*,
-};
+use self::{cipher::*, kdf::*, keys::*, random::*, util::*, x509::*};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{

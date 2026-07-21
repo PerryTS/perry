@@ -2,14 +2,8 @@
 //! Extracted from the trunk `lower_expr.rs`. Pure code move.
 
 use super::*;
-use crate::lower::*;
 use anyhow::{anyhow, Result};
-use perry_types::LocalId;
-use swc_common::Spanned;
 use swc_ecma_ast as ast;
-
-use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,

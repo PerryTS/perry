@@ -1,8 +1,3 @@
-use super::super::*;
-use super::disposal::*;
-use super::object_proto::*;
-use super::proto_dispatch::*;
-use super::typed_array::*;
 use super::*;
 
 pub(super) unsafe fn dispatch_string(

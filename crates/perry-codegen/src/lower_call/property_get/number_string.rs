@@ -6,13 +6,10 @@ use super::*;
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
-use crate::lower_array_method::lower_array_method;
-use crate::lower_string_method::{is_known_string_method_name, lower_string_method};
+use crate::expr::{lower_expr, nanbox_string_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::{
-    is_array_expr, is_global_constructor_expr, is_map_expr, is_native_module_dynamic_index,
-    is_promise_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    is_array_expr, is_native_module_dynamic_index, is_string_expr, receiver_class_name,
 };
 use crate::types::{DOUBLE, I32, I64};
 

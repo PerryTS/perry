@@ -51,44 +51,25 @@ pub use stringify_api::{
 // so every cross-sibling helper must be visible at the mod-root scope.
 // `ShapeTemplate` is referenced by the `SHAPE_CACHE` thread-local declared
 // below so the re-export must precede the `thread_local!` block.
-//
-// `#[allow(unused_imports)]`: many helpers are self-referenced from their
-// home sibling and don't need the re-export there, but keeping the surface
-// uniform makes the split predictable and resilient to future cross-
-// sibling references.
 #[cfg(test)]
 pub(crate) use parse_api::test_json_parse_direct;
-#[allow(unused_imports)]
-pub(crate) use parse_api::{try_parse_via_tape, TapeMode};
-#[allow(unused_imports)]
 pub(crate) use parser::{DirectParser, ObjectShapeHint};
-#[allow(unused_imports)]
-pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes, RAW_JSON_CLASS_ID};
+pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
 #[cfg(test)]
 pub(crate) use reviver::test_apply_reviver_for_value;
-#[allow(unused_imports)]
 pub(crate) use simd::find_string_terminator;
-#[allow(unused_imports)]
 pub(crate) use stringify::{
-    arm_to_json_result_guard, build_shape_prefix_template, estimate_json_size, is_closure_value,
-    is_object_pointer, is_symbol_value, object_get_to_json, shape_template_for, stringify_array,
-    stringify_array_depth, stringify_object, stringify_object_inner, stringify_value,
-    stringify_value_depth, try_emit_shape_element, write_escaped_string, write_number,
+    arm_to_json_result_guard, estimate_json_size, is_closure_value, is_object_pointer,
+    is_symbol_value, object_get_to_json, stringify_value, write_escaped_string, write_number,
     ShapeTemplate,
 };
-#[allow(unused_imports)]
-pub(crate) use stringify_api::{
-    redirect_lazy_to_materialized, string_from_header, try_stringify_lazy_array,
-};
-#[allow(unused_imports)]
+pub(crate) use stringify_api::{redirect_lazy_to_materialized, try_stringify_lazy_array};
 pub(crate) use stringify_buffer::{
     stringify_buffer, stringify_buffer_pretty, stringify_typed_array, stringify_typed_array_pretty,
 };
-#[allow(unused_imports)]
 pub(crate) use stringify_tojson_probe::{
     current_to_json_key_arg, invalidate_object_proto_tojson_state, reset_to_json_key,
     set_to_json_key_index, set_to_json_key_str, set_to_json_key_value, to_json_definitely_absent,
-    PROTO_TOJSON_DIRTY,
 };
 
 // ─── Circular reference detection ────────────────────────────────────────────

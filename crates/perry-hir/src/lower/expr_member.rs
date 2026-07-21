@@ -11,7 +11,6 @@
 
 use anyhow::Result;
 use perry_types::Type;
-use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;

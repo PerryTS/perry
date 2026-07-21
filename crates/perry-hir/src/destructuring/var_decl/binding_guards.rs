@@ -2,17 +2,10 @@
 //! shadow-tombstones for a simple `let/const/var` identifier binding
 //! (extracted from `var_decl.rs`'s `Pat::Ident` arm).
 
-use super::*;
-
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
-use crate::lower_patterns::*;
-
-use crate::destructuring::var_decl_sources::*;
+use crate::lower::LoweringContext;
 
 /// Applies the strict-mode early error and the native-instance/module
 /// shadow tombstones for a fresh `name` binding. Mirrors the original

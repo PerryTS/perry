@@ -1,9 +1,6 @@
 //! Not-callable error path: `throw_not_callable` plus its #922 runaway-loop
 //! circuit breaker and the counter reset hook the async-step driver calls.
 
-use super::super::*;
-use super::*;
-
 /// Issue #648: calling a value that isn't a function (most commonly the
 /// result of a property lookup that returned undefined, e.g.
 /// `obj.missingFn()`) must throw a TypeError that user code can catch via

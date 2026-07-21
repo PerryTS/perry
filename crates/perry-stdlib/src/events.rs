@@ -21,9 +21,9 @@
 
 use perry_runtime::{
     js_array_alloc, js_array_length, js_array_push_f64, js_closure_call0, js_closure_call1,
-    js_closure_call2, js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string, js_object_alloc,
-    js_object_get_field_by_name_f64, js_promise_new, js_promise_reject, js_promise_resolve,
-    js_string_from_bytes, ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader,
+    js_closure_call2, js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string,
+    js_object_get_field_by_name_f64, js_promise_reject, js_promise_resolve, js_string_from_bytes,
+    ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader,
 };
 use std::collections::{HashMap, HashSet};
 

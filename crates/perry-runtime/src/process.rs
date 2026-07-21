@@ -6,9 +6,6 @@
 //! and static state, the metadata-property dispatcher, and the re-exports that
 //! preserve the existing `crate::process::*` call paths.
 
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
-};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 use std::cell::{Cell, RefCell};

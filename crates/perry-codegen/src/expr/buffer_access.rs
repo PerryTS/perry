@@ -10,7 +10,7 @@ use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
 use super::{
     attach_native_owned_view_fact, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
     buffer_view_lowered_value, can_lower_expr_as_i32, effective_alias_state_for_access,
-    int_range_expr, is_numeric_expr, lower_expr, lower_expr_native, FnCtx,
+    int_range_expr, is_numeric_expr, lower_expr_native, FnCtx,
 };
 
 #[derive(Debug, Clone, Copy)]

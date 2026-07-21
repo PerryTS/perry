@@ -6,7 +6,7 @@
 //! allocations. Split out of `stringify.rs` for the 2000-line file gate.
 
 use super::*;
-use crate::{JSValue, StringHeader};
+use crate::JSValue;
 
 // ─── toJSON fast-negative probe (#6009) ──────────────────────────────────────
 

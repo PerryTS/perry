@@ -83,6 +83,7 @@ SLOW_MODULES = {
     "stream", "child_process", "worker_threads", "inspector",
     "inspector-promises", "repl", "diagnostics_channel", "timers", "perf_hooks", "fetch",
     "v8",
+    "trace_events",
 }
 
 tests = []

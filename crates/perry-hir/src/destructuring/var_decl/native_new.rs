@@ -4,15 +4,9 @@
 
 use super::*;
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
-use crate::lower_patterns::*;
-
-use crate::destructuring::var_decl_sources::*;
+use crate::lower::LoweringContext;
 
 /// Registers `name` as a native instance based on `new ClassName(...)`,
 /// `new mod.Class(...)`, `await new Class(...)`, native-module factory calls,

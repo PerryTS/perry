@@ -5,8 +5,6 @@
 //! the codegen can't statically determine the type. This module provides
 //! runtime dispatch by checking the handle type in the registry.
 
-use super::handle::*;
-
 mod emitter_als;
 mod fastify_net_zlib;
 mod init;

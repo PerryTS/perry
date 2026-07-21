@@ -14,8 +14,6 @@ use crate::object::{
 use crate::string::{js_string_from_bytes, str_bytes_from_jsvalue};
 use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
 use crate::StringHeader;
-#[cfg(feature = "intl-segmenter")]
-use unicode_segmentation::UnicodeSegmentation;
 
 mod ctor_guard;
 use ctor_guard::{constructor_target_prototype, require_new_target};
@@ -29,7 +27,7 @@ mod date_names;
 #[cfg(feature = "intl-datetime")]
 pub(crate) mod icu_dtf;
 mod time_zone;
-pub(crate) use time_zone::{canonicalize_named_time_zone, resolved_date_time_zone};
+pub(crate) use time_zone::resolved_date_time_zone;
 mod install;
 use install::install_constructor;
 mod subclass;
@@ -46,57 +44,37 @@ mod segmenter;
 use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
-    collator_bound_compare_thunk, collator_bound_resolved_options_thunk, collator_compare_object,
-    collator_compare_thunk, collator_resolved_options_object, collator_resolved_options_thunk,
-    compare_strings, date_range_parts_from_ms, date_short_utc_from_ms,
-    date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
-    date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
-    date_time_format_bound_to_parts_thunk, date_time_format_format_getter_thunk,
-    date_time_format_format_thunk, date_time_format_format_value,
-    date_time_format_range_parts_value, date_time_format_range_thunk,
-    date_time_format_range_to_parts_thunk, date_time_format_range_value,
-    date_time_format_resolved_options_object, date_time_format_resolved_options_thunk,
-    date_time_format_to_parts_thunk, date_time_range_clip, range_parts_to_js_array,
-    swedish_collation_key, temporal_locale_string, TemporalLocaleCtx,
+    collator_bound_compare_thunk, collator_bound_resolved_options_thunk, collator_compare_thunk,
+    collator_resolved_options_thunk, date_time_format_bound_format_thunk,
+    date_time_format_bound_range_thunk, date_time_format_bound_range_to_parts_thunk,
+    date_time_format_bound_resolved_options_thunk, date_time_format_bound_to_parts_thunk,
+    date_time_format_format_getter_thunk, date_time_format_range_thunk,
+    date_time_format_range_to_parts_thunk, date_time_format_resolved_options_thunk,
+    date_time_format_to_parts_thunk, temporal_locale_string, TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
-    canonicalize_calendar_id, canonicalize_offset_time_zone, collect_string_list,
-    is_valid_offset_time_zone, list_format_bound_format_thunk,
-    list_format_bound_resolved_options_thunk, list_format_bound_to_parts_thunk,
-    list_format_format_thunk, list_format_instance_parts, list_format_parts,
-    list_format_resolved_options_object, list_format_resolved_options_thunk,
-    list_format_to_parts_thunk, list_separators, plural_categories,
+    canonicalize_calendar_id, canonicalize_offset_time_zone, is_valid_offset_time_zone,
+    list_format_bound_format_thunk, list_format_bound_resolved_options_thunk,
+    list_format_bound_to_parts_thunk, list_format_format_thunk, list_format_parts,
+    list_format_resolved_options_thunk, list_format_to_parts_thunk,
     plural_rules_bound_resolved_options_thunk, plural_rules_bound_select_range_thunk,
-    plural_rules_bound_select_thunk, plural_rules_resolved_options_object,
-    plural_rules_resolved_options_thunk, plural_rules_select, plural_rules_select_range_thunk,
-    plural_rules_select_thunk, plural_select_en, plural_select_range, rtf_bound_format_thunk,
+    plural_rules_bound_select_thunk, plural_rules_resolved_options_thunk,
+    plural_rules_select_range_thunk, plural_rules_select_thunk, rtf_bound_format_thunk,
     rtf_bound_resolved_options_thunk, rtf_bound_to_parts_thunk, rtf_format_thunk,
-    rtf_instance_parts, rtf_parts, rtf_resolved_options_object, rtf_resolved_options_thunk,
-    rtf_singular_unit, rtf_to_parts_thunk,
+    rtf_resolved_options_thunk, rtf_to_parts_thunk,
 };
 pub(crate) use number_format::{
-    bigint_to_locale_string, captured_intl_object, compact_round, compact_suffix,
-    currency_instance_parts, decimal_msd_exponent, format_number_instance, grouping_enabled,
-    increment_decimal, intl_object_from_value, nf_coerce_number, nf_load, nf_resolved_default,
+    bigint_to_locale_string, captured_intl_object, nf_resolved_default,
     number_format_bound_format_thunk, number_format_bound_resolved_options_thunk,
     number_format_bound_to_parts_thunk, number_format_format_getter_thunk,
-    number_format_format_object, number_format_range_thunk, number_format_range_to_parts_thunk,
-    number_format_resolved_options_object, number_format_resolved_options_thunk,
-    number_format_to_parts_thunk, number_instance_parts, number_parts_from_resolved,
-    parts_to_js_array, push_grouped_integer, push_sign, push_style_suffix, round_integer_to_place,
-    round_mode_code, round_to_fraction, round_to_significant, rounding_up, set_round_ctx,
-    significant_count, strip_leading_zeros, this_intl_object, trim_fraction, NfResolved,
+    number_format_range_thunk, number_format_range_to_parts_thunk,
+    number_format_resolved_options_thunk, number_format_to_parts_thunk, number_parts_from_resolved,
+    parts_to_js_array, this_intl_object,
 };
-pub(crate) use number_format_options::{
-    configure_number_format, is_well_formed_currency_code, is_well_formed_unit_identifier,
-};
-#[cfg(feature = "intl-segmenter")]
-pub(crate) use segmenter::segment_is_word_like;
+pub(crate) use number_format_options::configure_number_format;
 pub(crate) use segmenter::{
-    build_segments, make_segment_record, normalize_granularity,
-    segmenter_bound_resolved_options_thunk, segmenter_bound_segment_thunk,
-    segmenter_resolved_options_object, segmenter_resolved_options_thunk, segmenter_segment_object,
-    segmenter_segment_thunk, utf16_len,
+    normalize_granularity, segmenter_bound_resolved_options_thunk, segmenter_bound_segment_thunk,
+    segmenter_resolved_options_thunk, segmenter_segment_thunk,
 };
 
 const KIND_NUMBER: &str = "NumberFormat";

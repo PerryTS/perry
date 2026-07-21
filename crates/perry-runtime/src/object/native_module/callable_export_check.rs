@@ -1,8 +1,4 @@
 use super::*;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
 
 /// Whitelist of (module, property) pairs for which property-read should
 /// produce a callable handle (a bound-method closure) rather than undefined.

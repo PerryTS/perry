@@ -2,17 +2,12 @@
 //! `expr_new.rs` so the trunk stays under the file-size budget. Pure code move
 //! — no behavior change.
 
-use super::*;
-
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
-use crate::lower_decl::lower_class_from_ast;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::expr_new_builtins::{global_member_constructor_name, module_constructor_name};
 use super::super::{lower_expr, LoweringContext};
 
 /// Collect the compile-time-constant string fragments of a `+`-concatenation

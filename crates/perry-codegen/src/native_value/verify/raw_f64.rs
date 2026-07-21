@@ -1,18 +1,9 @@
 use super::*;
 
-use anyhow::{bail, Result};
-
-#[cfg(test)]
-use crate::native_value::artifact::NativeAbiTransitionRecord;
-use crate::native_value::artifact::{
-    NativeAbiDirection, NativeAbiTransitionOp, NativeFactUse, NativeRepRecord, NativeValueState,
-    PodLayoutManifest,
-};
+use crate::native_value::artifact::{NativeFactUse, NativeRepRecord, NativeValueState};
 use crate::native_value::buffer::{AliasState, BoundsState, BufferAccessMode};
 use crate::native_value::materialize::MaterializationReason;
-use crate::native_value::pod::recompute_layout_from_fields;
 use crate::native_value::rep::NativeRep;
-use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
 
 pub(crate) fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
     matches!(

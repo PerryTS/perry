@@ -4,17 +4,11 @@
 
 use super::*;
 
-use perry_hir::{BinaryOp, Expr, UnaryOp};
+use perry_hir::Expr;
 use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
-use crate::type_analysis_class_fields::{
-    class_field_declared_type, class_field_global_index, declared_field_type,
-};
-use crate::type_analysis_facts::{
-    function_type_from_decl, hir_inferred_refinable_type, hir_inferred_static_type,
-};
-use crate::type_analysis_net::{net_result_class, net_result_type};
+use crate::type_analysis_class_fields::{class_field_declared_type, declared_field_type};
 
 pub(crate) fn is_numeric_typed_array_class(name: &str) -> bool {
     matches!(

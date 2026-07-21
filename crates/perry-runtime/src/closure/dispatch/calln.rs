@@ -2,7 +2,6 @@
 //! hot-loop helper, and the shared `dispatch_registered_call` /
 //! `dispatch_rest_or_declared_arity` routing helpers.
 
-use super::super::*;
 use super::*;
 
 /// Call a closure with 0 arguments, returning f64

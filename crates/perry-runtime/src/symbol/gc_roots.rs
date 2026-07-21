@@ -4,9 +4,6 @@
 //! `#[cfg(test)]` seed/inspect helpers.
 
 use super::*;
-use crate::string::{js_string_from_bytes, StringHeader};
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 
 pub(crate) fn merge_symbol_property_entries(dst: &mut Vec<(usize, u64)>, src: Vec<(usize, u64)>) {
     for (sym_key, value_bits) in src {

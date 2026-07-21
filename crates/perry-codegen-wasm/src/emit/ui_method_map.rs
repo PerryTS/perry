@@ -1,7 +1,6 @@
 //! `map_ui_method`: maps perry/ui and perry/system method names to bridge
 //! function names. Pure code-movement from `mod.rs`.
 
-#[allow(unused_imports)]
 use super::*;
 
 /// Map perry/ui and perry/system method names to bridge function names.

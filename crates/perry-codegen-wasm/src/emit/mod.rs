@@ -53,7 +53,6 @@ use wasm_encoder::{
 use closures::{collect_closures_from_expr, collect_closures_from_stmts};
 // `f64_const_bits` is held alive for future use (matches the pre-split
 // `#[allow(dead_code)]` annotation on its original definition).
-#[allow(unused_imports)]
 use constants::f64_const_bits;
 use constants::{
     f64_const, EnumResolvedValue, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,

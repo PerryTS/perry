@@ -19,12 +19,8 @@ mod supports;
 mod util;
 mod wrap;
 
-#[allow(unused_imports)]
 // Private imports keep sibling modules able to share `pub(super)` helpers.
-use self::{
-    aes::*, digest::*, encapsulation::*, hmac::*, jwk::*, kdf::*, key_object::*, keys::*,
-    supports::*, util::*, wrap::*,
-};
+use self::{aes::*, hmac::*, jwk::*, key_object::*, util::*};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{

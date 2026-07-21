@@ -2,14 +2,9 @@
 //! desugar helper. Extracted from the trunk `lower_expr.rs`. Pure code move.
 
 use super::*;
-use crate::lower::*;
 use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
-use swc_common::Spanned;
 use swc_ecma_ast as ast;
-
-use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
 /// If `call` matches `Text(\`...${state.value}...\`)` with at least one State
 /// interpolation, desugar into an auto-reactive binding. Returns `Ok(None)`

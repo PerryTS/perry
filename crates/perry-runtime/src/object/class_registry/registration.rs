@@ -1,10 +1,6 @@
 use super::*;
-use crate::object::*;
-use crate::{ArrayHeader, JSValue};
-use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::RwLock;
+use std::sync::atomic::Ordering;
 
 /// Returns true if `class_id` corresponds to a registered class. Used by
 /// `js_value_typeof` (refs #618 / #420 followup) to distinguish a class

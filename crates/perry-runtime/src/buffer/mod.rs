@@ -1,6 +1,5 @@
 //! Buffer module - provides binary data handling similar to Node.js Buffer
 
-use std::alloc::Layout;
 use std::ptr;
 
 use crate::array::ArrayHeader;

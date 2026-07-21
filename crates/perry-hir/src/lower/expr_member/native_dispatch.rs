@@ -2,17 +2,6 @@
 //!
 //! Split out of `expr_member.rs` (pure code move).
 
-use anyhow::Result;
-use perry_types::Type;
-use swc_common::Spanned;
-use swc_ecma_ast as ast;
-
-use crate::ir::Expr;
-
-use super::{lower_expr, LoweringContext};
-
-use super::*;
-
 /// Issue #562 — does `prop` name a stream-API method or property on the
 /// given stream module? Used to gate the native-instance property
 /// rerouting so subclass-declared fields fall through to regular object

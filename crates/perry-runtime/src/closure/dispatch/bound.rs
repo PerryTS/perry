@@ -1,7 +1,6 @@
 //! Bound-method / bound-function dispatch, `Function.prototype.bind`, and the
 //! `call`/`apply`/`bind`-as-value reification helpers.
 
-use super::super::*;
 use super::*;
 
 /// Dispatch a bound method call with the given arguments.

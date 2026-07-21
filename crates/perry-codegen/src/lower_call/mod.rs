@@ -63,9 +63,7 @@ mod web_storage;
 
 use buffer_intrinsic::try_emit_buffer_read_intrinsic;
 use builtin::lower_builtin_new;
-use event_target::lower_event_target_call;
 use jsx::try_rewrite_perry_tui_jsx_intrinsic;
-use method_override::{emit_guarded_direct_method_call, emit_own_method_override_check};
 // `options/` (#1099): the options-object-literal lowering family,
 // split by native-API surface (notification / abort / fetch) under
 // `options/`. Bring the per-surface entry points + shared helpers
@@ -73,8 +71,8 @@ use method_override::{emit_guarded_direct_method_call, emit_own_method_override_
 // sites in sibling submodules (builtin/native/ui_styling) keep
 // resolving unchanged after the split.
 use options::{
-    build_headers_from_object, get_raw_string_ptr, lower_abort_controller_call,
-    lower_fetch_native_method, lower_notification_schedule,
+    build_headers_from_object, get_raw_string_ptr, lower_fetch_native_method,
+    lower_notification_schedule,
 };
 // `native_table.rs` (#1099): the ~5k-row `NATIVE_MODULE_TABLE` data +
 // arg/ret kind types. The dispatch consumers below

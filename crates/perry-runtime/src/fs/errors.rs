@@ -1,7 +1,6 @@
 //! fs error-value construction + callback-error probes (extracted from
 //! fs/mod.rs to keep it under the 2000-line cap). `use super::*` preserves
 //! parent visibility.
-#![allow(unused_imports)]
 use super::*;
 
 pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {

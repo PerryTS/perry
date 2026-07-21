@@ -1,20 +1,12 @@
 use super::*;
 
-#[cfg(feature = "regex-engine")]
-use regex::Regex;
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::ptr;
-#[cfg(feature = "regex-engine")]
-use std::sync::Arc;
 
 #[cfg(feature = "regex-engine")]
 use crate::array::ArrayHeader;
 use crate::string::StringHeader;
 #[cfg(feature = "regex-engine")]
 use crate::value::js_nanbox_string;
-
-use crate::object::ObjectHeader;
 
 /// Coerce a `String.prototype.search`/`match` argument into a RegExp
 /// (ECMA-262 §22.1.3.12 / §22.1.3.20 → `RegExpCreate`). A RegExp value passes

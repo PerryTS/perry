@@ -1,27 +1,8 @@
 use super::*;
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::process::{Command, Stdio};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Mutex,
-};
+use sync_run::{CpRun, CpRunError, CpRunOptions};
 
-use sync_run::{
-    cp_read_async_run_options, cp_read_spawn_sync_run_options, cp_read_sync_stdio_run_options,
-    cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
-};
-
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
-    js_register_closure_arity, ClosureHeader,
-};
-use crate::object::{
-    js_implicit_this_get, js_implicit_this_set, js_object_alloc_with_shape,
-    js_object_get_field_by_name_f64, js_object_set_field, js_object_set_field_by_name,
-    ObjectHeader,
-};
+use crate::object::js_object_set_field_by_name;
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 

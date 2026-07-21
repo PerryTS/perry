@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context, Result};
-use perry_hir::{Function, Stmt};
+use perry_hir::Function;
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;

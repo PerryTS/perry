@@ -1,8 +1,5 @@
 use super::*;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::cell::Cell;
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     // Bound-native closures carry (module, method) metadata that the

@@ -6,26 +6,14 @@ use super::string_value;
 // See the note in `opendir.rs`: the parent `fs` module's helpers are globbed in
 // directly here (we are a grandchild of `fs`); the two private-to-`fs/mod.rs`
 // helpers are named explicitly so a glob that skips privates can't drop them.
-use crate::fs::*;
-#[allow(unused_imports)]
-use crate::fs::{encoded_string_ptr, fs_encoding_option};
-#[allow(unused_imports)]
-use crate::string::js_string_from_bytes;
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 #[cfg(feature = "regex-engine")]
 use std::path::PathBuf;
-use std::sync::Once;
 
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
-};
+use crate::closure::ClosureHeader;
 
 /// Compiled exclude-pattern type for `fs.glob`. Backed by `fancy_regex::Regex`.
 /// Only referenced by the regex-engine-gated glob machinery (`FsGlobOptions`),

@@ -11,7 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-use crate::dns_resolver::{self, Answer, DnsError, QueryType, ResolvedRecord};
+use crate::dns_resolver::{self, DnsError, QueryType};
 
 use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
@@ -25,9 +25,7 @@ pub(crate) use records::{
     any_address_record, caa_record, hex_encode, mx_record, naptr_record, object_value, soa_record,
     srv_record, tlsa_record,
 };
-pub(crate) use resolve_build::{
-    build_any_record, build_resolve_value, deterministic_resolve_records,
-};
+pub(crate) use resolve_build::{build_resolve_value, deterministic_resolve_records};
 
 const RESULT_ORDER_VERBATIM: u8 = 0;
 const RESULT_ORDER_IPV4_FIRST: u8 = 1;

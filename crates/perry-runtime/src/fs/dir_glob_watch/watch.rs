@@ -6,10 +6,7 @@ use super::string_value;
 // See the note in `opendir.rs`: the parent `fs` module's helpers are globbed in
 // directly here (we are a grandchild of `fs`); the two private-to-`fs/mod.rs`
 // helpers are named explicitly so a glob that skips privates can't drop them.
-use crate::fs::*;
-#[allow(unused_imports)]
 use crate::fs::{encoded_string_ptr, fs_encoding_option};
-#[allow(unused_imports)]
 use crate::string::js_string_from_bytes;
 
 use std::cell::RefCell;
@@ -18,8 +15,6 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-#[cfg(feature = "regex-engine")]
-use std::path::PathBuf;
 use std::sync::Once;
 
 use crate::closure::{

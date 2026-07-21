@@ -1,20 +1,13 @@
 //! node:stream — WHATWG Web-stream interop (`Readable.toWeb`/`fromWeb`, the
 //! adapter pumps, and the fallback stub) split out of
 //! node_stream_constructors.rs for the 2000-line file-size gate, #1987.
-#![allow(unused_imports)]
 use super::super::*;
 use super::*;
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
-use crate::object::{
-    js_object_alloc, js_object_alloc_with_shape, js_object_get_field,
-    js_object_get_field_by_name_f64, js_object_set_field, js_object_set_field_by_name,
-    ObjectHeader,
-};
+use crate::object::{js_object_alloc, js_object_set_field};
 use crate::value::JSValue;
-use std::os::raw::c_int;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 // ─────────────────────────────────────────────────────────────────

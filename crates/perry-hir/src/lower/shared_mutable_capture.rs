@@ -363,7 +363,7 @@ fn retype_capture_holders(module: &mut Module, shared: &HashSet<LocalId>) {
                 f.ty = Type::Any;
             }
         }
-        let mut retype_fn = |f: &mut Function| {
+        let retype_fn = |f: &mut Function| {
             for p in &mut f.params {
                 if is_cap_name_of(&p.name, targets) {
                     p.ty = Type::Any;
@@ -407,7 +407,7 @@ fn retype_lets_in_stmt(stmt: &mut Stmt, targets: &HashSet<LocalId>) {
             retype_lets_in_expr(e, targets);
         }
     }
-    let mut recur = |body: &mut Vec<Stmt>| retype_lets_in_stmts(body, targets);
+    let recur = |body: &mut Vec<Stmt>| retype_lets_in_stmts(body, targets);
     match stmt {
         Stmt::If {
             then_branch,
@@ -509,7 +509,7 @@ fn class_mutates_capture(c: &Class, id: LocalId) -> bool {
 /// closure) plus every `Let` name in member bodies and field initializers.
 fn collect_class_names(c: &Class) -> HashMap<LocalId, String> {
     let mut id_name: HashMap<LocalId, String> = HashMap::new();
-    let mut add_fn = |f: &Function, m: &mut HashMap<LocalId, String>| {
+    let add_fn = |f: &Function, m: &mut HashMap<LocalId, String>| {
         for p in &f.params {
             m.insert(p.id, p.name.clone());
         }

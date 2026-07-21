@@ -3,15 +3,10 @@
 
 use super::*;
 
-use crate::arena::arena_alloc_gc;
 use crate::fast_hash::{new_fast_key_hash_map, FastKeyHashMap};
-use crate::ArrayHeader;
-use crate::JSValue;
-use std::cell::{Cell, RefCell, UnsafeCell};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// Per-property attribute flags set by `Object.defineProperty` / `Object.freeze` / `Object.seal`.
 /// Tracks the JS PropertyDescriptor attributes (writable, enumerable, configurable) for keys
@@ -294,7 +289,17 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
 /// `GLOBAL_DESCRIPTORS_IN_USE`, neither is poisoned by the runtime
 /// installing attrs on unrelated builtins (RegExp prototype etc.), so the
 /// dynamic-write fast path stays precise.
+/// #6710: set once a native HANDLE-band owner (small id, not a heap object)
+/// gets a property-attr / accessor descriptor. Heap owners record this on their
+/// GC header (`OBJ_FLAG_HAS_DESCRIPTORS`) but a handle id has no header, so
+/// `clear_object_descriptors` uses this flag to skip the O(N) `retain` scans on
+/// the common path where no handle was ever `defineProperty`'d.
+static HANDLE_HAS_DESCRIPTORS: AtomicBool = AtomicBool::new(false);
+
 pub(crate) fn note_descriptor_target(obj: usize) {
+    if crate::value::addr_class::is_handle_band(obj) {
+        HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
+    }
     if crate::array::object_prototype_addr_matches(obj) {
         OBJECT_PROTO_DESCRIPTORS.store(true, Ordering::Relaxed);
     }
@@ -708,6 +713,34 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
         let mut m = m.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| !is_dead(*owner));
+        }
+    });
+}
+
+/// #6710: drop every property-attr + accessor descriptor owned by `obj`.
+///
+/// The generic descriptor tables are keyed by owner address; for a native
+/// handle that address is its (recycled) handle id. `gc_sweep_dead_descriptors`
+/// only reaps entries whose owner is a dead *heap* object, so a recycled handle
+/// id's descriptors survive into the next owner. Called from
+/// `handle_expando_clear` when perry-ffi hands a freed handle id back out.
+pub(crate) fn clear_object_descriptors(obj: usize) {
+    // Fast path: if no handle-band owner ever received a descriptor, these
+    // tables hold only heap owners — none of whose keys can match `obj` (a
+    // handle id) — so the O(N) `retain` scans would remove nothing. Skip them.
+    if !HANDLE_HAS_DESCRIPTORS.load(Ordering::Relaxed) {
+        return;
+    }
+    PROPERTY_DESCRIPTORS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.is_empty() {
+            m.retain(|(owner, _), _| *owner != obj);
+        }
+    });
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.is_empty() {
+            m.retain(|(owner, _), _| *owner != obj);
         }
     });
 }

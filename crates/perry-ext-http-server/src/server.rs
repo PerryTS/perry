@@ -38,9 +38,9 @@ use crate::response::{
     alloc_server_response_for_request, HyperResponseShape, ResponseBody, ServerResponse,
 };
 use crate::types::{
-    extract_host, extract_port, js_promise_run_microtasks, js_promise_state, js_value_is_closure,
-    jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
-    TAG_UNDEFINED,
+    extract_host, extract_port, js_handle_clear_side_tables, js_promise_run_microtasks,
+    js_promise_state, js_value_is_closure, jsvalue_to_owned_string, read_string_header, Promise,
+    POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED,
 };
 
 // #4728 — in-flight (async-handler) request tracking + the reaper that
@@ -1601,6 +1601,16 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
         while let Some(up) = try_recv_upgrade(h) {
+            // #6710 — the upgrade path bypasses `process_pending`, but its
+            // request handle and the adopted socket / WebSocket handles are
+            // recycled from the same freelist. Clear their per-handle JS side
+            // tables here, on the main thread, before any upgrade listener sees
+            // them (no-op for a zero handle).
+            unsafe {
+                js_handle_clear_side_tables(up.request_handle);
+                js_handle_clear_side_tables(up.raw_socket_id);
+                js_handle_clear_side_tables(up.ws_id);
+            }
             if up.raw_socket_id != 0 {
                 // #4973 raw path: make sure the adopted net.Socket's
                 // dispatch extensions + GC scanner are registered on the
@@ -1739,6 +1749,25 @@ pub(crate) fn try_recv_pending_nonblocking(server_handle: i64) -> Option<HttpPen
 fn process_pending(pending: HttpPendingRequest) {
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
     let res_f64 = handle_to_pointer_f64(pending.response_handle);
+
+    // #6710: this handler is about to run on a possibly-RECYCLED handle id —
+    // perry-ffi's bounded freelist hands a freed `IncomingMessage` /
+    // `ServerResponse` id back out to a later `register_handle`. The per-handle
+    // JS-property side tables (`HANDLE_EXPANDO_PROPS` string props +
+    // `SYMBOL_PROPERTIES`/attrs/accessors symbol props) are keyed by that id and
+    // are NOT cleared on recycle, so without this a fresh request would inherit
+    // the previous request's arbitrary own props — e.g. Next.js stores
+    // `isRSCRequest` / `NextInternalRequestMeta` on `req` — crossing per-request
+    // state across concurrent requests and wedging the App Router render
+    // pipeline. Clear them here, on the MAIN thread that owns the thread-local
+    // expando table, before any `'request'` listener or the handler observes
+    // `req`/`res`. (The Rust `IncomingMessage`/`ServerResponse` structs are
+    // already fresh per request via `IncomingMessage::new`; only these
+    // id-keyed JS side tables leak.)
+    unsafe {
+        js_handle_clear_side_tables(pending.request_handle);
+        js_handle_clear_side_tables(pending.response_handle);
+    }
 
     // Fire `'request'` listeners (Node's `server.on('request', ...)`).
     // Node's emitter invokes them with `this` bound to the server, so the

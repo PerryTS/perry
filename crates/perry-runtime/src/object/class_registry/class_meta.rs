@@ -1,9 +1,5 @@
 use super::*;
-use crate::object::*;
-use crate::{ArrayHeader, JSValue};
-use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::RwLock;
 
 /// Register a class id so `js_value_typeof` can distinguish class refs

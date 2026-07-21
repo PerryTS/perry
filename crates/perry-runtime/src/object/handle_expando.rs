@@ -80,6 +80,29 @@ pub fn handle_expando_set(handle: i64, name: &str, value: f64) {
     crate::gc::runtime_write_barrier_external_slot(0, 0, bits);
 }
 
+/// Drop every expando property stored under `handle`.
+///
+/// #6710: handle ids are recycled through perry-ffi's freelist — a freed
+/// `IncomingMessage`/`ServerResponse`/Blob/stream id is handed back out by a
+/// later `register_handle`. This table (like the symbol-property table) is
+/// keyed by that id, so without an explicit clear the NEW owner inherits the
+/// PREVIOUS owner's arbitrary JS props. Under concurrent HTTP requests that
+/// crosses per-request state — Next.js stores `isRSCRequest` /
+/// `NextInternalRequestMeta` on `req`, so a recycled id makes one request read
+/// another's flags and the App Router render pipeline wedges. Callers clear a
+/// recycled id's side tables on the MAIN (JS-owning) thread before reuse.
+pub fn handle_expando_clear(handle: i64) {
+    if handle == 0 {
+        return;
+    }
+    HANDLE_EXPANDO_PROPS.with(|cell| {
+        cell.borrow_mut().remove(&handle);
+    });
+    // Also drop the handle's property-attr / accessor descriptors, which live
+    // in the generic per-owner descriptor tables (keyed by the handle id).
+    super::descriptor_state::clear_object_descriptors(handle as usize);
+}
+
 /// Read back an own property previously stored via `handle_expando_set`.
 /// Returns `None` when no such property exists (caller falls through to its
 /// `undefined` default). Mirrors `closure_get_own_dynamic_prop`.
@@ -304,6 +327,47 @@ mod tests {
         HANDLE_EXPANDO_PROPS.with(|cell| {
             cell.borrow_mut().remove(&h);
         });
+    }
+
+    #[test]
+    fn clear_drops_all_props() {
+        // #6710: a recycled handle id must not carry the prior owner's props.
+        let h = 0x4_2426i64;
+        handle_expando_set(h, "a", f64::from_bits(0x7FFD_0000_0000_0011));
+        handle_expando_set(h, "b", f64::from_bits(0x7FFD_0000_0000_0022));
+        assert!(handle_expando_has_any(h));
+        handle_expando_clear(h);
+        assert!(
+            !handle_expando_has_any(h),
+            "clear must drop the owner entry"
+        );
+        assert!(handle_expando_get(h, "a").is_none());
+        assert!(handle_expando_get(h, "b").is_none());
+        // Clearing an absent id and the null id (0) are no-ops, not panics.
+        handle_expando_clear(0x9_9999i64);
+        handle_expando_clear(0);
+    }
+
+    #[test]
+    fn clear_drops_handle_descriptors() {
+        // #6710: a handle that received a `defineProperty` descriptor must also
+        // have it cleared on recycle — exercises the HANDLE_HAS_DESCRIPTORS-gated
+        // path in `clear_object_descriptors`.
+        use super::super::descriptor_state::{
+            get_property_attrs, set_property_attrs, PropertyAttrs,
+        };
+        let h = 0x4_2427i64;
+        set_property_attrs(
+            h as usize,
+            "d".to_string(),
+            PropertyAttrs::new(false, true, true),
+        );
+        assert!(get_property_attrs(h as usize, "d").is_some());
+        handle_expando_clear(h);
+        assert!(
+            get_property_attrs(h as usize, "d").is_none(),
+            "clear must drop the handle's property descriptor"
+        );
     }
 
     #[test]

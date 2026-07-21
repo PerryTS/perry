@@ -1,6 +1,5 @@
 //! `require(...)` specifier extraction and alias detection.
 
-#[allow(unused_imports)]
 use super::*;
 
 /// Extract `require('X')` / `require("X")` specifiers, preserving order and

@@ -1,8 +1,5 @@
 use super::*;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::Ordering;
 
 // #6667: `node:crypto` export surface. Node 22–26 enumerate 70 own keys on the
 // CJS namespace (`Object.keys(require("crypto")).length === 70`); order matches

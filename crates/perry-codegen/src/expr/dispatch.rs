@@ -8,22 +8,11 @@
 use super::*;
 
 use anyhow::{bail, Result};
-use perry_hir::{BinaryOp, Expr};
-use perry_types::Type as HirType;
+use perry_hir::Expr;
 
-use crate::block::LlBlock;
-use crate::codegen::AppMetadata;
-use crate::collectors::NativeRegionFactGraph;
-use crate::function::LlFunction;
-use crate::native_value::{
-    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
-    BufferViewSlot, GuardedBufferIndex, LoweredValue, MaterializationReason, NativeAbiTypeRecord,
-    NativeFactUse, NativeRep, NativeRepRecord, NativeValueState, PodLayoutManifest,
-    PodRecordViewManifest, ScalarConversionRecord,
-};
-use crate::strings::StringPool;
+use crate::native_value::MaterializationReason;
 use crate::type_analysis::is_numeric_expr;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::DOUBLE;
 
 /// Lower an expression to a raw LLVM `double` value. Returns the string form
 /// of the value (either a `%rN` register or a literal like `42.0`).

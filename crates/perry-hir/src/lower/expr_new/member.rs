@@ -10,10 +10,8 @@ use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
-use crate::lower_decl::lower_class_from_ast;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::expr_new_builtins::{global_member_constructor_name, module_constructor_name};
+use super::super::expr_new_builtins::global_member_constructor_name;
 use super::super::{lower_expr, LoweringContext};
 
 /// Issue #422: `new net.Socket()` over a `net` module alias and the many other

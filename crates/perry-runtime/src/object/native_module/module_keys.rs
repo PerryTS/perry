@@ -1,8 +1,4 @@
 use super::*;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
 
 // #3677: `Object.keys(zlib.constants)` enumeration. Node exposes the full
 // Z_*/BROTLI_*/ZSTD_* table as enumerable own keys (170 keys). Every key here

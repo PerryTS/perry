@@ -49,17 +49,16 @@ mod state;
 
 // ── state.rs ────────────────────────────────────────────────────────────────
 pub(crate) use state::{
-    class_decl_prototype_object, class_decl_prototype_object_root_store,
-    class_decl_prototype_value, class_decl_prototype_value_for_instance_class,
-    class_delete_own_dynamic_prop, class_dynamic_prop_root_store, class_has_own_dynamic_prop,
-    class_id_for_decl_prototype_object, class_is_key_deleted, class_mark_key_deleted,
-    class_object_value_for_cid, class_object_value_root_store, class_own_enumerable_field_names,
-    class_own_static_field_value, class_parent_closure, class_parent_closure_root_store,
-    class_prototype_method_is_enumerable, class_prototype_method_set_enumerable,
-    class_prototype_method_value_cache_root_store, class_prototype_object_root_store,
-    global_object_prototype_bits, is_bound_native_method_closure_value,
-    is_non_constructable_builtin_function_value, parent_closure_in_chain,
-    throw_non_constructable_builtin_function,
+    class_decl_prototype_object, class_decl_prototype_value,
+    class_decl_prototype_value_for_instance_class, class_delete_own_dynamic_prop,
+    class_dynamic_prop_root_store, class_has_own_dynamic_prop, class_id_for_decl_prototype_object,
+    class_is_key_deleted, class_mark_key_deleted, class_object_value_for_cid,
+    class_object_value_root_store, class_own_enumerable_field_names, class_own_static_field_value,
+    class_parent_closure, class_parent_closure_root_store, class_prototype_method_is_enumerable,
+    class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
+    class_prototype_object_root_store, global_object_prototype_bits,
+    is_bound_native_method_closure_value, is_non_constructable_builtin_function_value,
+    parent_closure_in_chain, throw_non_constructable_builtin_function,
 };
 pub use state::{
     ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,
@@ -87,10 +86,10 @@ pub use class_meta::{
     js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_NAMES,
 };
 pub(crate) use class_meta::{
-    dispatch_diag_enabled, identify_global_builtin_constructor, report_dispatch_miss,
-    text_decoder_bool_option, text_encoding_stream_new_with_constructor,
-    validate_web_compression_stream_format, CLASS_ID_COMPRESSION_STREAM,
-    CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM, CLASS_ID_TEXT_ENCODER_STREAM,
+    identify_global_builtin_constructor, report_dispatch_miss, text_decoder_bool_option,
+    text_encoding_stream_new_with_constructor, validate_web_compression_stream_format,
+    CLASS_ID_COMPRESSION_STREAM, CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM,
+    CLASS_ID_TEXT_ENCODER_STREAM,
 };
 #[cfg(test)]
 pub(crate) use prototype_methods::CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED;
@@ -124,7 +123,6 @@ pub use construct::{
 // ── gc_roots.rs ─────────────────────────────────────────────────────────────
 pub(crate) use gc_roots::{
     new_class_side_table_root_scan_state, scan_class_side_table_roots_mut_step,
-    ClassSideTableRootScanState,
 };
 pub use gc_roots::{scan_class_side_table_roots, scan_class_side_table_roots_mut};
 #[cfg(test)]

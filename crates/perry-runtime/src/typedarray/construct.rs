@@ -4,14 +4,9 @@
 
 use super::*;
 
-use std::alloc::{alloc, Layout};
-use std::cell::RefCell;
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::array::ArrayHeader;
-use crate::closure::ClosureHeader;
-use crate::typedarray_half::{f16_bits_to_f64, f64_to_f16_bits};
 
 /// Allocate a typed array of `length` elements, all zero.
 #[no_mangle]

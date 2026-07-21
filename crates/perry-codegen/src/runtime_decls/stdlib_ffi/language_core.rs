@@ -4,9 +4,8 @@
 //! async-step, slugify, class registration, runtime init/module-loader,
 //! well-known Symbol hooks, Object.groupBy, JSX runtime adapter.
 
-use super::*;
 use crate::module::LlModule;
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 pub(crate) fn declare_core(module: &mut LlModule) {
     // ========== Date ==========

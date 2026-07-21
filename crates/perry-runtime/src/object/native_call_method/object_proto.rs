@@ -1,7 +1,4 @@
 use super::super::*;
-use super::disposal::*;
-use super::proto_dispatch::*;
-use super::typed_array::*;
 use super::*;
 
 pub(super) unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {

@@ -4,8 +4,6 @@
 
 use super::*;
 use crate::string::{js_string_from_bytes, StringHeader};
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
 /// the object. Looks up the side table populated by

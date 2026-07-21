@@ -6,9 +6,7 @@
 use super::dispatch::{
     self, boolean, field_u16, field_u8, ok_or_throw, raw_arg, string, undefined,
 };
-use super::{
-    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
-};
+use super::{alloc_temporal_cell, temporal_value_ref_or_subclass, TemporalValue};
 use crate::value::JSValue;
 use temporal_rs::{Calendar, PlainDateTime};
 

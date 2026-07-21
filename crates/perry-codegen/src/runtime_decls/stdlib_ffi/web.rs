@@ -1,9 +1,8 @@
 //! URL / URLSearchParams + WebSocket stdlib FFI declarations
 //! (extracted from stdlib_ffi.rs).
 
-use super::*;
 use crate::module::LlModule;
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(crate) fn declare_web(module: &mut LlModule) {
     // ========== URL / URLSearchParams ==========

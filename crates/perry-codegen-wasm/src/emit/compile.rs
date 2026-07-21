@@ -927,7 +927,6 @@ impl WasmModuleEmitter {
                     // suffix/basename match on `import.source`.
                     let src_idx_opt = resolve_source_module_idx(modules, import, &name_to_idx);
                     let Some(src_idx) = src_idx_opt else { continue };
-                    let src_lets = &src_let_names[src_idx];
                     for spec in &import.specifiers {
                         if let perry_hir::ir::ImportSpecifier::Named { imported, local } = spec {
                             // Resolve the public `imported` name to a let

@@ -920,7 +920,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     eligibility: CopiedMinorEligibility,
-    trigger_kind: GcTriggerKind,
+    _trigger_kind: GcTriggerKind,
 ) -> Option<CopiedMinorFastPathOutcome> {
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
