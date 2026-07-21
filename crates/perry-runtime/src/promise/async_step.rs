@@ -287,7 +287,28 @@ fn then_backpatch_result(
         super::then::js_promise_attach_handlers(awaited, fulfill, reject);
         result
     } else {
-        js_promise_then(awaited, fulfill, reject)
+        // #6728: `trap_next` non-null means this is a SUBSEQUENT `await` (the
+        // 2nd or later) in the activation — the result promise already exists
+        // and the resume thunks already carry it (capture slot 1, set by
+        // `build_async_step_thunks`). Attach the thunks to `awaited` WITHOUT a
+        // chained then-result promise, exactly like the first-await
+        // (`trap_next.is_null()`) branch above, and return `trap_next` (which is
+        // what the reuse fast paths in `js_async_step_chain` return too).
+        //
+        // A plain `js_promise_then` here mints an intermediate then-result
+        // promise. When the resumed step later THROWS — a `throw` reached after
+        // two-or-more awaits — its fulfill thunk returns the step body's fresh
+        // `Promise.reject(e)` (see `forward_swallowed_rejection`), and that
+        // then-result promise ADOPTS the rejection, becoming a REJECTED promise
+        // with NO handler attached. The orphan surfaces a spurious
+        // "Uncaught (in promise)" (and exits the process non-zero) even though a
+        // surrounding `try/catch` already handled the throw via `trap_next`.
+        // The first-await path never hit this because it uses `attach_handlers`
+        // (`next` = null, nothing to propagate the thunk's rejected return to);
+        // extend the same shape to every await so multi-await async functions
+        // that throw reject exactly one promise — the activation result.
+        super::then::js_promise_attach_handlers(awaited, fulfill, reject);
+        trap_next
     }
 }
 
