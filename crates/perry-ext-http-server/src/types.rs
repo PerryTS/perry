@@ -14,6 +14,13 @@ pub const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 // Runtime symbols not yet wrapped by perry-ffi — declared locally.
 extern "C" {
     pub fn js_promise_run_microtasks() -> i32;
+    /// #6710 — clear every per-handle JS-property side table (string expando +
+    /// symbol props/attrs/accessors) for a recycled handle id, so a reused
+    /// `IncomingMessage`/`ServerResponse` id does not carry the previous
+    /// request's own props (Next.js `isRSCRequest` / `NextInternalRequestMeta`).
+    /// Must be called on the main thread. Defined in
+    /// `crates/perry-runtime/src/symbol/properties.rs::js_handle_clear_side_tables`.
+    pub fn js_handle_clear_side_tables(handle: i64);
     pub fn js_promise_state(ptr: *mut Promise) -> i32;
     pub fn js_promise_reason(ptr: *mut Promise) -> f64;
     pub fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;

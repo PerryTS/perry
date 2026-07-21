@@ -712,6 +712,28 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
     });
 }
 
+/// #6710: drop every property-attr + accessor descriptor owned by `obj`.
+///
+/// The generic descriptor tables are keyed by owner address; for a native
+/// handle that address is its (recycled) handle id. `gc_sweep_dead_descriptors`
+/// only reaps entries whose owner is a dead *heap* object, so a recycled handle
+/// id's descriptors survive into the next owner. Called from
+/// `handle_expando_clear` when perry-ffi hands a freed handle id back out.
+pub(crate) fn clear_object_descriptors(obj: usize) {
+    PROPERTY_DESCRIPTORS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.is_empty() {
+            m.retain(|(owner, _), _| *owner != obj);
+        }
+    });
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.is_empty() {
+            m.retain(|(owner, _), _| *owner != obj);
+        }
+    });
+}
+
 /// Rewrite a descriptor table's owner ADDRESS during the GC metadata-rewrite
 /// phase (evacuation moved the owning object), mirroring the symbol-keyed
 /// twin tables' owner rekey (`symbol/gc_roots.rs`). Outside that phase the

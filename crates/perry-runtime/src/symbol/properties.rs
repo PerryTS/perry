@@ -108,6 +108,47 @@ pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64
     1
 }
 
+/// #6710: drop ALL symbol-keyed props (data + attrs + accessors) owned by
+/// `obj_key`. Used when a handle id is recycled so the reused id starts with a
+/// clean symbol side table — mirrors `handle_expando_clear` for the string
+/// table. The three tables are keyed by `obj_key` (`SYMBOL_PROPERTIES`) or
+/// `(obj_key, sym_key)` (attrs / accessors), so a single object drops in one
+/// `remove` and two `retain`s.
+pub(crate) fn clear_all_symbol_properties_for_object(obj_key: usize) {
+    if obj_key == 0 {
+        return;
+    }
+    accessors::clear_all_symbol_accessor_properties_for_object(obj_key);
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        if let Some(map) = guard.as_mut() {
+            map.remove(&obj_key);
+        }
+    }
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
+        if let Some(map) = guard.as_mut() {
+            map.retain(|(o, _), _| *o != obj_key);
+        }
+    }
+}
+
+/// #6710: clear every per-handle JS-property side table for a recycled handle
+/// id (the string expando table AND the symbol tables). Called on the MAIN
+/// (JS-owning) thread from perry-ext-http-server just before a recycled
+/// `IncomingMessage`/`ServerResponse` id is handed to a new request's handler,
+/// so no request inherits a prior request's `req.__rid` / `isRSCRequest` /
+/// `NextInternalRequestMeta`. The `handle` id equals `obj_key_from_f64` of the
+/// handle's NaN-boxed pointer, so one id keys all four tables.
+#[no_mangle]
+pub extern "C" fn js_handle_clear_side_tables(handle: i64) {
+    if handle == 0 {
+        return;
+    }
+    crate::object::handle_expando::handle_expando_clear(handle);
+    clear_all_symbol_properties_for_object(handle as usize);
+}
+
 pub(crate) fn symbol_property_is_enumerable(owner: usize, sym_key: usize) -> bool {
     get_symbol_property_attrs(owner, sym_key)
         .map(|attrs| attrs.enumerable())

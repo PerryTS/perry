@@ -23,6 +23,16 @@ pub(super) fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
     }
 }
 
+/// #6710: drop every symbol accessor descriptor owned by `obj_key` — used when
+/// a handle id is recycled so a reused id can't carry the prior owner's
+/// accessors. Keyed by `(obj_key, sym_key)`, so retain everything else.
+pub(super) fn clear_all_symbol_accessor_properties_for_object(obj_key: usize) {
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    if let Some(map) = guard.as_mut() {
+        map.retain(|(o, _), _| *o != obj_key);
+    }
+}
+
 pub(crate) unsafe fn set_symbol_accessor_property(
     obj_f64: f64,
     sym_f64: f64,
