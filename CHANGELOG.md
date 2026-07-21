@@ -1,3 +1,43 @@
+## v0.5.1264 — fix(url): route URLSearchParams subclass instances to their native backing (#6738)
+
+`class X extends URLSearchParams` — most importantly Next.js's `ReadonlyURLSearchParams`
+returned by `useSearchParams()`, on the logout path — lost its entire inherited surface:
+`r.get(k)`/`r.has(k)` threw `TypeError: value is not a function`, `r.toString()` returned
+`"[object Object]"`, `r.size` read `undefined`, and `for (const [k, v] of r)` threw
+`next is not a function`. Root cause: Perry lowers the URLSearchParams method/property
+surface by the receiver's **static type** (`Expr::UrlSearchParams*`), not as real
+`URLSearchParams.prototype` methods, so a subclass-typed receiver matches none of those
+static arms and falls through to generic class dispatch, which has no such member.
+
+Fix — attach a hidden **native URLSearchParams backing** to the subclass instance at
+`super()` and delegate the inherited surface to it:
+
+- **Runtime backing** (`url/search_params.rs`): `js_url_search_params_subclass_init` creates a
+  native URLSearchParams and stashes it on `this` under a hidden key;
+  `url_search_params_backing_of` / `resolve_search_params_receiver` resolve it, and the
+  read/write runtime methods resolve the backing internally so the subclass instance stays
+  the observable object. All three helpers root the receiver across the (heap-allocating)
+  backing-key string and `js_url_search_params_new_any` via `RuntimeHandleScope`.
+- **super() codegen**: emit the init from all three derived-construction paths — explicit
+  `super(init)`, implicit `super(...args)` (`SuperCallSpread`), and the no-constructor `new`
+  path.
+- **Method dispatch**: the existing `#5961` dynamic-URLSearchParams block in
+  `js_native_call_method` resolves the backing when the native shape probe misses, reusing
+  `url_search_params_dynamic_call` (correct boolean/string/array boxing), extracted to
+  `try_url_search_params_dynamic_dispatch`. A codegen carve-out routes subclass method calls
+  into `js_native_call_method` instead of the static class tower, and the universal
+  `.toString()` arm defers to it.
+- **`.size` and iteration**: new codegen `.size` property arm and a `js_get_iterator`
+  backing branch (yields `[key, value]` pairs).
+
+A user override (Next's throwing `append`/`delete`/`set`/`sort` on `ReadonlyURLSearchParams`)
+still resolves first via the static class tower, preserving read-only semantics. Validated
+byte-identical to `node --experimental-strip-types` across get/getAll/has(name[,value])/set/
+append/delete/toString/forEach/sort, `.size`, entries()/keys()/values()/for-of, explicit and
+implicit super, and throwing read-only overrides; GC-rooting verified under
+`PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1`. No regression to native
+URLSearchParams, Map/Set subclasses, plain-class or user `toString`, or `number.toString(radix)`.
+
 ## v0.5.1263 — fix(cache): key the object cache on all codegen-affecting env vars (#6394, PR #6526)
 
 The per-module object cache (`node_modules/.cache/perry`) keyed on a curated

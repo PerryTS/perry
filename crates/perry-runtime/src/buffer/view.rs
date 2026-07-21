@@ -37,7 +37,6 @@
 use super::*;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 /// Each live slice/subarray records its ultimate backing buffer plus
 /// the [offset, offset + length) range within that backing.  The

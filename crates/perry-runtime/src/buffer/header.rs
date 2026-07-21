@@ -1,5 +1,3 @@
-use super::*;
-
 /// Type ID constant for Buffer/Uint8Array - matches class_id 0xFFFF0004
 pub const BUFFER_TYPE_ID: u32 = 0xFFFF0004;
 

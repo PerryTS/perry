@@ -1,10 +1,7 @@
 use super::*;
-use crate::object::*;
-use crate::{ArrayHeader, JSValue};
-use std::cell::{Cell, RefCell, UnsafeCell};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::RwLock;
+use crate::JSValue;
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ============================================================================
 // Per-callsite-keyed inline cache for vtable method dispatch.

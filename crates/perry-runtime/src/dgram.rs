@@ -10,16 +10,15 @@
 //! touching the network.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::net::ToSocketAddrs;
+use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
 use crate::closure::{
     js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
 };
 use crate::object::{
-    js_object_alloc, js_object_get_field_by_name_f64, js_object_keys, js_object_set_field_by_name,
-    ObjectHeader,
+    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
 use crate::value::{
     js_nanbox_pointer, JSValue, POINTER_MASK, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
@@ -57,8 +56,8 @@ pub(crate) use listeners::{
 // `crate::dgram_reactor`).
 pub(crate) use net::{
     bind_socket, build_address_info, build_rinfo, deterministic, dgram_emit_message, ensure_bound,
-    finish_send, live_udp, lookup_bound_socket, message_value, parse_multicast_v4,
-    parse_multicast_v6, reactor_id, real_bind, real_send, ref_impl, remove_bound_socket, with_udp,
+    live_udp, lookup_bound_socket, message_value, parse_multicast_v4, parse_multicast_v6,
+    reactor_id, real_bind, real_send, ref_impl, remove_bound_socket, with_udp,
 };
 
 // Socket operation implementations (used by thunks + FFI siblings).
@@ -67,7 +66,6 @@ pub(crate) use ops::{
     get_buffer_size_impl, membership_impl, remote_address_impl, send_destination, send_impl,
     set_broadcast_impl, set_buffer_size_impl, set_multicast_interface_impl,
     set_multicast_loopback_impl, set_multicast_ttl_impl, set_ttl_impl, source_membership_impl,
-    validate_buffer_size,
 };
 
 // Closure thunks referenced by SOCKET_METHODS in this trunk.

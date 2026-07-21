@@ -1,5 +1,4 @@
 //! `Object.defineProperties` and `Object.setPrototypeOf`.
-use super::super::*;
 use super::*;
 
 /// `Object.defineProperties(target, descriptors)` — iterate the descriptor

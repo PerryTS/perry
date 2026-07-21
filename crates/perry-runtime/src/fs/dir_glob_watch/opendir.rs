@@ -8,26 +8,8 @@ use super::*;
 // grandchild we glob the `fs` module directly. `fs_encoding_option` /
 // `encoded_string_ptr` are private to `fs/mod.rs` but reachable here as a
 // descendant module, so name them explicitly in case the glob skips privates.
-use crate::fs::*;
-#[allow(unused_imports)]
-use crate::fs::{encoded_string_ptr, fs_encoding_option};
-#[allow(unused_imports)]
-use crate::string::js_string_from_bytes;
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-#[cfg(feature = "regex-engine")]
-use std::path::PathBuf;
-use std::sync::Once;
-
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
-};
 
 /// `fs.opendirSync(path)` — codegen emits a direct call to the unmangled
 /// `js_fs_opendir_sync` symbol (runtime_decls/strings.rs). Without `#[no_mangle]`

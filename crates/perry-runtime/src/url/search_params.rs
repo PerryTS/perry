@@ -17,6 +17,120 @@ pub(crate) const URL_SEARCH_PARAMS_ENTRIES: u32 = 0; // Array of [key, value] pa
 pub(crate) const URL_SEARCH_PARAMS_OWNER: u32 = 1;
 pub(crate) const URL_SEARCH_PARAMS_FIELD_COUNT: u32 = 2;
 
+/// Hidden field installed on a `class X extends URLSearchParams` instance by
+/// `js_url_search_params_subclass_init`, holding the native backing params
+/// object that the inherited method surface actually operates on.
+pub(crate) const URL_SEARCH_PARAMS_BACKING_KEY: &[u8] = b"__perry_usp_backing__";
+
+/// Resolve a URLSearchParams method receiver to the native params object it
+/// operates on.
+///
+/// `new URLSearchParams(...)` returns a native object (entries at slot 0)
+/// directly. A `class X extends URLSearchParams` instance is a plain object
+/// that carries the native params under [`URL_SEARCH_PARAMS_BACKING_KEY`]; every
+/// read/write funnels through here so the inherited surface behaves correctly on
+/// the subclass (Next's `ReadonlyURLSearchParams` — a `class extends
+/// URLSearchParams` — is on the logout path). A native params object has no such
+/// field, so the lookup misses and the receiver is returned unchanged.
+pub(crate) fn resolve_search_params_receiver(params: *mut ObjectHeader) -> *mut ObjectHeader {
+    if params.is_null() {
+        return params;
+    }
+    // `URL_SEARCH_PARAMS_BACKING_KEY` is longer than a short string, so
+    // `js_string_from_bytes` heap-allocates and may GC-evacuate `params` before
+    // the field read dereferences it. Root it across the allocation and reload.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let params_handle = scope.root_raw_mut_ptr(params);
+    let key = js_string_from_bytes(
+        URL_SEARCH_PARAMS_BACKING_KEY.as_ptr(),
+        URL_SEARCH_PARAMS_BACKING_KEY.len() as u32,
+    );
+    let params = params_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let backing = unsafe { crate::object::js_object_get_field_by_name(params, key) };
+    if backing.is_pointer() {
+        let ptr = backing.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        if !ptr.is_null() {
+            return ptr;
+        }
+    }
+    params
+}
+
+/// The native backing params for a `class X extends URLSearchParams` instance,
+/// or `None` for a native URLSearchParams / any other object. Lets the runtime
+/// method dispatcher (`native_call_method`) recognize a subclass instance whose
+/// `r.get()`/`r.has()`/… lowered generically (the HIR method-lowering only fires
+/// for a statically `URLSearchParams`-typed receiver, not a subclass type).
+pub(crate) fn url_search_params_backing_of(object: f64) -> Option<*mut ObjectHeader> {
+    let jv = crate::value::JSValue::from_bits(object.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let obj = crate::value::js_nanbox_get_pointer(object) as *mut ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    // Root `obj` across the (heap-allocating) key string so a GC evacuation
+    // mid-allocation can't leave it dangling before the field read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key = js_string_from_bytes(
+        URL_SEARCH_PARAMS_BACKING_KEY.as_ptr(),
+        URL_SEARCH_PARAMS_BACKING_KEY.len() as u32,
+    );
+    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let backing = unsafe { crate::object::js_object_get_field_by_name(obj, key) };
+    if backing.is_pointer() {
+        let ptr = backing.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        if !ptr.is_null() {
+            return Some(ptr);
+        }
+    }
+    None
+}
+
+/// `super(init)` for `class X extends URLSearchParams`. Builds a native
+/// URLSearchParams from `init` and stashes it on `this` under
+/// [`URL_SEARCH_PARAMS_BACKING_KEY`]; the inherited method surface resolves it
+/// via [`resolve_search_params_receiver`]. Returns undefined (super's value).
+#[no_mangle]
+pub extern "C" fn js_url_search_params_subclass_init(this: f64, init: f64) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let this_jv = crate::value::JSValue::from_bits(this.to_bits());
+    if !this_jv.is_pointer() {
+        return undef;
+    }
+    let this_obj = crate::value::js_nanbox_get_pointer(this) as *mut ObjectHeader;
+    if this_obj.is_null() {
+        return undef;
+    }
+    // Every allocation below (the key string, the native backing, and the
+    // field-storage growth in the final write) can GC-evacuate the objects held
+    // in raw pointers. Root `this`, the key, and the backing, and reload each
+    // from its handle after the last allocation before the field write.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_handle = scope.root_raw_mut_ptr(this_obj);
+    let key = js_string_from_bytes(
+        URL_SEARCH_PARAMS_BACKING_KEY.as_ptr(),
+        URL_SEARCH_PARAMS_BACKING_KEY.len() as u32,
+    );
+    let key_handle = scope.root_string_ptr(key);
+    let backing = js_url_search_params_new_any(init);
+    let backing_handle = scope.root_raw_mut_ptr(backing);
+    let this_obj = this_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let backing_ptr = backing_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let backing_f64 = crate::value::js_nanbox_pointer(backing_ptr as i64);
+    unsafe { crate::object::js_object_set_field_by_name(this_obj, key, backing_f64) };
+    undef
+}
+
+/// Reached only from codegen-emitted IR (the `Expr::SuperCall` URLSearchParams
+/// arm); pin it so the auto-optimize bitcode rebuild's dead-strip can't drop it.
+#[used]
+static KEEP_JS_URL_SEARCH_PARAMS_SUBCLASS_INIT: extern "C" fn(f64, f64) -> f64 =
+    js_url_search_params_subclass_init;
+
 fn throw_invalid_query_pair_tuple() -> ! {
     let msg = b"Each query pair must be an iterable [name, value] tuple";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
@@ -229,6 +343,8 @@ pub(crate) fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(S
     if params.is_null() {
         return Vec::new();
     }
+    // Subclass instances carry the native params under a hidden backing field.
+    let params = resolve_search_params_receiver(params);
 
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
     let entries_ptr: *mut ArrayHeader = f64::to_bits(entries_f64).cast_signed() as *mut ArrayHeader;
@@ -550,7 +666,11 @@ pub extern "C" fn js_url_search_params_set(
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    js_object_set_field_f64(
+        resolve_search_params_receiver(params),
+        URL_SEARCH_PARAMS_ENTRIES,
+        entries_f64,
+    );
     unsafe { maybe_sync_params_to_owner(params) };
 }
 
@@ -578,7 +698,11 @@ pub extern "C" fn js_url_search_params_append(
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    js_object_set_field_f64(
+        resolve_search_params_receiver(params),
+        URL_SEARCH_PARAMS_ENTRIES,
+        entries_f64,
+    );
     unsafe { maybe_sync_params_to_owner(params) };
 }
 
@@ -601,7 +725,11 @@ pub extern "C" fn js_url_search_params_delete(params: *mut ObjectHeader, name_va
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    js_object_set_field_f64(
+        resolve_search_params_receiver(params),
+        URL_SEARCH_PARAMS_ENTRIES,
+        entries_f64,
+    );
     unsafe { maybe_sync_params_to_owner(params) };
 }
 
@@ -652,7 +780,11 @@ pub extern "C" fn js_url_search_params_delete2(
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    js_object_set_field_f64(
+        resolve_search_params_receiver(params),
+        URL_SEARCH_PARAMS_ENTRIES,
+        entries_f64,
+    );
     unsafe { maybe_sync_params_to_owner(params) };
 }
 
@@ -665,6 +797,7 @@ pub extern "C" fn js_url_search_params_size(params: *mut ObjectHeader) -> i32 {
     if params.is_null() {
         return 0;
     }
+    let params = resolve_search_params_receiver(params);
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
     let entries_ptr: *const ArrayHeader =
         f64::to_bits(entries_f64).cast_signed() as *const ArrayHeader;
@@ -749,7 +882,11 @@ pub extern "C" fn js_url_search_params_sort(params: *mut ObjectHeader) {
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
     let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    js_object_set_field_f64(
+        resolve_search_params_receiver(params),
+        URL_SEARCH_PARAMS_ENTRIES,
+        entries_f64,
+    );
     unsafe { maybe_sync_params_to_owner(params) };
 }
 
@@ -914,6 +1051,72 @@ extern "C" fn usp_delete_thunk(closure: *const crate::closure::ClosureHeader, na
 /// on a type-erased receiver): dispatch the covered URLSearchParams surface to
 /// the natives. Returns `None` for uncovered names so the generic dispatch
 /// keeps its existing behavior.
+/// #5961/#6710: dispatch the covered URLSearchParams method surface for a
+/// type-erased (fused dynamic) receiver — both a native-shape URLSearchParams
+/// and a `class X extends URLSearchParams` subclass instance (Next's
+/// `ReadonlyURLSearchParams`), whose entries live on a hidden native backing.
+/// The statically-typed form lowers to the native call; this handles the fused
+/// dynamic form before the generic field-scan misses and throws
+/// "is not a function" (or the generic `toString` → "[object Object]" default).
+/// `object` is the NaN-boxed receiver. Returns `Some(result)` when handled,
+/// `None` to fall through to generic dispatch. The receiver's pointer payload
+/// is only handed to a shape probe after `pointer_shaped` rejects plain doubles
+/// and low handle-band ids (a Web Streams handle id extracts to an unmapped
+/// address past the macOS 2 TB heap floor).
+pub(crate) fn try_url_search_params_dynamic_dispatch(
+    object: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if !matches!(
+        method_name,
+        "append"
+            | "set"
+            | "get"
+            | "has"
+            | "delete"
+            | "toString"
+            | "entries"
+            | "keys"
+            | "values"
+            | "getAll"
+            | "sort"
+            | "forEach"
+    ) {
+        return None;
+    }
+    // Only a pointer-shaped receiver (NaN-boxed pointer above the handle band,
+    // or a raw untagged heap address) may be shape-probed. A plain double must
+    // NOT have its low 48 bits read as an address: a Web Streams handle id
+    // (`1049102.0`) extracts to `(id - 2^20) * 2^32`, which passes the macOS
+    // 2 TB heap floor once ~512 stream ids are live and the probe then
+    // dereferences unmapped memory (the gscmaster request-12 SIGSEGV; Linux's
+    // 0x1000 floor probes low memory from id 1). Numeric stream receivers fall
+    // through to the primitive-methods stream dispatch that owns them.
+    let bits = object.to_bits();
+    let top16 = bits >> 48;
+    let payload = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    let pointer_shaped = (top16 == 0x7FFD
+        && crate::value::addr_class::is_above_handle_band(payload))
+        || (top16 == 0 && payload >= 0x10000);
+    if !pointer_shaped {
+        return None;
+    }
+    let recv_ptr = payload as *mut ObjectHeader;
+    if shape_is_url_search_params(recv_ptr) {
+        return url_search_params_dynamic_call(recv_ptr, method_name, args_ptr, args_len);
+    }
+    // #6710: a `class X extends URLSearchParams` instance — the native store
+    // lives on the hidden backing that `js_url_search_params_subclass_init`
+    // stashed at `super()`. Reuse the same dynamic dispatch (correct boolean/
+    // string/array boxing) the native-shape path uses.
+    if let Some(backing) = url_search_params_backing_of(object) {
+        return url_search_params_dynamic_call(backing, method_name, args_ptr, args_len);
+    }
+    None
+}
+
 pub(crate) fn url_search_params_dynamic_call(
     params: *mut ObjectHeader,
     name: &str,

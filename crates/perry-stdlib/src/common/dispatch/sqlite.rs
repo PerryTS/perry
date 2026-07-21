@@ -1,6 +1,3 @@
-use super::super::handle::*;
-use super::*;
-
 /// Dispatch method calls on SQLite Statement handles. Routes the
 /// dynamic-receiver chain `this.stmt.raw().all(...params)` (drizzle's
 /// PreparedQuery.values()) and similar shapes where the codegen

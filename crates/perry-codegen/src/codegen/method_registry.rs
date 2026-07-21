@@ -6,21 +6,14 @@
 //! and pre-declares imported-class methods/getters/setters/ctors/statics as
 //! extern LLVM functions so the linker can resolve cross-module method calls.
 
-use super::*;
-
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
 use perry_hir::Module as HirModule;
 
 use crate::module::LlModule;
-use crate::runtime_decls;
-use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64};
+use crate::types::DOUBLE;
 
 // Collector and boxing-analysis walkers live in dedicated modules.
-use crate::boxed_vars::{collect_boxed_param_ids, collect_boxed_vars, collect_let_types_in_stmts};
-use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_ids_in_stmts};
 
 // Name-mangling helpers from the trunk (also reachable via `super::*`).
 use super::helpers::{sanitize, sanitize_member, scoped_method_name, scoped_static_method_name};

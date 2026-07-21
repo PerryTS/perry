@@ -1,20 +1,12 @@
 use super::*;
 
-#[cfg(feature = "regex-engine")]
-use regex::Regex;
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::ptr;
-#[cfg(feature = "regex-engine")]
-use std::sync::Arc;
 
 #[cfg(feature = "regex-engine")]
 use crate::array::ArrayHeader;
 use crate::string::StringHeader;
 #[cfg(feature = "regex-engine")]
 use crate::value::js_nanbox_string;
-
-use crate::object::ObjectHeader;
 
 /// regex.exec(string) -> match array (like string.match) with thread-local index/groups
 /// For global regexes, starts matching at lastIndex and updates it.

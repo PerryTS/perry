@@ -4,10 +4,7 @@ use anyhow::Result;
 use perry_types::Type;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
-
-use super::super::super::{is_known_namespace_static_function, lower_expr, LoweringContext};
+use super::super::super::{lower_expr, LoweringContext};
 
 /// Issue #957 — `(function(...) { ... }.call(<thisArg>, ...args))` IIFE
 /// pattern used at the top of older CJS packages (lodash, underscore, and

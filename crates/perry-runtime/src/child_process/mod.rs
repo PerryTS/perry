@@ -27,28 +27,17 @@ pub(crate) use v8_serde::{
     v8_serialize,
 };
 
-use std::collections::HashMap;
-use std::fs::File;
 use std::process::{Command, Stdio};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Mutex,
-};
 
-use sync_run::{
-    cp_read_async_run_options, cp_read_spawn_sync_run_options, cp_read_sync_stdio_run_options,
-    cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
-};
+#[cfg(test)]
+use crate::object::js_object_get_field_by_name_f64;
+
+use sync_run::{CpRun, CpRunError, CpRunOptions};
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
-use crate::object::{
-    js_implicit_this_get, js_implicit_this_set, js_object_alloc_with_shape,
-    js_object_get_field_by_name_f64, js_object_set_field, js_object_set_field_by_name,
-    ObjectHeader,
-};
+use crate::object::{js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 
@@ -71,7 +60,7 @@ mod value_util;
 // item's own visibility.
 
 // registry.rs — background-process registry + detach FFI.
-pub(crate) use registry::{extract_string_from_nanboxed, make_two_field_object};
+pub(crate) use registry::make_two_field_object;
 pub use registry::{
     js_child_process_get_process_status, js_child_process_kill_process,
     js_child_process_spawn_background, js_child_process_spawn_detached, spawn_detached_command,
@@ -81,38 +70,34 @@ pub use registry::{
 pub(crate) use value_util::{
     cp_args_from_value, cp_array_ptr, cp_box_ptr, cp_box_string, cp_box_string_bytes,
     cp_coerce_string, cp_get_field, cp_make_buffer, cp_object_ptr, cp_read_arg_strings,
-    cp_read_string_header, cp_set_field, cp_str_key, cp_this, cp_undefined, cp_value_to_bytes,
+    cp_read_string_header, cp_set_field, cp_this, cp_undefined, cp_value_to_bytes,
     cp_value_to_string,
 };
 
 // signals.rs — signal name/number mapping + kill/timeout reads.
 pub(crate) use signals::{
-    cp_read_kill_signal, cp_read_timeout, cp_signal_from_value, cp_signal_name, cp_signal_number,
-    CP_SIGTERM,
+    cp_read_kill_signal, cp_read_timeout, cp_signal_from_value, cp_signal_name, CP_SIGTERM,
 };
 
 // emitter.rs — EventEmitter listener registry, method bodies, IPC send/disconnect.
 pub(crate) use emitter::{
-    cp_channel_closed_error, cp_defer_send_callback, cp_emit, cp_handle_of, cp_listener_key,
-    cp_method_disconnect, cp_method_dispose, cp_method_emit, cp_method_kill, cp_method_on,
+    cp_emit, cp_method_disconnect, cp_method_dispose, cp_method_emit, cp_method_kill, cp_method_on,
     cp_method_pipe, cp_method_read, cp_method_remove_all_listeners, cp_method_remove_listener,
     cp_method_send, cp_method_stdin_end, cp_method_this0, cp_method_this1, cp_method_write2,
-    cp_pipe_data_thunk, cp_pipe_end_thunk, cp_register, cp_send_callback_thunk, js_fork_child,
+    cp_send_callback_thunk, js_fork_child,
 };
 
 // builder.rs — heap object construction + shape ids.
 pub(crate) use builder::{
     cp_build_object, cp_build_readable, cp_build_writable, cp_cast0, cp_cast1, cp_cast2, cp_cast4,
-    cp_install_dispose, cp_register_arities, CpFn, CP_READABLE_SHAPE_ID, CP_SHAPE_ID,
-    CP_WRITABLE_SHAPE_ID,
+    cp_install_dispose, cp_register_arities, CpFn, CP_SHAPE_ID,
 };
 
 // options.rs — command option application (cwd/env/uid/gid/argv0/detached/stdio).
 pub(crate) use options::{
     cp_abort_signal_is_aborted, cp_apply_argv0, cp_apply_detached, cp_apply_live_stdio,
-    cp_apply_options, cp_apply_uid_gid, cp_build_command, cp_read_abort_signal, cp_read_argv0,
-    cp_read_stdio, cp_read_uid_gid_option, cp_spawnargs_argv0, cp_stdio_from_fd, cp_stdio_js_value,
-    CpStdio,
+    cp_apply_options, cp_build_command, cp_read_abort_signal, cp_read_stdio, cp_spawnargs_argv0,
+    cp_stdio_from_fd, cp_stdio_js_value, CpStdio,
 };
 
 // output.rs — output encoding, error shape, exit decoding.
@@ -120,7 +105,6 @@ pub(crate) use output::{
     cp_abort_error, cp_box_output, cp_box_run_output, cp_decode_status, cp_errno_number,
     cp_exec_callback_args, cp_exec_callback_output_bytes, cp_file_cmd_display, cp_io_error_code,
     cp_make_error, cp_output_array, cp_read_output_mode, cp_sync_throw_error, CpExit, CpOutput,
-    CP_ABORT_ERROR_CLASS_ID,
 };
 
 // exec.rs — exec / execFile / spawnSync / execSync FFI + promisify wrappers.

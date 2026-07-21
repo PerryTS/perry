@@ -1,20 +1,13 @@
 //! Map / Set method dispatch + Map/Set/URLSearchParams `.forEach`.
 //! Pure code move from `property_get.rs` — no behavior change.
 
-use super::*;
-
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
-use crate::lower_array_method::lower_array_method;
-use crate::lower_string_method::{is_known_string_method_name, lower_string_method};
+use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
-use crate::type_analysis::{
-    is_array_expr, is_global_constructor_expr, is_map_expr, is_native_module_dynamic_index,
-    is_promise_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
-};
-use crate::types::{DOUBLE, I32, I64};
+use crate::type_analysis::{is_map_expr, is_set_expr, is_url_search_params_expr};
+use crate::types::{DOUBLE, I64};
 
 /// Map/Set methods on PropertyGet receivers. The HIR only folds
 /// `m.set(...)`/`m.get(...)` to MapSet/MapGet when `m` is an Ident receiver.

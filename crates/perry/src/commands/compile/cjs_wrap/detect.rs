@@ -1,6 +1,5 @@
 //! CommonJS-vs-ESM heuristic detection plus reserved-word filtering.
 
-#[allow(unused_imports)]
 use super::*;
 
 /// Heuristic CJS detection. Same shape as

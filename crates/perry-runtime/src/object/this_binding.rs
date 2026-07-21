@@ -3,14 +3,7 @@
 
 use super::*;
 
-use crate::arena::arena_alloc_gc;
-use crate::ArrayHeader;
-use crate::JSValue;
-use std::cell::{Cell, RefCell, UnsafeCell};
-use std::collections::HashMap;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::RwLock;
+use std::cell::Cell;
 
 // Implicit `this` for closure-typed class fields invoked method-style.
 //

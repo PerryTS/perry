@@ -8,32 +8,9 @@
 use super::*;
 
 use anyhow::Result;
-#[allow(unused_imports)]
-use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
-#[allow(unused_imports)]
-use perry_types::Type as HirType;
+use perry_hir::Expr;
 
-#[allow(unused_imports)]
-use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
-#[allow(unused_imports)]
-use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
-#[allow(unused_imports)]
-use crate::lower_string_method::{
-    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
-    lower_string_concat_chain, lower_string_self_append,
-};
-#[allow(unused_imports)]
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::native_value::{
-    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
-};
-#[allow(unused_imports)]
-use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_numeric_typed_array_class, is_set_expr, is_string_expr,
-    is_url_search_params_expr, receiver_class_name,
-};
-#[allow(unused_imports)]
+use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// The generic per-site monomorphic inline-cache dispatch for `obj.property`.

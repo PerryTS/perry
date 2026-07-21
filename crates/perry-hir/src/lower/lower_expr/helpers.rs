@@ -6,13 +6,10 @@ use super::*;
 // Pull in the parent `lower` module's full (re-exported) surface so moved
 // helpers resolve names like `LoweringContext`, `expr_member`,
 // `is_builtin_function`, etc. exactly as they did in the trunk.
-use crate::lower::*;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use perry_types::{LocalId, Type};
-use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
 /// Whether `PERRY_GLOBAL_SCRIPT_THIS` is set — compile the program as a

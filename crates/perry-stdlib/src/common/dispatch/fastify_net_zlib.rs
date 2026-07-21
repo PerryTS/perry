@@ -1,6 +1,3 @@
-use super::super::handle::*;
-use super::*;
-
 /// Dispatch method calls on net.Socket handles when codegen couldn't tag
 /// the receiver type. Mirrors the static NATIVE_MODULE_TABLE entries for
 /// the same methods (write/end/destroy/on/upgradeToTLS).

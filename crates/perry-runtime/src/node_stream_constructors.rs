@@ -1,20 +1,8 @@
 //! node:stream — constructors, init/option-parsing, and module-level FFI entry points (split out of node_stream.rs for the 2000-line
 //! file-size gate, #1987). Shares the parent module's constants, hidden-key
 //! accessors and state primitives via `use super::*`.
-#![allow(unused_imports)]
 use super::*;
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
-};
-use crate::object::{
-    js_object_alloc, js_object_alloc_with_shape, js_object_get_field,
-    js_object_get_field_by_name_f64, js_object_set_field, js_object_set_field_by_name,
-    ObjectHeader,
-};
 use crate::value::JSValue;
-use std::os::raw::c_int;
-use std::sync::atomic::{AtomicPtr, Ordering};
 
 thread_local! {
     static ITER_HELPER_ARITIES_REGISTERED: std::cell::Cell<bool> =

@@ -6,21 +6,12 @@
 //! the module init — and accumulate a single flat set/map keyed by HIR
 //! LocalId (which is globally unique within the module).
 
-use super::*;
-
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
 use perry_hir::Module as HirModule;
-
-use crate::module::LlModule;
-use crate::runtime_decls;
-use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64};
 
 // Collector and boxing-analysis walkers live in dedicated modules.
 use crate::boxed_vars::{collect_boxed_param_ids, collect_boxed_vars, collect_let_types_in_stmts};
-use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_ids_in_stmts};
 
 /// Module-level boxed_vars: union of every per-function/method/
 /// closure/module-init boxed set. We compute this once because

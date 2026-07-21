@@ -1,7 +1,4 @@
 use super::super::*;
-use super::object_proto::*;
-use super::proto_dispatch::*;
-use super::typed_array::*;
 use super::*;
 
 /// #4795: resolve `obj[Symbol.dispose]` / `obj[Symbol.asyncDispose]` for the

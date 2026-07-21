@@ -5,49 +5,15 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
-#[allow(unused_imports)]
-use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
-#[allow(unused_imports)]
-use perry_types::Type as HirType;
+use perry_hir::Expr;
 
-#[allow(unused_imports)]
-use crate::lower_call::{
-    bind_inline_constructor_params, lower_call, lower_native_method_call, lower_new,
-    restore_inline_constructor_scope,
-};
-#[allow(unused_imports)]
-use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
-#[allow(unused_imports)]
-use crate::lower_string_method::{
-    flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
-    lower_string_concat_chain, lower_string_self_append,
-};
-#[allow(unused_imports)]
+use crate::lower_call::{bind_inline_constructor_params, restore_inline_constructor_scope};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-#[allow(unused_imports)]
-use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
-};
-#[allow(unused_imports)]
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I32, I64};
 
-#[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
-    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_array_super_init, lower_channel_reduction,
-    lower_event_emitter_subclass_init, lower_expr, lower_expr_as_i32, lower_index_set_fast,
-    lower_js_args_array, lower_node_stream_super_init, lower_object_literal,
-    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx,
+    lower_array_super_init, lower_event_emitter_subclass_init, lower_expr,
+    lower_node_stream_super_init, lower_stream_super_init, nanbox_pointer_inline, FnCtx,
 };
 
 /// Built-in constructor names (beyond Error/stream/fetch, which have their own
@@ -220,6 +186,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )?;
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            // `class X extends URLSearchParams` via a spread/implicit super
+            // (`class R extends URLSearchParams {}` synthesizes `super(...args)`)
+            // — install the native backing from the first arg instead of routing
+            // the uncallable builtin ctor through `js_super_construct_apply`.
+            // Mirrors the non-spread `Expr::SuperCall` URLSearchParams arm.
+            let is_usp = ctx
+                .classes
+                .get(&current_class_name)
+                .and_then(|c| c.extends_name.as_deref())
+                .map(|p| p == "URLSearchParams")
+                .unwrap_or(false);
+            if is_usp {
+                let zero_idx = "0".to_string();
+                let first =
+                    ctx.block()
+                        .call(DOUBLE, "js_array_get_f64", &[(I64, &arr), (I32, &zero_idx)]);
+                ctx.block().call(
+                    DOUBLE,
+                    "js_url_search_params_subclass_init",
+                    &[(DOUBLE, &this_box), (DOUBLE, &first)],
+                );
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::SelfOnly,
+                )?;
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             if let Some(&child_cid) = ctx.class_ids.get(&current_class_name) {
                 let cid_str = child_cid.to_string();
                 let blk = ctx.block();
@@ -299,6 +293,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let parent_class = match static_parent_lookup {
                 Some(c) => c,
                 None => {
+                    // #6710 follow-up: `class X extends URLSearchParams` (Next's
+                    // `ReadonlyURLSearchParams`). The parent is a construct-only
+                    // builtin — not a user class and not a callable value — so the
+                    // dynamic-parent / `js_fetch_or_value_super` dispatch below
+                    // would call it as a plain function and throw "not a function".
+                    // Build the native params and stash them on `this` as a hidden
+                    // backing instead; the inherited surface resolves it via
+                    // `resolve_search_params_receiver`.
+                    if parent_name == "URLSearchParams" {
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
+                        for a in super_args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        let init = lowered.first().cloned().unwrap_or_else(|| undef.clone());
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => undef.clone(),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_url_search_params_subclass_init",
+                            &[(DOUBLE, &this_box), (DOUBLE, &init)],
+                        );
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(undef);
+                    }
                     // #321 / #66 (#1787 follow-up): `class Sub extends <runtimeValueFn>`
                     // — the parent is a runtime-value function/closure (the IIFE-
                     // returned constructor function `Base` in Effect's `Data.Class`).

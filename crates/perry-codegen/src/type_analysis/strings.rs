@@ -4,17 +4,11 @@
 
 use super::*;
 
-use perry_hir::{BinaryOp, Expr, UnaryOp};
+use perry_hir::{BinaryOp, Expr};
 use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
-use crate::type_analysis_class_fields::{
-    class_field_declared_type, class_field_global_index, declared_field_type,
-};
-use crate::type_analysis_facts::{
-    function_type_from_decl, hir_inferred_refinable_type, hir_inferred_static_type,
-};
-use crate::type_analysis_net::{net_result_class, net_result_type};
+use crate::type_analysis_class_fields::declared_field_type;
 
 pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
@@ -97,6 +91,45 @@ pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// #6710: True when `name` is a user class that (transitively) extends the
+/// builtin `URLSearchParams` — `class ReadonlyURLSearchParams extends
+/// URLSearchParams` (Next.js), `class B extends ReadonlyURLSearchParams`, …
+/// `URLSearchParams` itself returns false: a directly-typed receiver is lowered
+/// statically (`Expr::UrlSearchParams*`) and must not be treated as a subclass.
+/// Shared by the codegen carve-outs that route a subclass instance's inherited
+/// surface (methods, `.size`, iteration) onto its hidden native backing.
+pub(crate) fn class_name_extends_url_search_params(ctx: &FnCtx<'_>, name: &str) -> bool {
+    if name == "URLSearchParams" {
+        return false;
+    }
+    let mut cur = Some(name.to_string());
+    let mut depth = 0usize;
+    while let Some(c) = cur {
+        if depth > 32 {
+            break;
+        }
+        match ctx.classes.get(&c) {
+            Some(cd) => {
+                if cd.extends_name.as_deref() == Some("URLSearchParams") {
+                    return true;
+                }
+                cur = cd.extends_name.clone();
+            }
+            // Reached a name codegen doesn't track — it may be the builtin
+            // `URLSearchParams` heritage itself.
+            None => return c == "URLSearchParams",
+        }
+        depth += 1;
+    }
+    false
+}
+
+/// Expr form of [`class_name_extends_url_search_params`] — resolves the
+/// receiver's class name first, then walks its heritage.
+pub(crate) fn is_url_search_params_subclass_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    receiver_class_name(ctx, e).is_some_and(|n| class_name_extends_url_search_params(ctx, &n))
 }
 
 pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {

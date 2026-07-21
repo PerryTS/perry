@@ -76,7 +76,6 @@ unsafe fn root_holder(value_f64: f64) -> f64 {
 /// (top 16 bits 0 or 1) and 8-byte aligned. A value whose extracted
 /// "pointer" fails this is a corrupted / mis-encoded pointer, never a
 /// dereferenceable `GcHeader` — feeding it to `gc_obj_type` SIGBUSes.
-#[inline]
 fn ptr_derefable(ptr: usize) -> bool {
     // Top-16-bits check: a real heap pointer sits in the low canonical VA
     // range (bits 48-63 are 0 or 1). On 32-bit targets (arm64_32/watchOS)

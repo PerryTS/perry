@@ -1,6 +1,5 @@
 //! node:stream — Duplex prototype method table. Split out of
 //! node_stream_readwrite.rs for the 2000-line file-size gate.
-#![allow(unused_imports)]
 use super::*;
 
 pub(super) fn duplex_methods() -> [(&'static str, StubFn); 44] {

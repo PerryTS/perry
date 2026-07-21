@@ -2,16 +2,7 @@
 //!
 //! Split out of `expr_member.rs` (pure code move).
 
-use anyhow::Result;
-use perry_types::Type;
-use swc_common::Spanned;
 use swc_ecma_ast as ast;
-
-use crate::ir::Expr;
-
-use super::{lower_expr, LoweringContext};
-
-use super::*;
 
 /// #503 — Node-core stdlib namespace receivers whose dynamic (`obj[x]`)
 /// member access is refused at compile time. These are the namespaces

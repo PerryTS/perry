@@ -1,10 +1,7 @@
 use super::*;
-use crate::object::*;
-use crate::{ArrayHeader, JSValue};
-use std::cell::{Cell, RefCell, UnsafeCell};
+use crate::JSValue;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::RwLock;
+use std::sync::atomic::Ordering;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {

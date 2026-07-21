@@ -4,16 +4,12 @@
 
 use super::*;
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
-use crate::lower_patterns::*;
+use crate::lower::LoweringContext;
 
 use crate::destructuring::helpers::{get_fetch_module, is_member_fetch_call};
-use crate::destructuring::var_decl_sources::*;
 
 /// Handles the `require(...)` namespace-binding fast path and the fetch /
 /// Web-Streams / Blob native-instance registrations. May refine `ty`.

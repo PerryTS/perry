@@ -1,9 +1,8 @@
 //! URL / URLSearchParams + WebSocket stdlib FFI declarations
 //! (extracted from stdlib_ffi.rs).
 
-use super::*;
 use crate::module::LlModule;
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(crate) fn declare_web(module: &mut LlModule) {
     // ========== URL / URLSearchParams ==========
@@ -67,6 +66,13 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     // undefined — see `js_url_search_params_new_any` rustdoc. Refs #575.
     module.declare_function("js_url_search_params_new_any", I64, &[DOUBLE]);
     module.declare_function("js_url_search_params_new_empty", I64, &[]);
+    // #6710 follow-up: `super(init)` for `class X extends URLSearchParams`
+    // (this, init) -> undefined. Stashes a native backing on `this`.
+    module.declare_function(
+        "js_url_search_params_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_url_search_params_set", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_to_string", I64, &[I64]);
     // Issue #650: URLSearchParams.size getter — returns entries count.

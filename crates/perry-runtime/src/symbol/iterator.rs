@@ -4,8 +4,6 @@
 
 use super::*;
 use crate::string::{js_string_from_bytes, StringHeader};
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
 /// the object. Looks up the side table populated by
@@ -290,6 +288,16 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 jsv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
             if crate::url::search_params::shape_is_url_search_params(obj) {
                 let entries = crate::url::js_url_search_params_entries_arr(obj);
+                return crate::array::array_values_iter(entries);
+            }
+            // #6710: a `class X extends URLSearchParams` instance (Next's
+            // `ReadonlyURLSearchParams`) stores its entries on a hidden native
+            // backing rather than its own `_entries`/`_owner` fields, so the
+            // shape probe above misses. Default `for (const [k, v] of r)` still
+            // yields `[key, value]` pairs from the backing.
+            if let Some(backing) = crate::url::search_params::url_search_params_backing_of(val_f64)
+            {
+                let entries = crate::url::js_url_search_params_entries_arr(backing);
                 return crate::array::array_values_iter(entries);
             }
         }

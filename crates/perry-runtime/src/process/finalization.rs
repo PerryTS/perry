@@ -3,13 +3,6 @@
 //! of the `process` trunk. Pure code move — no behavior change.
 
 use super::*;
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
-};
-use crate::string::{js_string_from_bytes, StringHeader};
-use crate::value::JSValue;
-use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 extern "C" fn process_finalization_before_exit_listener(
     _closure: *const crate::closure::ClosureHeader,

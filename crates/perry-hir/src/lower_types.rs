@@ -3,10 +3,9 @@
 //! Contains functions for inferring types from expressions, extracting
 //! TypeScript type annotations, and parsing function parameter types.
 
-use perry_types::{Type, TypeParam};
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
 use crate::lower::LoweringContext;
 use crate::lower_patterns::get_pat_name;
 
@@ -1441,7 +1440,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
 mod extract;
 
 pub(crate) use extract::{
-    extract_binding_type, extract_member_class_name, extract_param_type_with_ctx,
-    extract_pattern_type, extract_pattern_type_with_ctx, extract_ts_type, extract_ts_type_with_ctx,
-    extract_type_params, get_fn_param_name_and_type_with_ctx, get_ts_entity_name, lower_decorators,
+    extract_binding_type, extract_member_class_name, extract_param_type_with_ctx, extract_ts_type,
+    extract_ts_type_with_ctx, extract_type_params, get_fn_param_name_and_type_with_ctx,
+    lower_decorators,
 };

@@ -3,7 +3,6 @@
 //! readable as a live pipe participant and consume its buffered front when it
 //! re-emits, so `pipe()`, `pipeline()`, and `compose()` chains don't replay the
 //! same flowing chunk from retained readable storage.
-#![allow(unused_imports)]
 use super::*;
 
 pub(super) fn mark_live_pipe_consume_on_emit(stream: f64) {

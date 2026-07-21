@@ -6,21 +6,11 @@
 //! about emission order, and records each function's ABI signature
 //! `(param_count, has_rest, returns_number, synthetic_is_rest)`.
 
-use super::*;
-
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
 use perry_hir::Module as HirModule;
 
-use crate::module::LlModule;
-use crate::runtime_decls;
-use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64};
-
 // Collector and boxing-analysis walkers live in dedicated modules.
-use crate::boxed_vars::{collect_boxed_param_ids, collect_boxed_vars, collect_let_types_in_stmts};
-use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_ids_in_stmts};
 
 // Name-mangling helper from the trunk (also reachable via `super::*`).
 use super::helpers::scoped_fn_name;

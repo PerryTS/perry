@@ -75,7 +75,7 @@ pub(crate) use gc_roots::{
     test_symbol_property_root_bits, test_symbol_property_roots,
 };
 
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::StringHeader;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 

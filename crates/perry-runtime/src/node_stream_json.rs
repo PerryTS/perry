@@ -2,7 +2,6 @@
 //! out of node_stream_readwrite.rs for the 2000-line file-size gate (#1987).
 //! Shares the parent module's constants, hidden-key accessors and state
 //! primitives via `use super::*`.
-#![allow(unused_imports)]
 use super::*;
 use crate::object::ObjectHeader;
 

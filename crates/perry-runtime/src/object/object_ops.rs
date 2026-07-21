@@ -34,7 +34,7 @@ pub use prototype::{
 
 // Internal `pub(crate)` helpers shared between siblings / the rest of the crate.
 pub(crate) use descriptor_helpers::{
-    closure_ptr_from_value, define_property_force_store_value, desc_has_field, desc_read_field,
+    define_property_force_store_value, desc_has_field, desc_read_field,
     describe_value_for_type_error, descriptor_enumerable, enforce_define_property_invariants,
     registered_buffer_index_own_property_present, throw_object_type_error,
     throw_object_type_error_with_suffix, validate_nonconfigurable_redefine,
@@ -44,7 +44,6 @@ pub(crate) use descriptor_helpers::{
 // object_ops children (`accessors.rs`, `descriptor_helpers.rs`) but NOT
 // re-exported, so `crate::object::value_is_callable` resolves uniquely to the
 // `instanceof.rs` definition (preserves the pre-split resolution).
-use descriptor_helpers::value_is_callable;
 pub(crate) use keys_array::{ensure_key_in_keys_array, install_builtin_getter, own_key_present};
 
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.

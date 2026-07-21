@@ -2,15 +2,7 @@
 //! `extends Error`, `Symbol.hasInstance` / `Symbol.toStringTag` hooks
 //! (split out of `object/mod.rs`, behavior-preserving).
 
-use super::*;
-
-use crate::arena::arena_alloc_gc;
-use crate::ArrayHeader;
-use crate::JSValue;
-use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::RwLock;
 
 /// Global class registry mapping class_id -> parent_class_id for inheritance chain lookups

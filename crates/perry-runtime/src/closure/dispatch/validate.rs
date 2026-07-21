@@ -1,7 +1,6 @@
 //! Closure-pointer validation: GC-forwarding resolution (`clean_closure_ptr`)
 //! and the speculation-safe `get_valid_func_ptr` gate.
 
-use super::super::*;
 use super::*;
 
 /// Resolve a closure pointer through any GC forwarding stubs left behind by

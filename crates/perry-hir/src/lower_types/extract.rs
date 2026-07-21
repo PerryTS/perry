@@ -9,7 +9,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 use crate::lower::{lower_expr, LoweringContext};
-use crate::lower_patterns::{get_pat_name, lower_lit};
+use crate::lower_patterns::lower_lit;
 
 /// Extract type parameters from SWC's TsTypeParamDecl
 pub(crate) fn extract_type_params(decl: &ast::TsTypeParamDecl) -> Vec<TypeParam> {

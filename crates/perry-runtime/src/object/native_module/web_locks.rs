@@ -1,8 +1,6 @@
 use super::*;
-use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WebLockMode {

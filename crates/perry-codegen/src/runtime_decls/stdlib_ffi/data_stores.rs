@@ -1,9 +1,8 @@
 //! Database / data-store / crypto / OS stdlib FFI declarations
 //! (extracted from stdlib_ffi.rs): pg, redis, mongodb, sqlite, OS, crypto, nanoid.
 
-use super::*;
 use crate::module::LlModule;
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(crate) fn declare_data_stores(module: &mut LlModule) {
     // ========== PostgreSQL (pg) ==========

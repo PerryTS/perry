@@ -448,6 +448,12 @@ pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<H
 pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
     let res_f64 = handle_to_pointer_f64(pending.response_handle);
+    // #6710 — clear a possibly-recycled handle id's per-handle JS side tables
+    // before the handler observes req/res (see process_pending in server.rs).
+    unsafe {
+        crate::types::js_handle_clear_side_tables(pending.request_handle);
+        crate::types::js_handle_clear_side_tables(pending.response_handle);
+    }
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);

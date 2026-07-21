@@ -8,13 +8,8 @@ use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
-use crate::type_analysis_class_fields::{
-    class_field_declared_type, class_field_global_index, declared_field_type,
-};
-use crate::type_analysis_facts::{
-    function_type_from_decl, hir_inferred_refinable_type, hir_inferred_static_type,
-};
-use crate::type_analysis_net::{net_result_class, net_result_type};
+use crate::type_analysis_facts::hir_inferred_refinable_type;
+use crate::type_analysis_net::net_result_type;
 
 pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
     matches!(e, Expr::GlobalGet(_))

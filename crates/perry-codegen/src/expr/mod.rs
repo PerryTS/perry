@@ -8,7 +8,7 @@
 //! error so a user running `--backend llvm` on richer TypeScript gets a
 //! one-line explanation instead of a silent broken binary.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
 use perry_types::Type as HirType;
 
@@ -18,17 +18,13 @@ use crate::collectors::NativeRegionFactGraph;
 use crate::function::LlFunction;
 use crate::nanbox::double_literal;
 use crate::native_value::{
-    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
-    BufferViewSlot, ExpectedNativeRep, GuardedBufferIndex, LoweredValue, MaterializationReason,
-    NativeAbiTypeRecord, NativeFactUse, NativeRep, NativeRepRecord, NativeValueState,
-    PodLayoutManifest, PodRecordViewManifest, ScalarConversionRecord,
+    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferViewSlot,
+    ExpectedNativeRep, GuardedBufferIndex, LoweredValue, MaterializationReason, NativeFactUse,
+    NativeRep, NativeRepRecord,
 };
 use crate::strings::StringPool;
-use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
-};
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
+use crate::type_analysis::{is_bigint_expr, is_bool_expr, is_numeric_expr};
+use crate::types::{DOUBLE, F32, I1, I32, I64, I8};
 
 // Issue #1098: expr.rs split into expr/ submodules. These are pure
 // mechanical moves of self-contained helper clusters out of this file;
@@ -69,10 +65,9 @@ pub(crate) use buffer_views::{
     invalidate_native_owned_views_for_dispose, native_arena_canonical_owner_id,
     record_native_arena_owner_assignment, update_buffer_view_for_assignment,
 };
-#[allow(unused_imports)] // ChannelReduction kept reachable for surface stability
 pub(crate) use channel::{
     extract_array_of_object_shape, lower_channel_reduction, try_match_channel_reduction,
-    variant_name, ChannelReduction,
+    variant_name,
 };
 pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
@@ -116,10 +111,10 @@ pub(crate) use v8_interop::{
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_jsvalue_slot_store_scalar_aware_on_block,
-    emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
-    emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,
-    emit_write_barrier_slot_on_block, lower_array_super_init, lower_event_emitter_subclass_init,
-    lower_node_stream_super_init, lower_stream_super_init,
+    emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_heap_word_store_on_block,
+    emit_root_nanbox_store_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
+    lower_array_super_init, lower_event_emitter_subclass_init, lower_node_stream_super_init,
+    lower_stream_super_init,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its

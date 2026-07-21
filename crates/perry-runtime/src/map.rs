@@ -2279,7 +2279,6 @@ fn js_map_foreach_impl(
     let has_override = collection_override.to_bits() != crate::value::TAG_UNDEFINED;
     let collection_handle = scope.root_nanbox_f64(collection_override);
     unsafe {
-        let map = map_handle.get_raw_const_ptr::<MapHeader>();
         // The collection itself is the third callback argument and the
         // identity user code compares `self === m` against.
         // ECMA-262 24.1.3.5: forEach iterates [[MapData]] in insertion order,

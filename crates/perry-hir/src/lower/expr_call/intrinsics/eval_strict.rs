@@ -4,10 +4,7 @@ use anyhow::Result;
 use perry_types::Type;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
-
-use super::super::super::{is_known_namespace_static_function, lower_expr, LoweringContext};
+use super::super::super::LoweringContext;
 
 /// #1678 (Phase 0 of #1677) — classify a bare `Function(...)` /
 /// `eval(...)` call. The `Function('return this')()` globalThis fold runs

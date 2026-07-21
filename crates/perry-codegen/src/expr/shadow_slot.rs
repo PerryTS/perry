@@ -5,23 +5,10 @@
 //! `crate::expr::X` call paths resolve unchanged.
 use super::*;
 
-use anyhow::{bail, Result};
 use perry_hir::{BinaryOp, Expr};
 use perry_types::Type as HirType;
 
-use crate::block::LlBlock;
-use crate::codegen::AppMetadata;
-use crate::collectors::NativeRegionFactGraph;
-use crate::function::LlFunction;
-use crate::native_value::{
-    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
-    BufferViewSlot, GuardedBufferIndex, LoweredValue, MaterializationReason, NativeAbiTypeRecord,
-    NativeFactUse, NativeRep, NativeRepRecord, NativeValueState, PodLayoutManifest,
-    PodRecordViewManifest, ScalarConversionRecord,
-};
-use crate::strings::StringPool;
-use crate::type_analysis::is_numeric_expr;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{I32, I64, PTR};
 
 pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {

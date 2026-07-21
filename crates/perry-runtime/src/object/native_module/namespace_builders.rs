@@ -1,8 +1,5 @@
 use super::*;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::Ordering;
 /// Create a NativeModuleRef sub-namespace (e.g. "fs.constants", "path.posix").
 /// The compiled code treats the result as another NativeModuleRef, so chained
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.

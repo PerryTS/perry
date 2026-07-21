@@ -9,10 +9,10 @@ use super::*;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
-use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
+use std::sync::atomic::Ordering;
 
 pub fn scan_process_module_loader_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     MODULE_LOADER_HOOKS.with(|hooks| {

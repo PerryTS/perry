@@ -60,7 +60,7 @@ mod copying;
 use copying::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry
 // pass in `crate::weakref` (#6182), which lives outside the gc module.
-pub(crate) use copying::{CopyingPointer, CopyingPointerSet};
+pub(crate) use copying::CopyingPointerSet;
 mod dead_owner;
 mod oldgen;
 use oldgen::*;

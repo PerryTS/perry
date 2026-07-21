@@ -1,23 +1,9 @@
 //! opendir / glob / watch / watchFile / unwatchFile.
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 // `PathBuf` is only named by the regex-engine-gated glob helpers
 // (`pathbuf_to_slashes`); the cp path at the bottom uses the fully-qualified
 // `std::path::PathBuf`, so the bare import is gated to avoid an unused-import
 // warning when the engine is off.
-#[cfg(feature = "regex-engine")]
-use std::path::PathBuf;
-use std::sync::Once;
-
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
-};
 
 use super::*;
 
@@ -28,12 +14,12 @@ mod watch;
 // Re-export the opendir entry points consumed cross-module (callbacks.rs,
 // node_submodules/fs_promises.rs) plus the unmangled FFI sync symbol.
 pub use opendir::js_fs_opendir_sync;
-pub(crate) use opendir::{js_fs_opendir_value, js_fs_opendir_value_with_path};
+pub(crate) use opendir::js_fs_opendir_value_with_path;
 
 // Re-export the glob machinery: the `#[no_mangle]` FFI sync symbols are `pub`,
 // while the run/value helpers and match types are consumed by the `watch`
 // sibling (glob iterator) and stay `pub(crate)`.
-pub(crate) use glob::{glob_entry_value, run_fs_glob_result, FsGlobMatch, FsGlobRun};
+pub(crate) use glob::{glob_entry_value, run_fs_glob_result, FsGlobMatch};
 pub use glob::{js_fs_glob_sync, js_fs_glob_sync_options};
 
 // Re-export the watch/watchFile entry points + GC scanner + the shared promise
