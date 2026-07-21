@@ -1,4 +1,3 @@
-use super::super::handle::*;
 use super::*;
 
 /// Dispatch property set on a handle-based object.

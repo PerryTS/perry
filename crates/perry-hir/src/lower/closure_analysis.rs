@@ -4,14 +4,8 @@
 //! visibility and are re-exported from `lower/mod.rs` so the existing
 //! `expr_*` submodules and the rest of the crate keep compiling unchanged.
 
-#![allow(unused_imports)]
+use perry_types::LocalId;
 
-use anyhow::{anyhow, Result};
-use perry_types::{FuncId, FunctionType, GlobalId, LocalId, Type, TypeParam};
-use std::collections::{HashMap, HashSet};
-use swc_ecma_ast as ast;
-
-use super::*;
 use crate::ir::*;
 
 /// Post-lowering pass that widens every `Expr::Closure`'s `mutable_captures`

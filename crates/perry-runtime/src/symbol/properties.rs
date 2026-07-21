@@ -4,8 +4,7 @@
 
 use super::*;
 use crate::string::{js_string_from_bytes, StringHeader};
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::collections::HashMap;
 
 /// Look up the cached pointer for the registered `util.inspect.custom` symbol
 /// (description `"nodejs.util.inspect.custom"`). Returns 0 if the symbol has

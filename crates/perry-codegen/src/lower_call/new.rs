@@ -6,7 +6,7 @@
 //! in the sibling `field_init` module.
 
 use anyhow::Result;
-use perry_hir::{Expr, Param};
+use perry_hir::Expr;
 use perry_types::Type as HirType;
 
 use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
@@ -17,9 +17,8 @@ use super::new_ctor_args::{
 };
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
-    ctor_body_has_value_return, ctor_body_uses_new_target, ctor_body_uses_this,
-    ctor_chain_uses_new_target, effective_constructor_param_count, emit_promise_subclass_init,
-    local_constructor_symbol_exists, node_stream_parent_kind,
+    ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
+    emit_promise_subclass_init, local_constructor_symbol_exists, node_stream_parent_kind,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -1516,7 +1515,6 @@ fn lower_new_impl(
             .unwrap_or(false);
         if !found_inherited_ctor && class.extends_expr.is_some() && !parent_is_uncallable_builtin {
             if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
-                let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let parent_val = ctx.block().call(
                     DOUBLE,
                     "js_get_dynamic_parent_value",

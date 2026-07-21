@@ -2,16 +2,9 @@
 //!
 //! Split out of `expr_member.rs` (pure code move).
 
-use anyhow::Result;
-use perry_types::Type;
-use swc_common::Spanned;
-use swc_ecma_ast as ast;
-
 use crate::ir::Expr;
 
-use super::{lower_expr, LoweringContext};
-
-use super::*;
+use super::LoweringContext;
 
 /// Wire codes for `Expr::PrivateGuard.op` — the operation a private member
 /// access performs. Keep in sync with the `js_private_guard` runtime helper:

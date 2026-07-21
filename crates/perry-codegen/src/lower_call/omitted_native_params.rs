@@ -27,8 +27,7 @@ use perry_api_manifest::NativeAbiType;
 use perry_hir::Expr;
 
 use super::extern_func::{
-    lower_buffer_and_len_param, lower_manifest_param, lower_manifest_pod_param,
-    lower_manifest_pod_view_param,
+    lower_buffer_and_len_param, lower_manifest_pod_param, lower_manifest_pod_view_param,
 };
 use crate::expr::FnCtx;
 use crate::nanbox::double_literal;

@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_parse_multipart_with_file() {
-        let boundary = "boundary456";
+        let _boundary = "boundary456";
         let file_content = vec![0u8, 1, 2, 3, 4, 5, 255, 254, 253];
         let mut body = Vec::new();
         body.extend_from_slice(b"--boundary456\r\n");

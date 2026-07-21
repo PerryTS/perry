@@ -3,9 +3,8 @@
 //! async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer, child_process,
 //! cheerio.
 
-use super::*;
 use crate::module::LlModule;
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 pub(crate) fn declare_third_party(module: &mut LlModule) {
     // ========== bcrypt / argon2 ==========

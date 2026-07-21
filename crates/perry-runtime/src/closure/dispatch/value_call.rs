@@ -2,7 +2,6 @@
 //! NaN-boxed callee dispatcher), the V8 trampoline bridge `js_closure_call_array`,
 //! and the spread-apply bridge `js_closure_call_apply_with_spread`.
 
-use super::super::*;
 use super::*;
 
 /// Call a JavaScript function value with variable arguments

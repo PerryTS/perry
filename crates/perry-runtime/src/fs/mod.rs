@@ -41,8 +41,8 @@ pub mod validate;
 pub use time::js_fs_to_unix_timestamp;
 mod fd_sync_ops;
 pub(crate) use fd_sync_ops::{
-    fchown_sync_inner, fchown_sync_inner_result, fdatasync_sync_inner, fstat_stats_value,
-    fsync_sync_inner, js_fs_fchown_result, js_fs_ftruncate_result, js_fs_truncate_result,
+    fchown_sync_inner, fdatasync_sync_inner, fstat_stats_value, fsync_sync_inner,
+    js_fs_fchown_result, js_fs_ftruncate_result, js_fs_truncate_result,
 };
 pub use fd_sync_ops::{
     js_fs_fchmod_sync, js_fs_fchown_sync, js_fs_fdatasync_sync, js_fs_fstat_sync,

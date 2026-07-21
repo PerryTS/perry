@@ -3,8 +3,6 @@
 //! recipe). Pure relocation; `use super::*` preserves visibility of the
 //! parent's private registry helpers.
 
-#![allow(unused_imports)]
-
 use super::*;
 
 pub(super) fn array_from_args(args: &[f64]) -> f64 {

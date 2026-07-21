@@ -4,7 +4,7 @@
 
 use super::*;
 
-use super::parse::{create_url_object, is_valid_absolute_url, parse_url, resolve_url};
+use super::parse::{create_url_object, is_valid_absolute_url, resolve_url};
 use super::search_params::url_decode;
 
 const QUERYSTRING_ESCAPE_HEX: &[u8; 16] = b"0123456789ABCDEF";

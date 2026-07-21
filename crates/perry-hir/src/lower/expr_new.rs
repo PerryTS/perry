@@ -9,17 +9,14 @@
 //! `Expr::TypedArrayNew`, etc.), (c) the dynamic
 //! `new (someFn)(args)` form via `Expr::NewDynamic`.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::LocalId;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
-use crate::lower_decl::lower_class_from_ast;
 use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::expr_new_builtins::{
-    global_member_constructor_name, is_reified_global_builtin_constructor, module_constructor_name,
-};
+use super::expr_new_builtins::{is_reified_global_builtin_constructor, module_constructor_name};
 use super::{lower_expr, LoweringContext};
 
 mod helpers;
@@ -27,12 +24,11 @@ mod member;
 mod non_ident;
 
 pub(crate) use helpers::{
-    callee_is_generic_construct_shape, collect_const_string_parts, is_depd_wrapfunction_shape,
-    is_fetch_constructor_name, is_global_object_expr, is_url_encoding_constructor_name,
-    is_worker_messaging_constructor_name, is_worker_threads_module_name, lower_new_spread_args,
-    lower_optional_args, lower_text_decoder_new, lower_url_encoding_constructor,
-    lower_worker_messaging_new, lower_worker_new, nonconstructable_builtin_throw_expr,
-    peel_new_callee,
+    callee_is_generic_construct_shape, is_depd_wrapfunction_shape, is_fetch_constructor_name,
+    is_global_object_expr, is_url_encoding_constructor_name, is_worker_messaging_constructor_name,
+    is_worker_threads_module_name, lower_new_spread_args, lower_optional_args,
+    lower_text_decoder_new, lower_url_encoding_constructor, lower_worker_messaging_new,
+    lower_worker_new, nonconstructable_builtin_throw_expr, peel_new_callee,
 };
 pub(crate) use member::lower_new_member_native;
 pub(crate) use non_ident::{lower_new_non_ident, register_stream_controller_params};

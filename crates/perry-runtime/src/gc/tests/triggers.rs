@@ -1,5 +1,4 @@
 use super::super::*;
-#[allow(unused_imports)]
 use super::support::*;
 
 struct GcBumpTriggerTestGuard {

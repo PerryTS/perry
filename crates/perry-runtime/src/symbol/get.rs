@@ -2,9 +2,7 @@
 //! and its prototype-chain / well-known-symbol / handle helpers.
 
 use super::*;
-use crate::string::{js_string_from_bytes, StringHeader};
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use crate::string::js_string_from_bytes;
 
 /// #5128: map a well-known-symbol key to the synthetic class-method name used
 /// for a symbol-keyed instance *method* (`*[Symbol.iterator]()` →

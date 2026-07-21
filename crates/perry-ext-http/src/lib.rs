@@ -42,7 +42,6 @@
 //! a v0.6.0 followup that needs a cooperative `spawn_async` surface
 //! on perry-ffi (today's surface is sync-via-blocking-pool only).
 
-#[allow(unused_imports)]
 extern crate perry_ext_http_server as _server_link;
 
 mod agent;

@@ -4,13 +4,7 @@
 //! `process` trunk. Pure code move — no behavior change.
 
 use super::*;
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
-};
-use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
-use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) fn process_release_value() -> f64 {
     let obj = crate::object::js_object_alloc(0, 3);

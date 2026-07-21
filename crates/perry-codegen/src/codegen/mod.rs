@@ -83,7 +83,7 @@ use function::{
 };
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, sanitize_member, scoped_fn_name, scoped_method_name, scoped_static_method_name,
+    sanitize,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules. The

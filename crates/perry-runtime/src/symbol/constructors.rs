@@ -4,8 +4,7 @@
 
 use super::*;
 use crate::string::{js_string_from_bytes, StringHeader};
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::collections::HashMap;
 
 /// `Symbol()` with no description — allocates a fresh unique symbol.
 #[no_mangle]

@@ -903,7 +903,7 @@ unsafe fn try_concat_all_dense(
     // is what makes the single deferred rebuild sound.
     let dst = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
     let mut off: usize = 0;
-    let mut copy_array = |src: *const ArrayHeader, len: u32, off: &mut usize| {
+    let copy_array = |src: *const ArrayHeader, len: u32, off: &mut usize| {
         if len == 0 {
             return;
         }

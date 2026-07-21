@@ -1,19 +1,11 @@
 use super::*;
 
-use std::cell::RefCell;
-use std::collections::HashMap as StdHashMap;
 use std::fs;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
-use std::sync::atomic::{AtomicI32, Ordering};
-
-use crate::closure::ClosureHeader;
-use crate::string::{js_string_from_bytes, StringHeader};
-use crate::value::{POINTER_MASK, POINTER_TAG};
 
 /// Core path-based `truncate` op. Node surfaces the `open` syscall error
 /// when the path can't be opened for truncation (ENOENT / EISDIR / EACCES),

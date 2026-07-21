@@ -22,8 +22,7 @@ use crate::analysis::{
 };
 use crate::ir::{EnumValue, Expr, Function, Param, Stmt};
 use crate::lower_decl::{
-    append_synthetic_arguments_param, body_uses_arguments, lower_block_stmt,
-    lower_fn_body_block_stmt,
+    append_synthetic_arguments_param, body_uses_arguments, lower_fn_body_block_stmt,
 };
 use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, is_destructuring_pattern,

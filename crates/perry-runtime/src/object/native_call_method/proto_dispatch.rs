@@ -1,7 +1,4 @@
 use super::super::*;
-use super::disposal::*;
-use super::object_proto::*;
-use super::typed_array::*;
 use super::*;
 
 /// #3716: a built-in *prototype method* read off its prototype and called *as

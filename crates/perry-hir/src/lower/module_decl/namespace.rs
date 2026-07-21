@@ -1,15 +1,11 @@
 //! TypeScript namespace → synthetic-class lowering — extracted from
 //! `lower/module_decl.rs` (pure mechanical split, no logic changes).
 
-#![allow(unused_imports)]
-
-use anyhow::{anyhow, Result};
-use perry_types::{FuncId, FunctionType, GlobalId, LocalId, Type, TypeParam};
-use std::collections::{HashMap, HashSet};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::*;
-use crate::ir::*;
 
 /// Lower a TypeScript namespace declaration into a synthetic class with static methods.
 /// `export namespace Slug { export function create() { ... } }` becomes a class `Slug`

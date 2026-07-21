@@ -4,11 +4,7 @@
 //! visibility and are re-exported from `lower/mod.rs` so the existing
 //! `expr_*` submodules and the rest of the crate keep compiling unchanged.
 
-#![allow(unused_imports)]
-
-use anyhow::{anyhow, Result};
-use perry_types::{FuncId, FunctionType, GlobalId, LocalId, Type, TypeParam};
-use std::collections::{HashMap, HashSet};
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::*;

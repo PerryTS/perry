@@ -1,6 +1,5 @@
 //! Top-level `class` hoisting and `module.exports = class …` rewrite passes.
 
-#[allow(unused_imports)]
 use super::*;
 
 /// Issue #665 (fifth pass): rewrite the leaf-file shape

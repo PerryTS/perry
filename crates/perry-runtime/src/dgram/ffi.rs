@@ -5,21 +5,7 @@
 
 use super::*;
 
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::{Arc, LazyLock, Mutex};
-
 use crate::array::ArrayHeader;
-use crate::closure::{
-    js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
-};
-use crate::object::{
-    js_object_alloc, js_object_get_field_by_name_f64, js_object_keys, js_object_set_field_by_name,
-    ObjectHeader,
-};
-use crate::value::{
-    js_nanbox_pointer, JSValue, POINTER_MASK, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
-};
 
 #[no_mangle]
 pub extern "C" fn js_dgram_create_socket(args: *const ArrayHeader) -> f64 {

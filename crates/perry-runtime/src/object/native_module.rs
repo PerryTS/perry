@@ -9,7 +9,6 @@
 
 use super::*;
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -24,22 +23,21 @@ pub(crate) use callable_export_check::is_native_module_callable_export;
 pub(crate) use callable_exports::{
     bound_native_callable_export_value, bound_native_callable_module_and_method,
     bound_native_callable_value_arity, buffer_constructor_value,
-    builtin_closure_is_non_constructable, builtin_closure_is_non_constructable_value,
-    builtin_closure_length, fs_namespace_descriptor_getter_value,
-    fs_namespace_descriptor_setter_value, is_buffer_constructor_value, is_cluster_emitter_method,
-    module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
-    module_cjs_path_cache_value, native_string_value, set_bound_native_closure_name,
-    set_builtin_closure_length, set_builtin_closure_non_constructable,
-    sqlite_session_constructor_value, sqlite_statement_sync_constructor_value,
-    timers_promises_parent_namespace, util_debuglog_logger_value,
+    builtin_closure_is_non_constructable_value, builtin_closure_length,
+    fs_namespace_descriptor_getter_value, fs_namespace_descriptor_setter_value,
+    is_buffer_constructor_value, is_cluster_emitter_method, module_cjs_cache_value,
+    module_cjs_extensions_value, module_cjs_global_paths_value, module_cjs_path_cache_value,
+    native_string_value, set_bound_native_closure_name, set_builtin_closure_length,
+    set_builtin_closure_non_constructable, sqlite_session_constructor_value,
+    sqlite_statement_sync_constructor_value, timers_promises_parent_namespace,
     util_inspect_default_options_value, zlib_codes_object,
 };
 pub(crate) use constants::get_native_module_constant;
 pub(crate) use module_keys::{native_module_enumerable_keys, native_module_has_enumerable_key};
 pub(crate) use namespace_builders::{
-    create_cached_sub_namespace, create_fs_constants_object, create_sub_namespace,
-    http_global_agent_object, http_methods_array, http_status_codes_object,
-    https_global_agent_object, native_namespace_or_create,
+    create_cached_sub_namespace, create_sub_namespace, http_global_agent_object,
+    http_methods_array, http_status_codes_object, https_global_agent_object,
+    native_namespace_or_create,
 };
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 

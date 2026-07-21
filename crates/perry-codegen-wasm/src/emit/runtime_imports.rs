@@ -3,7 +3,6 @@
 //!
 //! Pure code-movement from `mod.rs`.
 
-#[allow(unused_imports)]
 use super::*;
 
 /// Import function indices (must match the order imports are added)

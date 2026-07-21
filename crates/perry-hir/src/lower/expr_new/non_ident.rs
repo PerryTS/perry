@@ -12,7 +12,6 @@ use crate::ir::Expr;
 use crate::lower_decl::lower_class_from_ast;
 use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::expr_new_builtins::{global_member_constructor_name, module_constructor_name};
 use super::super::{lower_expr, LoweringContext};
 
 /// Issue #237: pre-register the controller param of every

@@ -1,16 +1,12 @@
 use anyhow::{bail, Result};
 
 #[cfg(test)]
-use super::artifact::NativeAbiTransitionRecord;
-use super::artifact::{
-    NativeAbiDirection, NativeAbiTransitionOp, NativeFactUse, NativeRepRecord, NativeValueState,
-    PodLayoutManifest,
-};
+use super::artifact::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
+use super::artifact::{NativeRepRecord, NativeValueState};
 use super::buffer::{AliasState, BoundsState, BufferAccessMode};
-use super::materialize::MaterializationReason;
+#[cfg(test)]
 use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
-use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
 
 mod abi;
 mod layout;

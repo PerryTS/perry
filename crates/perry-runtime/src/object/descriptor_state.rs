@@ -3,15 +3,10 @@
 
 use super::*;
 
-use crate::arena::arena_alloc_gc;
 use crate::fast_hash::{new_fast_key_hash_map, FastKeyHashMap};
-use crate::ArrayHeader;
-use crate::JSValue;
-use std::cell::{Cell, RefCell, UnsafeCell};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// Per-property attribute flags set by `Object.defineProperty` / `Object.freeze` / `Object.seal`.
 /// Tracks the JS PropertyDescriptor attributes (writable, enumerable, configurable) for keys

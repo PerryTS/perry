@@ -4,26 +4,21 @@
 //! Used by `expr.rs`, `lower_call.rs`, `lower_string_method.rs`,
 //! `lower_conditional.rs`, and `stmt.rs`.
 
-use perry_hir::{BinaryOp, Expr, UnaryOp};
-use perry_types::Type as HirType;
-
-use crate::expr::FnCtx;
-use crate::type_analysis_facts::{
-    function_type_from_decl, hir_inferred_refinable_type, hir_inferred_static_type,
-};
-use crate::type_analysis_net::{net_result_class, net_result_type};
-
 #[cfg(test)]
 pub(crate) use crate::type_analysis_facts::{
     hir_inferred_refinable_type_from_facts, hir_inferred_refinable_type_from_locals,
     hir_inferred_static_type_from_locals, CodegenTypeFacts,
 };
+#[cfg(test)]
+use perry_hir::Expr;
+#[cfg(test)]
+use perry_types::Type as HirType;
 
 // Class-field layout / declared-type resolution lives in a sibling module
 // (file-size gate). Re-exported here so existing `type_analysis::*` call
 // sites keep resolving, and brought into scope for local callers.
 pub(crate) use crate::type_analysis_class_fields::{
-    class_field_declared_type, class_field_global_index, declared_field_type,
+    class_field_declared_type, class_field_global_index,
 };
 
 // The body of this module was split into topical sub-modules to keep each
@@ -45,8 +40,8 @@ pub(crate) use pod::{
     scalar_replaced_field_raw_f64_store_state,
 };
 pub(crate) use predicates::{
-    is_array_expr, is_global_builtin_named, is_native_module_dynamic_index, is_promise_expr,
-    receiver_class_name, receiver_is_error_type, static_type_of,
+    is_array_expr, is_native_module_dynamic_index, is_promise_expr, receiver_class_name,
+    receiver_is_error_type, static_type_of,
 };
 // Re-exported so the `#[cfg(test)] mod tests` (which reaches trunk items via
 // `super::*`) can keep calling `tuple_index_literal` directly.

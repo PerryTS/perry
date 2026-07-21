@@ -3,15 +3,6 @@
 
 use super::*;
 
-use crate::arena::arena_alloc_gc;
-use crate::ArrayHeader;
-use crate::JSValue;
-use std::cell::{Cell, RefCell, UnsafeCell};
-use std::collections::HashMap;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::RwLock;
-
 pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
     if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 {
         return None;

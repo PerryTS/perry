@@ -3,15 +3,10 @@
 
 use super::*;
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use perry_types::LocalId;
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
-use crate::lower_patterns::*;
-
-use crate::destructuring::var_decl_sources::*;
+use crate::lower::LoweringContext;
 
 /// Records the various alias/prototype/static-method facts a freshly-bound
 /// simple identifier (`id`, lowered `init`) carries. Pure side effects on

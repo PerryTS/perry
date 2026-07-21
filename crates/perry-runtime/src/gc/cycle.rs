@@ -748,7 +748,7 @@ fn record_test_malloc_trim_call() {
     TEST_MALLOC_TRIM_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
 }
 
-fn run_malloc_trim(progress_kind: GcProgressKind) -> MallocTrimOutcome {
+fn run_malloc_trim(_progress_kind: GcProgressKind) -> MallocTrimOutcome {
     // #6179/#6180 RSS floor: budgeted cycles are the DEFAULT-path collector
     // once incremental graduates — skipping allocator trim there meant a
     // long-lived incremental process never returned freed allocator pages to

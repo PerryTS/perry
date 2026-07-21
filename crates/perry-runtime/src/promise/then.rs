@@ -1420,7 +1420,6 @@ pub(crate) extern "C" fn promise_prototype_finally_thunk(
 
     // SpeciesConstructor(receiver, %Promise%).
     let c = promise_species_constructor(receiver);
-    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
 
     let (then_finally, catch_finally) = if !super::spec_combinators::is_callable_value(on_finally) {
         // Not callable: pass on_finally as both args (§27.2.5.3 step 5).

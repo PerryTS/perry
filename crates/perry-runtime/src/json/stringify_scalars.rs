@@ -5,8 +5,6 @@
 //! move — no behaviour change.
 
 use super::*;
-use crate::JSValue;
-use std::fmt::Write as FmtWrite;
 
 #[inline]
 pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {

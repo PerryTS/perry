@@ -1,7 +1,3 @@
-use super::super::*;
-use super::disposal::*;
-use super::object_proto::*;
-use super::proto_dispatch::*;
 use super::*;
 
 /// Dispatch a `%TypedArray%` instance method on an already-resolved

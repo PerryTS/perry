@@ -1,14 +1,6 @@
 use super::*;
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{LazyLock, Mutex};
-
-use crate::dns_resolver::{self, Answer, DnsError, QueryType, ResolvedRecord};
-
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
-use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
-use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
+use crate::object::{js_object_alloc, js_object_set_field_by_name};
 
 pub(crate) fn object_value(fields: &[(&str, f64)]) -> f64 {
     let obj = js_object_alloc(0, fields.len() as u32);

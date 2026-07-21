@@ -1,16 +1,9 @@
 use super::*;
 
-use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
+use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::closure::ClosureHeader;
-use crate::object::{
-    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
-    set_builtin_property_attrs, ObjectHeader, PropertyAttrs,
-};
-use crate::string::{js_string_from_bytes, str_bytes_from_jsvalue};
-use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
-use crate::StringHeader;
-#[cfg(feature = "intl-segmenter")]
-use unicode_segmentation::UnicodeSegmentation;
+use crate::object::{js_object_alloc, ObjectHeader};
+use crate::value::{js_nanbox_pointer, JSValue};
 
 /// ECMA-402 FormatDateTime / HandleDateTimeValue step 1: coerce the
 /// `format`/`formatToParts` argument to a TimeClip'd integer-millisecond value.

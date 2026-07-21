@@ -4,11 +4,8 @@
 //! visibility (re-exported from `widget_decl.rs`) so the
 //! `pub(crate) use widget_decl::*` in `lower/mod.rs` still resolves it.
 
-#![allow(unused_imports)]
-
 use anyhow::{anyhow, Result};
-use perry_types::{FuncId, FunctionType, GlobalId, LocalId, Type, TypeParam};
-use std::collections::{HashMap, HashSet};
+use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use super::super::*;
