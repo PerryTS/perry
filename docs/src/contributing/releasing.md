@@ -25,14 +25,18 @@ cargo test --workspace --exclude perry-ui-ios --exclude perry-ui-tvos \
 Then bump and tag:
 
 ```bash
-# Edit Cargo.toml workspace.package.version + CLAUDE.md "Current Version".
-# Add a changelog entry in CHANGELOG.md.
+# Bump [workspace.package] version in Cargo.toml AND the "Current Version"
+# line in CLAUDE.md (the two must move together), then add a changelog
+# entry in CHANGELOG.md.
 git commit -am "release: v0.x.y"
-git tag v0.x.y && git push --tags
+git tag v0.x.y && git push origin v0.x.y
 ```
 
-The `release-packages.yml` workflow fires on the pushed tag and builds the
-cross-platform matrix (see [§3](#3-what-ci-does-on-the-tag)).
+The tag push runs the test workflows, but does **not** publish packages on
+its own: `release-packages.yml` triggers on a **published GitHub Release**
+(or a manual `workflow_dispatch`). After pushing the tag, create and publish
+the GitHub Release for `v0.x.y`; that fires the cross-platform package
+matrix (see [§3](#3-what-ci-does-on-the-release)).
 
 ## 2. Major-release verification (all platforms)
 
@@ -53,8 +57,10 @@ Before tagging a major/minor bump, these must all pass:
 | **Home-screen widgets** | `perry compile --target widgetkit ... && perry publish ios` | No |
 
 For v1.0, expect to spend half a day spinning through the four OS VMs locally.
-Linux + Windows doc-tests are automated in `test.yml`; the mobile/watch/web
-lanes remain manual pending tier-2 simulator orchestration.
+Only the macOS doc-tests lane currently runs in `test.yml` — the Linux (gtk4)
+and Windows matrix entries are disabled pending testkit fixes (see the
+commented-out entries in the `doc-tests` job), so run those manually, as with
+the mobile/watch/web lanes.
 
 ### 2a. Simulator-run recipe (iOS / tvOS)
 
@@ -85,7 +91,7 @@ Same recipe works for `tvos-simulator` + `"Apple TV"` device. On watchOS the
 Rust Tier-3 toolchain requires `+nightly -Zbuild-std` — see the
 `watchos-simulator` row in the matrix above.
 
-## 3. What CI does on the tag
+## 3. What CI does on the release
 
 The `Release Packages` workflow (`.github/workflows/release-packages.yml`)
 triggers on a published GitHub Release or manual `workflow_dispatch`. Matrix
@@ -107,7 +113,7 @@ Artifacts are published to:
 4. **winget** — manifest auto-update
 5. **hub.perryts.com** — worker notification so cloud build workers refresh
 
-A tag push with a failing platform build aborts the publish step for that
+A release with a failing platform build aborts the publish step for that
 platform only; fix-forward with a new patch tag (e.g. `v0.6.1`) rather than
 amending the existing one.
 
