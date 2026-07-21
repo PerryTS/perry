@@ -101,6 +101,18 @@ fn build_dispatch_while_body(
                 case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
             }
             StateExit::Await { value, next_state } => {
+                // A user `return X` can sit in a yield/await-free control-flow
+                // block (e.g. `if (c) return X;`) that the linearizer's catch-all
+                // accumulated into this Await state's body ahead of the `await`.
+                // Rewrite it exactly like the Yield/Goto/Done arms so the step
+                // closure settles via an iter-result completion (which the later
+                // `wrap_iter_result_returns_in_async_step_done` pass converts to
+                // `AsyncStepDone`) instead of escaping as a raw return with the
+                // wrong completion shape / a stale `__done` flag.
+                if body_contains_return(&case_body) {
+                    prepend_done_before_returns(&mut case_body, done_id);
+                    rewrite_returns_as_done(&mut case_body);
+                }
                 case_body.push(Stmt::Expr(Expr::LocalSet(
                     state_id,
                     Box::new(Expr::Number(*next_state as f64)),

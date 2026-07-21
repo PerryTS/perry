@@ -116,6 +116,66 @@ main().then(() => log("main:resolved"));
 ///   main:resolved
 const EXPECTED: &str = "GOT agent_start\nGOT turn_start\nGOT message_start\ndone\nmain:resolved\n";
 
+/// A user `return X` sitting in a yield/await-free control-flow block that
+/// precedes an `await` lands in the `StateExit::Await` state's body (the
+/// linearizer's catch-all accumulates it into `current`, which the next `await`
+/// takes as the state body). That return must settle the async generator's
+/// result Promise as an iter-result completion — `.next()` must resolve to
+/// `{value: X, done: true}`, not to the bare value `X`. Regression guard for the
+/// CodeRabbit finding on #6727 (the `StateExit::Await` arm skipped the
+/// `prepend_done_before_returns` + `rewrite_returns_as_done` rewrite the
+/// `Yield`/`Goto`/`Done` arms apply, so the step closure escaped with a raw
+/// `return X`).
+const RETURN_BEFORE_AWAIT_FIXTURE: &str = r#"
+async function* g(cond) {
+  if (cond) { return 5; }
+  await Promise.resolve();
+  yield 1;
+}
+async function main() {
+  const it = g(true);
+  console.log("A " + JSON.stringify(await it.next()));
+  console.log("B " + JSON.stringify(await it.next()));
+  const it2 = g(false);
+  console.log("C " + JSON.stringify(await it2.next()));
+  console.log("D " + JSON.stringify(await it2.next()));
+}
+main();
+"#;
+
+/// Node v26 output (stdout):
+///   A {"value":5,"done":true}
+///   B {"done":true}
+///   C {"value":1,"done":false}
+///   D {"done":true}
+const RETURN_BEFORE_AWAIT_EXPECTED: &str =
+    "A {\"value\":5,\"done\":true}\nB {\"done\":true}\nC {\"value\":1,\"done\":false}\nD {\"done\":true}\n";
+
+#[test]
+fn async_generator_return_before_await_settles_as_iter_result() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.mjs");
+    let output = dir.path().join("main_bin");
+    std::fs::write(&entry, RETURN_BEFORE_AWAIT_FIXTURE).unwrap();
+
+    let status = Command::new(perry_bin())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .status()
+        .expect("perry compile");
+    assert!(status.success(), "compile failed");
+
+    let out = Command::new(&output).output().expect("run");
+    assert!(out.status.success(), "binary exited non-zero");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout, RETURN_BEFORE_AWAIT_EXPECTED,
+        "async generator `return` before an `await` diverged from node"
+    );
+}
+
 #[test]
 fn async_generator_pending_await_suspends_not_deadlocks() {
     let dir = tempfile::tempdir().expect("tempdir");
