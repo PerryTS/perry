@@ -2,7 +2,7 @@
 
 **Write TypeScript. Ship native. Everywhere.**
 
-Perry compiles the TypeScript you already write into real machine-code executables — for macOS, Windows, Linux, iOS, Android, watchOS, TV, and the web. No Node.js to install. No Electron to bundle. No runtime at all. Just a binary.
+Perry compiles the TypeScript you already write into real machine-code executables — for macOS, Windows, Linux, iOS, Android, watchOS, and TV. No Node.js to install. No Electron to bundle. No runtime at all. Just a binary. (The same codebase can also target the web, emitted as JavaScript or WebAssembly.)
 
 [![Latest release](https://img.shields.io/github/v/release/PerryTS/perry?display_name=tag)](https://github.com/PerryTS/perry/releases/latest)
 [![Join the Perry Discord community](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/chEmpGdTtZ)
@@ -26,6 +26,8 @@ Millions of developers write TypeScript every day — but shipping it has always
 | **Native UI (no WebView)** | ✅ AppKit, UIKit, Android Views, Win32, GTK4 | — | — | Chromium |
 | **iOS · Android · watchOS · TV** | ✅ from the same codebase | — | — | — |
 | **Multicore** | Real OS threads, data-race-safe at compile time | worker_threads | workers | processes |
+
+<sub>Table describes Perry's native targets. `--target web` / `--target wasm` emit JavaScript / WebAssembly that runs in the browser rather than as a native binary.</sub>
 
 ## Performance
 
@@ -109,8 +111,8 @@ Everything else lives in the [docs](https://perryts.github.io/perry/):
 - [Language support](https://perryts.github.io/perry/language/supported-features.html) — supported TypeScript features and [limitations](https://perryts.github.io/perry/language/limitations.html)
 - [Native UI](https://perryts.github.io/perry/ui/overview.html) · [Multi-threading](https://perryts.github.io/perry/threading/overview.html) · [Standard library](https://perryts.github.io/perry/stdlib/overview.html)
 - [Platforms](https://perryts.github.io/perry/platforms/overview.html) — per-platform guides from macOS to watchOS to WASM
-- [CLI reference](https://perryts.github.io/perry/cli/commands.html) — commands, flags, `perry.toml`
-- [Contributing](https://perryts.github.io/perry/contributing/architecture.html) — architecture and building from source
+- [CLI reference](https://perryts.github.io/perry/cli/commands.html) — commands, flags, `perry.toml`, [privacy & telemetry](https://perryts.github.io/perry/cli/telemetry.html)
+- [Contributing](https://perryts.github.io/perry/contributing/architecture.html) — architecture, [building from source](https://perryts.github.io/perry/contributing/building.html), and the [release process](https://perryts.github.io/perry/contributing/releasing.html)
 
 ## Community
 
