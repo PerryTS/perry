@@ -25,7 +25,7 @@ pub(crate) fn set_linearize_async_generator(v: bool) {
     LINEARIZE_IS_ASYNC_GEN.with(|c| c.set(v));
 }
 
-fn linearize_async_generator() -> bool {
+pub(crate) fn linearize_async_generator() -> bool {
     LINEARIZE_IS_ASYNC_GEN.with(|c| c.get())
 }
 
