@@ -122,7 +122,7 @@ Perry is built in the open — come say hi:
 
 ## Privacy
 
-Telemetry is **opt-in**: nothing leaves your machine unless you explicitly enable it in `~/.perry/config.toml`, and `PERRY_NO_TELEMETRY=1` (or `CI=true`) always wins. What can be sent is anonymous and redacted — never your source, paths, or project names. Inspect it any time with `perry doctor`.
+Telemetry is **opt-in**: nothing leaves your machine unless you explicitly enable it in `~/.perry/config.toml`, and `PERRY_NO_TELEMETRY=1` (or `CI=true`) always wins. What can be sent is anonymous and redacted — never your source, paths, or project names. Inspect it any time with `perry doctor`, and see exactly what's in the payload in the [privacy & telemetry docs](https://perryts.github.io/perry/cli/telemetry.html).
 
 ## Sponsors
 
