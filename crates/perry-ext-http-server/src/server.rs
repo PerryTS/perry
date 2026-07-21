@@ -1601,6 +1601,16 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
         while let Some(up) = try_recv_upgrade(h) {
+            // #6710 — the upgrade path bypasses `process_pending`, but its
+            // request handle and the adopted socket / WebSocket handles are
+            // recycled from the same freelist. Clear their per-handle JS side
+            // tables here, on the main thread, before any upgrade listener sees
+            // them (no-op for a zero handle).
+            unsafe {
+                js_handle_clear_side_tables(up.request_handle);
+                js_handle_clear_side_tables(up.raw_socket_id);
+                js_handle_clear_side_tables(up.ws_id);
+            }
             if up.raw_socket_id != 0 {
                 // #4973 raw path: make sure the adopted net.Socket's
                 // dispatch extensions + GC scanner are registered on the

@@ -294,7 +294,17 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
 /// `GLOBAL_DESCRIPTORS_IN_USE`, neither is poisoned by the runtime
 /// installing attrs on unrelated builtins (RegExp prototype etc.), so the
 /// dynamic-write fast path stays precise.
+/// #6710: set once a native HANDLE-band owner (small id, not a heap object)
+/// gets a property-attr / accessor descriptor. Heap owners record this on their
+/// GC header (`OBJ_FLAG_HAS_DESCRIPTORS`) but a handle id has no header, so
+/// `clear_object_descriptors` uses this flag to skip the O(N) `retain` scans on
+/// the common path where no handle was ever `defineProperty`'d.
+static HANDLE_HAS_DESCRIPTORS: AtomicBool = AtomicBool::new(false);
+
 pub(crate) fn note_descriptor_target(obj: usize) {
+    if crate::value::addr_class::is_handle_band(obj) {
+        HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
+    }
     if crate::array::object_prototype_addr_matches(obj) {
         OBJECT_PROTO_DESCRIPTORS.store(true, Ordering::Relaxed);
     }
@@ -720,6 +730,12 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
 /// id's descriptors survive into the next owner. Called from
 /// `handle_expando_clear` when perry-ffi hands a freed handle id back out.
 pub(crate) fn clear_object_descriptors(obj: usize) {
+    // Fast path: if no handle-band owner ever received a descriptor, these
+    // tables hold only heap owners — none of whose keys can match `obj` (a
+    // handle id) — so the O(N) `retain` scans would remove nothing. Skip them.
+    if !HANDLE_HAS_DESCRIPTORS.load(Ordering::Relaxed) {
+        return;
+    }
     PROPERTY_DESCRIPTORS.with(|m| {
         let mut m = m.borrow_mut();
         if !m.is_empty() {

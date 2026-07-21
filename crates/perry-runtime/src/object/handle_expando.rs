@@ -349,6 +349,28 @@ mod tests {
     }
 
     #[test]
+    fn clear_drops_handle_descriptors() {
+        // #6710: a handle that received a `defineProperty` descriptor must also
+        // have it cleared on recycle — exercises the HANDLE_HAS_DESCRIPTORS-gated
+        // path in `clear_object_descriptors`.
+        use super::super::descriptor_state::{
+            get_property_attrs, set_property_attrs, PropertyAttrs,
+        };
+        let h = 0x4_2427i64;
+        set_property_attrs(
+            h as usize,
+            "d".to_string(),
+            PropertyAttrs::new(false, true, true),
+        );
+        assert!(get_property_attrs(h as usize, "d").is_some());
+        handle_expando_clear(h);
+        assert!(
+            get_property_attrs(h as usize, "d").is_none(),
+            "clear must drop the handle's property descriptor"
+        );
+    }
+
+    #[test]
     fn scanner_visits_stored_values() {
         let h = 0x4_2425i64;
         let v_bits = 0x7FFD_1234_5678_9ABCu64;

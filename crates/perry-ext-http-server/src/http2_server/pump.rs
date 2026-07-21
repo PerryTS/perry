@@ -159,9 +159,12 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
     let res_f64 = handle_to_pointer_f64(pending.response_handle);
     // #6710 — clear a possibly-recycled handle id's per-handle JS side tables
     // before the handler observes req/res (see process_pending in server.rs).
+    // The HTTP/2 stream handle is recycled from the same pool, so clear it too
+    // (no-op when `h2_stream_handle == 0`).
     unsafe {
         crate::types::js_handle_clear_side_tables(pending.request_handle);
         crate::types::js_handle_clear_side_tables(pending.response_handle);
+        crate::types::js_handle_clear_side_tables(pending.h2_stream_handle);
     }
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
