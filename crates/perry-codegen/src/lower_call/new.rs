@@ -980,6 +980,12 @@ fn lower_new_impl(
     // Promise constructor against a hidden backing cell (see new_helpers). (#5991)
     let promise_parent_runtime =
         !has_own_ctor && !has_imported_ctor && class.extends_name.as_deref() == Some("Promise");
+    // `class X extends URLSearchParams {}` (Next's `ReadonlyURLSearchParams`) with
+    // no own ctor — `new X(init)` builds a native URLSearchParams and stashes it
+    // as a hidden backing on `this` (#6710 follow-up).
+    let usp_parent_runtime = !has_own_ctor
+        && !has_imported_ctor
+        && class.extends_name.as_deref() == Some("URLSearchParams");
     let inherited_ctor_class: Option<String> = if !has_own_ctor && has_extends {
         // Walk the inheritance chain to find the closest ancestor with
         // an explicit ctor — same logic as the body-inlining loop below.
@@ -1336,6 +1342,25 @@ fn lower_new_impl(
             emit_promise_subclass_init(ctx, &lowered_args);
             found_inherited_ctor = true;
         }
+        if usp_parent_runtime {
+            let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let init = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef_lit.clone());
+            let this_box = ctx
+                .this_stack
+                .last()
+                .cloned()
+                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                .unwrap_or_else(|| undef_lit.clone());
+            ctx.block().call(
+                DOUBLE,
+                "js_url_search_params_subclass_init",
+                &[(DOUBLE, &this_box), (DOUBLE, &init)],
+            );
+            found_inherited_ctor = true;
+        }
         // If no parent constructor was found (imported class with no
         // inlineable constructor body), call the cross-module constructor.
         // Refs #420: walk past empty-bodied ancestors with param_count==0
@@ -1591,6 +1616,7 @@ fn lower_new_impl(
         if builtin_parent_runtime.is_some()
             || fetch_parent_runtime.is_some()
             || promise_parent_runtime
+            || usp_parent_runtime
             || (class.extends_expr.is_some() && !has_extends)
         {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;

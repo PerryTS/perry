@@ -781,6 +781,17 @@ pub fn try_lower_native_method_str_dispatch(
             .as_deref()
             .is_some_and(|n| class_extends_builtin_array(ctx, n))
             && is_array_like_method(property.as_str());
+        // A `class X extends URLSearchParams` instance's methods (`get`/`has`/
+        // `set`/…) are NOT class methods — they live on the hidden native
+        // backing installed by `js_url_search_params_subclass_init` at
+        // `super()`. The static class-dispatch tower would read them as a
+        // non-callable property and throw "value is not a function", so route
+        // them through `js_native_call_method` (whose `dispatch_url_search_params`
+        // redirects onto the backing). Mirrors `is_collection_subclass_method`.
+        let is_url_search_params_subclass_method = class_name_opt
+            .as_deref()
+            .is_some_and(|n| crate::type_analysis::class_name_extends_url_search_params(ctx, n))
+            && is_url_search_params_method(property.as_str());
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))
             || (class_name_opt.is_some()
@@ -788,7 +799,8 @@ pub fn try_lower_native_method_str_dispatch(
                 && !class_unknown_to_codegen
                 && !is_well_known_proto_method
                 && !is_collection_subclass_method
-                && !is_array_subclass_method);
+                && !is_array_subclass_method
+                && !is_url_search_params_subclass_method);
         if !skip_native {
             // Issue #92 fast path: intrinsify Buffer numeric reads
             // (`buf.readInt32BE(off)` etc.) when the receiver is a tracked
@@ -1034,6 +1046,29 @@ pub fn class_extends_builtin_array(ctx: &FnCtx<'_>, cls_name: &str) -> bool {
         depth += 1;
     }
     false
+}
+
+/// The `URLSearchParams.prototype` methods handled by the runtime's
+/// `dispatch_url_search_params` over a subclass instance's hidden native
+/// backing. A name outside this set stays on the normal class-dispatch path (a
+/// genuine user override already resolved earlier). `size` is a getter, not a
+/// method, so it is intentionally absent.
+fn is_url_search_params_method(method: &str) -> bool {
+    matches!(
+        method,
+        "get"
+            | "getAll"
+            | "has"
+            | "set"
+            | "append"
+            | "delete"
+            | "toString"
+            | "entries"
+            | "keys"
+            | "values"
+            | "forEach"
+            | "sort"
+    )
 }
 
 /// The inherited `Array.prototype` methods the runtime's spec-generic array-like

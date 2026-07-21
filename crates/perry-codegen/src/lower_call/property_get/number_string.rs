@@ -9,7 +9,8 @@ use perry_hir::Expr;
 use crate::expr::{lower_expr, nanbox_string_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::{
-    is_array_expr, is_native_module_dynamic_index, is_string_expr, receiver_class_name,
+    is_array_expr, is_native_module_dynamic_index, is_string_expr,
+    is_url_search_params_subclass_expr, receiver_class_name,
 };
 use crate::types::{DOUBLE, I32, I64};
 
@@ -152,6 +153,7 @@ pub(crate) fn try_lower_number_string_methods(
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_date_receiver(ctx, object)
+        && !is_url_search_params_subclass_expr(ctx, object)
     {
         // Only treat as radix call if class doesn't have toString.
         let has_user_to_string = receiver_class_name(ctx, object)
@@ -197,6 +199,7 @@ pub(crate) fn try_lower_number_string_methods(
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_date_receiver(ctx, object)
+        && !is_url_search_params_subclass_expr(ctx, object)
     {
         // Check whether the receiver class (if any) defines
         // toString itself or via inheritance.

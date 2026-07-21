@@ -93,6 +93,45 @@ pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// #6710: True when `name` is a user class that (transitively) extends the
+/// builtin `URLSearchParams` — `class ReadonlyURLSearchParams extends
+/// URLSearchParams` (Next.js), `class B extends ReadonlyURLSearchParams`, …
+/// `URLSearchParams` itself returns false: a directly-typed receiver is lowered
+/// statically (`Expr::UrlSearchParams*`) and must not be treated as a subclass.
+/// Shared by the codegen carve-outs that route a subclass instance's inherited
+/// surface (methods, `.size`, iteration) onto its hidden native backing.
+pub(crate) fn class_name_extends_url_search_params(ctx: &FnCtx<'_>, name: &str) -> bool {
+    if name == "URLSearchParams" {
+        return false;
+    }
+    let mut cur = Some(name.to_string());
+    let mut depth = 0usize;
+    while let Some(c) = cur {
+        if depth > 32 {
+            break;
+        }
+        match ctx.classes.get(&c) {
+            Some(cd) => {
+                if cd.extends_name.as_deref() == Some("URLSearchParams") {
+                    return true;
+                }
+                cur = cd.extends_name.clone();
+            }
+            // Reached a name codegen doesn't track — it may be the builtin
+            // `URLSearchParams` heritage itself.
+            None => return c == "URLSearchParams",
+        }
+        depth += 1;
+    }
+    false
+}
+
+/// Expr form of [`class_name_extends_url_search_params`] — resolves the
+/// receiver's class name first, then walks its heritage.
+pub(crate) fn is_url_search_params_subclass_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    receiver_class_name(ctx, e).is_some_and(|n| class_name_extends_url_search_params(ctx, &n))
+}
+
 pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::MapNew | Expr::MapNewFromArray(_) => true,

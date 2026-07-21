@@ -14,7 +14,8 @@ use crate::native_value::{
 };
 use crate::type_analysis::{
     is_array_expr, is_map_expr, is_numeric_typed_array_class, is_set_expr, is_string_expr,
-    is_url_search_params_expr, receiver_class_name, receiver_is_error_type,
+    is_url_search_params_expr, is_url_search_params_subclass_expr, receiver_class_name,
+    receiver_is_error_type,
 };
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
@@ -431,6 +432,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet {
             object, property, ..
         } if property == "size" && is_url_search_params_expr(ctx, object) => {
+            let recv_box = lower_expr(ctx, object)?;
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let i32_v = blk.call(I32, "js_url_search_params_size", &[(I64, &recv_handle)]);
+            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+        }
+        // #6710: `class X extends URLSearchParams` instance `.size` — the
+        // generic object-field lookup returns undefined (the entries live on the
+        // hidden native backing, not a `size` field). `js_url_search_params_size`
+        // resolves the backing internally, so pass the subclass instance.
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "size" && is_url_search_params_subclass_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
