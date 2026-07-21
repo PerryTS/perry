@@ -101,7 +101,10 @@ jobs:
       - name: Public benchmark evidence freshness
         run: |
           PYTHONPATH=. python3 tests/test_public_baseline.py
-          python3 benchmarks/public_baseline.py check --max-age-days 45
+          # README embedded table is optional since #6736 (marketing landing
+          # page); this wrapper still enforces artifact freshness + RESULTS.md
+          # drift. Kept out of public_baseline.py to preserve harness_fingerprint.
+          python3 benchmarks/ci_public_baseline_check.py
 
       # File-size gate (v0.5.1019): fails the PR if any tracked source
       # file exceeds the LOC threshold (5000 initially; eventual target
