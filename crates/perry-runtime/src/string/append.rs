@@ -2,6 +2,22 @@
 
 use super::*;
 
+/// True if the final WTF-8 unit of `bytes` is a lone HIGH surrogate
+/// (`ED A0..AF ..`), matching the encoding `canonicalize_surrogate_pairs` uses.
+/// `0xED` is always a 3-byte lead (never a continuation), so `bytes[n-3] == 0xED`
+/// means the last code unit starts there.
+#[inline]
+fn ends_with_lone_high_surrogate(bytes: &[u8]) -> bool {
+    let n = bytes.len();
+    n >= 3 && bytes[n - 3] == 0xED && (0xA0..=0xAF).contains(&bytes[n - 2])
+}
+
+/// True if the first WTF-8 unit of `bytes` is a lone LOW surrogate (`ED B0..BF ..`).
+#[inline]
+fn starts_with_lone_low_surrogate(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0] == 0xED && (0xB0..=0xBF).contains(&bytes[1])
+}
+
 /// Append a string to another string in-place if possible.
 /// Returns the (possibly new) string pointer.
 ///
@@ -32,6 +48,9 @@ pub extern "C" fn js_string_append(
                 ptr::copy_nonoverlapping(src_data, new_data, src_blen as usize);
                 (*new_ptr).byte_len = src_blen;
                 (*new_ptr).utf16_len = (*src).utf16_len;
+                // Preserve the lone-surrogate flag on the duplicate so later
+                // concats/appends still canonicalize correctly. (#6728)
+                (*new_ptr).flags |= (*src).flags & STRING_FLAG_HAS_LONE_SURROGATES;
             }
         }
         return new_ptr;
@@ -61,6 +80,24 @@ pub extern "C" fn js_string_append(
 
         let new_blen = dest_blen + src_blen;
 
+        // A high→low surrogate pair can only newly form at the dest|src join
+        // (both operands are already canonical), so detect it in O(1) from the
+        // boundary bytes: ordinary appends never pay for a whole-string scan;
+        // only an actual straddling pair triggers canonicalization below. The
+        // `+=` path previously skipped this entirely, so `s += hi; s += lo`
+        // kept two lone 3-byte WTF-8 surrogates instead of the astral char's
+        // 4-byte UTF-8 (unlike expression `hi + lo`, which canonicalizes). That
+        // corrupted every emoji built up code-unit-by-code-unit. (#6728)
+        let flag_bits = ((*dest).flags | (*src).flags) & STRING_FLAG_HAS_LONE_SURROGATES;
+        let boundary_pair = {
+            let d = std::slice::from_raw_parts(
+                (dest as *const u8).add(std::mem::size_of::<StringHeader>()),
+                dest_blen as usize,
+            );
+            let s = std::slice::from_raw_parts(string_data(src), src_blen as usize);
+            ends_with_lone_high_surrogate(d) && starts_with_lone_low_surrogate(s)
+        };
+
         // In-place append optimization: if dest is uniquely owned (refcount==1)
         // and has enough capacity, append directly without allocation.
         // This turns O(n^2) string building loops into amortized O(n).
@@ -74,7 +111,14 @@ pub extern "C" fn js_string_append(
             );
             (*dest).byte_len = new_blen;
             (*dest).utf16_len += (*src).utf16_len;
-            return dest; // Same pointer, no allocation!
+            (*dest).flags |= flag_bits;
+            return if boundary_pair {
+                // Merge the straddling pair (usually returns a new, smaller
+                // string; rare, so the in-place win still holds in general).
+                super::concat::canonicalize_surrogate_pairs(dest)
+            } else {
+                dest // Same pointer, no allocation!
+            };
         }
 
         // Allocate fresh with 2x capacity for future in-place appends.
@@ -103,11 +147,16 @@ pub extern "C" fn js_string_append(
         );
         (*new_ptr).byte_len = new_blen;
         (*new_ptr).utf16_len = (*dest).utf16_len + (*src).utf16_len;
+        (*new_ptr).flags |= flag_bits;
 
         // Mark as uniquely owned — the caller (codegen) is about to assign
         // this pointer to a single variable, so in-place append is safe next time.
         (*new_ptr).refcount = 1;
 
-        new_ptr
+        if boundary_pair {
+            super::concat::canonicalize_surrogate_pairs(new_ptr)
+        } else {
+            new_ptr
+        }
     }
 }
