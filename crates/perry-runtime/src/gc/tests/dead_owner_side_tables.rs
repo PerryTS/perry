@@ -825,8 +825,9 @@ fn test_shape_record_migrates_on_owned_grow() {
 /// wide object's slot map survives a copied minor.
 #[test]
 fn test_shape_record_rekeys_on_copied_minor_move() {
-    let _global = global_side_table_test_lock();
     let _guard = CopyingNurseryTestGuard::new(2);
+    // The scoped registry starts empty — install the C3a rekey scanner.
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     let keys = unsafe { alloc_nursery_test_array() };
     let old_addr = keys as usize;
