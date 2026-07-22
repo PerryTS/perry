@@ -303,7 +303,9 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     let gc = gc_header_for(obj);
     let no_extend = (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0;
 
-    let exists = own_key_present(obj, key);
+    // #6743: wide objects answer via the O(1) sidecar; the linear scan is the
+    // narrow-object fallback (repeated defines were O(N²) through this check).
+    let exists = own_key_present_via_index(obj, key).unwrap_or_else(|| own_key_present(obj, key));
 
     if !exists {
         // Adding a new property to a non-extensible object always throws.

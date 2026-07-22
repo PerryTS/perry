@@ -936,7 +936,12 @@ pub extern "C" fn js_object_define_property(
         // attributes before any mutation below. `None` ⇒ the key is new, so the
         // historical all-`false` (writable defaults to `has_accessor`) applies.
         let existing_attrs: Option<PropertyAttrs> = key_rust.as_ref().and_then(|k| {
-            if super::super::obj_value_has_own_key(obj_value, key_value) {
+            // #6743: wide objects answer own-key presence via the O(1) sidecar
+            // (repeated defines were O(N²) through this check); narrow or
+            // non-indexable receivers keep the general path.
+            let present = own_key_present_via_index(obj, key_str)
+                .unwrap_or_else(|| super::super::obj_value_has_own_key(obj_value, key_value));
+            if present {
                 Some(
                     super::super::get_property_attrs(obj as usize, k)
                         .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),

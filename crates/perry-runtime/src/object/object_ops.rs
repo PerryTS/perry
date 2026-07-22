@@ -44,7 +44,9 @@ pub(crate) use descriptor_helpers::{
 // object_ops children (`accessors.rs`, `descriptor_helpers.rs`) but NOT
 // re-exported, so `crate::object::value_is_callable` resolves uniquely to the
 // `instanceof.rs` definition (preserves the pre-split resolution).
-pub(crate) use keys_array::{ensure_key_in_keys_array, install_builtin_getter, own_key_present};
+pub(crate) use keys_array::{
+    ensure_key_in_keys_array, install_builtin_getter, own_key_present, own_key_present_via_index,
+};
 
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.
 pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {

@@ -50,16 +50,35 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || !is_valid_obj_ptr(keys as *const u8) {
         return;
     }
-    // Check if key already exists
+    // Check if key already exists. Past the sidecar threshold, probe the same
+    // key→slot hash index the [[Set]] fast path maintains instead of scanning:
+    // repeated `Object.defineProperty` on one object (Babel-style
+    // `exports` re-export modules install hundreds of getters) made this
+    // linear dup-check O(N²) total — the dominant cost of pi's module init
+    // under perry (a single @babel/types re-export module took ~292ms vs
+    // node's 3ms). A sidecar miss is authoritative here exactly as it is for
+    // the [[Set]] append path ("the sidecar would have found it if it
+    // existed"), and the append below records the new key via
+    // `keys_index_insert` so the index stays fresh across the loop.
     let key_count = crate::array::js_array_length(keys) as usize;
-    for i in 0..key_count {
-        let stored = crate::array::js_array_get(keys, i as u32);
-        // #1781: SSO-aware match — pre-fix an existing inline-SSO key
-        // wasn't seen here, so `Object.defineProperty(obj, "id", ...)`
-        // on an object that already had `id` as an SSO key
-        // double-inserted instead of overwriting.
-        if crate::string::js_string_key_matches(stored, key) {
+    if key_count >= super::super::KEYS_INDEX_THRESHOLD as usize {
+        let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key).byte_len as usize;
+        let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+        let key_hash = super::super::key_bytes_hash(name_ptr, name_len);
+        if super::super::keys_index_lookup(obj, keys, name_bytes, key_hash).is_some() {
             return; // already present
+        }
+    } else {
+        for i in 0..key_count {
+            let stored = crate::array::js_array_get(keys, i as u32);
+            // #1781: SSO-aware match — pre-fix an existing inline-SSO key
+            // wasn't seen here, so `Object.defineProperty(obj, "id", ...)`
+            // on an object that already had `id` as an SSO key
+            // double-inserted instead of overwriting.
+            if crate::string::js_string_key_matches(stored, key) {
+                return; // already present
+            }
         }
     }
     // Clone shared keys array if needed, then append.
@@ -85,6 +104,20 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     let _owned_keys = owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
     refresh_define_property_roots!();
     set_object_keys_array(obj, new_keys);
+    // Keep the sidecar fresh (mirrors the [[Set]] append path): the entry is
+    // keyed by the OBJECT address and length-stamped, so this contiguous
+    // insert lets the next probe answer without a rebuild. No-op below the
+    // index threshold or when no entry exists yet.
+    {
+        let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let key_hash = super::super::key_bytes_hash(name_ptr, (*key).byte_len as usize);
+        super::super::keys_index_insert(
+            obj as usize,
+            key_count as u32 + 1,
+            key_hash,
+            key_count as u32,
+        );
+    }
     // `field_count` is the inline/overflow boundary consulted by the read path
     // (`js_object_get_field`: index < field_count ⇒ read inline slot, else the
     // overflow map). It must never exceed the object's physically-allocated
@@ -146,6 +179,48 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
         // writable is N/A for an accessor; enumerable=false, configurable=true.
         PropertyAttrs::new(true, false, true),
     );
+}
+
+/// O(1) own-key presence via the [[Set]]-path sidecar, for the
+/// `Object.defineProperty` flow (#6743). Returns `Some(present)` when the
+/// sidecar is applicable — a genuine wide object (keys past
+/// `KEYS_INDEX_THRESHOLD`) with a valid heap string key — using the same
+/// authoritative-miss trust model as the fast [[Set]] append. Returns `None`
+/// when not applicable (caller falls back to the linear `own_key_present` /
+/// `obj_value_has_own_key`). Native-module namespaces expose VIRTUAL keys
+/// that never live in `keys_array`, so they always fall back.
+pub(crate) unsafe fn own_key_present_via_index(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<bool> {
+    if obj.is_null() || key.is_null() {
+        return None;
+    }
+    // Centralized address classification (rejects handle bands / non-heap /
+    // header-less slab addrs without dereferencing) + GC-type brand check —
+    // both for the receiver and for whatever the keys_array slot holds (a
+    // corrupted slot must classify as "no keys array", not fault; #321/#3527).
+    match crate::value::addr_class::try_read_gc_header(obj as usize) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        _ => return None,
+    }
+    if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
+        return None;
+    }
+    let keys = (*obj).keys_array;
+    match crate::value::addr_class::try_read_gc_header(keys as usize) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+        _ => return None,
+    }
+    let key_count = crate::array::js_array_length(keys) as usize;
+    if key_count < super::super::KEYS_INDEX_THRESHOLD as usize || key_count > 65536 {
+        return None;
+    }
+    let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key).byte_len as usize;
+    let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+    let key_hash = super::super::key_bytes_hash(name_ptr, name_len);
+    Some(super::super::keys_index_lookup(obj, keys, name_bytes, key_hash).is_some())
 }
 
 /// Helper: does `key` appear in `obj.keys_array`?

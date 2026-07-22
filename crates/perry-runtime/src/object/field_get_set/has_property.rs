@@ -932,11 +932,20 @@ unsafe fn ordinary_has_property(
             ) {
                 return true;
             }
-        } else if super::super::own_key_present(cur as *mut ObjectHeader, key) {
-            // Own data / overflow key present (value-agnostic: `delete`
-            // removes the key, so a present key — even one holding
-            // `undefined` — is an own property).
-            return true;
+        } else {
+            // #6743: wide objects answer own-key presence via the O(1) sidecar
+            // the [[Set]]/define append paths maintain — the linear
+            // `own_key_present` scan made `k in wideObj` O(N) per MISS, which
+            // turned webpack/Babel's re-export loop (`if (k in exports) …` per
+            // key) quadratic. Narrow or non-indexable receivers keep the scan.
+            let own = super::super::own_key_present_via_index(cur as *mut ObjectHeader, key)
+                .unwrap_or_else(|| super::super::own_key_present(cur as *mut ObjectHeader, key));
+            if own {
+                // Own data / overflow key present (value-agnostic: `delete`
+                // removes the key, so a present key — even one holding
+                // `undefined` — is an own property).
+                return true;
+            }
         }
         // Own accessor property (also mirrored into `keys_array`, but check the
         // side table directly so a get-only accessor is never missed).

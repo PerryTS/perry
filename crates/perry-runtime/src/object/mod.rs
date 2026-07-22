@@ -313,19 +313,18 @@ unsafe fn keys_index_lookup(
     if needs_rebuild {
         let mut map: std::collections::HashMap<u64, Vec<u32>> =
             std::collections::HashMap::with_capacity(key_count as usize);
+        // SSO-aware key decode (#1781 family): short keys can be stored INLINE
+        // (`SHORT_STRING_TAG`), not as heap `STRING_TAG` pointers. The previous
+        // heap-only `is_string()` gate silently dropped them from the index, so
+        // an authoritative-miss caller (the [[Set]] fast path's append, and now
+        // the defineProperty path) could duplicate an SSO-stored key.
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..key_count {
             let v = crate::array::js_array_get(keys, i);
-            if !v.is_string() {
-                continue;
+            if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
+                let h = key_bytes_hash(b.as_ptr(), b.len());
+                map.entry(h).or_default().push(i);
             }
-            let sp = v.as_string_ptr();
-            if sp.is_null() {
-                continue;
-            }
-            let sname_ptr = (sp as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let sname_len = (*sp).byte_len as usize;
-            let h = key_bytes_hash(sname_ptr, sname_len);
-            map.entry(h).or_default().push(i);
         }
         KEYS_INDEX.with(|m| {
             m.borrow_mut().insert(obj_addr, (key_count, map));
@@ -335,21 +334,12 @@ unsafe fn keys_index_lookup(
         let m = m.borrow();
         let (_, map) = m.get(&obj_addr)?;
         let candidates = map.get(&key_hash)?;
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for &i in candidates {
             let v = crate::array::js_array_get(keys, i);
-            if !v.is_string() {
+            let Some(stored_bytes) = crate::string::js_string_key_bytes(v, &mut sso) else {
                 continue;
-            }
-            let sp = v.as_string_ptr();
-            if sp.is_null() {
-                continue;
-            }
-            let sname_ptr = (sp as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let sname_len = (*sp).byte_len as usize;
-            if sname_len != key_bytes.len() {
-                continue;
-            }
-            let stored_bytes = std::slice::from_raw_parts(sname_ptr, sname_len);
+            };
             if stored_bytes == key_bytes {
                 return Some(i);
             }
