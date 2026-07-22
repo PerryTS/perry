@@ -14,6 +14,7 @@ use crate::types::DOUBLE;
 mod if_stmt;
 mod let_stmt;
 mod loops;
+mod masked_window_region;
 mod switch_stmt;
 mod try_stmt;
 mod unused_expr;
@@ -178,6 +179,29 @@ fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bo
                     continue;
                 }
             }
+        }
+        // #6750 follow-up: masked-window versioning for straight-line runs
+        // of scalar statements (bcryptjs ships `_encipher` fully unrolled —
+        // ~130 consecutive `S[l >>> 24]`-shaped reads with no loop for the
+        // range-loop tiers to version). Probes the accessed arrays once at
+        // region entry and branches into a fast copy whose masked reads are
+        // bare inline loads; consumes the whole region on a match.
+        if let Some(region) =
+            masked_window_region::try_match_masked_window_region(ctx, &stmts[i..])
+        {
+            let end = i + region.len;
+            masked_window_region::lower_masked_window_region(
+                ctx,
+                &stmts[i..end],
+                i,
+                emit_shadow_clears,
+                &region,
+            )?;
+            i = end;
+            if ctx.block().is_terminated() {
+                break;
+            }
+            continue;
         }
         lower_stmt(ctx, &stmts[i])?;
         // If an earlier statement already terminated the current block

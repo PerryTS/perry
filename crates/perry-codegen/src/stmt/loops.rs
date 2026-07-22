@@ -410,16 +410,16 @@ enum PackedF64RangeLoopBound {
 }
 
 #[derive(Clone, Copy)]
-struct PackedF64RangeArrayAccess {
-    array_id: u32,
+pub(super) struct PackedF64RangeArrayAccess {
+    pub(super) array_id: u32,
     /// Counter-relative accesses: smallest / largest constant offset `c` over
     /// all `arr[i ± c]` accesses.
-    counter: Option<(i32, i32)>,
+    pub(super) counter: Option<(i32, i32)>,
     /// Merged static index windows `(lo, hi)` over masked accesses
     /// (`arr[e & K]`, `arr[K1 + (e >>> k & K2)]`, … — see
     /// `collectors::static_index_window`). Dense mode only.
-    stat: Option<(i64, i64)>,
-    written: bool,
+    pub(super) stat: Option<(i64, i64)>,
+    pub(super) written: bool,
 }
 
 struct PackedF64RangeLoop {
@@ -878,7 +878,7 @@ fn packed_f64_range_loop_dense_body_collect(
 /// with an unrecognized receiver/index shape bails the whole match.
 /// `allow_static` (dense mode) additionally admits reads whose index carries a
 /// static value window (`a[e & K]`, `a[K1 + (e >>> k & K2)]`, …).
-fn packed_f64_range_loop_pure_expr_collect(
+pub(super) fn packed_f64_range_loop_pure_expr_collect(
     expr: &perry_hir::Expr,
     counter_id: u32,
     allow_static: bool,
@@ -2370,7 +2370,7 @@ fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
 /// The storage half of [`packed_loop_array_binding_is_eligible`]: the binding
 /// read is a plain load (stack alloca or `@perry_global_*`), not a capture
 /// slot or box.
-fn packed_loop_array_binding_storage_is_addressable(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
+pub(super) fn packed_loop_array_binding_storage_is_addressable(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
     if ctx.closure_captures.contains_key(&arr_id) {
         false
     } else if ctx.locals.contains_key(&arr_id) {
@@ -2380,7 +2380,7 @@ fn packed_loop_array_binding_storage_is_addressable(ctx: &FnCtx<'_>, arr_id: u32
     }
 }
 
-fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+pub(super) fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         local_array_element_type(ctx, local_id),
         Some(perry_types::Type::Number | perry_types::Type::Int32)
@@ -2399,7 +2399,7 @@ fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
 /// version the loop instead of proving anything at compile time. Known
 /// non-array static types (string, object, declared non-number arrays) stay
 /// ineligible — their guard chains would be dead weight.
-fn local_is_untyped_candidate(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+pub(super) fn local_is_untyped_candidate(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         ctx.local_types.get(&local_id),
         None | Some(perry_types::Type::Any | perry_types::Type::Unknown)
