@@ -380,9 +380,11 @@ pub extern "C" fn js_object_delete_field(
         //    slot map is now stale (entries past `i` have shifted).
         //    The next lookup at threshold will rebuild from current
         //    keys_array.
-        KEYS_INDEX.with(|m| {
-            m.borrow_mut().remove(&(obj as usize));
-        });
+        crate::state::state()
+            .object_hot
+            .keys_index
+            .borrow_mut()
+            .remove(&(obj as usize));
 
         1
     }

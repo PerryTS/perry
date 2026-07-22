@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::fast_hash::{new_fast_key_hash_map, FastKeyHashMap};
+use crate::state::state;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -47,12 +48,46 @@ impl PropertyAttrs {
     }
 }
 
-thread_local! {
-    // Hasher: `FastKeyHasher` (FNV-1a) rather than std's SipHash `RandomState`.
-    // The key is `(owner_addr, key_string)` — a runtime heap pointer plus a
-    // program-supplied property name, so no external input reaches it and
-    // DoS-resistant hashing buys nothing on this hot property-access path.
-    pub(crate) static PROPERTY_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), PropertyAttrs>> = RefCell::new(new_fast_key_hash_map());
+/// #6759 Phase A: the descriptor side tables and their per-thread fast-path
+/// gates, grouped as the `descriptors` field of
+/// [`crate::state::RuntimeState`]. Previously four separate `thread_local!`s;
+/// reach them via `crate::state::state().descriptors` (one TLS fetch for the
+/// whole group).
+pub(crate) struct DescriptorTables {
+    /// Per-property attribute flags set by `Object.defineProperty` /
+    /// `Object.freeze` / `Object.seal`, keyed `(owner_addr, key_string)`.
+    ///
+    /// Hasher: `FastKeyHasher` (FNV-1a) rather than std's SipHash
+    /// `RandomState`. The key is a runtime heap pointer plus a
+    /// program-supplied property name, so no external input reaches it and
+    /// DoS-resistant hashing buys nothing on this hot property-access path.
+    pub(crate) property_descriptors: RefCell<FastKeyHashMap<(usize, String), PropertyAttrs>>,
+    /// Accessor descriptor storage: maps `(owner_addr, key_string)` to the
+    /// getter/setter closure bits. Same hasher rationale as
+    /// `property_descriptors`.
+    pub(crate) accessor_descriptors: RefCell<FastKeyHashMap<(usize, String), AccessorDescriptor>>,
+    /// Fast-path gate: `false` when no accessor descriptors have ever been
+    /// installed on this thread, so hot `js_object_get_field_by_name` /
+    /// `set_field_by_name` can skip the `accessor_descriptors` HashMap
+    /// lookup entirely.
+    pub(crate) accessors_in_use: Cell<bool>,
+    /// Fast-path gate for `property_descriptors` — flipped the first time
+    /// `Object.defineProperty` (or freeze/seal via `set_property_attrs`)
+    /// installs a per-property descriptor. Lets the hot object-write path
+    /// skip the `.to_string()` allocation required to look up a descriptor
+    /// that almost never exists.
+    pub(crate) property_attrs_in_use: Cell<bool>,
+}
+
+impl DescriptorTables {
+    pub(crate) fn new() -> Self {
+        DescriptorTables {
+            property_descriptors: RefCell::new(new_fast_key_hash_map()),
+            accessor_descriptors: RefCell::new(new_fast_key_hash_map()),
+            accessors_in_use: Cell::new(false),
+            property_attrs_in_use: Cell::new(false),
+        }
+    }
 }
 
 /// Accessor descriptor storage: maps (obj_ptr, key) -> (get_closure_bits, set_closure_bits).
@@ -64,22 +99,6 @@ thread_local! {
 pub(crate) struct AccessorDescriptor {
     pub get: u64, // NaN-boxed closure f64 bits, 0 = absent
     pub set: u64, // NaN-boxed closure f64 bits, 0 = absent
-}
-
-thread_local! {
-    // Hasher: `FastKeyHasher` (FNV-1a); see `PROPERTY_DESCRIPTORS` above for the
-    // same-shape `(owner_addr, key_string)` key and rationale.
-    pub(crate) static ACCESSOR_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), AccessorDescriptor>> = RefCell::new(new_fast_key_hash_map());
-    /// Fast-path gate: `false` when no accessor descriptors have ever been installed
-    /// on this thread, so hot `js_object_get_field_by_name` / `set_field_by_name`
-    /// can skip the `ACCESSOR_DESCRIPTORS` HashMap lookup entirely.
-    pub(crate) static ACCESSORS_IN_USE: Cell<bool> = const { Cell::new(false) };
-    /// Fast-path gate for `PROPERTY_DESCRIPTORS` — flipped the first time
-    /// `Object.defineProperty` (or freeze/seal via `set_property_attrs`)
-    /// installs a per-property descriptor. Lets the hot object-write path
-    /// skip the `.to_string()` allocation required to look up a descriptor
-    /// that almost never exists.
-    pub(crate) static PROPERTY_ATTRS_IN_USE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Global monotonic flag: set once any accessor or property descriptor is
@@ -319,7 +338,12 @@ pub(crate) fn note_descriptor_target(obj: usize) {
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
-    PROPERTY_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow()
+        .get(&(obj, key.to_string()))
+        .copied()
 }
 
 /// Whether this specific object has ever had a property descriptor installed on
@@ -416,38 +440,47 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
-    PROPERTY_ATTRS_IN_USE.with(|c| c.set(true));
+    let st = state();
+    st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_class_field_inline_guard_for_target(obj);
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), attrs);
-    });
+    st.descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
 }
 
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
     super::prop_plan::prop_plan_epoch_bump();
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().remove(&(obj, key.to_string()));
-    });
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow_mut()
+        .remove(&(obj, key.to_string()));
 }
 
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
-    ACCESSOR_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
+    state()
+        .descriptors
+        .accessor_descriptors
+        .borrow()
+        .get(&(obj, key.to_string()))
+        .copied()
 }
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        let mut keys = m
-            .borrow()
-            .keys()
-            .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
-            .collect::<Vec<_>>();
-        keys.sort();
-        keys
-    })
+    let mut keys = state()
+        .descriptors
+        .accessor_descriptors
+        .borrow()
+        .keys()
+        .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys
 }
 
 /// #2766: resolve an accessor *getter* closure for `(value, key)` if one is
@@ -458,7 +491,7 @@ pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
 /// invoking it. Returns `None` (rather than reading the field) when there is no
 /// accessor at all, so the caller falls back to an ordinary field read.
 pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
-    if !ACCESSORS_IN_USE.with(|c| c.get()) {
+    if !state().descriptors.accessors_in_use.get() {
         return None;
     }
     let key_str = crate::builtins::js_string_coerce(key);
@@ -567,22 +600,26 @@ fn note_accessor_descriptor_key(key: &str) {
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
-    ACCESSORS_IN_USE.with(|c| c.set(true));
+    let st = state();
+    st.descriptors.accessors_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_class_field_inline_guard_for_target(obj);
     note_accessor_descriptor_key(&key);
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), acc);
-    });
+    st.descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .insert((obj, key), acc);
 }
 
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
     super::prop_plan::prop_plan_epoch_bump();
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        m.borrow_mut().remove(&(obj, key.to_string()));
-    });
+    state()
+        .descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .remove(&(obj, key.to_string()));
 }
 
 /// Install a built-in *reflection-only* accessor descriptor for (obj, key)
@@ -607,12 +644,15 @@ pub(crate) fn set_builtin_accessor_descriptor(
 ) {
     super::prop_plan::prop_plan_epoch_bump();
     note_accessor_descriptor_key(&key);
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key.clone()), acc);
-    });
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), attrs);
-    });
+    let st = state();
+    st.descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .insert((obj, key.clone()), acc);
+    st.descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
 }
 
 /// Install a built-in *reflection-only* data-property descriptor for (obj, key)
@@ -633,9 +673,11 @@ pub(crate) fn set_builtin_accessor_descriptor(
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), attrs);
-    });
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
 }
 
 /// Walk the keys array of `obj` and apply the given attribute mask AND filter to every existing key.
@@ -703,18 +745,19 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
             .entry(owner)
             .or_insert_with(|| is_dead_owner(owner))
     };
-    PROPERTY_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    let st = state();
+    {
+        let mut m = st.descriptors.property_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| !is_dead(*owner));
         }
-    });
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    }
+    {
+        let mut m = st.descriptors.accessor_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| !is_dead(*owner));
         }
-    });
+    }
 }
 
 /// #6710: drop every property-attr + accessor descriptor owned by `obj`.
@@ -731,18 +774,19 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
     if !HANDLE_HAS_DESCRIPTORS.load(Ordering::Relaxed) {
         return;
     }
-    PROPERTY_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    let st = state();
+    {
+        let mut m = st.descriptors.property_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| *owner != obj);
         }
-    });
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    }
+    {
+        let mut m = st.descriptors.accessor_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| *owner != obj);
         }
-    });
+    }
 }
 
 /// Rewrite a descriptor table's owner ADDRESS during the GC metadata-rewrite
@@ -771,8 +815,9 @@ fn rewrite_descriptor_owner(
 /// attrs and accessors don't silently detach (or fire on a new tenant at a
 /// reused address).
 pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PROPERTY_DESCRIPTORS.with(|descriptors| {
-        let mut descriptors = descriptors.borrow_mut();
+    let st = state();
+    {
+        let mut descriptors = st.descriptors.property_descriptors.borrow_mut();
         let needs_rebuild = descriptors
             .keys()
             .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
@@ -783,10 +828,10 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
                 descriptors.insert((owner, key), attrs);
             }
         }
-    });
+    }
 
-    ACCESSOR_DESCRIPTORS.with(|descriptors| {
-        let mut descriptors = descriptors.borrow_mut();
+    {
+        let mut descriptors = st.descriptors.accessor_descriptors.borrow_mut();
         let needs_rebuild = descriptors
             .keys()
             .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
@@ -812,5 +857,5 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
                 }
             }
         }
-    });
+    }
 }

@@ -128,6 +128,34 @@ mod has_property;
 mod ic_miss;
 mod map_set_receiver;
 
+/// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
+/// cache backing `js_object_get_field_by_name`'s slow tail.
+pub(crate) const FIELD_CACHE_SIZE: usize = 1024;
+
+/// #6759 Phase A: property-lookup inline caches, grouped as the
+/// `field_lookup` field of [`crate::state::RuntimeState`]. Previously a
+/// function-local `thread_local!` in `get_field_by_name_tail` plus a module
+/// `thread_local!` in `has_property`; reach them via
+/// `crate::state::state().field_lookup`.
+pub(crate) struct FieldLookupCaches {
+    /// Fixed-size direct-mapped cache (no allocation, no HashMap): each
+    /// entry stores `(keys_ptr, key_hash, field_index)`. Copied-minor
+    /// nursery reset can reuse a keys-array address, so cache hits still
+    /// validate the key slot before returning a field.
+    pub(crate) field_cache: std::cell::UnsafeCell<[(usize, u32, u32); FIELD_CACHE_SIZE]>,
+    /// #5054 wide-object key→index map entries (see `has_property.rs`).
+    pub(crate) wide_key_index: std::cell::RefCell<Vec<has_property::WideKeyIndexEntry>>,
+}
+
+impl FieldLookupCaches {
+    pub(crate) fn new() -> Self {
+        FieldLookupCaches {
+            field_cache: std::cell::UnsafeCell::new([(0usize, 0u32, 0u32); FIELD_CACHE_SIZE]),
+            wide_key_index: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
 // Explicit named re-exports so existing `crate::object::…` / `super::…`
 // paths keep resolving (a glob re-export does not reliably propagate through
 // `object/mod.rs`'s `pub use field_get_set::*`), and so sibling modules can

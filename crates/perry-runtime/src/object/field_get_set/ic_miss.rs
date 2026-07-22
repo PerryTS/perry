@@ -382,7 +382,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // would silently return the raw slot value instead of calling the
     // getter. The slow path through js_object_get_field_by_name handles
     // accessors correctly.
-    let can_cache = !ACCESSORS_IN_USE.with(|c| c.get());
+    let can_cache = !crate::state::state().descriptors.accessors_in_use.get();
     unsafe {
         // Issue #72: validate this really is a GC_TYPE_OBJECT before reading
         // (*obj).keys_array — otherwise an Array/String/Buffer/etc. receiver

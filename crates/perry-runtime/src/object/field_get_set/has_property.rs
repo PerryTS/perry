@@ -1060,7 +1060,7 @@ unsafe fn ordinary_has_property(
         // EVERY `in`, dominating its profile (~60% of samples on a
         // descriptor-less receiver).
         if let Some(name) = key_name {
-            if crate::object::descriptor_state::ACCESSORS_IN_USE.with(|c| c.get())
+            if crate::state::state().descriptors.accessors_in_use.get()
                 && crate::object::descriptor_state::object_has_descriptors(cur as usize)
                 && get_accessor_descriptor(cur as usize, name).is_some()
             {
@@ -1276,16 +1276,13 @@ pub(crate) unsafe fn native_module_own_field_by_key(
 pub(crate) const WIDE_KEY_INDEX_MIN_KEYS: usize = 257;
 const WIDE_KEY_INDEX_CAPACITY: usize = 4;
 
-struct WideKeyIndexEntry {
+pub(crate) struct WideKeyIndexEntry {
     keys_id: usize,
     indexed_len: u32,
     map: std::collections::HashMap<Vec<u8>, u32>,
 }
 
-thread_local! {
-    static WIDE_KEY_INDEX: std::cell::RefCell<Vec<WideKeyIndexEntry>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
+// Storage: `FieldLookupCaches::wide_key_index` (`state().field_lookup`).
 
 /// Probe the wide-object index for `key_bytes` in the keys array identified by
 /// `keys_id`. Returns a slot index whose stored key has been re-validated
@@ -1298,8 +1295,11 @@ pub(crate) unsafe fn wide_key_index_lookup(
     keys: *const crate::array::ArrayHeader,
     key_count: usize,
 ) -> Option<u32> {
-    WIDE_KEY_INDEX.with(|cell| {
-        let mut table = cell.borrow_mut();
+    {
+        let mut table = crate::state::state()
+            .field_lookup
+            .wide_key_index
+            .borrow_mut();
         let pos = table.iter().position(|e| e.keys_id == keys_id);
         let pos = match pos {
             Some(p) => p,
@@ -1372,16 +1372,17 @@ pub(crate) unsafe fn wide_key_index_lookup(
             }
             _ => None,
         }
-    })
+    }
 }
 
 /// Back-fill a linear-scan hit into the wide-object index (no-op when the
 /// keys array has no entry — the next lookup builds it wholesale).
 pub(crate) fn wide_key_index_note_hit(keys_id: usize, key_bytes: &[u8], index: u32) {
-    WIDE_KEY_INDEX.with(|cell| {
-        let mut table = cell.borrow_mut();
-        if let Some(e) = table.iter_mut().find(|e| e.keys_id == keys_id) {
-            e.map.entry(key_bytes.to_vec()).or_insert(index);
-        }
-    });
+    let mut table = crate::state::state()
+        .field_lookup
+        .wide_key_index
+        .borrow_mut();
+    if let Some(e) = table.iter_mut().find(|e| e.keys_id == keys_id) {
+        e.map.entry(key_bytes.to_vec()).or_insert(index);
+    }
 }
