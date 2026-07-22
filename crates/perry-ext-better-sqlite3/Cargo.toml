@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for the npm `better-sqlite3` package — uses only `perry-ffi`. First database wrapper port (Phase 5 step 10) and acceptance test for perry-ffi's JsValue + object/array surface. Foundation for the Tursodb port in #424."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

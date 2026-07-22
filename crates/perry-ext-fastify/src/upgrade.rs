@@ -179,6 +179,9 @@ pub(crate) fn fire_fastify_upgrade_listeners(
 }
 
 #[allow(dead_code)]
+// The `& 0` is deliberate: this linker anchor only exists to keep the tag
+// constants referenced; the composed value itself is meaningless.
+#[allow(clippy::erasing_op)]
 fn _force_link() -> u64 {
     POINTER_TAG | (PTR_MASK & 0) | STRING_TAG | TAG_UNDEFINED
 }

@@ -2,6 +2,10 @@
 name = "perry-ui-macos"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
 
 [lib]
 crate-type = ["rlib", "staticlib"]
@@ -14,9 +18,9 @@ geisterhand = []
 [dependencies]
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
-base64 = "0.22"
+base64.workspace = true
 block2 = "0.6"
-libc = "0.2"
+libc.workspace = true
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
     "NSString",

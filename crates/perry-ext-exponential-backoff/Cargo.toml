@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `exponential-backoff` — uses only `perry-ffi`. Acceptance test for perry-ffi's closure invocation surface (Phase 5 step 12)."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

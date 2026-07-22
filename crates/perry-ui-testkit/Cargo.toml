@@ -5,5 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 path = "src/lib.rs"

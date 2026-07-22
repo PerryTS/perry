@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `ioredis` — uses only `perry-ffi`. Async Redis client (lazy connection) via the `redis` crate. spawn_blocking + JsPromise + tokio::Handle::current().block_on bridge."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
@@ -12,7 +15,7 @@ crate-type = ["staticlib", "rlib"]
 perry-ffi.workspace = true
 redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 tokio = { workspace = true }
-lazy_static = "1.5"
+lazy_static.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

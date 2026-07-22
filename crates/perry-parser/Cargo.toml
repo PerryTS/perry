@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "TypeScript parser wrapper using SWC"
 
+[lints]
+workspace = true
+
 [dependencies]
 swc_ecma_parser.workspace = true
 swc_ecma_ast.workspace = true

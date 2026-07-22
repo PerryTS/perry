@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "SwiftUI code generation for Perry widget extensions (--target ios-widget)"
 
+[lints]
+workspace = true
+
 [dependencies]
 perry-hir.workspace = true
 perry-types.workspace = true

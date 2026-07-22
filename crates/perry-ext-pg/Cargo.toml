@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `pg` (PostgreSQL client) — uses only `perry-ffi`. Async via `sqlx::postgres` bridged through spawn_blocking + JsPromise + tokio::Handle::current().block_on. Both pre-connect handles and connection pool surfaces."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

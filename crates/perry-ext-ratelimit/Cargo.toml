@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `rate-limiter-flexible` — uses only `perry-ffi`. Token-bucket rate limiting via `governor`. Sync + spawn_blocking-async."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

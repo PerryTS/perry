@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for the npm `uuid` package — uses only `perry-ffi`. Third port under #466 Phase 5 (after dotenv + nanoid)."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

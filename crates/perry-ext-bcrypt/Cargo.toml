@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for the npm `bcrypt` package — uses only `perry-ffi`. First port of an async wrapper under #466 Phase 5; doubles as the acceptance test for perry-ffi's v0.5.1 async surface."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Android Glance widget code generation for Perry (--target android-widget)"
 
+[lints]
+workspace = true
+
 [dependencies]
 perry-hir.workspace = true
 anyhow.workspace = true

@@ -5,16 +5,19 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `node-fetch` — uses only `perry-ffi`. HTTP via reqwest, async via spawn_blocking + JsPromise. Web Fetch API surface (Response / Headers / Blob / Request)."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false }
-bytes = "1"
+bytes.workspace = true
 tokio = { workspace = true }
-serde_json = "1"
-lazy_static = "1.5"
+serde_json.workspace = true
+lazy_static.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

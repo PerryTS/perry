@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for the npm `jsonwebtoken` package — uses only `perry-ffi`. Sync, string-only port (Phase 5 step 7)."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
@@ -13,7 +16,7 @@ perry-ffi.workspace = true
 jsonwebtoken.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
-base64 = "0.22"
+base64.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

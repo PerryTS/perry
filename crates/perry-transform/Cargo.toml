@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "IR transformations: closure conversion, async lowering"
 
+[lints]
+workspace = true
+
 [dependencies]
 perry-hir.workspace = true
 perry-types.workspace = true

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "WebAssembly code generation backend for Perry (--target wasm)"
 
+[lints]
+workspace = true
+
 [dependencies]
 perry-hir.workspace = true
 perry-types.workspace = true
@@ -12,4 +15,4 @@ perry-codegen-js.workspace = true
 perry-dispatch.workspace = true
 anyhow.workspace = true
 wasm-encoder = "0.253"
-base64 = "0.22"
+base64.workspace = true

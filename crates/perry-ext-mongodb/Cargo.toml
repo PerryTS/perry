@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `mongodb` — uses only `perry-ffi`. Async via the mongodb crate bridged through spawn_blocking + JsPromise + tokio::Handle::current().block_on."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
@@ -14,7 +17,7 @@ mongodb = { version = "3.7", default-features = false, features = ["bson-3", "co
 bson = { version = "3.1", features = ["serde"] }
 tokio = { workspace = true }
 futures-util = "0.3"
-serde_json = "1"
+serde_json.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

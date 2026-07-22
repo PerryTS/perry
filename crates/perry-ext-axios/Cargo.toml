@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for the npm `axios` HTTP client — uses only `perry-ffi`. First HTTP-client port (Phase 5 step 13)."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

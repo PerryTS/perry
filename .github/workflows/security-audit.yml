@@ -63,3 +63,21 @@ jobs:
             --ignore RUSTSEC-2026-0118 \
             --ignore RUSTSEC-2026-0119 \
             --ignore RUSTSEC-2026-0187
+
+  # License policy + duplicate-version tracking (deny.toml at repo root).
+  # Advisories stay with cargo-audit above — deny.toml doesn't duplicate them.
+  # Pure metadata check: no compilation, runs in ~1 min once cargo-deny is
+  # cached in ~/.cargo/bin by rust-cache.
+  cargo-deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security-audit
+      - name: Install cargo-deny
+        run: which cargo-deny || cargo install cargo-deny --locked
+      - name: Run cargo deny
+        run: cargo deny check licenses bans sources

@@ -7,6 +7,9 @@ repository.workspace = true
 publish = false
 description = "End-to-end test harness for perry/container — compiles `.e2e.ts` via the perry CLI and runs the resulting binary against a live OCI runtime"
 
+[lints]
+workspace = true
+
 [lib]
 path = "src/lib.rs"
 

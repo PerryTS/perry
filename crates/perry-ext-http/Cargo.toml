@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for Node's `http` / `https` modules — callback-style ClientRequest / IncomingMessage. Uses only `perry-ffi`. Async via spawn_blocking + reqwest."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
@@ -50,9 +53,9 @@ tokio = { workspace = true }
 # streaming event enum (instead of `.to_vec()`-ing it) drops one heap alloc
 # + memcpy per response chunk. Already in the lockfile via reqwest/hyper, so
 # declaring it pulls nothing new.
-bytes = "1"
-serde_json = "1"
-lazy_static = "1.5"
+bytes.workspace = true
+serde_json.workspace = true
+lazy_static.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 description = "Doc fixture backing the native-libraries authoring guide. Not for end-user consumption."
 
+[lints]
+workspace = true
+
 [lib]
 name = "perry_ext_my_bindings"
 crate-type = ["staticlib", "rlib"]

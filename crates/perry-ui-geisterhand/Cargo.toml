@@ -5,11 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "In-process input fuzzer HTTP server for Perry UI"
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 tiny_http = "0.12"
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 rand = "0.8"

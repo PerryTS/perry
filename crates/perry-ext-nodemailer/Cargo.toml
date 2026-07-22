@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `nodemailer` — uses only `perry-ffi`. SMTP transport via `lettre`. Async via spawn_blocking + JsPromise."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

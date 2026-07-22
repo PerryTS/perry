@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `ethers` utilities — uses only `perry-ffi`. Sync, hex/keccak256/EIP-55/parseUnits/formatUnits/parseEther/formatEther utilities."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

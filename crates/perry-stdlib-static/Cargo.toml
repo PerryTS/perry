@@ -7,6 +7,9 @@ description = "Staticlib wrapper (#5422): emits libperry_stdlib.a from the rlib-
 
 # Output name stays `perry_stdlib` so the produced archive is the canonical
 # `libperry_stdlib.a` / `perry_stdlib.lib` every consumer already looks for.
+[lints]
+workspace = true
+
 [lib]
 name = "perry_stdlib"
 crate-type = ["staticlib"]

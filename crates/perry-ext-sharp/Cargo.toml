@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `sharp` — uses only `perry-ffi`. Image processing via the `image` crate; sync transforms + async toFile/toBuffer/metadata via `spawn_blocking` + `JsPromise`."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

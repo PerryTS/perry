@@ -110,6 +110,10 @@ pub(crate) fn fire_upgrade_listeners(
 }
 
 #[allow(dead_code)]
+// The `& 0` is deliberate: the value is the canonical null-pointer NaN-box
+// (POINTER_TAG with an all-zero payload), spelled out so both constants stay
+// referenced by this linker anchor.
+#[allow(clippy::erasing_op)]
 fn _force_link() -> u64 {
     POINTER_TAG | (PTR_MASK & 0)
 }

@@ -12,6 +12,9 @@ keywords = ["perry", "ffi", "native-bindings", "typescript"]
 categories = ["api-bindings", "external-ffi-bindings"]
 readme = "README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
 # #1112: `perry-runtime` is restored as an OPTIONAL regular dep (not
 # a dev-dep) so the `runtime-link` feature actually propagates the
@@ -29,8 +32,8 @@ perry-runtime = { workspace = true, optional = true }
 # Handle registry storage (#466 Phase 5 — `lru-cache`/db wrappers).
 # perry-stdlib uses dashmap internally for the same purpose; sharing
 # the dep keeps the resulting binaries identical in size.
-dashmap = "6"
-once_cell = "1"
+dashmap.workspace = true
+once_cell.workspace = true
 
 [features]
 default = []

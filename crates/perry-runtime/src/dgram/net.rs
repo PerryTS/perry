@@ -16,7 +16,7 @@ use crate::value::JSValue;
 pub(crate) fn allocate_port(registry: &mut DgramRegistry, address: &str) -> u16 {
     for _ in 0..16384 {
         let port = registry.next_port;
-        registry.next_port = if registry.next_port >= 65535 {
+        registry.next_port = if registry.next_port == 65535 {
             49152
         } else {
             registry.next_port + 1

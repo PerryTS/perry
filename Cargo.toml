@@ -348,6 +348,24 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
 
+# Workspace-wide lint policy (members opt in via `[lints] workspace = true`).
+# Deny-level lints are enforced by the `clippy` CI job: `cargo clippy` exits
+# nonzero only on denies, so warn-level noise never blocks a PR. Ratchet new
+# lints in here once the codebase is clean for them.
+[workspace.lints.rust]
+non_ascii_idents = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Deny-by-default in clippy, allowed here on purpose: Perry's runtime/stdlib/
+# ext crates expose one big FFI surface called from Perry-generated native
+# code — pub fns taking raw pointers with caller contracts ARE the calling
+# convention (500+ sites), and `unsafe fn` is meaningless to those callers.
+# Rust-facing helpers should still document SAFETY at the site.
+not_unsafe_ptr_arg_deref = "allow"
+
 [workspace.dependencies]
 # SWC for TypeScript parsing
 swc_ecma_parser = "32.0"
@@ -368,6 +386,23 @@ clap = { version = "4.5", features = ["derive"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# Shared low-level deps — single source of truth for versions.
+# Members inherit with `<dep>.workspace = true` (features stay additive
+# per member). rand is deliberately absent: 0.8 vs 0.9 users coexist
+# until the 0.9 API migration happens (follow-up).
+libc = "0.2"
+lazy_static = "1.5"
+chrono = "0.4"
+regex = "1.12"
+hex = "0.4"
+tempfile = "3"
+itoa = "1.0"
+ryu = "1.0"
+once_cell = "1.19"
+dashmap = "6.2"
+bytes = "1.5"
+semver = "1.0"
 toml = "1.1"
 stacker = "0.1.24"
 

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Perry UI backend for Android (JNI bridge to Android Views)"
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["rlib", "staticlib"]
 
@@ -20,10 +23,10 @@ perry-runtime = { path = "../perry-runtime", default-features = false }
 # surface (`image` crate + perry-ffi only). Force-linked via `extern crate` in
 # lib.rs so libperry_ui_android.a bundles the symbols.
 perry-ext-sharp = { path = "../perry-ext-sharp" }
-base64 = "0.22"
-libc = "0.2"
+base64.workspace = true
+libc.workspace = true
 jni = "0.21"
-serde_json = "1"
-itoa = "1"
-ryu = "1"
+serde_json.workspace = true
+itoa.workspace = true
+ryu.workspace = true
 tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

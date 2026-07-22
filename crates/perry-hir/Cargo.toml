@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "High-level intermediate representation for Perry"
 
+[lints]
+workspace = true
+
 [dependencies]
 perry-types.workspace = true
 perry-diagnostics.workspace = true

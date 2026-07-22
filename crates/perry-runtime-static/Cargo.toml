@@ -9,6 +9,9 @@ description = "Staticlib wrapper (#5422): emits libperry_runtime.a from the rlib
 # output name stays `perry_runtime` so the produced archive is the canonical
 # `libperry_runtime.a` / `perry_runtime.lib` every consumer already looks for —
 # only the cargo PACKAGE name (`-p perry-runtime-static`) changes.
+[lints]
+workspace = true
+
 [lib]
 name = "perry_runtime"
 crate-type = ["staticlib"]

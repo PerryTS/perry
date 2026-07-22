@@ -5,13 +5,16 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `node-cron` — uses only `perry-ffi`. Cron-expression scheduling; callbacks fire on the perry main thread via the codegen event-loop tick."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
 cron = "0.17"
-chrono = "0.4"
+chrono.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "WebAssembly host runtime for Perry (wasmi engine, isolated so the default build does not pull wasmi)"
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["rlib", "staticlib"]
 

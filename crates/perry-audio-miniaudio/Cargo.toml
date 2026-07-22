@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Shared miniaudio-backed perry/audio backend for Linux, Windows, and Android (#1867)."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["rlib"]
 
@@ -12,4 +15,4 @@ crate-type = ["rlib"]
 cc = "1"
 
 [dependencies]
-libc = "0.2"
+libc.workspace = true

@@ -2,6 +2,10 @@
 name = "perry-ui-gtk4"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
 
 [lib]
 crate-type = ["rlib", "staticlib"]
@@ -12,8 +16,8 @@ perry-ui-testkit = { workspace = true }
 perry-audio-miniaudio = { workspace = true }
 perry-runtime = { path = "../perry-runtime" }
 perry-ffi = { path = "../perry-ffi" }
-base64 = "0.22"
-libc = "0.2"
+base64.workspace = true
+libc.workspace = true
 gtk4 = { version = "0.9", features = ["v4_6"] }
 cairo-rs = "0.22"
 # perry/ui MapView (#517). libshumate is GNOME's GTK4-native vector-tile
@@ -30,7 +34,7 @@ libshumate = "0.6"
 webkit6 = "=0.4"
 # Persistent WebView userDataFolder (#658 v2-B) — XDG-aware data/cache
 # dir resolution for `ephemeral: false`. Pure-Rust crate, no system deps.
-dirs = "6"
+dirs.workspace = true
 # perry/media — GStreamer playbin for streaming audio playback (#351).
 gstreamer = "0.25"
 # perry/ui CameraView — appsink frame pull for the v4l2 live-preview /

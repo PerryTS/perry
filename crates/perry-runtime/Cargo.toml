@@ -9,6 +9,9 @@ description = "Runtime library: GC, JSValue, builtins"
 # perry-runtime-static wrapper crate so a plain `cargo build` of the workspace
 # no longer produces the heavy archive as a side effect. Build the archive
 # explicitly with `cargo build -p perry-runtime-static`.
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["rlib"]
 
@@ -162,19 +165,19 @@ dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 [dependencies]
 thiserror.workspace = true
 anyhow.workspace = true
-libc = "0.2"
+libc.workspace = true
 rand = "0.8"
-regex = { version = "1", optional = true }
+regex = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
 taffy = { version = "0.7", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 fancy-regex = { version = "0.18", optional = true }
-itoa = "1"
-ryu = "1"
-base64 = "0.22"
+itoa.workspace = true
+ryu.workspace = true
+base64.workspace = true
 hostname = { version = "0.4", optional = true }
-dirs = { version = "6", optional = true }
-lazy_static = "1.4"
+dirs = { workspace = true, optional = true }
+lazy_static.workspace = true
 # #6559 `dyn-eval`: reuse the compiler's own SWC-based parser for runtime-
 # generated `new Function` bodies (no second parser). perry-parser depends
 # only on swc + perry-diagnostics — no cycle back into perry-runtime.
@@ -188,7 +191,7 @@ perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 # current-system-zone lookup used by Temporal.Now.*ISO() with no argument.
 temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data", "sys-local"], optional = true }
 
-serde_json = "1"
+serde_json.workspace = true
 unicode-normalization = { version = "0.1", optional = true }
 # #4877: extended grapheme-cluster / word / sentence segmentation backing
 # Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,

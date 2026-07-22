@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `mysql2` (MySQL client) — uses only `perry-ffi`. Async via `sqlx::mysql` bridged through spawn_blocking + JsPromise + tokio::Handle::current().block_on. Connection + pool + per-pool-connection surfaces."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
@@ -17,7 +20,7 @@ perry-ffi.workspace = true
 # Auth.js credentials `authorize` DB lookup, surfaced as a CallbackRouteError).
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "mysql-rsa", "chrono"] }
 tokio = { workspace = true }
-chrono = "0.4"
+chrono.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

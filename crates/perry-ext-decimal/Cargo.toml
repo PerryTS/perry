@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `decimal.js` / `bignumber.js` — uses only `perry-ffi`. Sync, arbitrary-precision arithmetic via `rust_decimal`."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

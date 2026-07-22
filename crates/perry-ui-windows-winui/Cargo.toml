@@ -2,6 +2,7 @@
 name = "perry-ui-windows-winui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 # Opt-in WinUI 3 (Fluent) Windows backend — issue #4680. Selected via
 # `--target windows-winui`. This is the SCAFFOLD: the crate re-exports the
@@ -10,6 +11,9 @@ edition.workspace = true
 # (rendering through Win32). The WinUI/XAML widget mapping then lands
 # incrementally in the `winui` module, replacing Win32 widget creation one
 # widget at a time, without ever breaking the link surface.
+
+[lints]
+workspace = true
 
 [lib]
 # Same shape as perry-ui-windows: an rlib for Rust consumers and a staticlib

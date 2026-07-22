@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Source-of-truth manifest of stdlib / native APIs Perry implements. Consumed by perry-hir for compile-time unimplemented-API checks (#463), by perry-codegen for native module dispatch lookups, and by perry's docs / .d.ts emit (#465). The same schema is the foundation for #466 Phase 2's external `perry.nativeLibrary` spec."
 
+[lints]
+workspace = true
+
 [dependencies]
 serde = { workspace = true, optional = true }
 

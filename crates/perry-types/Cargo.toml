@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Type system and type inference for Perry"
 
+[lints]
+workspace = true
+
 [dependencies]
 thiserror.workspace = true
 anyhow.workspace = true

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for the npm `lru-cache` package — uses only `perry-ffi`. First handle-based wrapper port and acceptance test for perry-ffi's v0.5.x handle registry surface."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

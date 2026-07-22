@@ -239,37 +239,31 @@ unsafe fn pipe_step(
     if perry_runtime::promise::js_promise_state(promise) != 0 {
         return;
     }
-    loop {
-        let step = pipe_next_read(readable_id);
-        // Pipe progress on this readable is consumer progress: release
-        // transform writes parked on backpressure (chained
-        // pipeThrough(...).pipeTo(...) drains a transform's readable through
-        // here, never through js_reader_read).
-        super::transform::transform_release_writes(readable_id);
-        match step {
-            PipeReadStep::Chunk(chunk) => {
-                pipe_write_then_continue(
-                    readable_id,
-                    writable_id,
-                    promise,
-                    locks,
-                    prevent_close,
-                    chunk,
-                );
-                return;
-            }
-            PipeReadStep::Done => {
-                finish_pipe(readable_id, writable_id, promise, locks, prevent_close);
-                return;
-            }
-            PipeReadStep::Error(reason) => {
-                reject_pipe(readable_id, writable_id, promise, locks, reason);
-                return;
-            }
-            PipeReadStep::Pending => {
-                wait_for_next_read(readable_id, writable_id, promise, locks, prevent_close);
-                return;
-            }
+    let step = pipe_next_read(readable_id);
+    // Pipe progress on this readable is consumer progress: release
+    // transform writes parked on backpressure (chained
+    // pipeThrough(...).pipeTo(...) drains a transform's readable through
+    // here, never through js_reader_read).
+    super::transform::transform_release_writes(readable_id);
+    match step {
+        PipeReadStep::Chunk(chunk) => {
+            pipe_write_then_continue(
+                readable_id,
+                writable_id,
+                promise,
+                locks,
+                prevent_close,
+                chunk,
+            );
+        }
+        PipeReadStep::Done => {
+            finish_pipe(readable_id, writable_id, promise, locks, prevent_close);
+        }
+        PipeReadStep::Error(reason) => {
+            reject_pipe(readable_id, writable_id, promise, locks, reason);
+        }
+        PipeReadStep::Pending => {
+            wait_for_next_read(readable_id, writable_id, promise, locks, prevent_close);
         }
     }
 }

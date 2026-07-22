@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "doc-tests"
 path = "src/main.rs"
@@ -20,4 +23,4 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 rgb = "0.8"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

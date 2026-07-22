@@ -5,22 +5,25 @@ edition.workspace = true
 license.workspace = true
 description = "Auto-updater for Perry desktop apps: manifest parsing, SHA-256 + Ed25519 verification, atomic install, sentinel-based rollback, detached relaunch. Desktop-only — mobile updates go through App Store / Play Store."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 anyhow = "1.0"
 perry-runtime = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-semver = "1.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+semver.workspace = true
 sha2 = "0.11"
-hex = "0.4"
-base64 = "0.22"
+hex.workspace = true
+base64.workspace = true
 ed25519-dalek = "2.1"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 # Detached spawn (the only thing this crate used libc for) now routes
 # through perry_runtime::child_process::spawn_detached_command, so libc

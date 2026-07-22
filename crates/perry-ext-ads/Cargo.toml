@@ -6,6 +6,9 @@ license.workspace = true
 description = "Native bindings for `perry/ads` (#867) — in-app advertising. Interstitial / rewarded / banner surface backed by Google Mobile Ads SDK on iOS + Android (real SDK calls TODO in follow-ups). MVP: compiles + links across every platform crate with structured `{ success: false, error: \"no-sdk-linked\" }` placeholders so the FFI surface, type declarations, codegen wiring and consent / Info.plist / AndroidManifest follow-up work can land independently."
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

@@ -44,7 +44,7 @@ impl ComparatorCall {
             Some(f) => f(comparator, a, b),
             None => js_closure_call2(comparator, a, b),
         };
-        if r == r {
+        if !r.is_nan() {
             return r;
         }
         let n = crate::builtins::js_number_coerce(r);

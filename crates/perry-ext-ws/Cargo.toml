@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for npm `ws` — WebSocket client + server via tokio-tungstenite. Uses only `perry-ffi`. Per-client + per-server task via spawn_blocking; per-module pending queue + GC root scanner for listener closures."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 
@@ -23,7 +26,7 @@ tokio-tungstenite = { workspace = true }
 # is installed). Same pattern as perry-ext-net.
 rustls = "0.23"
 futures-util = "0.3"
-lazy_static = "1.5"
+lazy_static.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

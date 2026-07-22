@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native bindings for Node's `events` module (EventEmitter pattern) — uses only `perry-ffi`. Phase 5 — first port that exercises the GC-root-scanner surface."
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib", "rlib"]
 

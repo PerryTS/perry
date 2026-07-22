@@ -165,6 +165,51 @@ jobs:
           python3 scripts/addr_class_inventory.py
 
   # ---------------------------------------------------------------------------
+  # Clippy — enforces the deny-level lints in [workspace.lints] (root
+  # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
+  # warn-level output is informational and never blocks a PR. Separate from
+  # `lint` because it compiles the whole default-member set (~30 min cold);
+  # `lint` stays the fast fmt/gates job.
+  # ---------------------------------------------------------------------------
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      # Same tarball'd-disk-cache pattern as api-docs-drift (see the comment
+      # there for why SCCACHE_GHA_ENABLED is off).
+      - name: Cache sccache objects
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run clippy
+        run: cargo clippy
+
+  # ---------------------------------------------------------------------------
   # API docs drift gate (#465)
   #
   # Regenerates `docs/src/api/reference.md` and `docs/api/perry.d.ts` from

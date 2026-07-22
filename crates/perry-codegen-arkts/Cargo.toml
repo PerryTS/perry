@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "ArkUI/ArkTS code generation for Perry --target harmonyos (declarative UI emission)"
 
+[lints]
+workspace = true
+
 [dependencies]
 perry-hir.workspace = true
 perry-types.workspace = true

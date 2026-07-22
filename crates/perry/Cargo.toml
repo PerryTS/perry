@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native TypeScript compiler - CLI driver"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "perry"
 path = "src/main.rs"
@@ -53,14 +56,14 @@ flate2.workspace = true
 tar.workspace = true
 base64.workspace = true
 zip.workspace = true
-tempfile = "3"
-libc = "0.2"
+tempfile.workspace = true
+libc.workspace = true
 zstd.workspace = true
 jsonwebtoken.workspace = true
-semver = "1.0"
+semver.workspace = true
 dotenvy = "0.15"
 rayon = "1.10"
-regex = "1"
+regex.workspace = true
 
 # Cross-platform file locking (Unix flock + Windows LockFileEx) — used by
 # the auto-optimize driver in commands/compile/optimized_libs.rs to
@@ -81,12 +84,12 @@ fslock = "0.2"
 # for the keygen seed.
 ed25519-dalek = { version = "2.1", features = ["rand_core"], optional = true }
 sha2 = "0.11"
-hex = "0.4"
+hex.workspace = true
 rand = { version = "0.9", optional = true }
 # chrono is already a transitive dep through perry-stdlib; listing it
 # here makes the year accessor available to `perry native init`'s
 # LICENSE template substitution.
-chrono = "0.4"
+chrono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
@@ -152,5 +155,5 @@ all-codegen-backends = [
 ]
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 swc_common.workspace = true
