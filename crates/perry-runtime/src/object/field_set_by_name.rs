@@ -1502,6 +1502,13 @@ pub extern "C" fn js_object_set_field_by_name(
                 refresh_roots_after_alloc!();
                 set_object_keys_array(obj, new_keys);
                 super::mark_object_dynamic_shape_unknown(obj);
+                // #6759 Phase C3a: an owned grow keeps its shape identity —
+                // migrate the record instead of orphaning it (a shared
+                // fork must NOT migrate: the old address still describes
+                // the siblings' live shape).
+                if !keys_shared {
+                    super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+                }
                 overflow_set(obj as usize, new_index, vbits);
                 mirror_class_object_static_write(obj, key, value);
                 transition_cache_insert(
@@ -1529,6 +1536,11 @@ pub extern "C" fn js_object_set_field_by_name(
             refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
+            // #6759 Phase C3a: owned grow keeps its shape identity (see the
+            // overflow branch above).
+            if !keys_shared {
+                super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+            }
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
             mirror_class_object_static_write(obj, key, value);
             if new_index as u32 >= (*obj).field_count {
@@ -1540,17 +1552,10 @@ pub extern "C" fn js_object_set_field_by_name(
                 new_keys as usize,
                 new_index as u32,
             );
-            // The sidecar is keyed on the OBJECT pointer (see
-            // `keys_index_lookup`, which probes `obj as usize`), NOT the
-            // keys-array pointer — shape-sharing clones the keys array on
-            // every insert, so a keys-keyed entry would be orphaned each
-            // iteration. Previously this inline-slot append registered
-            // under `new_keys as usize`, so the obj-keyed lookup never
-            // found it and rebuilt the full O(key_count) index on every
-            // write — turning a wide build that stays on the inline-slot
-            // path (e.g. a class instance whose pre-sized inline capacity
-            // keeps appends below the overflow threshold) into O(n²). Use
-            // the object address to match the lookup + the overflow path.
+            // #6759 C1 note: `keys_index_insert` delegates to the keys-keyed
+            // shape records and takes the POST-append keys_array — with the
+            // C3a migration above, an owned grow lands the append on the
+            // migrated record rather than forcing a rebuild.
             keys_index_insert(
                 (*obj).keys_array,
                 (new_index + 1) as u32,
@@ -1695,6 +1700,10 @@ pub extern "C" fn js_object_set_field_by_name(
             refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
+            // #6759 Phase C3a: owned grow keeps its shape identity.
+            if !keys_shared {
+                super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+            }
             overflow_set(obj as usize, new_index, vbits);
             mirror_class_object_static_write(obj, key, value);
             // Record the shape transition so the next object sharing
@@ -1722,6 +1731,10 @@ pub extern "C" fn js_object_set_field_by_name(
         // Update the object's keys_array pointer in case js_array_push reallocated
         set_object_keys_array(obj, new_keys);
         super::mark_object_dynamic_shape_unknown(obj);
+        // #6759 Phase C3a: owned grow keeps its shape identity.
+        if !keys_shared {
+            super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+        }
 
         // Set the field at the new index and update logical field_count
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));

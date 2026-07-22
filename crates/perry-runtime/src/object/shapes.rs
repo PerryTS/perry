@@ -26,6 +26,13 @@ pub(crate) struct Shape {
     /// incrementally (append-only while shared); shorter ⟹ a delete
     /// compacted it — drop and rebuild on next lookup.
     indexed_len: u32,
+    /// #6759 Phase C3a: stable shape identity, allocated once at record
+    /// birth and preserved by [`shape_keys_grown`] when an owned keys
+    /// array reallocates — the identity consumers re-key on in C3b
+    /// (FIELD_CACHE, typed_feedback exactness) so they stop churning on
+    /// capacity doublings and GC moves. 0 is never allocated ("no id").
+    #[allow(dead_code)]
+    shape_id: u32,
     /// FNV-1a content hash of key bytes → candidate slots (collisions
     /// resolved by the per-hit content validation).
     slots: HashMap<u64, Vec<u32>>,
@@ -33,13 +40,25 @@ pub(crate) struct Shape {
 
 pub(crate) struct ShapeTable {
     entries: RefCell<crate::fast_hash::PtrHashMap<usize, Shape>>,
+    /// #6759 Phase C3a: monotonic ShapeId allocator (1-based; 0 = none).
+    /// u32 wrap is theoretical (one id per shape BIRTH, not per object);
+    /// on wrap the allocator skips 0 and collision risk is bounded by the
+    /// validation-on-hit trust model like every other accelerator here.
+    next_id: std::cell::Cell<u32>,
 }
 
 impl ShapeTable {
     pub(crate) fn new() -> Self {
         ShapeTable {
             entries: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
+            next_id: std::cell::Cell::new(1),
         }
+    }
+
+    fn alloc_shape_id(&self) -> u32 {
+        let id = self.next_id.get();
+        self.next_id.set(id.wrapping_add(1).max(1));
+        id
     }
 }
 
@@ -73,7 +92,8 @@ pub(crate) unsafe fn shape_slot_lookup(
     build: bool,
 ) -> Option<u32> {
     let keys_id = keys as usize;
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
+    let table = &crate::state::state().shapes;
+    let mut entries = table.entries.borrow_mut();
     let shape = match entries.get_mut(&keys_id) {
         Some(s) => {
             if s.indexed_len > key_count {
@@ -87,8 +107,10 @@ pub(crate) unsafe fn shape_slot_lookup(
             if !build {
                 return None;
             }
+            let shape_id = table.alloc_shape_id();
             entries.entry(keys_id).or_insert(Shape {
                 indexed_len: 0,
+                shape_id,
                 slots: HashMap::with_capacity(key_count as usize),
             })
         }
@@ -140,6 +162,30 @@ pub(crate) fn shape_note_hit(keys: *const ArrayHeader, key_hash: u64, slot: u32)
     }
 }
 
+/// #6759 Phase C3a: an OWNED (non-`GC_FLAG_SHAPE_SHARED`) keys array was
+/// reallocated by `js_array_push` — the SAME logical shape now lives at a
+/// new address. Migrate the record (slot map, indexed_len, shape_id) so it
+/// survives the capacity doubling; pre-C3a the record was orphaned at the
+/// old address and the next lookup rebuilt it O(key_count), making every
+/// doubling of a wide object's build pay a full re-index.
+///
+/// Callers must pass the OWNED-grow pair only: a shared array's fork is a
+/// genuine transition (the clone starts a NEW identity and the old address
+/// still describes the siblings' live shape — migrating it would corrupt
+/// them). Safety net: a wrong or stale migration cannot produce wrong
+/// results — every hit re-validates key bytes against the live array —
+/// it only wastes the rebuild this exists to save.
+pub(crate) fn shape_keys_grown(old_keys: usize, new_keys: *const ArrayHeader) {
+    let new_id = new_keys as usize;
+    if old_keys == 0 || new_id == 0 || old_keys == new_id {
+        return;
+    }
+    let mut entries = crate::state::state().shapes.entries.borrow_mut();
+    if let Some(shape) = entries.remove(&old_keys) {
+        entries.insert(new_id, shape);
+    }
+}
+
 /// Drop the shape for a keys_array that was compacted/retired in place
 /// (delete path). Address-recycled arrays need no eager drop — validation
 /// rejects them — but the delete path knows the map is stale NOW.
@@ -160,6 +206,36 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     }
 }
 
+/// #6759 Phase C3a: rekey shape records when GC evacuation MOVES their
+/// keys array, so a wide object's slot map (and its stable `shape_id`)
+/// survives a copied minor instead of being orphaned at the from-space
+/// address and rebuilt O(key_count) on the next lookup. Metadata-rewrite
+/// only — the records hold no heap references (slot indexes + an address
+/// used as identity), so outside that phase this scanner is a no-op and
+/// marks nothing. Same pattern as the descriptor-table owner rekey.
+pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if !visitor.is_metadata_rewrite_phase() {
+        return;
+    }
+    let mut entries = crate::state::state().shapes.entries.borrow_mut();
+    if entries.is_empty() {
+        return;
+    }
+    let moved: Vec<(usize, usize)> = entries
+        .keys()
+        .filter_map(|&keys_id| {
+            let mut addr = keys_id;
+            visitor.visit_metadata_usize_slot(&mut addr);
+            (addr != keys_id).then_some((keys_id, addr))
+        })
+        .collect();
+    for (old, new) in moved {
+        if let Some(shape) = entries.remove(&old) {
+            entries.insert(new, shape);
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_shape_entry_exists(keys_id: usize) -> bool {
     crate::state::state()
@@ -172,11 +248,24 @@ pub(crate) fn test_shape_entry_exists(keys_id: usize) -> bool {
 
 #[cfg(test)]
 pub(crate) fn test_seed_shape_entry(keys_id: usize) {
-    crate::state::state().shapes.entries.borrow_mut().insert(
+    let table = &crate::state::state().shapes;
+    let shape_id = table.alloc_shape_id();
+    table.entries.borrow_mut().insert(
         keys_id,
         Shape {
             indexed_len: 0,
+            shape_id,
             slots: HashMap::new(),
         },
     );
+}
+
+#[cfg(test)]
+pub(crate) fn test_shape_id_for_keys(keys_id: usize) -> Option<u32> {
+    crate::state::state()
+        .shapes
+        .entries
+        .borrow()
+        .get(&keys_id)
+        .map(|s| s.shape_id)
 }

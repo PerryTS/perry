@@ -788,6 +788,71 @@ fn test_descriptor_meta_summary_survives_copied_minor_move() {
     js_shadow_slot_set(0, 0);
 }
 
+/// #6759 Phase C3a: an owned keys array's grow-realloc migrates the shape
+/// record (slot map + stable shape_id) to the new address instead of
+/// orphaning it.
+#[test]
+fn test_shape_record_migrates_on_owned_grow() {
+    let _global = global_side_table_test_lock();
+    let old_addr: usize = 0xC3A0_0000_0000_1010;
+    let new_addr: usize = 0xC3A0_0000_0000_2020;
+    crate::object::shapes::test_seed_shape_entry(old_addr);
+    let id = crate::object::shapes::test_shape_id_for_keys(old_addr)
+        .expect("seeded entry must have an id");
+    assert!(id != 0, "shape ids are 1-based");
+
+    crate::object::shapes::shape_keys_grown(
+        old_addr,
+        new_addr as *const crate::array::ArrayHeader,
+    );
+
+    assert!(
+        !crate::object::shapes::test_shape_entry_exists(old_addr),
+        "grown-away address must no longer hold the record"
+    );
+    assert_eq!(
+        crate::object::shapes::test_shape_id_for_keys(new_addr),
+        Some(id),
+        "the record — including its stable shape_id — must move to the new address"
+    );
+    // Cleanup so the seeded address can't leak into later tests.
+    crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+}
+
+/// #6759 Phase C3a: GC evacuation MOVES a live keys array — the shape
+/// table's metadata-rewrite scanner must rekey the record to the array's
+/// to-space address (same pattern as the descriptor owner rekey), so a
+/// wide object's slot map survives a copied minor.
+#[test]
+fn test_shape_record_rekeys_on_copied_minor_move() {
+    let _global = global_side_table_test_lock();
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let keys = unsafe { alloc_nursery_test_array() };
+    let old_addr = keys as usize;
+    crate::object::shapes::test_seed_shape_entry(old_addr);
+    let id = crate::object::shapes::test_shape_id_for_keys(old_addr)
+        .expect("seeded entry must have an id");
+    js_shadow_slot_set(0, ptr_bits(old_addr));
+
+    let _ = gc_collect_minor();
+
+    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_addr, old_addr, "test premise: the keys array must move");
+    assert!(
+        !crate::object::shapes::test_shape_entry_exists(old_addr),
+        "from-space address must no longer key the record"
+    );
+    assert_eq!(
+        crate::object::shapes::test_shape_id_for_keys(new_addr),
+        Some(id),
+        "the shape record must be rekeyed to the moved keys array"
+    );
+
+    crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+    js_shadow_slot_set(0, 0);
+}
+
 /// #6759 Phase B: the meta record is kept alive by its owner (the header
 /// edge is a traced child slot) across a full non-moving collection, and an
 /// explicit-null recording is preserved.
