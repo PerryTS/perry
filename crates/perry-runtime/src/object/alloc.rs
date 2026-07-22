@@ -14,14 +14,31 @@ fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut A
     if class_id == 0 || keys_array.is_null() {
         return;
     }
-    let mut guard = CLASS_KEYS_BY_ID.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(std::collections::HashMap::new());
+    {
+        let mut guard = CLASS_KEYS_BY_ID.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(std::collections::HashMap::new());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .insert(class_id, (keys_array as usize, field_count));
     }
-    guard
-        .as_mut()
-        .unwrap()
-        .insert(class_id, (keys_array as usize, field_count));
+    // #6759 C5a: harvest this class's declared instance-field names into
+    // the process-wide name-hash set the per-key inline-guard vetting
+    // consults — and retro-check them against prototype-level descriptor
+    // keys installed BEFORE this class registered (module-init ordering
+    // must not create an unsound skip).
+    unsafe {
+        let count = field_count.min(crate::array::js_array_length(keys_array)) as usize;
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..count {
+            let v = crate::array::js_array_get(keys_array, i as u32);
+            if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
+                super::descriptor_state::note_declared_instance_field_name(b);
+            }
+        }
+    }
 }
 
 pub(crate) fn registered_class_keys_array(class_id: u32) -> Option<(*mut ArrayHeader, u32)> {

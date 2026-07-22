@@ -144,6 +144,11 @@ pub(crate) fn class_field_inline_guard_enabled() -> bool {
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.load(Ordering::Relaxed) == 0
 }
 
+#[cfg(test)]
+pub(crate) fn test_reset_class_field_inline_guard() {
+    PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(0, Ordering::Relaxed);
+}
+
 /// #5654: flip the process-wide inline gate only when the descriptor target can
 /// intercept a `this.field` access that the inline precheck cannot reject on
 /// its own. Receiver-level installs are visible to the precheck via
@@ -165,13 +170,85 @@ pub(crate) fn class_field_inline_guard_enabled() -> bool {
 ///
 /// The prototype-registry probes scan by value (O(#classes)); descriptor
 /// installs are rare and never on the hot property path, so the scan cost is
-/// acceptable. Finer granularity (flip only when the key collides with a
-/// declared field of that class hierarchy) is possible follow-up work.
-pub(crate) fn disable_class_field_inline_guard_for_target(obj: usize) {
+/// acceptable.
+///
+/// #6759 C5a — per-KEY refinement (the follow-up the paragraph above used to
+/// promise): the inline fast path only ever compiles accesses to DECLARED
+/// instance fields, so a prototype-level install whose key names no declared
+/// field of any registered class cannot affect anything the inline path
+/// handles — babel-style method installs (`defineProperty(C.prototype,
+/// "render", …)`) no longer poison the process. The vetting set holds FNV
+/// hashes of every declared field name (harvested by
+/// `remember_class_keys_array` at class registration); a collision merely
+/// disables — never skips — so it stays conservative. Module-init ordering
+/// is covered in both directions: installs that precede a class's
+/// registration are recorded in [`PROTO_DESCRIPTOR_KEY_HASHES`] and
+/// retro-checked by [`note_declared_instance_field_name`] when the class
+/// arrives.
+pub(crate) fn disable_class_field_inline_guard_for_target(obj: usize, key: &str) {
     if crate::array::object_prototype_addr_matches(obj)
         || class_registry::is_registered_class_prototype_object(obj)
         || class_registry::class_id_for_decl_prototype_object(obj).is_some()
     {
+        let hash = super::key_bytes_hash(key.as_ptr(), key.len());
+        note_proto_descriptor_key_hash(hash);
+        if declared_field_name_hash_exists(hash) {
+            disable_class_field_inline_guard();
+        }
+    }
+}
+
+/// #6759 C5a: FNV hashes of every declared instance-field name across all
+/// registered classes. Written at class registration (cold), read at
+/// prototype-level descriptor installs (rare). Never pruned — class
+/// registrations are process-lifetime.
+static DECLARED_FIELD_NAME_HASHES: std::sync::RwLock<Option<std::collections::HashSet<u64>>> =
+    std::sync::RwLock::new(None);
+
+/// #6759 C5a: FNV hashes of every key installed on a prototype-level
+/// descriptor target, so a class that registers AFTER such an install can
+/// retro-trigger the disable (see
+/// [`disable_class_field_inline_guard_for_target`]).
+static PROTO_DESCRIPTOR_KEY_HASHES: std::sync::RwLock<Option<std::collections::HashSet<u64>>> =
+    std::sync::RwLock::new(None);
+
+fn declared_field_name_hash_exists(hash: u64) -> bool {
+    DECLARED_FIELD_NAME_HASHES
+        .read()
+        .map(|g| g.as_ref().is_some_and(|s| s.contains(&hash)))
+        // Lock poisoned: be conservative (disable rather than skip).
+        .unwrap_or(true)
+}
+
+fn note_proto_descriptor_key_hash(hash: u64) {
+    if let Ok(mut guard) = PROTO_DESCRIPTOR_KEY_HASHES.write() {
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(hash);
+    } else {
+        // Lock poisoned: the retro-check can no longer see this key —
+        // take the conservative disable now.
+        disable_class_field_inline_guard();
+    }
+}
+
+/// #6759 C5a: called by `remember_class_keys_array` for each declared
+/// instance-field name of a registering class. Records the name hash and
+/// retro-checks it against prototype-level descriptor keys installed
+/// earlier (which skipped the disable because no class had declared the
+/// name yet).
+pub(crate) fn note_declared_instance_field_name(name: &[u8]) {
+    let hash = super::key_bytes_hash(name.as_ptr(), name.len());
+    if let Ok(mut guard) = DECLARED_FIELD_NAME_HASHES.write() {
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(hash);
+    }
+    let installed_earlier = PROTO_DESCRIPTOR_KEY_HASHES
+        .read()
+        .map(|g| g.as_ref().is_some_and(|s| s.contains(&hash)))
+        .unwrap_or(true);
+    if installed_earlier {
         disable_class_field_inline_guard();
     }
 }
@@ -582,7 +659,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     let st = state();
     st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard_for_target(obj);
+    disable_class_field_inline_guard_for_target(obj, &key);
     note_meta_descriptor_key(obj, &key, false);
     st.descriptors
         .property_descriptors
@@ -752,7 +829,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     let st = state();
     st.descriptors.accessors_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard_for_target(obj);
+    disable_class_field_inline_guard_for_target(obj, &key);
     note_accessor_descriptor_key(&key);
     note_meta_descriptor_key(obj, &key, true);
     st.descriptors
@@ -1014,5 +1091,84 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod c5a_tests {
+    use super::*;
+
+    /// #6759 C5a: a prototype-level descriptor whose key names no declared
+    /// instance field must NOT flip the process-wide inline-guard disable;
+    /// one whose key IS a declared field must.
+    #[test]
+    fn inline_guard_disable_is_per_declared_field_key() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        test_reset_class_field_inline_guard();
+
+        let proto = crate::object::js_object_alloc(0, 0);
+        class_registry::class_prototype_object_root_store(0x0666_0001, proto);
+        let proto_addr = proto as usize;
+
+        // Method-style install (babel output): key declared by no class.
+        set_accessor_descriptor(
+            proto_addr,
+            "c5a_render_method".to_string(),
+            AccessorDescriptor::default(),
+        );
+        assert!(
+            class_field_inline_guard_enabled(),
+            "a prototype install keyed by a non-field name must not poison \
+             the inline class-field fast path"
+        );
+
+        // Field-style install: key declared by a registered class.
+        note_declared_instance_field_name(b"c5a_field_x");
+        assert!(
+            class_field_inline_guard_enabled(),
+            "declaring the field alone (no matching install) must not disable"
+        );
+        set_property_attrs(
+            proto_addr,
+            "c5a_field_x".to_string(),
+            PropertyAttrs::new(false, true, true),
+        );
+        assert!(
+            !class_field_inline_guard_enabled(),
+            "a prototype install keyed by a DECLARED field must disable"
+        );
+
+        test_reset_class_field_inline_guard();
+    }
+
+    /// #6759 C5a ordering: an install that precedes the declaring class's
+    /// registration is retro-checked when the class arrives.
+    #[test]
+    fn inline_guard_retro_disable_on_late_class_registration() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        test_reset_class_field_inline_guard();
+
+        let proto = crate::object::js_object_alloc(0, 0);
+        class_registry::class_prototype_object_root_store(0x0666_0002, proto);
+
+        set_accessor_descriptor(
+            proto as usize,
+            "c5a_late_field".to_string(),
+            AccessorDescriptor::default(),
+        );
+        assert!(
+            class_field_inline_guard_enabled(),
+            "no class declares the key yet — install must skip the disable"
+        );
+
+        // The declaring class registers AFTER the install.
+        note_declared_instance_field_name(b"c5a_late_field");
+        assert!(
+            !class_field_inline_guard_enabled(),
+            "late class registration must retro-trigger the disable for \
+             prototype keys installed earlier"
+        );
+
+        test_reset_class_field_inline_guard();
     }
 }
