@@ -1201,13 +1201,35 @@ pub(crate) struct PackedF64LoopFact {
     pub window_validated: bool,
 }
 
+/// Element storage a masked-window fact's entry guard proved (#6750
+/// follow-up). The plain tier keeps deriving the slot address from the boxed
+/// array handle; the typed-array tiers load through the data pointer the
+/// preheader probe hoisted (`js_typed_array_masked_window_data_ptr` — stable
+/// for the whole call-free fast copy).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum MaskedWindowElem {
+    /// Plain array with raw-f64 numeric slots: `handle + 8 + idx * 8`.
+    PlainF64,
+    /// Int32Array: `load i32` at `data_ptr + idx * 4`; every element is an
+    /// exact i32 by construction.
+    TaI32 { data_ptr: String },
+    /// Uint32Array: `load i32` at `data_ptr + idx * 4`, materialized
+    /// UNSIGNED (`uitofp`) — elements may exceed `i32::MAX`, so the fact
+    /// never sets `values_i32`.
+    TaU32 { data_ptr: String },
+    /// Float64Array: `load double` at `data_ptr + idx * 8`.
+    TaF64 { data_ptr: String },
+}
+
 /// Read-only masked-index window fact for the dense packed-f64 range loop:
-/// the entry guard (`js_typed_feedback_packed_f64_range_loop_guard_dense`)
-/// proved `array_local_id` is a plain raw-f64 numeric array whose
+/// the entry guard (`js_typed_feedback_packed_f64_range_loop_guard_dense`
+/// for the plain tiers, `js_typed_feedback_masked_window_ta_kind` for the
+/// typed-array tiers) proved `array_local_id` is a numeric array whose
 /// `[min_idx, max_idx_exclusive)` slots are all in-bounds numbers (no holes).
 /// Any read whose index has a static value window inside this range (e.g.
 /// `S[x & 1023]`, `S[256 + ((x >>> 16) & 0xff)]` — see
-/// `collectors::static_index_window`) lowers to a bare raw-f64 element load.
+/// `collectors::static_index_window`) lowers to a bare element load whose
+/// width/signedness follows `elem`.
 #[derive(Debug, Clone)]
 pub(crate) struct MaskedWindowArrayFact {
     pub array_local_id: u32,
@@ -1215,10 +1237,13 @@ pub(crate) struct MaskedWindowArrayFact {
     pub guard_id: String,
     pub min_idx: i64,
     pub max_idx_exclusive: i64,
-    /// True in the i32-tier fast copy: the guard additionally proved every
-    /// window slot holds an i32-representable integer, so loads may
-    /// materialize elements as `i32` with a bare exact `fptosi`.
+    /// True in the i32-tier fast copies: the guard proved every window slot
+    /// holds an i32-representable integer (plain dense-i32 tier), or the
+    /// element type is exactly i32 (Int32Array tier), so loads may
+    /// materialize elements as native `i32`.
     pub values_i32: bool,
+    /// Storage layout the guard proved — selects the inline load shape.
+    pub elem: MaskedWindowElem,
 }
 
 /// #5093: one fact per (receiver, versioned loop). See

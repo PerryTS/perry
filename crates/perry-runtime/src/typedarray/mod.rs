@@ -398,6 +398,25 @@ pub(crate) fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
     }
 }
 
+/// #6750 follow-up: preheader data-pointer hoist for the masked-window
+/// typed-array loop tiers. Returns element 0's address for a registered typed
+/// array (owning inline storage, ArrayBuffer view, or native-arena view), or
+/// 0 when the receiver is not a registered typed array. Sound to cache for a
+/// guarded fast-loop copy: the copy's body is call-free (no allocation → no
+/// GC), the typed array's own address is stable (raw alloc or tenured
+/// old-gen — see `PERRY_TA_KIND_CACHE`), and view backings live for the
+/// thread's lifetime (`typedarray_view::TYPED_ARRAY_VIEW_META`), so nothing
+/// can invalidate the pointer between the loop-entry probe and the last
+/// iteration.
+#[no_mangle]
+pub extern "C" fn js_typed_array_masked_window_data_ptr(receiver: f64) -> i64 {
+    let addr = strip_nanbox(receiver.to_bits());
+    if addr < 0x1000 || lookup_typed_array_kind(addr).is_none() {
+        return 0;
+    }
+    data_ptr(addr as *const TypedArrayHeader) as i64
+}
+
 #[inline]
 pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
     unsafe {

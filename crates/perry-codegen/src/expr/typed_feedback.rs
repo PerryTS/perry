@@ -86,6 +86,12 @@ impl TypedFeedbackContract {
         Self::new("packed_f64_array_loop_guard", "generic_jsvalue_loop")
     }
 
+    // #6750 follow-up: masked-window typed-array tier probe for untyped
+    // loop-invariant array bindings.
+    pub(crate) const fn masked_window_ta_probe() -> Self {
+        Self::new("masked_window_ta_kind_probe", "generic_jsvalue_loop")
+    }
+
     pub(crate) const fn packed_i32_array_loop() -> Self {
         Self::new("packed_i32_array_loop_guard", "generic_jsvalue_loop")
     }

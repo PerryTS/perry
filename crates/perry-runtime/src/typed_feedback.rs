@@ -1382,6 +1382,80 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard_dense_i32(
     )
 }
 
+/// Kind codes returned by [`js_typed_feedback_masked_window_ta_kind`]. The
+/// codegen tier dispatch branches on these exact values — keep in sync with
+/// the masked-window TA tiers in `perry-codegen/src/stmt/loops.rs`.
+pub const MASKED_WINDOW_TA_KIND_NONE: i32 = 0;
+pub const MASKED_WINDOW_TA_KIND_I32: i32 = 1;
+pub const MASKED_WINDOW_TA_KIND_U32: i32 = 2;
+pub const MASKED_WINDOW_TA_KIND_F64: i32 = 3;
+
+/// Masked-window typed-array probe (#6750 follow-up): classify a receiver
+/// whose static type the compiler could not prove (an `any` function
+/// parameter — the bcryptjs S-box shape) as a typed array whose whole static
+/// index window `[min_idx, max_idx_exclusive)` is in bounds. O(1): a registry
+/// lookup plus a length compare — no window scan, so re-entering a short hot
+/// loop (one probe per accessed array per entry) stays cheap.
+///
+/// A view over a detached ArrayBuffer has `length == 0`
+/// (`zero_views_of_detached_backing`), so the window check also rejects
+/// detached backings. Kinds outside {Int32, Uint32, Float64} return NONE and
+/// fall through to the plain-array guard tiers / the slow loop.
+fn masked_window_ta_kind(addr: usize, min_idx: i32, max_idx_exclusive: i32) -> i32 {
+    if min_idx < 0 {
+        return MASKED_WINDOW_TA_KIND_NONE;
+    }
+    let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) else {
+        return MASKED_WINDOW_TA_KIND_NONE;
+    };
+    let code = match kind {
+        crate::typedarray::KIND_INT32 => MASKED_WINDOW_TA_KIND_I32,
+        crate::typedarray::KIND_UINT32 => MASKED_WINDOW_TA_KIND_U32,
+        crate::typedarray::KIND_FLOAT64 => MASKED_WINDOW_TA_KIND_F64,
+        _ => return MASKED_WINDOW_TA_KIND_NONE,
+    };
+    let len = unsafe { (*(addr as *const crate::typedarray::TypedArrayHeader)).length };
+    if i64::from(max_idx_exclusive) > i64::from(len) {
+        return MASKED_WINDOW_TA_KIND_NONE;
+    }
+    code
+}
+
+/// FFI wrapper for [`masked_window_ta_kind`] — the typed-array tier probe of
+/// the read-only masked-index range loop. Returns the `MASKED_WINDOW_TA_KIND_*`
+/// code; the codegen requires every accessed array to probe to the same
+/// non-NONE code before entering the matching typed-array fast copy.
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_masked_window_ta_kind(
+    site_id: u64,
+    receiver: f64,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> i32 {
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    let code = masked_window_ta_kind(raw_addr, min_idx, max_idx_exclusive);
+    if typed_feedback_enabled() {
+        let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
+        let observation = Observation {
+            source: ObservationSource::Array,
+            object_addr: 0,
+            shape_addr: 0,
+            key_hash: 0,
+            class_id,
+            heap_type,
+            aux,
+            value_tag: element_kind,
+        };
+        guard_observe(
+            site_id,
+            TypedFeedbackSiteKind::ArrayElement,
+            observation,
+            code != MASKED_WINDOW_TA_KIND_NONE,
+        );
+    }
+    code
+}
+
 fn packed_i32_array_loop_guard(arr: *const ArrayHeader) -> bool {
     if !packed_f64_array_loop_guard(arr) {
         return false;

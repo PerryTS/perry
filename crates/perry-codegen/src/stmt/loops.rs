@@ -615,7 +615,16 @@ fn match_packed_f64_range_loop(
             {
                 return None;
             }
-        } else if !local_is_number_array(ctx, arr_id) {
+        } else if !local_is_number_array(ctx, arr_id)
+            && !(dense && local_is_untyped_candidate(ctx, arr_id))
+        {
+            // #6750 follow-up: read-only DENSE accesses also admit bindings
+            // with no usable static type (`any` function parameters — the
+            // bcryptjs S-box shape). The entry guards/probes re-validate the
+            // ACTUAL runtime value, so a wrong hint costs one failed guard →
+            // slow loop, never correctness. Known non-array static types stay
+            // excluded so ordinary object/string index loops don't grow dead
+            // guard chains.
             return None;
         }
     }
@@ -1080,9 +1089,125 @@ fn push_packed_f64_range_facts(
                     min_idx: lo,
                     max_idx_exclusive: hi + 1,
                     values_i32,
+                    elem: crate::expr::MaskedWindowElem::PlainF64,
                 });
         }
     }
+}
+
+/// #6750 follow-up: one `js_typed_feedback_masked_window_ta_kind` probe call
+/// per accessed array (O(1) each: registry lookup + length compare). Returns
+/// the first array's kind code plus an i1 "every array probed to the same
+/// code" (None for a single array). The caller branches into the matching
+/// typed-array fast copy only when all arrays agree on a non-NONE code —
+/// heterogeneous mixes fall through to the plain-array guard tiers.
+fn emit_masked_window_ta_probes(
+    ctx: &mut FnCtx<'_>,
+    matched: &PackedF64RangeLoop,
+) -> Result<(String, Option<String>)> {
+    let mut first_kind: Option<String> = None;
+    let mut all_same: Option<String> = None;
+    for access in &matched.arrays {
+        let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(access.array_id))?;
+        let feedback_site_id = emit_typed_feedback_register_site(
+            ctx,
+            TypedFeedbackKind::ArrayElement,
+            "array[masked_window_ta_probe]",
+            TypedFeedbackContract::masked_window_ta_probe(),
+        );
+        let (lo, hi) = access
+            .stat
+            .expect("TA tier probes require static-window accesses");
+        let min_idx = lo.to_string();
+        let max_idx = (hi + 1).to_string();
+        let kind = ctx.block().call(
+            I32,
+            "js_typed_feedback_masked_window_ta_kind",
+            &[
+                (I64, &feedback_site_id),
+                (DOUBLE, &arr_box),
+                (I32, &min_idx),
+                (I32, &max_idx),
+            ],
+        );
+        match &first_kind {
+            None => first_kind = Some(kind),
+            Some(first) => {
+                let first = first.clone();
+                let same = ctx.block().icmp_eq(I32, &kind, &first);
+                all_same = Some(match all_same.take() {
+                    None => same,
+                    Some(prev) => ctx.block().and(I1, &prev, &same),
+                });
+            }
+        }
+    }
+    Ok((
+        first_kind.expect("range loop matcher requires >= 1 array"),
+        all_same,
+    ))
+}
+
+/// Lower one masked-window typed-array fast copy: hoist each array's element-0
+/// data pointer (`js_typed_array_masked_window_data_ptr` — stable for the
+/// call-free copy), push per-array facts carrying the tier's element kind, and
+/// emit the loop with the shared i32 bound.
+#[allow(clippy::too_many_arguments)]
+fn lower_masked_window_ta_tier(
+    ctx: &mut FnCtx<'_>,
+    matched: &PackedF64RangeLoop,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    guard_id: &str,
+    loop_label: &str,
+    values_i32: bool,
+    make_elem: fn(String) -> crate::expr::MaskedWindowElem,
+    bound_i32: &str,
+    merge_label: &str,
+) -> Result<()> {
+    let mut hoisted: Vec<(u32, crate::expr::MaskedWindowElem)> = Vec::new();
+    for access in &matched.arrays {
+        let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(access.array_id))?;
+        let data_ptr = ctx.block().call(
+            I64,
+            "js_typed_array_masked_window_data_ptr",
+            &[(DOUBLE, &arr_box)],
+        );
+        hoisted.push((access.array_id, make_elem(data_ptr)));
+    }
+    let scope_id = ctx.next_loop_proof_scope_id();
+    for (access, (arr_id, elem)) in matched.arrays.iter().zip(hoisted) {
+        let (lo, hi) = access
+            .stat
+            .expect("TA tiers require static-window accesses");
+        ctx.masked_window_array_facts
+            .push(crate::expr::MaskedWindowArrayFact {
+                array_local_id: arr_id,
+                scope_id,
+                guard_id: guard_id.to_string(),
+                min_idx: lo,
+                max_idx_exclusive: hi + 1,
+                values_i32,
+                elem,
+            });
+    }
+    lower_for_after_init_with_i32_bound(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        loop_label,
+        Some((matched.counter_id, bound_i32.to_string())),
+    )?;
+    ctx.masked_window_array_facts
+        .retain(|fact| fact.scope_id != scope_id);
+    if !ctx.block().is_terminated() {
+        ctx.block().br(merge_label);
+    }
+    Ok(())
 }
 
 fn lower_packed_f64_range_versioned_for(
@@ -1200,6 +1325,110 @@ fn lower_packed_f64_range_versioned_for(
     };
 
     if matched.dense {
+        // #6750 follow-up: typed-array tiers ahead of the plain-array guard
+        // chain, for loops whose accessed bindings include at least one with
+        // no usable static type (an `any` parameter — the bcryptjs shape; a
+        // declared `number[]` loop keeps exactly the previous tier chain and
+        // never pays a probe). One O(1) probe per array classifies the actual
+        // runtime receiver; when every array agrees on Int32Array / Uint32Array
+        // / Float64Array the matching fast copy loads elements inline through
+        // the hoisted data pointer (width-correct, no per-access call). Any
+        // disagreement or non-TA receiver falls through to the plain tiers,
+        // whose runtime guards reject typed arrays. Counter-offset accesses
+        // keep assuming plain raw-f64 storage, so the TA tiers require every
+        // access to carry a static window.
+        let ta_tiers_apply = matched
+            .arrays
+            .iter()
+            .all(|access| access.counter.is_none() && access.stat.is_some())
+            && matched
+                .arrays
+                .iter()
+                .any(|access| !local_is_number_array(ctx, access.array_id));
+        if ta_tiers_apply {
+            let ta_i32_pre_idx = ctx.new_block("packed_f64_range.loop.ta_i32.preheader");
+            let ta_u32_pre_idx = ctx.new_block("packed_f64_range.loop.ta_u32.preheader");
+            let ta_f64_pre_idx = ctx.new_block("packed_f64_range.loop.ta_f64.preheader");
+            let ta_try_u32_idx = ctx.new_block("packed_f64_range.ta.try_u32");
+            let ta_try_f64_idx = ctx.new_block("packed_f64_range.ta.try_f64");
+            let ta_plain_idx = ctx.new_block("packed_f64_range.ta.plain");
+            let ta_i32_pre_label = ctx.block_label(ta_i32_pre_idx);
+            let ta_u32_pre_label = ctx.block_label(ta_u32_pre_idx);
+            let ta_f64_pre_label = ctx.block_label(ta_f64_pre_idx);
+            let ta_try_u32_label = ctx.block_label(ta_try_u32_idx);
+            let ta_try_f64_label = ctx.block_label(ta_try_f64_idx);
+            let ta_plain_label = ctx.block_label(ta_plain_idx);
+
+            let (kind0, all_same) = emit_masked_window_ta_probes(ctx, &matched)?;
+            // Kind codes: keep in sync with MASKED_WINDOW_TA_KIND_* in
+            // perry-runtime/src/typed_feedback.rs.
+            let tier_select = |ctx: &mut FnCtx<'_>, code: &str| {
+                let is_code = ctx.block().icmp_eq(I32, &kind0, code);
+                match &all_same {
+                    Some(same) => ctx.block().and(I1, same, &is_code),
+                    None => is_code,
+                }
+            };
+            let is_i32 = tier_select(ctx, "1");
+            ctx.block()
+                .cond_br(&is_i32, &ta_i32_pre_label, &ta_try_u32_label);
+            ctx.current_block = ta_try_u32_idx;
+            let is_u32 = tier_select(ctx, "2");
+            ctx.block()
+                .cond_br(&is_u32, &ta_u32_pre_label, &ta_try_f64_label);
+            ctx.current_block = ta_try_f64_idx;
+            let is_f64 = tier_select(ctx, "3");
+            ctx.block()
+                .cond_br(&is_f64, &ta_f64_pre_label, &ta_plain_label);
+
+            ctx.current_block = ta_i32_pre_idx;
+            lower_masked_window_ta_tier(
+                ctx,
+                &matched,
+                init,
+                condition,
+                update,
+                body,
+                "masked_window_ta_i32",
+                "for.packed_f64_range_fast_ta_i32",
+                true,
+                |data_ptr| crate::expr::MaskedWindowElem::TaI32 { data_ptr },
+                &bound_i32,
+                &merge_label,
+            )?;
+            ctx.current_block = ta_u32_pre_idx;
+            lower_masked_window_ta_tier(
+                ctx,
+                &matched,
+                init,
+                condition,
+                update,
+                body,
+                "masked_window_ta_u32",
+                "for.packed_f64_range_fast_ta_u32",
+                false,
+                |data_ptr| crate::expr::MaskedWindowElem::TaU32 { data_ptr },
+                &bound_i32,
+                &merge_label,
+            )?;
+            ctx.current_block = ta_f64_pre_idx;
+            lower_masked_window_ta_tier(
+                ctx,
+                &matched,
+                init,
+                condition,
+                update,
+                body,
+                "masked_window_ta_f64",
+                "for.packed_f64_range_fast_ta_f64",
+                false,
+                |data_ptr| crate::expr::MaskedWindowElem::TaF64 { data_ptr },
+                &bound_i32,
+                &merge_label,
+            )?;
+            ctx.current_block = ta_plain_idx;
+        }
+
         // Read-only dense mode: two guard tiers. The i32 tier additionally
         // proves every window value is an i32-representable integer, so its
         // fast copy materializes loads with a bare exact `fptosi` (bit-mixing
@@ -2158,6 +2387,22 @@ fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     ) || matches!(
         local_array_element_type(ctx, local_id),
         Some(perry_types::Type::Named(name)) if name == "PerryU32"
+    )
+}
+
+/// #6750 follow-up: a binding whose static type gives the compiler nothing to
+/// key on — an `any`/`unknown` function parameter (the bcryptjs S-box shape)
+/// or a local with no recorded type at all. These are candidates for the
+/// runtime-probed dense masked-window tiers: the loop-entry probes/guards
+/// classify the ACTUAL runtime value (typed array kind, plain raw-f64
+/// packedness, window bounds), so the missing static type only means we must
+/// version the loop instead of proving anything at compile time. Known
+/// non-array static types (string, object, declared non-number arrays) stay
+/// ineligible — their guard chains would be dead weight.
+fn local_is_untyped_candidate(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        None | Some(perry_types::Type::Any | perry_types::Type::Unknown)
     )
 }
 
