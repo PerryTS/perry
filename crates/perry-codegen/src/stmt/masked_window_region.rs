@@ -290,6 +290,16 @@ pub(super) fn try_match_masked_window_region(
         {
             continue;
         }
+        // Already covered by an active fact (this run sits inside a dense
+        // range-loop fast copy) — its reads inline through that fact; a
+        // second, nested versioning would only add per-iteration probes.
+        if ctx
+            .masked_window_array_facts
+            .iter()
+            .any(|fact| fact.array_local_id == access.array_id)
+        {
+            continue;
+        }
         if !local_is_number_array(ctx, access.array_id)
             && !local_is_untyped_candidate(ctx, access.array_id)
         {
