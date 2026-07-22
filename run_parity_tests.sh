@@ -751,8 +751,20 @@ for test_file in "${TEST_FILES[@]}"; do
     # up on the 2>&1-captured stream for any test that exercises a flagged
     # API (dns/dgram loopback, v8 heap snapshot, …) and diff against Node.
     perry_tmp=$(mktemp)
-    run_with_timeout 10 env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
+    # Cap the test binary's fork budget at current-user-procs + 50: legit
+    # multi-process tests (cluster/child_process) fit easily, while a
+    # fork-bombing test (cluster re-exec loop, 2026-07-22) stalls at ~50
+    # orphans instead of saturating the user process limit — which would
+    # starve the harness itself out of fork() and kill the whole run.
+    run_with_timeout 10 /bin/sh -c '
+        ulimit -u $(( $(ps -u "$(id -u)" -o pid= | wc -l) + 50 )) 2>/dev/null
+        exec "$@"' _ env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
+    # Reap orphaned children of the test binary (cluster tests fork workers
+    # that survive the timeout kill of the direct child and can fork-bomb the
+    # machine — 2026-07-22). Scoped to this run's tmp dir, so concurrent
+    # suite runs are unaffected.
+    pkill -9 -f "$PARITY_TMP/" 2>/dev/null
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"
 
