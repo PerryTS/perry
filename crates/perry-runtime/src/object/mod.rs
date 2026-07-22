@@ -169,10 +169,10 @@ pub(crate) use descriptor_state::{
     disable_class_field_inline_guard, get_accessor_descriptor, get_property_attrs,
     json_object_getter_value, mark_all_keys, object_has_descriptors,
     object_proto_may_intercept_key, owner_may_have_descriptor_entries,
-    plain_data_write_may_intercept,
-    prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
-    set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
-    AccessorDescriptor, DescriptorTables, PropertyAttrs,
+    plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
+    reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
+    set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, DescriptorTables,
+    PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub use this_binding::{
