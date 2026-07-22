@@ -114,6 +114,23 @@ jobs:
       - name: File size limit
         run: ./scripts/check_file_size.sh
 
+      # Changeset gate: every PR touching crates/ must ship its own
+      # changelog fragment (changelog.d/<PR>-<slug>.md, see the README
+      # there). Fragments are folded into GitHub Release notes at tag
+      # time (scripts/cut_release_notes.sh); CHANGELOG.md is frozen.
+      # Escape hatch: the `skip-changelog` label (re-run the job after
+      # applying it).
+      - name: Changeset fragment gate
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate -q '.[].filename')
+          echo "$files" | grep -q '^crates/' || { echo "No crates/ changes — gate not applicable."; exit 0; }
+          echo "$files" | grep -q '^changelog\.d/' && exit 0
+          echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
+          exit 1
+
       # GC write-barrier store-site inventory: every raw heap-slot store in
       # perry-codegen / perry-runtime / perry-stdlib must be barriered or
       # carry a justified GC_STORE_AUDIT(...) marker (or a justified entry

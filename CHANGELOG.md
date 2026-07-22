@@ -1,3 +1,12 @@
+# Changelog — FROZEN at v0.5.1264
+
+This file is a historical archive (v0.5.0 – v0.5.1264) and no longer grows.
+New changes land as per-PR fragments in `changelog.d/` (see its README) and
+are folded into the GitHub Release notes at each tag via
+`scripts/cut_release_notes.sh`.
+
+---
+
 ## v0.5.1264 — fix(url): route URLSearchParams subclass instances to their native backing (#6738)
 
 `class X extends URLSearchParams` — most importantly Next.js's `ReadonlyURLSearchParams`

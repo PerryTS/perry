@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**NOTE**: Keep this file concise. Detailed changelogs live in CHANGELOG.md.
+**NOTE**: Keep this file concise. Detailed changelogs live as `changelog.d/` fragments (folded into GitHub Release notes at each tag); `CHANGELOG.md` is a frozen archive (≤ v0.5.1264).
 
 ## Project Overview
 
@@ -40,14 +40,14 @@ Two workflows are deliberately exempt and say so inline: `node-core-subset.yml` 
 **For every change that lands on `main`** (whether via PR or admin bypass):
 
 1. **Bump version**: Increment patch in `[workspace.package].version` in `Cargo.toml` and the `**Current Version:**` line above. That is the ONLY metadata edit CLAUDE.md needs.
-2. **Add changelog entry**: Prepend a new `## v0.5.x — <one-line summary>` block at the top of `CHANGELOG.md`. Detail can go below in the same block — long-form root-cause writeups, file paths, validation notes, etc. all belong here, NOT in CLAUDE.md.
-3. **Commit changes**: Include code, `Cargo.toml`/`Cargo.lock`, `CLAUDE.md` (version bump only), and `CHANGELOG.md` updates together.
+2. **Add a changeset**: create `changelog.d/<PR>-<slug>.md` with the entry body (no version header — see `changelog.d/README.md`). Long-form root-cause writeups, file paths, validation notes all belong in the fragment, NOT in CLAUDE.md. **Never append to `CHANGELOG.md`** — it is frozen at v0.5.1264. Fragments are folded into the GitHub Release notes at tag time (`scripts/cut_release_notes.sh`) and deleted.
+3. **Commit changes**: Include code, `Cargo.toml`/`Cargo.lock`, `CLAUDE.md` (version bump only), and the `changelog.d/` fragment together.
 
-**Do not write changelog entries into CLAUDE.md.** This file is for orientation (architecture, common pitfalls, build commands). Per-version history lives in `CHANGELOG.md` so CLAUDE.md stays small and stable across context loads.
+**Do not write changelog entries into CLAUDE.md.** This file is for orientation (architecture, common pitfalls, build commands). Per-change history lives in `changelog.d/` → GitHub Releases so CLAUDE.md stays small and stable across context loads.
 
 ### External contributor PRs
 
-PRs from outside contributors should **not** touch `[workspace.package] version` in `Cargo.toml`, the `**Current Version:**` line in `CLAUDE.md`, or `CHANGELOG.md`. The maintainer bumps the version and writes the changelog entry at merge time — usually by rebasing the PR branch and amending. This avoids the patch-version collisions that happen when Perry's `main` ships several commits while a PR is in review (each on-main commit bumps the version; a PR that bumped to the same patch on day 1 is already behind by merge day). Contributors just write code; let the maintainer fold in the metadata last.
+PRs from outside contributors should **not** touch `[workspace.package] version` in `Cargo.toml` or the `**Current Version:**` line in `CLAUDE.md`. The maintainer bumps the version at merge time — usually by rebasing the PR branch and amending. This avoids the patch-version collisions that happen when Perry's `main` ships several commits while a PR is in review (each on-main commit bumps the version; a PR that bumped to the same patch on day 1 is already behind by merge day). Contributors **do** write their own `changelog.d/<PR>-<slug>.md` fragment — the filename is PR-keyed, so in-flight PRs never collide.
 
 ## Build Commands
 
@@ -198,6 +198,6 @@ Build outputs are invisible to `git status`, so a clean tree tells you nothing a
 
 ## Recent Changes
 
-Per-version entries live in CHANGELOG.md.
+Per-change entries live as `changelog.d/` fragments until the next tag, then in that tag's GitHub Release notes (historical archive ≤ v0.5.1264 in the frozen `CHANGELOG.md`).
 
-**Do not add changelog entries to this file.** Bump only the `**Current Version:**` line above when you ship a release; everything else goes in CHANGELOG.md as a new `## v0.5.x — ...` block at the top.
+**Do not add changelog entries to this file.** Bump only the `**Current Version:**` line above when you ship a change; the entry itself goes in `changelog.d/<PR>-<slug>.md`.
