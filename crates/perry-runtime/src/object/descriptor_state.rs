@@ -338,6 +338,12 @@ pub(crate) fn note_descriptor_target(obj: usize) {
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
+    // #6759 Phase C2: the meta-record summary proves most misses without
+    // the `String` build + table probe (and shields a fresh object at a
+    // recycled address from a dead owner's not-yet-pruned entries).
+    if !may_have_descriptor_entry(obj, key, false) {
+        return None;
+    }
     state()
         .descriptors
         .property_descriptors
@@ -365,6 +371,129 @@ pub(crate) fn object_has_descriptors(obj: usize) -> bool {
         }
     }
     false
+}
+
+/// #6759 Phase C2: the summary bit for `key` in the owner's meta-record
+/// Bloom words (`ObjectMeta::{attr,accessor}_key_bits`) — same FNV key hash
+/// the Phase C1 shape records use. Install and probe must hash identical
+/// byte sequences, so both forms go through this one function.
+#[inline]
+fn descriptor_key_bit_bytes(key: &[u8]) -> u64 {
+    1u64 << (super::key_bytes_hash(key.as_ptr(), key.len()) & 63)
+}
+
+#[inline]
+fn descriptor_key_bit(key: &str) -> u64 {
+    descriptor_key_bit_bytes(key.as_bytes())
+}
+
+/// #6759 Phase C2: record `key` in the owner's per-object meta summary so
+/// hot-path probes for OTHER keys can skip the descriptor tables. No-op for
+/// owners that cannot carry a meta record (handle-band ids, typed arrays,
+/// RegExp, non-heap addresses) — probes for those stay conservative.
+///
+/// Invariant this maintains (relied on by [`may_have_descriptor_entry`]):
+/// every insert into `property_descriptors` / `accessor_descriptors` whose
+/// owner is meta-capable sets the key's bit first, so for such owners a
+/// clear bit — or a still-null meta record — proves the tables hold no
+/// entry for that key. The bits travel with the object (the meta record is
+/// GC-traced off the header and moves with its owner, exactly when the
+/// table entries are rekeyed by `scan_descriptor_roots_mut`), and a fresh
+/// object at a recycled address starts meta-null, so stale entries a dead
+/// owner left behind can no longer be misread as the new tenant's.
+fn note_meta_descriptor_key(owner: usize, key: &str, accessor: bool) {
+    unsafe {
+        if let Some(obj) = super::prototype_chain::meta_capable_object(owner) {
+            // No-move window: `object_meta_ensure` allocates, and a
+            // triggered collection could MOVE `owner` — installers
+            // (freeze/seal loops, defineProperty) hold raw owner pointers
+            // across repeated installs.
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            let meta = super::object_meta_ensure(obj);
+            let bit = descriptor_key_bit(key);
+            if accessor {
+                (*meta).accessor_key_bits |= bit;
+            } else {
+                (*meta).attr_key_bits |= bit;
+            }
+        }
+    }
+}
+
+/// #6759 Phase C2 per-key fast-path verdict: can the string-keyed
+/// descriptor tables hold an entry `(owner, key)`? `false` is
+/// authoritative (the probe is skipped); `true` means "probe the table"
+/// (a genuine entry, a Bloom collision, or a non-meta-capable owner).
+#[inline]
+pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
+    unsafe {
+        match super::prototype_chain::meta_capable_object(owner) {
+            Some(obj) => {
+                let meta = (*obj).meta;
+                if meta.is_null() {
+                    return false;
+                }
+                let word = if accessor {
+                    (*meta).accessor_key_bits
+                } else {
+                    (*meta).attr_key_bits
+                };
+                word & descriptor_key_bit(key) != 0
+            }
+            None => true,
+        }
+    }
+}
+
+/// #6759 Phase C2: can an OWN string-keyed descriptor (attr or accessor)
+/// cover the NaN-boxed key `key` on `addr`? Conservative `true` for
+/// non-string keys and non-meta-capable owners. Callers pair this with
+/// `object_has_descriptors` for the per-key refinement of that flag.
+fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(kb) = crate::string::js_string_key_bytes(
+        crate::value::JSValue::from_bits(key.to_bits()),
+        &mut sso,
+    ) else {
+        return true;
+    };
+    unsafe {
+        match super::prototype_chain::meta_capable_object(addr) {
+            Some(obj) => {
+                let meta = (*obj).meta;
+                if meta.is_null() {
+                    return false;
+                }
+                let bit = descriptor_key_bit_bytes(kb);
+                ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0
+            }
+            None => true,
+        }
+    }
+}
+
+/// #6759 Phase C2 owner-level verdict: can the tables hold ANY entry owned
+/// by `owner`? Gates the O(table-size) owner scans (`Object.keys` fast
+/// path, `accessor_descriptor_keys_for_obj`). Same trust model as the
+/// per-key form.
+#[inline]
+pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) -> bool {
+    unsafe {
+        match super::prototype_chain::meta_capable_object(owner) {
+            Some(obj) => {
+                let meta = (*obj).meta;
+                if meta.is_null() {
+                    return false;
+                }
+                if accessor {
+                    (*meta).accessor_key_bits != 0
+                } else {
+                    (*meta).attr_key_bits != 0
+                }
+            }
+            None => true,
+        }
+    }
 }
 
 /// #6084 (item 6): can anything intercept a plain-data write of `key` to the
@@ -407,8 +536,15 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
     // A descriptor exists SOMEWHERE. Vet this receiver and its prototype chain
     // instead of latching the whole process onto the slow path.
 
-    // Own accessor / non-writable descriptor on this exact object.
-    if object_has_descriptors(addr) {
+    // Own accessor / non-writable descriptor on this exact object. #6759
+    // Phase C2: the flag is object-level; the meta summary refines it
+    // per-KEY, so an object with a descriptor on one key (webpack's
+    // `defineProperty(exports, "__esModule", …)`) keeps the fast path for
+    // writes to its other keys. A clear pair of bits proves no own
+    // string-keyed entry covers THIS key (an own symbol-keyed descriptor
+    // cannot intercept a string-keyed write); prototype-level interception
+    // is still vetted below.
+    if object_has_descriptors(addr) && own_descriptor_may_cover_key(addr, key) {
         return true;
     }
 
@@ -444,6 +580,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_class_field_inline_guard_for_target(obj);
+    note_meta_descriptor_key(obj, &key, false);
     st.descriptors
         .property_descriptors
         .borrow_mut()
@@ -463,6 +600,10 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
 
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
+    // #6759 Phase C2: see `get_property_attrs`.
+    if !may_have_descriptor_entry(obj, key, true) {
+        return None;
+    }
     state()
         .descriptors
         .accessor_descriptors
@@ -472,6 +613,11 @@ pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorD
 }
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
+    // #6759 Phase C2: skip the O(table-size) scan when the owner's meta
+    // summary proves it owns no accessor entries.
+    if !owner_may_have_descriptor_entries(obj, true) {
+        return Vec::new();
+    }
     let mut keys = state()
         .descriptors
         .accessor_descriptors
@@ -605,6 +751,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_class_field_inline_guard_for_target(obj);
     note_accessor_descriptor_key(&key);
+    note_meta_descriptor_key(obj, &key, true);
     st.descriptors
         .accessor_descriptors
         .borrow_mut()
@@ -644,6 +791,11 @@ pub(crate) fn set_builtin_accessor_descriptor(
 ) {
     super::prop_plan::prop_plan_epoch_bump();
     note_accessor_descriptor_key(&key);
+    // #6759 Phase C2: the meta summary must over-approximate the tables
+    // even for gate-neutral builtin installs — the (unconditionally
+    // consulted) reflection reads now trust a clear bit.
+    note_meta_descriptor_key(obj, &key, true);
+    note_meta_descriptor_key(obj, &key, false);
     let st = state();
     st.descriptors
         .accessor_descriptors
@@ -673,6 +825,8 @@ pub(crate) fn set_builtin_accessor_descriptor(
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
+    // #6759 Phase C2: see `set_builtin_accessor_descriptor`.
+    note_meta_descriptor_key(obj, &key, false);
     state()
         .descriptors
         .property_descriptors

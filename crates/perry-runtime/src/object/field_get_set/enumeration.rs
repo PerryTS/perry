@@ -986,12 +986,17 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // the wrong slot's value. The slow path below already builds a
         // fresh array; the fast path now mirrors it, just without the
         // per-key descriptor check.
-        let has_descriptors = crate::state::state()
-            .descriptors
-            .property_descriptors
-            .borrow()
-            .keys()
-            .any(|(ptr, _)| *ptr == obj as usize);
+        // #6759 Phase C2: the owner's meta summary answers "no descriptor
+        // entries at all" in two loads; the O(table-size) owner scan runs
+        // only for owners that may actually hold entries (or can't carry a
+        // meta record — the conservative arm).
+        let has_descriptors = super::super::owner_may_have_descriptor_entries(obj as usize, false)
+            && crate::state::state()
+                .descriptors
+                .property_descriptors
+                .borrow()
+                .keys()
+                .any(|(ptr, _)| *ptr == obj as usize);
         let len = crate::array::js_array_length(keys) as usize;
         // #2438: enumerate in ECMA-262 OrdinaryOwnPropertyKeys order —
         // array-index keys first (ascending numeric), then string keys in

@@ -168,7 +168,8 @@ pub(crate) use descriptor_state::{
     clear_property_attrs, constructor_accessor_ever_installed, descriptors_in_use,
     disable_class_field_inline_guard, get_accessor_descriptor, get_property_attrs,
     json_object_getter_value, mark_all_keys, object_has_descriptors,
-    object_proto_may_intercept_key, plain_data_write_may_intercept,
+    object_proto_may_intercept_key, owner_may_have_descriptor_entries,
+    plain_data_write_may_intercept,
     prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
     set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
     AccessorDescriptor, DescriptorTables, PropertyAttrs,
@@ -1571,9 +1572,9 @@ pub struct ObjectHeader {
 /// garbage; every `meta` access must first establish a genuine shaped
 /// object (`object_meta_slot_addr` centralizes that check).
 ///
-/// Phase B lands incrementally: today the record holds only the custom
-/// `[[Prototype]]`; the per-object descriptor/accessor tables and the
-/// exotic-kind tag migrate here next (#6759).
+/// Phase B lands incrementally: today the record holds the custom
+/// `[[Prototype]]` plus the Phase C2 per-key descriptor summaries; the
+/// exotic-kind tag migrates here next (#6759).
 #[repr(C)]
 pub struct ObjectMeta {
     /// Custom `[[Prototype]]` recorded by `Object.setPrototypeOf` / object
@@ -1581,6 +1582,19 @@ pub struct ObjectMeta {
     /// `crate::value::TAG_NULL` for an explicit null prototype, or 0 when
     /// unset (fall back to default prototype resolution).
     pub prototype: u64,
+    /// #6759 Phase C2: Bloom summary of the string keys with a customized
+    /// property descriptor (non-default writable/enumerable/configurable)
+    /// installed on THIS object — bit `key_bytes_hash(key) & 63` per key.
+    /// Monotonic (descriptor removal never clears a bit — another key may
+    /// share it; a spurious bit just costs one table probe). A clear bit is
+    /// authoritative: no `property_descriptors` entry `(owner, key)` can
+    /// exist for a key whose bit is clear, so the hot paths skip the
+    /// side-table probe (and its per-call `String` build) entirely. POD —
+    /// the GC trace arm visits only `prototype`.
+    pub attr_key_bits: u64,
+    /// Same summary for accessor descriptors (`get`/`set` installs) — the
+    /// `accessor_descriptors` table twin of `attr_key_bits`.
+    pub accessor_key_bits: u64,
 }
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
@@ -1609,6 +1623,8 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
         return (*obj).meta;
     }
     (*meta).prototype = 0;
+    (*meta).attr_key_bits = 0;
+    (*meta).accessor_key_bits = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;

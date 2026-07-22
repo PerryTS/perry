@@ -60,7 +60,7 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 /// layout — returns `None` and stays on the residual registry. The
 /// classification is a pure function of the allocation, so an owner is
 /// always on exactly one of the two storages.
-unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
+pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
     if obj_ptr < crate::gc::GC_HEADER_SIZE + 0x1000
         || !crate::value::addr_class::is_above_handle_band(obj_ptr)
         || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
