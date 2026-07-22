@@ -801,10 +801,7 @@ fn test_shape_record_migrates_on_owned_grow() {
         .expect("seeded entry must have an id");
     assert!(id != 0, "shape ids are 1-based");
 
-    crate::object::shapes::shape_keys_grown(
-        old_addr,
-        new_addr as *const crate::array::ArrayHeader,
-    );
+    crate::object::shapes::shape_keys_grown(old_addr, new_addr as *const crate::array::ArrayHeader);
 
     assert!(
         !crate::object::shapes::test_shape_entry_exists(old_addr),
