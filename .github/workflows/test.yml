@@ -73,9 +73,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate -q '.[].filename')
-          echo "$files" | grep -q '^crates/' || { echo "No crates/ changes — gate not applicable."; exit 0; }
-          echo "$files" | grep -q '^changelog\.d/' && exit 0
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate > files.json
+          jq -r '.[].filename' files.json | grep -q '^crates/' || { echo "No crates/ changes — gate not applicable."; exit 0; }
+          # The fragment must be ADDED in this PR (editing a leftover file
+          # doesn't count) and match the root-level <digits>-<slug>.md shape
+          # cut_release_notes.sh folds at release time.
+          jq -r '.[] | select(.status == "added") | .filename' files.json | grep -qE '^changelog\.d/[0-9]+-[^/]+\.md$' && exit 0
           echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
           exit 1
 
