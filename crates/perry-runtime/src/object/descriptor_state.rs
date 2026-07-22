@@ -387,6 +387,11 @@ fn descriptor_key_bit(key: &str) -> u64 {
     descriptor_key_bit_bytes(key.as_bytes())
 }
 
+#[cfg(test)]
+pub(crate) fn test_descriptor_key_bit(key: &str) -> u64 {
+    descriptor_key_bit(key)
+}
+
 /// #6759 Phase C2: record `key` in the owner's per-object meta summary so
 /// hot-path probes for OTHER keys can skip the descriptor tables. No-op for
 /// owners that cannot carry a meta record (handle-band ids, typed arrays,
@@ -449,7 +454,7 @@ pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool)
 /// cover the NaN-boxed key `key` on `addr`? Conservative `true` for
 /// non-string keys and non-meta-capable owners. Callers pair this with
 /// `object_has_descriptors` for the per-key refinement of that flag.
-fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
+unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(kb) = crate::string::js_string_key_bytes(
         crate::value::JSValue::from_bits(key.to_bits()),
@@ -457,18 +462,16 @@ fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
     ) else {
         return true;
     };
-    unsafe {
-        match super::prototype_chain::meta_capable_object(addr) {
-            Some(obj) => {
-                let meta = (*obj).meta;
-                if meta.is_null() {
-                    return false;
-                }
-                let bit = descriptor_key_bit_bytes(kb);
-                ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0
+    match super::prototype_chain::meta_capable_object(addr) {
+        Some(obj) => {
+            let meta = (*obj).meta;
+            if meta.is_null() {
+                return false;
             }
-            None => true,
+            let bit = descriptor_key_bit_bytes(kb);
+            ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0
         }
+        None => true,
     }
 }
 

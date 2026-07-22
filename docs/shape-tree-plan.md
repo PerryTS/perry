@@ -113,14 +113,36 @@ Each step lands independently behind green suites, per the #6759 method.
   direct-mapped; folds into shape identity in C3), the store prop-plan
   (class-keyed; needs the shape to carry prototype facts first), and the
   transition cache (already the edge set; becomes shape-resident in C3).
-- **C2 — attributes + accessor presence move into the shape.**
-  A per-shape `attrs` sidecar (which keys have non-default
-  writable/enumerable/configurable or accessors) so the read/write fast
-  paths can answer "can anything intercept this key" from the shape
-  instead of the per-object descriptor probes Phase A grouped. Requires a
-  shape-split on descriptor install (an object whose descriptors diverge
-  from its shape's default leaves the shared shape — the Phase B `meta`
-  record is where the diverged object's private state hangs).
+- **C2 — per-key descriptor facts move into the per-object `meta` record**
+  *(design refined at implementation time — see below)*. The read/write
+  fast paths answer "can an own descriptor cover this key" from two
+  Bloom words in the Phase B `meta` record
+  (`ObjectMeta::{attr,accessor}_key_bits`, bit `fnv(key) & 63` per
+  installed key, monotonic) instead of the per-object descriptor probes
+  Phase A grouped: a clear bit — or a still-null meta — is an
+  authoritative miss, so `get_property_attrs` / `get_accessor_descriptor`
+  return `None` with no `String` build and no table probe, and the
+  owner-level form gates the O(table) owner scans (`Object.keys` fast
+  path). The address-keyed tables remain authoritative; non-meta-capable
+  owners (handle ids, typed arrays, RegExp) stay on the conservative
+  probe-always arm.
+  **Why not the sketched per-shape attrs sidecar:** shape records are
+  keyed on the keys_array ADDRESS with validation-on-hit — a trust model
+  that works only for POSITIVE facts (a hit re-validates against array
+  content). "No descriptors on this shape" is a NEGATIVE fact with
+  nothing to validate against, and the keys identity churns on every
+  grow-realloc, so a shape-resident claim goes stale undetectably. The
+  `meta` record travels with the object (GC-traced, moved+rewritten with
+  its owner, null on every fresh allocation), which is exactly the
+  carrier a negative per-object fact needs — and it means descriptor
+  install needs NO shape-split (no O(N) keys clone on freeze). True
+  shape-resident attributes return in C3, where the shape becomes a
+  header-resident identity and descriptor install becomes an explicit
+  transition (the V8 model).
+  Also fixes a latent stale-read: a fresh object at a recycled address
+  can no longer be misread as owning a dead tenant's not-yet-pruned
+  descriptor entries (its meta is null, so the gated getters miss
+  authoritatively).
 - **C3 — the shape pointer becomes the object's identity.**
   `ObjectHeader` gains a shape reference unifying `class_id` and the
   literal shape ids (candidate encodings: reuse the `class_id` u32 as a
@@ -151,8 +173,10 @@ review before landing. Acceptance is measured at each step against the
 
 - C1: none needed (validation-on-hit trust model; records are per-thread
   plain heap in `RuntimeState`, dropped at thread exit).
-- C2: attrs are plain data; accessor closures stay where Phase A/B put
-  them (descriptor tables now, `meta` record when C2 splits shapes).
+- C2: the summary words are POD inside the existing `ObjectMeta` record
+  (the trace arm still visits only `prototype`); accessor closures stay
+  where Phase A put them (the descriptor tables, whose GC scanner roots
+  and rekeys them).
 - C3: shape table entries hold `keys_array` references — those become
   GC roots with rewrite-on-move, following the Phase B pattern (the
   shape table is the successor of today's `SHAPE_CACHE_OVERFLOW`, which

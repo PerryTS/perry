@@ -658,6 +658,133 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
     js_shadow_slot_set(1, 0);
 }
 
+/// #6759 Phase C2: the per-key descriptor summary in the meta record gates
+/// table probes — exactly (no false negatives) for installed keys, and
+/// authoritatively negative for a fresh owner and for keys whose Bloom bit
+/// is clear. Non-meta-capable owners (handle-band ids) stay on the
+/// conservative probe-always arm, so their installs still round-trip.
+#[test]
+fn test_descriptor_meta_summary_gates_probes() {
+    let _global = global_side_table_test_lock();
+    let _guard = GcTestIsolationGuard::new();
+
+    unsafe {
+        let (owner, _) = alloc_nursery_test_object(0);
+        let addr = owner as usize;
+
+        // Fresh meta-capable owner: null meta is an authoritative miss.
+        assert!(
+            !crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", false),
+            "fresh owner must report no possible attr entry"
+        );
+        assert!(
+            !crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", true),
+            "fresh owner must report no possible accessor entry"
+        );
+        assert!(
+            !crate::object::owner_may_have_descriptor_entries(addr, false),
+            "fresh owner must report no possible entries at all"
+        );
+
+        crate::object::set_property_attrs(
+            addr,
+            "x".to_string(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        assert!(
+            crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", false),
+            "installed key's bit must be set"
+        );
+        assert!(
+            crate::object::get_property_attrs(addr, "x").is_some_and(|a| !a.writable()),
+            "gated getter must still return the installed attrs"
+        );
+        assert!(
+            crate::object::get_property_attrs(addr, "unrelated").is_none(),
+            "un-installed key must miss through the gate"
+        );
+        // Exact negative when the bits don't collide; a collision only
+        // costs a (missing) probe, which the getter assertion above covers.
+        let x_bit = crate::object::descriptor_state::test_descriptor_key_bit("x");
+        let other_bit = crate::object::descriptor_state::test_descriptor_key_bit("unrelated");
+        if x_bit != other_bit {
+            assert!(
+                !crate::object::descriptor_state::may_have_descriptor_entry(
+                    addr,
+                    "unrelated",
+                    false
+                ),
+                "non-colliding un-installed key must be a summary miss"
+            );
+        }
+        // The attr install must not set the ACCESSOR word.
+        if x_bit != 0 {
+            assert!(
+                !crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", true),
+                "attr install must not claim a possible accessor entry"
+            );
+        }
+
+        // Handle-band owner (no GC header): conservative arm, still works.
+        let handle = 0x400usize;
+        assert!(
+            crate::object::descriptor_state::may_have_descriptor_entry(handle, "x", false),
+            "non-meta-capable owner must stay conservative"
+        );
+        crate::object::set_property_attrs(
+            handle,
+            "h".to_string(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        assert!(
+            crate::object::get_property_attrs(handle, "h").is_some_and(|a| !a.writable()),
+            "handle-band install must round-trip via the conservative arm"
+        );
+        crate::object::clear_property_attrs(handle, "h");
+    }
+}
+
+/// #6759 Phase C2: the summary bits live in the meta record, which moves
+/// WITH its owner on a copied minor while `scan_descriptor_roots_mut`
+/// rekeys the table entry to the owner's new address — the gated getter
+/// must still resolve the entry at the moved address.
+#[test]
+fn test_descriptor_meta_summary_survives_copied_minor_move() {
+    let _global = global_side_table_test_lock();
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let old_addr = owner as usize;
+    crate::object::set_property_attrs(
+        old_addr,
+        "ro".to_string(),
+        crate::object::PropertyAttrs::new(false, true, false),
+    );
+    js_shadow_slot_set(0, ptr_bits(old_addr));
+
+    let _ = gc_collect_minor();
+
+    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_addr, old_addr, "test premise: the owner must move");
+    assert!(
+        crate::object::descriptor_state::may_have_descriptor_entry(new_addr, "ro", false),
+        "summary bits must travel with the moved owner's meta record"
+    );
+    let attrs = crate::object::get_property_attrs(new_addr, "ro")
+        .expect("rekeyed descriptor entry must resolve at the moved address");
+    assert!(
+        !attrs.writable() && !attrs.configurable(),
+        "moved owner must keep its installed attributes"
+    );
+    assert!(
+        crate::object::get_property_attrs(new_addr, "other").is_none(),
+        "un-installed key must still miss at the moved address"
+    );
+
+    crate::object::clear_property_attrs(new_addr, "ro");
+    js_shadow_slot_set(0, 0);
+}
+
 /// #6759 Phase B: the meta record is kept alive by its owner (the header
 /// edge is a traced child slot) across a full non-moving collection, and an
 /// explicit-null recording is preserved.
