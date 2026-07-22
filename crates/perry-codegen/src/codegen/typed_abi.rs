@@ -7,8 +7,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use perry_hir::types::Type;
 use perry_hir::{BinaryOp, CompareOp, Expr, Function, LogicalOp, Stmt, UnaryOp};
-use perry_types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TypedFunctionTrampolineKind {

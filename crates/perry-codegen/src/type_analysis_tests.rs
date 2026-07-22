@@ -363,7 +363,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
             },
             &facts,
         ),
-        HirType::Function(perry_types::FunctionType {
+        HirType::Function(perry_hir::types::FunctionType {
             params: Vec::new(),
             return_type: Box::new(HirType::Number),
             is_async: false,

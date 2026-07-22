@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
-use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {

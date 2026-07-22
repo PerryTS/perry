@@ -1,5 +1,5 @@
+use crate::types::{FuncId, Type};
 use anyhow::Result;
-use perry_types::{FuncId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;

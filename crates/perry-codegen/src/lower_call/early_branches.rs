@@ -11,8 +11,8 @@
 //! `Ok(None)` to let the caller try the next branch.
 
 use anyhow::{bail, Result};
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::{
     emit_typed_feedback_register_site, i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline,

@@ -4,7 +4,7 @@
 //! enum declarations, interface declarations, type alias declarations,
 //! constructors, class methods, getters, setters, and class properties.
 
-use perry_types::{LocalId, Type};
+use crate::types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;

@@ -187,8 +187,8 @@ fn match_numeric_bulk_fill_loop(
     };
     let is_numeric_array = matches!(
         ctx.local_types.get(&array_id),
-        Some(perry_types::Type::Array(elem))
-            if matches!(elem.as_ref(), perry_types::Type::Number | perry_types::Type::Int32)
+        Some(perry_hir::types::Type::Array(elem))
+            if matches!(elem.as_ref(), perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
     );
     if !is_numeric_array {
         return None;
@@ -2089,10 +2089,10 @@ fn match_packed_f64_versioned_loop(
 fn local_array_element_type<'t>(
     ctx: &'t FnCtx<'_>,
     local_id: u32,
-) -> Option<&'t perry_types::Type> {
+) -> Option<&'t perry_hir::types::Type> {
     match ctx.local_types.get(&local_id) {
-        Some(perry_types::Type::Array(elem)) => Some(elem.as_ref()),
-        Some(perry_types::Type::Generic { base, type_args })
+        Some(perry_hir::types::Type::Array(elem)) => Some(elem.as_ref()),
+        Some(perry_hir::types::Type::Generic { base, type_args })
             if base == "Array" && type_args.len() == 1 =>
         {
             Some(&type_args[0])
@@ -2154,31 +2154,31 @@ fn packed_loop_array_binding_storage_is_addressable(ctx: &FnCtx<'_>, arr_id: u32
 fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         local_array_element_type(ctx, local_id),
-        Some(perry_types::Type::Number | perry_types::Type::Int32)
+        Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
     ) || matches!(
         local_array_element_type(ctx, local_id),
-        Some(perry_types::Type::Named(name)) if name == "PerryU32"
+        Some(perry_hir::types::Type::Named(name)) if name == "PerryU32"
     )
 }
 
 fn local_allows_packed_f64_loop_store(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         local_array_element_type(ctx, local_id),
-        Some(perry_types::Type::Number)
+        Some(perry_hir::types::Type::Number)
     )
 }
 
 fn local_is_int32_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         local_array_element_type(ctx, local_id),
-        Some(perry_types::Type::Int32)
+        Some(perry_hir::types::Type::Int32)
     )
 }
 
 fn local_is_u32_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         local_array_element_type(ctx, local_id),
-        Some(perry_types::Type::Named(name)) if name == "PerryU32"
+        Some(perry_hir::types::Type::Named(name)) if name == "PerryU32"
     )
 }
 
@@ -2355,7 +2355,7 @@ fn expr_is_packed_i32_loop_store_rhs_safe(
 fn local_is_int32_value(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         ctx.local_types.get(&local_id),
-        Some(perry_types::Type::Int32)
+        Some(perry_hir::types::Type::Int32)
     ) || ctx.integer_locals.contains(&local_id)
 }
 
@@ -4742,7 +4742,7 @@ pub(crate) fn stmt_preserves_array_length(
 fn is_static_buffer_receiver(ctx: &crate::expr::FnCtx<'_>, object: &perry_hir::Expr) -> bool {
     matches!(
         crate::type_analysis::static_type_of(ctx, object),
-        Some(perry_types::Type::Named(name)) if name == "Buffer"
+        Some(perry_hir::types::Type::Named(name)) if name == "Buffer"
     )
 }
 

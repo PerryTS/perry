@@ -54,7 +54,7 @@ pub(crate) fn lower_let(
     id: u32,
     name: &str,
     init: Option<&perry_hir::Expr>,
-    ty: &perry_types::Type,
+    ty: &perry_hir::types::Type,
     mutable: bool,
 ) -> Result<()> {
     // `let C = SomeClass` aliases the local `C` to the class
@@ -236,10 +236,10 @@ pub(crate) fn lower_let(
     // We only refine Any → something more specific; we don't
     // override declared types because the user may have written
     // `let x: Object = ...` deliberately.
-    let refined_ty = if matches!(ty, perry_types::Type::Any) {
+    let refined_ty = if matches!(ty, perry_hir::types::Type::Any) {
         init.and_then(|e| crate::type_analysis::refine_type_from_init(ctx, e))
             .unwrap_or_else(|| ty.clone())
-    } else if matches!(ty, perry_types::Type::Array(ref elem) if matches!(**elem, perry_types::Type::Any))
+    } else if matches!(ty, perry_hir::types::Type::Array(ref elem) if matches!(**elem, perry_hir::types::Type::Any))
     {
         // Also refine Array<Any> when the init provides more
         // specific element type info. Object.keys() returns
@@ -1186,7 +1186,7 @@ pub(crate) fn lower_let(
     let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && i32_safe_local
         && init_in_i32_range
-        && !matches!(refined_ty, perry_types::Type::BigInt)
+        && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && !ctx.i32_counter_slots.contains_key(&id);
@@ -1196,7 +1196,7 @@ pub(crate) fn lower_let(
         ctx.i32_counter_slots.insert(id, i32_slot);
     }
     if init.is_some()
-        && matches!(refined_ty, perry_types::Type::Boolean)
+        && matches!(refined_ty, perry_hir::types::Type::Boolean)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && !ctx.i1_local_slots.contains_key(&id)
@@ -1267,8 +1267,8 @@ pub(crate) fn lower_let(
         let v = if !used_i32_init {
             let native_init = if matches!(
                 refined_ty,
-                perry_types::Type::Number | perry_types::Type::Int32
-            ) || (matches!(refined_ty, perry_types::Type::Boolean)
+                perry_hir::types::Type::Number | perry_hir::types::Type::Int32
+            ) || (matches!(refined_ty, perry_hir::types::Type::Boolean)
                 && ctx.i1_local_slots.contains_key(&id))
             {
                 lower_expr_value(ctx, init_expr)?
@@ -1377,7 +1377,10 @@ pub(crate) fn lower_let(
                     // started returning `start-try-finally` instead of
                     // `start-try`.
                     if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                        if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
+                        if matches!(
+                            ctx.local_types.get(src_id),
+                            Some(perry_hir::types::Type::String)
+                        ) {
                             let blk = ctx.block();
                             let s_ptr = blk.call(
                                 crate::types::I64,
@@ -1408,7 +1411,10 @@ pub(crate) fn lower_let(
                 // started returning `start-try-finally` instead of
                 // `start-try`.
                 if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                    if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
+                    if matches!(
+                        ctx.local_types.get(src_id),
+                        Some(perry_hir::types::Type::String)
+                    ) {
                         let blk = ctx.block();
                         let s_ptr = blk.call(
                             crate::types::I64,
@@ -1432,7 +1438,7 @@ pub(crate) fn lower_let(
                             if view_type.is_some()
                                 && matches!(
                                     refined_ty,
-                                    perry_types::Type::Any | perry_types::Type::Unknown
+                                    perry_hir::types::Type::Any | perry_hir::types::Type::Unknown
                                 ) =>
                         {
                             crate::native_value::layout_for_pod_view_type(

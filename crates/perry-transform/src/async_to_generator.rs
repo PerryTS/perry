@@ -71,7 +71,7 @@
 //!   #1021 phase 2.
 
 use perry_hir::ir::*;
-use perry_types::{LocalId, Type};
+use perry_hir::types::{LocalId, Type};
 use std::collections::HashSet;
 
 // #5293: the max-LocalId / max-FuncId scans were copy-pasted here; route through
@@ -172,7 +172,7 @@ pub fn transform_async_to_generator(module: &mut Module) {
     collect_async_step_closures(module);
 
     if !module.async_step_closures.is_empty() {
-        let mut next_func_id: perry_types::FuncId = compute_max_func_id(module) + 1;
+        let mut next_func_id: perry_hir::types::FuncId = compute_max_func_id(module) + 1;
         // Walk the HIR, rewriting matched async closures in-place. The
         // walker descends into nested closures so chains like
         // `async () => { items.map(async x => await f(x)) }` are
@@ -279,9 +279,9 @@ pub fn transform_async_to_generator(module: &mut Module) {
 
 fn rewrite_async_closures_in_stmts(
     stmts: &mut Vec<Stmt>,
-    work: &std::collections::HashSet<perry_types::FuncId>,
+    work: &std::collections::HashSet<perry_hir::types::FuncId>,
     next_local_id: &mut LocalId,
-    next_func_id: &mut perry_types::FuncId,
+    next_func_id: &mut perry_hir::types::FuncId,
 ) {
     for s in stmts {
         rewrite_async_closures_in_stmt(s, work, next_local_id, next_func_id);
@@ -290,9 +290,9 @@ fn rewrite_async_closures_in_stmts(
 
 fn rewrite_async_closures_in_stmt(
     stmt: &mut Stmt,
-    work: &std::collections::HashSet<perry_types::FuncId>,
+    work: &std::collections::HashSet<perry_hir::types::FuncId>,
     next_local_id: &mut LocalId,
-    next_func_id: &mut perry_types::FuncId,
+    next_func_id: &mut perry_hir::types::FuncId,
 ) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => {
@@ -370,9 +370,9 @@ fn rewrite_async_closures_in_stmt(
 
 fn rewrite_async_closures_in_expr(
     expr: &mut Expr,
-    work: &std::collections::HashSet<perry_types::FuncId>,
+    work: &std::collections::HashSet<perry_hir::types::FuncId>,
     next_local_id: &mut LocalId,
-    next_func_id: &mut perry_types::FuncId,
+    next_func_id: &mut perry_hir::types::FuncId,
 ) {
     // Match-and-rewrite at the current level.
     let should_rewrite = if let Expr::Closure {
@@ -1544,7 +1544,7 @@ fn rewrite_expr(expr: &mut Expr, had_await: &mut bool) {
 // Phase 3 (follow-up): `compile_closure` emits the wrapped form when the
 // closure's func_id is in `module.async_step_closures`.
 fn collect_async_step_closures(module: &mut Module) {
-    let mut found: std::collections::HashSet<perry_types::FuncId> =
+    let mut found: std::collections::HashSet<perry_hir::types::FuncId> =
         std::collections::HashSet::new();
     for func in &module.functions {
         scan_stmts_for_async_closures(&func.body, &mut found);
@@ -1597,7 +1597,7 @@ fn collect_async_step_closures(module: &mut Module) {
 
 fn scan_stmts_for_async_closures(
     stmts: &[Stmt],
-    found: &mut std::collections::HashSet<perry_types::FuncId>,
+    found: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     for s in stmts {
         scan_stmt_for_async_closures(s, found);
@@ -1606,7 +1606,7 @@ fn scan_stmts_for_async_closures(
 
 fn scan_stmt_for_async_closures(
     stmt: &Stmt,
-    found: &mut std::collections::HashSet<perry_types::FuncId>,
+    found: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => scan_expr_for_async_closures(e, found),
@@ -1676,7 +1676,7 @@ fn scan_stmt_for_async_closures(
 
 fn scan_expr_for_async_closures(
     expr: &Expr,
-    found: &mut std::collections::HashSet<perry_types::FuncId>,
+    found: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     if let Expr::Closure {
         func_id,
@@ -1806,7 +1806,7 @@ mod computed_and_field_async_tests {
 
     // The minimal shape the collect scan matches: `async () => { await 1 }`
     // — `Expr::Closure { is_async, !is_generator }` whose body has an Await.
-    fn async_closure_with_await(func_id: perry_types::FuncId) -> Expr {
+    fn async_closure_with_await(func_id: perry_hir::types::FuncId) -> Expr {
         Expr::Closure {
             func_id,
             params: Vec::new(),
@@ -1824,7 +1824,7 @@ mod computed_and_field_async_tests {
         }
     }
 
-    fn empty_fn(id: perry_types::FuncId, body: Vec<Stmt>) -> Function {
+    fn empty_fn(id: perry_hir::types::FuncId, body: Vec<Stmt>) -> Function {
         Function {
             id,
             name: String::new(),

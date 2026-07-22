@@ -4,7 +4,7 @@
 //! visibility and are re-exported from `lower/mod.rs` so the existing
 //! `expr_*` submodules and the rest of the crate keep compiling unchanged.
 
-use perry_types::{FuncId, LocalId, Type, TypeParam};
+use crate::types::{FuncId, LocalId, Type, TypeParam};
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -214,7 +214,7 @@ impl LoweringContext {
         // Constraint table mirrors the same scope so `is_type_param(name)`
         // and `resolve_type_param_constraint(name)` agree on visibility.
         // Only params with a declared upper bound contribute an entry.
-        let constraints: HashMap<String, perry_types::Type> = type_params
+        let constraints: HashMap<String, crate::types::Type> = type_params
             .iter()
             .filter_map(|p| {
                 p.constraint
@@ -248,7 +248,7 @@ impl LoweringContext {
     /// the chance to substitute a concrete type).
     ///
     /// Innermost scope wins (shadowing).
-    pub(crate) fn resolve_type_param_constraint(&self, name: &str) -> Option<perry_types::Type> {
+    pub(crate) fn resolve_type_param_constraint(&self, name: &str) -> Option<crate::types::Type> {
         for scope in self.type_param_constraints.iter().rev() {
             if let Some(ty) = scope.get(name) {
                 // Only return constraints whose runtime shape is
@@ -261,11 +261,11 @@ impl LoweringContext {
                 // instance tagging / class-id propagation still work.
                 let useful = matches!(
                     ty,
-                    perry_types::Type::String
-                        | perry_types::Type::Number
-                        | perry_types::Type::Boolean
-                        | perry_types::Type::BigInt
-                        | perry_types::Type::Array(_)
+                    crate::types::Type::String
+                        | crate::types::Type::Number
+                        | crate::types::Type::Boolean
+                        | crate::types::Type::BigInt
+                        | crate::types::Type::Array(_)
                 );
                 if useful {
                     return Some(ty.clone());
@@ -281,7 +281,7 @@ impl LoweringContext {
     /// This is used during type extraction to resolve type aliases like
     /// `type BlockTag = 'latest' | number | string` so the compiler sees
     /// the underlying Union type instead of Named("BlockTag").
-    pub(crate) fn resolve_type_alias(&self, name: &str) -> Option<perry_types::Type> {
+    pub(crate) fn resolve_type_alias(&self, name: &str) -> Option<crate::types::Type> {
         self.type_aliases
             .iter()
             .find(|(alias_name, _, type_params, _)| alias_name == name && type_params.is_empty())

@@ -6,8 +6,8 @@
 //! in the sibling `field_init` module.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
 use super::lower_builtin_new;

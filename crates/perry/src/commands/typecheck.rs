@@ -4,7 +4,7 @@
 //! over stdin/stdout using the msgpack-based IPC protocol.
 
 use anyhow::{anyhow, Result};
-use perry_types::Type;
+use perry_hir::types::Type;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

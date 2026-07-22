@@ -20,7 +20,7 @@ use crate::*;
 /// same way as real top-level lets.
 pub(crate) fn inlined_analysis_init(module: &Module) -> Vec<Stmt> {
     use perry_hir::analysis::remap_local_ids_in_stmts;
-    use perry_types::FuncId;
+    use perry_hir::types::FuncId;
     use std::collections::HashSet;
 
     let mut function_map: HashMap<FuncId, perry_hir::ir::Function> = HashMap::new();
@@ -128,7 +128,7 @@ pub(crate) fn inlined_analysis_init(module: &Module) -> Vec<Stmt> {
 /// covers Mango's makePill but punts on more complex returning fns.
 pub(crate) fn expr_level_inline_pass(
     stmts: Vec<Stmt>,
-    function_map: &HashMap<perry_types::FuncId, perry_hir::ir::Function>,
+    function_map: &HashMap<perry_hir::types::FuncId, perry_hir::ir::Function>,
     bindings: &HashMap<LocalId, Expr>,
     next_local: &mut u32,
     budget: &mut usize,
@@ -156,7 +156,7 @@ pub(crate) fn expr_level_inline_pass(
 
 pub(crate) fn inline_calls_in_stmt(
     stmt: &mut Stmt,
-    function_map: &HashMap<perry_types::FuncId, perry_hir::ir::Function>,
+    function_map: &HashMap<perry_hir::types::FuncId, perry_hir::ir::Function>,
     bindings: &HashMap<LocalId, Expr>,
     next_local: &mut u32,
     budget: &mut usize,
@@ -210,7 +210,7 @@ pub(crate) fn inline_calls_in_stmt(
 
 pub(crate) fn inline_calls_in_expr(
     expr: &mut Expr,
-    function_map: &HashMap<perry_types::FuncId, perry_hir::ir::Function>,
+    function_map: &HashMap<perry_hir::types::FuncId, perry_hir::ir::Function>,
     bindings: &HashMap<LocalId, Expr>,
     next_local: &mut u32,
     budget: &mut usize,
@@ -327,7 +327,7 @@ pub(crate) fn inline_calls_in_expr(
         name: String::new(),
         type_params: Vec::new(),
         params,
-        return_type: perry_types::Type::Any,
+        return_type: perry_hir::types::Type::Any,
         body,
         is_strict,
         is_async: false,

@@ -1,5 +1,5 @@
+use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Expr, Function, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
 use super::*;

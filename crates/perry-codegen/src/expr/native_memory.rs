@@ -1,6 +1,6 @@
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::native_value::{
     AliasState, BoundsProof, BoundsState, BufferAccessMode, BufferElem, BufferIndexUnit,

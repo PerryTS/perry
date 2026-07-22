@@ -15,7 +15,6 @@ path = "src/main.rs"
 [dependencies]
 perry-parser.workspace = true
 swc_ecma_ast.workspace = true
-perry-types.workspace = true
 perry-hir.workspace = true
 perry-transform.workspace = true
 perry-codegen.workspace = true

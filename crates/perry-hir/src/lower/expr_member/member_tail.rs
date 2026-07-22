@@ -5,8 +5,8 @@
 //! Split out of `expr_member.rs` (pure code move). Runs after the
 //! early-return checks in `lower_member_inner`.
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 

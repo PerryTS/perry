@@ -3,8 +3,8 @@
 //! Contains functions for lowering JSX elements, fragments, attributes,
 //! and children into HIR expressions.
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;

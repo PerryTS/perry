@@ -292,24 +292,24 @@ fn key_stable_for_order_insensitive_graph_lists() {
     );
 }
 
-fn record_row_type(property_insert_order: &[&str]) -> perry_types::Type {
+fn record_row_type(property_insert_order: &[&str]) -> perry_hir::types::Type {
     let mut properties = std::collections::HashMap::new();
     for name in property_insert_order {
         let ty = match *name {
-            "name" => perry_types::Type::String,
-            "id" | "value" => perry_types::Type::Number,
+            "name" => perry_hir::types::Type::String,
+            "id" | "value" => perry_hir::types::Type::Number,
             _ => panic!("unexpected property"),
         };
         properties.insert(
             (*name).to_string(),
-            perry_types::PropertyInfo {
+            perry_hir::types::PropertyInfo {
                 ty,
                 optional: false,
                 readonly: false,
             },
         );
     }
-    perry_types::Type::Object(perry_types::ObjectType {
+    perry_hir::types::Type::Object(perry_hir::types::ObjectType {
         name: None,
         properties,
         property_order: Some(vec!["id".into(), "name".into(), "value".into()]),
@@ -441,7 +441,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         setter_names: vec![],
         parent_name: None,
         field_names: vec!["x".into()],
-        field_types: vec![perry_types::Type::Number],
+        field_types: vec![perry_hir::types::Type::Number],
         static_field_names: vec![],
         source_class_id: Some(42),
     };
@@ -481,7 +481,7 @@ fn key_changes_with_imported_class_codegen_surface() {
     assert_ne!(base_key, key_for(changed));
 
     let mut changed = base;
-    changed.field_types = vec![perry_types::Type::String];
+    changed.field_types = vec![perry_hir::types::Type::String];
     assert_ne!(base_key, key_for(changed));
 }
 

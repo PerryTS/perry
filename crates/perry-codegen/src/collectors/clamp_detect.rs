@@ -4,7 +4,7 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
     if f.is_async || f.is_generator || f.params.len() != 3 {
         return None;
     }
-    if !matches!(f.return_type, perry_types::Type::Number) {
+    if !matches!(f.return_type, perry_hir::types::Type::Number) {
         return None;
     }
     if f.body.len() != 3 {
@@ -149,13 +149,13 @@ pub fn is_integer_specializable(f: &Function) -> bool {
     if f.is_async || f.is_generator {
         return false;
     }
-    if !matches!(f.return_type, perry_types::Type::Number) {
+    if !matches!(f.return_type, perry_hir::types::Type::Number) {
         return false;
     }
     if !f
         .params
         .iter()
-        .all(|p| matches!(p.ty, perry_types::Type::Number))
+        .all(|p| matches!(p.ty, perry_hir::types::Type::Number))
     {
         return false;
     }
@@ -169,7 +169,7 @@ pub fn returns_integer(f: &Function) -> bool {
     if f.is_async || f.is_generator {
         return false;
     }
-    if !matches!(f.return_type, perry_types::Type::Number) {
+    if !matches!(f.return_type, perry_hir::types::Type::Number) {
         return false;
     }
     returns_int_stmts(&f.body)
@@ -179,7 +179,7 @@ pub fn returns_i32_identity_arg(f: &Function) -> bool {
     if f.is_async || f.is_generator || f.params.len() != 1 {
         return false;
     }
-    if !matches!(f.return_type, perry_types::Type::Number) {
+    if !matches!(f.return_type, perry_hir::types::Type::Number) {
         return false;
     }
     let param_id = f.params[0].id;

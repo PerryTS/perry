@@ -3,7 +3,7 @@
 //! `super`.
 
 use super::*;
-use perry_types::{FuncId, GlobalId, LocalId, Type, TypeParam};
+use crate::types::{FuncId, GlobalId, LocalId, Type, TypeParam};
 
 /// An enum definition
 #[derive(Debug, Clone)]

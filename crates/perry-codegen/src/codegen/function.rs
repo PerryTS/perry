@@ -325,7 +325,7 @@ pub(super) fn compile_function(
     classes: &HashMap<String, &perry_hir::Class>,
     methods: &HashMap<(String, String), String>,
     module_globals: &HashMap<u32, String>,
-    module_global_types: &HashMap<u32, perry_types::Type>,
+    module_global_types: &HashMap<u32, perry_hir::types::Type>,
     import_function_prefixes: &HashMap<String, String>,
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
@@ -423,7 +423,7 @@ pub(super) fn compile_function(
     // concat detection on a `: string` parameter) works inside the body.
     // Also seed with module global types so functions that access module
     // globals see the correct declared types (e.g., Named("Editor")).
-    let mut local_types: HashMap<u32, perry_types::Type> = module_global_types
+    let mut local_types: HashMap<u32, perry_hir::types::Type> = module_global_types
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();
@@ -654,7 +654,7 @@ pub(super) fn compile_function(
     for p in &f.params {
         let is_buffer_typed = matches!(
             &p.ty,
-            perry_types::Type::Named(n) if n == "Buffer"
+            perry_hir::types::Type::Named(n) if n == "Buffer"
         );
         if !is_buffer_typed {
             continue;

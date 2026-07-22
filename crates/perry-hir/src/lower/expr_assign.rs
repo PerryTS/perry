@@ -6,8 +6,8 @@
 //! `[a, b] = arr` and `{a, b} = obj` (these last two desugar to a
 //! sequence expression of individual assignments).
 
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::destructuring::lower_destructuring_assignment;
@@ -590,8 +590,8 @@ fn lower_assignment_target(
                             return Ok(Expr::Call {
                                 callee: Box::new(Expr::ExternFuncRef {
                                     name: "js_process_exit_code_set".to_string(),
-                                    param_types: vec![perry_types::Type::Number],
-                                    return_type: perry_types::Type::Number,
+                                    param_types: vec![crate::types::Type::Number],
+                                    return_type: crate::types::Type::Number,
                                 }),
                                 args: vec![*value],
                                 type_args: vec![],

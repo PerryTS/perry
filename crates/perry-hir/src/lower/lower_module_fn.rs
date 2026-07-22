@@ -7,8 +7,8 @@
 //! reach them via `crate::lower::lower_module*` (or the `lib.rs`
 //! re-exports — `pub use lower::{lower_module, ...}`).
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use std::collections::HashSet;
 use swc_ecma_ast as ast;
 

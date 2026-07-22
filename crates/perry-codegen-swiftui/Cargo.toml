@@ -10,5 +10,4 @@ workspace = true
 
 [dependencies]
 perry-hir.workspace = true
-perry-types.workspace = true
 anyhow.workspace = true

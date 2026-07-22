@@ -104,7 +104,7 @@ fn emit_typed_closure_trampoline_fast_value(
 
 fn emit_public_typed_closure_trampoline(
     llmod: &mut LlModule,
-    func_id: perry_types::FuncId,
+    func_id: perry_hir::types::FuncId,
     closure_expr: &perry_hir::Expr,
     module_prefix: &str,
     generic_body_name: &str,
@@ -283,10 +283,10 @@ pub(crate) fn emit_typed_string_capture_guard(
 
 pub(super) fn compile_typed_string_closure(
     llmod: &mut LlModule,
-    func_id: perry_types::FuncId,
+    func_id: perry_hir::types::FuncId,
     closure_expr: &perry_hir::Expr,
     module_prefix: &str,
-    module_local_types: &HashMap<u32, perry_types::Type>,
+    module_local_types: &HashMap<u32, perry_hir::types::Type>,
 ) -> Result<()> {
     let (params, body) = match closure_expr {
         perry_hir::Expr::Closure { params, body, .. } => (params, body),
@@ -335,10 +335,10 @@ pub(super) fn compile_typed_string_closure(
 
 pub(super) fn compile_typed_f64_closure(
     llmod: &mut LlModule,
-    func_id: perry_types::FuncId,
+    func_id: perry_hir::types::FuncId,
     closure_expr: &perry_hir::Expr,
     module_prefix: &str,
-    module_local_types: &HashMap<u32, perry_types::Type>,
+    module_local_types: &HashMap<u32, perry_hir::types::Type>,
 ) -> Result<()> {
     let (params, body) = match closure_expr {
         perry_hir::Expr::Closure { params, body, .. } => (params, body),
@@ -380,10 +380,10 @@ pub(super) fn compile_typed_f64_closure(
 
 pub(super) fn compile_typed_i1_closure(
     llmod: &mut LlModule,
-    func_id: perry_types::FuncId,
+    func_id: perry_hir::types::FuncId,
     closure_expr: &perry_hir::Expr,
     module_prefix: &str,
-    module_local_types: &HashMap<u32, perry_types::Type>,
+    module_local_types: &HashMap<u32, perry_hir::types::Type>,
 ) -> Result<()> {
     let (params, body) = match closure_expr {
         perry_hir::Expr::Closure { params, body, .. } => (params, body),
@@ -425,10 +425,10 @@ pub(super) fn compile_typed_i1_closure(
 
 pub(super) fn compile_typed_i32_closure(
     llmod: &mut LlModule,
-    func_id: perry_types::FuncId,
+    func_id: perry_hir::types::FuncId,
     closure_expr: &perry_hir::Expr,
     module_prefix: &str,
-    module_local_types: &HashMap<u32, perry_types::Type>,
+    module_local_types: &HashMap<u32, perry_hir::types::Type>,
 ) -> Result<()> {
     let (params, body) = match closure_expr {
         perry_hir::Expr::Closure { params, body, .. } => (params, body),
@@ -482,7 +482,7 @@ pub(super) fn compile_typed_i32_closure(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_closure(
     llmod: &mut LlModule,
-    func_id: perry_types::FuncId,
+    func_id: perry_hir::types::FuncId,
     closure_expr: &perry_hir::Expr,
     func_names: &HashMap<u32, String>,
     strings: &mut StringPool,
@@ -501,7 +501,7 @@ pub(super) fn compile_closure(
     // Seeds `FnCtx.local_types` so a binding captured from an enclosing scope
     // keeps its declared type at its read sites. NOT the typed-ABI capture
     // map — the typed closure clones take `module_local_types` instead.
-    module_receiver_types: &HashMap<u32, perry_types::Type>,
+    module_receiver_types: &HashMap<u32, perry_hir::types::Type>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
 ) -> Result<()> {
@@ -619,7 +619,7 @@ pub(super) fn compile_closure(
     // their types available inside the body. Without this, closures
     // that capture an array `items` and do `items.length` miss the
     // typed fast path and return undefined.
-    let mut local_types: HashMap<u32, perry_types::Type> =
+    let mut local_types: HashMap<u32, perry_hir::types::Type> =
         params.iter().map(|p| (p.id, p.ty.clone())).collect();
     for (id, ty) in module_receiver_types.iter() {
         local_types.entry(*id).or_insert_with(|| ty.clone());

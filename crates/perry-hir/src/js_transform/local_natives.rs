@@ -1,5 +1,5 @@
 use crate::ir::{Expr, Module, Stmt};
-use perry_types::LocalId;
+use crate::types::LocalId;
 use std::collections::HashMap;
 
 /// Fix local native instance method calls within the same module

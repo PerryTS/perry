@@ -2,8 +2,8 @@
 //! Pure move — no logic changes.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::POINTER_MASK_I64;
@@ -127,7 +127,7 @@ fn is_number_type(ty: &HirType) -> bool {
     matches!(ty, HirType::Number)
 }
 
-fn object_type_is_exact_xy_number(ty: &perry_types::ObjectType) -> bool {
+fn object_type_is_exact_xy_number(ty: &perry_hir::types::ObjectType) -> bool {
     ty.index_signature.is_none()
         && ty.properties.len() == 2
         && ty

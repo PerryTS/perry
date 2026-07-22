@@ -1,5 +1,5 @@
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::*;
@@ -1126,7 +1126,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     false
                 };
 
-            let iter_from_class: Option<perry_types::FuncId> =
+            let iter_from_class: Option<crate::types::FuncId> =
                 if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
                     if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
                         let class_name = ident.sym.to_string();

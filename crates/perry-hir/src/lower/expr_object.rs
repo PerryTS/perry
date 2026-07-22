@@ -13,8 +13,8 @@
 //! Pattern matches `expr_misc.rs` and `expr_function.rs`: free
 //! `pub(super) fn` helpers, recursion through `super::lower_expr`.
 
+use crate::types::{LocalId, Type};
 use anyhow::Result;
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::{

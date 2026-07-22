@@ -249,7 +249,7 @@ pub(super) fn compile_method(
     classes: &HashMap<String, &perry_hir::Class>,
     methods: &HashMap<(String, String), String>,
     module_globals: &HashMap<u32, String>,
-    module_global_types: &HashMap<u32, perry_types::Type>,
+    module_global_types: &HashMap<u32, perry_hir::types::Type>,
     import_function_prefixes: &HashMap<String, String>,
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
@@ -345,7 +345,7 @@ pub(super) fn compile_method(
         (this_slot, map)
     };
 
-    let mut local_types: HashMap<u32, perry_types::Type> = module_global_types
+    let mut local_types: HashMap<u32, perry_hir::types::Type> = module_global_types
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();
@@ -1234,7 +1234,7 @@ pub(super) fn compile_static_method(
     classes: &HashMap<String, &perry_hir::Class>,
     methods: &HashMap<(String, String), String>,
     module_globals: &HashMap<u32, String>,
-    module_global_types: &HashMap<u32, perry_types::Type>,
+    module_global_types: &HashMap<u32, perry_hir::types::Type>,
     import_function_prefixes: &HashMap<String, String>,
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
@@ -1337,7 +1337,7 @@ pub(super) fn compile_static_method(
     // type-aware dispatch sites and the #6185 perry/thread worker-closure
     // check (`hazardous_module_global_ids`) were blind inside static
     // methods. Param types override on collision.
-    let mut local_types: HashMap<u32, perry_types::Type> = module_global_types
+    let mut local_types: HashMap<u32, perry_hir::types::Type> = module_global_types
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();

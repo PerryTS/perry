@@ -9,8 +9,8 @@
 //! one-line explanation instead of a silent broken binary.
 
 use anyhow::{anyhow, Result};
+use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
-use perry_types::Type as HirType;
 
 use crate::block::LlBlock;
 use crate::codegen::AppMetadata;
@@ -480,7 +480,7 @@ pub(crate) struct FnCtx<'a> {
     pub funcs_reading_dynamic_this: &'a std::collections::HashSet<u32>,
     /// Type alias map (name → Type) aggregated from all modules. Used
     /// to resolve `Named` types in function signatures and dispatch.
-    pub type_aliases: &'a std::collections::HashMap<String, perry_types::Type>,
+    pub type_aliases: &'a std::collections::HashMap<String, perry_hir::types::Type>,
     /// Imported function parameter counts, keyed by function name.
     /// Used for rest-param bundling on cross-module calls.
     pub imported_func_param_counts: &'a std::collections::HashMap<String, usize>,
@@ -493,7 +493,7 @@ pub(crate) struct FnCtx<'a> {
     pub imported_func_synthetic_arguments: &'a std::collections::HashSet<String>,
     /// Imported function return types, keyed by local function name.
     /// Used for type-aware dispatch on cross-module call results.
-    pub imported_func_return_types: &'a std::collections::HashMap<String, perry_types::Type>,
+    pub imported_func_return_types: &'a std::collections::HashMap<String, perry_hir::types::Type>,
     /// Per-method explicit param counts, keyed by `(class_name, method_name)`.
     /// Built from BOTH local `hir.classes` AND `opts.imported_classes`.
     /// `lower_call.rs` dispatch sites use this to pad missing trailing args

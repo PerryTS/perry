@@ -2,8 +2,8 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::super::unimpl_hints;

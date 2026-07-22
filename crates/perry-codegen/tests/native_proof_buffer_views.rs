@@ -1,9 +1,9 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::{FunctionType, ObjectType, PropertyInfo, Type};
 use perry_hir::{
     BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
     UpdateOp,
 };
-use perry_types::{FunctionType, ObjectType, PropertyInfo, Type};
 
 static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

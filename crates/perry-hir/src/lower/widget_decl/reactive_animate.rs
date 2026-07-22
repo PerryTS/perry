@@ -4,8 +4,8 @@
 //! visibility (re-exported from `widget_decl.rs`) so the
 //! `pub(crate) use widget_decl::*` in `lower/mod.rs` still resolves it.
 
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use super::super::*;

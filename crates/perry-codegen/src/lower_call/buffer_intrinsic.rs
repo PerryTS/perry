@@ -576,7 +576,7 @@ mod shadow_scan_tests {
         ClassField {
             name: name.to_string(),
             key_expr: None,
-            ty: perry_types::Type::Any,
+            ty: perry_hir::types::Type::Any,
             init: Some(init),
             is_private: false,
             is_readonly: false,

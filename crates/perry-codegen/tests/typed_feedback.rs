@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::{FunctionType, Type};
 use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
-use perry_types::{FunctionType, Type};
 
 /// Serializes env-mutating tests so a concurrent test never observes a
 /// half-applied variable. Mirrors the guard in `typed_shape_descriptors.rs`.

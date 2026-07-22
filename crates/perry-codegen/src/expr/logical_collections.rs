@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::{bail, Result};
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::lower_conditional::lower_logical;
 use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED};

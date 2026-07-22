@@ -3,11 +3,11 @@
 //! that the runtime can't resolve.
 
 use perry_diagnostics::SourceCache;
+use perry_hir::types::Type;
 use perry_hir::{
     clear_current_module_source, fix_local_native_instances, lower_module, Expr, Module, Stmt,
 };
 use perry_parser::parse_typescript_with_cache;
-use perry_types::Type;
 
 fn lower(src: &str) -> perry_hir::Module {
     let mut cache = SourceCache::new();

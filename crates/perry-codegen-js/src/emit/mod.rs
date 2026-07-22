@@ -3,7 +3,7 @@
 //! Recursively translates HIR statements and expressions into JavaScript source code.
 
 use perry_hir::ir::*;
-use perry_types::{FuncId, GlobalId, LocalId};
+use perry_hir::types::{FuncId, GlobalId, LocalId};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// App metadata baked into compile-time `perry/system` introspection APIs

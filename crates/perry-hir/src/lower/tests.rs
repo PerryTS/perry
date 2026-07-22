@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::ir::EnumValue;
-use perry_types::{Type, TypeParam};
+use crate::types::{Type, TypeParam};
 
 fn make_ctx() -> LoweringContext {
     LoweringContext::new("test.ts")

@@ -56544,8 +56544,8 @@ msgid "SWC wrapper for TypeScript parsing"
 msgstr "Wrapper SWC untuk parsing TypeScript"
 
 #: src/contributing/architecture.md:27
-msgid "`perry-types`"
-msgstr "`perry-types`"
+msgid "`perry-hir::types`"
+msgstr "`perry-hir::types`"
 
 #: src/contributing/architecture.md:27
 msgid "Type system definitions"

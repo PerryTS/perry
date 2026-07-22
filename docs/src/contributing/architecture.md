@@ -25,8 +25,7 @@ Native Executable
 |-------|---------|
 | `perry` | CLI driver, command parsing, compilation orchestration |
 | `perry-parser` | SWC wrapper for TypeScript parsing |
-| `perry-types` | Shared type definitions; tracked for consolidation into HIR |
-| `perry-hir` | HIR data structures (`ir.rs`) and AST→HIR lowering (`lower.rs`) |
+| `perry-hir` | HIR types and data structures, plus AST→HIR lowering |
 | `perry-transform` | IR passes: function inlining, closure conversion, async lowering |
 | `perry-codegen` | LLVM-based native code generation |
 | `perry-codegen-wasm` | WebAssembly code generation for `--target web` / `--target wasm` (HIR → WASM bytecode + JS bridge) |

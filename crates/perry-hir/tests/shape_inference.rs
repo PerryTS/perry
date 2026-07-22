@@ -9,9 +9,9 @@
 //! downstream codegen to route property access through the direct-GEP path.
 
 use perry_diagnostics::SourceCache;
+use perry_hir::types::Type;
 use perry_hir::{lower_module, Module, Stmt};
 use perry_parser::parse_typescript_with_cache;
-use perry_types::Type;
 
 /// Run parsing + lowering on a thread with a larger stack than cargo's default
 /// 2 MB. The perry HIR lowering passes are deeply recursive — typical compiler

@@ -1,7 +1,7 @@
 use super::*;
 
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::nanbox::double_literal;
 use crate::type_analysis::static_type_of;

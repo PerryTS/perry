@@ -9,8 +9,8 @@
 //! (regular object vs class static vs enum vs builtin namespace) then
 //! emit the right HIR variant.
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
@@ -2034,8 +2034,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             if let ast::Expr::Ident(ident) = member.obj.as_ref() {
                 let recv_ty = ctx.lookup_local_type(ident.sym.as_ref());
                 let is_array = match recv_ty {
-                    Some(perry_types::Type::Array(_)) | Some(perry_types::Type::Tuple(_)) => true,
-                    Some(perry_types::Type::Named(n)) if n == "TemplateStringsArray" => true,
+                    Some(crate::types::Type::Array(_)) | Some(crate::types::Type::Tuple(_)) => true,
+                    Some(crate::types::Type::Named(n)) if n == "TemplateStringsArray" => true,
                     _ => false,
                 };
                 if is_array {

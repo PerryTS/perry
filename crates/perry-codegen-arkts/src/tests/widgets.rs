@@ -207,7 +207,7 @@ fn local_get_escape_follows_const_binding() {
     m.init.push(Stmt::Let {
         id: 7,
         name: "t".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(nmc("Text", vec![Expr::String("via let".into())])),
     });
@@ -545,7 +545,7 @@ fn for_each_lowers_array_map_in_vstack() {
     let item_param = perry_hir::ir::Param {
         id: 42,
         name: "item".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         default: None,
         decorators: Vec::new(),
         is_rest: false,
@@ -559,9 +559,9 @@ fn for_each_lowers_array_map_in_vstack() {
             Expr::String("c".into()),
         ])),
         callback: Box::new(Expr::Closure {
-            func_id: 0 as perry_types::FuncId,
+            func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
-            return_type: perry_types::Type::Any,
+            return_type: perry_hir::types::Type::Any,
             body: vec![Stmt::Return(Some(inner_text))],
             captures: vec![],
             mutable_captures: vec![],

@@ -1,10 +1,10 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{
     monomorphize_module, ArgumentsObjectMeta, BinaryOp, CallArg, Class, ClassComputedMember,
     ClassComputedMemberKind, ClassField, CompareOp, Expr, Function, LogicalOp, Module,
     ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp,
 };
-use perry_types::{ObjectType, PropertyInfo, Type, TypeParam};
 
 static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -8472,7 +8472,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
         Stmt::Let {
             id: 10,
             name: "adder".to_string(),
-            ty: Type::Function(perry_types::FunctionType {
+            ty: Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Number, false),
                     ("b".to_string(), Type::Number, false),
@@ -8527,7 +8527,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
     let mut prefix = Vec::new();
     let mut captures = Vec::new();
     let mut mutable_captures = Vec::new();
-    let mut local_ty = Type::Function(perry_types::FunctionType {
+    let mut local_ty = Type::Function(perry_hir::types::FunctionType {
         params: vec![
             ("a".to_string(), Type::Int32, false),
             ("b".to_string(), Type::Int32, false),
@@ -8567,7 +8567,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
         }
         "number_param" => {
             params[0].ty = Type::Number;
-            local_ty = Type::Function(perry_types::FunctionType {
+            local_ty = Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Number, false),
                     ("b".to_string(), Type::Int32, false),
@@ -8579,7 +8579,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
         }
         "number_return" => {
             return_type = Type::Number;
-            local_ty = Type::Function(perry_types::FunctionType {
+            local_ty = Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Int32, false),
                     ("b".to_string(), Type::Int32, false),
@@ -8981,7 +8981,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
     let mut captures = Vec::new();
     let mut mutable_captures = Vec::new();
     let mut call_args = vec![Expr::Bool(true), Expr::Bool(false)];
-    let mut local_ty = Type::Function(perry_types::FunctionType {
+    let mut local_ty = Type::Function(perry_hir::types::FunctionType {
         params: vec![
             ("a".to_string(), Type::Boolean, false),
             ("b".to_string(), Type::Boolean, false),
@@ -9008,7 +9008,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
         }
         "numeric_predicate" => {
             params = vec![param(31, "a", Type::Number), param(32, "b", Type::Number)];
-            local_ty = Type::Function(perry_types::FunctionType {
+            local_ty = Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Number, false),
                     ("b".to_string(), Type::Number, false),
@@ -9119,7 +9119,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
     let mut prefix = Vec::new();
     let mut captures = Vec::new();
     let mut mutable_captures = Vec::new();
-    let mut local_ty = Type::Function(perry_types::FunctionType {
+    let mut local_ty = Type::Function(perry_hir::types::FunctionType {
         params: vec![("s".to_string(), Type::String, false)],
         return_type: Box::new(Type::String),
         is_async: false,

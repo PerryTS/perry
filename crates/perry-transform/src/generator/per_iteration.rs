@@ -78,9 +78,9 @@ use super::hoist_yields::expr_contains_yield;
 use crate::unroll::escape_analysis::{
     count_local_refs_expr, count_local_refs_stmt, count_local_refs_stmts,
 };
+use perry_hir::types::{LocalId, Type};
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{BinaryOp, Expr, Stmt, UpdateOp, WithSetFallback};
-use perry_types::{LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
 /// Ids whose `Stmt::Let` the state-machine transform must leave in place so

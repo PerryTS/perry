@@ -19,8 +19,8 @@
 //! `class_ids[name]`.
 
 use perry_codegen::{compile_module, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Class, Expr, Function, Module, ModuleInitKind, Stmt};
-use perry_types::Type;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {

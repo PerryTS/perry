@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 pub fn collect_closures_in_stmts(
     stmts: &[perry_hir::Stmt],
-    seen: &mut HashSet<perry_types::FuncId>,
-    out: &mut Vec<(perry_types::FuncId, perry_hir::Expr)>,
+    seen: &mut HashSet<perry_hir::types::FuncId>,
+    out: &mut Vec<(perry_hir::types::FuncId, perry_hir::Expr)>,
 ) {
     for s in stmts {
         match s {
@@ -91,8 +91,8 @@ pub fn collect_closures_in_stmts(
 
 pub fn collect_closures_in_expr(
     e: &perry_hir::Expr,
-    seen: &mut HashSet<perry_types::FuncId>,
-    out: &mut Vec<(perry_types::FuncId, perry_hir::Expr)>,
+    seen: &mut HashSet<perry_hir::types::FuncId>,
+    out: &mut Vec<(perry_hir::types::FuncId, perry_hir::Expr)>,
 ) {
     use perry_hir::Expr;
 

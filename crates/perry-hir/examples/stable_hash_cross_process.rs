@@ -13,7 +13,7 @@
 
 use perry_hir::ir::*;
 use perry_hir::stable_hash::hash_module;
-use perry_types::{ObjectType, PropertyInfo, Type};
+use perry_hir::types::{ObjectType, PropertyInfo, Type};
 use std::collections::HashMap;
 
 fn build_canonical() -> Module {

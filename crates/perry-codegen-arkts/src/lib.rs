@@ -259,9 +259,9 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
         // expression substitutes the call. Without this, emit_widget
         // hits `[unrecognized body]` for every helper-wrapped Text /
         // Stack child.
-        let function_map_inline: HashMap<perry_types::FuncId, perry_hir::ir::Function> =
+        let function_map_inline: HashMap<perry_hir::types::FuncId, perry_hir::ir::Function> =
             module.functions.iter().map(|f| (f.id, f.clone())).collect();
-        let function_lookup: HashMap<perry_types::FuncId, &perry_hir::ir::Function> =
+        let function_lookup: HashMap<perry_hir::types::FuncId, &perry_hir::ir::Function> =
             module.functions.iter().map(|f| (f.id, f)).collect();
         // Start view-builder Phase B remap counter ABOVE the highest
         // LocalId already used by `analysis_init` (Phase A + B inlining

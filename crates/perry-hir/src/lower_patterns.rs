@@ -6,8 +6,8 @@
 use crate::ir::*;
 use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_types::*;
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 

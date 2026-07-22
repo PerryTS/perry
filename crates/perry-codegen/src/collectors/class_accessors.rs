@@ -64,8 +64,8 @@ pub fn is_class_setter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_hir::types::Type;
     use perry_hir::{Class, Function};
-    use perry_types::Type;
     use std::collections::HashMap;
 
     fn function(name: &str) -> Function {

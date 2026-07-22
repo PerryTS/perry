@@ -1,7 +1,7 @@
 //! `Module` HIR struct + constructor. Re-exported from `super`.
 
 use super::*;
-use perry_types::{FuncId, Type};
+use crate::types::{FuncId, Type};
 
 /// A complete HIR module (corresponds to one TypeScript file)
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ pub struct Module {
     /// to decide whether the closure body is already a state machine
     /// returning a Promise (no busy-wait pump needed). Populated by the
     /// transform pass; consumed by codegen.
-    pub async_step_closures: std::collections::HashSet<perry_types::FuncId>,
+    pub async_step_closures: std::collections::HashSet<crate::types::FuncId>,
     /// Issue #2076: display name overrides for `fn.name`/`console.log`.
     /// Populated at lowering for two cases the binding-name registration
     /// path can't see:
@@ -113,7 +113,7 @@ pub struct Module {
     ///   • object-literal shorthand/method properties (`{m(){}}` → `"m"`)
     /// Keyed by the closure/function's HIR FuncId; consumed by codegen
     /// when emitting `js_register_function_name` calls.
-    pub closure_display_names: std::collections::HashMap<perry_types::FuncId, String>,
+    pub closure_display_names: std::collections::HashMap<crate::types::FuncId, String>,
     /// #5592: user-visible `.name` overrides for classes whose HIR
     /// registration key differs from their JS name. The only producer
     /// today is a second anonymous class expression assigned to a binding
@@ -129,7 +129,7 @@ pub struct Module {
     /// by codegen to emit `js_register_function_source` so `fn.toString()`
     /// (and `Function.prototype.toString.call(fn)`) reconstruct the source
     /// instead of returning the generic `"[object Object]"`.
-    pub closure_source_text: std::collections::HashMap<perry_types::FuncId, String>,
+    pub closure_source_text: std::collections::HashMap<crate::types::FuncId, String>,
     /// #3664: func_ids of `async function*` declarations and `async function*(){}`
     /// expressions. The generator transform clears `is_async`/`is_generator`
     /// before codegen, erasing the async-vs-sync distinction (both lower to a
@@ -137,7 +137,7 @@ pub struct Module {
     /// register async-generator closures in the runtime's dedicated async-
     /// generator registry, which drives `%AsyncGeneratorFunction%` / `%Async
     /// Generator%` intrinsic resolution. Populated by `transform_generators`.
-    pub async_generator_funcs: std::collections::HashSet<perry_types::FuncId>,
+    pub async_generator_funcs: std::collections::HashSet<crate::types::FuncId>,
     /// Number of leading parameter-prologue statements (default-param guards +
     /// destructuring binding stmts) in each generator / async-generator
     /// function body, keyed by func_id. Per spec, generator parameter binding
@@ -149,7 +149,7 @@ pub struct Module {
     /// outer wrapper (run-at-call) instead of state 0 of `.next()`. Absent /
     /// zero means no prologue (the common case — fully inert). Populated by
     /// lowering (`lower_fn_decl` / `lower_fn_expr`).
-    pub gen_param_prologue_len: std::collections::HashMap<perry_types::FuncId, usize>,
+    pub gen_param_prologue_len: std::collections::HashMap<crate::types::FuncId, usize>,
 }
 
 impl Module {

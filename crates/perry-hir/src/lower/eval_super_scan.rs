@@ -27,7 +27,7 @@
 
 use std::collections::HashSet;
 
-use perry_types::Type;
+use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use super::LoweringContext;

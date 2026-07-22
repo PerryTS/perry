@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::{anyhow, bail, Result};
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, PTR};

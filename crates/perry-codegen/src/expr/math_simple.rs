@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr};
-use perry_types::Type as HirType;
 
 use crate::type_analysis::{is_definitely_string_expr, is_numeric_expr, map_static_type_args};
 use crate::types::{DOUBLE, F32, I1, I32, I64};

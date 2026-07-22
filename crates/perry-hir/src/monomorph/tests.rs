@@ -1,5 +1,5 @@
 use super::*;
-use perry_types::TypeParam;
+use crate::types::TypeParam;
 
 #[test]
 fn test_mangle_type() {
