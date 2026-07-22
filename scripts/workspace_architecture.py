@@ -43,6 +43,7 @@ ALLOWED_CATEGORIES = {
     "tool",
 }
 ALLOWED_DECISIONS = {"keep", "merge", "externalize", "remove", "review"}
+SUPPORTED_SCHEMA_VERSION = 1
 
 
 def load_metadata():
@@ -55,7 +56,18 @@ def load_metadata():
 
 def load_policy():
     with POLICY_PATH.open(encoding="utf-8") as handle:
-        return json.load(handle)
+        policy = json.load(handle)
+    validate_policy_schema(policy)
+    return policy
+
+
+def validate_policy_schema(policy):
+    version = policy.get("schema_version")
+    if version != SUPPORTED_SCHEMA_VERSION:
+        raise ValueError(
+            "unsupported workspace architecture schema version: {!r}; "
+            "expected {}".format(version, SUPPORTED_SCHEMA_VERSION)
+        )
 
 
 def excluded_members(policy, scope):
@@ -443,6 +455,17 @@ something = "1"
     def test_unknown_ci_scope_is_rejected(self):
         with self.assertRaises(ValueError):
             excluded_members({}, "typo")
+
+    def test_policy_schema_version_is_required(self):
+        with self.assertRaisesRegex(ValueError, "schema version"):
+            validate_policy_schema({})
+
+    def test_unknown_policy_schema_version_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "schema version"):
+            validate_policy_schema({"schema_version": 2})
+
+    def test_supported_policy_schema_version_is_accepted(self):
+        validate_policy_schema({"schema_version": SUPPORTED_SCHEMA_VERSION})
 
 
 def main():

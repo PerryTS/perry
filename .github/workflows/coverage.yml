@@ -49,21 +49,20 @@ jobs:
 
       - name: Run coverage
         # Uses the same centralized Linux test scope as `cargo-test`.
-        # `--no-fail-fast` keeps the
-        # report comprehensive even if one crate's tests fail —
-        # this is a visibility job, not a gate.
+        # Keep collecting and reporting partial coverage if a test fails —
+        # this is a visibility job, not a test gate.
         run: |
           mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
             --print-excluded-scope linux-test)
           exclude_args=()
           for package in "${excluded[@]}"; do exclude_args+=(--exclude "$package"); done
-          cargo llvm-cov --workspace --no-fail-fast \
+          cargo llvm-cov --workspace --no-fail-fast --ignore-run-fail \
             "${exclude_args[@]}" \
             --html --output-dir target/llvm-cov-html
-          cargo llvm-cov report --no-fail-fast \
+          cargo llvm-cov report \
             "${exclude_args[@]}" \
             --lcov --output-path target/lcov.info
-          cargo llvm-cov report --no-fail-fast \
+          cargo llvm-cov report \
             "${exclude_args[@]}" \
             --summary-only > target/summary.txt
         # Don't fail the workflow on a non-zero exit — the artifacts
