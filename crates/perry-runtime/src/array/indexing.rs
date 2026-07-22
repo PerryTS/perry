@@ -256,7 +256,12 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
 /// is `index` present as an *own* property (dense non-hole slot, sparse named
 /// data property, or an accessor descriptor)?
 pub(crate) unsafe fn array_has_own_index(arr: *const ArrayHeader, index: u32) -> bool {
-    if crate::object::descriptors_in_use() {
+    // #6748 grind: gate on the PER-ARRAY descriptor flag (set by every
+    // `define_array_property` install), not the process-global
+    // `descriptors_in_use()` — the global flag flips during builtin init, so
+    // every array element probe paid an `index.to_string()` + accessor-map
+    // String-key alloc for arrays that have no descriptors at all.
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         let key = index.to_string();
         if crate::object::get_accessor_descriptor(arr as usize, &key).is_some() {
             return true;
@@ -690,7 +695,11 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             return std::ptr::read(entries.add(index as usize * 2));
         }
     }
-    if crate::object::descriptors_in_use() {
+    // #6748 grind: per-array flag, not the process-global gate (see
+    // `array_has_own_index`) — this probe allocated two Strings on EVERY
+    // checked element read once any descriptor existed process-wide, which
+    // taxed every internal keys_array walk (`in`, defineProperty, Object.keys).
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         let key = index.to_string();
         if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, &key) {
             if acc.get != 0 {
@@ -1441,7 +1450,7 @@ pub extern "C" fn js_array_set_string_key(
     }
     // Named accessor installed via `Object.defineProperty(arr, "prop",
     // {get,set})`: dispatch the setter instead of the expando store.
-    if crate::object::descriptors_in_use() {
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, key_str) {
             if acc.set != 0 {
                 unsafe {

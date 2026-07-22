@@ -949,8 +949,17 @@ unsafe fn ordinary_has_property(
         }
         // Own accessor property (also mirrored into `keys_array`, but check the
         // side table directly so a get-only accessor is never missed).
+        // #6748 follow-up: gate on the thread flag + the per-object
+        // `OBJ_FLAG_HAS_DESCRIPTORS` header bit (the same address-reuse-safe
+        // gate the [[Set]] path uses) — `get_accessor_descriptor` allocates a
+        // `String` map key per probe, and this ran per prototype level on
+        // EVERY `in`, dominating its profile (~60% of samples on a
+        // descriptor-less receiver).
         if let Some(name) = key_name {
-            if get_accessor_descriptor(cur as usize, name).is_some() {
+            if crate::object::descriptor_state::ACCESSORS_IN_USE.with(|c| c.get())
+                && crate::object::descriptor_state::object_has_descriptors(cur as usize)
+                && get_accessor_descriptor(cur as usize, name).is_some()
+            {
                 return true;
             }
         }
@@ -1139,8 +1148,9 @@ pub(crate) unsafe fn native_module_own_field_by_key(
         return None;
     }
     let key_count = crate::array::js_array_length(keys);
-    for i in 0..key_count {
-        let stored = crate::array::js_array_get(keys, i);
+    let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+    for i in 0..key_count.min(slot_len as u32) {
+        let stored = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if crate::string::js_string_key_bytes(stored, &mut sso_buf) == Some(target) {
             return Some(js_object_get_field(obj, i));
@@ -1194,8 +1204,9 @@ pub(crate) unsafe fn wide_key_index_lookup(
                 // linear-scan order).
                 let mut map = std::collections::HashMap::with_capacity(key_count);
                 let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                for i in 0..key_count {
-                    let stored = crate::array::js_array_get(keys, i as u32);
+                let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+                for i in 0..key_count.min(slot_len) {
+                    let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
                     if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
                         map.entry(b.to_vec()).or_insert(i as u32);
                     }
@@ -1224,8 +1235,9 @@ pub(crate) unsafe fn wide_key_index_lookup(
         if (key_count as u32) > entry.indexed_len {
             // Catch up on appended keys.
             let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            for i in entry.indexed_len as usize..key_count {
-                let stored = crate::array::js_array_get(keys, i as u32);
+            let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+            for i in entry.indexed_len as usize..key_count.min(slot_len) {
+                let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
                 if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
                     entry.map.entry(b.to_vec()).or_insert(i as u32);
                 }
@@ -1235,7 +1247,12 @@ pub(crate) unsafe fn wide_key_index_lookup(
         let idx = entry.map.get(key_bytes).copied();
         match idx {
             Some(i) if (i as usize) < key_count => {
-                let stored = crate::array::js_array_get(keys, i);
+                let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+                if (i as usize) >= slot_len {
+                    table.remove(pos);
+                    return None;
+                }
+                let stored = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
                 if crate::string::js_string_key_matches(stored, key) {
                     if pos != 0 {
                         let e = table.remove(pos);

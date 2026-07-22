@@ -70,8 +70,9 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
             return; // already present
         }
     } else {
-        for i in 0..key_count {
-            let stored = crate::array::js_array_get(keys, i as u32);
+        let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+        for i in 0..key_count.min(slot_len) {
+            let stored = JSValue::from_bits((*slots.add(i)).to_bits());
             // #1781: SSO-aware match — pre-fix an existing inline-SSO key
             // wasn't seen here, so `Object.defineProperty(obj, "id", ...)`
             // on an object that already had `id` as an SSO key
@@ -300,8 +301,9 @@ pub(crate) unsafe fn own_key_present(
             return true;
         }
     }
-    for i in 0..key_count {
-        let stored = crate::array::js_array_get(keys, i as u32);
+    let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+    for i in 0..key_count.min(slot_len) {
+        let stored = JSValue::from_bits((*slots.add(i)).to_bits());
         // #1781: SSO-aware match — `hasOwnProperty("id")` previously
         // returned false when "id" lived as an inline SSO key.
         if crate::string::js_string_key_matches(stored, key) {

@@ -264,6 +264,30 @@ thread_local! {
 /// faster than the hash overhead (memory access, cache footprint).
 const KEYS_INDEX_THRESHOLD: u32 = 32;
 
+/// Raw dense-slot view of a (validated) keys array: resolve a grow-forward
+/// pointer ONCE, then hand back the backing slots for direct indexing. The
+/// generic `js_array_get` element getter re-runs the whole per-element
+/// gauntlet — forward-resolution, lazy/Map/Set receiver probes (each a TLS +
+/// registry HashMap hit), descriptor gates — on EVERY slot, which made the
+/// keys_array scan loops (`own_key_present`, the sidecar/wide-index builds)
+/// pay ~µs per element. Callers have already validated `keys` is a
+/// `GC_TYPE_ARRAY`; keys arrays are dense (no holes), and a slot that is not
+/// a string simply fails the key match. (#6748 grind)
+#[inline]
+pub(crate) unsafe fn keys_array_dense_slots(
+    keys: *const crate::array::ArrayHeader,
+) -> (*const f64, usize) {
+    let arr = crate::array::clean_arr_ptr(keys);
+    if arr.is_null() {
+        return (std::ptr::null(), 0);
+    }
+    let len = (*arr).length.min((*arr).capacity) as usize;
+    (
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64,
+        len,
+    )
+}
+
 /// FNV-1a hash of the bytes behind a string header. Same hash function
 /// as `key_content_hash_impl` so callers can mix paths.
 #[inline(always)]
@@ -319,8 +343,9 @@ unsafe fn keys_index_lookup(
         // an authoritative-miss caller (the [[Set]] fast path's append, and now
         // the defineProperty path) could duplicate an SSO-stored key.
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        for i in 0..key_count {
-            let v = crate::array::js_array_get(keys, i);
+        let (slots, slot_len) = keys_array_dense_slots(keys);
+        for i in 0..key_count.min(slot_len as u32) {
+            let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
             if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
                 let h = key_bytes_hash(b.as_ptr(), b.len());
                 map.entry(h).or_default().push(i);
@@ -335,8 +360,12 @@ unsafe fn keys_index_lookup(
         let (_, map) = m.get(&obj_addr)?;
         let candidates = map.get(&key_hash)?;
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let (slots, slot_len) = keys_array_dense_slots(keys);
         for &i in candidates {
-            let v = crate::array::js_array_get(keys, i);
+            if (i as usize) >= slot_len {
+                continue;
+            }
+            let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
             let Some(stored_bytes) = crate::string::js_string_key_bytes(v, &mut sso) else {
                 continue;
             };
