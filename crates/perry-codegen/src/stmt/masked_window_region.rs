@@ -137,9 +137,17 @@ fn count_masked_reads(expr: &Expr, eligible: &std::collections::HashSet<u32>) ->
 /// True when `expr` provably evaluates to a JS number in a fast copy, under
 /// `refined` (locals already proven number at this program point) and
 /// `eligible` (arrays whose static-window reads the entry guard proved
-/// numeric). Bitwise operators and `-`/`*`/`/`/`%`/`**` produce numbers for
-/// ANY operands (they ToNumber/ToInt32 internally); only `+` needs both
-/// sides proven (string concatenation).
+/// numeric).
+///
+/// BigInt is the trap here: `1n * 1n`, `-1n`, `~1n`, `1n << 1n` are all
+/// BigInts, so arithmetic/bitwise operators do NOT unconditionally produce
+/// numbers. What IS sound is the mixed-type rule: when at least one operand
+/// is a proven number, `-`/`*`/`/`/`%`/`**`/`&`/`|`/`^`/`<<`/`>>` either
+/// produce a Number or THROW a TypeError ("cannot mix BigInt") — and a
+/// statement that throws never completes, so its scheduled refinement is
+/// unobservable. `>>>` and unary `+` throw on ANY BigInt operand, so they
+/// are unconditionally number-or-throw; `+` (Add) needs BOTH sides proven
+/// (string concatenation); `-x`/`~x` need the operand proven.
 fn expr_is_number_under(
     ctx: &FnCtx<'_>,
     refined: &std::collections::HashSet<u32>,
@@ -161,25 +169,37 @@ fn expr_is_number_under(
                 && crate::collectors::static_index_window(index).is_some()
         }
         Expr::Binary { op, left, right } => match op {
+            // ToUint32 has no BigInt form — `1n >>> 0n` throws — so the
+            // result, when the statement completes, is always a Number.
+            BinaryOp::UShr => true,
+            // Number-or-throw when one side is a proven number: the BigInt
+            // forms of these ops require BOTH operands BigInt (mixing
+            // throws), and every non-BigInt primitive coerces to Number.
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
             | BinaryOp::Shr
-            | BinaryOp::UShr
             | BinaryOp::Sub
             | BinaryOp::Mul
             | BinaryOp::Div
             | BinaryOp::Mod
-            | BinaryOp::Pow => true,
+            | BinaryOp::Pow => {
+                expr_is_number_under(ctx, refined, eligible, left)
+                    || expr_is_number_under(ctx, refined, eligible, right)
+            }
             BinaryOp::Add => {
                 expr_is_number_under(ctx, refined, eligible, left)
                     && expr_is_number_under(ctx, refined, eligible, right)
             }
         },
-        Expr::Unary { op, operand: _ } => {
-            matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
-        }
+        Expr::Unary { op, operand } => match op {
+            // Unary `+` is ToNumber, which throws on BigInt.
+            UnaryOp::Pos => true,
+            // `-x` / `~x` on a BigInt yield BigInts — need the operand proven.
+            UnaryOp::Neg | UnaryOp::BitNot => expr_is_number_under(ctx, refined, eligible, operand),
+            UnaryOp::Not => false,
+        },
         Expr::Conditional {
             condition: _,
             then_expr,
@@ -364,16 +384,11 @@ pub(super) fn try_match_masked_window_region(
                     });
                 }
             }
-            // `x++` / `x--` coerce the local to a number.
-            Stmt::Expr(Expr::Update { id, .. }) => {
-                if refinable(ctx, *id) && refined.insert(*id) {
-                    refinements.push(RegionRefinement {
-                        stmt_offset: offset,
-                        local_id: *id,
-                        set_number: true,
-                    });
-                }
-            }
+            // `x++` on a BigInt yields a BigInt (ToNumeric, not ToNumber) —
+            // an Update proves nothing about the local's type. If the local
+            // was previously refined, the refinement stays valid (++ on a
+            // number is a number); an unrefined local stays unrefined.
+            Stmt::Expr(Expr::Update { .. }) => {}
             _ => {}
         }
     }

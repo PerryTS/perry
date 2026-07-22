@@ -150,6 +150,44 @@ function regionInTry(S: any, poison: any): string {
   return 'ok a=' + a;
 }
 
+// BigInt flowing through a region must NOT be refined to Number: `x * x`,
+// `-x`, `~x` on BigInts yield BigInts (a pure-unknown operator proves
+// nothing), and mixing a BigInt with a guard-proven numeric element read
+// must throw TypeError in fast and slow copies alike.
+function regionBigintSide(S: any, b: any): string {
+  let x = b;
+  let y = b;
+  let acc = 0;
+  acc += S[1 & 15];
+  acc += S[2 & 15];
+  acc += S[3 & 15];
+  acc += S[4 & 15];
+  x = x * x;
+  y = -y;
+  acc += S[5 & 15];
+  acc += S[6 & 15];
+  acc += S[7 & 15];
+  acc += S[8 & 15];
+  return acc + ' ' + x + ' ' + y;
+}
+function regionBigintMixThrow(S: any, b: any): string {
+  let x = b;
+  let acc = 0;
+  try {
+    acc += S[1 & 15];
+    acc += S[2 & 15];
+    acc += S[3 & 15];
+    acc += S[4 & 15];
+    acc += S[5 & 15];
+    acc += S[6 & 15];
+    acc += S[7 & 15];
+    x = x * S[8 & 15];
+  } catch (e: any) {
+    return 'caught acc=' + acc + ' x=' + x;
+  }
+  return 'no-throw acc=' + acc + ' x=' + x;
+}
+
 const lrPlain = [11, 22];
 console.log('encipherish i32:', encipherish(lrPlain, 0, i32, i32));
 console.log('encipherish plain:', encipherish(lrPlain, 0, plain, plain));
@@ -166,3 +204,7 @@ const thrower = {
   },
 };
 console.log('region try throw:', regionInTry(i32, thrower));
+console.log('region bigint side:', regionBigintSide(i32, 3n));
+console.log('region bigint side plain:', regionBigintSide(plain, 5n));
+console.log('region bigint mix:', regionBigintMixThrow(i32, 7n));
+console.log('region bigint mix num:', regionBigintMixThrow(i32, 2)); // number path completes

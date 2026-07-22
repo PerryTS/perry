@@ -411,7 +411,9 @@ pub(crate) fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
 #[no_mangle]
 pub extern "C" fn js_typed_array_masked_window_data_ptr(receiver: f64) -> i64 {
     let addr = strip_nanbox(receiver.to_bits());
-    if addr < 0x1000 || lookup_typed_array_kind(addr).is_none() {
+    if !crate::value::addr_class::is_plausible_heap_addr(addr)
+        || lookup_typed_array_kind(addr).is_none()
+    {
         return 0;
     }
     data_ptr(addr as *const TypedArrayHeader) as i64
