@@ -37,10 +37,12 @@ pub(crate) struct RuntimeState {
     /// sidecar, shape and transition caches (previously five
     /// `thread_local!`s in `object::mod`).
     pub(crate) object_hot: crate::object::ObjectHotTables,
-    /// Property-lookup inline caches: the direct-mapped field cache and
-    /// the wide-object key index (previously `thread_local!`s in
-    /// `object::field_get_set`).
+    /// Property-lookup inline caches: the direct-mapped field cache
+    /// (previously a `thread_local!` in `object::field_get_set`).
     pub(crate) field_lookup: crate::object::FieldLookupCaches,
+    /// #6759 Phase C1: first-class Shape records keyed on keys_array
+    /// identity (see `object::shapes` and docs/shape-tree-plan.md).
+    pub(crate) shapes: crate::object::ShapeTable,
 }
 
 impl RuntimeState {
@@ -49,6 +51,7 @@ impl RuntimeState {
             descriptors: crate::object::DescriptorTables::new(),
             object_hot: crate::object::ObjectHotTables::new(),
             field_lookup: crate::object::FieldLookupCaches::new(),
+            shapes: crate::object::ShapeTable::new(),
         })
     }
 }

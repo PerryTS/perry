@@ -1276,113 +1276,28 @@ pub(crate) unsafe fn native_module_own_field_by_key(
 pub(crate) const WIDE_KEY_INDEX_MIN_KEYS: usize = 257;
 const WIDE_KEY_INDEX_CAPACITY: usize = 4;
 
-pub(crate) struct WideKeyIndexEntry {
-    keys_id: usize,
-    indexed_len: u32,
-    map: std::collections::HashMap<Vec<u8>, u32>,
-}
+// #6759 C1: the wide-object key index folded into the shape records
+// (`object::shapes`, keyed on keys_array identity, unbounded — the old
+// 4-entry LRU thrashed past 4 wide shapes). These shims keep the
+// historical entry points.
 
-// Storage: `FieldLookupCaches::wide_key_index` (`state().field_lookup`).
-
-/// Probe the wide-object index for `key_bytes` in the keys array identified by
-/// `keys_id`. Returns a slot index whose stored key has been re-validated
-/// against `key` — `None` means "not found via the index" (caller falls back
-/// to the linear scan).
+/// Probe the shape record for `key_bytes`; slot is content-revalidated.
+/// `None` falls back to the caller's linear scan (accelerator, never
+/// authoritative).
 pub(crate) unsafe fn wide_key_index_lookup(
-    keys_id: usize,
+    _keys_id: usize,
     key_bytes: &[u8],
-    key: *const crate::StringHeader,
+    _key: *const crate::StringHeader,
     keys: *const crate::array::ArrayHeader,
     key_count: usize,
 ) -> Option<u32> {
-    {
-        let mut table = crate::state::state()
-            .field_lookup
-            .wide_key_index
-            .borrow_mut();
-        let pos = table.iter().position(|e| e.keys_id == keys_id);
-        let pos = match pos {
-            Some(p) => p,
-            None => {
-                // Build the full map once (first occurrence wins, matching
-                // linear-scan order).
-                let mut map = std::collections::HashMap::with_capacity(key_count);
-                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
-                for i in 0..key_count.min(slot_len) {
-                    let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
-                    if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
-                        map.entry(b.to_vec()).or_insert(i as u32);
-                    }
-                }
-                if table.len() >= WIDE_KEY_INDEX_CAPACITY {
-                    table.pop();
-                }
-                table.insert(
-                    0,
-                    WideKeyIndexEntry {
-                        keys_id,
-                        indexed_len: key_count as u32,
-                        map,
-                    },
-                );
-                0
-            }
-        };
-        let entry = &mut table[pos];
-        if (key_count as u32) < entry.indexed_len {
-            // The keys array shrank (a delete compacted it) — slot indices
-            // are no longer trustworthy. Drop and let the next read rebuild.
-            table.remove(pos);
-            return None;
-        }
-        if (key_count as u32) > entry.indexed_len {
-            // Catch up on appended keys.
-            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
-            for i in entry.indexed_len as usize..key_count.min(slot_len) {
-                let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
-                if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
-                    entry.map.entry(b.to_vec()).or_insert(i as u32);
-                }
-            }
-            entry.indexed_len = key_count as u32;
-        }
-        let idx = entry.map.get(key_bytes).copied();
-        match idx {
-            Some(i) if (i as usize) < key_count => {
-                let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
-                if (i as usize) >= slot_len {
-                    table.remove(pos);
-                    return None;
-                }
-                let stored = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
-                if crate::string::js_string_key_matches(stored, key) {
-                    if pos != 0 {
-                        let e = table.remove(pos);
-                        table.insert(0, e);
-                    }
-                    Some(i)
-                } else {
-                    // Stale (address reuse or in-place mutation): drop the
-                    // whole entry rather than chase it.
-                    table.remove(pos);
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
+    let h = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+    crate::object::shapes::shape_slot_lookup(keys, key_bytes, h, key_count as u32, true)
 }
 
-/// Back-fill a linear-scan hit into the wide-object index (no-op when the
-/// keys array has no entry — the next lookup builds it wholesale).
+/// Back-fill a linear-scan hit into the shape record (no-op when the keys
+/// array has no shape entry yet).
 pub(crate) fn wide_key_index_note_hit(keys_id: usize, key_bytes: &[u8], index: u32) {
-    let mut table = crate::state::state()
-        .field_lookup
-        .wide_key_index
-        .borrow_mut();
-    if let Some(e) = table.iter_mut().find(|e| e.keys_id == keys_id) {
-        e.map.entry(key_bytes.to_vec()).or_insert(index);
-    }
+    let h = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+    crate::object::shapes::shape_note_hit(keys_id as *const crate::array::ArrayHeader, h, index);
 }

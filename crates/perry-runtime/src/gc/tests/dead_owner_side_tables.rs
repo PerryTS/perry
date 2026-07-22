@@ -449,19 +449,30 @@ fn test_closure_dead_payload_arm_clears_side_tables() {
 /// Assert the arm now clears the KEYS_INDEX entry alongside the overflow one.
 #[test]
 fn test_object_dead_payload_arm_clears_keys_index() {
+    // #6759 C1: key indexes are shape records keyed on the KEYS_ARRAY
+    // address; the per-object dead-payload arm no longer prunes them.
+    // The successor guarantee: the dead-owner fan-out drops a shape whose
+    // keys_array is dead (memory-only — per-hit content validation covers
+    // correctness for anything the prune misses).
     let _global = global_side_table_test_lock();
-    let owner: usize = 0x0BEC_1DE0_0000_2026;
-    crate::object::test_seed_keys_index_entry(owner);
-    assert!(crate::object::test_keys_index_entry_exists(owner));
+    let dead_keys: usize = 0x0BEC_1DE0_0000_2026;
+    let live_keys: usize = 0x0BEC_1DE0_0000_3026;
+    crate::object::test_seed_keys_index_entry(dead_keys);
+    crate::object::test_seed_keys_index_entry(live_keys);
+    assert!(crate::object::test_keys_index_entry_exists(dead_keys));
 
-    gc_type_clear_dead_payload_side_tables(GC_TYPE_OBJECT, owner);
+    crate::object::shapes::prune_dead_shape_keys(&|addr| addr == dead_keys);
 
     assert!(
-        !crate::object::test_keys_index_entry_exists(owner),
-        "dead object's KEYS_INDEX entry must be pruned by the \
-         ObjectOverflowFields dead-payload arm (else it leaks forever \
-         keyed on the recycled address)"
+        !crate::object::test_keys_index_entry_exists(dead_keys),
+        "a dead keys_array's shape record must be pruned by the dead-owner \
+         fan-out (else it leaks forever keyed on the recycled address)"
     );
+    assert!(
+        crate::object::test_keys_index_entry_exists(live_keys),
+        "a live keys_array's shape record must survive the prune"
+    );
+    crate::object::shapes::shape_drop(live_keys as *const crate::array::ArrayHeader);
 }
 
 #[test]

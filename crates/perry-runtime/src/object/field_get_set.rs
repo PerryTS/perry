@@ -143,15 +143,12 @@ pub(crate) struct FieldLookupCaches {
     /// nursery reset can reuse a keys-array address, so cache hits still
     /// validate the key slot before returning a field.
     pub(crate) field_cache: std::cell::UnsafeCell<[(usize, u32, u32); FIELD_CACHE_SIZE]>,
-    /// #5054 wide-object key→index map entries (see `has_property.rs`).
-    pub(crate) wide_key_index: std::cell::RefCell<Vec<has_property::WideKeyIndexEntry>>,
 }
 
 impl FieldLookupCaches {
     pub(crate) fn new() -> Self {
         FieldLookupCaches {
             field_cache: std::cell::UnsafeCell::new([(0usize, 0u32, 0u32); FIELD_CACHE_SIZE]),
-            wide_key_index: std::cell::RefCell::new(Vec::new()),
         }
     }
 }

@@ -675,11 +675,11 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
     match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
         GcMoveHookKind::ObjectOverflowFields => {
             crate::object::clear_overflow_for_ptr(user_ptr);
-            // Sibling of the overflow prune above: the object's KEYS_INDEX
-            // sidecar (built for objects past KEYS_INDEX_THRESHOLD own keys)
-            // is also address-keyed and must be dropped on death, else it
-            // leaks forever under the recycled address.
-            crate::object::clear_keys_index_for_ptr(user_ptr);
+            // The old per-object KEYS_INDEX prune is gone (#6759 C1): key
+            // indexes are shape records keyed on keys_array identity now,
+            // memory-pruned by `shapes::prune_dead_shape_keys` in the
+            // dead-owner fan-out and correctness-guarded by per-hit
+            // content validation.
         }
         GcMoveHookKind::ClosureDynamicProps => {
             // 2026-07-09 GC audit wave 2: previously an explicit no-op — a

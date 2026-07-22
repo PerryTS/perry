@@ -84,6 +84,8 @@ mod polymorphic_index;
 mod primitive_proto_thunks;
 mod property_key;
 pub(crate) mod prototype_chain;
+pub(crate) mod shapes;
+pub(crate) use shapes::ShapeTable;
 mod prototype_helpers;
 mod reflect_support;
 mod regex_proto_thunks;
@@ -251,28 +253,6 @@ pub(crate) struct ObjectHotTables {
     /// object (the row-build pattern). See `overflow_set` for the safety
     /// argument behind the cached raw `Vec` pointer.
     pub(crate) overflow_last: Cell<(usize, *mut Vec<u64>)>,
-    /// Sidecar hash index for object key lookup. The on-object
-    /// `keys_array` only supports O(N) linear scan; for objects that
-    /// grow beyond `KEYS_INDEX_THRESHOLD` keys, the linear scan
-    /// becomes O(N²) total work for the build-then-fill pattern (e.g.
-    /// `for (i=0..N) obj["k_"+i] = i`). Without this index, building
-    /// a 10k-key dictionary takes ~9 s (Bun: 4 ms — 2200× slower).
-    ///
-    /// Keyed on the keys_array heap pointer. Each entry maps
-    /// FNV-1a content hash of the key bytes → slot index in the
-    /// keys_array. Built lazily on first lookup at threshold; rebuilt
-    /// on miss after a reallocation (`js_array_push` returns a new
-    /// pointer when the backing storage grew). Incremental updates
-    /// happen when the array stays in place.
-    ///
-    /// Stale entries (keys_array address recycled by GC into an
-    /// unrelated array) are tolerated: lookup just misses, content
-    /// validation against the actual stored key on the linear-scan
-    /// fallback ensures correctness.
-    #[allow(clippy::type_complexity)]
-    pub(crate) keys_index: RefCell<
-        crate::fast_hash::PtrHashMap<usize, (u32, std::collections::HashMap<u64, Vec<u32>>)>,
-    >,
     /// Direct-mapped inline shape cache. Empty entries have shape_id == 0
     /// and keys_array == null.
     pub(crate) shape_inline_cache:
@@ -292,7 +272,6 @@ impl ObjectHotTables {
         ObjectHotTables {
             overflow_fields: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             overflow_last: Cell::new((0, std::ptr::null_mut())),
-            keys_index: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             shape_inline_cache: std::cell::UnsafeCell::new(
                 [ShapeCacheEntry {
                     shape_id: 0,
@@ -360,19 +339,14 @@ fn key_bytes_hash(name_ptr: *const u8, name_len: usize) -> u64 {
     h
 }
 
-/// Look up the slot index for `key` in `obj`'s keys array via the
-/// sidecar hash index. Returns `Some(slot)` on hit, `None` on miss
-/// (the caller must then fall through to append/grow).
-///
-/// Keyed on the OBJECT pointer (not the keys_array pointer) because
-/// shape-sharing means the keys_array gets cloned on every insert,
-/// which would invalidate a keys-keyed sidecar after each call. The
-/// object pointer is stable within its lifetime (until GC moves it —
-/// at which point any sidecar entry just becomes a harmless stale
-/// reference; the next lookup misses and rebuilds).
+/// Locate `key` in `obj`'s keys array via the shape record (#6759 C1:
+/// keyed on keys_array identity — shared across same-shape objects —
+/// replacing the per-object sidecar). Returns `Some(slot)` on a
+/// content-validated hit, `None` on miss (caller falls through to
+/// append/grow or the linear scan).
 #[inline]
 unsafe fn keys_index_lookup(
-    obj: *const ObjectHeader,
+    _obj: *const ObjectHeader,
     keys: *const crate::array::ArrayHeader,
     key_bytes: &[u8],
     key_hash: u64,
@@ -381,77 +355,25 @@ unsafe fn keys_index_lookup(
     if key_count < KEYS_INDEX_THRESHOLD {
         return None;
     }
-    let obj_addr = obj as usize;
-    // Look up the cached index. If absent OR stale (length doesn't
-    // match — caller appended without going through `keys_index_insert`),
-    // rebuild.
-    let st = crate::state::state();
-    let needs_rebuild = {
-        let m = st.object_hot.keys_index.borrow();
-        match m.get(&obj_addr) {
-            Some((cached_len, _)) => *cached_len != key_count,
-            None => true,
-        }
-    };
-    if needs_rebuild {
-        let mut map: std::collections::HashMap<u64, Vec<u32>> =
-            std::collections::HashMap::with_capacity(key_count as usize);
-        // SSO-aware key decode (#1781 family): short keys can be stored INLINE
-        // (`SHORT_STRING_TAG`), not as heap `STRING_TAG` pointers. The previous
-        // heap-only `is_string()` gate silently dropped them from the index, so
-        // an authoritative-miss caller (the [[Set]] fast path's append, and now
-        // the defineProperty path) could duplicate an SSO-stored key.
-        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let (slots, slot_len) = keys_array_dense_slots(keys);
-        for i in 0..key_count.min(slot_len as u32) {
-            let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
-            if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
-                let h = key_bytes_hash(b.as_ptr(), b.len());
-                map.entry(h).or_default().push(i);
-            }
-        }
-        st.object_hot
-            .keys_index
-            .borrow_mut()
-            .insert(obj_addr, (key_count, map));
-    }
-    {
-        let m = st.object_hot.keys_index.borrow();
-        let (_, map) = m.get(&obj_addr)?;
-        let candidates = map.get(&key_hash)?;
-        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let (slots, slot_len) = keys_array_dense_slots(keys);
-        for &i in candidates {
-            if (i as usize) >= slot_len {
-                continue;
-            }
-            let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
-            let Some(stored_bytes) = crate::string::js_string_key_bytes(v, &mut sso) else {
-                continue;
-            };
-            if stored_bytes == key_bytes {
-                return Some(i);
-            }
-        }
-        None
-    }
+    shapes::shape_slot_lookup(keys, key_bytes, key_hash, key_count, true)
 }
 
-/// Record a new (key_hash → slot) entry in the sidecar after a key
-/// has been appended to `obj`. Caller ensures `new_count` equals the
-/// new keys_array length right after the append.
+/// Record a new (key_hash → slot) entry on the POST-append keys array's
+/// shape after a key was appended. Caller passes `(*obj).keys_array`
+/// (the definitive post-append array — a clone or grow-realloc lands
+/// under its new identity, or nowhere if no shape entry exists yet) and
+/// ensures `new_count` equals the new keys_array length.
 #[inline]
-fn keys_index_insert(obj_addr: usize, new_count: u32, key_hash: u64, slot: u32) {
+fn keys_index_insert(
+    keys: *const crate::array::ArrayHeader,
+    new_count: u32,
+    key_hash: u64,
+    slot: u32,
+) {
     if new_count < KEYS_INDEX_THRESHOLD {
         return;
     }
-    let mut m = crate::state::state().object_hot.keys_index.borrow_mut();
-    if let Some(entry) = m.get_mut(&obj_addr) {
-        if entry.0 + 1 == new_count {
-            entry.0 = new_count;
-            entry.1.entry(key_hash).or_default().push(slot);
-        }
-    }
+    shapes::shape_note_append(keys, new_count, key_hash, slot);
 }
 
 // Last-accessed overflow Vec cache — one entry, keyed by `obj_ptr`.
@@ -1454,21 +1376,12 @@ pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
 
 #[cfg(test)]
 pub(crate) fn test_seed_keys_index_entry(owner: usize) {
-    crate::state::state()
-        .object_hot
-        .keys_index
-        .borrow_mut()
-        .insert(owner, (0, std::collections::HashMap::new()));
+    shapes::test_seed_shape_entry(owner);
 }
 
 #[cfg(test)]
 pub(crate) fn test_keys_index_entry_exists(owner: usize) -> bool {
-    crate::state::state()
-        .object_hot
-        .keys_index
-        .borrow()
-        .get(&owner)
-        .is_some()
+    shapes::test_shape_entry_exists(owner)
 }
 
 #[cfg(test)]
@@ -1588,23 +1501,6 @@ pub fn clear_overflow_for_ptr(obj_ptr: usize) {
     if st.object_hot.overflow_last.get().0 == obj_ptr {
         st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
     }
-}
-
-/// Remove the `KEYS_INDEX` sidecar entry for a freed object pointer.
-/// Sibling of `clear_overflow_for_ptr`: called from the same GC
-/// dead-owner dispatch when a `GC_TYPE_OBJECT` header is reclaimed.
-/// `KEYS_INDEX` is keyed on the object address, so without this prune
-/// the entry (a whole `HashMap<u64, Vec<u32>>`) would persist forever
-/// keyed by a recycled address — a monotonic leak over a long-running
-/// process, and a stale index a fresh object at the same address could
-/// read. Unlike `clear_overflow_for_ptr` there is no last-accessed
-/// cache to invalidate: `keys_index_lookup` always goes through the map.
-pub fn clear_keys_index_for_ptr(obj_ptr: usize) {
-    crate::state::state()
-        .object_hot
-        .keys_index
-        .borrow_mut()
-        .remove(&obj_ptr);
 }
 
 /// Cheap check used by the GC sweep to short-circuit per-object

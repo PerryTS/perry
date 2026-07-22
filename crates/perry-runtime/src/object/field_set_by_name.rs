@@ -1511,7 +1511,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     new_index as u32,
                 );
                 keys_index_insert(
-                    obj as usize,
+                    (*obj).keys_array,
                     (new_index + 1) as u32,
                     key_hash,
                     new_index as u32,
@@ -1552,7 +1552,7 @@ pub extern "C" fn js_object_set_field_by_name(
             // keeps appends below the overflow threshold) into O(n²). Use
             // the object address to match the lookup + the overflow path.
             keys_index_insert(
-                obj as usize,
+                (*obj).keys_array,
                 (new_index + 1) as u32,
                 key_hash,
                 new_index as u32,
