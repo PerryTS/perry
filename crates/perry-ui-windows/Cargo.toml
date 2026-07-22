@@ -10,7 +10,7 @@ workspace = true
 [lib]
 crate-type = ["rlib", "staticlib"]
 
-[dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
 perry-audio-miniaudio = { workspace = true }
@@ -35,10 +35,6 @@ qrcodegen = "1.8"
 # (a version skew here is what broke the Windows build at v0.5.1180).
 webview2-com = "=0.39"
 
-[features]
-geisterhand = []
-
-[target.'cfg(target_os = "windows")'.dependencies]
 # The `#[implement]` macro from `windows` expands to absolute
 # `::windows_core::` paths, so the consuming crate must depend on
 # `windows-core` directly or the COM authoring in drag_drop.rs fails to
@@ -92,3 +88,6 @@ windows = { version = "0.62", features = [
     # GdipLoadImageFromStream on the main thread during WM_PAINT.
     "Win32_Networking_WinHttp",
 ] }
+
+[features]
+geisterhand = []

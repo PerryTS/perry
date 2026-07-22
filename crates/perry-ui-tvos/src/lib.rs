@@ -1,3 +1,5 @@
+#![cfg(target_os = "tvos")]
+
 pub mod app;
 pub mod audio;
 pub mod audio_playback;

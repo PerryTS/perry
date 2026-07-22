@@ -69,10 +69,7 @@ fn parse_compose_file(file_ptr: *const StringHeader) -> Option<PathBuf> {
 }
 
 fn make_engine(files: Vec<PathBuf>) -> Result<Arc<ComposeEngine>, String> {
-    let config = crate::config::ProjectConfig {
-        files,
-        ..Default::default()
-    };
+    let config = crate::config::ProjectConfig::new(files, None, Vec::new());
     let proj = crate::project::ComposeProject::load(&config).map_err(|e| e.to_string())?;
     let backend: Arc<dyn crate::backend::ContainerBackend> =
         match block(crate::backend::detect_backend()) {
@@ -145,20 +142,18 @@ pub unsafe extern "C" fn js_compose_logs(
     _follow: bool,
 ) -> *const StringHeader {
     let files: Vec<PathBuf> = parse_compose_file(file_ptr).into_iter().collect();
-    let service: Option<String> = string_from_header(services_ptr)
+    let services: Vec<String> = string_from_header(services_ptr)
         .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
-        .and_then(|v| v.into_iter().next());
+        .unwrap_or_default();
 
     match make_engine(files) {
         Err(e) => json_err(&e),
-        Ok(engine) => match block(engine.logs(service.as_deref(), None)) {
+        Ok(engine) => match block(engine.logs(&services, None)) {
             Err(e) => json_err(&e.to_string()),
-            Ok(logs) => {
-                let stdout = logs.stdout.replace('"', "\\\"").replace('\n', "\\n");
-                let stderr = logs.stderr.replace('"', "\\\"").replace('\n', "\\n");
-                let payload = format!("{{\"stdout\":\"{}\",\"stderr\":\"{}\"}}", stdout, stderr);
-                json_ok(&payload)
-            }
+            Ok(logs) => match serde_json::to_string(&logs) {
+                Ok(payload) => json_ok(&payload),
+                Err(e) => json_err(&e.to_string()),
+            },
         },
     }
 }
@@ -180,7 +175,7 @@ pub unsafe extern "C" fn js_compose_exec(
 
     match make_engine(files) {
         Err(e) => json_err(&e),
-        Ok(engine) => match block(engine.exec(&service, &cmd)) {
+        Ok(engine) => match block(engine.exec(&service, &cmd, None, None)) {
             Err(e) => json_err(&e.to_string()),
             Ok(result) => {
                 let stdout = result.stdout.replace('"', "\\\"").replace('\n', "\\n");
@@ -195,10 +190,7 @@ pub unsafe extern "C" fn js_compose_exec(
 #[no_mangle]
 pub unsafe extern "C" fn js_compose_config(file_ptr: *const StringHeader) -> *const StringHeader {
     let files: Vec<PathBuf> = parse_compose_file(file_ptr).into_iter().collect();
-    let config = crate::config::ProjectConfig {
-        files,
-        ..Default::default()
-    };
+    let config = crate::config::ProjectConfig::new(files, None, Vec::new());
     match crate::project::ComposeProject::load(&config) {
         Err(e) => json_err(&e.to_string()),
         Ok(proj) => {

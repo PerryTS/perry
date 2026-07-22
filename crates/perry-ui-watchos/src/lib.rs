@@ -4,6 +4,8 @@
 //! The fixed PerryWatchApp.swift queries this tree via FFI and renders
 //! it as SwiftUI views reactively.
 
+#![cfg(target_os = "watchos")]
+
 pub mod app;
 pub mod audio;
 pub mod audio_playback;

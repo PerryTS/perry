@@ -79,9 +79,9 @@ members = [
     "crates/perry-stdlib-static",
     "docs/examples/_fixtures/native-libraries/my-bindings",
 ]
-# Only build platform-independent crates by default.
-# Platform-specific UI crates (perry-ui-macos, perry-ui-ios, etc.) must be built
-# explicitly with -p on their target platform.
+# Build only the host-independent product set by default.
+# Platform UI manifests keep their source and dependencies behind target cfgs.
+# Build each platform package explicitly for its applicable target.
 default-members = [
     "crates/perry",
     "crates/perry-parser",

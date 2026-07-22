@@ -15,6 +15,8 @@
 //!   PlaybackId  0x10000001..=0x1FFFFFFF  — live ma_sound voice
 //!   Bus         0x20000001..=0x2FFFFFFF  — ma_sound_group (0 = master)
 
+#![cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+
 use libc::{c_char, c_float, c_int, c_uint, c_void};
 use std::cell::RefCell;
 use std::ffi::CString;

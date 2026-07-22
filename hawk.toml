@@ -1,0 +1,7 @@
+[[production]]
+package = "perry"
+bin = "perry"
+reason = "Perry ships this command-line compiler."
+
+[[feature-profile]]
+name = "default"
