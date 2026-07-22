@@ -147,6 +147,16 @@ pub(crate) fn class_field_inline_guard_enabled() -> bool {
 #[cfg(test)]
 pub(crate) fn test_reset_class_field_inline_guard() {
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(0, Ordering::Relaxed);
+    // Also clear the C5a per-key vetting sets (production-monotonic, so
+    // without this a key name reused across tests in one process would
+    // inherit an earlier test's declared-field / installed-key state and
+    // make the disable decision order-dependent (CodeRabbit on #6802).
+    if let Ok(mut guard) = DECLARED_FIELD_NAME_HASHES.write() {
+        guard.take();
+    }
+    if let Ok(mut guard) = PROTO_DESCRIPTOR_KEY_HASHES.write() {
+        guard.take();
+    }
 }
 
 /// #5654: flip the process-wide inline gate only when the descriptor target can
