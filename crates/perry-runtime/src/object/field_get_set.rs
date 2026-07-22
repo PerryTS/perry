@@ -18,6 +18,13 @@ use super::*;
 /// chain, so a subclass instance can only reach those members via the handle.
 pub(crate) const FETCH_SUBCLASS_HANDLE_FIELD: &[u8] = b"__perry_fetch_handle__";
 
+/// Has any fetch-subclass instance EVER stashed a native handle in this
+/// process? `fetch_subclass_handle_id` costs a key-string alloc + a full
+/// property read per call; the `in`-operator fast path (#6748) gates on this
+/// flag so the overwhelmingly-common no-fetch-subclass program never pays it.
+pub(crate) static FETCH_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// If `obj` (a raw heap object address) is a `class X extends Request/Response`
 /// instance, return the id of its underlying native fetch handle. Returns
 /// `None` for any non-object / non-subclass receiver, so callers can fall
