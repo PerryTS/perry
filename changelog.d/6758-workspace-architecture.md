@@ -1,0 +1,1 @@
+**Workspace architecture baseline:** make all 78 effective Cargo members explicit, reduce the default build to the Perry CLI and its 18-crate dependency closure, add a reproducible crate inventory and policy audit, and run Clippy against explicit product and host-compatible scopes.
