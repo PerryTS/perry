@@ -66,6 +66,7 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
     (*obj).parent_class_id = 0;
     (*obj).field_count = 0;
     (*obj).keys_array = std::ptr::null_mut();
+    (*obj).meta = std::ptr::null_mut();
     obj
 }
 
@@ -525,9 +526,20 @@ fn test_arguments_entry_rekeys_and_mapped_box_survives_copied_minor() {
 fn test_dead_owner_prototype_vm_expando_and_filehandle_entries_pruned() {
     let _guard = GcTestIsolationGuard::new();
 
-    // OBJECT_PROTOTYPES: recorded `Object.setPrototypeOf(obj, null)`.
-    let (proto_owner, _) = unsafe { alloc_nursery_test_object(0) };
-    let proto_owner = proto_owner as usize;
+    // OBJECT_PROTOTYPES (residual registry, #6759 B): shaped objects now
+    // store their recorded prototype in the per-object meta record, which
+    // dies WITH the owner (no prune needed — see
+    // `test_object_meta_prototype_survives_copied_minor_move`). The
+    // registry still backs non-object owners, so exercise the prune with a
+    // TYPED-ARRAY-tagged owner. (Not a real array: retargeting one flips
+    // the process-wide `ARRAY_TARGET_PROTO_RECORDED` latch, permanently
+    // standing down the typed-feedback array fast paths every later
+    // `typed_feedback` guard test in this process asserts.)
+    let proto_owner = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::object::ObjectHeader>(),
+        8,
+        GC_TYPE_TYPED_ARRAY,
+    ) as usize;
     crate::object::prototype_chain::object_set_static_prototype(
         proto_owner,
         crate::value::TAG_NULL,
@@ -593,4 +605,67 @@ fn test_dom_exception_set_cleared_with_error_side_tables() {
         "dead error must be removed from DOM_EXCEPTION_ERRORS by the error \
          side-table death cleanup"
     );
+}
+
+/// #6759 Phase B: a shaped object's recorded `[[Prototype]]` lives in its
+/// per-object `ObjectMeta` record. A copied minor moves the owner, the meta
+/// record, AND the prototype object; the header's meta edge and the
+/// record's prototype slot must both be rewritten so the moved owner still
+/// resolves the moved prototype.
+#[test]
+fn test_object_meta_prototype_survives_copied_minor_move() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let (proto, _) = unsafe { alloc_nursery_test_object(0) };
+    let old_owner = owner as usize;
+    let old_proto = proto as usize;
+    crate::object::prototype_chain::object_set_static_prototype(old_owner, ptr_bits(old_proto));
+    assert_eq!(
+        crate::object::prototype_chain::object_static_prototype(old_owner),
+        Some(ptr_bits(old_proto)),
+        "test premise: the meta-resident prototype reads back before the GC"
+    );
+    js_shadow_slot_set(0, ptr_bits(old_owner));
+    js_shadow_slot_set(1, ptr_bits(old_proto));
+
+    let _ = gc_collect_minor();
+
+    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let new_proto = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+    assert_ne!(new_owner, old_owner, "test premise: the owner must move");
+    assert_ne!(new_proto, old_proto, "test premise: the proto must move");
+    let recorded = crate::object::prototype_chain::object_static_prototype(new_owner)
+        .expect("the moved owner must still resolve its recorded prototype via its meta record");
+    assert_eq!(
+        (recorded & POINTER_MASK) as usize,
+        new_proto,
+        "the meta record's prototype slot must be rewritten to the moved proto"
+    );
+
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
+}
+
+/// #6759 Phase B: the meta record is kept alive by its owner (the header
+/// edge is a traced child slot) across a full non-moving collection, and an
+/// explicit-null recording is preserved.
+#[test]
+fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let addr = owner as usize;
+    crate::object::prototype_chain::object_set_static_prototype(addr, crate::value::TAG_NULL);
+    js_shadow_slot_set(0, ptr_bits(addr));
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::prototype_chain::object_static_prototype(addr),
+        Some(crate::value::TAG_NULL),
+        "a live (rooted) owner's meta record — and its explicit-null \
+         prototype — must survive a full collection"
+    );
+    js_shadow_slot_set(0, 0);
 }

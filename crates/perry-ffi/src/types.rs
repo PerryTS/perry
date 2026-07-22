@@ -45,6 +45,11 @@ pub struct ObjectHeader {
     pub field_count: u32,
     /// Runtime array of object keys, or null for class instances.
     pub keys_array: *mut ArrayHeader,
+    /// Per-object metadata record (#6759 Phase B), or null when the object
+    /// has none. Opaque to FFI consumers — never dereferenced across the
+    /// boundary, mirrored only so the header size and field-region offset
+    /// stay in lockstep with the runtime.
+    pub meta: *mut core::ffi::c_void,
 }
 
 /// Header for a runtime-allocated Buffer or Uint8Array payload.
@@ -164,6 +169,10 @@ mod layout_tests {
         assert_eq!(
             offset_of!(ObjectHeader, keys_array),
             offset_of!(perry_runtime::ObjectHeader, keys_array)
+        );
+        assert_eq!(
+            offset_of!(ObjectHeader, meta),
+            offset_of!(perry_runtime::ObjectHeader, meta)
         );
     }
 

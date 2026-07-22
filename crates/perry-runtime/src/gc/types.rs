@@ -54,7 +54,14 @@ pub const GC_TYPE_DATE_CELL: u8 = 17;
 /// never a JSValue. Heap-owning variants (a `ZonedDateTime`'s IANA timezone
 /// string) are released by the `TemporalCleanup` finalize hook on sweep.
 pub const GC_TYPE_TEMPORAL: u8 = 18;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_TEMPORAL;
+/// #6759 Phase B: a per-object [`crate::object::ObjectMeta`] record — the
+/// self-describing metadata a shaped `GC_TYPE_OBJECT` reaches through its
+/// `ObjectHeader::meta` slot (custom `[[Prototype]]` today; descriptor
+/// tables and exotic kind as later tranches migrate). Reachable ONLY via
+/// its owner's header slot, so ordinary tracing gives it exactly the
+/// owner's lifetime; movable, and holds one traced NaN-box slot.
+pub const GC_TYPE_OBJECT_META: u8 = 19;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_OBJECT_META;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -89,6 +96,8 @@ pub(crate) enum GcRewriteDescriptorKind {
     Set,
     NativeTypedView,
     NativePodView,
+    /// #6759 Phase B: one traced NaN-box slot (`ObjectMeta::prototype`).
+    ObjectMeta,
 }
 
 #[allow(dead_code)]
@@ -533,6 +542,26 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::TemporalCleanup,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_OBJECT_META,
+        "object_meta",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::ObjectMeta,
+        GcLayoutSlotKind::None,
+        // Movable: the owner's `meta` header slot is a raw-pointer child
+        // edge (visited in the Object rewrite descriptor), so evacuation
+        // rewrites it like any other reference — no address-keyed side
+        // state exists for this type at all.
+        true,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        // Holds the traced `prototype` NaN-box slot.
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
 ];
 
 #[inline]
@@ -760,7 +789,8 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
         | GcRewriteDescriptorKind::Error
         | GcRewriteDescriptorKind::Map
         | GcRewriteDescriptorKind::LazyArray
-        | GcRewriteDescriptorKind::Set => {
+        | GcRewriteDescriptorKind::Set
+        | GcRewriteDescriptorKind::ObjectMeta => {
             if info.layout_slot_kind != GcLayoutSlotKind::None {
                 return Err(
                     "external-backed rewrite descriptor must not expose payload layout slots",

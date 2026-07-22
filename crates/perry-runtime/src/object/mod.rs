@@ -1650,6 +1650,83 @@ pub struct ObjectHeader {
     /// Pointer to array of key strings (for Object.keys() support)
     /// NULL for class instances (keys are defined by the class)
     pub keys_array: *mut ArrayHeader,
+    /// #6759 Phase B: per-object metadata record — null for ordinary
+    /// objects (the common case). MUST stay the LAST field: codegen reads
+    /// the earlier header fields at fixed offsets (0/4/8/12/16), and the
+    /// field-slot region begins at `size_of::<ObjectHeader>()`, mirrored
+    /// by `perry-codegen/src/target_layout.rs::object_header_size_bytes`.
+    /// See [`ObjectMeta`].
+    pub meta: *mut ObjectMeta,
+}
+
+/// #6759 Phase B: per-object metadata record, reached from
+/// [`ObjectHeader::meta`] in two dependent loads (no side-table probe).
+///
+/// GC-arena allocated (`GC_TYPE_OBJECT_META`), exactly like the
+/// `keys_array` the header already carries: the header slot is a traced +
+/// rewritten child edge (the record is reachable ONLY through its owner),
+/// so liveness, evacuation, and death all ride the ordinary GC — no manual
+/// free paths, no owner registry, and no stale-address hazard: the record
+/// dies with (and only with) its owner.
+///
+/// CAUTION — RegExp aliasing: `RegExpHeader` is a different struct that is
+/// also tagged `GC_TYPE_OBJECT` (see `gc_child_slots`'s regex special
+/// case). Reading `.meta` at the `ObjectHeader` offset off a RegExp yields
+/// garbage; every `meta` access must first establish a genuine shaped
+/// object (`object_meta_slot_addr` centralizes that check).
+///
+/// Phase B lands incrementally: today the record holds only the custom
+/// `[[Prototype]]`; the per-object descriptor/accessor tables and the
+/// exotic-kind tag migrate here next (#6759).
+#[repr(C)]
+pub struct ObjectMeta {
+    /// Custom `[[Prototype]]` recorded by `Object.setPrototypeOf` / object
+    /// literal `__proto__`: the NaN-boxed proto bits,
+    /// `crate::value::TAG_NULL` for an explicit null prototype, or 0 when
+    /// unset (fall back to default prototype resolution).
+    pub prototype: u64,
+}
+
+/// Fetch-or-allocate the per-object meta record. Caller must have already
+/// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
+/// (see `prototype_chain::meta_capable_object`).
+pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
+    if !(*obj).meta.is_null() {
+        return (*obj).meta;
+    }
+    let meta = arena_alloc_gc(
+        std::mem::size_of::<ObjectMeta>(),
+        8,
+        crate::gc::GC_TYPE_OBJECT_META,
+    ) as *mut ObjectMeta;
+    (*meta).prototype = 0;
+    // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
+    // followed by an object-slot barrier, mirroring `set_object_keys_array`.
+    (*obj).meta = meta;
+    crate::gc::runtime_write_barrier_slot(
+        obj as usize,
+        &(*obj).meta as *const _ as usize,
+        meta as u64,
+    );
+    meta
+}
+
+/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-
+/// pointer child slot exactly like `gc_keys_array_slot`. Returns `None` for
+/// a null meta AND for a `RegExpHeader` masquerading as `GC_TYPE_OBJECT`
+/// (its bytes at this offset are native data — see the regex special case
+/// in `gc_child_slots`).
+pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
+    if user_ptr == 0
+        || crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader)
+    {
+        return None;
+    }
+    let obj = user_ptr as *mut ObjectHeader;
+    if (*obj).meta.is_null() {
+        return None;
+    }
+    Some(&mut (*obj).meta as *mut _ as *mut u64)
 }
 
 #[inline]

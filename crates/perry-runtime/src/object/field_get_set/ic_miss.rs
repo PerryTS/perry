@@ -419,7 +419,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                         // slow path which handles overflow correctly.
                         break;
                     }
-                    // The codegen IC fast path computes `obj + 24 + slot*8`
+                    // The codegen IC fast path computes `obj + object_header_size + slot*8`
                     // and does a direct load. Any inline slot (`i <
                     // alloc_limit`) is reachable via that path, so cache
                     // every inline slot — including the ones at index >= 8

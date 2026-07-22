@@ -1053,6 +1053,7 @@ pub(super) fn compile_typed_f64_receiver_method(
     method: &Function,
     methods: &HashMap<(String, String), String>,
     receiver: &TypedReceiverMethodInfo,
+    header_skip: u64,
 ) -> Result<()> {
     let generic_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -1077,7 +1078,7 @@ pub(super) fn compile_typed_f64_receiver_method(
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
-        lower_typed_f64_receiver_body(blk, &method.params, &method.body, receiver)?
+        lower_typed_f64_receiver_body(blk, &method.params, &method.body, receiver, header_skip)?
     };
     lf.block_mut(0).unwrap().ret(DOUBLE, &value);
     Ok(())

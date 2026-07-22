@@ -126,6 +126,8 @@ pub extern "C" fn js_object_alloc_with_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
 
@@ -161,6 +163,8 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = 0;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
@@ -193,6 +197,8 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
@@ -237,6 +243,8 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
         set_object_keys_array(ptr, keys_array);
 
         // PerryTS/perry#4717: initialize ALL `max(field_count, 8)` field slots to
@@ -355,6 +363,8 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
@@ -515,6 +525,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_cid;
         (*ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
         let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
@@ -563,6 +575,8 @@ pub extern "C" fn js_object_alloc_with_shape(
         // field_count tracks the logical number of fields; extra allocated slots
         // are available for dynamic property growth via js_object_set_field_by_name
         (*obj_ptr).field_count = field_count;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*obj_ptr).meta = ptr::null_mut();
 
         // Initialize all allocated field slots to undefined (including extra padding)
         let fields_ptr = (obj_ptr as *mut u8).add(header_size) as *mut JSValue;
@@ -670,6 +684,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_ptr).class_id = 0;
         (*new_ptr).parent_class_id = 0;
         (*new_ptr).field_count = 0;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*new_ptr).meta = ptr::null_mut();
         let fields_ptr = (new_ptr as *mut u8).add(header_size) as *mut u64;
         for i in 0..phys_slots as usize {
             // GC_STORE_AUDIT(INIT): freshly allocated clone field slot is initialized pointer-free.
@@ -700,6 +716,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // Logical field count starts at src's count. js_object_set_field_by_name bumps it when
     // appending new keys.
     (*new_ptr).field_count = src_field_count;
+    // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+    (*new_ptr).meta = ptr::null_mut();
 
     // Copy source fields (as raw f64/u64 words — preserves NaN-boxing)
     let src_fields = (src_ptr as *const u8).add(header_size) as *const u64;

@@ -1,4 +1,4 @@
-//! Observable `[[Prototype]]` side-table for ordinary heap objects (#2820).
+//! Observable `[[Prototype]]` for ordinary heap objects (#2820, #6759 B).
 //!
 //! Perry bakes class IDs at allocation time, so it cannot rewrite an object's
 //! baked prototype chain. But `Object.setPrototypeOf(obj, proto)` on an
@@ -7,16 +7,23 @@
 //! `proto`, and an inherited property read (`obj.x` where `x` lives on `proto`)
 //! walks to it.
 //!
-//! We model this with a thread-local map from the object's heap pointer to the
-//! NaN-box bits of its recorded prototype. `proto_bits` for an explicit
-//! `Object.setPrototypeOf(obj, null)` is `TAG_NULL`, so a recorded-null entry
-//! is distinguishable from "no entry recorded" (default prototype).
+//! Storage is split by owner kind (#6759 Phase B):
 //!
-//! GC correctness: the recorded prototype is a live reference. The map is
-//! visited by `visit_object_static_prototype_slot_mut` (wired into the Object
-//! rewrite descriptor in `gc/layout.rs`) so a moving collector rewrites the
-//! stored bits, and `object_static_prototype_owner_moved` migrates the entry
-//! when the *owner* object itself is evacuated.
+//! * A genuine shaped `GC_TYPE_OBJECT` stores the recorded bits in its own
+//!   per-object [`crate::object::ObjectMeta`] record, reached from the
+//!   object header in two dependent loads — no mutex, no address-keyed
+//!   probe, and structurally immune to the stale-address-reuse hazard (the
+//!   record lives and dies with its owner; GC traces/rewrites it through
+//!   the ordinary Object descriptor).
+//! * Every other owner kind — real/lazy arrays, typed arrays, native
+//!   handle-band ids, proxy ids — keeps the RESIDUAL address-keyed registry
+//!   below, with its original GC hooks (scanner, owner-move rekey,
+//!   dead-owner prune). Migrating arrays needs an `ArrayHeader` slot and is
+//!   a later #6759 tranche.
+//!
+//! `proto_bits` for an explicit `Object.setPrototypeOf(obj, null)` is
+//! `TAG_NULL`, so a recorded-null entry is distinguishable from "no entry
+//! recorded" (default prototype); in the meta record, 0 means unset.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,6 +51,30 @@ static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
 fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     OBJECT_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// #6759 Phase B: classify `obj_ptr` as a genuine shaped `GC_TYPE_OBJECT`
+/// whose header can carry the per-object meta record. Everything else —
+/// arrays, typed arrays, native handle-band ids, proxy ids, and the
+/// `RegExpHeader` that is tagged `GC_TYPE_OBJECT` but has a different
+/// layout — returns `None` and stays on the residual registry. The
+/// classification is a pure function of the allocation, so an owner is
+/// always on exactly one of the two storages.
+unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
+    if obj_ptr < crate::gc::GC_HEADER_SIZE + 0x1000
+        || !crate::value::addr_class::is_above_handle_band(obj_ptr)
+        || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
+    {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(obj_ptr)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    if crate::regex::regex_header_has_magic(obj_ptr as *const crate::regex::RegExpHeader) {
+        return None;
+    }
+    Some(obj_ptr as *mut crate::ObjectHeader)
 }
 
 /// Record `Object.setPrototypeOf(obj_ptr, proto)`. `proto_bits` is the NaN-box
@@ -98,6 +129,24 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
             }
         }
     }
+    // #6759 Phase B: shaped objects store the recorded prototype in their
+    // own meta record; only non-object owners fall through to the residual
+    // registry.
+    unsafe {
+        if let Some(obj) = meta_capable_object(obj_ptr) {
+            let meta = crate::object::object_meta_ensure(obj);
+            (*meta).prototype = proto_bits;
+            // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store —
+            // the record is an arena allocation, so the ordinary object-slot
+            // barrier applies (parent = the meta record).
+            crate::gc::runtime_write_barrier_slot(
+                meta as usize,
+                &(*meta).prototype as *const u64 as usize,
+                proto_bits,
+            );
+            return;
+        }
+    }
     let mut slot_addr = 0usize;
     // Latch BEFORE the insert: a concurrent `object_static_prototype` that
     // observed the latch after the insert-but-before-the-store window would
@@ -117,6 +166,22 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
 /// when no explicit prototype has been recorded (the object still has its
 /// default prototype); `Some(TAG_NULL)` when it was explicitly set to `null`.
 pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
+    // #6759 Phase B: a shaped object answers from its own meta record — two
+    // dependent loads, no global latch, no mutex — and NEVER has a residual
+    // registry entry (the write path classifies identically), so a meta
+    // miss for a shaped object is authoritative.
+    unsafe {
+        if let Some(obj) = meta_capable_object(obj_ptr) {
+            let meta = (*obj).meta;
+            if !meta.is_null() {
+                let bits = (*meta).prototype;
+                if bits != 0 {
+                    return Some(bits);
+                }
+            }
+            return None;
+        }
+    }
     if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
         return None;
     }
