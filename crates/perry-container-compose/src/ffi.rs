@@ -68,6 +68,14 @@ fn parse_compose_file(file_ptr: *const StringHeader) -> Option<PathBuf> {
     unsafe { string_from_header(file_ptr) }.map(PathBuf::from)
 }
 
+fn parse_services_filter(raw: Option<String>) -> Result<Vec<String>, &'static str> {
+    match raw {
+        None => Ok(Vec::new()),
+        Some(raw) if raw.trim().is_empty() => Ok(Vec::new()),
+        Some(raw) => serde_json::from_str(&raw).map_err(|_| "services must be a JSON array"),
+    }
+}
+
 fn make_engine(files: Vec<PathBuf>) -> Result<Arc<ComposeEngine>, String> {
     let config = crate::config::ProjectConfig::new(files, None, Vec::new());
     let proj = crate::project::ComposeProject::load(&config).map_err(|e| e.to_string())?;
@@ -142,9 +150,10 @@ pub unsafe extern "C" fn js_compose_logs(
     _follow: bool,
 ) -> *const StringHeader {
     let files: Vec<PathBuf> = parse_compose_file(file_ptr).into_iter().collect();
-    let services: Vec<String> = string_from_header(services_ptr)
-        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
-        .unwrap_or_default();
+    let services = match parse_services_filter(string_from_header(services_ptr)) {
+        Ok(services) => services,
+        Err(message) => return json_err(message),
+    };
 
     match make_engine(files) {
         Err(e) => json_err(&e),
@@ -198,5 +207,39 @@ pub unsafe extern "C" fn js_compose_config(file_ptr: *const StringHeader) -> *co
             let escaped = yaml.replace('"', "\\\"").replace('\n', "\\n");
             json_ok(&format!("\"{}\"", escaped))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_services_filter;
+
+    #[test]
+    fn services_filter_accepts_absent_and_empty_values() {
+        assert_eq!(parse_services_filter(None), Ok(Vec::new()));
+        assert_eq!(
+            parse_services_filter(Some("  ".to_string())),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn services_filter_accepts_a_string_array() {
+        assert_eq!(
+            parse_services_filter(Some(r#"["api","db"]"#.to_string())),
+            Ok(vec!["api".to_string(), "db".to_string()])
+        );
+    }
+
+    #[test]
+    fn services_filter_rejects_invalid_or_non_array_json() {
+        assert_eq!(
+            parse_services_filter(Some("not-json".to_string())),
+            Err("services must be a JSON array")
+        );
+        assert_eq!(
+            parse_services_filter(Some(r#"{"service":"api"}"#.to_string())),
+            Err("services must be a JSON array")
+        );
     }
 }
