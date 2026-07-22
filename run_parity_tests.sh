@@ -756,15 +756,27 @@ for test_file in "${TEST_FILES[@]}"; do
     # fork-bombing test (cluster re-exec loop, 2026-07-22) stalls at ~50
     # orphans instead of saturating the user process limit — which would
     # starve the harness itself out of fork() and kill the whole run.
+    # If the proc count can't be measured, deliberately skip the cap (fail
+    # open): applying a bogus low limit would silently break every legit
+    # multi-process test, which is worse than one uncapped run. The cap is a
+    # containment layer, not a correctness gate — the post-test reap below
+    # still runs either way. Note the budget is per-UID, not per-tree, so a
+    # concurrent heavy job can transiently eat the +50 headroom; recomputing
+    # per test keeps that window small, and the worst case is one test
+    # classified as crash rather than a wedged machine.
     run_with_timeout 10 /bin/sh -c '
-        ulimit -u $(( $(ps -u "$(id -u)" -o pid= | wc -l) + 50 )) 2>/dev/null
+        nproc_now=$(ps -u "$(id -u)" -o pid= 2>/dev/null | wc -l)
+        if [ "$nproc_now" -gt 0 ] 2>/dev/null; then
+            ulimit -u $(( nproc_now + 50 )) 2>/dev/null || true
+        fi
         exec "$@"' _ env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
     # Reap orphaned children of the test binary (cluster tests fork workers
     # that survive the timeout kill of the direct child and can fork-bomb the
     # machine — 2026-07-22). Scoped to this run's tmp dir, so concurrent
-    # suite runs are unaffected.
-    pkill -9 -f "$PARITY_TMP/" 2>/dev/null
+    # suite runs are unaffected. pkill -f treats the pattern as a regex, so
+    # escape the path's metacharacters (the mktemp dir contains a dot).
+    pkill -9 -f "$(printf '%s/' "$PARITY_TMP" | sed 's/[][\.*^$()+?{|]/\\&/g')" 2>/dev/null
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"
 
