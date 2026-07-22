@@ -77,15 +77,36 @@ We loosely follow [Conventional Commits](https://www.conventionalcommits.org/) �
 
 Comment on the issue saying you'd like to take it. We'll assign it to you. If you go quiet for a week or two, we may un-assign to let someone else pick it up — no hard feelings, just keeping the board moving.
 
-## Running the full CI suite locally
+## Running CI's checks locally
 
-Mirroring CI before pushing saves a round trip:
+Most red PRs come from gates that `cargo build` never looks at — a file
+that crossed the 2000-line cap, fmt drift, a clippy deny-level lint, an
+unbarriered GC store site. One command runs all of them:
 
 ```bash
-cargo build --release                               # All crates
-./run_parity_tests.sh                               # Perry vs Node parity (needs Node 22)
+./scripts/pre-tag-check.sh --quick
+```
+
+That is every gate in the `lint` job that doesn't compile anything, so it
+costs seconds. Drop `--quick` to add `cargo check`, clippy, and cargo-deny;
+the script prints every failure in one pass rather than one per push.
+
+Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
+which diffs compiled programs byte-for-byte against Node:
+
+```bash
+./scripts/run_gap_tests.sh                          # 401 tests; ~1h serially
 ./scripts/run_doc_tests.sh                          # Compile + run every docs/examples/*.ts
 ```
+
+**Use the Node version pinned in `.node-version`, not whatever you have.**
+Node is the oracle the suite diffs against, so its version is a correctness
+input: on a Node too old for a test, *node* fails, the harness classifies the
+test `node_fail`, and it is dropped from the run instead of going red. CI sat
+on Node 22 while the suite grew Node 24/26 features and hid 14 tests that way.
+
+Any PR touching `crates/` also needs a `changelog.d/<PR-number>-<slug>.md`
+fragment; see [changelog.d/README.md](changelog.d/README.md).
 
 UI doc-tests launch real windows. On headless hosts, wrap in `xvfb-run -a` (Linux) or rely on `PERRY_UI_TEST_MODE=1` which auto-exits after one frame.
 
