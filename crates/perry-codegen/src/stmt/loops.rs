@@ -2370,7 +2370,10 @@ fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
 /// The storage half of [`packed_loop_array_binding_is_eligible`]: the binding
 /// read is a plain load (stack alloca or `@perry_global_*`), not a capture
 /// slot or box.
-pub(super) fn packed_loop_array_binding_storage_is_addressable(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
+pub(super) fn packed_loop_array_binding_storage_is_addressable(
+    ctx: &FnCtx<'_>,
+    arr_id: u32,
+) -> bool {
     if ctx.closure_captures.contains_key(&arr_id) {
         false
     } else if ctx.locals.contains_key(&arr_id) {

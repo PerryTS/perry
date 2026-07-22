@@ -663,6 +663,11 @@ pub(crate) struct FnCtx<'a> {
     /// `i` in bounds.
     pub packed_f64_loop_facts: Vec<PackedF64LoopFact>,
     pub masked_window_array_facts: Vec<MaskedWindowArrayFact>,
+    /// #6750 follow-up: locals currently flow-refined to Number inside a
+    /// masked-window region fast copy — their shadow slots were cleared at
+    /// the refinement point and per-statement shadow updates are suppressed
+    /// until the refinement is dropped (`expr::shadow_slot`).
+    pub masked_region_scalar_locals: std::collections::HashSet<u32>,
 
     /// #5093: scoped loop-versioning facts for monomorphic class-field loops.
     /// Pushed only around the FAST clone of `lower_class_field_versioned_for`
@@ -1363,6 +1368,7 @@ mod fs_await;
 mod index_get;
 mod masked_window;
 pub(crate) use index_get::packed_f64_loop_index_parts;
+pub(crate) use masked_window::masked_window_fact_for_index;
 mod index_set;
 mod instance_misc1;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;

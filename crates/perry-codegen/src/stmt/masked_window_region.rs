@@ -43,9 +43,8 @@ use anyhow::Result;
 use perry_hir::{Expr, Stmt};
 
 use super::loops::{
-    local_is_number_array, local_is_untyped_candidate,
-    packed_f64_range_loop_pure_expr_collect, packed_loop_array_binding_storage_is_addressable,
-    PackedF64RangeArrayAccess,
+    local_is_number_array, local_is_untyped_candidate, packed_f64_range_loop_pure_expr_collect,
+    packed_loop_array_binding_storage_is_addressable, PackedF64RangeArrayAccess,
 };
 use super::{emit_shadow_clears_after_stmt, lower_stmt};
 use crate::expr::{
@@ -71,12 +70,31 @@ pub(super) struct MaskedWindowRegionArray {
     pub hi: i64,
 }
 
+/// One scheduled fast-copy type refinement: after lowering the statement at
+/// `stmt_offset`, override (or restore) `local_id`'s static type.
+pub(super) struct RegionRefinement {
+    pub stmt_offset: usize,
+    pub local_id: u32,
+    /// `true` → set `Type::Number`; `false` → restore the original type (the
+    /// local was reassigned a value we can no longer prove numeric).
+    pub set_number: bool,
+}
+
 pub(super) struct MaskedWindowRegion {
     /// Number of consecutive statements the region consumes.
     pub len: usize,
     /// Eligible arrays (static-window reads only, never written in-region,
     /// addressable number-array or untyped bindings).
     pub arrays: Vec<MaskedWindowRegionArray>,
+    /// Flow-ordered type refinements applied ONLY inside the fast copies:
+    /// an untyped local written a provably-numeric value (a fact-covered
+    /// read, or any ToNumber/ToInt32-producing operator) is `Type::Number`
+    /// from that statement on, so downstream scalar ops lower numerically
+    /// (inline coercion towers) instead of through the `js_dynamic_*`
+    /// dispatch calls. The slow copy sees the original types — full dynamic
+    /// semantics — and the fast copies compute identical VALUES for numeric
+    /// inputs, which the entry guards established.
+    pub refinements: Vec<RegionRefinement>,
 }
 
 /// True when `stmt` contains at least one `LocalGet`-received read with a
@@ -116,6 +134,80 @@ fn count_masked_reads(expr: &Expr, eligible: &std::collections::HashSet<u32>) ->
     count
 }
 
+/// True when `expr` provably evaluates to a JS number in a fast copy, under
+/// `refined` (locals already proven number at this program point) and
+/// `eligible` (arrays whose static-window reads the entry guard proved
+/// numeric). Bitwise operators and `-`/`*`/`/`/`%`/`**` produce numbers for
+/// ANY operands (they ToNumber/ToInt32 internally); only `+` needs both
+/// sides proven (string concatenation).
+fn expr_is_number_under(
+    ctx: &FnCtx<'_>,
+    refined: &std::collections::HashSet<u32>,
+    eligible: &std::collections::HashSet<u32>,
+    expr: &Expr,
+) -> bool {
+    use perry_hir::{BinaryOp, UnaryOp};
+    match expr {
+        Expr::Number(_) | Expr::Integer(_) | Expr::NumberCoerce(_) => true,
+        Expr::LocalGet(id) => {
+            refined.contains(id)
+                || matches!(
+                    ctx.local_types.get(id),
+                    Some(perry_types::Type::Number | perry_types::Type::Int32)
+                )
+        }
+        Expr::IndexGet { object, index } => {
+            matches!(object.as_ref(), Expr::LocalGet(id) if eligible.contains(id))
+                && crate::collectors::static_index_window(index).is_some()
+        }
+        Expr::Binary { op, left, right } => match op {
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Pow => true,
+            BinaryOp::Add => {
+                expr_is_number_under(ctx, refined, eligible, left)
+                    && expr_is_number_under(ctx, refined, eligible, right)
+            }
+        },
+        Expr::Unary { op, operand: _ } => {
+            matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
+        }
+        Expr::Conditional {
+            condition: _,
+            then_expr,
+            else_expr,
+        } => {
+            expr_is_number_under(ctx, refined, eligible, then_expr)
+                && expr_is_number_under(ctx, refined, eligible, else_expr)
+        }
+        Expr::Logical { left, right, .. } => {
+            expr_is_number_under(ctx, refined, eligible, left)
+                && expr_is_number_under(ctx, refined, eligible, right)
+        }
+        Expr::MathImul(_, _)
+        | Expr::MathPow(_, _)
+        | Expr::MathMin(_)
+        | Expr::MathMax(_)
+        | Expr::MathAbs(_)
+        | Expr::MathSqrt(_)
+        | Expr::MathFloor(_)
+        | Expr::MathCeil(_)
+        | Expr::MathRound(_)
+        | Expr::MathTrunc(_)
+        | Expr::MathSign(_)
+        | Expr::MathF16round(_) => true,
+        _ => false,
+    }
+}
+
 /// Match a masked-window region starting at `stmts[0]`. Returns `None` when
 /// the run is too short, tracks no eligible array, or carries fewer than
 /// [`REGION_MIN_TRACKED_READS`] tracked reads.
@@ -153,8 +245,12 @@ pub(super) fn try_match_masked_window_region(
             }
             Stmt::Expr(expr) => {
                 let mut trial = accesses.clone();
-                if packed_f64_range_loop_pure_expr_collect(expr, REGION_NO_COUNTER, true, &mut trial)
-                {
+                if packed_f64_range_loop_pure_expr_collect(
+                    expr,
+                    REGION_NO_COUNTER,
+                    true,
+                    &mut trial,
+                ) {
                     accesses = trial;
                     true
                 } else {
@@ -220,30 +316,205 @@ pub(super) fn try_match_masked_window_region(
     if reads < REGION_MIN_TRACKED_READS {
         return None;
     }
-    Some(MaskedWindowRegion { len, arrays })
+
+    // Flow-ordered fast-copy type refinements. A refinement lands strictly
+    // AFTER its statement: the statement's own RHS may read the local's
+    // pre-write (possibly non-number) value and must keep coercing
+    // semantics; every later statement may assume Number. A subsequent
+    // write we cannot prove numeric restores the original type.
+    let mut refinements = Vec::new();
+    let mut refined: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Only plain stack locals whose static type is not already numeric are
+    // worth refining (boxed/captured storage keeps its own access lowering).
+    let refinable = |ctx: &FnCtx<'_>, id: u32| {
+        ctx.locals.contains_key(&id)
+            && !ctx.boxed_vars.contains(&id)
+            && !ctx.closure_captures.contains_key(&id)
+            && !matches!(
+                ctx.local_types.get(&id),
+                Some(perry_types::Type::Number | perry_types::Type::Int32)
+            )
+    };
+    for (offset, stmt) in stmts[..len].iter().enumerate() {
+        match stmt {
+            Stmt::Expr(Expr::LocalSet(id, value)) => {
+                if expr_is_number_under(ctx, &refined, &eligible, value) {
+                    if refinable(ctx, *id) && refined.insert(*id) {
+                        refinements.push(RegionRefinement {
+                            stmt_offset: offset,
+                            local_id: *id,
+                            set_number: true,
+                        });
+                    }
+                } else if refined.remove(id) {
+                    refinements.push(RegionRefinement {
+                        stmt_offset: offset,
+                        local_id: *id,
+                        set_number: false,
+                    });
+                }
+            }
+            // `x++` / `x--` coerce the local to a number.
+            Stmt::Expr(Expr::Update { id, .. }) => {
+                if refinable(ctx, *id) && refined.insert(*id) {
+                    refinements.push(RegionRefinement {
+                        stmt_offset: offset,
+                        local_id: *id,
+                        set_number: true,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some(MaskedWindowRegion {
+        len,
+        arrays,
+        refinements,
+    })
 }
 
 /// Lower one copy of the region, mirroring `lower_stmts_inner`'s per-statement
-/// bookkeeping (shadow-slot clears at the original statement indices).
+/// bookkeeping (shadow-slot clears at the original statement indices). Fast
+/// copies pass the region's flow-ordered type `refinements`; each lands
+/// strictly AFTER its statement (the statement's own RHS may read the
+/// pre-write, possibly non-number value) and every original type is restored
+/// before returning, so the next copy — and everything after the region —
+/// sees the untouched static types.
 fn lower_region_copy(
     ctx: &mut FnCtx<'_>,
     region_stmts: &[Stmt],
     base_idx: usize,
     emit_shadow_clears: bool,
+    refinements: &[RegionRefinement],
+    privatize: bool,
 ) -> Result<()> {
-    for (offset, stmt) in region_stmts.iter().enumerate() {
-        lower_stmt(ctx, stmt)?;
-        if ctx.block().is_terminated() {
+    // Locals refined to Number and never un-refined for the rest of the
+    // region. When `privatize` holds (no enclosing `try` — an exception
+    // unwinds the whole frame, so a stale original slot is unobservable),
+    // the fast copy moves each such local into a FRESH entry alloca at its
+    // refinement point and copies the value back at region end. The original
+    // slot's address escaped through `js_shadow_slot_bind`, which blocks
+    // LLVM from promoting it to a register; the private slot never escapes,
+    // so the whole call-free region SROAs into register-resident bit-mixing
+    // chains (the bcryptjs `_encipher` win).
+    let unset_ids: std::collections::HashSet<u32> = refinements
+        .iter()
+        .filter(|refinement| !refinement.set_number)
+        .map(|refinement| refinement.local_id)
+        .collect();
+    let mut privatized: Vec<(u32, String)> = Vec::new();
+    let mut saved: Vec<(u32, Option<perry_types::Type>)> = Vec::new();
+    let mut saved_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut result = Ok(());
+    'stmts: for (offset, stmt) in region_stmts.iter().enumerate() {
+        result = lower_stmt(ctx, stmt);
+        if result.is_err() || ctx.block().is_terminated() {
             break;
         }
         if emit_shadow_clears {
             emit_shadow_clears_after_stmt(ctx, base_idx + offset);
             if ctx.block().is_terminated() {
-                break;
+                break 'stmts;
+            }
+        }
+        for r in 0..refinements.len() {
+            if refinements[r].stmt_offset != offset {
+                continue;
+            }
+            let id = refinements[r].local_id;
+            let set_number = refinements[r].set_number;
+            if saved_ids.insert(id) {
+                saved.push((id, ctx.local_types.get(&id).cloned()));
+            }
+            if set_number {
+                ctx.local_types.insert(id, perry_types::Type::Number);
+                // The local now provably holds a number for the rest of the
+                // copy (or until an unset): clear its shadow slot once and
+                // suppress the per-statement shadow updates — numbers need
+                // no GC root, and the region admits no statement that could
+                // store a pointer while suppressed. When the statement's own
+                // shadow update already emitted a clear (its RHS was a known
+                // non-pointer shape), don't emit a second one.
+                if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
+                    if ctx.masked_region_scalar_locals.insert(id) {
+                        let already_cleared = matches!(
+                            stmt,
+                            Stmt::Expr(Expr::LocalSet(_, rhs))
+                                if crate::expr::expr_is_known_non_pointer_shadow_value(ctx, rhs)
+                        );
+                        if !already_cleared {
+                            crate::expr::emit_shadow_slot_clear(ctx, slot_idx);
+                        }
+                    }
+                }
+                if privatize && !unset_ids.contains(&id) {
+                    if let Some(original_slot) = ctx.locals.get(&id).cloned() {
+                        let private_slot = ctx.func.alloca_entry(DOUBLE);
+                        let current = ctx.block().load(DOUBLE, &original_slot);
+                        ctx.block().store(DOUBLE, &current, &private_slot);
+                        ctx.locals.insert(id, private_slot);
+                        privatized.push((id, original_slot));
+                    }
+                }
+            } else {
+                // Restore the pre-region type for the rest of this copy.
+                match saved.iter().find(|(saved_id, _)| *saved_id == id) {
+                    Some((_, Some(original))) => {
+                        ctx.local_types.insert(id, original.clone());
+                    }
+                    _ => {
+                        ctx.local_types.remove(&id);
+                    }
+                }
+                // The statement just lowered stored a value we can no longer
+                // prove numeric while its shadow update was suppressed —
+                // re-bind the slot from the local's current value so GC sees
+                // it again.
+                if ctx.masked_region_scalar_locals.remove(&id) {
+                    if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
+                        if let Some(local_slot) = ctx.locals.get(&id).cloned() {
+                            crate::expr::emit_shadow_slot_bind_for_local(ctx, id);
+                            let current = ctx.block().load(DOUBLE, &local_slot);
+                            let bits = ctx.block().bitcast_double_to_i64(&current);
+                            ctx.block().call_void(
+                                "js_shadow_slot_set",
+                                &[(I32, &slot_idx.to_string()), (I64, &bits)],
+                            );
+                        }
+                    }
+                }
             }
         }
     }
-    Ok(())
+    // Copy privatized values back into the original (shadow-visible) slots
+    // and restore the binding map — post-region code reads the originals.
+    for (id, original_slot) in &privatized {
+        if result.is_ok() && !ctx.block().is_terminated() {
+            if let Some(private_slot) = ctx.locals.get(id).cloned() {
+                let value = ctx.block().load(DOUBLE, &private_slot);
+                ctx.block().store(DOUBLE, &value, original_slot);
+            }
+        }
+        ctx.locals.insert(*id, original_slot.clone());
+    }
+    // Drop any still-active suppressions before leaving the copy — the slow
+    // copy and post-region code use the ordinary shadow protocol.
+    for (id, _) in &saved {
+        ctx.masked_region_scalar_locals.remove(id);
+    }
+    for (id, original) in saved {
+        match original {
+            Some(original) => {
+                ctx.local_types.insert(id, original);
+            }
+            None => {
+                ctx.local_types.remove(&id);
+            }
+        }
+    }
+    result
 }
 
 /// Emit the versioned region: TA probe chain → `ta_i32` fast copy, plain
@@ -295,7 +566,8 @@ pub(super) fn lower_masked_window_region(
         });
     }
     let all_i32 = all_i32.expect("region matcher requires >= 1 eligible array");
-    ctx.block().cond_br(&all_i32, &ta_pre_label, &try_plain_label);
+    ctx.block()
+        .cond_br(&all_i32, &ta_pre_label, &try_plain_label);
 
     // Plain tier: the dense window guard (hole-free, raw-f64) — O(1) once the
     // RawF64 layout flag is set.
@@ -354,7 +626,15 @@ pub(super) fn lower_masked_window_region(
             elem: MaskedWindowElem::TaI32 { data_ptr },
         });
     }
-    lower_region_copy(ctx, region_stmts, base_idx, emit_shadow_clears)?;
+    let privatize = ctx.try_depth == 0;
+    lower_region_copy(
+        ctx,
+        region_stmts,
+        base_idx,
+        emit_shadow_clears,
+        &region.refinements,
+        privatize,
+    )?;
     ctx.masked_window_array_facts
         .retain(|fact| fact.scope_id != ta_scope_id);
     if !ctx.block().is_terminated() {
@@ -375,16 +655,23 @@ pub(super) fn lower_masked_window_region(
             elem: MaskedWindowElem::PlainF64,
         });
     }
-    lower_region_copy(ctx, region_stmts, base_idx, emit_shadow_clears)?;
+    lower_region_copy(
+        ctx,
+        region_stmts,
+        base_idx,
+        emit_shadow_clears,
+        &region.refinements,
+        privatize,
+    )?;
     ctx.masked_window_array_facts
         .retain(|fact| fact.scope_id != plain_scope_id);
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
 
-    // Slow copy: the untouched per-access lowering.
+    // Slow copy: the untouched per-access lowering, original static types.
     ctx.current_block = slow_pre_idx;
-    lower_region_copy(ctx, region_stmts, base_idx, emit_shadow_clears)?;
+    lower_region_copy(ctx, region_stmts, base_idx, emit_shadow_clears, &[], false)?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
