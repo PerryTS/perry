@@ -299,6 +299,9 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // #6759 A: one state fetch for the whole write path — the descriptor
+    // gates below all reuse it.
+    let st = crate::state::state();
     // #5135: the receiver may be a Proxy id arriving with its NaN-box tag
     // already masked off (the `obj.prop++` / `PropertyUpdate` codegen path
     // hands us the bare pointer band, not the full POINTER_TAG value). A Proxy
@@ -907,7 +910,7 @@ pub extern "C" fn js_object_set_field_by_name(
             // fresh array reusing a freed address (its `_reserved` zeroed at
             // allocation) skips this lookup and can't fire a previous tenant's
             // stale accessor.
-            if crate::state::state().descriptors.accessors_in_use.get()
+            if st.descriptors.accessors_in_use.get()
                 && (*gc_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
             {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
@@ -1351,11 +1354,8 @@ pub extern "C" fn js_object_set_field_by_name(
         // honored), so the descriptor key string can never be consulted: skip
         // the per-store String allocation entirely.
         let needs_descriptor_key = !plan_fast
-            && (crate::state::state().descriptors.accessors_in_use.get()
-                || crate::state::state()
-                    .descriptors
-                    .property_attrs_in_use
-                    .get());
+            && (st.descriptors.accessors_in_use.get()
+                || st.descriptors.property_attrs_in_use.get());
         let incoming_key_str: Option<String> = if needs_descriptor_key && !key.is_null() {
             let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let name_len = (*key).byte_len as usize;
@@ -1383,7 +1383,7 @@ pub extern "C" fn js_object_set_field_by_name(
         // app-page-turbo runtime's `exports.Fragment = …`). A fresh allocation
         // has the flag clear, so it skips the stale lookup entirely.
         if !plan_fast
-            && crate::state::state().descriptors.accessors_in_use.get()
+            && st.descriptors.accessors_in_use.get()
             && super::object_has_descriptors(obj as usize)
         {
             if let Some(ref k) = incoming_key_str {
@@ -1589,10 +1589,7 @@ pub extern "C" fn js_object_set_field_by_name(
                 // read only property" on a plain `{}` (Next.js app-page-turbo
                 // runtime's `exports.Fragment = …`). A fresh allocation has the
                 // flag clear, so it skips the lookup entirely.
-                if crate::state::state()
-                    .descriptors
-                    .property_attrs_in_use
-                    .get()
+                if st.descriptors.property_attrs_in_use.get()
                     && super::object_has_descriptors(obj as usize)
                 {
                     if let Some(ref k) = incoming_key_str {

@@ -1568,7 +1568,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 // thread-local gate keeps this off the hot path in the common case;
                 // the per-object flag gate avoids invoking a stale getter left by a
                 // freed object whose address this fresh object reused.
-                if crate::state::state().descriptors.accessors_in_use.get()
+                if st.descriptors.accessors_in_use.get()
                     && super::super::object_has_descriptors(obj as usize)
                 {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
@@ -1597,7 +1597,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
             if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
-                if crate::state::state().descriptors.accessors_in_use.get()
+                if st.descriptors.accessors_in_use.get()
                     && super::super::object_has_descriptors(obj as usize)
                 {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
@@ -1640,7 +1640,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);
                 }
                 // Accessor short-circuit (see fast path above).
-                if crate::state::state().descriptors.accessors_in_use.get()
+                if st.descriptors.accessors_in_use.get()
                     && super::super::object_has_descriptors(obj as usize)
                 {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
