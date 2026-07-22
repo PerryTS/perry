@@ -164,6 +164,12 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # The gap-suite ratchet decides whether conformance-smoke goes red, so
+      # its own logic is unit-checked on the cheap job rather than only being
+      # exercised 8 shards deep.
+      - name: Gap snapshot checker self-test
+        run: python3 scripts/gap_snapshot.py --self-test
+
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
