@@ -195,9 +195,3 @@ Build outputs are invisible to `git status`, so a clean tree tells you nothing a
 - **Async-to-generator transform, body locals.** It boxes every body local into a shared mutable cell typed `Any`. Two consequences seen in the wild: per-iteration `let`/`const` bindings collapse for closures created in a loop, and computed numeric-key calls (`arr[i](x)`) lose their type proof and silently resolve by *method name*, evaporating the call.
 - **Native base-class subclassing.** A native base's surface is installed at `super()` time and its parent edge lives in the class registry; keying any of that on a literal `extends` name loses it for fieldless classes, indirect subclasses, and class expressions.
 - **Two prototype-resolution paths.** `CLASS_PROTOTYPE_OBJECTS` (synthetic: `Object.create`, plain-function ctors) vs `CLASS_DECL_PROTOTYPE_OBJECTS` (declared classes). `in`/`for…in` and `getPrototypeOf` have disagreed about the same chain.
-
-## Recent Changes
-
-Per-change entries live as `changelog.d/` fragments until the next tag, then in that tag's GitHub Release notes (historical archive ≤ v0.5.1264 in the frozen `CHANGELOG.md`).
-
-**Do not add changelog entries to this file.** Bump only the `**Current Version:**` line above when you ship a change; the entry itself goes in `changelog.d/<PR>-<slug>.md`.
