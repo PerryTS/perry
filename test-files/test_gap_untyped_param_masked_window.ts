@@ -91,3 +91,78 @@ for (let i = 0; i < 16; i++) view[i] = i + 1;
 console.log('pre-detach:', sumMasked(view, 100));
 (buf as any).transfer();
 console.log('post-detach:', sumMaskedF64(view, 100)); // length 0 -> undefined reads -> NaN
+
+// ---- STRAIGHT-LINE region shapes (the unrolled bcryptjs _encipher form):
+// >= 8 masked reads with no loop, exercising the region versioner.
+
+// The _encipher shape: untyped locals fed from an untyped array, then a
+// run of masked reads mixed through bitwise ops.
+function encipherish(lr: any, off: any, P: any, S: any): number {
+  let n = 0;
+  let l = lr[off];
+  let r = lr[off + 1];
+  l ^= P[0];
+  n = S[l >>> 28];
+  n += S[8 | ((l >> 16) & 7)];
+  n ^= S[(l >> 8) & 15];
+  n += S[l & 15];
+  r ^= n ^ P[1];
+  n = S[r >>> 28];
+  n += S[8 | ((r >> 16) & 7)];
+  n ^= S[(r >> 8) & 15];
+  n += S[r & 15];
+  l ^= n ^ P[2];
+  return ((l | 0) + (r | 0) + (n | 0)) | 0;
+}
+
+// Region with the binding REASSIGNED mid-run: T's reads must see T.
+function regionReassign(S: any, T: any): number {
+  let a = 0;
+  a += S[1 & 15];
+  a += S[2 & 15];
+  a += S[3 & 15];
+  a += S[4 & 15];
+  S = T;
+  a += S[5 & 15];
+  a += S[6 & 15];
+  a += S[7 & 15];
+  a += S[8 & 15];
+  return a;
+}
+
+// Region inside try/catch (privatization disabled): a mid-region throw via
+// a valueOf that returns a non-number must leave the partial sums correct.
+function regionInTry(S: any, poison: any): string {
+  let a = 0;
+  try {
+    a += S[1 & 15];
+    a += S[2 & 15];
+    a += S[3 & 15];
+    a += S[4 & 15];
+    a += S[5 & 15];
+    a += S[6 & 15];
+    a += S[7 & 15];
+    a += S[8 & 15];
+    a ^= poison;
+  } catch (e: any) {
+    return 'caught a=' + a + ' ' + e.message;
+  }
+  return 'ok a=' + a;
+}
+
+const lrPlain = [11, 22];
+console.log('encipherish i32:', encipherish(lrPlain, 0, i32, i32));
+console.log('encipherish plain:', encipherish(lrPlain, 0, plain, plain));
+console.log('encipherish mixed:', encipherish(lrPlain, 0, plain, i32));
+console.log('encipherish u32:', encipherish(lrPlain, 0, u32, u32));
+console.log('encipherish f64:', encipherish(lrPlain, 0, f64, f64));
+console.log('encipherish holey:', encipherish(lrPlain, 0, holey, holey));
+console.log('encipherish short:', encipherish(lrPlain, 0, small, small));
+console.log('region reassign:', regionReassign(i32, plain), regionReassign(plain, u32));
+console.log('region try ok:', regionInTry(i32, 3));
+const thrower = {
+  valueOf() {
+    throw new Error('boom');
+  },
+};
+console.log('region try throw:', regionInTry(i32, thrower));
