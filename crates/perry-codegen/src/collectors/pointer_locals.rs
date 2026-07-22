@@ -32,6 +32,63 @@ thread_local! {
 
 const MAX_POINTER_ANALYSIS_TYPE_DEPTH: usize = 4;
 
+/// Class name for a `TYPED_ARRAY_KIND_*` tag (reverse of
+/// `perry_hir::typed_array_kind_for_name`).
+fn typed_array_class_name_for_kind(kind: u8) -> Option<&'static str> {
+    const NAMES: &[&str] = &[
+        "Int8Array",
+        "Uint8Array",
+        "Int16Array",
+        "Uint16Array",
+        "Int32Array",
+        "Uint32Array",
+        "Float32Array",
+        "Float64Array",
+        "Uint8ClampedArray",
+        "BigInt64Array",
+        "BigUint64Array",
+        "Float16Array",
+    ];
+    let name = NAMES.get(kind as usize)?;
+    debug_assert_eq!(perry_hir::typed_array_kind_for_name(name), Some(kind));
+    Some(name)
+}
+
+/// Typed-array classes whose elements are plain Numbers (excludes the BigInt
+/// kinds, whose elements are heap-allocated BigInt pointers).
+fn typed_array_elem_is_number(name: &str) -> bool {
+    perry_hir::typed_array_kind_for_name(name).is_some()
+        && !matches!(name, "BigInt64Array" | "BigUint64Array")
+}
+
+/// Index shapes that are definitely canonical numeric keys — integer/number
+/// literals, bitwise ops (which `ToInt32`/`ToUint32` their operands), and
+/// arithmetic over such shapes. A `LocalGet` index is NOT accepted: the local
+/// could hold a string/symbol key that reaches a prototype method.
+fn index_is_definitely_numeric(e: &Expr) -> bool {
+    match e {
+        Expr::Integer(_) | Expr::Number(_) | Expr::MathImul(_, _) => true,
+        Expr::Unary { op, .. } => matches!(
+            op,
+            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot
+        ),
+        Expr::Binary { op, left, right } => match op {
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr => true,
+            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => true,
+            // `+` may be string concatenation — both sides must be numeric.
+            BinaryOp::Add => {
+                index_is_definitely_numeric(left) && index_is_definitely_numeric(right)
+            }
+        },
+        _ => false,
+    }
+}
+
 fn pointer_analysis_type(ty: &Type) -> Type {
     pointer_analysis_type_inner(ty, 0)
 }
@@ -299,10 +356,21 @@ pub fn collect_pointer_typed_locals(
                 }
                 Some(pointer_analysis_array_type(elem_ty.unwrap_or(Type::Any)))
             }
-            Expr::IndexGet { object, .. } => {
+            Expr::IndexGet { object, index } => {
                 match expr_value_type(object, local_types, local_value_types, non_pointer_locals)? {
                     Type::Array(elem) => Some(*elem),
                     Type::String => Some(Type::String),
+                    // A numerically-keyed element read of a non-BigInt typed
+                    // array yields a Number (or `undefined` when out of
+                    // bounds) — never a pointer. String/symbol keys could
+                    // reach `%TypedArray%.prototype` methods (pointers), so
+                    // only definitely-numeric index shapes qualify.
+                    Type::Named(name)
+                        if typed_array_elem_is_number(&name)
+                            && index_is_definitely_numeric(index) =>
+                    {
+                        Some(Type::Union(vec![Type::Number, Type::Void]))
+                    }
                     _ => None,
                 }
             }
@@ -315,6 +383,9 @@ pub fn collect_pointer_typed_locals(
             | Expr::Uint8ArrayNew(_)
             | Expr::Uint8ArrayFrom(_)
             | Expr::TextEncoderEncode(_) => Some(Type::Named("Uint8Array".into())),
+            Expr::TypedArrayNew { kind, .. } => {
+                typed_array_class_name_for_kind(*kind).map(|name| Type::Named(name.into()))
+            }
             Expr::TextEncoderEncodeInto { .. } => Some(Type::Object(Default::default())),
             Expr::NativeMethodCall {
                 module,

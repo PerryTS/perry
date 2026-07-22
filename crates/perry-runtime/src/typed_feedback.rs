@@ -1251,6 +1251,137 @@ fn packed_f64_array_loop_range_guard(
     }
 }
 
+/// Dense-window variant of [`packed_f64_array_loop_range_guard`] for the
+/// read-only masked-index range loop: identical shape/window validation, but
+/// the window must additionally be hole-free (the guarded loop's inline loads
+/// carry no hole check and no side exit — its multi-statement body cannot be
+/// safely re-executed mid-iteration).
+fn packed_f64_array_loop_range_guard_dense(
+    arr: *const ArrayHeader,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> bool {
+    if !plain_array_index_guard(arr, 0, false) {
+        return false;
+    }
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+    let Some(header) = gc_header_for_user_addr(raw_addr) else {
+        return false;
+    };
+    unsafe {
+        let flags = (*header)._reserved;
+        if flags
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND)
+            != 0
+        {
+            return false;
+        }
+        let arr = raw_addr as *mut ArrayHeader;
+        let len = (*arr).length;
+        if len > i32::MAX as u32 {
+            return false;
+        }
+        if min_idx < 0 || i64::from(max_idx_exclusive) > i64::from(len) {
+            return false;
+        }
+        crate::array::rebuild_array_numeric_raw_f64_dense_window(arr, min_idx, max_idx_exclusive)
+    }
+}
+
+/// i32 tier of [`packed_f64_array_loop_range_guard_dense`]: the window must
+/// additionally hold only i32-representable integers, so the guarded loop's
+/// inline loads can use a bare exact `fptosi`.
+fn packed_f64_array_loop_range_guard_dense_i32(
+    arr: *const ArrayHeader,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> bool {
+    if !packed_f64_array_loop_range_guard_dense(arr, min_idx, max_idx_exclusive) {
+        return false;
+    }
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+    unsafe {
+        crate::array::rebuild_array_numeric_raw_f64_dense_window_i32(
+            raw_addr as *mut ArrayHeader,
+            min_idx,
+            max_idx_exclusive,
+        )
+    }
+}
+
+fn packed_f64_range_dense_guard_impl(
+    site_id: u64,
+    receiver: f64,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+    guard: fn(*const ArrayHeader, i32, i32) -> bool,
+) -> i32 {
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return guard(raw_addr as *const ArrayHeader, min_idx, max_idx_exclusive) as i32;
+    }
+    let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
+    let observation = Observation {
+        source: ObservationSource::Array,
+        object_addr: 0,
+        shape_addr: 0,
+        key_hash: 0,
+        class_id,
+        heap_type,
+        aux,
+        value_tag: element_kind,
+    };
+    let pass = guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::ArrayElement,
+        observation,
+        guard(raw_addr as *const ArrayHeader, min_idx, max_idx_exclusive),
+    );
+    if pass {
+        1
+    } else {
+        0
+    }
+}
+
+/// FFI wrapper for [`packed_f64_array_loop_range_guard_dense`] — the entry
+/// guard of the read-only masked-index packed-f64 range loop (f64 tier).
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard_dense(
+    site_id: u64,
+    receiver: f64,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> i32 {
+    packed_f64_range_dense_guard_impl(
+        site_id,
+        receiver,
+        min_idx,
+        max_idx_exclusive,
+        packed_f64_array_loop_range_guard_dense,
+    )
+}
+
+/// FFI wrapper for [`packed_f64_array_loop_range_guard_dense_i32`] — the i32
+/// tier of the dense range-loop guard.
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard_dense_i32(
+    site_id: u64,
+    receiver: f64,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> i32 {
+    packed_f64_range_dense_guard_impl(
+        site_id,
+        receiver,
+        min_idx,
+        max_idx_exclusive,
+        packed_f64_array_loop_range_guard_dense_i32,
+    )
+}
+
 fn packed_i32_array_loop_guard(arr: *const ArrayHeader) -> bool {
     if !packed_f64_array_loop_guard(arr) {
         return false;

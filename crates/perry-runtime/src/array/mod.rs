@@ -61,6 +61,7 @@ pub use self::generic_mutators::{
 pub(crate) use self::header::{
     array_has_arguments_object_flag, mark_array_as_arguments_object,
     prune_dead_array_named_property_owners, rebuild_array_numeric_raw_f64_allow_holes,
+    rebuild_array_numeric_raw_f64_dense_window, rebuild_array_numeric_raw_f64_dense_window_i32,
 };
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,

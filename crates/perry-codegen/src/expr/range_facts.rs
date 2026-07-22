@@ -158,6 +158,121 @@ fn checked_range_div(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
     None
 }
 
+/// Smallest all-ones value covering `value` (`255 → 255`, `256 → 511`,
+/// `0 → 0`). An upper bound for `a | b` / `a & b` results whose operands are
+/// bounded by `value`: OR/AND cannot set a bit above the highest bit of
+/// either operand's cover.
+fn ones_cover(value: i64) -> i64 {
+    debug_assert!(value >= 0);
+    if value == 0 {
+        return 0;
+    }
+    ((1u64 << (64 - (value as u64).leading_zeros())) - 1) as i64
+}
+
+/// `a & b` where both operands carry non-negative ranges bounded by
+/// `i32::MAX`: `ToInt32` of a value in `[0, 2^31)` cannot wrap or change
+/// sign, and AND of two non-negative i32 values is bounded by each operand.
+fn checked_range_bitand(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
+    if lhs.min >= 0 && rhs.min >= 0 && lhs.max <= i32::MAX as i64 && rhs.max <= i32::MAX as i64 {
+        return Some(IntRange {
+            min: 0,
+            max: lhs.max.min(rhs.max),
+        });
+    }
+    None
+}
+
+/// `a | b` where both operands carry non-negative ranges bounded by
+/// `i32::MAX`: OR cannot clear bits (so it is at least each operand) and
+/// cannot set a bit above either operand's ones-cover.
+fn checked_range_bitor(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
+    if lhs.min >= 0 && rhs.min >= 0 && lhs.max <= i32::MAX as i64 && rhs.max <= i32::MAX as i64 {
+        return Some(IntRange {
+            min: lhs.min.max(rhs.min),
+            max: ones_cover(lhs.max) | ones_cover(rhs.max),
+        });
+    }
+    None
+}
+
+/// A constant operand of `&` usable as a result mask: a non-negative integer
+/// `≤ i32::MAX`, so `ToInt32` leaves it unchanged and its sign bit is clear.
+fn bitand_mask_constant(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
+    let mask = constant_i64_expr(ctx, expr)?;
+    (0..=i64::from(i32::MAX)).contains(&mask).then_some(mask)
+}
+
+/// Value range of an `object[index]` load from a width-tracked integer-element
+/// typed array when the index is provably in bounds: the element kind bounds
+/// the value (an in-bounds `Int32Array` read is always an i32 integer, a
+/// `Uint8Array` read is `[0, 255]`, …). Out of bounds would read `undefined`,
+/// so the same static bounds proof the unchecked native load relies on gates
+/// the range. The index range is computed through the SAME `seen` set as the
+/// enclosing walk so mutually-recursive local aliases keep their cycle
+/// breaker.
+fn int_typed_array_load_range(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+    seen: &mut std::collections::HashSet<u32>,
+) -> Option<IntRange> {
+    use crate::native_value::{BufferElem, BufferIndexUnit, MaterializationReason};
+    if ctx.disable_buffer_fast_path {
+        return None;
+    }
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    let view = ctx.buffer_view_slots.get(id)?;
+    if view.index_unit != BufferIndexUnit::Element
+        || !view.alias.allows_noalias()
+        || view.scope_idx.is_none()
+    {
+        return None;
+    }
+    if ctx.closure_captures.contains_key(id)
+        || matches!(
+            ctx.buffer_hazard_reasons.get(id),
+            Some(MaterializationReason::ClosureCapture)
+        )
+    {
+        return None;
+    }
+    let elem_range = match view.elem {
+        BufferElem::I8 => IntRange {
+            min: -128,
+            max: 127,
+        },
+        BufferElem::U8 | BufferElem::U8Clamped => IntRange { min: 0, max: 255 },
+        BufferElem::I16 => IntRange {
+            min: -32768,
+            max: 32767,
+        },
+        BufferElem::U16 => IntRange { min: 0, max: 65535 },
+        BufferElem::I32 => IntRange {
+            min: i32::MIN as i64,
+            max: i32::MAX as i64,
+        },
+        BufferElem::U32 => IntRange {
+            min: 0,
+            max: u32::MAX as i64,
+        },
+        BufferElem::F32 | BufferElem::F64 => return None,
+    };
+    let index_range = int_range_expr_inner(ctx, index, seen)?;
+    let length_min = view
+        .length_source
+        .as_ref()
+        .and_then(|source| length_source_range(ctx, source))?
+        .min;
+    if index_range.min >= 0 && index_range.max < length_min {
+        Some(elem_range)
+    } else {
+        None
+    }
+}
+
 fn pod_layout_constant_i64(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
     match expr {
         Expr::PodLayoutSizeOf { ty } => match layout_decision_for_type(ctx, ty) {
@@ -220,7 +335,37 @@ fn int_range_expr_inner(
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => pod_layout_constant_i64(ctx, expr).map(IntRange::exact),
         Expr::LocalGet(id) => int_range_for_local(ctx, *id, seen),
+        Expr::IndexGet { object, index } => int_typed_array_load_range(ctx, object, index, seen),
         Expr::Binary { op, left, right } => {
+            // Result-shape rules that need no range on one (or either)
+            // operand. `e & K` with a non-negative i32 constant `K` is
+            // `ToInt32(e) & K ∈ [0, K]` for EVERY `e` (NaN, fractional,
+            // negative, non-numeric — `ToInt32` coerces first, the mask
+            // bounds last), and `e >>> k` is a `ToUint32` result shifted
+            // right, bounded by the shift amount alone. Both results are
+            // integral by construction, so they are safe to feed the
+            // unchecked buffer-bounds proofs (a fractional index would read
+            // a named property, not an element — these ops cannot produce
+            // one). This is what lets `S[i & 1023]` / `S[x >>> 24]` /
+            // `S[0x100 | ((x >> 16) & 0xff)]` (the bcryptjs Blowfish S-box
+            // shapes) prove bounds against a known view length.
+            if matches!(op, BinaryOp::BitAnd) {
+                if let Some(mask) =
+                    bitand_mask_constant(ctx, left).or_else(|| bitand_mask_constant(ctx, right))
+                {
+                    return Some(IntRange { min: 0, max: mask });
+                }
+            }
+            if matches!(op, BinaryOp::UShr) {
+                // JS `>>>` shifts by `ToUint32(rhs) & 31`; any result is a
+                // Uint32. A constant shift of `k ∈ [1, 31]` tightens the
+                // bound to `2^(32-k) - 1`.
+                let max = match constant_i64_expr(ctx, right).map(|k| (k as u64) & 31) {
+                    Some(k) if k > 0 => (1i64 << (32 - k)) - 1,
+                    _ => i64::from(u32::MAX),
+                };
+                return Some(IntRange { min: 0, max });
+            }
             let lhs = int_range_expr_inner(ctx, left, seen)?;
             let rhs = int_range_expr_inner(ctx, right, seen)?;
             match op {
@@ -228,6 +373,7 @@ fn int_range_expr_inner(
                 BinaryOp::Sub => checked_range_sub(lhs, rhs),
                 BinaryOp::Mul => checked_range_mul(lhs, rhs),
                 BinaryOp::Div => checked_range_div(lhs, rhs),
+                // `| 0` keeps the (possibly negative) operand range exactly.
                 BinaryOp::BitOr if rhs.min == 0 && rhs.max == 0 => {
                     if lhs.min >= i32::MIN as i64 && lhs.max <= i32::MAX as i64 {
                         Some(lhs)
@@ -235,6 +381,15 @@ fn int_range_expr_inner(
                         None
                     }
                 }
+                BinaryOp::BitOr if lhs.min == 0 && lhs.max == 0 => {
+                    if rhs.min >= i32::MIN as i64 && rhs.max <= i32::MAX as i64 {
+                        Some(rhs)
+                    } else {
+                        None
+                    }
+                }
+                BinaryOp::BitOr => checked_range_bitor(lhs, rhs),
+                BinaryOp::BitAnd => checked_range_bitand(lhs, rhs),
                 _ => None,
             }
         }

@@ -47,6 +47,328 @@ use std::collections::{HashMap, HashSet};
 
 use super::*;
 
+/// Element-value-fits-signed-i32 `TYPED_ARRAY_KIND_*` tags (excludes
+/// `Uint32Array`, whose upper half does not round-trip through an i32 slot,
+/// and the float/BigInt kinds).
+fn typed_array_kind_elem_fits_i32(kind: u8) -> bool {
+    use perry_hir::{
+        TYPED_ARRAY_KIND_INT16, TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_INT8,
+        TYPED_ARRAY_KIND_UINT16, TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_UINT8_CLAMPED,
+    };
+    matches!(
+        kind,
+        TYPED_ARRAY_KIND_INT8
+            | TYPED_ARRAY_KIND_UINT8
+            | TYPED_ARRAY_KIND_UINT8_CLAMPED
+            | TYPED_ARRAY_KIND_INT16
+            | TYPED_ARRAY_KIND_UINT16
+            | TYPED_ARRAY_KIND_INT32
+    )
+}
+
+/// Context-free value window of an index expression: `Some((lo, hi))` proves
+/// the JS value is an integer in `[lo, hi]` for EVERY runtime environment.
+/// Only shapes whose result is integral by construction qualify — literals and
+/// `ToInt32`/`ToUint32`-wrapping bitwise ops (`e & K` is `[0, K]` for any `e`,
+/// `e >>> k` is bounded by the shift) — plus `+`/`-` compositions of such
+/// windows. This is the syntactic sibling of the ctx-aware
+/// `int_range_expr` rules in `expr/range_facts.rs`; collectors run before any
+/// `FnCtx` exists, so they cannot consult local range facts.
+pub(crate) fn static_index_window(e: &perry_hir::Expr) -> Option<(i64, i64)> {
+    use perry_hir::{BinaryOp, Expr};
+    fn int_constant(e: &Expr) -> Option<i64> {
+        match e {
+            Expr::Integer(n) => Some(*n),
+            Expr::Number(n) if n.is_finite() && n.fract() == 0.0 && n.abs() < 2f64.powi(53) => {
+                Some(*n as i64)
+            }
+            _ => None,
+        }
+    }
+    fn ones_cover(value: i64) -> i64 {
+        if value == 0 {
+            0
+        } else {
+            ((1u64 << (64 - (value as u64).leading_zeros())) - 1) as i64
+        }
+    }
+    if let Some(n) = int_constant(e) {
+        return Some((n, n));
+    }
+    let Expr::Binary { op, left, right } = e else {
+        return None;
+    };
+    match op {
+        BinaryOp::BitAnd => {
+            let mask = int_constant(left)
+                .or_else(|| int_constant(right))
+                .filter(|mask| (0..=i64::from(i32::MAX)).contains(mask))?;
+            Some((0, mask))
+        }
+        BinaryOp::UShr => {
+            let max = match int_constant(right).map(|k| (k as u64) & 31) {
+                Some(k) if k > 0 => (1i64 << (32 - k)) - 1,
+                _ => i64::from(u32::MAX),
+            };
+            Some((0, max))
+        }
+        BinaryOp::Add => {
+            let (ll, lh) = static_index_window(left)?;
+            let (rl, rh) = static_index_window(right)?;
+            Some((ll.checked_add(rl)?, lh.checked_add(rh)?))
+        }
+        BinaryOp::Sub => {
+            let (ll, lh) = static_index_window(left)?;
+            let (rl, rh) = static_index_window(right)?;
+            Some((ll.checked_sub(rh)?, lh.checked_sub(rl)?))
+        }
+        BinaryOp::BitOr => {
+            let (ll, lh) = static_index_window(left)?;
+            let (rl, rh) = static_index_window(right)?;
+            if ll >= 0 && rl >= 0 && lh <= i64::from(i32::MAX) && rh <= i64::from(i32::MAX) {
+                Some((ll.max(rl), ones_cover(lh) | ones_cover(rh)))
+            } else {
+                None
+            }
+        }
+        BinaryOp::Shr => {
+            let shift = int_constant(right).map(|k| (k as u64) & 31)?;
+            if shift == 0 {
+                return None;
+            }
+            Some((i64::from(i32::MIN) >> shift, i64::from(i32::MAX) >> shift))
+        }
+        _ => None,
+    }
+}
+
+/// `const S = new Int32Array(<literal length>)`-style bindings whose element
+/// reads are provably integers: the binding is a `const` (never reassigned),
+/// the element kind fits a signed i32, the length is a compile-time literal,
+/// and the binding is only ever used as an element-access receiver (`S[...]`
+/// reads and writes) — so nothing can alias it, detach its buffer, or swap
+/// the value behind it. Returns `id → length`.
+fn collect_const_int_ta_views(stmts: &[perry_hir::Stmt]) -> HashMap<u32, i64> {
+    use perry_hir::{Expr, Stmt};
+    let mut views: HashMap<u32, i64> = HashMap::new();
+    fn seed_stmt(stmt: &Stmt, views: &mut HashMap<u32, i64>) {
+        if let Stmt::Let {
+            id,
+            mutable: false,
+            init:
+                Some(Expr::TypedArrayNew {
+                    kind,
+                    arg: Some(arg),
+                }),
+            ..
+        } = stmt
+        {
+            let len = match arg.as_ref() {
+                Expr::Integer(n) => Some(*n),
+                Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
+                _ => None,
+            };
+            if let Some(len) = len {
+                if typed_array_kind_elem_fits_i32(*kind) && (0..=16_000_000).contains(&len) {
+                    views.insert(*id, len);
+                }
+            }
+        }
+        for_each_child_stmt(stmt, &mut |child| seed_stmt(child, views));
+    }
+    for stmt in stmts {
+        seed_stmt(stmt, &mut views);
+    }
+    if views.is_empty() {
+        return views;
+    }
+    for stmt in stmts {
+        scan_ta_view_escapes_stmt(stmt, &mut views);
+    }
+    views
+}
+
+/// Invoke `f` on every statement nested directly inside `stmt` (branch
+/// bodies, loop bodies, catch/finally, switch cases, labels).
+fn for_each_child_stmt(stmt: &perry_hir::Stmt, f: &mut dyn FnMut(&perry_hir::Stmt)) {
+    use perry_hir::Stmt;
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            then_branch.iter().for_each(&mut *f);
+            if let Some(eb) = else_branch {
+                eb.iter().for_each(&mut *f);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body.iter().for_each(&mut *f),
+        Stmt::For { init, body, .. } => {
+            if let Some(init) = init {
+                f(init);
+            }
+            body.iter().for_each(&mut *f);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().for_each(&mut *f);
+            if let Some(c) = catch {
+                c.body.iter().for_each(&mut *f);
+            }
+            if let Some(fin) = finally {
+                fin.iter().for_each(&mut *f);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases {
+                case.body.iter().for_each(&mut *f);
+            }
+        }
+        Stmt::Labeled { body, .. } => f(body.as_ref()),
+        _ => {}
+    }
+}
+
+/// Remove from `views` every binding used anywhere other than as the direct
+/// receiver of an element access. A bare `LocalGet` in any other position
+/// (call argument, property access, capture, assignment source, …) can alias
+/// or detach the array, so the window proof no longer holds.
+fn scan_ta_view_escapes_stmt(stmt: &perry_hir::Stmt, views: &mut HashMap<u32, i64>) {
+    use perry_hir::Stmt;
+    if let Stmt::Let { init: Some(e), .. } = stmt {
+        scan_ta_view_escapes_expr(e, views);
+    }
+    match stmt {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+            scan_ta_view_escapes_expr(e, views);
+        }
+        Stmt::If { condition, .. } => scan_ta_view_escapes_expr(condition, views),
+        Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => {
+            scan_ta_view_escapes_expr(condition, views);
+        }
+        Stmt::For {
+            condition, update, ..
+        } => {
+            if let Some(c) = condition {
+                scan_ta_view_escapes_expr(c, views);
+            }
+            if let Some(u) = update {
+                scan_ta_view_escapes_expr(u, views);
+            }
+        }
+        Stmt::Switch { discriminant, .. } => scan_ta_view_escapes_expr(discriminant, views),
+        _ => {}
+    }
+    for_each_child_stmt(stmt, &mut |child| scan_ta_view_escapes_stmt(child, views));
+}
+
+fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>) {
+    use perry_hir::Expr;
+    match e {
+        // Receiver position of an element access is the one allowed use.
+        Expr::IndexGet { object, index } => {
+            if !matches!(object.as_ref(), Expr::LocalGet(_)) {
+                scan_ta_view_escapes_expr(object, views);
+            }
+            scan_ta_view_escapes_expr(index, views);
+        }
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
+            if !matches!(object.as_ref(), Expr::LocalGet(_)) {
+                scan_ta_view_escapes_expr(object, views);
+            }
+            scan_ta_view_escapes_expr(index, views);
+            scan_ta_view_escapes_expr(value, views);
+        }
+        // `S[k] = v` lowers as PutValueSet with `target` and `receiver` both
+        // the receiver local — receiver-position uses, like IndexSet's object.
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            if !matches!(target.as_ref(), Expr::LocalGet(_)) {
+                scan_ta_view_escapes_expr(target, views);
+            }
+            if !matches!(receiver.as_ref(), Expr::LocalGet(_)) {
+                scan_ta_view_escapes_expr(receiver, views);
+            }
+            scan_ta_view_escapes_expr(key, views);
+            scan_ta_view_escapes_expr(value, views);
+        }
+        Expr::LocalGet(id) => {
+            views.remove(id);
+        }
+        Expr::LocalSet(id, value) => {
+            views.remove(id);
+            scan_ta_view_escapes_expr(value, views);
+        }
+        Expr::Closure { body, .. } => {
+            for stmt in body {
+                scan_ta_view_escapes_stmt(stmt, views);
+            }
+            perry_hir::walker::walk_expr_children(e, &mut |child| {
+                scan_ta_view_escapes_expr(child, views);
+            });
+        }
+        _ => {
+            perry_hir::walker::walk_expr_children(e, &mut |child| {
+                scan_ta_view_escapes_expr(child, views);
+            });
+        }
+    }
+}
+
+/// `S[idx]` where `S` is a tracked const int-typed-array view and `idx`'s
+/// static window is inside `[0, length)` — an integer by construction.
+fn is_proven_int_ta_load(views: &HashMap<u32, i64>, e: &perry_hir::Expr) -> bool {
+    use perry_hir::Expr;
+    let Expr::IndexGet { object, index } = e else {
+        return false;
+    };
+    let Expr::LocalGet(id) = object.as_ref() else {
+        return false;
+    };
+    let Some(&len) = views.get(id) else {
+        return false;
+    };
+    static_index_window(index).is_some_and(|(lo, hi)| lo >= 0 && hi < len)
+}
+
+/// Walk all Lets and seed ids whose init is a proven in-window int-typed-array
+/// element load (`const a = S[x & 0xff]` — the bcryptjs Blowfish shape).
+fn collect_int_ta_load_let_ids(
+    stmts: &[perry_hir::Stmt],
+    views: &HashMap<u32, i64>,
+    out: &mut HashSet<u32>,
+) {
+    use perry_hir::Stmt;
+    for stmt in stmts {
+        if let Stmt::Let {
+            id,
+            init: Some(init),
+            ..
+        } = stmt
+        {
+            if is_proven_int_ta_load(views, init) {
+                out.insert(*id);
+            }
+        }
+        for_each_child_stmt(stmt, &mut |child| {
+            collect_int_ta_load_let_ids(std::slice::from_ref(child), views, out);
+        });
+    }
+}
+
 pub fn collect_integer_locals(
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &HashSet<u32>,
@@ -69,6 +391,13 @@ pub fn collect_integer_locals(
         &flat_row_alias_ids,
         clamp_fn_ids,
     );
+
+    // `const a = S[x & 0xff]` where `S` is a const int-typed-array view and
+    // the index window is statically inside the array: the load is an integer
+    // by construction, so seed it like any other int-producing Let. The
+    // provenance judge exempts these inits below for the same reason.
+    let int_ta_views = collect_const_int_ta_views(stmts);
+    collect_int_ta_load_let_ids(stmts, &int_ta_views, &mut candidates);
 
     // Forward closure pass: extend the seed set with Lets whose init is
     // `is_int32_producing_expr` against the current candidate set.
@@ -118,6 +447,7 @@ pub fn collect_integer_locals(
         flat_row_alias_ids: &flat_row_alias_ids,
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
+        int_ta_views: &int_ta_views,
         dependents: HashMap::new(),
         disqualified: HashSet::new(),
         closure_written: HashSet::new(),
@@ -166,6 +496,10 @@ struct ProvenanceJudge<'a> {
     flat_row_alias_ids: &'a HashSet<u32>,
     clamp_fn_ids: &'a HashSet<u32>,
     arg_dependent_clamp_fn_ids: &'a HashSet<u32>,
+    /// Const int-typed-array views (`id → length`) whose in-window element
+    /// loads are integers by construction — obligations whose rhs is such a
+    /// load pass without deps.
+    int_ta_views: &'a HashMap<u32, i64>,
     /// dep local id → candidate ids whose integer verdict relied on it.
     dependents: HashMap<u32, Vec<u32>>,
     /// Candidates with at least one failed obligation.
@@ -176,6 +510,12 @@ struct ProvenanceJudge<'a> {
 
 impl ProvenanceJudge<'_> {
     fn judge_obligation(&mut self, id: u32, rhs: &Expr) {
+        // A proven in-window int-typed-array load is an integer regardless of
+        // any candidate's status — pass with no deps (the view binding is a
+        // never-escaping const, so nothing can invalidate it).
+        if is_proven_int_ta_load(self.int_ta_views, rhs) {
+            return;
+        }
         let mut deps: HashSet<u32> = HashSet::new();
         if int32_producing_deps(
             rhs,

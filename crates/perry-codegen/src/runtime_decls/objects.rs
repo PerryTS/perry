@@ -342,6 +342,18 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I32],
     );
+    // Dense-window variant for the read-only masked-index range loop: the
+    // window must be hole-free (loads carry no hole check / side exit).
+    module.declare_function(
+        "js_typed_feedback_packed_f64_range_loop_guard_dense",
+        I32,
+        &[I64, DOUBLE, I32, I32],
+    );
+    module.declare_function(
+        "js_typed_feedback_packed_f64_range_loop_guard_dense_i32",
+        I32,
+        &[I64, DOUBLE, I32, I32],
+    );
     module.declare_function(
         "js_typed_feedback_packed_u32_array_loop_guard",
         I32,

@@ -364,6 +364,7 @@ fn lower_packed_f64_versioned_for(
         store_side_exit_label: slow_pre_label.clone(),
         array_kind: matched.array_kind,
         allow_holes: false,
+        window_validated: false,
     });
     lower_for_after_init(
         ctx,
@@ -411,9 +412,13 @@ enum PackedF64RangeLoopBound {
 #[derive(Clone, Copy)]
 struct PackedF64RangeArrayAccess {
     array_id: u32,
-    /// Smallest / largest constant offset `c` over all `arr[i + c]` accesses.
-    min_offset: i32,
-    max_offset: i32,
+    /// Counter-relative accesses: smallest / largest constant offset `c` over
+    /// all `arr[i ± c]` accesses.
+    counter: Option<(i32, i32)>,
+    /// Merged static index windows `(lo, hi)` over masked accesses
+    /// (`arr[e & K]`, `arr[K1 + (e >>> k & K2)]`, … — see
+    /// `collectors::static_index_window`). Dense mode only.
+    stat: Option<(i64, i64)>,
     written: bool,
 }
 
@@ -424,6 +429,13 @@ struct PackedF64RangeLoop {
     bound: PackedF64RangeLoopBound,
     /// Per-array access windows, ordered by array local id (deterministic).
     arrays: Vec<PackedF64RangeArrayAccess>,
+    /// True for the read-only masked-index mode: the body may hold several
+    /// scalar statements and statically-windowed (`e & K`-shaped) reads, the
+    /// entry guard is the DENSE variant (window must be hole-free), and the
+    /// fast loop's loads carry no hole check and no side exit (a
+    /// mid-iteration side exit could double-apply earlier statement effects
+    /// on re-execution).
+    dense: bool,
 }
 
 /// #6011: range-preguarded packed-f64 versioned loop.
@@ -530,26 +542,69 @@ fn match_packed_f64_range_loop(
     };
     let mut accesses: std::collections::BTreeMap<u32, PackedF64RangeArrayAccess> =
         std::collections::BTreeMap::new();
-    if !packed_f64_range_loop_body_collect(body, counter_id, bound_local, &mut accesses) {
-        return None;
-    }
+    let dense = if packed_f64_range_loop_body_collect(body, counter_id, bound_local, &mut accesses)
+    {
+        false
+    } else {
+        // The classic shape (one statement, counter-offset indices, stores
+        // allowed, hole-tolerant with side exits) didn't match. Try the
+        // read-only DENSE mode: several scalar statements, masked
+        // statically-windowed indices, no stores, no side exits.
+        accesses.clear();
+        if !packed_f64_range_loop_dense_body_collect(body, counter_id, bound_local, &mut accesses) {
+            return None;
+        }
+        true
+    };
     if accesses.is_empty() {
         // No tracked array access — nothing for the versioned loop to win.
         return None;
     }
     for access in accesses.values() {
         let arr_id = access.array_id;
-        if !packed_loop_array_binding_is_eligible(ctx, arr_id) {
+        // Written arrays keep the full fact-graph eligibility (below). Reads
+        // only need a declared number-array binding in addressable storage:
+        // the range guard re-validates the ACTUAL runtime array — plain-array
+        // shape, raw-f64 packedness, frozen/descriptor/prototype state, and
+        // the whole index window — at loop entry, and the matched body admits
+        // no store/call/closure/await, so nothing can reshape the array (even
+        // through an alias) between the guard and the last iteration. In
+        // particular this must NOT consult the materialization-hazard /
+        // array-kind facts: `mark_unknown_call_escape` blanket-hazards every
+        // function-local tracked array when the function contains ANY call
+        // (e.g. a `console.log` after the loop), which would keep every
+        // locally-built lookup table (`const S: number[] = new Array(1024)`
+        // + fill loop — the Blowfish S-box shape) off the fast path forever.
+        // A wrong static hint costs one failed guard → slow loop, never
+        // correctness.
+        if access.written {
+            if !packed_loop_array_binding_is_eligible(ctx, arr_id) {
+                return None;
+            }
+        } else if !packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
+            || ctx.scalar_replaced_arrays.contains_key(&arr_id)
+        {
             return None;
         }
         // The guard takes i32 window endpoints; make sure `start + offset`
         // still fits (bound-side overflow is prevented by the constant cap /
         // runtime bound range check).
-        let min_idx = start + i64::from(access.min_offset);
-        let max_base = start + i64::from(access.max_offset);
-        if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&min_idx)
-            || !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&max_base)
-        {
+        if let Some((min_offset, max_offset)) = access.counter {
+            let min_idx = start + i64::from(min_offset);
+            let max_base = start + i64::from(max_offset);
+            if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&min_idx)
+                || !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&max_base)
+            {
+                return None;
+            }
+        }
+        if let Some((lo, hi)) = access.stat {
+            // `hi + 1` must fit the guard's i32 `max_idx_exclusive` argument.
+            if lo < 0 || hi >= i64::from(i32::MAX) {
+                return None;
+            }
+        }
+        if access.counter.is_none() && access.stat.is_none() {
             return None;
         }
         if access.written {
@@ -560,9 +615,7 @@ fn match_packed_f64_range_loop(
             {
                 return None;
             }
-        } else if !local_is_number_array(ctx, arr_id)
-            || !ctx.native_facts.proves_packed_f64_array(arr_id)
-        {
+        } else if !local_is_number_array(ctx, arr_id) {
             return None;
         }
     }
@@ -571,6 +624,7 @@ fn match_packed_f64_range_loop(
         start,
         bound,
         arrays: accesses.into_values().collect(),
+        dense,
     })
 }
 
@@ -584,13 +638,35 @@ fn record_packed_f64_range_access(
         .entry(array_id)
         .or_insert(PackedF64RangeArrayAccess {
             array_id,
-            min_offset: offset,
-            max_offset: offset,
+            counter: None,
+            stat: None,
             written,
         });
-    entry.min_offset = entry.min_offset.min(offset);
-    entry.max_offset = entry.max_offset.max(offset);
+    entry.counter = Some(match entry.counter {
+        None => (offset, offset),
+        Some((min, max)) => (min.min(offset), max.max(offset)),
+    });
     entry.written |= written;
+}
+
+fn record_packed_f64_range_static_access(
+    accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+    array_id: u32,
+    lo: i64,
+    hi: i64,
+) {
+    let entry = accesses
+        .entry(array_id)
+        .or_insert(PackedF64RangeArrayAccess {
+            array_id,
+            counter: None,
+            stat: None,
+            written: false,
+        });
+    entry.stat = Some(match entry.stat {
+        None => (lo, hi),
+        Some((cur_lo, cur_hi)) => (cur_lo.min(lo), cur_hi.max(hi)),
+    });
 }
 
 /// `i` → 0, `i + c` / `c + i` → c, `i - c` → -c, with |result| ≤ 64.
@@ -663,10 +739,10 @@ fn packed_f64_range_loop_body_collect(
         Expr::LocalSet(id, value) => {
             *id != counter_id
                 && Some(*id) != bound_local
-                && packed_f64_range_loop_pure_expr_collect(value, counter_id, accesses)
+                && packed_f64_range_loop_pure_expr_collect(value, counter_id, false, accesses)
                 && !accesses.contains_key(id)
         }
-        _ => packed_f64_range_loop_pure_expr_collect(expr, counter_id, accesses),
+        _ => packed_f64_range_loop_pure_expr_collect(expr, counter_id, false, accesses),
     }
 }
 
@@ -722,19 +798,81 @@ fn packed_f64_range_loop_store_collect(
     let Some(offset) = packed_f64_range_loop_index_offset(index, counter_id) else {
         return false;
     };
-    if !packed_f64_range_loop_pure_expr_collect(value, counter_id, accesses) {
+    if !packed_f64_range_loop_pure_expr_collect(value, counter_id, false, accesses) {
         return false;
     }
     record_packed_f64_range_access(accesses, *arr_id, offset, true);
     true
 }
 
+/// Body walk for the read-only DENSE range-loop mode: any number of scalar
+/// statements — `const a = <pure>` / `sum = <pure>` / `n++` / bare pure
+/// expressions — where every tracked array access is a READ with a
+/// counter-offset or statically-windowed index. No store to a tracked array,
+/// no call/closure/await, and the written scalars must be disjoint from the
+/// tracked arrays, the counter, and the bound. Because the fast loop's loads
+/// have no side exits, multi-statement bodies are safe: an iteration either
+/// runs entirely in the fast copy or entirely in the slow copy.
+fn packed_f64_range_loop_dense_body_collect(
+    body: &[Stmt],
+    counter_id: u32,
+    bound_local: Option<u32>,
+    accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+) -> bool {
+    use perry_hir::Expr;
+    let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for stmt in body {
+        match stmt {
+            Stmt::Let {
+                id,
+                init: Some(init),
+                ..
+            } => {
+                if !packed_f64_range_loop_pure_expr_collect(init, counter_id, true, accesses) {
+                    return false;
+                }
+                written.insert(*id);
+            }
+            Stmt::Let { id, init: None, .. } => {
+                written.insert(*id);
+            }
+            Stmt::Expr(Expr::LocalSet(id, value)) => {
+                if *id == counter_id || Some(*id) == bound_local {
+                    return false;
+                }
+                if !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses) {
+                    return false;
+                }
+                written.insert(*id);
+            }
+            Stmt::Expr(Expr::Update { id, .. }) => {
+                if *id == counter_id || Some(*id) == bound_local {
+                    return false;
+                }
+                written.insert(*id);
+            }
+            Stmt::Expr(expr) => {
+                if !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    !accesses.is_empty()
+        && accesses.values().all(|access| !access.written)
+        && accesses.keys().all(|arr_id| !written.contains(arr_id))
+}
+
 /// Effect-free expression walk: tracked `a[i ± c]` reads, locals, literals and
 /// pure arithmetic/Math only. Any store, call, update, closure, or index read
 /// with an unrecognized receiver/index shape bails the whole match.
+/// `allow_static` (dense mode) additionally admits reads whose index carries a
+/// static value window (`a[e & K]`, `a[K1 + (e >>> k & K2)]`, …).
 fn packed_f64_range_loop_pure_expr_collect(
     expr: &perry_hir::Expr,
     counter_id: u32,
+    allow_static: bool,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
 ) -> bool {
     use perry_hir::Expr;
@@ -743,10 +881,24 @@ fn packed_f64_range_loop_pure_expr_collect(
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
-            let Some(offset) = packed_f64_range_loop_index_offset(index, counter_id) else {
+            if let Some(offset) = packed_f64_range_loop_index_offset(index, counter_id) {
+                record_packed_f64_range_access(accesses, *arr_id, offset, false);
+                return true;
+            }
+            if !allow_static {
+                return false;
+            }
+            let Some((lo, hi)) = crate::collectors::static_index_window(index) else {
                 return false;
             };
-            record_packed_f64_range_access(accesses, *arr_id, offset, false);
+            if lo < 0 || hi >= i64::from(i32::MAX) {
+                return false;
+            }
+            // The index may nest further tracked reads — walk it too.
+            if !packed_f64_range_loop_pure_expr_collect(index, counter_id, allow_static, accesses) {
+                return false;
+            }
+            record_packed_f64_range_static_access(accesses, *arr_id, lo, hi);
             true
         }
         Expr::LocalGet(_)
@@ -758,32 +910,52 @@ fn packed_f64_range_loop_pure_expr_collect(
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {
-            packed_f64_range_loop_pure_expr_collect(left, counter_id, accesses)
-                && packed_f64_range_loop_pure_expr_collect(right, counter_id, accesses)
+            packed_f64_range_loop_pure_expr_collect(left, counter_id, allow_static, accesses)
+                && packed_f64_range_loop_pure_expr_collect(
+                    right,
+                    counter_id,
+                    allow_static,
+                    accesses,
+                )
         }
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
         | Expr::NumberCoerce(operand)
         | Expr::BooleanCoerce(operand) => {
-            packed_f64_range_loop_pure_expr_collect(operand, counter_id, accesses)
+            packed_f64_range_loop_pure_expr_collect(operand, counter_id, allow_static, accesses)
         }
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => {
-            packed_f64_range_loop_pure_expr_collect(condition, counter_id, accesses)
-                && packed_f64_range_loop_pure_expr_collect(then_expr, counter_id, accesses)
-                && packed_f64_range_loop_pure_expr_collect(else_expr, counter_id, accesses)
+            packed_f64_range_loop_pure_expr_collect(condition, counter_id, allow_static, accesses)
+                && packed_f64_range_loop_pure_expr_collect(
+                    then_expr,
+                    counter_id,
+                    allow_static,
+                    accesses,
+                )
+                && packed_f64_range_loop_pure_expr_collect(
+                    else_expr,
+                    counter_id,
+                    allow_static,
+                    accesses,
+                )
         }
         Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
-            packed_f64_range_loop_pure_expr_collect(left, counter_id, accesses)
-                && packed_f64_range_loop_pure_expr_collect(right, counter_id, accesses)
+            packed_f64_range_loop_pure_expr_collect(left, counter_id, allow_static, accesses)
+                && packed_f64_range_loop_pure_expr_collect(
+                    right,
+                    counter_id,
+                    allow_static,
+                    accesses,
+                )
         }
-        Expr::MathMin(values) | Expr::MathMax(values) => values
-            .iter()
-            .all(|expr| packed_f64_range_loop_pure_expr_collect(expr, counter_id, accesses)),
+        Expr::MathMin(values) | Expr::MathMax(values) => values.iter().all(|expr| {
+            packed_f64_range_loop_pure_expr_collect(expr, counter_id, allow_static, accesses)
+        }),
         Expr::MathAbs(value)
         | Expr::MathSqrt(value)
         | Expr::MathFloor(value)
@@ -792,7 +964,7 @@ fn packed_f64_range_loop_pure_expr_collect(
         | Expr::MathTrunc(value)
         | Expr::MathSign(value)
         | Expr::MathF16round(value) => {
-            packed_f64_range_loop_pure_expr_collect(value, counter_id, accesses)
+            packed_f64_range_loop_pure_expr_collect(value, counter_id, allow_static, accesses)
         }
         _ => false,
     }
@@ -804,6 +976,115 @@ fn packed_f64_range_loop_pure_expr_collect(
 /// guard runs per accessed array, and the AND of the guards picks the fast
 /// loop (hole-tolerant `PackedF64LoopFact` per array; side exits resume at
 /// the current `i` in the slow copy) or the slow loop.
+/// Emit one range-guard call per accessed array (window endpoints merged
+/// from the counter part `[start + min_offset, bound + max_offset)` and the
+/// static part `[lo, hi]`), AND-reduced into a single i1.
+fn emit_packed_f64_range_guards(
+    ctx: &mut FnCtx<'_>,
+    matched: &PackedF64RangeLoop,
+    bound_i32: &str,
+    guard_fn: &str,
+    guard_id: &str,
+) -> Result<String> {
+    let mut all_guards_ok: Option<String> = None;
+    for access in &matched.arrays {
+        let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(access.array_id))?;
+        let feedback_site_id = emit_typed_feedback_register_site(
+            ctx,
+            TypedFeedbackKind::ArrayElement,
+            "array[packed_f64_range_loop]",
+            TypedFeedbackContract::packed_f64_array_loop(),
+        );
+        let (min_idx, max_idx): (String, String) = match (access.counter, access.stat) {
+            (Some((min_off, max_off)), None) => (
+                (matched.start + i64::from(min_off)).to_string(),
+                ctx.block().add(I32, bound_i32, &max_off.to_string()),
+            ),
+            (None, Some((lo, hi))) => (lo.to_string(), (hi + 1).to_string()),
+            (Some((min_off, max_off)), Some((lo, hi))) => {
+                let min_c = (matched.start + i64::from(min_off)).min(lo).to_string();
+                let counter_max = ctx.block().add(I32, bound_i32, &max_off.to_string());
+                let static_max = (hi + 1).to_string();
+                let counter_wins = ctx.block().icmp_sgt(I32, &counter_max, &static_max);
+                let max_r = ctx.block().select(
+                    crate::types::I1,
+                    &counter_wins,
+                    I32,
+                    &counter_max,
+                    &static_max,
+                );
+                (min_c, max_r)
+            }
+            (None, None) => unreachable!("range-loop access with no window"),
+        };
+        let guard_i32 = ctx.block().call(
+            I32,
+            guard_fn,
+            &[
+                (I64, &feedback_site_id),
+                (DOUBLE, &arr_box),
+                (I32, &min_idx),
+                (I32, &max_idx),
+            ],
+        );
+        let guard_ok = ctx.block().icmp_ne(I32, &guard_i32, "0");
+        all_guards_ok = Some(match all_guards_ok {
+            None => guard_ok,
+            Some(prev) => ctx.block().and(I1, &prev, &guard_ok),
+        });
+        record_packed_f64_loop_guard_artifacts(
+            ctx,
+            access.array_id,
+            &arr_box,
+            guard_id,
+            PackedNumericLoopKind::F64,
+        );
+    }
+    Ok(all_guards_ok.expect("range loop matcher requires >= 1 array"))
+}
+
+/// Push the per-array facts for one fast-loop copy: counter accesses get a
+/// `PackedF64LoopFact` (hole-tolerant only in the classic non-dense mode),
+/// masked accesses get a `MaskedWindowArrayFact` (`values_i32` selects the
+/// i32-tier load lowering).
+fn push_packed_f64_range_facts(
+    ctx: &mut FnCtx<'_>,
+    matched: &PackedF64RangeLoop,
+    scope_id: u32,
+    guard_id: &str,
+    slow_pre_label: &str,
+    values_i32: bool,
+) {
+    for access in &matched.arrays {
+        if access.counter.is_some() {
+            ctx.packed_f64_loop_facts.push(PackedF64LoopFact {
+                index_local_id: matched.counter_id,
+                array_local_id: access.array_id,
+                scope_id,
+                guard_id: guard_id.to_string(),
+                store_side_exit_label: slow_pre_label.to_string(),
+                array_kind: PackedNumericLoopKind::F64,
+                // Dense mode proved the window hole-free — loads need no
+                // hole check / side exit. Classic range mode stays
+                // hole-tolerant.
+                allow_holes: !matched.dense,
+                window_validated: true,
+            });
+        }
+        if let Some((lo, hi)) = access.stat {
+            ctx.masked_window_array_facts
+                .push(crate::expr::MaskedWindowArrayFact {
+                    array_local_id: access.array_id,
+                    scope_id,
+                    guard_id: guard_id.to_string(),
+                    min_idx: lo,
+                    max_idx_exclusive: hi + 1,
+                    values_i32,
+                });
+        }
+    }
+}
+
 fn lower_packed_f64_range_versioned_for(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
@@ -816,8 +1097,30 @@ fn lower_packed_f64_range_versioned_for(
     };
     // The inline load/store fast paths read the counter through its i32
     // shadow slot; without one the versioned copy would win nothing.
+    let mut counter_i32_was_fresh = false;
     if !ctx.i32_counter_slots.contains_key(&matched.counter_id) {
-        return Ok(false);
+        // The Let site only allocates the shadow for *directly* index-used
+        // locals; a masked index (`S[i & 1023]`) hides the counter from that
+        // analysis. With a CONSTANT bound the counter provably stays in i32
+        // range (the matcher caps constants at `i32::MAX - 64`), so allocate
+        // the parallel slot here — mirroring the `i < n` local-bound path in
+        // `lower_for`. Runtime local bounds keep requiring a pre-existing
+        // slot (their range is only proven inside this lowering, after the
+        // slot would already be live).
+        if !matches!(matched.bound, PackedF64RangeLoopBound::Constant(_))
+            || !ctx.integer_locals.contains(&matched.counter_id)
+        {
+            return Ok(false);
+        }
+        let Some(counter_slot) = ctx.locals.get(&matched.counter_id).cloned() else {
+            return Ok(false);
+        };
+        let i32_slot = ctx.func.alloca_entry(I32);
+        let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
+        let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
+        ctx.block().store(I32, &cur_i32, &i32_slot);
+        ctx.i32_counter_slots.insert(matched.counter_id, i32_slot);
+        counter_i32_was_fresh = true;
     }
 
     // Cache loop-invariant module-global reads (e.g. `alpha` in the EMA
@@ -896,74 +1199,129 @@ fn lower_packed_f64_range_versioned_for(
         }
     };
 
-    let guard_id = "packed_f64_range_loop_guard";
-    let mut all_guards_ok: Option<String> = None;
-    for access in &matched.arrays {
-        let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(access.array_id))?;
-        let feedback_site_id = emit_typed_feedback_register_site(
+    if matched.dense {
+        // Read-only dense mode: two guard tiers. The i32 tier additionally
+        // proves every window value is an i32-representable integer, so its
+        // fast copy materializes loads with a bare exact `fptosi` (bit-mixing
+        // chains stay in integer registers); the f64 tier keeps raw-double
+        // loads for float lookup tables. Either failing falls through.
+        let try_f64_idx = ctx.new_block("packed_f64_range.dense.try_f64");
+        let try_f64_label = ctx.block_label(try_f64_idx);
+        let fast_i32_pre_idx = ctx.new_block("packed_f64_range.loop.fast_i32.preheader");
+        let fast_i32_pre_label = ctx.block_label(fast_i32_pre_idx);
+
+        let ok_i32 = emit_packed_f64_range_guards(
             ctx,
-            TypedFeedbackKind::ArrayElement,
-            "array[packed_f64_range_loop]",
-            TypedFeedbackContract::packed_f64_array_loop(),
+            &matched,
+            &bound_i32,
+            "js_typed_feedback_packed_f64_range_loop_guard_dense_i32",
+            "packed_f64_range_loop_guard_dense_i32",
+        )?;
+        ctx.block()
+            .cond_br(&ok_i32, &fast_i32_pre_label, &try_f64_label);
+
+        ctx.current_block = try_f64_idx;
+        let ok_f64 = emit_packed_f64_range_guards(
+            ctx,
+            &matched,
+            &bound_i32,
+            "js_typed_feedback_packed_f64_range_loop_guard_dense",
+            "packed_f64_range_loop_guard_dense",
+        )?;
+        ctx.block()
+            .cond_br(&ok_f64, &fast_pre_label, &slow_pre_label);
+
+        ctx.current_block = fast_i32_pre_idx;
+        let scope_i32 = ctx.next_loop_proof_scope_id();
+        push_packed_f64_range_facts(
+            ctx,
+            &matched,
+            scope_i32,
+            "packed_f64_range_loop_guard_dense_i32",
+            &slow_pre_label,
+            true,
         );
-        let min_idx = (matched.start + i64::from(access.min_offset)).to_string();
-        let max_idx = ctx
-            .block()
-            .add(I32, &bound_i32, &access.max_offset.to_string());
-        let guard_i32 = ctx.block().call(
-            I32,
+        lower_for_after_init_with_i32_bound(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for.packed_f64_range_fast_i32",
+            Some((matched.counter_id, bound_i32.clone())),
+        )?;
+        ctx.packed_f64_loop_facts
+            .retain(|fact| fact.scope_id != scope_i32);
+        ctx.masked_window_array_facts
+            .retain(|fact| fact.scope_id != scope_i32);
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+
+        ctx.current_block = fast_pre_idx;
+        let scope_f64 = ctx.next_loop_proof_scope_id();
+        push_packed_f64_range_facts(
+            ctx,
+            &matched,
+            scope_f64,
+            "packed_f64_range_loop_guard_dense",
+            &slow_pre_label,
+            false,
+        );
+        lower_for_after_init_with_i32_bound(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for.packed_f64_range_fast",
+            Some((matched.counter_id, bound_i32.clone())),
+        )?;
+        ctx.packed_f64_loop_facts
+            .retain(|fact| fact.scope_id != scope_f64);
+        ctx.masked_window_array_facts
+            .retain(|fact| fact.scope_id != scope_f64);
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+    } else {
+        let all_guards_ok = emit_packed_f64_range_guards(
+            ctx,
+            &matched,
+            &bound_i32,
             "js_typed_feedback_packed_f64_range_loop_guard",
-            &[
-                (I64, &feedback_site_id),
-                (DOUBLE, &arr_box),
-                (I32, &min_idx),
-                (I32, &max_idx),
-            ],
-        );
-        let guard_ok = ctx.block().icmp_ne(I32, &guard_i32, "0");
-        all_guards_ok = Some(match all_guards_ok {
-            None => guard_ok,
-            Some(prev) => ctx.block().and(I1, &prev, &guard_ok),
-        });
-        record_packed_f64_loop_guard_artifacts(
+            "packed_f64_range_loop_guard",
+        )?;
+        ctx.block()
+            .cond_br(&all_guards_ok, &fast_pre_label, &slow_pre_label);
+
+        let packed_scope_id = ctx.next_loop_proof_scope_id();
+
+        ctx.current_block = fast_pre_idx;
+        push_packed_f64_range_facts(
             ctx,
-            access.array_id,
-            &arr_box,
-            guard_id,
-            PackedNumericLoopKind::F64,
+            &matched,
+            packed_scope_id,
+            "packed_f64_range_loop_guard",
+            &slow_pre_label,
+            false,
         );
-    }
-    let all_guards_ok = all_guards_ok.expect("range loop matcher requires >= 1 array");
-    ctx.block()
-        .cond_br(&all_guards_ok, &fast_pre_label, &slow_pre_label);
-
-    let packed_scope_id = ctx.next_loop_proof_scope_id();
-
-    ctx.current_block = fast_pre_idx;
-    for access in &matched.arrays {
-        ctx.packed_f64_loop_facts.push(PackedF64LoopFact {
-            index_local_id: matched.counter_id,
-            array_local_id: access.array_id,
-            scope_id: packed_scope_id,
-            guard_id: guard_id.to_string(),
-            store_side_exit_label: slow_pre_label.clone(),
-            array_kind: PackedNumericLoopKind::F64,
-            allow_holes: true,
-        });
-    }
-    lower_for_after_init_with_i32_bound(
-        ctx,
-        init,
-        condition,
-        update,
-        body,
-        "for.packed_f64_range_fast",
-        Some((matched.counter_id, bound_i32.clone())),
-    )?;
-    ctx.packed_f64_loop_facts
-        .retain(|fact| fact.scope_id != packed_scope_id);
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
+        lower_for_after_init_with_i32_bound(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for.packed_f64_range_fast",
+            Some((matched.counter_id, bound_i32.clone())),
+        )?;
+        ctx.packed_f64_loop_facts
+            .retain(|fact| fact.scope_id != packed_scope_id);
+        ctx.masked_window_array_facts
+            .retain(|fact| fact.scope_id != packed_scope_id);
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
     }
 
     ctx.current_block = slow_pre_idx;
@@ -981,6 +1339,9 @@ fn lower_packed_f64_range_versioned_for(
 
     for gid in &global_override_ids {
         ctx.locals.remove(gid);
+    }
+    if counter_i32_was_fresh {
+        ctx.i32_counter_slots.remove(&matched.counter_id);
     }
     ctx.current_block = merge_idx;
     Ok(true)
@@ -1772,16 +2133,22 @@ fn local_array_element_type<'t>(
 /// that distinction is what kept a captured `const rows: number[]` off the fast
 /// loop in a closure while the same code in a plain function got it.
 fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
-    let storage_is_addressable = if ctx.closure_captures.contains_key(&arr_id) {
+    packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
+        && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
+        && !ctx.native_facts.has_materialization_hazard(arr_id)
+}
+
+/// The storage half of [`packed_loop_array_binding_is_eligible`]: the binding
+/// read is a plain load (stack alloca or `@perry_global_*`), not a capture
+/// slot or box.
+fn packed_loop_array_binding_storage_is_addressable(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
+    if ctx.closure_captures.contains_key(&arr_id) {
         false
     } else if ctx.locals.contains_key(&arr_id) {
         !ctx.boxed_vars.contains(&arr_id)
     } else {
         ctx.module_globals.contains_key(&arr_id)
-    };
-    storage_is_addressable
-        && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
-        && !ctx.native_facts.has_materialization_hazard(arr_id)
+    }
 }
 
 fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {

@@ -1086,6 +1086,67 @@ pub(crate) unsafe fn rebuild_array_numeric_raw_f64_allow_holes(arr: *mut ArrayHe
     true
 }
 
+/// Dense-window variant of [`rebuild_array_numeric_raw_f64_allow_holes`] for
+/// the read-only masked-index range loop: after the hole-tolerant rebuild,
+/// additionally require that `[min_idx, max_idx_exclusive)` contains NO holes.
+/// That loop's inline loads skip the per-slot hole check entirely (its body
+/// may interleave several scalar writes per iteration, so a mid-iteration
+/// side exit could double-apply effects on re-execution) — a hole inside the
+/// window would leak `TAG_HOLE` bits as a raw double. Holes OUTSIDE the
+/// window are fine and keep their raw-f64-or-holes invariant.
+pub(crate) unsafe fn rebuild_array_numeric_raw_f64_dense_window(
+    arr: *mut ArrayHeader,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> bool {
+    if !rebuild_array_numeric_raw_f64_allow_holes(arr) {
+        return false;
+    }
+    if array_has_raw_f64_layout_flag(arr) {
+        // Dense everywhere — no holes anywhere, window included.
+        return true;
+    }
+    let len = (*arr).length as i64;
+    let min = i64::from(min_idx).max(0);
+    let max = i64::from(max_idx_exclusive).min(len);
+    for i in min..max {
+        if array_slot_bits(arr, i as usize) == crate::value::TAG_HOLE {
+            return false;
+        }
+    }
+    true
+}
+
+/// i32 tier of [`rebuild_array_numeric_raw_f64_dense_window`]: the window
+/// must additionally hold only integers representable in a signed i32, so
+/// the guarded loop's inline loads may materialize elements with a bare
+/// `fptosi` (exact — no ToInt32 wrap tower) and keep bit-mixing chains like
+/// bcrypt's Blowfish F in integer registers.
+pub(crate) unsafe fn rebuild_array_numeric_raw_f64_dense_window_i32(
+    arr: *mut ArrayHeader,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> bool {
+    if !rebuild_array_numeric_raw_f64_dense_window(arr, min_idx, max_idx_exclusive) {
+        return false;
+    }
+    let len = (*arr).length as i64;
+    let min = i64::from(min_idx).max(0);
+    let max = i64::from(max_idx_exclusive).min(len);
+    let elements = array_elements_ptr(arr) as *const f64;
+    for i in min..max {
+        let value = *elements.add(i as usize);
+        if !value.is_finite()
+            || value.fract() != 0.0
+            || value < i32::MIN as f64
+            || value > i32::MAX as f64
+        {
+            return false;
+        }
+    }
+    true
+}
+
 #[inline]
 pub(crate) unsafe fn set_array_numeric_layout(arr: *mut ArrayHeader, layout: NumericArrayLayout) {
     if arr.is_null() {

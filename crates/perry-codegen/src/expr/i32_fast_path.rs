@@ -63,6 +63,16 @@ fn known_finite_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
             || ctx.unsigned_i32_locals.contains(id))
         .then_some(32),
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => Some(8),
+        // In-bounds loads from an int-element typed array are integers in
+        // i32 range by construction (see `ta_int_elem_load_is_i32_provable`),
+        // as are i32-tier masked-window plain-array loads (the dense-i32
+        // range guard proved every window value is an i32 integer).
+        Expr::IndexGet { object, index }
+            if ta_int_elem_load_is_i32_provable(ctx, object, index)
+                || super::index_get::masked_window_i32_load_is_provable(ctx, object, index) =>
+        {
+            Some(32)
+        }
         Expr::MathImul(_, _) => Some(32), // Math.imul returns i32 → always finite
         Expr::Call { callee, .. } => {
             matches!(callee.as_ref(), Expr::FuncRef(fid) if ctx.integer_returning_functions.contains(fid))
@@ -389,6 +399,55 @@ pub(crate) fn can_lower_expr_as_i32(
     }
 }
 
+/// `object[index]` on a width-tracked typed-array local whose element kind is
+/// integral and value-representable in a signed i32 (I8/U8/U8Clamped/I16/U16/
+/// I32 — NOT U32, whose upper half doesn't round-trip through an i32 slot, and
+/// not the float kinds), with the index bounds proven against the tracked view
+/// length. In-bounds loads of these kinds are integers by construction, so the
+/// access is an i32-native leaf — this is what keeps bcrypt-style S-box chains
+/// (`(s + S[x & 1023]) | 0`) in `add i32` instead of a per-element
+/// f64 round-trip through the branchless ToInt32 tower. Out-of-bounds reads
+/// (which produce `undefined`) are excluded by the same bounds proof the
+/// unchecked native load itself requires.
+fn ta_int_elem_load_is_i32_provable(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
+    use crate::native_value::{BufferElem, BufferIndexUnit};
+    if ctx.disable_buffer_fast_path {
+        return false;
+    }
+    let Expr::LocalGet(id) = object else {
+        return false;
+    };
+    let Some(view) = ctx.buffer_view_slots.get(id) else {
+        return false;
+    };
+    if view.index_unit != BufferIndexUnit::Element
+        || !view.alias.allows_noalias()
+        || view.scope_idx.is_none()
+    {
+        return false;
+    }
+    if !matches!(
+        view.elem,
+        BufferElem::I8
+            | BufferElem::U8
+            | BufferElem::U8Clamped
+            | BufferElem::I16
+            | BufferElem::U16
+            | BufferElem::I32
+    ) {
+        return false;
+    }
+    if ctx.closure_captures.contains_key(id)
+        || matches!(
+            ctx.buffer_hazard_reasons.get(id),
+            Some(MaterializationReason::ClosureCapture)
+        )
+    {
+        return false;
+    }
+    super::bounds_for_buffer_access_width(ctx, *id, index, 1).allows_inbounds()
+}
+
 fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
     let Expr::IndexGet { object, index } = e else {
         return None;
@@ -482,6 +541,10 @@ pub(crate) fn can_lower_expr_as_i32_in_current_region(ctx: &FnCtx<'_>, e: &Expr)
                 && args
                     .iter()
                     .all(|arg| can_lower_expr_as_i32_in_current_region(ctx, arg))
+        }
+        Expr::IndexGet { object, index } => {
+            ta_int_elem_load_is_i32_provable(ctx, object, index)
+                || super::index_get::masked_window_i32_load_is_provable(ctx, object, index)
         }
         _ => false,
     }
@@ -693,6 +756,14 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
         Expr::BufferIndexGet { buffer, index } => {
             let lowered = super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?;
             Some(i32_from_indexed_get_lowered(ctx, lowered))
+        }
+        Expr::IndexGet { object, index } => {
+            if ta_int_elem_load_is_i32_provable(ctx, object, index) {
+                super::lower_typed_array_load(ctx, object, index)?
+                    .map(|lowered| i32_from_indexed_get_lowered(ctx, lowered))
+            } else {
+                super::index_get::lower_masked_window_index_get_i32(ctx, object, index)?
+            }
         }
         _ => None,
     };

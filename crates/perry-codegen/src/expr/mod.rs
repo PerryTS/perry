@@ -662,6 +662,7 @@ pub(crate) struct FnCtx<'a> {
     /// the array is a live packed raw-f64 plain Array and the loop proof keeps
     /// `i` in bounds.
     pub packed_f64_loop_facts: Vec<PackedF64LoopFact>,
+    pub masked_window_array_facts: Vec<MaskedWindowArrayFact>,
 
     /// #5093: scoped loop-versioning facts for monomorphic class-field loops.
     /// Pushed only around the FAST clone of `lower_class_field_versioned_for`
@@ -1191,6 +1192,33 @@ pub(crate) struct PackedF64LoopFact {
     /// RHS is numeric bits (side-exiting otherwise) and skip the per-iteration
     /// store guard — the range guard already proved bounds and mutability.
     pub allow_holes: bool,
+    /// True when a *range* guard (hole-tolerant or dense) validated the whole
+    /// constant-offset index window `[start + min_offset, bound + max_offset)`
+    /// at loop entry — `arr[i ± c]` loads may use non-zero offsets even
+    /// without hole tolerance (`allow_holes: false` + `window_validated: true`
+    /// is the dense range loop: the window is additionally hole-free, so
+    /// loads carry no hole check at all).
+    pub window_validated: bool,
+}
+
+/// Read-only masked-index window fact for the dense packed-f64 range loop:
+/// the entry guard (`js_typed_feedback_packed_f64_range_loop_guard_dense`)
+/// proved `array_local_id` is a plain raw-f64 numeric array whose
+/// `[min_idx, max_idx_exclusive)` slots are all in-bounds numbers (no holes).
+/// Any read whose index has a static value window inside this range (e.g.
+/// `S[x & 1023]`, `S[256 + ((x >>> 16) & 0xff)]` — see
+/// `collectors::static_index_window`) lowers to a bare raw-f64 element load.
+#[derive(Debug, Clone)]
+pub(crate) struct MaskedWindowArrayFact {
+    pub array_local_id: u32,
+    pub scope_id: u32,
+    pub guard_id: String,
+    pub min_idx: i64,
+    pub max_idx_exclusive: i64,
+    /// True in the i32-tier fast copy: the guard additionally proved every
+    /// window slot holds an i32-representable integer, so loads may
+    /// materialize elements as `i32` with a bare exact `fptosi`.
+    pub values_i32: bool,
 }
 
 /// #5093: one fact per (receiver, versioned loop). See
