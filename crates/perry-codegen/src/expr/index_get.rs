@@ -1636,10 +1636,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             ));
                         }
                     }
-                    if let Some(fact) = masked_window_fact_for_index(ctx, *arr_id, index.as_ref()) {
+                    if let Some(fact) = super::masked_window::masked_window_fact_for_index(
+                        ctx,
+                        *arr_id,
+                        index.as_ref(),
+                    ) {
                         let arr_box = lower_expr(ctx, object)?;
                         let idx_i32 = lower_expr_as_i32(ctx, index)?;
-                        return Ok(lower_masked_window_index_get(
+                        return Ok(super::masked_window::lower_masked_window_index_get(
                             ctx, *arr_id, &arr_box, &idx_i32, &fact,
                         ));
                     }
