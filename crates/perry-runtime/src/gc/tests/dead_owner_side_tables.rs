@@ -665,7 +665,8 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
 /// conservative probe-always arm, so their installs still round-trip.
 #[test]
 fn test_descriptor_meta_summary_gates_probes() {
-    let _global = global_side_table_test_lock();
+    // NOTE: the guard already takes the process-global side-table lock —
+    // taking `global_side_table_test_lock()` here too self-deadlocks.
     let _guard = GcTestIsolationGuard::new();
 
     unsafe {
@@ -750,8 +751,10 @@ fn test_descriptor_meta_summary_gates_probes() {
 /// must still resolve the entry at the moved address.
 #[test]
 fn test_descriptor_meta_summary_survives_copied_minor_move() {
-    let _global = global_side_table_test_lock();
     let _guard = CopyingNurseryTestGuard::new(2);
+    // The scoped registry starts empty — install the scanner that rekeys
+    // descriptor-table owner addresses on evacuation.
+    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
 
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
     let old_addr = owner as usize;
