@@ -26,12 +26,12 @@ pub(crate) struct Shape {
     /// incrementally (append-only while shared); shorter ⟹ a delete
     /// compacted it — drop and rebuild on next lookup.
     indexed_len: u32,
-    /// #6759 Phase C3a: stable shape identity, allocated once at record
-    /// birth and preserved by [`shape_keys_grown`] when an owned keys
-    /// array reallocates — the identity consumers re-key on in C3b
-    /// (FIELD_CACHE, typed_feedback exactness) so they stop churning on
+    /// #6759 Phase C3a/C3c: stable shape identity, allocated once at
+    /// record birth and preserved by [`shape_keys_grown`] when an owned
+    /// keys array reallocates. Stamped into a plain object's
+    /// `parent_class_id` header word (dead weight for `class_id == 0`)
+    /// and used as the FIELD_CACHE key, so lookups stop churning on
     /// capacity doublings and GC moves. 0 is never allocated ("no id").
-    #[allow(dead_code)]
     shape_id: u32,
     /// FNV-1a content hash of key bytes → candidate slots (collisions
     /// resolved by the per-hit content validation).
@@ -40,26 +40,71 @@ pub(crate) struct Shape {
 
 pub(crate) struct ShapeTable {
     entries: RefCell<crate::fast_hash::PtrHashMap<usize, Shape>>,
-    /// #6759 Phase C3a: monotonic ShapeId allocator (1-based; 0 = none).
-    /// u32 wrap is theoretical (one id per shape BIRTH, not per object);
-    /// on wrap the allocator skips 0 and collision risk is bounded by the
-    /// validation-on-hit trust model like every other accelerator here.
-    next_id: std::cell::Cell<u32>,
 }
 
 impl ShapeTable {
     pub(crate) fn new() -> Self {
         ShapeTable {
             entries: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            next_id: std::cell::Cell::new(1),
         }
     }
+}
 
-    fn alloc_shape_id(&self) -> u32 {
-        let id = self.next_id.get();
-        self.next_id.set(id.wrapping_add(1).max(1));
-        id
+/// #6759 C3c: ShapeIds live in their own u32 range, disjoint from every
+/// real class id (user counter tops out far below; builtin reserved
+/// ranges sit at `0x7FFF_FF00..=0x7FFF_FFFF` and `0xFFFF_0000..`), so a
+/// stamp in a plain object's `parent_class_id` can never be mistaken for
+/// inheritance data — and vice versa.
+pub(crate) const SHAPE_ID_BASE: u32 = 0x8000_0000;
+/// Exclusive end of the ShapeId range (2^30 ids ≈ one per shape BIRTH,
+/// unreachable in practice).
+pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
+
+/// #6759 C3c: PROCESS-GLOBAL allocator (supersedes the per-thread counter
+/// C3a landed with). Global uniqueness matters because the worker
+/// serializer replays `parent_class_id` verbatim: a deep-copied object's
+/// stamp arriving on another thread must never alias an id that thread
+/// allocated for a different shape. Monotonic — ids are NEVER reused, so
+/// a stale stamp or cache entry can only miss, not falsely hit.
+static SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE);
+
+#[inline]
+pub(crate) fn is_shape_id(v: u32) -> bool {
+    (SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
+}
+
+fn alloc_shape_id() -> u32 {
+    use std::sync::atomic::Ordering;
+    let id = SHAPE_ID_NEXT.fetch_add(1, Ordering::Relaxed);
+    if id >= SHAPE_ID_END {
+        // Range exhausted: park the counter (every subsequent call lands
+        // here again, so it can never wrap back into the valid range) and
+        // stop handing out ids — 0 disables the acceleration, never
+        // correctness.
+        SHAPE_ID_NEXT.store(SHAPE_ID_END, Ordering::Relaxed);
+        return 0;
     }
+    id
+}
+
+/// #6759 C3c: get-or-create the shape record for `keys` and return its
+/// stable id (0 only if the id range is exhausted). Used by the resolve
+/// paths to stamp a plain object's header after a successful lookup.
+pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> u32 {
+    let keys_id = keys as usize;
+    if keys_id == 0 {
+        return 0;
+    }
+    let mut entries = crate::state::state().shapes.entries.borrow_mut();
+    entries
+        .entry(keys_id)
+        .or_insert_with(|| Shape {
+            indexed_len: 0,
+            shape_id: alloc_shape_id(),
+            slots: HashMap::with_capacity(key_count as usize),
+        })
+        .shape_id
 }
 
 /// Build (or extend) the slot map for `keys` covering `key_count` keys.
@@ -92,8 +137,7 @@ pub(crate) unsafe fn shape_slot_lookup(
     build: bool,
 ) -> Option<u32> {
     let keys_id = keys as usize;
-    let table = &crate::state::state().shapes;
-    let mut entries = table.entries.borrow_mut();
+    let mut entries = crate::state::state().shapes.entries.borrow_mut();
     let shape = match entries.get_mut(&keys_id) {
         Some(s) => {
             if s.indexed_len > key_count {
@@ -107,10 +151,9 @@ pub(crate) unsafe fn shape_slot_lookup(
             if !build {
                 return None;
             }
-            let shape_id = table.alloc_shape_id();
             entries.entry(keys_id).or_insert(Shape {
                 indexed_len: 0,
-                shape_id,
+                shape_id: alloc_shape_id(),
                 slots: HashMap::with_capacity(key_count as usize),
             })
         }
@@ -248,13 +291,11 @@ pub(crate) fn test_shape_entry_exists(keys_id: usize) -> bool {
 
 #[cfg(test)]
 pub(crate) fn test_seed_shape_entry(keys_id: usize) {
-    let table = &crate::state::state().shapes;
-    let shape_id = table.alloc_shape_id();
-    table.entries.borrow_mut().insert(
+    crate::state::state().shapes.entries.borrow_mut().insert(
         keys_id,
         Shape {
             indexed_len: 0,
-            shape_id,
+            shape_id: alloc_shape_id(),
             slots: HashMap::new(),
         },
     );
@@ -268,4 +309,77 @@ pub(crate) fn test_shape_id_for_keys(keys_id: usize) -> Option<u32> {
         .borrow()
         .get(&keys_id)
         .map(|s| s.shape_id)
+}
+
+#[cfg(test)]
+mod c3c_tests {
+    use super::*;
+
+    fn key(name: &str) -> *mut crate::StringHeader {
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    }
+
+    /// #6759 C3c: ids come from the dedicated range (disjoint from real and
+    /// builtin class ids), are stable per keys identity, and distinct
+    /// across identities.
+    #[test]
+    fn shape_ids_are_range_disjoint_and_stable() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let a: usize = 0xC3C0_0000_0000_1000;
+        let b: usize = 0xC3C0_0000_0000_2000;
+        let ida = shape_id_for_keys_ensure(a as *const ArrayHeader, 4);
+        let idb = shape_id_for_keys_ensure(b as *const ArrayHeader, 4);
+        assert!(is_shape_id(ida) && is_shape_id(idb));
+        assert_ne!(ida, idb);
+        assert_eq!(shape_id_for_keys_ensure(a as *const ArrayHeader, 4), ida);
+        // Real class-id space must never classify as a shape id.
+        assert!(!is_shape_id(0));
+        assert!(!is_shape_id(1));
+        assert!(!is_shape_id(0x7FFF_FF30));
+        assert!(!is_shape_id(0xFFFF_0005));
+        shape_drop(a as *const ArrayHeader);
+        shape_drop(b as *const ArrayHeader);
+    }
+
+    /// #6759 C3c stamp invariant on a REAL object through the real
+    /// write/read paths: a read resolution stamps a shape id into the
+    /// plain object's `parent_class_id`; after further appends the stamp
+    /// is either cleared (keys pointer changed) or still equal to the
+    /// current keys' id (in-place append / migrated grow).
+    #[test]
+    fn plain_object_stamp_lifecycle() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 8);
+            for name in ["c3c_a", "c3c_b", "c3c_c"] {
+                crate::object::js_object_set_field_by_name(obj, key(name), 1.0);
+            }
+            assert_eq!((*obj).class_id, 0, "test premise: plain object");
+            let _ = crate::object::js_object_get_field_by_name(obj, key("c3c_b"));
+            let stamp = (*obj).parent_class_id;
+            assert!(
+                is_shape_id(stamp),
+                "read resolution must stamp a shape id, got {stamp:#x}"
+            );
+
+            crate::object::js_object_set_field_by_name(obj, key("c3c_d"), 2.0);
+            crate::object::js_object_set_field_by_name(obj, key("c3c_e"), 3.0);
+            let stamp2 = (*obj).parent_class_id;
+            if stamp2 != 0 {
+                assert!(is_shape_id(stamp2));
+                let cur = shape_id_for_keys_ensure(
+                    (*obj).keys_array,
+                    crate::array::js_array_length((*obj).keys_array),
+                );
+                assert_eq!(
+                    stamp2, cur,
+                    "a surviving stamp must equal the CURRENT keys' id"
+                );
+            }
+
+            // Reads still resolve correctly through the id-keyed cache.
+            let v = crate::object::js_object_get_field_by_name(obj, key("c3c_d"));
+            assert_eq!(f64::from_bits(v.bits()), 2.0);
+        }
+    }
 }

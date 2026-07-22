@@ -1525,6 +1525,18 @@ pub(crate) fn get_field_by_name_object_tail(
             h
         };
         let keys_id = keys as usize;
+        // #6759 C3c: prefer the header-stamped stable shape id as the cache
+        // key — it survives owned grow-reallocs AND GC moves of the keys
+        // array, both of which change `keys_id` and orphaned the entry.
+        // Unstamped objects (stamp 0 / class instances) keep the address
+        // key; either way every hit below re-validates the stored key, so a
+        // colliding or foreign key can only miss, never mis-resolve.
+        let stamp = (*obj).parent_class_id;
+        let shape_key = if (*obj).class_id == 0 && super::super::shapes::is_shape_id(stamp) {
+            stamp as usize
+        } else {
+            keys_id
+        };
 
         // Clamp the keys length to capacity so a bogus/oversized length can't
         // drive the wide-key map build or the linear scan below into unbounded
@@ -1534,15 +1546,15 @@ pub(crate) fn get_field_by_name_object_tail(
 
         // Per-thread inline cache (`state().field_lookup.field_cache`):
         // fixed-size direct-mapped cache (no allocation, no HashMap).
-        // Each entry stores (keys_ptr, key_hash, field_index). Copied-minor
+        // Each entry stores (shape_key, key_hash, field_index). Copied-minor
         // nursery reset can reuse a keys-array address, so cache hits still
         // validate the key slot before returning a field.
         let st = crate::state::state();
-        let cache_idx = (keys_id.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
+        let cache_idx = (shape_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
         let cached = {
             let cache = &*st.field_lookup.field_cache.get();
             let entry = cache[cache_idx];
-            if entry.0 == keys_id && entry.1 == key_hash {
+            if entry.0 == shape_key && entry.1 == key_hash {
                 Some(entry.2)
             } else {
                 None
@@ -1631,10 +1643,27 @@ pub(crate) fn get_field_by_name_object_tail(
             // slow-path lookup is what backs `obj[k]` for ≤5-byte
             // keys after a field-cache miss.
             if crate::string::js_string_key_matches(key_val, key) {
-                // Cache this lookup for next time
+                // Cache this lookup for next time. #6759 C3c: stamp the
+                // object's stable shape id (allocating the record on first
+                // touch) and key the entry on it, so the entry survives the
+                // grow-reallocs and GC moves that retire `keys_id`.
                 {
+                    let store_key = if (*obj).class_id == 0 {
+                        let id =
+                            super::super::shapes::shape_id_for_keys_ensure(keys, key_count as u32);
+                        if id != 0 {
+                            (*(obj as *mut ObjectHeader)).parent_class_id = id;
+                            id as usize
+                        } else {
+                            keys_id
+                        }
+                    } else {
+                        keys_id
+                    };
+                    let store_idx =
+                        (store_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
                     let cache = &mut *st.field_lookup.field_cache.get();
-                    cache[cache_idx] = (keys_id, key_hash, i as u32);
+                    cache[store_idx] = (store_key, key_hash, i as u32);
                 }
                 if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);

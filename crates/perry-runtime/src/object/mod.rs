@@ -1656,6 +1656,20 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
 
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
+    // #6759 C3c: a stamped shape id (plain objects reuse the otherwise-dead
+    // `parent_class_id` word) described the OLD keys array — clear it on a
+    // pointer CHANGE so the stamp invariant (`stamp != 0 ⟹ stamp == id of
+    // current keys`) holds; the resolve paths re-stamp on their next
+    // successful lookup. A same-pointer update (in-place append) keeps the
+    // stamp: slots are append-only, existing mappings stay valid — and the
+    // C3a grow-migration keeps the id itself alive across reallocs, so the
+    // fresh stamp after a grow resolves to the SAME id.
+    if (*obj).class_id == 0
+        && (*obj).keys_array != keys_array
+        && shapes::is_shape_id((*obj).parent_class_id)
+    {
+        (*obj).parent_class_id = 0;
+    }
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;
     crate::gc::runtime_write_barrier_slot(
