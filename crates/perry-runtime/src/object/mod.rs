@@ -1694,11 +1694,24 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     if !(*obj).meta.is_null() {
         return (*obj).meta;
     }
+    // Root the owner across the allocation: `arena_alloc_gc` can trigger a
+    // copied-minor that MOVES `obj`, and the header store below must land
+    // in the live copy, not the stale from-space one. Reload through the
+    // handle after the allocation. (The fresh `meta` record itself cannot
+    // move before the store — no allocation happens in between.)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
     let meta = arena_alloc_gc(
         std::mem::size_of::<ObjectMeta>(),
         8,
         crate::gc::GC_TYPE_OBJECT_META,
     ) as *mut ObjectMeta;
+    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    if !(*obj).meta.is_null() {
+        // A GC-triggered re-entrant path installed one meanwhile; keep it
+        // (the fresh record above is unreferenced and dies with the cycle).
+        return (*obj).meta;
+    }
     (*meta).prototype = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.

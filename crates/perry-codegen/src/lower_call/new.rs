@@ -669,12 +669,14 @@ fn lower_new_impl(
 
             // #6759 Phase B: null the `meta` record pointer — the LAST header
             // field, at header offset (object_header_size - pointer_size).
-            // On ILP32 this 8-byte store spills 4 bytes into field slot 0;
-            // harmless, because the slot-zero loop below rewrites every slot.
+            // Pointer-width store: on ILP32 the field is 4 bytes at a
+            // 4-aligned offset, and an i64 store there would violate the
+            // arm64_32 `i64:64` ABI alignment (and spill into slot 0).
             let meta_off = GC_HEADER_SIZE + object_header_size - meta_ptr_size;
             let meta_addr = blk.gep(I8, &raw, &[(I64, &meta_off.to_string())]);
             // GC_STORE_AUDIT(INIT): fresh inline object starts with no per-object meta record (#6759 B).
-            blk.store(I64, "0", &meta_addr);
+            let meta_store_ty = if meta_ptr_size == 4 { I32 } else { I64 };
+            blk.store(meta_store_ty, "0", &meta_addr);
 
             // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
             // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately

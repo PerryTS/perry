@@ -20,6 +20,9 @@ pub fn target_is_ilp32(target_triple: &str) -> bool {
         || target_triple.starts_with("wasm32")
         || target_triple.starts_with("i686")
         || target_triple.starts_with("i386")
+        // x32: 64-bit ISA with 32-bit pointers — the `x86_64` prefix alone
+        // would misclassify it as LP64.
+        || target_triple.ends_with("gnux32")
 }
 
 /// `std::mem::size_of::<perry_runtime::object::ObjectHeader>()` for the target.
@@ -56,6 +59,7 @@ mod tests {
         assert_eq!(object_header_size_bytes("aarch64-apple-watchos-sim"), 32);
         assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnu"), 32);
         // arm64_32 watchOS (Series 4–8 / SE): 4×u32 + two 4-byte pointers = 24.
+        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnux32"), 24);
         assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 24);
     }
 
