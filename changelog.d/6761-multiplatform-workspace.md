@@ -1,1 +1,1 @@
-**Cross-platform workspace builds:** gate each platform UI crate and its native dependencies for the applicable Cargo target. Host workspace checks and Hawk no longer require SDKs or system libraries for other platforms. Update the container Compose FFI for the current engine API.
+**Cross-platform workspace builds:** gate each platform UI crate and its native dependencies for the applicable Cargo target. Host workspace checks no longer require SDKs or system libraries for other platforms. Update the container Compose FFI for the current engine API.
