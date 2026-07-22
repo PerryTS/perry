@@ -69,7 +69,7 @@ fn known_finite_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
         // range guard proved every window value is an i32 integer).
         Expr::IndexGet { object, index }
             if ta_int_elem_load_is_i32_provable(ctx, object, index)
-                || super::index_get::masked_window_i32_load_is_provable(ctx, object, index) =>
+                || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index) =>
         {
             Some(32)
         }
@@ -544,7 +544,7 @@ pub(crate) fn can_lower_expr_as_i32_in_current_region(ctx: &FnCtx<'_>, e: &Expr)
         }
         Expr::IndexGet { object, index } => {
             ta_int_elem_load_is_i32_provable(ctx, object, index)
-                || super::index_get::masked_window_i32_load_is_provable(ctx, object, index)
+                || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
         }
         _ => false,
     }
@@ -762,7 +762,7 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
                 super::lower_typed_array_load(ctx, object, index)?
                     .map(|lowered| i32_from_indexed_get_lowered(ctx, lowered))
             } else {
-                super::index_get::lower_masked_window_index_get_i32(ctx, object, index)?
+                super::masked_window::lower_masked_window_index_get_i32(ctx, object, index)?
             }
         }
         _ => None,

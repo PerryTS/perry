@@ -1336,6 +1336,7 @@ mod dyn_extern_i18n;
 mod env_clones;
 mod fs_await;
 mod index_get;
+mod masked_window;
 pub(crate) use index_get::packed_f64_loop_index_parts;
 mod index_set;
 mod instance_misc1;
