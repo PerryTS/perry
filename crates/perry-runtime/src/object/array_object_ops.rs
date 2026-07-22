@@ -398,6 +398,7 @@ pub(crate) unsafe fn define_array_property(
                         cur_accessor,
                         cur_value,
                         descriptor_value,
+                        None,
                     );
                 }
             }
@@ -608,6 +609,7 @@ pub(crate) unsafe fn define_array_property(
                     cur_accessor,
                     cur_value,
                     descriptor_value,
+                    None,
                 );
             }
         }

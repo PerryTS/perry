@@ -491,6 +491,7 @@ pub(crate) unsafe fn exotic_define_own_property(
                 existing_accessor,
                 cur_value,
                 descriptor_value,
+                None,
             );
         }
     } else {

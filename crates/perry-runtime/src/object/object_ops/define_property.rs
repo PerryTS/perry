@@ -300,6 +300,22 @@ pub extern "C" fn js_object_define_property(
     descriptor_value: f64,
 ) -> f64 {
     unsafe {
+        // #6748 follow-up: classify the receiver ONCE. A `GC_TYPE_OBJECT` that
+        // is not an exotic cell (RegExp is the one OBJECT-typed exotic) cannot
+        // be a proxy or handle id, a typed array, a buffer, a closure, or an
+        // exotic Date/Error/Map/Set — so each of those arms (a TLS + registry
+        // probe apiece) is skipped below. Mirrors the `in` operator's fast
+        // path in `has_property.rs`.
+        let receiver_plain_object = {
+            let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
+            jv.is_pointer() && {
+                let a = jv.as_pointer::<u8>() as usize;
+                matches!(
+                    crate::value::addr_class::try_read_gc_header(a),
+                    Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT
+                ) && super::super::exotic_expando::exotic_expando_kind(a).is_none()
+            }
+        };
         // A Proxy receiver is a small registered id, not a heap object — it
         // fails the `value_is_object_like` test below (so it would wrongly throw
         // "called on non-object") and the ordinary paths would deref the fake
@@ -307,7 +323,7 @@ pub extern "C" fn js_object_define_property(
         // validate the descriptor (ToPropertyDescriptor), invoke the
         // `[[DefineOwnProperty]]` trap, and throw a TypeError if it reports
         // failure. (Proxy crash cluster.)
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        if !receiver_plain_object && crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
             if !value_is_object_like(descriptor_value)
                 || crate::symbol::js_is_symbol(descriptor_value) != 0
             {
@@ -400,26 +416,41 @@ pub extern "C" fn js_object_define_property(
             let desc = describe_value_for_type_error(descriptor_value);
             throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
         }
-        validate_property_descriptor(descriptor_value);
+        // #6748 follow-up: decode the descriptor's 6 fields in ONE pass when it
+        // is a plain default-prototype object (the overwhelming majority) —
+        // the per-field `desc_has_field`/`desc_read_field` helpers each cost a
+        // key-string alloc plus a HasProperty/[[Get]] walk. `None` keeps the
+        // spec-general per-field path everywhere below.
+        let desc_view = try_decode_descriptor(descriptor_value);
+        match &desc_view {
+            Some(v) => validate_property_descriptor_view(v),
+            None => validate_property_descriptor(descriptor_value),
+        }
 
         // TypedArrays are Integer-Indexed exotic objects: a canonical numeric
         // index key bypasses ordinary define entirely (validate the index, then
         // either write the element or reject with a TypeError).
-        match super::super::typed_array_define_own_property(obj_value, key_value, descriptor_value)
-        {
-            super::super::TypedArrayDefineOutcome::Defined => return obj_value,
-            super::super::TypedArrayDefineOutcome::Rejected => {
-                throw_object_type_error(b"Cannot redefine property")
+        if !receiver_plain_object {
+            match super::super::typed_array_define_own_property(
+                obj_value,
+                key_value,
+                descriptor_value,
+            ) {
+                super::super::TypedArrayDefineOutcome::Defined => return obj_value,
+                super::super::TypedArrayDefineOutcome::Rejected => {
+                    throw_object_type_error(b"Cannot redefine property")
+                }
+                super::super::TypedArrayDefineOutcome::NotTypedArray => {}
             }
-            super::super::TypedArrayDefineOutcome::NotTypedArray => {}
         }
 
         // Date / RegExp / Error instances are exotic cells, not
         // `ObjectHeader`s — the ordinary define path below would bit-cast
         // them and corrupt memory. Route through the expando-aware
         // [[DefineOwnProperty]] (side-table storage + attrs + accessors).
-        if let Some((addr, kind)) =
-            super::super::exotic_expando::exotic_expando_kind_of_value(obj_value)
+        if let Some((addr, kind)) = (!receiver_plain_object)
+            .then(|| super::super::exotic_expando::exotic_expando_kind_of_value(obj_value))
+            .flatten()
         {
             if crate::symbol::js_is_symbol(key_value) != 0 {
                 let value_field = desc_read_field(descriptor_value, b"value");
@@ -503,7 +534,9 @@ pub extern "C" fn js_object_define_property(
 
         // Closures are object-like but not ObjectHeader-backed, so descriptor
         // writes have to route through the closure property side tables.
-        let target_closure_ptr = {
+        let target_closure_ptr = if receiver_plain_object {
+            None
+        } else {
             let value = crate::value::JSValue::from_bits(obj_value.to_bits());
             let raw = if value.is_pointer() {
                 value.as_pointer::<u8>() as usize
@@ -619,6 +652,7 @@ pub extern "C" fn js_object_define_property(
                         cur_accessor,
                         cur_value,
                         descriptor_value,
+                        desc_view.as_ref(),
                     );
                 }
             }
@@ -687,7 +721,10 @@ pub extern "C" fn js_object_define_property(
             return obj_value;
         }
 
-        if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+        if let Some(addr) = (!receiver_plain_object)
+            .then(|| crate::typedarray_props::typed_array_addr_from_value(obj_value))
+            .flatten()
+        {
             // A Symbol key on a TypedArray is an ORDINARY define — store it in
             // the symbol side tables (string-coercing it would file the value
             // under a "Symbol(x)" string name, unreachable via `ta[sym]`),
@@ -887,7 +924,9 @@ pub extern "C" fn js_object_define_property(
                 }
             }
         }
-        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+        if !receiver_plain_object
+            && crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+        {
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(
                     obj_value,
@@ -899,13 +938,18 @@ pub extern "C" fn js_object_define_property(
             }
             return obj_value;
         }
-        if let Some(ok) = super::super::define_array_property(
-            obj,
-            obj_value,
-            key_str,
-            key_rust.as_deref(),
-            descriptor_value,
-        ) {
+        if let Some(ok) = (!receiver_plain_object)
+            .then(|| {
+                super::super::define_array_property(
+                    obj,
+                    obj_value,
+                    key_str,
+                    key_rust.as_deref(),
+                    descriptor_value,
+                )
+            })
+            .flatten()
+        {
             if ok {
                 return obj_value;
             }
@@ -920,7 +964,13 @@ pub extern "C" fn js_object_define_property(
         // mutation, so a rejected definition leaves the object untouched and the
         // thrown TypeError matches Node.
         if let Some(ref k) = key_rust {
-            enforce_define_property_invariants(obj, key_str, k, descriptor_value);
+            enforce_define_property_invariants(
+                obj,
+                key_str,
+                k,
+                descriptor_value,
+                desc_view.as_ref(),
+            );
         }
         super::super::mark_object_dynamic_shape_unknown(obj);
         // Extract descriptor object
@@ -956,10 +1006,20 @@ pub extern "C" fn js_object_define_property(
         // PRESENCE (HasProperty — own OR inherited) on the descriptor object,
         // not by `is_undefined`: `{ get: undefined }` is an explicit (present)
         // accessor field, and an *inherited* `value`/`get` counts as present.
-        let desc_has_get = desc_has_field(descriptor_value, b"get");
-        let desc_has_set = desc_has_field(descriptor_value, b"set");
-        let get_field = desc_read_field(descriptor_value, b"get");
-        let set_field = desc_read_field(descriptor_value, b"set");
+        let (desc_has_get, desc_has_set, get_field, set_field) = match &desc_view {
+            Some(v) => (
+                v.has(DESC_GET),
+                v.has(DESC_SET),
+                v.read(DESC_GET),
+                v.read(DESC_SET),
+            ),
+            None => (
+                desc_has_field(descriptor_value, b"get"),
+                desc_has_field(descriptor_value, b"set"),
+                desc_read_field(descriptor_value, b"get"),
+                desc_read_field(descriptor_value, b"set"),
+            ),
+        };
         let has_accessor = desc_has_get || desc_has_set;
 
         // The existing accessor (if the property is currently an accessor) —
@@ -1024,8 +1084,13 @@ pub extern "C" fn js_object_define_property(
             // descriptor (only `enumerable`/`configurable`). Detect by own-field
             // presence so `{ value: undefined }` (present) stores `undefined`,
             // while a generic descriptor on an existing accessor leaves it intact.
-            let desc_has_value = desc_has_field(descriptor_value, b"value");
-            let desc_has_writable = desc_has_field(descriptor_value, b"writable");
+            let (desc_has_value, desc_has_writable) = match &desc_view {
+                Some(v) => (v.has(DESC_VALUE), v.has(DESC_WRITABLE)),
+                None => (
+                    desc_has_field(descriptor_value, b"value"),
+                    desc_has_field(descriptor_value, b"writable"),
+                ),
+            };
             let is_data = desc_has_value || desc_has_writable;
 
             if is_data {
@@ -1040,7 +1105,10 @@ pub extern "C" fn js_object_define_property(
                     });
                     clear_property_attrs(obj as usize, k);
                 }
-                let value_field = desc_read_field(descriptor_value, b"value");
+                let value_field = match &desc_view {
+                    Some(v) => v.read(DESC_VALUE),
+                    None => desc_read_field(descriptor_value, b"value"),
+                };
                 // Ensure the key exists; store the (possibly `undefined`) value
                 // via `[[DefineOwnProperty]]`, bypassing the `[[Set]]` writability
                 // / frozen guard (invariants already enforced above). When
@@ -1075,7 +1143,14 @@ pub extern "C" fn js_object_define_property(
         // Read attribute flags from descriptor. JS defaults when omitted in
         // `Object.defineProperty` are `false` (NOT `true` like for direct assignment).
         let read_bool = |name: &[u8]| -> Option<bool> {
-            let v = desc_read_field(descriptor_value, name);
+            let v = match &desc_view {
+                Some(view) => view.read(match name {
+                    b"writable" => DESC_WRITABLE,
+                    b"enumerable" => DESC_ENUMERABLE,
+                    _ => DESC_CONFIGURABLE,
+                }),
+                None => desc_read_field(descriptor_value, name),
+            };
             if v.is_undefined() {
                 None
             } else {
@@ -1094,8 +1169,13 @@ pub extern "C" fn js_object_define_property(
         // retained-attrs rule doesn't apply across the kind switch).
         let accessor_to_data = existing_accessor.is_some()
             && !has_accessor
-            && (desc_has_field(descriptor_value, b"value")
-                || desc_has_field(descriptor_value, b"writable"));
+            && match &desc_view {
+                Some(v) => v.has(DESC_VALUE) || v.has(DESC_WRITABLE),
+                None => {
+                    desc_has_field(descriptor_value, b"value")
+                        || desc_has_field(descriptor_value, b"writable")
+                }
+            };
         let writable = read_bool(b"writable").unwrap_or_else(|| {
             if accessor_to_data {
                 false
