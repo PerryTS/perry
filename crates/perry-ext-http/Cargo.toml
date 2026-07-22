@@ -18,7 +18,7 @@ perry-ffi.workspace = true
 # `js_node_http2_*` symbols flow through into libperry_ext_http.a so a
 # single staticlib registration in well_known_bindings.toml covers
 # both client and server. The crate split keeps the source layered.
-perry-ext-http-server = { path = "../perry-ext-http-server" }
+perry-ext-http-server.workspace = true
 # #2154: Agent argument validation throws `RangeError [ERR_OUT_OF_RANGE]`
 # via `js_throw` + `register_error_code_pub`, which are perry-runtime's
 # Rust-ABI helpers (not perry-ffi's). Stays consistent with perry-stdlib's

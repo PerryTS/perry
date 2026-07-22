@@ -174,4 +174,5 @@
 # Contributing
 
 - [Architecture](contributing/architecture.md)
+- [Crate policy](contributing/crate-policy.md)
 - [Building from Source](contributing/building.md)

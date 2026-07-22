@@ -126,6 +126,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Audit workspace architecture
+        run: |
+          python3 scripts/workspace_architecture.py --self-test
+          python3 scripts/workspace_architecture.py --check --print-summary
+
       - name: Public benchmark evidence freshness
         run: |
           PYTHONPATH=. python3 tests/test_public_baseline.py
@@ -167,13 +172,18 @@ jobs:
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
-  # warn-level output is informational and never blocks a PR. Separate from
-  # `lint` because it compiles the whole default-member set (~30 min cold);
-  # `lint` stays the fast fmt/gates job.
+  # warn-level output is informational and never blocks a PR. The product leg
+  # gives fast feedback for the CLI; the host-compatible leg names every Linux
+  # package explicitly. Neither scope depends on Cargo default-members.
   # ---------------------------------------------------------------------------
   clippy:
+    name: Clippy (${{ matrix.scope }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [product, host-compatible]
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
@@ -206,8 +216,19 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Run clippy
-        run: cargo clippy
+      - name: Run clippy for explicit scope
+        run: |
+          if [[ "${{ matrix.scope }}" == "product" ]]; then
+            cargo clippy -p perry --bins
+          else
+            mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
+              --print-excluded-scope host-compatible)
+            cargo_args=(--workspace)
+            for package in "${excluded[@]}"; do
+              cargo_args+=(--exclude "$package")
+            done
+            cargo clippy "${cargo_args[@]}"
+          fi
 
   # ---------------------------------------------------------------------------
   # API docs drift gate (#465)
@@ -306,9 +327,8 @@ jobs:
   # workaround). Each downstream job below builds in parallel directly.
   cargo-test:
     # Was macos-14 — moved to ubuntu-latest in v0.5.392 to drop the 10×
-    # billing weight. cargo-test's `--exclude` list already filters out
-    # every macOS-specific UI crate (perry-ui-{ios,visionos,tvos,
-    # watchos,gtk4,android,windows} per the comment block below), so
+    # billing weight. The centralized Linux test scope already filters out
+    # platform-specific UI crates, so
     # the platform-independent test set runs identically on Linux. The
     # macOS-host coverage we lose here is negligible — these tests
     # don't exercise any platform behavior; they're pure logic +
@@ -392,7 +412,8 @@ jobs:
           rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
 
       - name: Run cargo test
-        # Exclude UI backends that don't build on the ubuntu-latest CI image:
+        # The exclusions below are maintained once in
+        # workspace-architecture.json and consumed by ci_test_scope.py:
         # - perry-ui-macos / perry-ui-ios / perry-ui-tvos / perry-ui-watchos
         #   / perry-ui-visionos: depend on `objc2` which only compiles on
         #   Apple platforms (`compile_error!` in objc2/src/lib.rs:219).

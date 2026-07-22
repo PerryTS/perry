@@ -19,9 +19,9 @@ Selection rules:
   * `--full` (release tags, nightly cron, workflow_dispatch) selects every
     testable workspace member.
 
-Cross-host UI crates and doc fixtures that don't build on the Linux CI image are
-always excluded (mirrors the historical exclude list in test.yml). `perry-runtime`
-is included when affected; the workflow runs it single-threaded separately.
+Cross-host UI crates and doc fixtures that don't build in this Linux test scope
+are always excluded. The shared list lives in `workspace-architecture.json`;
+`perry-runtime` is included when affected and runs single-threaded separately.
 
 Usage:  <changed-files> | python3 scripts/ci_test_scope.py [--full]
 """
@@ -31,20 +31,11 @@ import re
 import subprocess
 import sys
 
-# Excluded from the Linux cargo-test gate (see test.yml): cross-host UI backends
-# (objc2 / win32 / NDK / gtk) and the doc fixture crate.
-EXCLUDED = {
-    "perry-ui-macos",
-    "perry-ui-ios",
-    "perry-ui-visionos",
-    "perry-ui-tvos",
-    "perry-ui-watchos",
-    "perry-ui-gtk4",
-    "perry-ui-android",
-    "perry-ui-windows",
-    "perry-ui-windows-winui",
-    "perry-doc-fixture-my-bindings",
-}
+from workspace_architecture import excluded_members, load_policy
+
+# One source of truth shared with Clippy and coverage. The test scope adds the
+# documentation fixture because the fixture has no product tests of its own.
+EXCLUDED = excluded_members(load_policy(), "linux-test")
 
 INFRA_PREFIXES = (".github/", "scripts/", "rust-toolchain")
 
