@@ -720,6 +720,13 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
             return (0, 0, gc_type);
         }
         let class_id = (*ptr).class_id;
+        // #6759 C3b note: this token is equality-compared only, and the
+        // header-stamped stable shape id (C3c-r) would be a stabler token —
+        // but LAZY stamping means early observations of a shape use the
+        // keys address while later ones would use the id, splitting one
+        // logical shape into two tokens per site (spurious polymorphism).
+        // Switching this token to ids requires EAGER stamping at
+        // allocation (the codegen-assisted remainder of C3c).
         let shape = (*ptr).keys_array as usize;
         (shape, class_id, gc_type)
     }

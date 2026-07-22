@@ -143,30 +143,52 @@ Each step lands independently behind green suites, per the #6759 method.
   can no longer be misread as owning a dead tenant's not-yet-pruned
   descriptor entries (its meta is null, so the gated getters miss
   authoritatively).
-- **C3 — the shape pointer becomes the object's identity.**
-  `ObjectHeader` gains a shape reference unifying `class_id` and the
-  literal shape ids (candidate encodings: reuse the `class_id` u32 as a
-  shape-table index — `is_anon_shape_class_id` already carves that space —
-  or a `meta`-resident pointer for shaped-divergent objects). ICs and
-  prop plans compare shape identity in one load; `keys_array` becomes a
-  shape-owned enumeration artifact rather than a per-object scanned
-  array. This is the step where `FIELD_CACHE` and the transition cache
-  fold into shape-resident ICs/edges, and where codegen property plans
-  compile against shape ids (touches `perry-codegen` property_get/set
-  and the PIC).
-- **C4 — dictionary mode formalized.**
-  Wide/high-churn objects (today: KEYS_INDEX_THRESHOLD=32 /
-  WIDE_KEY_INDEX_MIN_KEYS=257 heuristics, delete/compaction in
-  `delete_rest.rs`) get an explicit out-of-shape mode: the object owns a
-  private dictionary (its `meta` record), leaves the transition system,
-  and enumeration order is preserved by the dictionary itself.
-- **C5 — typed_feedback exactness.**
-  Guard families that today re-derive facts per call vet a shape id
-  instead; representation-change invalidation (`#6759`'s Phase A rider)
-  becomes "shape actually changed".
+- **C3 — stable shape identity, staged** *(refined at implementation
+  time; design review on #6798)*:
+  - **C3a (landed)**: `Shape` records carry a stable `shape_id`; an
+    owned keys array's grow-realloc MIGRATES the record instead of
+    orphaning it, and GC evacuation rekeys records to the moved array
+    (metadata-rewrite scanner). Kills the O(key_count) re-index per
+    capacity doubling in the wide regime.
+  - **C3c-r (landed, runtime-only)**: ids come from a PROCESS-GLOBAL
+    allocator in a dedicated u32 range (`0x8000_0000..0xC000_0000`) —
+    disjoint from every real/builtin class id, and globally unique so a
+    worker-serialized stamp can never alias another thread's ids. Plain
+    objects (`class_id == 0`) carry their id in the otherwise-dead
+    `parent_class_id` header word, stamped lazily at read resolution and
+    cleared whenever the keys pointer changes or a delete compacts
+    in-place (ids are never reused, so stale entries can only miss).
+    `FIELD_CACHE` keys on the stamp — entries survive grow-reallocs AND
+    GC moves. The PIC's miss handler now primes only `SHAPE_SHARED`
+    (process-rooted, address-immortal) keys arrays, closing a latent ABA
+    hazard where an owned array's recycled address could satisfy the
+    unvalidated inline compare.
+  - **C3-codegen (remaining, own review gate)**: eager id stamping at
+    allocation (so typed_feedback observation tokens can canonicalize on
+    ids without the lazy-stamp two-token split) and the PIC comparing
+    the header id — needs a discriminated compare because the generic
+    PIC also serves class instances, whose `parent_class_id` is real
+    inheritance data. Folding the transition cache into shape-resident
+    edges rides the same rung.
+- **C4 — dictionary mode: largely subsumed.**
+  The concrete goals — per-shape hash lookup for wide objects, churn
+  not corrupting acceleration, eager invalidation on delete/compaction,
+  recycling safety — are delivered by C1 (shared per-shape slot maps),
+  C3a (identity survives grow), and C3c-r (never-reused ids; compaction
+  drops record + stamp). The remaining formalization (an authoritative
+  per-object dictionary carrying enumeration order, off the transition
+  system) is deferred until profiling shows transition-cache pollution
+  from churn-heavy objects; keys_array remains the order artifact.
+- **C5 — typed_feedback exactness, staged.**
+  - **C5a (landed)**: the class-field inline-guard disable is vetted
+    per-key against declared instance-field names (with a late-class
+    retro-check), so babel-style prototype method installs stop
+    poisoning `this.field` access process-wide.
+  - Remaining: guard families vetting one exact shape id — gated on
+    eager stamping (see C3-codegen above).
 
-C1 and C2 are runtime-only. C3 is the codegen milestone and gets its own
-review before landing. Acceptance is measured at each step against the
+C1, C2, C3a, C3c-r, and C5a are runtime-only. The C3 codegen remainder
+gets its own review before landing. Acceptance is measured against the
 #6759 micro table.
 
 ## GC story
