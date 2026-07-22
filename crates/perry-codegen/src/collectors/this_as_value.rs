@@ -479,8 +479,8 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_hir::types::Type;
     use perry_hir::{Class, ClassField, Expr, Function, Stmt};
-    use perry_types::Type;
     use std::collections::HashMap;
 
     fn function(name: &str, body: Vec<Stmt>) -> Function {

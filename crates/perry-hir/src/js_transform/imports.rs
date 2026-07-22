@@ -1,5 +1,5 @@
 use crate::ir::{Expr, Module, ModuleKind, Stmt};
-use perry_types::LocalId;
+use crate::types::LocalId;
 use std::collections::{HashMap, HashSet};
 
 /// Information about a JavaScript module import

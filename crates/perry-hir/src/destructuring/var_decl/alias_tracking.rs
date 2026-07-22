@@ -3,7 +3,7 @@
 
 use super::*;
 
-use perry_types::LocalId;
+use crate::types::LocalId;
 use swc_ecma_ast as ast;
 
 use crate::lower::LoweringContext;

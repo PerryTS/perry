@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::{anyhow, Result};
+use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, UpdateOp};
-use perry_types::Type as HirType;
 
 use crate::lower_string_method::lower_string_self_append;
 use crate::nanbox::double_literal;

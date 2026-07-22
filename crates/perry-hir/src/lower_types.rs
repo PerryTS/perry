@@ -3,7 +3,7 @@
 //! Contains functions for inferring types from expressions, extracting
 //! TypeScript type annotations, and parsing function parameter types.
 
-use perry_types::Type;
+use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use crate::lower::LoweringContext;
@@ -655,7 +655,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
         // Type::Any on anything that makes the shape non-closed: spread, computed
         // keys, methods/getters/setters, bigint keys.
         ast::Expr::Object(obj) => {
-            let mut properties: std::collections::HashMap<String, perry_types::PropertyInfo> =
+            let mut properties: std::collections::HashMap<String, crate::types::PropertyInfo> =
                 std::collections::HashMap::new();
             let mut property_order: Vec<String> = Vec::new();
             let mut open_shape = false;
@@ -674,7 +674,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                             }
                             properties.insert(
                                 name,
-                                perry_types::PropertyInfo {
+                                crate::types::PropertyInfo {
                                     ty,
                                     optional: false,
                                     readonly: false,
@@ -697,7 +697,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                             }
                             properties.insert(
                                 key,
-                                perry_types::PropertyInfo {
+                                crate::types::PropertyInfo {
                                     ty,
                                     optional: false,
                                     readonly: false,
@@ -714,7 +714,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
             if open_shape {
                 Type::Any
             } else {
-                Type::Object(perry_types::ObjectType {
+                Type::Object(crate::types::ObjectType {
                     name: None,
                     properties,
                     property_order: Some(property_order),
@@ -774,7 +774,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
             } else {
                 annotated
             };
-            Type::Function(perry_types::FunctionType {
+            Type::Function(crate::types::FunctionType {
                 params: arrow
                     .params
                     .iter()

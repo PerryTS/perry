@@ -74,8 +74,8 @@
 
 use std::collections::HashMap;
 
+use perry_hir::types::{LocalId, Type};
 use perry_hir::{Expr, Module, Stmt};
-use perry_types::{LocalId, Type};
 
 // #5293: the max-LocalId scan was copy-pasted here; route through the canonical
 // (exhaustive-walker-backed) implementation in `generator::id_scan` instead.

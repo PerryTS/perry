@@ -4,8 +4,8 @@
 
 use super::*;
 
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 use crate::type_analysis_class_fields::{class_field_declared_type, declared_field_type};

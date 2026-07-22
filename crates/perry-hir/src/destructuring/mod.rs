@@ -14,8 +14,8 @@
 //! - [`var_decl`] — full variable-declaration lowering, including the
 //!   destructuring case.
 
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;

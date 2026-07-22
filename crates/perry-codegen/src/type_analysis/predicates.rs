@@ -4,8 +4,8 @@
 
 use super::*;
 
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 use crate::type_analysis_facts::{function_type_from_decl, hir_inferred_static_type};
@@ -539,7 +539,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                     if let Some(method) =
                         iface.methods.iter().find(|method| method.name == *property)
                     {
-                        return Some(HirType::Function(perry_types::FunctionType {
+                        return Some(HirType::Function(perry_hir::types::FunctionType {
                             params: method.params.clone(),
                             return_type: Box::new(method.return_type.clone()),
                             is_async: false,

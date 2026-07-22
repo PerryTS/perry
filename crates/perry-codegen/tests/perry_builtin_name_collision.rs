@@ -16,8 +16,8 @@
 //! and a genuine `perry/system` import must still reach the native one.
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Expr, Import, ImportSpecifier, Module, ModuleInitKind, ModuleKind, Stmt};
-use perry_types::Type;
 
 fn base_opts() -> CompileOptions {
     CompileOptions {

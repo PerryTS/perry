@@ -1,4 +1,4 @@
-//! Type system for Perry
+//! Type definitions owned by the high-level intermediate representation
 //!
 //! Defines the type representations used throughout the compiler,
 //! from parsing through code generation.

@@ -2,7 +2,7 @@
 //! `super`.
 
 use super::*;
-use perry_types::{LocalId, Type};
+use crate::types::{LocalId, Type};
 
 /// Statement in function body
 #[derive(Debug, Clone)]

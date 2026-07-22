@@ -62,7 +62,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let inferred = crate::type_analysis::refine_type_from_init(ctx, d)
                 .or_else(|| crate::type_analysis::static_type_of(ctx, d));
             match inferred {
-                Some(perry_types::Type::Number) | Some(perry_types::Type::Int32) => {
+                Some(perry_hir::types::Type::Number) | Some(perry_hir::types::Type::Int32) => {
                     let blk = ctx.block();
                     let handle = blk.call(I64, "js_number_to_locale_string", &[(DOUBLE, &v)]);
                     Ok(nanbox_string_inline(blk, &handle))

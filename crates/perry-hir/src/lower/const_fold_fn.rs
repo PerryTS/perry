@@ -1185,7 +1185,7 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
                 }
                 return Some(Expr::Undefined);
             }
-            let id = ctx.define_local(name, perry_types::Type::Any);
+            let id = ctx.define_local(name, crate::types::Type::Any);
             ctx.var_hoisted_ids.insert(id);
             return Some(Expr::Undefined);
         }
@@ -1231,7 +1231,7 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
             "eval assignment to undeclared identifier `{name}`"
         )))
     } else {
-        let id = ctx.define_local(name.to_string(), perry_types::Type::Any);
+        let id = ctx.define_local(name.to_string(), crate::types::Type::Any);
         ctx.var_hoisted_ids.insert(id);
         Some(finish(Expr::LocalSet(id, Box::new(value))))
     }

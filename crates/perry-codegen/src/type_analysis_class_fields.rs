@@ -9,8 +9,8 @@
 //! cycle — an unguarded walk would then CPU-hang or OOM. The walks bail on
 //! a repeated class name (and a depth cap) instead.
 
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 use crate::type_analysis::receiver_class_name;

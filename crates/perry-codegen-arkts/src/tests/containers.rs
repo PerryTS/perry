@@ -110,7 +110,7 @@ fn navstack_emits_state_driven_branches() {
     m.init.push(Stmt::Let {
         id: 5,
         name: "route".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(state_call(Expr::String("home".into()))),
     });
@@ -169,7 +169,7 @@ fn navstack_no_state_falls_back_to_first_route() {
     m.init.push(Stmt::Let {
         id: 7,
         name: "x".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(Expr::String("home".into())),
     });
@@ -202,7 +202,7 @@ fn navstack_empty_routes_emits_empty_column_with_comment() {
     m.init.push(Stmt::Let {
         id: 5,
         name: "route".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(state_call(Expr::String("home".into()))),
     });
@@ -224,7 +224,7 @@ fn navstack_set_in_closure_rewrites_to_settext() {
     m.init.push(Stmt::Let {
         id: 5,
         name: "route".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(state_call(Expr::String("home".into()))),
     });
@@ -233,9 +233,9 @@ fn navstack_set_in_closure_rewrites_to_settext() {
         vec![
             Expr::String("Go".into()),
             Expr::Closure {
-                func_id: 0 as perry_types::FuncId,
+                func_id: 0 as perry_hir::types::FuncId,
                 params: vec![],
-                return_type: perry_types::Type::Any,
+                return_type: perry_hir::types::Type::Any,
                 body: vec![Stmt::Expr(state_method_call(
                     5,
                     "set",
@@ -297,7 +297,7 @@ fn state_text_emits_reactive_text_with_synth_id() {
     m.init.push(Stmt::Let {
         id: 5,
         name: "count".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(state_call(Expr::Number(0.0))),
     });
@@ -318,15 +318,15 @@ fn state_set_in_closure_rewrites_to_settext() {
     m.init.push(Stmt::Let {
         id: 5,
         name: "count".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(state_call(Expr::Number(0.0))),
     });
     // Closure body: Stmt::Expr(count.set(5))
     let closure = Expr::Closure {
-        func_id: 0 as perry_types::FuncId,
+        func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
-        return_type: perry_types::Type::Any,
+        return_type: perry_hir::types::Type::Any,
         body: vec![Stmt::Expr(state_method_call(
             5,
             "set",
@@ -372,14 +372,14 @@ fn multiple_state_decls_get_unique_ids() {
     m.init.push(Stmt::Let {
         id: 1,
         name: "count".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(state_call(Expr::Number(0.0))),
     });
     m.init.push(Stmt::Let {
         id: 2,
         name: "name".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(state_call(Expr::String("Alice".into()))),
     });
@@ -489,7 +489,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
     let item_param = perry_hir::ir::Param {
         id: 99,
         name: "item".to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         default: None,
         decorators: Vec::new(),
         is_rest: false,
@@ -502,9 +502,9 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
             Expr::String("b".into()),
         ])),
         callback: Box::new(Expr::Closure {
-            func_id: 0 as perry_types::FuncId,
+            func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
-            return_type: perry_types::Type::Any,
+            return_type: perry_hir::types::Type::Any,
             body: vec![Stmt::Return(Some(inner_text))],
             captures: vec![],
             mutable_captures: vec![],
@@ -842,9 +842,9 @@ fn media_call_inside_button_closure_also_triggers_glue() {
     // walker must descend into Closure bodies via stmt_uses → Closure.
     let mut m = empty_module();
     let play_closure = Expr::Closure {
-        func_id: 0 as perry_types::FuncId,
+        func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
-        return_type: perry_types::Type::Any,
+        return_type: perry_hir::types::Type::Any,
         body: vec![Stmt::Expr(media_call("play", vec![Expr::Number(1.0)]))],
         captures: vec![],
         mutable_captures: vec![],

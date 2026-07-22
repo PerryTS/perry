@@ -23,8 +23,8 @@
 //! `js_gc_register_global_root`.
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Module, ModuleInitKind};
-use perry_types::Type;
 
 fn entry_opts() -> CompileOptions {
     CompileOptions {

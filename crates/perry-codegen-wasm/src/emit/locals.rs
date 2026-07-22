@@ -3,7 +3,7 @@
 //! Pure move: `collect_module_let_ids`, `resolve_source_module_idx`, `collect_locals`.
 
 use perry_hir::ir::*;
-use perry_types::LocalId;
+use perry_hir::types::LocalId;
 use std::collections::BTreeMap;
 
 /// Recursively scan statements for local variable declarations
@@ -353,7 +353,7 @@ pub(super) fn resolve_export_to_let(
 /// module i.
 pub(super) fn resolve_export_to_func(
     modules: &[(String, perry_hir::ir::Module)],
-    module_func_maps: &[std::collections::BTreeMap<perry_types::FuncId, u32>],
+    module_func_maps: &[std::collections::BTreeMap<perry_hir::types::FuncId, u32>],
     name_to_idx: &std::collections::HashMap<&str, usize>,
     mod_idx: usize,
     name: &str,

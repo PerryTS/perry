@@ -345,7 +345,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         .map(|name| perry_hir::ClassField {
                             name: name.clone(),
                             key_expr: None,
-                            ty: perry_types::Type::Any,
+                            ty: perry_hir::types::Type::Any,
                             init: None,
                             is_private: false,
                             is_readonly: false,
@@ -383,7 +383,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 name: format!("get_{}", prop),
                 type_params: Vec::new(),
                 params: Vec::new(),
-                return_type: perry_types::Type::Any,
+                return_type: perry_hir::types::Type::Any,
                 body: Vec::new(),
                 is_async: false,
                 is_generator: false,
@@ -403,7 +403,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 name: format!("set_{}", prop),
                 type_params: Vec::new(),
                 params: Vec::new(),
-                return_type: perry_types::Type::Any,
+                return_type: perry_hir::types::Type::Any,
                 body: Vec::new(),
                 is_async: false,
                 is_generator: false,
@@ -444,7 +444,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         .field_types
                         .get(i)
                         .cloned()
-                        .unwrap_or(perry_types::Type::Any),
+                        .unwrap_or(perry_hir::types::Type::Any),
                     init: None,
                     is_private: false,
                     is_readonly: false,
@@ -460,7 +460,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     name: m.clone(),
                     type_params: Vec::new(),
                     params: Vec::new(),
-                    return_type: perry_types::Type::Any,
+                    return_type: perry_hir::types::Type::Any,
                     body: Vec::new(),
                     is_async: false,
                     is_generator: false,
@@ -1828,7 +1828,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // closures). Only the typed-ABI *specialization* decision needs the
     // module-globals removed, so scope the filter to a dedicated copy — the
     // receiver oracle is `module_receiver_types` (#6369).
-    let typed_abi_local_types: std::collections::HashMap<u32, perry_types::Type> =
+    let typed_abi_local_types: std::collections::HashMap<u32, perry_hir::types::Type> =
         module_local_types
             .iter()
             .filter(|(id, _)| !module_globals.contains_key(id))

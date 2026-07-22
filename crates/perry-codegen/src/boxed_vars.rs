@@ -1333,7 +1333,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
 /// having a handle on the enclosing function's context.
 pub(crate) fn collect_let_types_in_stmts(
     stmts: &[perry_hir::Stmt],
-    out: &mut HashMap<u32, perry_types::Type>,
+    out: &mut HashMap<u32, perry_hir::types::Type>,
 ) {
     use perry_hir::Stmt;
     for s in stmts {
@@ -1341,7 +1341,7 @@ pub(crate) fn collect_let_types_in_stmts(
             Stmt::Let { id, ty, init, .. } => {
                 // Refine Any-typed lets from the init if possible,
                 // so closures inherit the right type.
-                let refined_ty = if matches!(ty, perry_types::Type::Any) {
+                let refined_ty = if matches!(ty, perry_hir::types::Type::Any) {
                     init.as_ref()
                         .and_then(refine_type_from_init_simple)
                         .unwrap_or_else(|| ty.clone())
@@ -1429,11 +1429,11 @@ fn collect_compiler_private_async_control_locals_in_stmts_inner(
                     match (name.as_str(), ty) {
                         (
                             "__gen_state" | "__gen_pending_type",
-                            perry_types::Type::Number | perry_types::Type::Int32,
+                            perry_hir::types::Type::Number | perry_hir::types::Type::Int32,
                         ) => {
                             i32_out.insert(*id);
                         }
-                        ("__gen_done" | "__gen_executing", perry_types::Type::Boolean) => {
+                        ("__gen_done" | "__gen_executing", perry_hir::types::Type::Boolean) => {
                             i1_out.insert(*id);
                         }
                         _ => {}
@@ -1558,7 +1558,7 @@ fn collect_compiler_private_async_control_locals_in_expr(
 
 fn collect_closure_let_types_in_expr(
     expr: &perry_hir::Expr,
-    out: &mut HashMap<u32, perry_types::Type>,
+    out: &mut HashMap<u32, perry_hir::types::Type>,
 ) {
     use perry_hir::Expr;
     match expr {
@@ -1621,9 +1621,9 @@ fn collect_closure_let_types_in_expr(
 /// used at module-level type collection time before any FnCtx
 /// exists. Conservative: most generic runtime facts come from the shared HIR
 /// type-analysis spine; only codegen-specific/native escape facts remain here.
-fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::Type> {
+fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_hir::types::Type> {
+    use perry_hir::types::Type;
     use perry_hir::Expr;
-    use perry_types::Type;
     match init {
         // `String.prototype.matchAll` returns an iterator, but the current
         // codegen collector only tracks broad escape-hatch value facts here.
@@ -1644,15 +1644,15 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
     }
 }
 
-fn infer_refinable_type_without_context(init: &perry_hir::Expr) -> Option<perry_types::Type> {
+fn infer_refinable_type_without_context(init: &perry_hir::Expr) -> Option<perry_hir::types::Type> {
     infer_refinable_expr_type(init, &())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_hir::types::Type;
     use perry_hir::Expr;
-    use perry_types::Type;
 
     #[test]
     fn simple_refinement_uses_shared_hir_inference_for_constructed_values() {

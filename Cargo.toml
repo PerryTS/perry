@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/perry",
     "crates/perry-parser",
-    "crates/perry-types",
     "crates/perry-api-manifest",
     "crates/perry-hir",
     "crates/perry-transform",
@@ -390,7 +389,6 @@ zstd = "0.13"
 
 # Internal crates
 perry-parser = { path = "crates/perry-parser" }
-perry-types = { path = "crates/perry-types" }
 perry-api-manifest = { path = "crates/perry-api-manifest" }
 perry-hir = { path = "crates/perry-hir" }
 perry-transform = { path = "crates/perry-transform" }

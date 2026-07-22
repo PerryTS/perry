@@ -5,7 +5,7 @@
 use super::primitives::SH;
 use super::*;
 use crate::ir::*;
-use perry_types::{ObjectType, PropertyInfo, Type};
+use crate::types::{ObjectType, PropertyInfo, Type};
 use std::collections::{BTreeMap, HashMap};
 
 fn empty_module() -> Module {

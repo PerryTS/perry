@@ -10,8 +10,8 @@
 //! normalizes them to the `util/types` / `util.types` module keys.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::{
     emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, FnCtx,

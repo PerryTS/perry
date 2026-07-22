@@ -77,7 +77,7 @@ pub(crate) fn build_func_registry(hir: &HirModule, module_prefix: &str) -> FuncR
         }
         let returns_number = matches!(
             f.return_type,
-            perry_types::Type::Number | perry_types::Type::Int32
+            perry_hir::types::Type::Number | perry_hir::types::Type::Int32
         );
         func_signatures.insert(
             f.id,

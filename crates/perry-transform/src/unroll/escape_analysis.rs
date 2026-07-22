@@ -5,9 +5,9 @@
 //! must keep their original id across unrolled copies rather than being
 //! renamed per copy by `refresh_local_ids`. See `compute_loop_escaping_ids`.
 
+use perry_hir::types::LocalId;
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{Expr, Stmt};
-use perry_types::LocalId;
 use std::collections::{HashMap, HashSet};
 
 /// #2308: compute the set of loop-body-declared local ids that are

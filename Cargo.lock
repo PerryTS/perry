@@ -5511,7 +5511,6 @@ dependencies = [
  "perry-parser",
  "perry-runtime",
  "perry-transform",
- "perry-types",
  "perry-updater",
  "rand 0.9.4",
  "rayon",
@@ -5559,7 +5558,6 @@ dependencies = [
  "perry-api-manifest",
  "perry-dispatch",
  "perry-hir",
- "perry-types",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -5571,7 +5569,6 @@ version = "0.5.1264"
 dependencies = [
  "anyhow",
  "perry-hir",
- "perry-types",
 ]
 
 [[package]]
@@ -5589,7 +5586,6 @@ dependencies = [
  "anyhow",
  "perry-dispatch",
  "perry-hir",
- "perry-types",
 ]
 
 [[package]]
@@ -5598,7 +5594,6 @@ version = "0.5.1264"
 dependencies = [
  "anyhow",
  "perry-hir",
- "perry-types",
 ]
 
 [[package]]
@@ -5610,7 +5605,6 @@ dependencies = [
  "perry-codegen-js",
  "perry-dispatch",
  "perry-hir",
- "perry-types",
  "wasm-encoder 0.253.0",
 ]
 
@@ -6075,7 +6069,6 @@ dependencies = [
  "perry-api-manifest",
  "perry-diagnostics",
  "perry-parser",
- "perry-types",
  "perry-ui-model",
  "serde",
  "serde_json",
@@ -6249,15 +6242,6 @@ version = "0.5.1264"
 dependencies = [
  "anyhow",
  "perry-hir",
- "perry-types",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "perry-types"
-version = "0.5.1264"
-dependencies = [
- "anyhow",
  "thiserror 1.0.69",
 ]
 

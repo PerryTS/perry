@@ -381,7 +381,7 @@ fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receive
     // typed receiver is unaffected — `recv_unknown` is false for them.
     let recv_unknown = matches!(
         crate::type_analysis::static_type_of(ctx, target),
-        None | Some(perry_types::Type::Any) | Some(perry_types::Type::Unknown)
+        None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
     );
     // Mirror `index_set::lower`'s `recv_unknown` arm: keep statically-known
     // string-literal / symbol keys on their dedicated routes; route everything

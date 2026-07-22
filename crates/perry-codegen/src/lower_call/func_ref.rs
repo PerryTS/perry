@@ -15,7 +15,7 @@ fn is_i32_expr(ctx: &FnCtx<'_>, arg: &Expr) -> bool {
         Expr::Integer(n) => (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n),
         _ => matches!(
             crate::type_analysis::static_type_of(ctx, arg),
-            Some(perry_types::Type::Int32)
+            Some(perry_hir::types::Type::Int32)
         ),
     }
 }

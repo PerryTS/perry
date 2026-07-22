@@ -204,7 +204,7 @@ impl Djb2Hasher {
     }
 }
 
-fn stable_type_key(ty: &perry_types::Type) -> String {
+fn stable_type_key(ty: &perry_hir::types::Type) -> String {
     format!("{:016x}", perry_hir::stable_hash::hash_type(ty))
 }
 
@@ -662,7 +662,7 @@ fn compute_object_cache_key_with_env(
     // Imported return types (HashMap — MUST sort). Type can contain nested
     // HashMaps (ObjectType::properties), so never use Debug output here.
     {
-        let mut v: Vec<(&String, &perry_types::Type)> =
+        let mut v: Vec<(&String, &perry_hir::types::Type)> =
             opts.imported_func_return_types.iter().collect();
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s = v
@@ -685,7 +685,7 @@ fn compute_object_cache_key_with_env(
 
     // Type aliases (HashMap — MUST sort).
     {
-        let mut v: Vec<(&String, &perry_types::Type)> = opts.type_aliases.iter().collect();
+        let mut v: Vec<(&String, &perry_hir::types::Type)> = opts.type_aliases.iter().collect();
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s = v
             .iter()

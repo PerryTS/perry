@@ -1860,7 +1860,7 @@ fn collect_module_finish(
             for prior_module in ctx.native_modules.values() {
                 for class in &prior_module.classes {
                     for f in &class.fields {
-                        if let perry_types::Type::Named(field_class) = &f.ty {
+                        if let perry_hir::types::Type::Named(field_class) = &f.ty {
                             extra_class_fields
                                 .entry((class.name.clone(), f.name.clone()))
                                 .or_insert_with(|| field_class.clone());

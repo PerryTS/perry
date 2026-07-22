@@ -216,7 +216,7 @@ pub struct CompileOptions {
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// Type alias map (name → Type) aggregated from all modules. Codegen
     /// uses this to resolve `Named` types in function signatures.
-    pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
+    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Imported function parameter counts, keyed by function name.
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #608 — imported function names whose source-side signature
@@ -230,7 +230,7 @@ pub struct CompileOptions {
     /// just trailing), matching `arguments.length` semantics.
     pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
     /// Imported function return types, keyed by local function name.
-    pub imported_func_return_types: std::collections::HashMap<String, perry_types::Type>,
+    pub imported_func_return_types: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Names of imports that are exported VARIABLES (not functions). When an
     /// `ExternFuncRef` with one of these names appears as a value (not as a
     /// Call callee), the codegen calls the getter function to fetch the value
@@ -530,7 +530,7 @@ pub struct ImportedClass {
     /// class returns `Type::Any` and the dispatch chain breaks at the
     /// first hop. Empty (or filled with `Type::Any`) is the legacy fallback
     /// when the source side hasn't been updated to populate it yet.
-    pub field_types: Vec<perry_types::Type>,
+    pub field_types: Vec<perry_hir::types::Type>,
     /// Class id assigned by the source module. When present, the importing
     /// module reuses this id in its `class_ids` map so that `instanceof`
     /// on an imported class compares against the same id stamped onto
@@ -598,7 +598,7 @@ pub(crate) struct CrossModuleCtx {
     /// sloppy/strict `this` resolution sees "no receiver" instead of a
     /// leaked receiver from an enclosing method dispatch (#3576).
     pub funcs_reading_dynamic_this: std::collections::HashSet<u32>,
-    pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
+    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.
     /// Cloned from the same field so codegen helpers reachable via
@@ -633,7 +633,7 @@ pub(crate) struct CrossModuleCtx {
     /// `arguments` rest. The cross-module call bundles ALL args into it (not
     /// just trailing), matching `arguments.length` semantics.
     pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
-    pub imported_func_return_types: std::collections::HashMap<String, perry_types::Type>,
+    pub imported_func_return_types: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Refs #915 (gap 3 / #321 follow-up): function ids in THIS module
     /// whose body unconditionally returns a `ClassRef` (or transitively
     /// returns another such factory). Maps function id → produced

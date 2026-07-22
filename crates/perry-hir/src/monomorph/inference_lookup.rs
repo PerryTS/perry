@@ -8,7 +8,7 @@ pub(crate) struct FuncInfo {
     // self-describing record + future lookups.
     #[allow(dead_code)]
     pub(crate) id: FuncId,
-    pub(crate) type_params: Vec<perry_types::TypeParam>,
+    pub(crate) type_params: Vec<crate::types::TypeParam>,
     pub(crate) params: Vec<Param>,
     pub(crate) return_type: Type,
 }
@@ -20,7 +20,7 @@ pub(crate) struct ClassInfo {
     // mirrored copy is currently unread. Kept for the self-describing record.
     #[allow(dead_code)]
     pub(crate) name: String,
-    pub(crate) type_params: Vec<perry_types::TypeParam>,
+    pub(crate) type_params: Vec<crate::types::TypeParam>,
     pub(crate) constructor_params: Option<Vec<Param>>,
 }
 

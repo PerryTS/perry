@@ -1,8 +1,8 @@
 //! TypeScript namespace → synthetic-class lowering — extracted from
 //! `lower/module_decl.rs` (pure mechanical split, no logic changes).
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::*;

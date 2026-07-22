@@ -3,8 +3,8 @@
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
+use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, UnaryOp};
-use perry_types::Type;
 
 use crate::expr::{
     emit_jsvalue_slot_store_on_block, i32_to_nanbox, lower_expr, lower_expr_as_i32,

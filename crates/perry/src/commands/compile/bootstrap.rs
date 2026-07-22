@@ -163,12 +163,12 @@ pub(super) fn rerun_collect_with_class_field_types(
     if ctx.native_modules.len() <= 1 {
         return Ok(());
     }
-    let mut field_map: HashMap<String, Vec<(String, perry_types::Type)>> = HashMap::new();
+    let mut field_map: HashMap<String, Vec<(String, perry_hir::types::Type)>> = HashMap::new();
     let mut accessor_map: HashMap<String, perry_hir::ClassAccessorNames> = HashMap::new();
     let mut parent_map: HashMap<String, String> = HashMap::new();
     for hir_module in ctx.native_modules.values() {
         for class in &hir_module.classes {
-            let fields: Vec<(String, perry_types::Type)> = class
+            let fields: Vec<(String, perry_hir::types::Type)> = class
                 .fields
                 .iter()
                 .map(|f| (f.name.clone(), f.ty.clone()))

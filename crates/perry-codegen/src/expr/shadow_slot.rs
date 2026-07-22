@@ -5,8 +5,8 @@
 //! `crate::expr::X` call paths resolve unchanged.
 use super::*;
 
+use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr};
-use perry_types::Type as HirType;
 
 use crate::types::{I32, I64, PTR};
 

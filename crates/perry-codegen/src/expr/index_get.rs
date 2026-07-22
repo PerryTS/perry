@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr};
-use perry_types::Type as HirType;
 
 use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
@@ -1543,7 +1543,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_ty = crate::type_analysis::static_type_of(ctx, object);
             let recv_unknown = matches!(
                 recv_ty,
-                None | Some(perry_types::Type::Any) | Some(perry_types::Type::Unknown)
+                None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
             );
             // #5525: route every non-static-string/symbol read on an unknown
             // receiver through `js_dyn_index_get` (numeric, runtime-string, and

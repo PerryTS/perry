@@ -1,6 +1,6 @@
 use super::*;
 use crate::ir::Module;
-use perry_types::Type;
+use crate::types::Type;
 
 #[test]
 fn resolve_string_literal() {
@@ -495,14 +495,14 @@ fn collect_consts_skips_mutated() {
     m.init.push(Stmt::Let {
         id: 1,
         name: "stable".into(),
-        ty: perry_types::Type::String,
+        ty: crate::types::Type::String,
         mutable: false,
         init: Some(Expr::String("./a.ts".into())),
     });
     m.init.push(Stmt::Let {
         id: 2,
         name: "mutated".into(),
-        ty: perry_types::Type::String,
+        ty: crate::types::Type::String,
         mutable: false,
         init: Some(Expr::String("./b.ts".into())),
     });
@@ -523,14 +523,14 @@ fn collect_includes_unreassigned_let_but_drops_reassigned() {
     m.init.push(Stmt::Let {
         id: 1,
         name: "stableLet".into(),
-        ty: perry_types::Type::String,
+        ty: crate::types::Type::String,
         mutable: true,
         init: Some(Expr::String("./a.ts".into())),
     });
     m.init.push(Stmt::Let {
         id: 2,
         name: "reassignedLet".into(),
-        ty: perry_types::Type::String,
+        ty: crate::types::Type::String,
         mutable: true,
         init: Some(Expr::String("./b.ts".into())),
     });
@@ -550,7 +550,7 @@ fn resolve_unreassigned_let_ternary_union() {
     m.init.push(Stmt::Let {
         id: 5,
         name: "p".into(),
-        ty: perry_types::Type::String,
+        ty: crate::types::Type::String,
         mutable: true,
         init: Some(Expr::Conditional {
             condition: Box::new(Expr::Bool(true)),

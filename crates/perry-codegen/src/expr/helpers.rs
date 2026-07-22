@@ -3,8 +3,8 @@
 //! issue #1098. Pure move — no logic changes.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, UnaryOp};
-use perry_types::Type as HirType;
 
 use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;

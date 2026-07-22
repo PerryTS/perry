@@ -286,7 +286,7 @@ pub(crate) fn extract_widget_set_hidden_target(e: &Expr) -> Option<(LocalId, boo
 
 pub(crate) fn walk_for_funcref_calls_in_closures_in_stmts(
     stmts: &[Stmt],
-    out: &mut std::collections::HashSet<perry_types::FuncId>,
+    out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     for stmt in stmts {
         walk_for_funcref_calls_in_closures_in_stmt(stmt, out);
@@ -295,7 +295,7 @@ pub(crate) fn walk_for_funcref_calls_in_closures_in_stmts(
 
 pub(crate) fn walk_for_funcref_calls_in_closures_in_stmt(
     stmt: &Stmt,
-    out: &mut std::collections::HashSet<perry_types::FuncId>,
+    out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
         Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
@@ -323,7 +323,7 @@ pub(crate) fn walk_for_funcref_calls_in_closures_in_stmt(
 
 pub(crate) fn walk_for_funcref_calls_in_closures_in_expr(
     e: &Expr,
-    out: &mut std::collections::HashSet<perry_types::FuncId>,
+    out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     if let Expr::Closure { body, .. } = e {
         walk_for_funcref_calls_in_body(body, out);
@@ -353,7 +353,7 @@ pub(crate) fn walk_for_funcref_calls_in_closures_in_expr(
 /// which functions are called transitively inside a closure body.
 pub(crate) fn walk_for_funcref_calls_in_body(
     stmts: &[Stmt],
-    out: &mut std::collections::HashSet<perry_types::FuncId>,
+    out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     for stmt in stmts {
         walk_for_funcref_calls_in_body_stmt(stmt, out);
@@ -362,7 +362,7 @@ pub(crate) fn walk_for_funcref_calls_in_body(
 
 pub(crate) fn walk_for_funcref_calls_in_body_stmt(
     stmt: &Stmt,
-    out: &mut std::collections::HashSet<perry_types::FuncId>,
+    out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
         Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
@@ -390,7 +390,7 @@ pub(crate) fn walk_for_funcref_calls_in_body_stmt(
 
 pub(crate) fn walk_for_funcref_calls_in_body_expr(
     e: &Expr,
-    out: &mut std::collections::HashSet<perry_types::FuncId>,
+    out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     if let Expr::Call { callee, args, .. } = e {
         if let Expr::FuncRef(id) = callee.as_ref() {
@@ -423,7 +423,7 @@ pub(crate) fn walk_for_funcref_calls_in_body_expr(
 /// top-level (Phase A inlining sees these and inlines them).
 pub(crate) fn walk_for_funcref_calls_top_level_in_stmts(
     stmts: &[Stmt],
-    out: &mut std::collections::HashSet<perry_types::FuncId>,
+    out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     for stmt in stmts {
         if let Stmt::Expr(e) = stmt {

@@ -4,7 +4,7 @@
 //! visibility and are re-exported from `lower/mod.rs` so the existing
 //! `expr_*` submodules and the rest of the crate keep compiling unchanged.
 
-use perry_types::Type;
+use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use super::*;

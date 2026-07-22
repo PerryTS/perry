@@ -68,9 +68,9 @@
 //! kernel-bearing function. Larger trips would inflate code size faster
 //! than LLVM constant-folding can claw back.
 
+use perry_hir::types::{FuncId, LocalId};
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{CallArg, CompareOp, Expr, Module, Stmt, UpdateOp};
-use perry_types::{FuncId, LocalId};
 use std::collections::HashMap;
 
 pub(crate) mod escape_analysis;
@@ -974,8 +974,8 @@ fn refresh_in_expr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_hir::types::Type;
     use perry_hir::BinaryOp;
-    use perry_types::Type;
 
     fn ivar(id: LocalId) -> Expr {
         Expr::LocalGet(id)

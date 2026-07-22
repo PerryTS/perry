@@ -1,5 +1,5 @@
+use perry_hir::types::{FunctionType, Type};
 use perry_hir::{infer_expr_type, BinaryOp, Expr, HirTypeFacts};
-use perry_types::{FunctionType, Type};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone)]

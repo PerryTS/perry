@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
-use perry_types::{FuncId, GlobalId, LocalId, ObjectType, PropertyInfo, Type};
+use crate::types::{FuncId, GlobalId, LocalId, ObjectType, PropertyInfo, Type};
 
 use crate::ir::*;
 use crate::walker::walk_expr_children;
@@ -655,7 +655,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
                 .extern_function_return_type(name)
                 .filter(|ty| !matches!(ty, Type::Any | Type::Unknown))
                 .unwrap_or(return_type);
-            Type::Function(perry_types::FunctionType {
+            Type::Function(crate::types::FunctionType {
                 params: param_types
                     .iter()
                     .enumerate()
@@ -672,7 +672,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             is_async,
             is_generator,
             ..
-        } => Type::Function(perry_types::FunctionType {
+        } => Type::Function(crate::types::FunctionType {
             params: params
                 .iter()
                 .map(|param| (param.name.clone(), param.ty.clone(), false))
@@ -1393,7 +1393,7 @@ pub fn infer_refinable_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F)
 }
 
 fn function_type_for_return(return_type: Option<&Type>) -> Type {
-    Type::Function(perry_types::FunctionType {
+    Type::Function(crate::types::FunctionType {
         params: Vec::new(),
         return_type: Box::new(return_type.cloned().unwrap_or(Type::Any)),
         is_async: false,
@@ -1402,7 +1402,7 @@ fn function_type_for_return(return_type: Option<&Type>) -> Type {
 }
 
 fn function_type_from_decl(function: &Function) -> Type {
-    Type::Function(perry_types::FunctionType {
+    Type::Function(crate::types::FunctionType {
         params: function
             .params
             .iter()
@@ -1415,7 +1415,7 @@ fn function_type_from_decl(function: &Function) -> Type {
 }
 
 fn interface_method_type(method: &InterfaceMethod) -> Type {
-    Type::Function(perry_types::FunctionType {
+    Type::Function(crate::types::FunctionType {
         params: method.params.clone(),
         return_type: Box::new(method.return_type.clone()),
         is_async: false,

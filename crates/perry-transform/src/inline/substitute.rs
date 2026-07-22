@@ -1,6 +1,6 @@
+use perry_hir::types::LocalId;
 use perry_hir::walker::walk_expr_children_mut;
 use perry_hir::{Expr, Stmt};
-use perry_types::LocalId;
 use std::collections::HashMap;
 
 pub fn substitute_locals(

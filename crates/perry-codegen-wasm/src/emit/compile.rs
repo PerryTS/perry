@@ -654,7 +654,7 @@ impl WasmModuleEmitter {
                 }
                 seen_ffi.insert(name.clone());
                 let param_count = param_types.len();
-                let has_return = !matches!(return_type, perry_types::Type::Void);
+                let has_return = !matches!(return_type, perry_hir::types::Type::Void);
                 let params = vec![ValType::I64; param_count];
                 let results = if has_return {
                     vec![ValType::I64]

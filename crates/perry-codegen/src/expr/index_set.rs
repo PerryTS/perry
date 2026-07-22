@@ -866,7 +866,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_ty = crate::type_analysis::static_type_of(ctx, object);
             let recv_unknown = matches!(
                 recv_ty,
-                None | Some(perry_types::Type::Any) | Some(perry_types::Type::Unknown)
+                None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
             );
             // The index may be numeric, a runtime string, or (rarely) a runtime
             // symbol — `js_dyn_index_set` triages all three. We only keep the

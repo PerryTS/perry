@@ -6,7 +6,7 @@ fn empty_env() -> HirTypeEnv {
 }
 
 fn function_type(return_type: Type) -> Type {
-    Type::Function(perry_types::FunctionType {
+    Type::Function(crate::types::FunctionType {
         params: Vec::new(),
         return_type: Box::new(return_type),
         is_async: false,

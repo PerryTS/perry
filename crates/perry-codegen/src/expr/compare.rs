@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::{CompareOp, Expr};
-use perry_types::Type as HirType;
 
 use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_bigint_expr, is_bool_expr,

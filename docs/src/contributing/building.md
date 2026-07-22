@@ -116,8 +116,7 @@ perry/
 ├── crates/
 │   ├── perry/              # CLI driver
 │   ├── perry-parser/       # SWC TypeScript parser
-│   ├── perry-types/        # Type definitions
-│   ├── perry-hir/          # HIR and lowering
+│   ├── perry-hir/          # HIR types, data structures, and lowering
 │   ├── perry-transform/    # IR passes
 │   ├── perry-codegen/      # LLVM native codegen
 │   ├── perry-codegen-wasm/ # WebAssembly codegen (--target web / --target wasm)

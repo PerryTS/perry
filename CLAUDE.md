@@ -84,8 +84,7 @@ TypeScript (.ts) → Parse (SWC) → AST → Lower → HIR → Transform → Cod
 |-------|---------|
 | **perry** | CLI driver (parallel module codegen via rayon) |
 | **perry-parser** | SWC wrapper for TypeScript parsing |
-| **perry-types** | Type system definitions |
-| **perry-hir** | HIR data structures (`ir.rs`) and AST→HIR lowering (`lower.rs`) |
+| **perry-hir** | HIR types and data structures, plus AST→HIR lowering |
 | **perry-transform** | IR passes (closure conversion, async lowering, inlining) |
 | **perry-codegen** | LLVM-based native code generation |
 | **perry-runtime** | Runtime: value.rs, object.rs, array.rs, string.rs, gc.rs, arena.rs, thread.rs |

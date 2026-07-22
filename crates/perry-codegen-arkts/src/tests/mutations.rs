@@ -445,7 +445,7 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
     let onclick = Expr::Closure {
         func_id: 0,
         params: vec![],
-        return_type: perry_types::Type::Any,
+        return_type: perry_hir::types::Type::Any,
         body: vec![mutator_stmt(
             "widgetSetHidden",
             vec![Expr::LocalGet(target_id), Expr::Number(0.0)],

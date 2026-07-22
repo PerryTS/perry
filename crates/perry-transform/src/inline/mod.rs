@@ -52,8 +52,8 @@ pub(crate) use substitute::{
 pub(crate) use super_detect::MAX_INLINE_EXPR_RECURSION_DEPTH;
 pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexical_super};
 
+use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Class, Expr, Function, Module, Stmt};
-use perry_types::{FuncId, LocalId, Type};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Maximum number of statements for a function to be considered for inlining

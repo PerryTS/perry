@@ -304,7 +304,7 @@ pub(crate) fn collect_type_facts(
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
-    binding_types: &HashMap<u32, perry_types::Type>,
+    binding_types: &HashMap<u32, perry_hir::types::Type>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
@@ -421,7 +421,7 @@ pub(crate) fn collect_native_region_fact_graph(
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
-    binding_types: &HashMap<u32, perry_types::Type>,
+    binding_types: &HashMap<u32, perry_hir::types::Type>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
@@ -608,7 +608,7 @@ fn collect_array_facts(
     stmts: &[Stmt],
     params: &[perry_hir::Param],
     module_globals: &HashMap<u32, String>,
-    binding_types: &HashMap<u32, perry_types::Type>,
+    binding_types: &HashMap<u32, perry_hir::types::Type>,
 ) -> (ArrayFacts, EffectFacts, MaterializationHazardFacts) {
     let mut collector = ArrayFactCollector::default();
     collector.seed_params(params);
@@ -674,7 +674,7 @@ impl ArrayFactCollector {
     fn seed_module_bindings(
         &mut self,
         module_globals: &HashMap<u32, String>,
-        binding_types: &HashMap<u32, perry_types::Type>,
+        binding_types: &HashMap<u32, perry_hir::types::Type>,
     ) {
         for id in module_globals.keys() {
             if let Some(ty) = binding_types.get(id) {
@@ -683,7 +683,7 @@ impl ArrayFactCollector {
         }
     }
 
-    fn seed_declared_array_type(&mut self, id: u32, ty: &perry_types::Type) {
+    fn seed_declared_array_type(&mut self, id: u32, ty: &perry_hir::types::Type) {
         let kind = array_kind_from_declared_type(ty);
         if matches!(
             kind,
@@ -1257,32 +1257,40 @@ impl ArrayFactCollector {
     }
 }
 
-fn array_kind_from_declared_type(ty: &perry_types::Type) -> ArrayKindFact {
+fn array_kind_from_declared_type(ty: &perry_hir::types::Type) -> ArrayKindFact {
     match ty {
-        perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Int32) => {
+        perry_hir::types::Type::Array(elem)
+            if matches!(elem.as_ref(), perry_hir::types::Type::Int32) =>
+        {
             ArrayKindFact::PackedI32
         }
-        perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Named(name) if name == "PerryU32") => {
+        perry_hir::types::Type::Array(elem) if matches!(elem.as_ref(), perry_hir::types::Type::Named(name) if name == "PerryU32") => {
             ArrayKindFact::PackedU32
         }
-        perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Number) => {
+        perry_hir::types::Type::Array(elem)
+            if matches!(elem.as_ref(), perry_hir::types::Type::Number) =>
+        {
             ArrayKindFact::PackedF64
         }
-        perry_types::Type::Array(_) => ArrayKindFact::PackedValue,
+        perry_hir::types::Type::Array(_) => ArrayKindFact::PackedValue,
         // #6011: `new Array<number>(n)` declares/infers as
         // `Generic { base: "Array", type_args: [Number] }` rather than
         // `Array(Number)` — classify the generic spelling identically.
-        perry_types::Type::Generic { base, type_args }
+        perry_hir::types::Type::Generic { base, type_args }
             if base == "Array" && type_args.len() == 1 =>
         {
             match &type_args[0] {
-                perry_types::Type::Int32 => ArrayKindFact::PackedI32,
-                perry_types::Type::Named(name) if name == "PerryU32" => ArrayKindFact::PackedU32,
-                perry_types::Type::Number => ArrayKindFact::PackedF64,
+                perry_hir::types::Type::Int32 => ArrayKindFact::PackedI32,
+                perry_hir::types::Type::Named(name) if name == "PerryU32" => {
+                    ArrayKindFact::PackedU32
+                }
+                perry_hir::types::Type::Number => ArrayKindFact::PackedF64,
                 _ => ArrayKindFact::PackedValue,
             }
         }
-        perry_types::Type::Generic { base, .. } if base == "Array" => ArrayKindFact::PackedValue,
+        perry_hir::types::Type::Generic { base, .. } if base == "Array" => {
+            ArrayKindFact::PackedValue
+        }
         _ => ArrayKindFact::Unknown,
     }
 }
@@ -1500,8 +1508,8 @@ fn meet_declared_array_kind(declared: ArrayKindFact, init: ArrayKindFact) -> Arr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_hir::types::Type;
     use perry_hir::BinaryOp;
-    use perry_types::Type;
 
     fn const_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {

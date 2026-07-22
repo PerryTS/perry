@@ -40,7 +40,7 @@ mod ui_method_map;
 
 // Shared prelude — each sibling re-imports these via `use super::*;`.
 use perry_hir::ir::*;
-use perry_types::{FuncId, GlobalId, LocalId};
+use perry_hir::types::{FuncId, GlobalId, LocalId};
 use std::collections::BTreeMap;
 use wasm_encoder::{
     CodeSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,

@@ -1,6 +1,6 @@
 use perry_api_manifest::{NativeAbiType, NativePodAbi};
+use perry_hir::types::{ObjectType, Type};
 use perry_hir::Expr;
-use perry_types::{ObjectType, Type};
 
 use crate::expr::FnCtx;
 use crate::types::{DOUBLE, F32, I32, I64};

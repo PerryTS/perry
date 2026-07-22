@@ -10,9 +10,9 @@ pub(crate) use crate::type_analysis_facts::{
     hir_inferred_static_type_from_locals, CodegenTypeFacts,
 };
 #[cfg(test)]
-use perry_hir::Expr;
+use perry_hir::types::Type as HirType;
 #[cfg(test)]
-use perry_types::Type as HirType;
+use perry_hir::Expr;
 
 // Class-field layout / declared-type resolution lives in a sibling module
 // (file-size gate). Re-exported here so existing `type_analysis::*` call

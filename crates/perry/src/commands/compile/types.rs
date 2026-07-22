@@ -717,7 +717,7 @@ pub struct CompilationContext {
     /// elsewhere) silently iterates 0 times because the iterable's static
     /// type is unknown and the `SetValues`/`MapEntries` wrap is skipped at
     /// `lower_decl.rs:3737-3747`. See ECS demo-simple repro / #412.
-    pub cross_module_class_field_types: HashMap<String, Vec<(String, perry_types::Type)>>,
+    pub cross_module_class_field_types: HashMap<String, Vec<(String, perry_hir::types::Type)>>,
     /// Cross-module class accessor names collected alongside field types.
     /// HIR lowering uses this to avoid inferring subclass `this.x = ...`
     /// constructor writes as data fields when `x` is an inherited accessor

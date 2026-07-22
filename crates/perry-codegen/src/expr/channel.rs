@@ -35,10 +35,10 @@ pub(crate) fn variant_name(e: &Expr) -> String {
 /// the outer record is still pre-shaped, and nested values go through
 /// `parse_value_generic` inside `parse_object_shaped`.
 pub(crate) fn extract_array_of_object_shape(
-    ty: &perry_types::Type,
+    ty: &perry_hir::types::Type,
     ordered_keys: Option<&[String]>,
 ) -> Option<(Vec<u8>, u32)> {
-    use perry_types::Type;
+    use perry_hir::types::Type;
     let elem = match ty {
         Type::Array(inner) => &**inner,
         Type::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
