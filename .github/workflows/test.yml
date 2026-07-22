@@ -55,6 +55,31 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Changeset gate: PRs touching crates/ must ship changelog.d/<PR>-<slug>.md
+  # (see changelog.d/README.md; fragments fold into GitHub Release notes at
+  # tag time via scripts/cut_release_notes.sh — CHANGELOG.md is frozen).
+  # Standalone job, NOT a step inside `lint`, so it can be its own required
+  # status check: lint carries unrelated red debt that gets admin-bypassed,
+  # and this gate must not ride along with that. The `skip-changelog` label
+  # skips it (the `labeled` trigger above refires the workflow, and a skipped
+  # required check counts as satisfied).
+  # ---------------------------------------------------------------------------
+  changeset-gate:
+    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require a changelog.d/ fragment for crates/ changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate -q '.[].filename')
+          echo "$files" | grep -q '^crates/' || { echo "No crates/ changes — gate not applicable."; exit 0; }
+          echo "$files" | grep -q '^changelog\.d/' && exit 0
+          echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
+          exit 1
+
+  # ---------------------------------------------------------------------------
   # Lint: cargo fmt --check (formatting gate for every PR)
   # ---------------------------------------------------------------------------
   lint:
@@ -113,23 +138,6 @@ jobs:
       # Allowlist + exclusions live in the script.
       - name: File size limit
         run: ./scripts/check_file_size.sh
-
-      # Changeset gate: every PR touching crates/ must ship its own
-      # changelog fragment (changelog.d/<PR>-<slug>.md, see the README
-      # there). Fragments are folded into GitHub Release notes at tag
-      # time (scripts/cut_release_notes.sh); CHANGELOG.md is frozen.
-      # Escape hatch: the `skip-changelog` label (re-run the job after
-      # applying it).
-      - name: Changeset fragment gate
-        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate -q '.[].filename')
-          echo "$files" | grep -q '^crates/' || { echo "No crates/ changes — gate not applicable."; exit 0; }
-          echo "$files" | grep -q '^changelog\.d/' && exit 0
-          echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
-          exit 1
 
       # GC write-barrier store-site inventory: every raw heap-slot store in
       # perry-codegen / perry-runtime / perry-stdlib must be barriered or
