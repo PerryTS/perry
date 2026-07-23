@@ -1366,6 +1366,15 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
         }
         GcRewriteDescriptorKind::Object => {
             visit_gc_layout_slot_descriptors(header, &mut visit);
+            // #6759 Phase B: the per-object meta record is a GC allocation
+            // reachable ONLY through this header slot — a raw-pointer child
+            // edge exactly like `keys_array`'s prefix slot (marked live here,
+            // rewritten when the record itself is evacuated). The accessor
+            // returns `None` for RegExp headers, whose bytes at the meta
+            // offset are native data.
+            if let Some(slot) = crate::object::gc_object_meta_slot(user_ptr as usize) {
+                visit(fixed_slot(slot));
+            }
             crate::object::visit_overflow_field_slots_mut(user_ptr as usize, |slot| {
                 visit(fixed_slot(slot));
             });
@@ -1480,6 +1489,13 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
         GcRewriteDescriptorKind::NativePodView => {
             let view = user_ptr as *mut crate::native_arena::NativePodViewHeader;
             visit(fixed_slot(&mut (*view).owner as *mut _ as *mut u64));
+        }
+        GcRewriteDescriptorKind::ObjectMeta => {
+            // #6759 Phase B: the recorded custom `[[Prototype]]` is a live
+            // reference (NaN-boxed pointer, raw pointer, or the TAG_NULL /
+            // 0-unset sentinels, which the slot visitor ignores).
+            let meta = user_ptr as *mut crate::object::ObjectMeta;
+            visit(fixed_slot(&mut (*meta).prototype as *mut u64));
         }
         GcRewriteDescriptorKind::Leaf => {}
     }

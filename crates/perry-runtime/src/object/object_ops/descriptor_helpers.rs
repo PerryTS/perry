@@ -117,6 +117,203 @@ pub(crate) unsafe fn registered_buffer_index_own_property_present(
 /// `HasProperty` then `Get`, so an inherited `value`/`get`/... counts as
 /// present (e.g. `Object.defineProperty(o, k, child)` where `child`'s prototype
 /// carries `value`). `descriptor_value` is the NaN-boxed descriptor object.
+// ─── #6748 follow-up: single-pass descriptor decode ──────────────────────────
+// `ToPropertyDescriptor` reads up to 6 fields; the per-field helpers below
+// each allocate the field-name string and run a full `HasProperty`/`[[Get]]`
+// (absent fields walk the prototype chain), so one defineProperty paid ~10
+// such probes. For the overwhelmingly-common descriptor — a plain object
+// literal with the default prototype and no accessor-backed fields — a single
+// walk of its own keys answers everything. `try_decode_descriptor` returns
+// `None` whenever any spec-visible subtlety could apply (closure/exotic/class
+// receivers, custom [[Prototype]], accessor-backed fields, a polluted
+// `Object.prototype`), and callers keep the general per-field path.
+
+pub(crate) const DESC_VALUE: usize = 0;
+pub(crate) const DESC_GET: usize = 1;
+pub(crate) const DESC_SET: usize = 2;
+pub(crate) const DESC_WRITABLE: usize = 3;
+pub(crate) const DESC_ENUMERABLE: usize = 4;
+pub(crate) const DESC_CONFIGURABLE: usize = 5;
+
+pub(crate) struct DescView {
+    present: [bool; 6],
+    vals: [crate::value::JSValue; 6],
+}
+
+impl DescView {
+    #[inline]
+    pub(crate) fn has(&self, f: usize) -> bool {
+        self.present[f]
+    }
+    /// Field value; `undefined` when absent (matching the per-field readers).
+    #[inline]
+    pub(crate) fn read(&self, f: usize) -> crate::value::JSValue {
+        self.vals[f]
+    }
+}
+
+#[inline]
+fn desc_field_index(b: &[u8]) -> Option<usize> {
+    match b {
+        b"value" => Some(DESC_VALUE),
+        b"get" => Some(DESC_GET),
+        b"set" => Some(DESC_SET),
+        b"writable" => Some(DESC_WRITABLE),
+        b"enumerable" => Some(DESC_ENUMERABLE),
+        b"configurable" => Some(DESC_CONFIGURABLE),
+        _ => None,
+    }
+}
+
+/// Does `Object.prototype` carry any of the 6 descriptor field names (own key
+/// or any descriptor/accessor installed on it)? Pollution like
+/// `Object.prototype.enumerable = true` is spec-visible through
+/// `ToPropertyDescriptor`'s inherited-field reads, so a polluted prototype
+/// forces the general path.
+unsafe fn object_prototype_has_desc_field() -> bool {
+    let op = crate::object::builtin_prototype_value("Object");
+    let ptr = extract_obj_ptr(op);
+    if ptr.is_null() {
+        return false;
+    }
+    // NOTE: builtin init legitimately installs (non-field-named) descriptors
+    // on Object.prototype, so the per-object flag is no signal here. Every own
+    // install — data write, defineProperty accessor, builtin getter — mirrors
+    // its key into keys_array, so scanning it for the 6 names is sufficient.
+    let keys = (*(ptr as *const ObjectHeader)).keys_array;
+    match crate::value::addr_class::try_read_gc_header(keys as usize) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+        Some(_) => return true, // unexpected shape — be conservative
+        None => return false,   // no keys array — nothing own
+    }
+    let key_count = crate::array::js_array_length(keys) as usize;
+    let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..key_count.min(slot_len) {
+        let stored = crate::value::JSValue::from_bits((*slots.add(i)).to_bits());
+        if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
+            if desc_field_index(b).is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Single-pass decode of `descriptor_value`'s 6 `ToPropertyDescriptor` fields.
+/// `Some(view)` is exactly equivalent to running `desc_has_field` /
+/// `desc_read_field` per field; `None` means the caller must use those.
+pub(crate) unsafe fn try_decode_descriptor(descriptor_value: f64) -> Option<DescView> {
+    let jv = crate::value::JSValue::from_bits(descriptor_value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let addr = jv.as_pointer::<u8>() as usize;
+    match crate::value::addr_class::try_read_gc_header(addr) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        _ => return None,
+    }
+    // RegExp cells are OBJECT-typed exotics; class instances can carry
+    // prototype getters named like a field; accessor-backed own fields
+    // (`get value() {…}` in the literal) fire on [[Get]]; a custom
+    // [[Prototype]] contributes inherited fields. All → general path.
+    if super::super::exotic_expando::exotic_expando_kind(addr).is_some() {
+        return None;
+    }
+    let obj = addr as *const ObjectHeader;
+    // A nonzero class_id is usually just a LITERAL SHAPE id (every object
+    // literal gets one) — only a real class with a prototype surface (vtable
+    // methods/getters, `C.prototype.x = …` assignments, or a parent chain)
+    // could contribute inherited/accessor-backed descriptor fields. Literal
+    // shapes have none of those registries populated, so three cheap misses
+    // admit them; any registered surface falls back to the general path.
+    let class_id = (*obj).class_id;
+    if class_id != 0 {
+        if super::super::class_registry::get_parent_class_id(class_id).is_some() {
+            return None;
+        }
+        if super::super::class_registry::CLASS_VTABLE_REGISTRY
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|m| m.contains_key(&class_id)))
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        if super::super::class_registry::CLASS_PROTOTYPE_METHODS
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|m| m.contains_key(&class_id)))
+            .unwrap_or(false)
+        {
+            return None;
+        }
+    }
+    if crate::object::descriptor_state::object_has_descriptors(addr) {
+        return None;
+    }
+    if super::super::prototype_chain::object_static_prototype(addr).is_some() {
+        return None;
+    }
+
+    const UNDEF: u64 = crate::value::TAG_UNDEFINED;
+    let mut view = DescView {
+        present: [false; 6],
+        vals: [crate::value::JSValue::from_bits(UNDEF); 6],
+    };
+    let keys = (*obj).keys_array;
+    if !keys.is_null() {
+        match crate::value::addr_class::try_read_gc_header(keys as usize) {
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+            _ => return None, // corrupted keys slot — let the guarded path cope
+        }
+        let key_count = crate::array::js_array_length(keys) as usize;
+        let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..key_count.min(slot_len) {
+            let stored = crate::value::JSValue::from_bits((*slots.add(i)).to_bits());
+            if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
+                if let Some(fi) = desc_field_index(b) {
+                    if !view.present[fi] {
+                        view.present[fi] = true;
+                        view.vals[fi] = js_object_get_field(obj, i as u32);
+                    }
+                }
+            }
+        }
+    }
+    // Absent fields may still be inherited through the (default) prototype.
+    if !view.present.iter().all(|&p| p) && object_prototype_has_desc_field() {
+        return None;
+    }
+    Some(view)
+}
+
+/// `validate_property_descriptor`, view form (see the f64 form below).
+pub(crate) unsafe fn validate_property_descriptor_view(view: &DescView) {
+    let has_get = view.has(DESC_GET);
+    let has_set = view.has(DESC_SET);
+    if (has_get || has_set) && (view.has(DESC_VALUE) || view.has(DESC_WRITABLE)) {
+        throw_object_type_error(
+            b"Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, #<Object>",
+        );
+    }
+    if has_get {
+        let g = view.read(DESC_GET);
+        if !g.is_undefined() && !value_is_callable(f64::from_bits(g.bits())) {
+            let s = describe_value_for_type_error(f64::from_bits(g.bits()));
+            throw_object_type_error_with_suffix("Getter must be a function: ", &s);
+        }
+    }
+    if has_set {
+        let s_field = view.read(DESC_SET);
+        if !s_field.is_undefined() && !value_is_callable(f64::from_bits(s_field.bits())) {
+            let s = describe_value_for_type_error(f64::from_bits(s_field.bits()));
+            throw_object_type_error_with_suffix("Setter must be a function: ", &s);
+        }
+    }
+}
+
 pub(crate) unsafe fn desc_has_field(descriptor_value: f64, name: &[u8]) -> bool {
     // A function object used as a descriptor (`Object.defineProperty(o, k,
     // funObj)`, test262 15.2.3.6-3-139-1 …) is a closure, not an
@@ -296,6 +493,7 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     key: *const crate::StringHeader,
     key_name: &str,
     descriptor_value: f64,
+    desc_view: Option<&DescView>,
 ) {
     if obj.is_null() || (obj as usize) <= 0x10000 {
         return;
@@ -336,7 +534,14 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
-    validate_nonconfigurable_redefine(key_name, attrs, cur_accessor, cur_value, descriptor_value);
+    validate_nonconfigurable_redefine(
+        key_name,
+        attrs,
+        cur_accessor,
+        cur_value,
+        descriptor_value,
+        desc_view,
+    );
 }
 
 /// The non-configurable branch of `ValidateAndApplyPropertyDescriptor`, factored
@@ -352,19 +557,40 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     cur_accessor: Option<AccessorDescriptor>,
     cur_value: f64,
     descriptor_value: f64,
+    desc_view: Option<&DescView>,
 ) {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     let desc_ptr = extract_obj_ptr(descriptor_value);
-    if desc_ptr.is_null() {
+    if desc_ptr.is_null() && desc_view.is_none() {
         return;
     }
     let reject = || throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
 
+    let view_index = |name: &[u8]| -> usize {
+        match name {
+            b"value" => DESC_VALUE,
+            b"get" => DESC_GET,
+            b"set" => DESC_SET,
+            b"writable" => DESC_WRITABLE,
+            b"enumerable" => DESC_ENUMERABLE,
+            _ => DESC_CONFIGURABLE,
+        }
+    };
     // `ToPropertyDescriptor` field presence is HasProperty (own OR inherited).
-    let has_field = |name: &[u8]| -> bool { desc_has_field(descriptor_value, name) };
+    let has_field = |name: &[u8]| -> bool {
+        match desc_view {
+            Some(v) => v.has(view_index(name)),
+            None => desc_has_field(descriptor_value, name),
+        }
+    };
     let read = |name: &[u8]| -> crate::value::JSValue {
-        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k)
+        match desc_view {
+            Some(v) => v.read(view_index(name)),
+            None => {
+                let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k)
+            }
+        }
     };
     let read_bool = |name: &[u8]| -> Option<bool> {
         if !has_field(name) {

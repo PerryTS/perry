@@ -1602,9 +1602,18 @@ pub(crate) fn lower_typed_string_body(
     lower_typed_string_body_with_seed_locals(blk, params, body, HashMap::new())
 }
 
-fn lower_typed_f64_receiver_field(blk: &mut crate::block::LlBlock, field_index: u32) -> String {
+fn lower_typed_f64_receiver_field(
+    blk: &mut crate::block::LlBlock,
+    field_index: u32,
+    header_skip: u64,
+) -> String {
     let obj_ptr = blk.inttoptr(crate::types::I64, "%this_obj");
-    let fields_base = blk.gep(crate::types::I8, &obj_ptr, &[(crate::types::I64, "24")]);
+    let header_skip_str = header_skip.to_string();
+    let fields_base = blk.gep(
+        crate::types::I8,
+        &obj_ptr,
+        &[(crate::types::I64, &header_skip_str)],
+    );
     let field_index_str = field_index.to_string();
     let field_ptr = blk.gep(
         crate::types::DOUBLE,
@@ -1619,6 +1628,7 @@ fn lower_typed_f64_receiver_expr_with_env(
     expr: &Expr,
     locals: &HashMap<u32, String>,
     receiver: &TypedReceiverMethodInfo,
+    header_skip: u64,
 ) -> anyhow::Result<String> {
     match expr {
         Expr::Number(n) => Ok(crate::nanbox::double_literal(*n)),
@@ -1633,22 +1643,34 @@ fn lower_typed_f64_receiver_expr_with_env(
             let Some(field_index) = receiver.field_index(property) else {
                 anyhow::bail!("typed-f64 receiver clone cannot lower unproven receiver field")
             };
-            Ok(lower_typed_f64_receiver_field(blk, field_index))
+            Ok(lower_typed_f64_receiver_field(
+                blk,
+                field_index,
+                header_skip,
+            ))
         }
         Expr::Unary {
             op: UnaryOp::Pos,
             operand,
-        } => lower_typed_f64_receiver_expr_with_env(blk, operand, locals, receiver),
+        } => lower_typed_f64_receiver_expr_with_env(blk, operand, locals, receiver, header_skip),
         Expr::Unary {
             op: UnaryOp::Neg,
             operand,
         } => {
-            let v = lower_typed_f64_receiver_expr_with_env(blk, operand, locals, receiver)?;
+            let v = lower_typed_f64_receiver_expr_with_env(
+                blk,
+                operand,
+                locals,
+                receiver,
+                header_skip,
+            )?;
             Ok(blk.fneg(&v))
         }
         Expr::Binary { op, left, right } => {
-            let l = lower_typed_f64_receiver_expr_with_env(blk, left, locals, receiver)?;
-            let r = lower_typed_f64_receiver_expr_with_env(blk, right, locals, receiver)?;
+            let l =
+                lower_typed_f64_receiver_expr_with_env(blk, left, locals, receiver, header_skip)?;
+            let r =
+                lower_typed_f64_receiver_expr_with_env(blk, right, locals, receiver, header_skip)?;
             Ok(match op {
                 BinaryOp::Add => blk.fadd(&l, &r),
                 BinaryOp::Sub => blk.fsub(&l, &r),
@@ -1672,6 +1694,7 @@ pub(crate) fn lower_typed_f64_receiver_body(
     params: &[perry_hir::Param],
     body: &[Stmt],
     receiver: &TypedReceiverMethodInfo,
+    header_skip: u64,
 ) -> anyhow::Result<String> {
     let mut locals = HashMap::new();
     for param in params {
@@ -1689,7 +1712,13 @@ pub(crate) fn lower_typed_f64_receiver_body(
                 init: Some(expr),
                 ..
             } if is_f64_type(ty) => {
-                let value = lower_typed_f64_receiver_expr_with_env(blk, expr, &locals, receiver)?;
+                let value = lower_typed_f64_receiver_expr_with_env(
+                    blk,
+                    expr,
+                    &locals,
+                    receiver,
+                    header_skip,
+                )?;
                 locals.insert(*id, value);
             }
             _ => anyhow::bail!("typed-f64 receiver clone cannot lower non-straight-line statement"),
@@ -1697,7 +1726,7 @@ pub(crate) fn lower_typed_f64_receiver_body(
     }
     match last {
         Stmt::Return(Some(expr)) => {
-            lower_typed_f64_receiver_expr_with_env(blk, expr, &locals, receiver)
+            lower_typed_f64_receiver_expr_with_env(blk, expr, &locals, receiver, header_skip)
         }
         _ => anyhow::bail!("typed-f64 receiver clone requires a final return value"),
     }

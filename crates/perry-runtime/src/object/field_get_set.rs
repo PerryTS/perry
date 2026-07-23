@@ -18,6 +18,13 @@ use super::*;
 /// chain, so a subclass instance can only reach those members via the handle.
 pub(crate) const FETCH_SUBCLASS_HANDLE_FIELD: &[u8] = b"__perry_fetch_handle__";
 
+/// Has any fetch-subclass instance EVER stashed a native handle in this
+/// process? `fetch_subclass_handle_id` costs a key-string alloc + a full
+/// property read per call; the `in`-operator fast path (#6748) gates on this
+/// flag so the overwhelmingly-common no-fetch-subclass program never pays it.
+pub(crate) static FETCH_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// If `obj` (a raw heap object address) is a `class X extends Request/Response`
 /// instance, return the id of its underlying native fetch handle. Returns
 /// `None` for any non-object / non-subclass receiver, so callers can fall
@@ -120,6 +127,31 @@ mod get_field_by_name_tail;
 mod has_property;
 mod ic_miss;
 mod map_set_receiver;
+
+/// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
+/// cache backing `js_object_get_field_by_name`'s slow tail.
+pub(crate) const FIELD_CACHE_SIZE: usize = 1024;
+
+/// #6759 Phase A: property-lookup inline caches, grouped as the
+/// `field_lookup` field of [`crate::state::RuntimeState`]. Previously a
+/// function-local `thread_local!` in `get_field_by_name_tail` plus a module
+/// `thread_local!` in `has_property`; reach them via
+/// `crate::state::state().field_lookup`.
+pub(crate) struct FieldLookupCaches {
+    /// Fixed-size direct-mapped cache (no allocation, no HashMap): each
+    /// entry stores `(keys_ptr, key_hash, field_index)`. Copied-minor
+    /// nursery reset can reuse a keys-array address, so cache hits still
+    /// validate the key slot before returning a field.
+    pub(crate) field_cache: std::cell::UnsafeCell<[(usize, u32, u32); FIELD_CACHE_SIZE]>,
+}
+
+impl FieldLookupCaches {
+    pub(crate) fn new() -> Self {
+        FieldLookupCaches {
+            field_cache: std::cell::UnsafeCell::new([(0usize, 0u32, 0u32); FIELD_CACHE_SIZE]),
+        }
+    }
+}
 
 // Explicit named re-exports so existing `crate::object::…` / `super::…`
 // paths keep resolving (a glob re-export does not reliably propagate through

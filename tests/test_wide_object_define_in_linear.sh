@@ -92,6 +92,24 @@ console.log("nonextensible-new-throws", threw);
 // 6. `in` answers across the wide object.
 console.log("in-checks", "k3" in t, "longKey_2" in t, "absent_xyz" in t, "__esModule" in t);
 
+// 6b. `in` fast-path receiver-kind coverage: the ordinary-object fast path
+//     must not change answers for any receiver kind (RegExp cells are
+//     OBJECT-typed and must keep routing through the exotic arm).
+{
+  const rk: any[] = [];
+  const oo = { a: 1 }; rk.push("a" in oo, "b" in oo, "toString" in oo);
+  class K { x = 1; m() {} } const ki = new K(); rk.push("x" in ki, "m" in ki, "y" in ki);
+  const ch = Object.create({ pp: 7 }); rk.push("pp" in ch, "zz" in ch);
+  const ar = [1, 2]; rk.push(0 in ar, 2 in ar, "length" in ar, "map" in ar);
+  const dt = new Date(); rk.push("getTime" in dt, "nope" in dt);
+  const re = /x/; rk.push("lastIndex" in re, "exec" in re);
+  const mp = new Map([["k", 1]]); rk.push("size" in mp, "k" in mp);
+  const fr = Object.freeze({ fz: 1 }); rk.push("fz" in fr);
+  const nl = Object.create(null); nl.nk = 1; rk.push("nk" in nl, "toString" in nl);
+  rk.push("307" in { 307: true }, 307 in { 307: true });
+  console.log("receiver-kinds", rk.join(","));
+}
+
 // 7. Scaling sanity: 2400 getter defines (was ~527ms quadratic; linear is ~100ms).
 const big: any = {};
 const t0 = Date.now();

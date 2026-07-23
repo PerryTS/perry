@@ -163,6 +163,7 @@
 - [`perry audit --sbom`](cli/perry-audit-sbom.md)
 - [Host Allowlist (nativeLibrary, compilePackages)](cli/allow-perry-features.md)
 - [perry.toml Reference](cli/perry-toml.md)
+- [Privacy & Telemetry](cli/telemetry.md)
 
 ---
 
@@ -175,3 +176,4 @@
 
 - [Architecture](contributing/architecture.md)
 - [Building from Source](contributing/building.md)
+- [Releasing Perry](contributing/releasing.md)

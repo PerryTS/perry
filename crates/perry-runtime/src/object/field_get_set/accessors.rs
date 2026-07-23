@@ -387,7 +387,7 @@ pub(crate) unsafe fn primitive_object_prototype_accessor(
     name: &str,
     receiver: f64,
 ) -> Option<JSValue> {
-    if !ACCESSORS_IN_USE.with(|c| c.get()) {
+    if !crate::state::state().descriptors.accessors_in_use.get() {
         return None;
     }
     let object_ctor = super::super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
@@ -449,7 +449,7 @@ pub(crate) unsafe fn primitive_builtin_prototype_property(
     // with the ORIGINAL primitive receiver — boxed/raw per getter strictness
     // inside `invoke_accessor_getter` — not the prototype object the accessor
     // happens to live on (which a plain field read below would hand it).
-    if ACCESSORS_IN_USE.with(|c| c.get()) {
+    if crate::state::state().descriptors.accessors_in_use.get() {
         let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let key_len = (*key).byte_len as usize;
         if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)) {
