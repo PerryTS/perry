@@ -127,6 +127,29 @@ fn http_outgoing_message_export_is_callable() {
     assert!(found, "http namespace keys should include OutgoingMessage");
 }
 
+#[test]
+fn util_is_array_export_records_its_node_arity() {
+    // Namespace reads (`util.isArray`) and named-import materialization
+    // (`import { isArray }`) intentionally converge on this same native-module
+    // property helper. The node-suite fixture exercises both source forms
+    // end-to-end; this unit test pins the shared closure metadata they consume.
+    let value = unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"util".as_ptr(),
+            "util".len(),
+            b"isArray".as_ptr(),
+            "isArray".len(),
+        )
+    };
+    let closure = crate::value::JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::closure::ClosureHeader>();
+
+    assert_eq!(
+        crate::object::builtin_closure_length(closure as usize),
+        Some(1)
+    );
+}
+
 fn boxed_ptr(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
 }

@@ -473,6 +473,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
+        ("util", "isArray") => Some(1),
         ("util", "debug" | "debuglog" | "inherits") => Some(2),
         ("console", "context") => Some(1),
         ("console", "createTask") => Some(0),
