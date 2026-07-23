@@ -197,6 +197,20 @@ pub(crate) fn is_timer_handle_method_key(key: &[u8]) -> bool {
     )
 }
 
+/// #6759 C3c: is `keys` safe to prime into a per-site PIC cache whose hit
+/// path does an UNVALIDATED compare-and-load? True only for
+/// `GC_FLAG_SHAPE_SHARED` arrays — those are shape-cache-resident
+/// (process-rooted, so the address can never be freed and recycled under a
+/// different shape). Conservative `false` for anything else.
+pub(crate) unsafe fn keys_cacheable_for_pic(keys: *const crate::array::ArrayHeader) -> bool {
+    if (keys as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+        && (*gc).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+}
+
 /// Monomorphic inline cache miss handler (issue #51).
 ///
 /// Called when the codegen-emitted shape check (`obj->keys_array == cache[0]`)
@@ -382,7 +396,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // would silently return the raw slot value instead of calling the
     // getter. The slow path through js_object_get_field_by_name handles
     // accessors correctly.
-    let can_cache = !ACCESSORS_IN_USE.with(|c| c.get());
+    let can_cache = !crate::state::state().descriptors.accessors_in_use.get();
     unsafe {
         // Issue #72: validate this really is a GC_TYPE_OBJECT before reading
         // (*obj).keys_array — otherwise an Array/String/Buffer/etc. receiver
@@ -410,6 +424,18 @@ pub extern "C" fn js_object_get_field_ic_miss(
             let keys_data = (keys as *const u8).add(8) as *const f64;
             let alloc_limit =
                 std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+            // #6804: stamp the receiver's stable ShapeId at PIC-miss
+            // resolution, so the id-keyed FIELD_CACHE (and the future
+            // id-comparing PIC) see a stamped object from its first read.
+            if (*obj).class_id == 0
+                && !crate::object::shapes::is_shape_id((*obj).parent_class_id)
+                && !crate::regex::regex_header_has_magic(obj as *const crate::regex::RegExpHeader)
+            {
+                let id = crate::object::shapes::shape_id_for_keys_ensure(keys, key_count as u32);
+                if id != 0 {
+                    (*(obj as *mut ObjectHeader)).parent_class_id = id;
+                }
+            }
             for i in 0..key_count {
                 let k_bits = (*keys_data.add(i)).to_bits();
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
@@ -419,7 +445,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                         // slow path which handles overflow correctly.
                         break;
                     }
-                    // The codegen IC fast path computes `obj + 24 + slot*8`
+                    // The codegen IC fast path computes `obj + object_header_size + slot*8`
                     // and does a direct load. Any inline slot (`i <
                     // alloc_limit`) is reachable via that path, so cache
                     // every inline slot — including the ones at index >= 8
@@ -432,8 +458,28 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     // perf-comprehensive's hot loops that path was hit
                     // ~900k times per run (40% inclusive samples per
                     // perfcomp.profile).
-                    (*cache)[0] = keys as i64;
-                    (*cache)[1] = i as i64;
+                    //
+                    // #6804: a stamped plain receiver primes an ID token
+                    // (`stamp | PIC_ID_TOKEN_BIT`, matching the emitted
+                    // PIC's discriminated compare). Ids are never reused,
+                    // so id tokens are immune to the address-recycling ABA
+                    // that keys-pointer tokens have — which also makes
+                    // OWNED keys arrays safely cacheable again for plain
+                    // objects. #6759 C3c: keys-POINTER tokens stay
+                    // restricted to SHAPE-SHARED arrays (literal shapes,
+                    // class-keys arrays — shape-cache-resident,
+                    // process-rooted, address-stable), because that compare
+                    // is unvalidated and a recycled owned-array address
+                    // would read the wrong slot.
+                    let stamp = (*obj).parent_class_id;
+                    if (*obj).class_id == 0 && crate::object::shapes::is_shape_id(stamp) {
+                        (*cache)[0] =
+                            (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+                        (*cache)[1] = i as i64;
+                    } else if keys_cacheable_for_pic(keys) {
+                        (*cache)[0] = keys as i64;
+                        (*cache)[1] = i as i64;
+                    }
                     let field_ptr = (obj as *const u8)
                         .add(std::mem::size_of::<ObjectHeader>() + i * 8)
                         as *const f64;
@@ -738,4 +784,29 @@ pub extern "C" fn js_private_guard(
         throw_private_type_error("Invalid private member operation for its kind");
     }
     obj
+}
+
+#[cfg(test)]
+mod c3c_pic_tests {
+    /// #6759 C3c: the PIC only caches SHAPE-SHARED (process-rooted,
+    /// address-stable) keys arrays; an owned array's address can be
+    /// recycled under a different shape, which the unvalidated PIC hit
+    /// path cannot detect.
+    #[test]
+    fn pic_caches_only_shape_shared_keys() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let keys = crate::array::js_array_alloc(4);
+            assert!(
+                !super::keys_cacheable_for_pic(keys),
+                "a fresh owned keys array must not be PIC-cacheable"
+            );
+            let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            (*gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+            assert!(
+                super::keys_cacheable_for_pic(keys),
+                "a shape-shared keys array must stay PIC-cacheable"
+            );
+        }
+    }
 }

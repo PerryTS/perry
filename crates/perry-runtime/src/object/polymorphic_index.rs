@@ -211,7 +211,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
 ///
 /// Closes #471: codegen's previous IndexSet numeric-key fallback emitted
 /// an inline `obj+8+idx*8` store. That layout assumes an `ArrayHeader`
-/// (8-byte header) but `ObjectHeader` is 24 bytes followed by `max(field_count, 8)`
+/// (8-byte header) but `ObjectHeader` is `size_of::<ObjectHeader>()` bytes (target-dependent) followed by `max(field_count, 8)`
 /// inline slots, so any `idMap[i] = v` on an object with i ≥ 7 wrote past
 /// the object's allocation, corrupting whatever heap memory followed.
 /// In the @perryts/mongodb repro, that memory happened to be doc[0]'s

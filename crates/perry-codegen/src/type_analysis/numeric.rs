@@ -249,7 +249,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `sum + arr[i]` in a hot loop wraps the element
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, index } => {
             if receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(is_numeric_typed_array_class)
@@ -259,6 +259,18 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
+            // #6750 follow-up: a masked-index read covered by an ACTIVE
+            // masked-window fact (dense range-loop / straight-line-region
+            // fast copy) is a guard-proven numeric element load, even when
+            // the receiver's STATIC type is erased (`any` parameter).
+            // Without this, `n ^= S[x & 0xff]` inside a fast copy still
+            // routed through the BigInt-aware dynamic helpers. Facts are
+            // scope-managed by the versioned lowerings, so the answer is
+            // only `true` while a fast copy that proved the window is being
+            // lowered.
+            if crate::expr::masked_window_fact_for_index(ctx, *arr_id, index).is_some() {
+                return true;
+            }
             match ctx.local_types.get(arr_id) {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)

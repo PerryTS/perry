@@ -1212,8 +1212,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         };
                         if let Some(obj_ptr) = loop_fact_ptr {
                             let field_idx_str = field_index.to_string();
+                            let header_skip =
+                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
+                                    .to_string();
                             let blk = ctx.block();
-                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                             let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
                             let val = blk.load(DOUBLE, &field_ptr);
                             let fast = LoweredValue {

@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::fast_hash::{new_fast_key_hash_map, FastKeyHashMap};
+use crate::state::state;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -47,12 +48,46 @@ impl PropertyAttrs {
     }
 }
 
-thread_local! {
-    // Hasher: `FastKeyHasher` (FNV-1a) rather than std's SipHash `RandomState`.
-    // The key is `(owner_addr, key_string)` — a runtime heap pointer plus a
-    // program-supplied property name, so no external input reaches it and
-    // DoS-resistant hashing buys nothing on this hot property-access path.
-    pub(crate) static PROPERTY_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), PropertyAttrs>> = RefCell::new(new_fast_key_hash_map());
+/// #6759 Phase A: the descriptor side tables and their per-thread fast-path
+/// gates, grouped as the `descriptors` field of
+/// [`crate::state::RuntimeState`]. Previously four separate `thread_local!`s;
+/// reach them via `crate::state::state().descriptors` (one TLS fetch for the
+/// whole group).
+pub(crate) struct DescriptorTables {
+    /// Per-property attribute flags set by `Object.defineProperty` /
+    /// `Object.freeze` / `Object.seal`, keyed `(owner_addr, key_string)`.
+    ///
+    /// Hasher: `FastKeyHasher` (FNV-1a) rather than std's SipHash
+    /// `RandomState`. The key is a runtime heap pointer plus a
+    /// program-supplied property name, so no external input reaches it and
+    /// DoS-resistant hashing buys nothing on this hot property-access path.
+    pub(crate) property_descriptors: RefCell<FastKeyHashMap<(usize, String), PropertyAttrs>>,
+    /// Accessor descriptor storage: maps `(owner_addr, key_string)` to the
+    /// getter/setter closure bits. Same hasher rationale as
+    /// `property_descriptors`.
+    pub(crate) accessor_descriptors: RefCell<FastKeyHashMap<(usize, String), AccessorDescriptor>>,
+    /// Fast-path gate: `false` when no accessor descriptors have ever been
+    /// installed on this thread, so hot `js_object_get_field_by_name` /
+    /// `set_field_by_name` can skip the `accessor_descriptors` HashMap
+    /// lookup entirely.
+    pub(crate) accessors_in_use: Cell<bool>,
+    /// Fast-path gate for `property_descriptors` — flipped the first time
+    /// `Object.defineProperty` (or freeze/seal via `set_property_attrs`)
+    /// installs a per-property descriptor. Lets the hot object-write path
+    /// skip the `.to_string()` allocation required to look up a descriptor
+    /// that almost never exists.
+    pub(crate) property_attrs_in_use: Cell<bool>,
+}
+
+impl DescriptorTables {
+    pub(crate) fn new() -> Self {
+        DescriptorTables {
+            property_descriptors: RefCell::new(new_fast_key_hash_map()),
+            accessor_descriptors: RefCell::new(new_fast_key_hash_map()),
+            accessors_in_use: Cell::new(false),
+            property_attrs_in_use: Cell::new(false),
+        }
+    }
 }
 
 /// Accessor descriptor storage: maps (obj_ptr, key) -> (get_closure_bits, set_closure_bits).
@@ -64,22 +99,6 @@ thread_local! {
 pub(crate) struct AccessorDescriptor {
     pub get: u64, // NaN-boxed closure f64 bits, 0 = absent
     pub set: u64, // NaN-boxed closure f64 bits, 0 = absent
-}
-
-thread_local! {
-    // Hasher: `FastKeyHasher` (FNV-1a); see `PROPERTY_DESCRIPTORS` above for the
-    // same-shape `(owner_addr, key_string)` key and rationale.
-    pub(crate) static ACCESSOR_DESCRIPTORS: RefCell<FastKeyHashMap<(usize, String), AccessorDescriptor>> = RefCell::new(new_fast_key_hash_map());
-    /// Fast-path gate: `false` when no accessor descriptors have ever been installed
-    /// on this thread, so hot `js_object_get_field_by_name` / `set_field_by_name`
-    /// can skip the `ACCESSOR_DESCRIPTORS` HashMap lookup entirely.
-    pub(crate) static ACCESSORS_IN_USE: Cell<bool> = const { Cell::new(false) };
-    /// Fast-path gate for `PROPERTY_DESCRIPTORS` — flipped the first time
-    /// `Object.defineProperty` (or freeze/seal via `set_property_attrs`)
-    /// installs a per-property descriptor. Lets the hot object-write path
-    /// skip the `.to_string()` allocation required to look up a descriptor
-    /// that almost never exists.
-    pub(crate) static PROPERTY_ATTRS_IN_USE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Global monotonic flag: set once any accessor or property descriptor is
@@ -125,6 +144,21 @@ pub(crate) fn class_field_inline_guard_enabled() -> bool {
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.load(Ordering::Relaxed) == 0
 }
 
+#[cfg(test)]
+pub(crate) fn test_reset_class_field_inline_guard() {
+    PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(0, Ordering::Relaxed);
+    // Also clear the C5a per-key vetting sets (production-monotonic, so
+    // without this a key name reused across tests in one process would
+    // inherit an earlier test's declared-field / installed-key state and
+    // make the disable decision order-dependent (CodeRabbit on #6802).
+    if let Ok(mut guard) = DECLARED_FIELD_NAME_HASHES.write() {
+        guard.take();
+    }
+    if let Ok(mut guard) = PROTO_DESCRIPTOR_KEY_HASHES.write() {
+        guard.take();
+    }
+}
+
 /// #5654: flip the process-wide inline gate only when the descriptor target can
 /// intercept a `this.field` access that the inline precheck cannot reject on
 /// its own. Receiver-level installs are visible to the precheck via
@@ -146,13 +180,85 @@ pub(crate) fn class_field_inline_guard_enabled() -> bool {
 ///
 /// The prototype-registry probes scan by value (O(#classes)); descriptor
 /// installs are rare and never on the hot property path, so the scan cost is
-/// acceptable. Finer granularity (flip only when the key collides with a
-/// declared field of that class hierarchy) is possible follow-up work.
-pub(crate) fn disable_class_field_inline_guard_for_target(obj: usize) {
+/// acceptable.
+///
+/// #6759 C5a — per-KEY refinement (the follow-up the paragraph above used to
+/// promise): the inline fast path only ever compiles accesses to DECLARED
+/// instance fields, so a prototype-level install whose key names no declared
+/// field of any registered class cannot affect anything the inline path
+/// handles — babel-style method installs (`defineProperty(C.prototype,
+/// "render", …)`) no longer poison the process. The vetting set holds FNV
+/// hashes of every declared field name (harvested by
+/// `remember_class_keys_array` at class registration); a collision merely
+/// disables — never skips — so it stays conservative. Module-init ordering
+/// is covered in both directions: installs that precede a class's
+/// registration are recorded in [`PROTO_DESCRIPTOR_KEY_HASHES`] and
+/// retro-checked by [`note_declared_instance_field_name`] when the class
+/// arrives.
+pub(crate) fn disable_class_field_inline_guard_for_target(obj: usize, key: &str) {
     if crate::array::object_prototype_addr_matches(obj)
         || class_registry::is_registered_class_prototype_object(obj)
         || class_registry::class_id_for_decl_prototype_object(obj).is_some()
     {
+        let hash = super::key_bytes_hash(key.as_ptr(), key.len());
+        note_proto_descriptor_key_hash(hash);
+        if declared_field_name_hash_exists(hash) {
+            disable_class_field_inline_guard();
+        }
+    }
+}
+
+/// #6759 C5a: FNV hashes of every declared instance-field name across all
+/// registered classes. Written at class registration (cold), read at
+/// prototype-level descriptor installs (rare). Never pruned — class
+/// registrations are process-lifetime.
+static DECLARED_FIELD_NAME_HASHES: std::sync::RwLock<Option<std::collections::HashSet<u64>>> =
+    std::sync::RwLock::new(None);
+
+/// #6759 C5a: FNV hashes of every key installed on a prototype-level
+/// descriptor target, so a class that registers AFTER such an install can
+/// retro-trigger the disable (see
+/// [`disable_class_field_inline_guard_for_target`]).
+static PROTO_DESCRIPTOR_KEY_HASHES: std::sync::RwLock<Option<std::collections::HashSet<u64>>> =
+    std::sync::RwLock::new(None);
+
+fn declared_field_name_hash_exists(hash: u64) -> bool {
+    DECLARED_FIELD_NAME_HASHES
+        .read()
+        .map(|g| g.as_ref().is_some_and(|s| s.contains(&hash)))
+        // Lock poisoned: be conservative (disable rather than skip).
+        .unwrap_or(true)
+}
+
+fn note_proto_descriptor_key_hash(hash: u64) {
+    if let Ok(mut guard) = PROTO_DESCRIPTOR_KEY_HASHES.write() {
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(hash);
+    } else {
+        // Lock poisoned: the retro-check can no longer see this key —
+        // take the conservative disable now.
+        disable_class_field_inline_guard();
+    }
+}
+
+/// #6759 C5a: called by `remember_class_keys_array` for each declared
+/// instance-field name of a registering class. Records the name hash and
+/// retro-checks it against prototype-level descriptor keys installed
+/// earlier (which skipped the disable because no class had declared the
+/// name yet).
+pub(crate) fn note_declared_instance_field_name(name: &[u8]) {
+    let hash = super::key_bytes_hash(name.as_ptr(), name.len());
+    if let Ok(mut guard) = DECLARED_FIELD_NAME_HASHES.write() {
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(hash);
+    }
+    let installed_earlier = PROTO_DESCRIPTOR_KEY_HASHES
+        .read()
+        .map(|g| g.as_ref().is_some_and(|s| s.contains(&hash)))
+        .unwrap_or(true);
+    if installed_earlier {
         disable_class_field_inline_guard();
     }
 }
@@ -319,7 +425,18 @@ pub(crate) fn note_descriptor_target(obj: usize) {
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
-    PROPERTY_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
+    // #6759 Phase C2: the meta-record summary proves most misses without
+    // the `String` build + table probe (and shields a fresh object at a
+    // recycled address from a dead owner's not-yet-pruned entries).
+    if !may_have_descriptor_entry(obj, key, false) {
+        return None;
+    }
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow()
+        .get(&(obj, key.to_string()))
+        .copied()
 }
 
 /// Whether this specific object has ever had a property descriptor installed on
@@ -341,6 +458,132 @@ pub(crate) fn object_has_descriptors(obj: usize) -> bool {
         }
     }
     false
+}
+
+/// #6759 Phase C2: the summary bit for `key` in the owner's meta-record
+/// Bloom words (`ObjectMeta::{attr,accessor}_key_bits`) — same FNV key hash
+/// the Phase C1 shape records use. Install and probe must hash identical
+/// byte sequences, so both forms go through this one function.
+#[inline]
+fn descriptor_key_bit_bytes(key: &[u8]) -> u64 {
+    1u64 << (super::key_bytes_hash(key.as_ptr(), key.len()) & 63)
+}
+
+#[inline]
+fn descriptor_key_bit(key: &str) -> u64 {
+    descriptor_key_bit_bytes(key.as_bytes())
+}
+
+#[cfg(test)]
+pub(crate) fn test_descriptor_key_bit(key: &str) -> u64 {
+    descriptor_key_bit(key)
+}
+
+/// #6759 Phase C2: record `key` in the owner's per-object meta summary so
+/// hot-path probes for OTHER keys can skip the descriptor tables. No-op for
+/// owners that cannot carry a meta record (handle-band ids, typed arrays,
+/// RegExp, non-heap addresses) — probes for those stay conservative.
+///
+/// Invariant this maintains (relied on by [`may_have_descriptor_entry`]):
+/// every insert into `property_descriptors` / `accessor_descriptors` whose
+/// owner is meta-capable sets the key's bit first, so for such owners a
+/// clear bit — or a still-null meta record — proves the tables hold no
+/// entry for that key. The bits travel with the object (the meta record is
+/// GC-traced off the header and moves with its owner, exactly when the
+/// table entries are rekeyed by `scan_descriptor_roots_mut`), and a fresh
+/// object at a recycled address starts meta-null, so stale entries a dead
+/// owner left behind can no longer be misread as the new tenant's.
+fn note_meta_descriptor_key(owner: usize, key: &str, accessor: bool) {
+    unsafe {
+        if let Some(obj) = super::prototype_chain::meta_capable_object(owner) {
+            // No-move window: `object_meta_ensure` allocates, and a
+            // triggered collection could MOVE `owner` — installers
+            // (freeze/seal loops, defineProperty) hold raw owner pointers
+            // across repeated installs.
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            let meta = super::object_meta_ensure(obj);
+            let bit = descriptor_key_bit(key);
+            if accessor {
+                (*meta).accessor_key_bits |= bit;
+            } else {
+                (*meta).attr_key_bits |= bit;
+            }
+        }
+    }
+}
+
+/// #6759 Phase C2 per-key fast-path verdict: can the string-keyed
+/// descriptor tables hold an entry `(owner, key)`? `false` is
+/// authoritative (the probe is skipped); `true` means "probe the table"
+/// (a genuine entry, a Bloom collision, or a non-meta-capable owner).
+#[inline]
+pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
+    unsafe {
+        match super::prototype_chain::meta_capable_object(owner) {
+            Some(obj) => {
+                let meta = (*obj).meta;
+                if meta.is_null() {
+                    return false;
+                }
+                let word = if accessor {
+                    (*meta).accessor_key_bits
+                } else {
+                    (*meta).attr_key_bits
+                };
+                word & descriptor_key_bit(key) != 0
+            }
+            None => true,
+        }
+    }
+}
+
+/// #6759 Phase C2: can an OWN string-keyed descriptor (attr or accessor)
+/// cover the NaN-boxed key `key` on `addr`? Conservative `true` for
+/// non-string keys and non-meta-capable owners. Callers pair this with
+/// `object_has_descriptors` for the per-key refinement of that flag.
+unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(kb) = crate::string::js_string_key_bytes(
+        crate::value::JSValue::from_bits(key.to_bits()),
+        &mut sso,
+    ) else {
+        return true;
+    };
+    match super::prototype_chain::meta_capable_object(addr) {
+        Some(obj) => {
+            let meta = (*obj).meta;
+            if meta.is_null() {
+                return false;
+            }
+            let bit = descriptor_key_bit_bytes(kb);
+            ((*meta).attr_key_bits | (*meta).accessor_key_bits) & bit != 0
+        }
+        None => true,
+    }
+}
+
+/// #6759 Phase C2 owner-level verdict: can the tables hold ANY entry owned
+/// by `owner`? Gates the O(table-size) owner scans (`Object.keys` fast
+/// path, `accessor_descriptor_keys_for_obj`). Same trust model as the
+/// per-key form.
+#[inline]
+pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) -> bool {
+    unsafe {
+        match super::prototype_chain::meta_capable_object(owner) {
+            Some(obj) => {
+                let meta = (*obj).meta;
+                if meta.is_null() {
+                    return false;
+                }
+                if accessor {
+                    (*meta).accessor_key_bits != 0
+                } else {
+                    (*meta).attr_key_bits != 0
+                }
+            }
+            None => true,
+        }
+    }
 }
 
 /// #6084 (item 6): can anything intercept a plain-data write of `key` to the
@@ -383,8 +626,15 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
     // A descriptor exists SOMEWHERE. Vet this receiver and its prototype chain
     // instead of latching the whole process onto the slow path.
 
-    // Own accessor / non-writable descriptor on this exact object.
-    if object_has_descriptors(addr) {
+    // Own accessor / non-writable descriptor on this exact object. #6759
+    // Phase C2: the flag is object-level; the meta summary refines it
+    // per-KEY, so an object with a descriptor on one key (webpack's
+    // `defineProperty(exports, "__esModule", …)`) keeps the fast path for
+    // writes to its other keys. A clear pair of bits proves no own
+    // string-keyed entry covers THIS key (an own symbol-keyed descriptor
+    // cannot intercept a string-keyed write); prototype-level interception
+    // is still vetted below.
+    if object_has_descriptors(addr) && own_descriptor_may_cover_key(addr, key) {
         return true;
     }
 
@@ -416,38 +666,57 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
-    PROPERTY_ATTRS_IN_USE.with(|c| c.set(true));
+    let st = state();
+    st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard_for_target(obj);
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), attrs);
-    });
+    disable_class_field_inline_guard_for_target(obj, &key);
+    note_meta_descriptor_key(obj, &key, false);
+    st.descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
 }
 
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
     super::prop_plan::prop_plan_epoch_bump();
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().remove(&(obj, key.to_string()));
-    });
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow_mut()
+        .remove(&(obj, key.to_string()));
 }
 
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
-    ACCESSOR_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
+    // #6759 Phase C2: see `get_property_attrs`.
+    if !may_have_descriptor_entry(obj, key, true) {
+        return None;
+    }
+    state()
+        .descriptors
+        .accessor_descriptors
+        .borrow()
+        .get(&(obj, key.to_string()))
+        .copied()
 }
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        let mut keys = m
-            .borrow()
-            .keys()
-            .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
-            .collect::<Vec<_>>();
-        keys.sort();
-        keys
-    })
+    // #6759 Phase C2: skip the O(table-size) scan when the owner's meta
+    // summary proves it owns no accessor entries.
+    if !owner_may_have_descriptor_entries(obj, true) {
+        return Vec::new();
+    }
+    let mut keys = state()
+        .descriptors
+        .accessor_descriptors
+        .borrow()
+        .keys()
+        .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys
 }
 
 /// #2766: resolve an accessor *getter* closure for `(value, key)` if one is
@@ -458,7 +727,7 @@ pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
 /// invoking it. Returns `None` (rather than reading the field) when there is no
 /// accessor at all, so the caller falls back to an ordinary field read.
 pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
-    if !ACCESSORS_IN_USE.with(|c| c.get()) {
+    if !state().descriptors.accessors_in_use.get() {
         return None;
     }
     let key_str = crate::builtins::js_string_coerce(key);
@@ -567,22 +836,27 @@ fn note_accessor_descriptor_key(key: &str) {
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
-    ACCESSORS_IN_USE.with(|c| c.set(true));
+    let st = state();
+    st.descriptors.accessors_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard_for_target(obj);
+    disable_class_field_inline_guard_for_target(obj, &key);
     note_accessor_descriptor_key(&key);
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), acc);
-    });
+    note_meta_descriptor_key(obj, &key, true);
+    st.descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .insert((obj, key), acc);
 }
 
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
     super::prop_plan::prop_plan_epoch_bump();
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        m.borrow_mut().remove(&(obj, key.to_string()));
-    });
+    state()
+        .descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .remove(&(obj, key.to_string()));
 }
 
 /// Install a built-in *reflection-only* accessor descriptor for (obj, key)
@@ -607,12 +881,20 @@ pub(crate) fn set_builtin_accessor_descriptor(
 ) {
     super::prop_plan::prop_plan_epoch_bump();
     note_accessor_descriptor_key(&key);
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key.clone()), acc);
-    });
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), attrs);
-    });
+    // #6759 Phase C2: the meta summary must over-approximate the tables
+    // even for gate-neutral builtin installs — the (unconditionally
+    // consulted) reflection reads now trust a clear bit.
+    note_meta_descriptor_key(obj, &key, true);
+    note_meta_descriptor_key(obj, &key, false);
+    let st = state();
+    st.descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .insert((obj, key.clone()), acc);
+    st.descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
 }
 
 /// Install a built-in *reflection-only* data-property descriptor for (obj, key)
@@ -633,9 +915,13 @@ pub(crate) fn set_builtin_accessor_descriptor(
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().insert((obj, key), attrs);
-    });
+    // #6759 Phase C2: see `set_builtin_accessor_descriptor`.
+    note_meta_descriptor_key(obj, &key, false);
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
 }
 
 /// Walk the keys array of `obj` and apply the given attribute mask AND filter to every existing key.
@@ -703,18 +989,19 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
             .entry(owner)
             .or_insert_with(|| is_dead_owner(owner))
     };
-    PROPERTY_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    let st = state();
+    {
+        let mut m = st.descriptors.property_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| !is_dead(*owner));
         }
-    });
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    }
+    {
+        let mut m = st.descriptors.accessor_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| !is_dead(*owner));
         }
-    });
+    }
 }
 
 /// #6710: drop every property-attr + accessor descriptor owned by `obj`.
@@ -731,18 +1018,19 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
     if !HANDLE_HAS_DESCRIPTORS.load(Ordering::Relaxed) {
         return;
     }
-    PROPERTY_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    let st = state();
+    {
+        let mut m = st.descriptors.property_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| *owner != obj);
         }
-    });
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        let mut m = m.borrow_mut();
+    }
+    {
+        let mut m = st.descriptors.accessor_descriptors.borrow_mut();
         if !m.is_empty() {
             m.retain(|(owner, _), _| *owner != obj);
         }
-    });
+    }
 }
 
 /// Rewrite a descriptor table's owner ADDRESS during the GC metadata-rewrite
@@ -771,8 +1059,9 @@ fn rewrite_descriptor_owner(
 /// attrs and accessors don't silently detach (or fire on a new tenant at a
 /// reused address).
 pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PROPERTY_DESCRIPTORS.with(|descriptors| {
-        let mut descriptors = descriptors.borrow_mut();
+    let st = state();
+    {
+        let mut descriptors = st.descriptors.property_descriptors.borrow_mut();
         let needs_rebuild = descriptors
             .keys()
             .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
@@ -783,10 +1072,10 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
                 descriptors.insert((owner, key), attrs);
             }
         }
-    });
+    }
 
-    ACCESSOR_DESCRIPTORS.with(|descriptors| {
-        let mut descriptors = descriptors.borrow_mut();
+    {
+        let mut descriptors = st.descriptors.accessor_descriptors.borrow_mut();
         let needs_rebuild = descriptors
             .keys()
             .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
@@ -812,5 +1101,84 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
                 }
             }
         }
-    });
+    }
+}
+
+#[cfg(test)]
+mod c5a_tests {
+    use super::*;
+
+    /// #6759 C5a: a prototype-level descriptor whose key names no declared
+    /// instance field must NOT flip the process-wide inline-guard disable;
+    /// one whose key IS a declared field must.
+    #[test]
+    fn inline_guard_disable_is_per_declared_field_key() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        test_reset_class_field_inline_guard();
+
+        let proto = crate::object::js_object_alloc(0, 0);
+        class_registry::class_prototype_object_root_store(0x0666_0001, proto);
+        let proto_addr = proto as usize;
+
+        // Method-style install (babel output): key declared by no class.
+        set_accessor_descriptor(
+            proto_addr,
+            "c5a_render_method".to_string(),
+            AccessorDescriptor::default(),
+        );
+        assert!(
+            class_field_inline_guard_enabled(),
+            "a prototype install keyed by a non-field name must not poison \
+             the inline class-field fast path"
+        );
+
+        // Field-style install: key declared by a registered class.
+        note_declared_instance_field_name(b"c5a_field_x");
+        assert!(
+            class_field_inline_guard_enabled(),
+            "declaring the field alone (no matching install) must not disable"
+        );
+        set_property_attrs(
+            proto_addr,
+            "c5a_field_x".to_string(),
+            PropertyAttrs::new(false, true, true),
+        );
+        assert!(
+            !class_field_inline_guard_enabled(),
+            "a prototype install keyed by a DECLARED field must disable"
+        );
+
+        test_reset_class_field_inline_guard();
+    }
+
+    /// #6759 C5a ordering: an install that precedes the declaring class's
+    /// registration is retro-checked when the class arrives.
+    #[test]
+    fn inline_guard_retro_disable_on_late_class_registration() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        test_reset_class_field_inline_guard();
+
+        let proto = crate::object::js_object_alloc(0, 0);
+        class_registry::class_prototype_object_root_store(0x0666_0002, proto);
+
+        set_accessor_descriptor(
+            proto as usize,
+            "c5a_late_field".to_string(),
+            AccessorDescriptor::default(),
+        );
+        assert!(
+            class_field_inline_guard_enabled(),
+            "no class declares the key yet — install must skip the disable"
+        );
+
+        // The declaring class registers AFTER the install.
+        note_declared_instance_field_name(b"c5a_late_field");
+        assert!(
+            !class_field_inline_guard_enabled(),
+            "late class registration must retro-trigger the disable for \
+             prototype keys installed earlier"
+        );
+
+        test_reset_class_field_inline_guard();
+    }
 }

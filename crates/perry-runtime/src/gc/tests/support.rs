@@ -733,6 +733,7 @@ pub(super) unsafe fn alloc_old_test_object(
     (*obj).parent_class_id = 0;
     (*obj).field_count = field_count;
     (*obj).keys_array = std::ptr::null_mut();
+    (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
     for i in 0..field_count as usize {
@@ -752,6 +753,7 @@ pub(super) unsafe fn alloc_nursery_test_object(
     (*obj).parent_class_id = 0;
     (*obj).field_count = field_count;
     (*obj).keys_array = std::ptr::null_mut();
+    (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
     for i in 0..field_count as usize {

@@ -213,6 +213,34 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     };
     let key_val = JSValue::from_bits(key.to_bits());
 
+    // ── #6748 fast path: ordinary heap object + string key ────────────────
+    // One GC-header read classifies the receiver. A `GC_TYPE_OBJECT` cannot
+    // be a proxy or handle-band id (non-heap addresses, rejected by
+    // `try_read_gc_header`), a typed array / buffer / Map / Set / promise /
+    // error / date / temporal cell (each has its own GC type), a closure
+    // (`GC_TYPE_CLOSURE`), or an INT32 class ref (not a pointer). So the
+    // per-registry probe gauntlet below — each arm a TLS access + HashMap
+    // lookup, together the dominant cost of `in` on plain objects — is
+    // skipped wholesale. The three object-relevant arms are preserved in
+    // `object_string_key_has_property`.
+    if key_val.is_any_string() && obj_val.is_pointer() {
+        let addr = (obj_val.bits() & crate::value::POINTER_MASK) as usize;
+        if let Some(h) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+            // RegExp cells (unlike Date/Error/Map/Set/…, which carry their own
+            // GC types) are OBJECT-typed allocations registered in the exotic
+            // expando registry — they must keep routing through the exotic arm
+            // below (`"lastIndex" in re`), so one registry probe stays in the
+            // fast path. Everything else OBJECT-typed is an ordinary object.
+            if h.obj_type == crate::gc::GC_TYPE_OBJECT
+                && super::super::exotic_expando::exotic_expando_kind(addr).is_none()
+            {
+                return unsafe {
+                    object_string_key_has_property(addr as *const ObjectHeader, key, key_val)
+                };
+            }
+        }
+    }
+
     // A Proxy is a small registered id (POINTER_TAG with a tiny pointer), not a
     // heap object. Falling through to the symbol/class/pointer paths below would
     // deref the fake pointer (or call symbol helpers that do) and segfault. Route
@@ -876,6 +904,82 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     }
 }
 
+/// #6748 fast-path tail for `js_object_has_property`: the receiver is a
+/// verified `GC_TYPE_OBJECT` and the key is a string. Replicates exactly the
+/// object-relevant arms of the full gauntlet — the fetch-subclass native
+/// forward (gated on the process-global "ever stashed" flag), `#private`-name
+/// hiding, native-module virtual keys — then the ordinary spec walk.
+unsafe fn object_string_key_has_property(
+    obj_ptr: *const ObjectHeader,
+    key: f64,
+    key_val: JSValue,
+) -> f64 {
+    let nanbox_false = f64::from_bits(0x7FFC_0000_0000_0003u64); // TAG_FALSE
+    let nanbox_true = f64::from_bits(0x7FFC_0000_0000_0004u64); // TAG_TRUE
+
+    // `class X extends Request/Response` instances forward native members
+    // (`body`/`method`/…) through their stashed fetch handle. Gated: programs
+    // that never construct a fetch subclass skip the per-call key alloc +
+    // property read entirely.
+    if crate::object::field_get_set::FETCH_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        if let Some(handle_id) = super::fetch_subclass_handle_id(obj_ptr as usize) {
+            if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
+                let key_ptr =
+                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+                if !key_ptr.is_null() {
+                    let name_ptr =
+                        (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let name_len = (*key_ptr).byte_len as usize;
+                    let result = dispatch(handle_id, name_ptr, name_len);
+                    if result.to_bits() != crate::value::TAG_UNDEFINED {
+                        return nanbox_true;
+                    }
+                }
+            }
+        }
+    }
+
+    let class_id = (*obj_ptr).class_id;
+    if class_id != 0 {
+        // `#name`-prefixed string keys on class instances are private elements —
+        // invisible to ordinary [[HasProperty]] (mirrors the slow-path arm).
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso) {
+            if b.first() == Some(&b'#') {
+                return nanbox_false;
+            }
+        }
+        // Native-module namespaces (console, fs, …) expose VIRTUAL keys —
+        // dispatch tables, not keys_array entries.
+        if class_id == NATIVE_MODULE_CLASS_ID {
+            let key_str =
+                crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+            if key_str.is_null() {
+                return nanbox_false;
+            }
+            let key_name = match super::super::has_own_helpers::str_from_string_header(key_str) {
+                Some(name) => name,
+                None => return nanbox_false,
+            };
+            let present = read_native_module_name(obj_ptr)
+                .as_deref()
+                .is_some_and(|module_name| {
+                    super::super::native_module::native_module_vtable()
+                        .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
+                });
+            return if present { nanbox_true } else { nanbox_false };
+        }
+    }
+
+    let key_str = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    if ordinary_has_property(obj_ptr, key_str) {
+        nanbox_true
+    } else {
+        nanbox_false
+    }
+}
+
 /// `OrdinaryHasProperty(O, P)` (ECMA-262 10.1.7.1) for ordinary heap objects:
 /// true when `P` is an own property of `O` OR of any object in `O`'s
 /// `[[Prototype]]` chain.
@@ -956,7 +1060,7 @@ unsafe fn ordinary_has_property(
         // EVERY `in`, dominating its profile (~60% of samples on a
         // descriptor-less receiver).
         if let Some(name) = key_name {
-            if crate::object::descriptor_state::ACCESSORS_IN_USE.with(|c| c.get())
+            if crate::state::state().descriptors.accessors_in_use.get()
                 && crate::object::descriptor_state::object_has_descriptors(cur as usize)
                 && get_accessor_descriptor(cur as usize, name).is_some()
             {
@@ -1172,112 +1276,28 @@ pub(crate) unsafe fn native_module_own_field_by_key(
 pub(crate) const WIDE_KEY_INDEX_MIN_KEYS: usize = 257;
 const WIDE_KEY_INDEX_CAPACITY: usize = 4;
 
-struct WideKeyIndexEntry {
-    keys_id: usize,
-    indexed_len: u32,
-    map: std::collections::HashMap<Vec<u8>, u32>,
-}
+// #6759 C1: the wide-object key index folded into the shape records
+// (`object::shapes`, keyed on keys_array identity, unbounded — the old
+// 4-entry LRU thrashed past 4 wide shapes). These shims keep the
+// historical entry points.
 
-thread_local! {
-    static WIDE_KEY_INDEX: std::cell::RefCell<Vec<WideKeyIndexEntry>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Probe the wide-object index for `key_bytes` in the keys array identified by
-/// `keys_id`. Returns a slot index whose stored key has been re-validated
-/// against `key` — `None` means "not found via the index" (caller falls back
-/// to the linear scan).
+/// Probe the shape record for `key_bytes`; slot is content-revalidated.
+/// `None` falls back to the caller's linear scan (accelerator, never
+/// authoritative).
 pub(crate) unsafe fn wide_key_index_lookup(
-    keys_id: usize,
+    _keys_id: usize,
     key_bytes: &[u8],
-    key: *const crate::StringHeader,
+    _key: *const crate::StringHeader,
     keys: *const crate::array::ArrayHeader,
     key_count: usize,
 ) -> Option<u32> {
-    WIDE_KEY_INDEX.with(|cell| {
-        let mut table = cell.borrow_mut();
-        let pos = table.iter().position(|e| e.keys_id == keys_id);
-        let pos = match pos {
-            Some(p) => p,
-            None => {
-                // Build the full map once (first occurrence wins, matching
-                // linear-scan order).
-                let mut map = std::collections::HashMap::with_capacity(key_count);
-                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
-                for i in 0..key_count.min(slot_len) {
-                    let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
-                    if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
-                        map.entry(b.to_vec()).or_insert(i as u32);
-                    }
-                }
-                if table.len() >= WIDE_KEY_INDEX_CAPACITY {
-                    table.pop();
-                }
-                table.insert(
-                    0,
-                    WideKeyIndexEntry {
-                        keys_id,
-                        indexed_len: key_count as u32,
-                        map,
-                    },
-                );
-                0
-            }
-        };
-        let entry = &mut table[pos];
-        if (key_count as u32) < entry.indexed_len {
-            // The keys array shrank (a delete compacted it) — slot indices
-            // are no longer trustworthy. Drop and let the next read rebuild.
-            table.remove(pos);
-            return None;
-        }
-        if (key_count as u32) > entry.indexed_len {
-            // Catch up on appended keys.
-            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
-            for i in entry.indexed_len as usize..key_count.min(slot_len) {
-                let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
-                if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
-                    entry.map.entry(b.to_vec()).or_insert(i as u32);
-                }
-            }
-            entry.indexed_len = key_count as u32;
-        }
-        let idx = entry.map.get(key_bytes).copied();
-        match idx {
-            Some(i) if (i as usize) < key_count => {
-                let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
-                if (i as usize) >= slot_len {
-                    table.remove(pos);
-                    return None;
-                }
-                let stored = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
-                if crate::string::js_string_key_matches(stored, key) {
-                    if pos != 0 {
-                        let e = table.remove(pos);
-                        table.insert(0, e);
-                    }
-                    Some(i)
-                } else {
-                    // Stale (address reuse or in-place mutation): drop the
-                    // whole entry rather than chase it.
-                    table.remove(pos);
-                    None
-                }
-            }
-            _ => None,
-        }
-    })
+    let h = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+    crate::object::shapes::shape_slot_lookup(keys, key_bytes, h, key_count as u32, true)
 }
 
-/// Back-fill a linear-scan hit into the wide-object index (no-op when the
-/// keys array has no entry — the next lookup builds it wholesale).
+/// Back-fill a linear-scan hit into the shape record (no-op when the keys
+/// array has no shape entry yet).
 pub(crate) fn wide_key_index_note_hit(keys_id: usize, key_bytes: &[u8], index: u32) {
-    WIDE_KEY_INDEX.with(|cell| {
-        let mut table = cell.borrow_mut();
-        if let Some(e) = table.iter_mut().find(|e| e.keys_id == keys_id) {
-            e.map.entry(key_bytes.to_vec()).or_insert(index);
-        }
-    });
+    let h = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+    crate::object::shapes::shape_note_hit(keys_id as *const crate::array::ArrayHeader, h, index);
 }

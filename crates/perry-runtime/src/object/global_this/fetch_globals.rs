@@ -363,6 +363,8 @@ unsafe fn subclass_this_object_ptr(this_box: f64) -> Option<*mut ObjectHeader> {
 /// plain numeric f64 — `fetch_subclass_handle_id` reads it back.
 unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
     if let Some(obj) = subclass_this_object_ptr(this_box) {
+        crate::object::field_get_set::FETCH_SUBCLASS_EVER
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         let id = crate::value::js_nanbox_get_pointer(handle_box);
         let key = crate::string::js_string_from_bytes(
             FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),

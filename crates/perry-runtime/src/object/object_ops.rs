@@ -37,8 +37,9 @@ pub(crate) use descriptor_helpers::{
     define_property_force_store_value, desc_has_field, desc_read_field,
     describe_value_for_type_error, descriptor_enumerable, enforce_define_property_invariants,
     registered_buffer_index_own_property_present, throw_object_type_error,
-    throw_object_type_error_with_suffix, validate_nonconfigurable_redefine,
-    validate_property_descriptor, value_is_object_like,
+    throw_object_type_error_with_suffix, try_decode_descriptor, validate_nonconfigurable_redefine,
+    validate_property_descriptor, validate_property_descriptor_view, value_is_object_like,
+    DescView, DESC_CONFIGURABLE, DESC_ENUMERABLE, DESC_GET, DESC_SET, DESC_VALUE, DESC_WRITABLE,
 };
 // Module-private `unsafe fn value_is_callable` (descriptor_helpers): used by the
 // object_ops children (`accessors.rs`, `descriptor_helpers.rs`) but NOT

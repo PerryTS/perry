@@ -379,6 +379,10 @@ pub fn gc_init() {
     // reflect-metadata store were invisible to GC — values swept/moved under
     // live references, owner keys stale after evacuation.
     gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+    // #6759 Phase C3a: shape records follow their keys array across
+    // evacuation (metadata-rewrite rekey only; the records hold no heap
+    // references and mark nothing).
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     // ERROR_USER_PROPS — invisible to GC without this scanner (collectable

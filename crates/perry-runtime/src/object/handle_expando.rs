@@ -33,10 +33,7 @@
 //! every phase (keeping e.g. a stored array and its elements alive) and rewrites
 //! the stored bits when a copying collection moves the value.
 
-use super::descriptor_state::{
-    get_accessor_descriptor, get_property_attrs, PropertyAttrs, ACCESSOR_DESCRIPTORS,
-    PROPERTY_DESCRIPTORS,
-};
+use super::descriptor_state::{get_accessor_descriptor, get_property_attrs, PropertyAttrs};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -231,12 +228,15 @@ pub(crate) fn handle_expando_delete(handle: i64, name: &str) -> bool {
             props.retain(|(k, _)| k != name);
         }
     });
-    PROPERTY_DESCRIPTORS.with(|m| {
-        m.borrow_mut().remove(&(handle as usize, name.to_string()));
-    });
-    ACCESSOR_DESCRIPTORS.with(|m| {
-        m.borrow_mut().remove(&(handle as usize, name.to_string()));
-    });
+    let st = crate::state::state();
+    st.descriptors
+        .property_descriptors
+        .borrow_mut()
+        .remove(&(handle as usize, name.to_string()));
+    st.descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .remove(&(handle as usize, name.to_string()));
     true
 }
 
@@ -436,8 +436,10 @@ mod tests {
         HANDLE_EXPANDO_PROPS.with(|cell| {
             cell.borrow_mut().remove(&h);
         });
-        PROPERTY_DESCRIPTORS.with(|m| {
-            m.borrow_mut().remove(&(h as usize, "hid".to_string()));
-        });
+        crate::state::state()
+            .descriptors
+            .property_descriptors
+            .borrow_mut()
+            .remove(&(h as usize, "hid".to_string()));
     }
 }

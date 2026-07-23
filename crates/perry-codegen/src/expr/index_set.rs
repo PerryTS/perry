@@ -1574,7 +1574,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // receiver had an ArrayHeader (8-byte header) layout. That's
             // a load-bearing assumption for `arr[i] = v` against an
             // unknown-typed receiver where `is_array_expr` couldn't
-            // narrow it statically — but ObjectHeader is 24 bytes plus
+            // narrow it statically — but the header spans object_header_size_bytes(...) bytes, then inline slots, plus
             // `max(field_count, 8)` inline slots, so writing at offset
             // `8 + idx*8` for any `idx ≥ 7` overflows the object's
             // allocation and corrupts the adjacent heap object. The
