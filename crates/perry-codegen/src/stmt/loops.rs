@@ -41,6 +41,34 @@ struct NumericRangeAddLoop {
     delta: f64,
 }
 
+fn match_indexed_store_shape(
+    store: &perry_hir::Expr,
+) -> Option<(&perry_hir::Expr, &perry_hir::Expr, &perry_hir::Expr)> {
+    use perry_hir::Expr;
+
+    match store {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => Some((object.as_ref(), index.as_ref(), value.as_ref())),
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } if matches!(
+            (target.as_ref(), receiver.as_ref()),
+            (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b
+        ) =>
+        {
+            Some((target.as_ref(), key.as_ref(), value.as_ref()))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LengthHoist {
     arr_id: u32,
@@ -351,27 +379,7 @@ fn match_numeric_range_add_loop(
     let [Stmt::Expr(store)] = body else {
         return None;
     };
-    let (object, index, value) = match store {
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => (object.as_ref(), index.as_ref(), value.as_ref()),
-        Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } if matches!(
-            (target.as_ref(), receiver.as_ref()),
-            (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b
-        ) =>
-        {
-            (target.as_ref(), key.as_ref(), value.as_ref())
-        }
-        _ => return None,
-    };
+    let (object, index, value) = match_indexed_store_shape(store)?;
     let array_id = match object {
         Expr::LocalGet(id) => *id,
         _ => return None,
@@ -2726,27 +2734,7 @@ fn supported_packed_numeric_loop_store_kind(
     let [Stmt::Expr(store)] = body else {
         return None;
     };
-    let (object, index, value) = match store {
-        perry_hir::Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => (object, index, value),
-        perry_hir::Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } if matches!(
-            (target.as_ref(), receiver.as_ref()),
-            (perry_hir::Expr::LocalGet(a), perry_hir::Expr::LocalGet(b)) if a == b
-        ) =>
-        {
-            (target, key, value)
-        }
-        _ => return None,
-    };
+    let (object, index, value) = match_indexed_store_shape(store)?;
     if !is_packed_f64_loop_index(object, index, arr_id, counter_id) {
         return None;
     }
