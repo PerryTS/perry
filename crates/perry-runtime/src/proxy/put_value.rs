@@ -107,6 +107,26 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
+    // Sloppy script assignment lowers to PutValue rather than the named-field
+    // setter.  Existing own data fields need none of PutValue's rooting,
+    // ToPropertyKey, Proxy, typed-array, or receiver-aware prototype work.
+    // Keep this before the handle scope: the helper validates both heap
+    // headers and only performs a barriered overwrite when the target and
+    // receiver are the same ordinary object and codegen supplied an interned
+    // heap-string key.
+    let target_bits = target.to_bits();
+    let key_bits = key.to_bits();
+    if target_bits == receiver.to_bits()
+        && (target_bits & !POINTER_MASK) == POINTER_TAG
+        && (key_bits & !POINTER_MASK) == crate::value::STRING_TAG
+    {
+        let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        let key_ptr = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
+            return value;
+        }
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
@@ -201,7 +221,6 @@ pub extern "C" fn js_put_value_set(
         }
     }
 
-    let target_bits = target.to_bits();
     if target_bits == TAG_NULL || target_bits == TAG_UNDEFINED {
         let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
         let msg = format!("Cannot set properties of null or undefined (setting '{key_name}')");
@@ -217,4 +236,147 @@ pub extern "C" fn js_put_value_set(
         crate::error::throw_immutable_write(0, &key_name);
     }
     value_handle.get_nanbox_f64()
+}
+
+/// Miss path for the codegen-emitted monomorphic PutValue store cache.
+///
+/// The full strict/sloppy `[[Set]]` semantics run first. Only a successful
+/// ordinary class-instance own-data overwrite may prime `[shape_token, slot]`;
+/// every exotic, descriptor-bearing, frozen, class-object, plain-class-zero,
+/// overflow, or typed-layout-intact receiver remains permanently on the miss
+/// path. The token mirrors the read PIC: a stamped runtime ShapeId is lifted
+/// above the pointer range with bit 62; otherwise the shared keys pointer is
+/// used. The generated hit path repeats all mutable per-object guards.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_ic_miss(
+    target: f64,
+    key: *const crate::StringHeader,
+    value: f64,
+    strict: i32,
+    cache: *mut [i64; 2],
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let key_value = if key.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits())
+    };
+    let result = js_put_value_set(
+        target_handle.get_nanbox_f64(),
+        key_value,
+        value_handle.get_nanbox_f64(),
+        target_handle.get_nanbox_f64(),
+        strict,
+    );
+
+    if cache.is_null() {
+        return result;
+    }
+
+    unsafe {
+        let target = target_handle.get_nanbox_f64();
+        let target_bits = target.to_bits();
+        if (target_bits & !POINTER_MASK) != POINTER_TAG {
+            return result;
+        }
+        let obj_addr = (target_bits & POINTER_MASK) as usize;
+        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
+            return result;
+        };
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            // A generated hit cannot update/downgrade a typed layout without
+            // calling the runtime. The miss store clears this bit; prime only
+            // once that per-object downgrade is visible.
+            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc_header._reserved & BLOCKING_FLAGS != 0
+            || key.is_null()
+        {
+            return result;
+        }
+
+        let obj = obj_addr as *mut crate::ObjectHeader;
+        let class_id = (*obj).class_id;
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+            || class_id == 0
+            || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        {
+            return result;
+        }
+        let Some(key_gc) = crate::value::addr_class::try_read_gc_header(key as usize) else {
+            return result;
+        };
+        if key_gc.obj_type != crate::gc::GC_TYPE_STRING
+            || key_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_INTERNED)
+                != crate::gc::GC_FLAG_INTERNED
+        {
+            return result;
+        }
+
+        let keys = (*obj).keys_array;
+        if keys.is_null() || (keys as u64) >> 48 != 0 {
+            return result;
+        }
+        let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
+            return result;
+        };
+        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
+                != crate::gc::GC_FLAG_SHAPE_SHARED
+        {
+            return result;
+        }
+
+        let mut own_idx = crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize);
+        if own_idx.is_none() {
+            let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+            if key_count > 4096 {
+                return result;
+            }
+            for i in 0..key_count {
+                let candidate = crate::array::js_array_get(keys, i as u32);
+                if crate::string::js_string_key_matches(candidate, key) {
+                    crate::object::prop_plan::read_plan_record(
+                        keys as usize,
+                        key as usize,
+                        i as u32,
+                    );
+                    own_idx = Some(i as u32);
+                    break;
+                }
+            }
+        }
+        let Some(idx) = own_idx else {
+            return result;
+        };
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        if idx as usize >= alloc_limit {
+            return result;
+        }
+
+        let parent_class_id = (*obj).parent_class_id;
+        let shape_token = if crate::object::shapes::is_shape_id(parent_class_id) {
+            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
+        } else {
+            keys as u64
+        };
+
+        // Publish the token last conceptually: a zero-initialized or stale
+        // token cannot hit this slot until it matches this receiver's current
+        // discriminated shape token. Perry's read PIC uses the same format.
+        (*cache)[1] = idx as i64;
+        (*cache)[0] = shape_token as i64;
+    }
+
+    result
 }

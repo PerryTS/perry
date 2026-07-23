@@ -200,23 +200,6 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8)
         super::object_ops::ensure_key_in_keys_array(proto_obj, key);
         let getter_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
         super::object_ops::install_builtin_getter(proto_obj, name, getter_bits);
-        // #6809: gate-neutral BUILTIN install. Reads of these getters
-        // dispatch through the regex-specific builtin-getter path installed
-        // above — the descriptor entries exist for reflection
-        // (`getOwnPropertyDescriptor`) only, so flipping the process-wide
-        // `ACCESSORS_IN_USE` / attrs gates here (during
-        // `populate_global_this_builtins`, i.e. at startup of every program
-        // that touches a builtin global) pushed all dynamic object access
-        // onto the descriptor-probing slow paths for nothing.
-        super::set_builtin_accessor_descriptor(
-            proto_obj as usize,
-            name.to_string(),
-            super::AccessorDescriptor {
-                get: getter_bits,
-                set: 0,
-            },
-            super::PropertyAttrs::new(true, false, true),
-        );
         super::set_builtin_property_attrs(
             closure as usize,
             "name".to_string(),

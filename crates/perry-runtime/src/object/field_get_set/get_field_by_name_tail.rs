@@ -1197,6 +1197,26 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // `DisposableStack` and `AsyncDisposableStack` are reserved native
+        // class ids rather than registered JS classes, so their instance
+        // getter cannot be found through the class-prototype registry. Route
+        // the one native data accessor directly. An own property installed
+        // with `defineProperty` still shadows the inherited getter.
+        if !key.is_null()
+            && ((*obj).class_id == crate::disposable::CLASS_ID_DISPOSABLE_STACK
+                || (*obj).class_id == crate::disposable::CLASS_ID_ASYNC_DISPOSABLE_STACK)
+        {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if key_bytes == b"disposed" && !own_key_present(obj as *mut ObjectHeader, key) {
+                return JSValue::from_bits(
+                    crate::disposable::js_disposable_stack_disposed(obj as *mut ObjectHeader)
+                        .to_bits(),
+                );
+            }
+        }
+
         // #1387: `PerformanceEntry#toJSON` is a synthesized (non-enumerable)
         // method — entry objects are plain shaped objects with no stored
         // `toJSON` field, so a `entry.toJSON` read (e.g. `typeof entry.toJSON`)
@@ -1508,13 +1528,13 @@ pub(crate) fn get_field_by_name_object_tail(
             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
             (*key).byte_len as usize,
         );
-        // #4140: builtin reflection-only accessors (e.g. the
-        // `%TypedArray%.prototype` getters) don't flip `ACCESSORS_IN_USE`, so the
-        // gated short-circuits below skip them on a plain value read. Handle the
-        // hosting prototype object here — a cheap pointer compare for everything
-        // else — before the slot scan returns the empty backing field.
-        if let Some(v) = builtin_reflection_accessor_read(obj, key_bytes) {
-            return v;
+        // Gate-neutral builtin accessors mark only their owning object. Consult
+        // the descriptor table before an accessor's empty backing slot is read;
+        // unrelated objects pay only this already-loaded header-bit test.
+        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 {
+            if let Some(v) = builtin_reflection_accessor_read(obj, key_bytes) {
+                return v;
+            }
         }
         let key_hash = {
             let mut h: u32 = 0x811c9dc5;

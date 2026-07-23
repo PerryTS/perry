@@ -1332,6 +1332,26 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             crate::object::prototype_chain::object_static_prototype(addr).is_none()
                                 && !crate::object::object_proto_may_intercept_key(key)
                         } else {
+                            // `DisposableStack#disposed` is a getter-only
+                            // builtin accessor on a reserved native prototype.
+                            // Those class ids are intentionally absent from the
+                            // JS class-vtable registry, so the shared
+                            // class-interception plan cannot discover it.
+                            // Keep an own descriptor on the instance eligible
+                            // for the normal walk; otherwise report the
+                            // inherited accessor's rejected [[Set]] here
+                            // (silent in sloppy PutValue, TypeError in strict).
+                            let inherited_disposed_readonly = matches!(
+                                class_id,
+                                crate::disposable::CLASS_ID_DISPOSABLE_STACK
+                                    | crate::disposable::CLASS_ID_ASYNC_DISPOSABLE_STACK
+                            ) && property_key_to_rust_string(key)
+                                .as_deref()
+                                == Some("disposed")
+                                && own_set_descriptor(target, key).is_none();
+                            if inherited_disposed_readonly {
+                                return false;
+                            }
                             // Class instance: the `class_id == 0` guard previously sent
                             // EVERY wide class-instance build down the O(own-key) slow
                             // walk (O(n²)). Safe to fast-path when no inherited accessor /
@@ -1349,8 +1369,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // class chain — SLOW_FLAGS above already excluded
                             // frozen/sealed/descriptor bits; add the per-instance
                             // divergence flags (setPrototypeOf override / null proto).
-                            const CHAIN_DIVERGE: u16 =
-                                crate::gc::OBJ_FLAG_PROTO_OVERRIDE | crate::gc::OBJ_FLAG_NULL_PROTO;
                             let key_ptr = crate::builtins::js_string_coerce(key)
                                 as *const crate::StringHeader;
                             let interned = crate::object::interned_key_ptr(key_ptr);
@@ -1367,7 +1385,11 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // statics like bundled zod's `ZodX.create` vanished
                             // from ClassRef static dispatch. Class objects
                             // neither record nor honor store plans.
-                            let plan_eligible = header._reserved & CHAIN_DIVERGE == 0
+                            let plan_eligible = header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO
+                                == 0
+                                && !crate::object::prototype_chain::object_has_prototype_override(
+                                    addr,
+                                )
                                 && class_id != crate::object::NATIVE_MODULE_CLASS_ID
                                 && (*(addr as *const crate::ObjectHeader)).object_type
                                     == crate::error::OBJECT_TYPE_REGULAR

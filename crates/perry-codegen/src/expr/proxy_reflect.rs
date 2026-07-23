@@ -9,12 +9,13 @@ use perry_hir::Expr;
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::MaterializationReason;
-use crate::type_analysis::{is_array_expr, is_string_expr, receiver_class_name};
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::{
-    downgrade_buffer_aliases_in_expr, lower_expr, nanbox_pointer_inline, proxy_build_args_array,
-    unbox_str_handle, unbox_to_i64, FnCtx,
+    downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_scalar_aware_on_block,
+    expr_produces_non_pointer_bits_by_construction, lower_expr, nanbox_pointer_inline,
+    proxy_build_args_array, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
 fn downgrade_unknown_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) {
@@ -216,6 +217,235 @@ fn put_value_static_property_fast_path(
                 .map(|_| property.clone())
         }
         _ => None,
+    }
+}
+
+/// Monomorphic inline cache for a static-name `PutValue` whose target and
+/// receiver are the same expression.
+///
+/// Sloppy script writes cannot reuse `PropertySet` because its fallback throws
+/// on rejected writes. This diamond keeps the strict-aware runtime on every
+/// miss, then turns a settled existing-own-data store into a keys-token compare
+/// plus a direct slot write. Mutable semantic state (freeze/descriptor flags)
+/// is rechecked on every hit.
+fn lower_put_value_static_write_ic(
+    ctx: &mut FnCtx<'_>,
+    target: &Expr,
+    key: &Expr,
+    value: &Expr,
+    receiver: &Expr,
+    strict: bool,
+) -> Result<Option<String>> {
+    let Expr::String(_) = key else {
+        return Ok(None);
+    };
+    if !same_put_value_receiver_expr(target, receiver) || crate::codegen::full_outline_ic_enabled()
+    {
+        return Ok(None);
+    }
+    // The assignment reference (target + static key) is evaluated before the
+    // RHS. Until PutValue reference temporaries have dedicated GC roots, an
+    // allocating/calling RHS could move the already-evaluated target while its
+    // SSA value remains stale. Keep the inline PIC to call-free expressions;
+    // the existing runtime lowering handles every other RHS.
+    if !put_value_rhs_is_safepoint_free(ctx, value) {
+        return Ok(None);
+    }
+
+    downgrade_unknown_call_expr(ctx, target);
+    downgrade_unknown_call_expr(ctx, key);
+    downgrade_unknown_call_expr(ctx, value);
+    downgrade_unknown_call_expr(ctx, receiver);
+    let target_value = lower_expr(ctx, target)?;
+    let key_value = lower_expr(ctx, key)?;
+    let stored_value = lower_expr(ctx, value)?;
+
+    let target_bits = ctx.block().bitcast_double_to_i64(&target_value);
+    let key_bits = ctx.block().bitcast_double_to_i64(&key_value);
+    let key_handle = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+    let target_handle = ctx.block().and(I64, &target_bits, POINTER_MASK_I64);
+
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let cache_name = format!("perry_ic_{}", site_id);
+    ctx.pending_declares
+        .push((format!("__ic_decl_{}", site_id), DOUBLE, vec![]));
+    ctx.ic_globals.push(cache_name.clone());
+    let cache_ref = format!("@{}", cache_name);
+
+    // Branch before the first header load so primitives, forged non-pointer
+    // bit patterns, and native handle ids can never be dereferenced by the
+    // inline checks.
+    let target_tag = ctx.block().lshr(I64, &target_bits, "48");
+    let pointer_tag = ctx.block().icmp_eq(I64, &target_tag, "32765"); // 0x7FFD
+    let above_handles = ctx.block().icmp_ugt(I64, &target_handle, "1048575"); // 0x100000
+    let heap_candidate = ctx.block().and(I1, &pointer_tag, &above_handles);
+    let guard_idx = ctx.new_block("put.pic.guard");
+    let hit_idx = ctx.new_block("put.pic.hit");
+    let miss_idx = ctx.new_block("put.pic.miss");
+    let merge_idx = ctx.new_block("put.pic.merge");
+    let guard_label = ctx.block_label(guard_idx);
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&heap_candidate, &guard_label, &miss_label);
+
+    ctx.current_block = guard_idx;
+    let safe_target = target_handle.clone();
+
+    let gc_type_addr = ctx.block().sub(I64, &safe_target, "8");
+    let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
+    let gc_type = ctx.block().load(I8, &gc_type_ptr);
+    let gc_object = ctx.block().icmp_eq(I8, &gc_type, "2");
+    let gc_flags_addr = ctx.block().sub(I64, &safe_target, "7");
+    let gc_flags_ptr = ctx.block().inttoptr(I64, &gc_flags_addr);
+    let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
+    let forwarded = ctx.block().and(I8, &gc_flags, "128");
+    let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
+
+    // Existing-own overwrite guards. Bit 12 is the per-object typed-layout
+    // intact bit: the runtime miss downgrades it before priming this cache, so
+    // same-shape siblings take one miss each before direct stores are allowed.
+    const BLOCKING_FLAGS: u16 = 0x1907; // frozen/sealed/noextend/TA-proto/descriptors/typed-intact
+    let reserved_addr = ctx.block().sub(I64, &safe_target, "6");
+    let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
+    let reserved = ctx.block().load(I16, &reserved_ptr);
+    let blocked = ctx.block().and(I16, &reserved, &BLOCKING_FLAGS.to_string());
+    let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
+
+    let object_type_ptr = ctx.block().inttoptr(I64, &safe_target);
+    let object_type = ctx.block().load(I32, &object_type_ptr);
+    let regular = ctx.block().icmp_eq(I32, &object_type, "1");
+    let class_addr = ctx.block().add(I64, &safe_target, "4");
+    let class_ptr = ctx.block().inttoptr(I64, &class_addr);
+    let class_id = ctx.block().load(I32, &class_ptr);
+    let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
+    let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
+
+    let keys_addr = ctx.block().add(I64, &safe_target, "16");
+    let keys_ptr = ctx.block().inttoptr(I64, &keys_addr);
+    let keys = ctx.block().load(I64, &keys_ptr);
+
+    // Mirror the read PIC's #6804 discriminated shape token. Plain objects
+    // carrying a never-reused runtime ShapeId compare by that stable id,
+    // lifted above the pointer range with bit 62. Class instances and
+    // unstamped receivers compare by their shared keys pointer. The runtime
+    // miss publishes the same token representation.
+    let parent_class_addr = ctx.block().add(I64, &safe_target, "8");
+    let parent_class_ptr = ctx.block().inttoptr(I64, &parent_class_addr);
+    let parent_class_id = ctx.block().load(I32, &parent_class_ptr);
+    let shape_id_rel = ctx.block().add(I32, &parent_class_id, "-2147483648");
+    let has_shape_id = ctx.block().icmp_ult(I32, &shape_id_rel, "1073741824");
+    let shape_id64 = ctx.block().zext(I32, &parent_class_id, I64);
+    let shape_id_token = ctx.block().or(I64, &shape_id64, "4611686018427387904");
+    let shape_token = ctx
+        .block()
+        .select(I1, &has_shape_id, I64, &shape_id_token, &keys);
+    let cached_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
+    let cached_token = ctx.block().load(I64, &cached_token_ptr);
+    let token_match = ctx.block().icmp_eq(I64, &shape_token, &cached_token);
+    let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
+
+    let cached_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let slot = ctx.block().load(I64, &cached_slot_ptr);
+    let field_count_addr = ctx.block().add(I64, &safe_target, "12");
+    let field_count_ptr = ctx.block().inttoptr(I64, &field_count_addr);
+    let field_count = ctx.block().load(I32, &field_count_ptr);
+    let field_count64 = ctx.block().zext(I32, &field_count, I64);
+    let below_floor = ctx.block().icmp_ult(I64, &field_count64, "4");
+    let inline_limit = ctx
+        .block()
+        .select(I1, &below_floor, I64, "4", &field_count64);
+    let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &inline_limit);
+
+    let mut hit = ctx.block().and(I1, &heap_candidate, &gc_object);
+    hit = ctx.block().and(I1, &hit, &not_forwarded);
+    hit = ctx.block().and(I1, &hit, &flags_clear);
+    hit = ctx.block().and(I1, &hit, &regular);
+    hit = ctx.block().and(I1, &hit, &class_nonzero);
+    hit = ctx.block().and(I1, &hit, &not_native_module);
+    hit = ctx.block().and(I1, &hit, &token_match);
+    hit = ctx.block().and(I1, &hit, &token_nonzero);
+    hit = ctx.block().and(I1, &hit, &slot_in_bounds);
+
+    ctx.block().cond_br(&hit, &hit_label, &miss_label);
+
+    ctx.current_block = hit_idx;
+    let pointer_possible = !(is_numeric_expr(ctx, value)
+        || expr_produces_non_pointer_bits_by_construction(ctx, value));
+    {
+        let header_size =
+            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let blk = ctx.block();
+        let slot_offset = blk.shl(I64, &slot, "3");
+        let fields_base = blk.add(I64, &target_handle, &header_size);
+        let field_addr = blk.add(I64, &fields_base, &slot_offset);
+        let field_ptr = blk.inttoptr(I64, &field_addr);
+        if pointer_possible {
+            let slot_i32 = blk.trunc(I64, &slot, I32);
+            emit_jsvalue_slot_store_scalar_aware_on_block(
+                blk,
+                &field_ptr,
+                &stored_value,
+                &target_handle,
+                &slot_i32,
+                true,
+                &target_bits,
+                &field_addr,
+                true,
+            );
+        } else {
+            // A non-pointer overwrite cannot create a young edge or make a GC
+            // pointer layout less conservative. The per-object typed layout
+            // bit was already cleared on the miss that primed this cache.
+            blk.store(DOUBLE, &stored_value, &field_ptr);
+        }
+        blk.br(&merge_label);
+    }
+    let hit_end_label = ctx.block().label.clone();
+
+    ctx.current_block = miss_idx;
+    let strict_i32 = if strict { "1" } else { "0" };
+    let miss_value = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set_ic_miss",
+        &[
+            (DOUBLE, &target_value),
+            (I64, &key_handle),
+            (DOUBLE, &stored_value),
+            (I32, strict_i32),
+            (PTR, &cache_ref),
+        ],
+    );
+    let miss_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let result = ctx.block().phi(
+        DOUBLE,
+        &[
+            (&stored_value, &hit_end_label),
+            (&miss_value, &miss_end_label),
+        ],
+    );
+    Ok(Some(result))
+}
+
+fn put_value_rhs_is_safepoint_free(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::LocalGet(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::String(_) => true,
+        Expr::Binary { left, right, .. } if is_numeric_expr(ctx, expr) => {
+            put_value_rhs_is_safepoint_free(ctx, left)
+                && put_value_rhs_is_safepoint_free(ctx, right)
+        }
+        _ => false,
     }
 }
 
@@ -631,6 +861,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         value: value.clone(),
                     },
                 );
+            }
+            if let Some(result) =
+                lower_put_value_static_write_ic(ctx, target, key, value, receiver, *strict)?
+            {
+                return Ok(result);
             }
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, key);

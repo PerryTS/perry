@@ -2,7 +2,7 @@
 use super::header::{array_numeric_layout, NumericArrayLayout};
 use super::*;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 
@@ -60,6 +60,18 @@ static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 static OBJECT_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBJECT_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
+/// Sticky summary of the process-wide conditions that invalidate codegen's
+/// inline plain-array index guard. The generated guard loads this byte
+/// directly; keeping the three rare prototype conditions behind one exported
+/// byte avoids an out-of-line runtime call on every array read.
+#[no_mangle]
+pub static PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED: AtomicU8 = AtomicU8::new(0);
+
+#[inline]
+pub(crate) fn invalidate_array_index_fast_path() {
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
+}
+
 pub(crate) fn object_prototype_addr() -> usize {
     let cached = OBJECT_PROTO_ADDR.load(Ordering::Relaxed);
     if cached != usize::MAX {
@@ -95,6 +107,7 @@ pub(crate) fn note_object_prototype_index_write(obj: usize) {
     if !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed) && obj != 0 && obj == object_prototype_addr()
     {
         OBJECT_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
+        invalidate_array_index_fast_path();
     }
 }
 
@@ -169,6 +182,7 @@ pub(crate) fn array_prototype_addr() -> usize {
 pub(crate) fn note_array_index_write(arr: usize) {
     if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) && arr != 0 && arr == array_prototype_addr() {
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
+        invalidate_array_index_fast_path();
     }
 }
 

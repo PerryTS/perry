@@ -834,6 +834,7 @@ pub(super) fn compile_closure(
         integer_locals: native_facts.integer_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
+        persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),

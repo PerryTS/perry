@@ -29,6 +29,14 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // when it is non-zero (descriptors / typed-feedback in use). Defined in
     // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
     module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
+    // Sticky summary of indexed Array/Object prototype pollution and custom
+    // Array [[Prototype]] installation. Normal compiled programs read this
+    // byte directly in the inline plain-array index guard.
+    module.add_external_global("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED", I8);
+    // Process-wide count of threads with an active incremental marking
+    // barrier. Persistent shadow-slot updates use zero as an authoritative
+    // fast skip before calling the TLS-backed root barrier.
+    module.add_external_global("PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", I32);
     // #5525 follow-up: the process-global typed-array kind cache + the
     // "any exotic views live" guard, exported from perry-runtime so the codegen
     // can emit a guarded *inline* typed-array element load at the access site
@@ -444,6 +452,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         "js_put_value_set",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_put_value_set_ic_miss",
+        DOUBLE,
+        &[DOUBLE, I64, DOUBLE, I32, PTR],
     );
     module.declare_function(
         "js_super_put_value_set",

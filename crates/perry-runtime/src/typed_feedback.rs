@@ -892,6 +892,9 @@ fn observe_property(
     obj_bits: u64,
     key: *const crate::StringHeader,
 ) {
+    if site_id == 0 || !typed_feedback_enabled() {
+        return;
+    }
     let object_addr = normalize_raw_object_addr(obj_bits);
     let (shape_addr, class_id, gc_type) = object_shape(object_addr);
     observe(
@@ -996,6 +999,12 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    if !typed_feedback_enabled() {
+        if crate::object::js_object_set_field_by_name_transition_fast(obj, key, value) == 0 {
+            crate::object::js_object_set_field_by_name(obj, key, value);
+        }
+        return;
+    }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_addr, class_id, gc_type) = object_shape(object_addr);
     let handled = crate::object::js_object_set_field_by_name_transition_fast(obj, key, value) != 0;

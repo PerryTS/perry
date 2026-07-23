@@ -1123,6 +1123,11 @@ pub(crate) fn lower_let(
     }
     ctx.locals.insert(id, slot.clone());
     ctx.local_types.insert(id, refined_ty.clone());
+    if !mutable {
+        if let Some(init_expr) = init {
+            crate::expr::enable_persistent_shadow_slot_for_array_alias(ctx, id, init_expr);
+        }
+    }
     // Int32 specialization (issue #48): if this local qualifies as
     // integer-valued (all writes are `| 0` / `>>> 0` / bitwise / int
     // literal / ++/--), allocate a parallel i32 slot. Update/LocalSet

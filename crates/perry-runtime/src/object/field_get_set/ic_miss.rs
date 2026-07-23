@@ -413,8 +413,13 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
             };
+        let has_own_descriptors = is_object && super::super::object_has_descriptors(obj as usize);
         let is_regular = is_object && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR;
-        if can_cache && is_regular {
+        // Gate-neutral builtin accessors deliberately leave the process-wide
+        // accessor latch clear. Their owner bit must still block this PIC:
+        // its generated hit path is a raw slot load and would otherwise turn
+        // `Set.prototype.size` into `undefined` instead of invoking the getter.
+        if can_cache && is_regular && !has_own_descriptors {
             let keys = (*obj).keys_array;
             if keys.is_null() || (keys as usize) <= 0x10000 {
                 let value = js_object_get_field_by_name(obj, key);

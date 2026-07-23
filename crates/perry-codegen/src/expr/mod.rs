@@ -101,7 +101,8 @@ pub(crate) use range_facts::{
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
-    emit_typed_feedback_register_site, native_region_slug, TypedFeedbackContract, TypedFeedbackKind,
+    emit_typed_feedback_register_site, native_region_slug, typed_feedback_emission_enabled,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 pub(crate) use url_helpers::lower_url_string_getter;
 pub(crate) use v8_interop::{
@@ -128,7 +129,7 @@ mod shadow_slot;
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
 pub(crate) use shadow_slot::{
     emit_shadow_slot_bind_for_local, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    expr_is_known_non_pointer_shadow_value,
+    enable_persistent_shadow_slot_for_array_alias, expr_is_known_non_pointer_shadow_value,
 };
 
 /// One in-flight inline-constructor return target. See
@@ -598,6 +599,12 @@ pub(crate) struct FnCtx<'a> {
     /// the frame reflects the live pointer state at the following
     /// safepoint. Today — just tracked, not consumed.
     pub shadow_slot_map: std::collections::HashMap<u32, u32>,
+    /// Shadow slots bound once in the function-entry setup and deliberately
+    /// kept active until return. This is used for immutable loop aliases read
+    /// from an already-rooted array: the local alloca is stable, and retaining
+    /// its current value for the function lifetime avoids per-iteration TLS
+    /// bind/clear traffic without weakening GC reachability.
+    pub persistent_shadow_slots: std::collections::HashSet<u32>,
     /// Top-level statement index → shadow-frame slot indices that can be
     /// cleared after lowering that statement. Built once per user function
     /// from HIR local-reference last-use information.

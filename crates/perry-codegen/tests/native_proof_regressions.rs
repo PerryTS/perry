@@ -13441,6 +13441,76 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
     );
 }
 
+#[test]
+fn static_put_value_uses_write_pic_for_call_free_rhs() {
+    let object = 1u32;
+    let left = 2u32;
+    let right = 3u32;
+    let module = module_with_classes_and_params(
+        "static_put_value_write_pic",
+        Vec::new(),
+        vec![
+            param(object, "object", Type::Any),
+            param(left, "left", Type::Number),
+            param(right, "right", Type::Number),
+        ],
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(object)),
+            key: Box::new(Expr::String("x".to_string())),
+            value: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(left)),
+                right: Box::new(Expr::LocalGet(right)),
+            }),
+            receiver: Box::new(Expr::LocalGet(object)),
+            strict: false,
+        }))],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_put_value_set_ic_miss"),
+        "a static existing-field write with a call-free numeric RHS should emit the guarded PIC:\n{ir}"
+    );
+    assert!(
+        ir.contains("put.pic.guard") && ir.contains("put.pic.hit") && ir.contains("put.pic.miss"),
+        "the PIC must branch before header dereferences and retain a semantic miss path"
+    );
+    assert!(
+        ir.contains("4611686018427387904") && ir.contains("1073741824"),
+        "the write PIC must mirror the read PIC's discriminated, never-reused ShapeId token"
+    );
+}
+
+#[test]
+fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
+    let object = 1u32;
+    let module = module_with_classes_and_params(
+        "allocating_rhs_put_value_write_pic",
+        Vec::new(),
+        vec![param(object, "object", Type::Any)],
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(object)),
+            key: Box::new(Expr::String("x".to_string())),
+            value: Box::new(Expr::Object(vec![("value".to_string(), Expr::Integer(1))])),
+            receiver: Box::new(Expr::LocalGet(object)),
+            strict: false,
+        }))],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        !ir.contains("call double @js_put_value_set_ic_miss"),
+        "an allocating RHS must stay on the rooted generic PutValue path"
+    );
+    assert!(
+        ir.contains("call double @js_put_value_set("),
+        "the rejected PIC case must retain the complete strict/sloppy runtime semantics:\n{ir}"
+    );
+}
+
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;
 

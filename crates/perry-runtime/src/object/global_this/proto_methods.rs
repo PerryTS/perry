@@ -199,20 +199,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 if !getter.is_null() {
                     let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
                     install_builtin_getter(proto_obj, "byteLength", getter_bits);
-                    // #6809: gate-neutral BUILTIN install — reads dispatch
-                    // through `install_builtin_getter` above; the descriptor
-                    // entry is reflection-only, and this runs during
-                    // `populate_global_this_builtins` (flipping the process
-                    // descriptor gates here poisoned every dynamic write).
-                    set_builtin_accessor_descriptor(
-                        proto_obj as usize,
-                        "byteLength".to_string(),
-                        AccessorDescriptor {
-                            get: getter_bits,
-                            set: 0,
-                        },
-                        PropertyAttrs::new(true, false, true),
-                    );
                 }
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -240,20 +226,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 if !getter.is_null() {
                     let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
                     install_builtin_getter(proto_obj, "byteLength", getter_bits);
-                    // #6809: gate-neutral BUILTIN install — reads dispatch
-                    // through `install_builtin_getter` above; the descriptor
-                    // entry is reflection-only, and this runs during
-                    // `populate_global_this_builtins` (flipping the process
-                    // descriptor gates here poisoned every dynamic write).
-                    set_builtin_accessor_descriptor(
-                        proto_obj as usize,
-                        "byteLength".to_string(),
-                        AccessorDescriptor {
-                            get: getter_bits,
-                            set: 0,
-                        },
-                        PropertyAttrs::new(true, false, true),
-                    );
                 }
             }
             set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");

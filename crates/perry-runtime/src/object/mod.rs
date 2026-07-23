@@ -1619,7 +1619,15 @@ pub struct ObjectMeta {
     /// Same summary for accessor descriptors (`get`/`set` installs) — the
     /// `accessor_descriptors` table twin of `attr_key_bits`.
     pub accessor_key_bits: u64,
+    /// Object-only state that cannot share `GcHeader._reserved`: every bit in
+    /// that 16-bit word is already owned by GC layout/age or another object
+    /// flag. In particular, bit 12 is `GC_OBJ_TYPED_LAYOUT_INTACT`, so using
+    /// it for prototype divergence made every typed-layout object appear to
+    /// have a custom prototype.
+    pub flags: u64,
 }
+
+pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
 /// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
@@ -1649,6 +1657,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).prototype = 0;
     (*meta).attr_key_bits = 0;
     (*meta).accessor_key_bits = 0;
+    (*meta).flags = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;
