@@ -125,6 +125,11 @@ crates/perry-runtime/src/regex/grammar.rs
 # sub-controllers into siblings (tee.rs / byob already peeled) is a mechanical
 # follow-up.
 crates/perry-stdlib/src/streams.rs
+# GC policy core (2009 lines): phase-C descriptor-summary accounting pushed the
+# coupled collection-policy state machine nine lines over the gate on main. Its
+# phase/debt/budget groups should be split together in the tracked #1435 file
+# decomposition rather than mixed into an unrelated runtime fast-path PR.
+crates/perry-runtime/src/gc/policy.rs
 EOF
 )
 
