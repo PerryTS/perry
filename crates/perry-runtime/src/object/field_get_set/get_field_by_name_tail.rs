@@ -915,7 +915,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
                     if let Some(index) = super::super::canonical_array_index(name) {
-                        if ACCESSORS_IN_USE.with(|c| c.get()) {
+                        if crate::state::state().descriptors.accessors_in_use.get() {
                             if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                                 if acc.get != 0 {
                                     let receiver = crate::value::js_nanbox_pointer(obj as i64);
@@ -936,7 +936,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                     // Named (non-index) accessor installed via
                     // `Object.defineProperty(arr, "prop", {get,set})`.
-                    if ACCESSORS_IN_USE.with(|c| c.get()) {
+                    if crate::state::state().descriptors.accessors_in_use.get() {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
                                 let receiver = crate::value::js_nanbox_pointer(obj as i64);
@@ -1525,6 +1525,18 @@ pub(crate) fn get_field_by_name_object_tail(
             h
         };
         let keys_id = keys as usize;
+        // #6759 C3c: prefer the header-stamped stable shape id as the cache
+        // key — it survives owned grow-reallocs AND GC moves of the keys
+        // array, both of which change `keys_id` and orphaned the entry.
+        // Unstamped objects (stamp 0 / class instances) keep the address
+        // key; either way every hit below re-validates the stored key, so a
+        // colliding or foreign key can only miss, never mis-resolve.
+        let stamp = (*obj).parent_class_id;
+        let shape_key = if (*obj).class_id == 0 && super::super::shapes::is_shape_id(stamp) {
+            stamp as usize
+        } else {
+            keys_id
+        };
 
         // Clamp the keys length to capacity so a bogus/oversized length can't
         // drive the wide-key map build or the linear scan below into unbounded
@@ -1532,25 +1544,22 @@ pub(crate) fn get_field_by_name_object_tail(
         // arrays.
         let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
 
-        // Thread-local inline cache: fixed-size direct-mapped cache (no allocation, no HashMap)
-        // Each entry stores (keys_ptr, key_hash, field_index). Copied-minor
+        // Per-thread inline cache (`state().field_lookup.field_cache`):
+        // fixed-size direct-mapped cache (no allocation, no HashMap).
+        // Each entry stores (shape_key, key_hash, field_index). Copied-minor
         // nursery reset can reuse a keys-array address, so cache hits still
         // validate the key slot before returning a field.
-        const FIELD_CACHE_SIZE: usize = 1024;
-        thread_local! {
-            static FIELD_CACHE: std::cell::UnsafeCell<[(usize, u32, u32); FIELD_CACHE_SIZE]> =
-                const { std::cell::UnsafeCell::new([(0usize, 0u32, 0u32); FIELD_CACHE_SIZE]) };
-        }
-        let cache_idx = (keys_id.wrapping_add(key_hash as usize)) % FIELD_CACHE_SIZE;
-        let cached = FIELD_CACHE.with(|c| {
-            let cache = &*c.get();
+        let st = crate::state::state();
+        let cache_idx = (shape_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
+        let cached = {
+            let cache = &*st.field_lookup.field_cache.get();
             let entry = cache[cache_idx];
-            if entry.0 == keys_id && entry.1 == key_hash {
+            if entry.0 == shape_key && entry.1 == key_hash {
                 Some(entry.2)
             } else {
                 None
             }
-        });
+        };
         if let Some(field_idx) = cached {
             let idx = field_idx as usize;
             let cache_hit_valid = if idx < key_count {
@@ -1563,17 +1572,15 @@ pub(crate) fn get_field_by_name_object_tail(
                 false
             };
             if !cache_hit_valid {
-                FIELD_CACHE.with(|c| {
-                    let cache = &mut *c.get();
-                    cache[cache_idx] = (0, 0, 0);
-                });
+                let cache = &mut *st.field_lookup.field_cache.get();
+                cache[cache_idx] = (0, 0, 0);
             } else {
                 // Accessor short-circuit: if this (obj, key) has a getter installed,
                 // invoke it instead of reading the slot. The `ACCESSORS_IN_USE`
                 // thread-local gate keeps this off the hot path in the common case;
                 // the per-object flag gate avoids invoking a stale getter left by a
                 // freed object whose address this fresh object reused.
-                if ACCESSORS_IN_USE.with(|c| c.get())
+                if st.descriptors.accessors_in_use.get()
                     && super::super::object_has_descriptors(obj as usize)
                 {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
@@ -1602,7 +1609,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
             if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
-                if ACCESSORS_IN_USE.with(|c| c.get())
+                if st.descriptors.accessors_in_use.get()
                     && super::super::object_has_descriptors(obj as usize)
                 {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
@@ -1636,16 +1643,33 @@ pub(crate) fn get_field_by_name_object_tail(
             // slow-path lookup is what backs `obj[k]` for ≤5-byte
             // keys after a field-cache miss.
             if crate::string::js_string_key_matches(key_val, key) {
-                // Cache this lookup for next time
-                FIELD_CACHE.with(|c| {
-                    let cache = &mut *c.get();
-                    cache[cache_idx] = (keys_id, key_hash, i as u32);
-                });
+                // Cache this lookup for next time. #6759 C3c: stamp the
+                // object's stable shape id (allocating the record on first
+                // touch) and key the entry on it, so the entry survives the
+                // grow-reallocs and GC moves that retire `keys_id`.
+                {
+                    let store_key = if (*obj).class_id == 0 {
+                        let id =
+                            super::super::shapes::shape_id_for_keys_ensure(keys, key_count as u32);
+                        if id != 0 {
+                            (*(obj as *mut ObjectHeader)).parent_class_id = id;
+                            id as usize
+                        } else {
+                            keys_id
+                        }
+                    } else {
+                        keys_id
+                    };
+                    let store_idx =
+                        (store_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
+                    let cache = &mut *st.field_lookup.field_cache.get();
+                    cache[store_idx] = (store_key, key_hash, i as u32);
+                }
                 if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);
                 }
                 // Accessor short-circuit (see fast path above).
-                if ACCESSORS_IN_USE.with(|c| c.get())
+                if st.descriptors.accessors_in_use.get()
                     && super::super::object_has_descriptors(obj as usize)
                 {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {

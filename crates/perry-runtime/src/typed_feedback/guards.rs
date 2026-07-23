@@ -12,7 +12,9 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
     unsafe {
         let obj = object_addr as *const ObjectHeader;
         let keys = (*obj).keys_array;
-        if keys.is_null() || keys as usize != shape_addr {
+        // #6804: `shape_addr` is an opaque token (see `object_shape`), not
+        // necessarily the keys address — the key scan below is the check.
+        if keys.is_null() {
             return false;
         }
         let key_count = crate::array::js_array_length(keys) as usize;

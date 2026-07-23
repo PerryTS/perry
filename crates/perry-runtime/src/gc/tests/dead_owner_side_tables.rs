@@ -66,6 +66,7 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
     (*obj).parent_class_id = 0;
     (*obj).field_count = 0;
     (*obj).keys_array = std::ptr::null_mut();
+    (*obj).meta = std::ptr::null_mut();
     obj
 }
 
@@ -448,19 +449,30 @@ fn test_closure_dead_payload_arm_clears_side_tables() {
 /// Assert the arm now clears the KEYS_INDEX entry alongside the overflow one.
 #[test]
 fn test_object_dead_payload_arm_clears_keys_index() {
+    // #6759 C1: key indexes are shape records keyed on the KEYS_ARRAY
+    // address; the per-object dead-payload arm no longer prunes them.
+    // The successor guarantee: the dead-owner fan-out drops a shape whose
+    // keys_array is dead (memory-only — per-hit content validation covers
+    // correctness for anything the prune misses).
     let _global = global_side_table_test_lock();
-    let owner: usize = 0x0BEC_1DE0_0000_2026;
-    crate::object::test_seed_keys_index_entry(owner);
-    assert!(crate::object::test_keys_index_entry_exists(owner));
+    let dead_keys: usize = 0x0BEC_1DE0_0000_2026;
+    let live_keys: usize = 0x0BEC_1DE0_0000_3026;
+    crate::object::test_seed_keys_index_entry(dead_keys);
+    crate::object::test_seed_keys_index_entry(live_keys);
+    assert!(crate::object::test_keys_index_entry_exists(dead_keys));
 
-    gc_type_clear_dead_payload_side_tables(GC_TYPE_OBJECT, owner);
+    crate::object::shapes::prune_dead_shape_keys(&|addr| addr == dead_keys);
 
     assert!(
-        !crate::object::test_keys_index_entry_exists(owner),
-        "dead object's KEYS_INDEX entry must be pruned by the \
-         ObjectOverflowFields dead-payload arm (else it leaks forever \
-         keyed on the recycled address)"
+        !crate::object::test_keys_index_entry_exists(dead_keys),
+        "a dead keys_array's shape record must be pruned by the dead-owner \
+         fan-out (else it leaks forever keyed on the recycled address)"
     );
+    assert!(
+        crate::object::test_keys_index_entry_exists(live_keys),
+        "a live keys_array's shape record must survive the prune"
+    );
+    crate::object::shapes::shape_drop(live_keys as *const crate::array::ArrayHeader);
 }
 
 #[test]
@@ -525,9 +537,20 @@ fn test_arguments_entry_rekeys_and_mapped_box_survives_copied_minor() {
 fn test_dead_owner_prototype_vm_expando_and_filehandle_entries_pruned() {
     let _guard = GcTestIsolationGuard::new();
 
-    // OBJECT_PROTOTYPES: recorded `Object.setPrototypeOf(obj, null)`.
-    let (proto_owner, _) = unsafe { alloc_nursery_test_object(0) };
-    let proto_owner = proto_owner as usize;
+    // OBJECT_PROTOTYPES (residual registry, #6759 B): shaped objects now
+    // store their recorded prototype in the per-object meta record, which
+    // dies WITH the owner (no prune needed — see
+    // `test_object_meta_prototype_survives_copied_minor_move`). The
+    // registry still backs non-object owners, so exercise the prune with a
+    // TYPED-ARRAY-tagged owner. (Not a real array: retargeting one flips
+    // the process-wide `ARRAY_TARGET_PROTO_RECORDED` latch, permanently
+    // standing down the typed-feedback array fast paths every later
+    // `typed_feedback` guard test in this process asserts.)
+    let proto_owner = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::object::ObjectHeader>(),
+        8,
+        GC_TYPE_TYPED_ARRAY,
+    ) as usize;
     crate::object::prototype_chain::object_set_static_prototype(
         proto_owner,
         crate::value::TAG_NULL,
@@ -593,4 +616,260 @@ fn test_dom_exception_set_cleared_with_error_side_tables() {
         "dead error must be removed from DOM_EXCEPTION_ERRORS by the error \
          side-table death cleanup"
     );
+}
+
+/// #6759 Phase B: a shaped object's recorded `[[Prototype]]` lives in its
+/// per-object `ObjectMeta` record. A copied minor moves the owner, the meta
+/// record, AND the prototype object; the header's meta edge and the
+/// record's prototype slot must both be rewritten so the moved owner still
+/// resolves the moved prototype.
+#[test]
+fn test_object_meta_prototype_survives_copied_minor_move() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let (proto, _) = unsafe { alloc_nursery_test_object(0) };
+    let old_owner = owner as usize;
+    let old_proto = proto as usize;
+    crate::object::prototype_chain::object_set_static_prototype(old_owner, ptr_bits(old_proto));
+    assert_eq!(
+        crate::object::prototype_chain::object_static_prototype(old_owner),
+        Some(ptr_bits(old_proto)),
+        "test premise: the meta-resident prototype reads back before the GC"
+    );
+    js_shadow_slot_set(0, ptr_bits(old_owner));
+    js_shadow_slot_set(1, ptr_bits(old_proto));
+
+    let _ = gc_collect_minor();
+
+    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let new_proto = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+    assert_ne!(new_owner, old_owner, "test premise: the owner must move");
+    assert_ne!(new_proto, old_proto, "test premise: the proto must move");
+    let recorded = crate::object::prototype_chain::object_static_prototype(new_owner)
+        .expect("the moved owner must still resolve its recorded prototype via its meta record");
+    assert_eq!(
+        (recorded & POINTER_MASK) as usize,
+        new_proto,
+        "the meta record's prototype slot must be rewritten to the moved proto"
+    );
+
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
+}
+
+/// #6759 Phase C2: the per-key descriptor summary in the meta record gates
+/// table probes — exactly (no false negatives) for installed keys, and
+/// authoritatively negative for a fresh owner and for keys whose Bloom bit
+/// is clear. Non-meta-capable owners (handle-band ids) stay on the
+/// conservative probe-always arm, so their installs still round-trip.
+#[test]
+fn test_descriptor_meta_summary_gates_probes() {
+    // NOTE: the guard already takes the process-global side-table lock —
+    // taking `global_side_table_test_lock()` here too self-deadlocks.
+    let _guard = GcTestIsolationGuard::new();
+
+    unsafe {
+        let (owner, _) = alloc_nursery_test_object(0);
+        let addr = owner as usize;
+
+        // Fresh meta-capable owner: null meta is an authoritative miss.
+        assert!(
+            !crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", false),
+            "fresh owner must report no possible attr entry"
+        );
+        assert!(
+            !crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", true),
+            "fresh owner must report no possible accessor entry"
+        );
+        assert!(
+            !crate::object::owner_may_have_descriptor_entries(addr, false),
+            "fresh owner must report no possible entries at all"
+        );
+
+        crate::object::set_property_attrs(
+            addr,
+            "x".to_string(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        assert!(
+            crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", false),
+            "installed key's bit must be set"
+        );
+        assert!(
+            crate::object::get_property_attrs(addr, "x").is_some_and(|a| !a.writable()),
+            "gated getter must still return the installed attrs"
+        );
+        assert!(
+            crate::object::get_property_attrs(addr, "unrelated").is_none(),
+            "un-installed key must miss through the gate"
+        );
+        // Exact negative when the bits don't collide; a collision only
+        // costs a (missing) probe, which the getter assertion above covers.
+        let x_bit = crate::object::descriptor_state::test_descriptor_key_bit("x");
+        let other_bit = crate::object::descriptor_state::test_descriptor_key_bit("unrelated");
+        if x_bit != other_bit {
+            assert!(
+                !crate::object::descriptor_state::may_have_descriptor_entry(
+                    addr,
+                    "unrelated",
+                    false
+                ),
+                "non-colliding un-installed key must be a summary miss"
+            );
+        }
+        // The attr install must not set the ACCESSOR word.
+        if x_bit != 0 {
+            assert!(
+                !crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", true),
+                "attr install must not claim a possible accessor entry"
+            );
+        }
+
+        // Handle-band owner (no GC header): conservative arm, still works.
+        let handle = 0x400usize;
+        assert!(
+            crate::object::descriptor_state::may_have_descriptor_entry(handle, "x", false),
+            "non-meta-capable owner must stay conservative"
+        );
+        crate::object::set_property_attrs(
+            handle,
+            "h".to_string(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        assert!(
+            crate::object::get_property_attrs(handle, "h").is_some_and(|a| !a.writable()),
+            "handle-band install must round-trip via the conservative arm"
+        );
+        crate::object::clear_property_attrs(handle, "h");
+    }
+}
+
+/// #6759 Phase C2: the summary bits live in the meta record, which moves
+/// WITH its owner on a copied minor while `scan_descriptor_roots_mut`
+/// rekeys the table entry to the owner's new address — the gated getter
+/// must still resolve the entry at the moved address.
+#[test]
+fn test_descriptor_meta_summary_survives_copied_minor_move() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    // The scoped registry starts empty — install the scanner that rekeys
+    // descriptor-table owner addresses on evacuation.
+    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let old_addr = owner as usize;
+    crate::object::set_property_attrs(
+        old_addr,
+        "ro".to_string(),
+        crate::object::PropertyAttrs::new(false, true, false),
+    );
+    js_shadow_slot_set(0, ptr_bits(old_addr));
+
+    let _ = gc_collect_minor();
+
+    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_addr, old_addr, "test premise: the owner must move");
+    assert!(
+        crate::object::descriptor_state::may_have_descriptor_entry(new_addr, "ro", false),
+        "summary bits must travel with the moved owner's meta record"
+    );
+    let attrs = crate::object::get_property_attrs(new_addr, "ro")
+        .expect("rekeyed descriptor entry must resolve at the moved address");
+    assert!(
+        !attrs.writable() && !attrs.configurable(),
+        "moved owner must keep its installed attributes"
+    );
+    assert!(
+        crate::object::get_property_attrs(new_addr, "other").is_none(),
+        "un-installed key must still miss at the moved address"
+    );
+
+    crate::object::clear_property_attrs(new_addr, "ro");
+    js_shadow_slot_set(0, 0);
+}
+
+/// #6759 Phase C3a: an owned keys array's grow-realloc migrates the shape
+/// record (slot map + stable shape_id) to the new address instead of
+/// orphaning it.
+#[test]
+fn test_shape_record_migrates_on_owned_grow() {
+    let _global = global_side_table_test_lock();
+    let old_addr: usize = 0xC3A0_0000_0000_1010;
+    let new_addr: usize = 0xC3A0_0000_0000_2020;
+    crate::object::shapes::test_seed_shape_entry(old_addr);
+    let id = crate::object::shapes::test_shape_id_for_keys(old_addr)
+        .expect("seeded entry must have an id");
+    assert!(id != 0, "shape ids are 1-based");
+
+    crate::object::shapes::shape_keys_grown(old_addr, new_addr as *const crate::array::ArrayHeader);
+
+    assert!(
+        !crate::object::shapes::test_shape_entry_exists(old_addr),
+        "grown-away address must no longer hold the record"
+    );
+    assert_eq!(
+        crate::object::shapes::test_shape_id_for_keys(new_addr),
+        Some(id),
+        "the record — including its stable shape_id — must move to the new address"
+    );
+    // Cleanup so the seeded address can't leak into later tests.
+    crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+}
+
+/// #6759 Phase C3a: GC evacuation MOVES a live keys array — the shape
+/// table's metadata-rewrite scanner must rekey the record to the array's
+/// to-space address (same pattern as the descriptor owner rekey), so a
+/// wide object's slot map survives a copied minor.
+#[test]
+fn test_shape_record_rekeys_on_copied_minor_move() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    // The scoped registry starts empty — install the C3a rekey scanner.
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+
+    let keys = unsafe { alloc_nursery_test_array() };
+    let old_addr = keys as usize;
+    crate::object::shapes::test_seed_shape_entry(old_addr);
+    let id = crate::object::shapes::test_shape_id_for_keys(old_addr)
+        .expect("seeded entry must have an id");
+    js_shadow_slot_set(0, ptr_bits(old_addr));
+
+    let _ = gc_collect_minor();
+
+    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_addr, old_addr, "test premise: the keys array must move");
+    assert!(
+        !crate::object::shapes::test_shape_entry_exists(old_addr),
+        "from-space address must no longer key the record"
+    );
+    assert_eq!(
+        crate::object::shapes::test_shape_id_for_keys(new_addr),
+        Some(id),
+        "the shape record must be rekeyed to the moved keys array"
+    );
+
+    crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+    js_shadow_slot_set(0, 0);
+}
+
+/// #6759 Phase B: the meta record is kept alive by its owner (the header
+/// edge is a traced child slot) across a full non-moving collection, and an
+/// explicit-null recording is preserved.
+#[test]
+fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let addr = owner as usize;
+    crate::object::prototype_chain::object_set_static_prototype(addr, crate::value::TAG_NULL);
+    js_shadow_slot_set(0, ptr_bits(addr));
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::prototype_chain::object_static_prototype(addr),
+        Some(crate::value::TAG_NULL),
+        "a live (rooted) owner's meta record — and its explicit-null \
+         prototype — must survive a full collection"
+    );
+    js_shadow_slot_set(0, 0);
 }

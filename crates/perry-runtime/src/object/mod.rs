@@ -84,6 +84,8 @@ mod polymorphic_index;
 mod primitive_proto_thunks;
 mod property_key;
 pub(crate) mod prototype_chain;
+pub(crate) mod shapes;
+pub(crate) use shapes::ShapeTable;
 mod prototype_helpers;
 mod reflect_support;
 mod regex_proto_thunks;
@@ -166,12 +168,13 @@ pub(crate) use descriptor_state::{
     clear_property_attrs, constructor_accessor_ever_installed, descriptors_in_use,
     disable_class_field_inline_guard, get_accessor_descriptor, get_property_attrs,
     json_object_getter_value, mark_all_keys, object_has_descriptors,
-    object_proto_may_intercept_key, plain_data_write_may_intercept,
-    prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
-    set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
-    AccessorDescriptor, PropertyAttrs, ACCESSORS_IN_USE, ACCESSOR_DESCRIPTORS,
-    PROPERTY_ATTRS_IN_USE, PROPERTY_DESCRIPTORS,
+    object_proto_may_intercept_key, owner_may_have_descriptor_entries,
+    plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
+    reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
+    set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, DescriptorTables,
+    PropertyAttrs,
 };
+pub(crate) use field_get_set::FieldLookupCaches;
 pub use this_binding::{
     js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
     js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
@@ -228,35 +231,72 @@ pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 // This handles cases like Object.assign() adding many fields to an object
 // that was allocated with only 8 slots (e.g., @noble/curves Fp field with 21 properties).
 thread_local! {
+    static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String), u64>> =
+        RefCell::new(HashMap::new());
+}
+
+/// #6759 Phase A: object field-storage side tables and the shape/transition
+/// caches, grouped as the `object_hot` field of
+/// [`crate::state::RuntimeState`]. Previously five separate
+/// `thread_local!`s; reach them via `crate::state::state().object_hot`
+/// (one TLS fetch for the whole group).
+pub(crate) struct ObjectHotTables {
+    /// Extra properties for objects that exceeded their pre-allocated
+    /// inline slot count.
+    ///
     /// Heap-pointer keyed; PtrHasher avoids the per-call SipHash on
     /// every overflow read/write. `clear_overflow_for_ptr` was 0.7%
     /// leaf samples on perf-comprehensive (called from object dispatch
     /// + arena_walk_objects in the GC path).
-    static OVERFLOW_FIELDS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<u64>>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String), u64>> =
-        RefCell::new(HashMap::new());
+    pub(crate) overflow_fields: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<u64>>>,
+    /// Last-accessed overflow Vec cache — one entry, keyed by `obj_ptr`.
+    /// Skips the outer HashMap lookup on consecutive writes to the same
+    /// object (the row-build pattern). See `overflow_set` for the safety
+    /// argument behind the cached raw `Vec` pointer.
+    pub(crate) overflow_last: Cell<(usize, *mut Vec<u64>)>,
+    /// Direct-mapped inline shape cache. Empty entries have shape_id == 0
+    /// and keys_array == null.
+    pub(crate) shape_inline_cache:
+        std::cell::UnsafeCell<[ShapeCacheEntry; SHAPE_INLINE_CACHE_SIZE]>,
+    /// Overflow map for shape_ids that collide in the inline cache. Values
+    /// are `(keys_array, runtime_shape_id)` — see [`ShapeCacheEntry`].
+    pub(crate) shape_cache_overflow: RefCell<HashMap<u32, (*mut ArrayHeader, u32)>>,
+    /// Per-thread shape-transition cache for the dynamic-key write path;
+    /// see the doc block above `with_transition_cache`. HEAP-allocated
+    /// (`Box`) — oversized inline storage overflowed the arm64_32 ILP32
+    /// TLS layout when this lived in a `thread_local!`, and keeping it
+    /// boxed inside the heap-allocated `RuntimeState` preserves that.
+    pub(crate) transition_cache: std::cell::UnsafeCell<Box<[TransitionEntry]>>,
+}
 
-    /// Sidecar hash index for object key lookup. The on-object
-    /// `keys_array` only supports O(N) linear scan; for objects that
-    /// grow beyond `KEYS_INDEX_THRESHOLD` keys, the linear scan
-    /// becomes O(N²) total work for the build-then-fill pattern (e.g.
-    /// `for (i=0..N) obj["k_"+i] = i`). Without this index, building
-    /// a 10k-key dictionary takes ~9 s (Bun: 4 ms — 2200× slower).
-    ///
-    /// Keyed on the keys_array heap pointer. Each entry maps
-    /// FNV-1a content hash of the key bytes → slot index in the
-    /// keys_array. Built lazily on first lookup at threshold; rebuilt
-    /// on miss after a reallocation (`js_array_push` returns a new
-    /// pointer when the backing storage grew). Incremental updates
-    /// happen when the array stays in place.
-    ///
-    /// Stale entries (keys_array address recycled by GC into an
-    /// unrelated array) are tolerated: lookup just misses, content
-    /// validation against the actual stored key on the linear-scan
-    /// fallback ensures correctness.
-    static KEYS_INDEX: RefCell<crate::fast_hash::PtrHashMap<usize, (u32, std::collections::HashMap<u64, Vec<u32>>)>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+impl ObjectHotTables {
+    pub(crate) fn new() -> Self {
+        ObjectHotTables {
+            overflow_fields: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
+            overflow_last: Cell::new((0, std::ptr::null_mut())),
+            shape_inline_cache: std::cell::UnsafeCell::new(
+                [ShapeCacheEntry {
+                    shape_id: 0,
+                    runtime_shape_id: 0,
+                    keys_array: std::ptr::null_mut(),
+                }; SHAPE_INLINE_CACHE_SIZE],
+            ),
+            shape_cache_overflow: RefCell::new(HashMap::new()),
+            transition_cache: std::cell::UnsafeCell::new(
+                vec![
+                    TransitionEntry {
+                        prev_keys: 0,
+                        key_ptr: 0,
+                        next_keys: 0,
+                        slot_idx: 0,
+                        target_len: 0,
+                    };
+                    TRANSITION_CACHE_SIZE
+                ]
+                .into_boxed_slice(),
+            ),
+        }
+    }
 }
 
 /// When keys_array length exceeds this, build the sidecar hash index
@@ -302,19 +342,14 @@ fn key_bytes_hash(name_ptr: *const u8, name_len: usize) -> u64 {
     h
 }
 
-/// Look up the slot index for `key` in `obj`'s keys array via the
-/// sidecar hash index. Returns `Some(slot)` on hit, `None` on miss
-/// (the caller must then fall through to append/grow).
-///
-/// Keyed on the OBJECT pointer (not the keys_array pointer) because
-/// shape-sharing means the keys_array gets cloned on every insert,
-/// which would invalidate a keys-keyed sidecar after each call. The
-/// object pointer is stable within its lifetime (until GC moves it —
-/// at which point any sidecar entry just becomes a harmless stale
-/// reference; the next lookup misses and rebuilds).
+/// Locate `key` in `obj`'s keys array via the shape record (#6759 C1:
+/// keyed on keys_array identity — shared across same-shape objects —
+/// replacing the per-object sidecar). Returns `Some(slot)` on a
+/// content-validated hit, `None` on miss (caller falls through to
+/// append/grow or the linear scan).
 #[inline]
 unsafe fn keys_index_lookup(
-    obj: *const ObjectHeader,
+    _obj: *const ObjectHeader,
     keys: *const crate::array::ArrayHeader,
     key_bytes: &[u8],
     key_hash: u64,
@@ -323,77 +358,25 @@ unsafe fn keys_index_lookup(
     if key_count < KEYS_INDEX_THRESHOLD {
         return None;
     }
-    let obj_addr = obj as usize;
-    // Look up the cached index. If absent OR stale (length doesn't
-    // match — caller appended without going through `keys_index_insert`),
-    // rebuild.
-    let needs_rebuild = KEYS_INDEX.with(|m| {
-        let m = m.borrow();
-        match m.get(&obj_addr) {
-            Some((cached_len, _)) => *cached_len != key_count,
-            None => true,
-        }
-    });
-    if needs_rebuild {
-        let mut map: std::collections::HashMap<u64, Vec<u32>> =
-            std::collections::HashMap::with_capacity(key_count as usize);
-        // SSO-aware key decode (#1781 family): short keys can be stored INLINE
-        // (`SHORT_STRING_TAG`), not as heap `STRING_TAG` pointers. The previous
-        // heap-only `is_string()` gate silently dropped them from the index, so
-        // an authoritative-miss caller (the [[Set]] fast path's append, and now
-        // the defineProperty path) could duplicate an SSO-stored key.
-        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let (slots, slot_len) = keys_array_dense_slots(keys);
-        for i in 0..key_count.min(slot_len as u32) {
-            let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
-            if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
-                let h = key_bytes_hash(b.as_ptr(), b.len());
-                map.entry(h).or_default().push(i);
-            }
-        }
-        KEYS_INDEX.with(|m| {
-            m.borrow_mut().insert(obj_addr, (key_count, map));
-        });
-    }
-    KEYS_INDEX.with(|m| {
-        let m = m.borrow();
-        let (_, map) = m.get(&obj_addr)?;
-        let candidates = map.get(&key_hash)?;
-        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let (slots, slot_len) = keys_array_dense_slots(keys);
-        for &i in candidates {
-            if (i as usize) >= slot_len {
-                continue;
-            }
-            let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
-            let Some(stored_bytes) = crate::string::js_string_key_bytes(v, &mut sso) else {
-                continue;
-            };
-            if stored_bytes == key_bytes {
-                return Some(i);
-            }
-        }
-        None
-    })
+    shapes::shape_slot_lookup(keys, key_bytes, key_hash, key_count, true)
 }
 
-/// Record a new (key_hash → slot) entry in the sidecar after a key
-/// has been appended to `obj`. Caller ensures `new_count` equals the
-/// new keys_array length right after the append.
+/// Record a new (key_hash → slot) entry on the POST-append keys array's
+/// shape after a key was appended. Caller passes `(*obj).keys_array`
+/// (the definitive post-append array — a clone or grow-realloc lands
+/// under its new identity, or nowhere if no shape entry exists yet) and
+/// ensures `new_count` equals the new keys_array length.
 #[inline]
-fn keys_index_insert(obj_addr: usize, new_count: u32, key_hash: u64, slot: u32) {
+fn keys_index_insert(
+    keys: *const crate::array::ArrayHeader,
+    new_count: u32,
+    key_hash: u64,
+    slot: u32,
+) {
     if new_count < KEYS_INDEX_THRESHOLD {
         return;
     }
-    KEYS_INDEX.with(|m| {
-        let mut m = m.borrow_mut();
-        if let Some(entry) = m.get_mut(&obj_addr) {
-            if entry.0 + 1 == new_count {
-                entry.0 = new_count;
-                entry.1.entry(key_hash).or_default().push(slot);
-            }
-        }
-    });
+    shapes::shape_note_append(keys, new_count, key_hash, slot);
 }
 
 // Last-accessed overflow Vec cache — one entry, keyed by `obj_ptr`.
@@ -407,13 +390,10 @@ fn keys_index_insert(obj_addr: usize, new_count: u32, key_hash: u64, slot: u32) 
 // inside a HashMap bucket. That struct only moves when the HashMap
 // resizes, which only happens on `entry().or_default()` inserting a
 // fresh key. The slow path below does both the potentially-resizing
-// call and the cache refresh inside a single `OVERFLOW_FIELDS.with`
-// closure, so no other thread-local mutation can interleave between
+// call and the cache refresh while holding the `overflow_fields`
+// borrow, so no other thread-local mutation can interleave between
 // obtaining `&mut Vec` and caching its address.
-thread_local! {
-    static OVERFLOW_LAST: std::cell::UnsafeCell<(usize, *mut Vec<u64>)> =
-        const { std::cell::UnsafeCell::new((0, std::ptr::null_mut())) };
-}
+// (Storage: `ObjectHotTables::overflow_last`.)
 
 /// Read the u64 bits stored at `field_index` for `obj`, or `None` if absent.
 /// Positions never written are stored as `TAG_UNDEFINED`; this helper reports
@@ -421,12 +401,13 @@ thread_local! {
 /// "no Vec entry at all" case.
 #[inline]
 fn overflow_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
-    OVERFLOW_FIELDS.with(|m| {
-        m.borrow()
-            .get(&obj_ptr)
-            .and_then(|v| v.get(field_index).copied())
-            .filter(|&bits| bits != crate::value::TAG_UNDEFINED)
-    })
+    crate::state::state()
+        .object_hot
+        .overflow_fields
+        .borrow()
+        .get(&obj_ptr)
+        .and_then(|v| v.get(field_index).copied())
+        .filter(|&bits| bits != crate::value::TAG_UNDEFINED)
 }
 
 /// Write `vbits` to the overflow slot `field_index` for `obj`. Grows the
@@ -506,8 +487,9 @@ fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         let hdr = obj_ptr as *const ObjectHeader;
         note_learned_inline_fields((*hdr).class_id, (field_index as u32).saturating_add(1));
     }
-    let cached_slot = OVERFLOW_LAST.with(|c| unsafe {
-        let (cached_obj, cached_vec) = *c.get();
+    let st = crate::state::state();
+    let cached_slot = unsafe {
+        let (cached_obj, cached_vec) = st.object_hot.overflow_last.get();
         if cached_obj == obj_ptr && !cached_vec.is_null() {
             let v = &mut *cached_vec;
             if v.len() <= field_index {
@@ -519,15 +501,15 @@ fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         } else {
             None
         }
-    });
+    };
     if let Some(slot_addr) = cached_slot {
         crate::gc::layout_note_slot(obj_ptr, field_index, vbits);
         crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, vbits);
         return;
     }
-    let mut slot_addr = 0;
-    OVERFLOW_FIELDS.with(|m| {
-        let mut map = m.borrow_mut();
+    let slot_addr;
+    {
+        let mut map = st.object_hot.overflow_fields.borrow_mut();
         let v = map.entry(obj_ptr).or_default();
         if v.len() <= field_index {
             v.resize(field_index + 1, crate::value::TAG_UNDEFINED);
@@ -535,10 +517,8 @@ fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         v[field_index] = vbits;
         slot_addr = (&mut v[field_index]) as *mut u64 as usize;
         let vec_ptr = v as *mut Vec<u64>;
-        OVERFLOW_LAST.with(|c| unsafe {
-            *c.get() = (obj_ptr, vec_ptr);
-        });
-    });
+        st.object_hot.overflow_last.set((obj_ptr, vec_ptr));
+    }
     crate::gc::layout_note_slot(obj_ptr, field_index, vbits);
     crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, vbits);
 }
@@ -670,8 +650,14 @@ const SHAPE_INLINE_CACHE_SIZE: usize = 256;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ShapeCacheEntry {
+pub(crate) struct ShapeCacheEntry {
     shape_id: u32,
+    /// #6804: the RUNTIME ShapeId (`shapes::shape_id_for_keys_ensure`) of
+    /// `keys_array`, computed once at insert so the literal-allocation path
+    /// can stamp newborn plain objects without a per-allocation table
+    /// probe. Distinct from `shape_id`, which is the CODEGEN packed-keys
+    /// hash used as this cache's lookup key.
+    runtime_shape_id: u32,
     keys_array: *mut ArrayHeader,
 }
 
@@ -691,39 +677,34 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-thread_local! {
-    /// Direct-mapped inline cache. Empty entries have shape_id == 0
-    /// and keys_array == null.
-    static SHAPE_INLINE_CACHE: std::cell::UnsafeCell<[ShapeCacheEntry; SHAPE_INLINE_CACHE_SIZE]> =
-        const { std::cell::UnsafeCell::new([ShapeCacheEntry {
-            shape_id: 0,
-            keys_array: std::ptr::null_mut(),
-        }; SHAPE_INLINE_CACHE_SIZE]) };
-
-    /// Overflow map for shape_ids that collide in the inline cache.
-    static SHAPE_CACHE_OVERFLOW: RefCell<HashMap<u32, *mut ArrayHeader>> = RefCell::new(HashMap::new());
-}
+// Storage: `ObjectHotTables::{shape_inline_cache, shape_cache_overflow}`.
 
 /// Look up a keys_array by shape_id. Returns `null` on miss.
 /// Hot-path: ~3 ALU ops + 1 load + 1 cmp + 1 branch (no RefCell, no HashMap).
 #[inline(always)]
 fn shape_cache_get(shape_id: u32) -> *mut ArrayHeader {
-    SHAPE_INLINE_CACHE.with(|cache| {
-        let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
-        // Safety: this thread-local is single-threaded by definition;
-        // the UnsafeCell allows zero-overhead reads on the hot path.
-        let entry = unsafe { (*cache.get())[slot] };
-        if entry.shape_id == shape_id {
-            return entry.keys_array;
-        }
-        // Miss — check the overflow map.
-        SHAPE_CACHE_OVERFLOW.with(|m| {
-            m.borrow()
-                .get(&shape_id)
-                .copied()
-                .unwrap_or(std::ptr::null_mut())
-        })
-    })
+    shape_cache_get_with_id(shape_id).0
+}
+
+/// #6804: `shape_cache_get` plus the keys array's RUNTIME ShapeId (0 on
+/// miss), so the literal-allocation birth-stamp costs no extra probe.
+#[inline(always)]
+fn shape_cache_get_with_id(shape_id: u32) -> (*mut ArrayHeader, u32) {
+    let st = crate::state::state();
+    let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
+    // Safety: the state is per-thread by construction; the UnsafeCell
+    // allows zero-overhead reads on the hot path.
+    let entry = unsafe { (*st.object_hot.shape_inline_cache.get())[slot] };
+    if entry.shape_id == shape_id {
+        return (entry.keys_array, entry.runtime_shape_id);
+    }
+    // Miss — check the overflow map.
+    st.object_hot
+        .shape_cache_overflow
+        .borrow()
+        .get(&shape_id)
+        .copied()
+        .unwrap_or((std::ptr::null_mut(), 0))
 }
 
 /// Insert a keys_array into the cache. Updates the inline slot
@@ -745,19 +726,28 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
             (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
     }
-    SHAPE_INLINE_CACHE.with(|cache| {
-        let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
-        unsafe {
-            // GC_STORE_AUDIT(ROOT): SHAPE_INLINE_CACHE entries are scanned by scan_shape_cache_roots_mut.
-            let entry = &mut (*cache.get())[slot];
-            entry.shape_id = shape_id;
-            crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut entry.keys_array, keys_array);
-        }
-    });
-    SHAPE_CACHE_OVERFLOW.with(|m| {
-        m.borrow_mut().insert(shape_id, keys_array);
-        crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
-    });
+    // #6804: bind the runtime ShapeId once at insert (one probe per shape
+    // BIRTH), so every later allocation of this shape reads it from the
+    // cache entry it already touches.
+    let runtime_shape_id = if keys_array.is_null() {
+        0
+    } else {
+        shapes::shape_id_for_keys_ensure(keys_array, unsafe { (*keys_array).length })
+    };
+    let st = crate::state::state();
+    let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
+    unsafe {
+        // GC_STORE_AUDIT(ROOT): shape_inline_cache entries are scanned by scan_shape_cache_roots_mut.
+        let entry = &mut (*st.object_hot.shape_inline_cache.get())[slot];
+        entry.shape_id = shape_id;
+        entry.runtime_shape_id = runtime_shape_id;
+        crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut entry.keys_array, keys_array);
+    }
+    st.object_hot
+        .shape_cache_overflow
+        .borrow_mut()
+        .insert(shape_id, (keys_array, runtime_shape_id));
+    crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
 }
 
 /// Thread-local shape-transition cache for the dynamic-key write path
@@ -788,7 +778,7 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
 /// first write — no per-row allocation of a 1-entry keys_array.
 #[derive(Clone, Copy)]
 #[repr(C)]
-struct TransitionEntry {
+pub(crate) struct TransitionEntry {
     prev_keys: usize, // offset 0
     key_ptr: usize,   // offset 8 — interned string pointer (pointer identity)
     next_keys: usize, // offset 16
@@ -805,43 +795,28 @@ const TRANSITION_CACHE_SIZE: usize = 16384;
 #[allow(dead_code)]
 const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 
-/// Per-thread transition cache. Was a process-wide `static mut`, but with
-/// `perry/thread` user code allocating objects on worker threads each
-/// thread has its own arena — cached `next_keys` / `key_ptr` pointers
-/// from another thread are use-after-free in our address space. The
-/// previous `#[no_mangle]` exposed the symbol for inline LLVM lookups
-/// but a grep across crates/perry-codegen confirms no codegen path ever
-/// resolved against it, so the export was dead.
-thread_local! {
-    // arm64_32 fix: HEAP-allocate the 320KB cache (Box) instead of storing it
-    // inline in TLS. Oversized `#[thread_local]` storage overflows the ILP32
-    // TLS layout and its writes corrupt adjacent thread-locals (confirmed on a
-    // real Series 7: shrinking OR boxing removes the corruption). `vec!` builds
-    // directly on the heap (no 320KB stack temporary).
-    static TRANSITION_CACHE_GLOBAL: std::cell::UnsafeCell<Box<[TransitionEntry]>> =
-        std::cell::UnsafeCell::new(
-            vec![
-                TransitionEntry {
-                    prev_keys: 0,
-                    key_ptr: 0,
-                    next_keys: 0,
-                    slot_idx: 0,
-                    target_len: 0,
-                };
-                TRANSITION_CACHE_SIZE
-            ]
-            .into_boxed_slice(),
-        );
-}
-
+// Per-thread transition cache (`ObjectHotTables::transition_cache`). Was a
+// process-wide `static mut`, but with `perry/thread` user code allocating
+// objects on worker threads each thread has its own arena — cached
+// `next_keys` / `key_ptr` pointers from another thread are use-after-free
+// in our address space. The one-time `#[no_mangle]` exposed the symbol for
+// inline LLVM lookups but a grep across crates/perry-codegen confirms no
+// codegen path ever resolved against it, so the export was dead.
+//
+// arm64_32 note: the cache stays HEAP-allocated (Box, now inside the
+// heap-allocated `RuntimeState`). Oversized `#[thread_local]` storage
+// overflowed the ILP32 TLS layout and its writes corrupted adjacent
+// thread-locals (confirmed on a real Series 7: shrinking OR boxing removes
+// the corruption). `vec!` builds directly on the heap (no 320KB stack
+// temporary).
 #[inline]
 fn with_transition_cache<R>(
     f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
 ) -> R {
-    TRANSITION_CACHE_GLOBAL.with(|c| unsafe {
-        let boxed = &mut *c.get();
+    unsafe {
+        let boxed = &mut *crate::state::state().object_hot.transition_cache.get();
         f(boxed.as_mut_ptr() as *mut [TransitionEntry; TRANSITION_CACHE_SIZE])
-    })
+    }
 }
 
 /// FNV-1a content hash for a property-name string.
@@ -1087,18 +1062,19 @@ pub fn scan_shape_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    SHAPE_INLINE_CACHE.with(|cache| {
-        let entries = unsafe { &mut *cache.get() };
+    let st = crate::state::state();
+    {
+        let entries = unsafe { &mut *st.object_hot.shape_inline_cache.get() };
         for entry in entries.iter_mut() {
             visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
         }
-    });
-    SHAPE_CACHE_OVERFLOW.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        for arr_ptr in cache.values_mut() {
+    }
+    {
+        let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
+        for (arr_ptr, _runtime_shape_id) in cache.values_mut() {
             visitor.visit_raw_mut_ptr_slot(arr_ptr);
         }
-    });
+    }
 }
 
 /// GC root scanner: mark all JSValues stored in OVERFLOW_FIELDS.
@@ -1112,10 +1088,11 @@ pub fn scan_overflow_fields_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_overflow_fields_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let st = crate::state::state();
     let mut moved = Vec::new();
     let mut moved_any = false;
-    OVERFLOW_FIELDS.with(|m| {
-        let mut m = m.borrow_mut();
+    {
+        let mut m = st.object_hot.overflow_fields.borrow_mut();
         for (&owner, fields) in m.iter_mut() {
             let mut new_owner = owner;
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
@@ -1134,11 +1111,9 @@ pub fn scan_overflow_fields_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
                 moved_any = true;
             }
         }
-    });
+    }
     if moved_any {
-        OVERFLOW_LAST.with(|c| unsafe {
-            *c.get() = (0, std::ptr::null_mut());
-        });
+        st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
     }
 }
 
@@ -1146,14 +1121,8 @@ pub(crate) fn visit_overflow_field_slots_mut(owner: usize, mut visit: impl FnMut
     if owner == 0 {
         return;
     }
-    let slots = OVERFLOW_FIELDS.with(|m| {
-        let map = m.borrow();
-        let Some(fields) = map.get(&owner) else {
-            return Vec::new();
-        };
-        if fields.is_empty() {
-            return Vec::new();
-        }
+    let slots = {
+        let map = crate::state::state().object_hot.overflow_fields.borrow();
         // #6495: visit EVERY overflow slot — never the layout-mask subset.
         // The per-object slot mask is maintained by `layout_note_slot` at
         // store time, but not every overflow write path notes (GC owner
@@ -1164,15 +1133,20 @@ pub(crate) fn visit_overflow_field_slots_mut(owner: usize, mut visit: impl FnMut
         // overflow region, and objects with large overflow populations are
         // in UNKNOWN layout state in practice (dynamic-shape stores degrade
         // the layout), so the mask bought little here.
-        let mut slots = Vec::with_capacity(fields.len());
-        let base = fields.as_ptr() as *mut u64;
-        for i in 0..fields.len() {
-            unsafe {
-                slots.push(base.add(i));
+        match map.get(&owner) {
+            Some(fields) if !fields.is_empty() => {
+                let mut slots = Vec::with_capacity(fields.len());
+                let base = fields.as_ptr() as *mut u64;
+                for i in 0..fields.len() {
+                    unsafe {
+                        slots.push(base.add(i));
+                    }
+                }
+                slots
             }
+            _ => Vec::new(),
         }
-        slots
-    });
+    };
     for slot in slots {
         visit(slot);
     }
@@ -1193,23 +1167,21 @@ pub(crate) fn overflow_fields_owner_moved(old_owner: usize, new_owner: usize) {
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;
     }
-    OVERFLOW_FIELDS.with(|m| {
-        let mut map = m.borrow_mut();
-        let Some(old_fields) = map.remove(&old_owner) else {
-            return;
-        };
-        match map.entry(new_owner) {
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                merge_overflow_fields(entry.get_mut(), old_fields);
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(old_fields);
+    let st = crate::state::state();
+    {
+        let mut map = st.object_hot.overflow_fields.borrow_mut();
+        if let Some(old_fields) = map.remove(&old_owner) {
+            match map.entry(new_owner) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    merge_overflow_fields(entry.get_mut(), old_fields);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(old_fields);
+                }
             }
         }
-    });
-    OVERFLOW_LAST.with(|c| unsafe {
-        *c.get() = (0, std::ptr::null_mut());
-    });
+    }
+    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
 }
 
 pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
@@ -1303,35 +1275,34 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
 
 #[cfg(test)]
 pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHeader) {
-    SHAPE_INLINE_CACHE.with(|cache| {
-        let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
-        unsafe {
-            // GC_STORE_AUDIT(ROOT): test seed mirrors SHAPE_INLINE_CACHE roots scanned by scan_shape_cache_roots_mut.
-            let entry = &mut (*cache.get())[slot];
-            entry.shape_id = shape_id;
-            crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut entry.keys_array, keys_array);
-        }
-    });
-    SHAPE_CACHE_OVERFLOW.with(|cache| {
-        cache.borrow_mut().clear();
-        cache.borrow_mut().insert(shape_id, keys_array);
-        crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
-    });
+    let st = crate::state::state();
+    let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
+    unsafe {
+        // GC_STORE_AUDIT(ROOT): test seed mirrors shape_inline_cache roots scanned by scan_shape_cache_roots_mut.
+        let entry = &mut (*st.object_hot.shape_inline_cache.get())[slot];
+        entry.shape_id = shape_id;
+        crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut entry.keys_array, keys_array);
+    }
+    {
+        let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
+        cache.clear();
+        cache.insert(shape_id, (keys_array, 0));
+    }
+    crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
 }
 
 #[cfg(test)]
 pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
-    let inline = SHAPE_INLINE_CACHE.with(|cache| {
-        let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
-        unsafe { (*cache.get())[slot].keys_array as usize }
-    });
-    let overflow = SHAPE_CACHE_OVERFLOW.with(|cache| {
-        cache
-            .borrow()
-            .get(&shape_id)
-            .map(|ptr| *ptr as usize)
-            .unwrap_or(0)
-    });
+    let st = crate::state::state();
+    let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
+    let inline = unsafe { (*st.object_hot.shape_inline_cache.get())[slot].keys_array as usize };
+    let overflow = st
+        .object_hot
+        .shape_cache_overflow
+        .borrow()
+        .get(&shape_id)
+        .map(|(ptr, _)| *ptr as usize)
+        .unwrap_or(0);
     (inline, overflow)
 }
 
@@ -1371,72 +1342,71 @@ pub(crate) fn test_clear_transition_cache_root() {
 
 #[cfg(test)]
 pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
-    OVERFLOW_FIELDS.with(|m| {
-        let mut m = m.borrow_mut();
+    let st = crate::state::state();
+    {
+        let mut m = st.object_hot.overflow_fields.borrow_mut();
         m.clear();
         m.insert(owner, vec![value_bits]);
-    });
+    }
     crate::gc::layout_note_slot(owner, 0, value_bits);
-    OVERFLOW_LAST.with(|c| unsafe {
-        *c.get() = (0, std::ptr::null_mut());
-    });
+    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
 }
 
 #[cfg(test)]
 pub(crate) fn debug_overflow_entry_len(owner: usize) -> Option<usize> {
-    OVERFLOW_FIELDS.with(|m| m.borrow().get(&owner).map(|v| v.len()))
+    crate::state::state()
+        .object_hot
+        .overflow_fields
+        .borrow()
+        .get(&owner)
+        .map(|v| v.len())
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_overflow_fields_vec(owner: usize, values: Vec<u64>) {
-    OVERFLOW_FIELDS.with(|m| {
-        m.borrow_mut().insert(owner, values);
-    });
-    OVERFLOW_LAST.with(|c| unsafe {
-        *c.get() = (0, std::ptr::null_mut());
-    });
+    let st = crate::state::state();
+    st.object_hot
+        .overflow_fields
+        .borrow_mut()
+        .insert(owner, values);
+    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear_overflow_fields_root() {
-    OVERFLOW_FIELDS.with(|m| m.borrow_mut().clear());
-    OVERFLOW_LAST.with(|c| unsafe {
-        *c.get() = (0, std::ptr::null_mut());
-    });
+    let st = crate::state::state();
+    st.object_hot.overflow_fields.borrow_mut().clear();
+    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
 }
 
 #[cfg(test)]
 pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
-    OVERFLOW_FIELDS.with(|m| {
-        let m = m.borrow();
-        let Some((&owner, fields)) = m.iter().next() else {
-            return (0, 0);
-        };
-        (owner, fields.first().copied().unwrap_or(0))
-    })
+    let m = crate::state::state().object_hot.overflow_fields.borrow();
+    let Some((&owner, fields)) = m.iter().next() else {
+        return (0, 0);
+    };
+    (owner, fields.first().copied().unwrap_or(0))
 }
 
 #[cfg(test)]
 pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
-    OVERFLOW_FIELDS.with(|m| {
-        m.borrow()
-            .get(&owner)
-            .and_then(|fields| fields.get(index).copied())
-            .unwrap_or(0)
-    })
+    crate::state::state()
+        .object_hot
+        .overflow_fields
+        .borrow()
+        .get(&owner)
+        .and_then(|fields| fields.get(index).copied())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_keys_index_entry(owner: usize) {
-    KEYS_INDEX.with(|m| {
-        m.borrow_mut()
-            .insert(owner, (0, std::collections::HashMap::new()));
-    });
+    shapes::test_seed_shape_entry(owner);
 }
 
 #[cfg(test)]
 pub(crate) fn test_keys_index_entry_exists(owner: usize) -> bool {
-    KEYS_INDEX.with(|m| m.borrow().get(&owner).is_some())
+    shapes::test_shape_entry_exists(owner)
 }
 
 #[cfg(test)]
@@ -1549,31 +1519,13 @@ pub(crate) fn test_clear_object_cache_roots() {
 /// Called from GC sweep when an ObjectHeader is collected, to prevent stale entries
 /// from "infecting" new objects allocated at the same address.
 pub fn clear_overflow_for_ptr(obj_ptr: usize) {
-    OVERFLOW_FIELDS.with(|m| {
-        m.borrow_mut().remove(&obj_ptr);
-    });
+    let st = crate::state::state();
+    st.object_hot.overflow_fields.borrow_mut().remove(&obj_ptr);
     // If the freed object is the one our last-accessed cache points at,
     // the cached `Vec` pointer is now dangling — clear it.
-    OVERFLOW_LAST.with(|c| unsafe {
-        if (*c.get()).0 == obj_ptr {
-            *c.get() = (0, std::ptr::null_mut());
-        }
-    });
-}
-
-/// Remove the `KEYS_INDEX` sidecar entry for a freed object pointer.
-/// Sibling of `clear_overflow_for_ptr`: called from the same GC
-/// dead-owner dispatch when a `GC_TYPE_OBJECT` header is reclaimed.
-/// `KEYS_INDEX` is keyed on the object address, so without this prune
-/// the entry (a whole `HashMap<u64, Vec<u32>>`) would persist forever
-/// keyed by a recycled address — a monotonic leak over a long-running
-/// process, and a stale index a fresh object at the same address could
-/// read. Unlike `clear_overflow_for_ptr` there is no last-accessed
-/// cache to invalidate: `keys_index_lookup` always goes through the map.
-pub fn clear_keys_index_for_ptr(obj_ptr: usize) {
-    KEYS_INDEX.with(|m| {
-        m.borrow_mut().remove(&obj_ptr);
-    });
+    if st.object_hot.overflow_last.get().0 == obj_ptr {
+        st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
+    }
 }
 
 /// Cheap check used by the GC sweep to short-circuit per-object
@@ -1591,7 +1543,11 @@ pub fn clear_keys_index_for_ptr(obj_ptr: usize) {
 /// matching obj_ptr without first writing to OVERFLOW_FIELDS.
 #[inline]
 pub fn overflow_fields_is_empty() -> bool {
-    OVERFLOW_FIELDS.with(|m| m.borrow().is_empty())
+    crate::state::state()
+        .object_hot
+        .overflow_fields
+        .borrow()
+        .is_empty()
 }
 
 // `is_valid_obj_ptr` moved to `value/addr_class.rs` (the centralized
@@ -1615,10 +1571,129 @@ pub struct ObjectHeader {
     /// Pointer to array of key strings (for Object.keys() support)
     /// NULL for class instances (keys are defined by the class)
     pub keys_array: *mut ArrayHeader,
+    /// #6759 Phase B: per-object metadata record — null for ordinary
+    /// objects (the common case). MUST stay the LAST field: codegen reads
+    /// the earlier header fields at fixed offsets (0/4/8/12/16), and the
+    /// field-slot region begins at `size_of::<ObjectHeader>()`, mirrored
+    /// by `perry-codegen/src/target_layout.rs::object_header_size_bytes`.
+    /// See [`ObjectMeta`].
+    pub meta: *mut ObjectMeta,
+}
+
+/// #6759 Phase B: per-object metadata record, reached from
+/// [`ObjectHeader::meta`] in two dependent loads (no side-table probe).
+///
+/// GC-arena allocated (`GC_TYPE_OBJECT_META`), exactly like the
+/// `keys_array` the header already carries: the header slot is a traced +
+/// rewritten child edge (the record is reachable ONLY through its owner),
+/// so liveness, evacuation, and death all ride the ordinary GC — no manual
+/// free paths, no owner registry, and no stale-address hazard: the record
+/// dies with (and only with) its owner.
+///
+/// CAUTION — RegExp aliasing: `RegExpHeader` is a different struct that is
+/// also tagged `GC_TYPE_OBJECT` (see `gc_child_slots`'s regex special
+/// case). Reading `.meta` at the `ObjectHeader` offset off a RegExp yields
+/// garbage; every `meta` access must first establish a genuine shaped
+/// object (`object_meta_slot_addr` centralizes that check).
+///
+/// Phase B lands incrementally: today the record holds the custom
+/// `[[Prototype]]` plus the Phase C2 per-key descriptor summaries; the
+/// exotic-kind tag migrates here next (#6759).
+#[repr(C)]
+pub struct ObjectMeta {
+    /// Custom `[[Prototype]]` recorded by `Object.setPrototypeOf` / object
+    /// literal `__proto__`: the NaN-boxed proto bits,
+    /// `crate::value::TAG_NULL` for an explicit null prototype, or 0 when
+    /// unset (fall back to default prototype resolution).
+    pub prototype: u64,
+    /// #6759 Phase C2: Bloom summary of the string keys with a customized
+    /// property descriptor (non-default writable/enumerable/configurable)
+    /// installed on THIS object — bit `key_bytes_hash(key) & 63` per key.
+    /// Monotonic (descriptor removal never clears a bit — another key may
+    /// share it; a spurious bit just costs one table probe). A clear bit is
+    /// authoritative: no `property_descriptors` entry `(owner, key)` can
+    /// exist for a key whose bit is clear, so the hot paths skip the
+    /// side-table probe (and its per-call `String` build) entirely. POD —
+    /// the GC trace arm visits only `prototype`.
+    pub attr_key_bits: u64,
+    /// Same summary for accessor descriptors (`get`/`set` installs) — the
+    /// `accessor_descriptors` table twin of `attr_key_bits`.
+    pub accessor_key_bits: u64,
+}
+
+/// Fetch-or-allocate the per-object meta record. Caller must have already
+/// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
+/// (see `prototype_chain::meta_capable_object`).
+pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
+    if !(*obj).meta.is_null() {
+        return (*obj).meta;
+    }
+    // Root the owner across the allocation: `arena_alloc_gc` can trigger a
+    // copied-minor that MOVES `obj`, and the header store below must land
+    // in the live copy, not the stale from-space one. Reload through the
+    // handle after the allocation. (The fresh `meta` record itself cannot
+    // move before the store — no allocation happens in between.)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let meta = arena_alloc_gc(
+        std::mem::size_of::<ObjectMeta>(),
+        8,
+        crate::gc::GC_TYPE_OBJECT_META,
+    ) as *mut ObjectMeta;
+    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    if !(*obj).meta.is_null() {
+        // A GC-triggered re-entrant path installed one meanwhile; keep it
+        // (the fresh record above is unreferenced and dies with the cycle).
+        return (*obj).meta;
+    }
+    (*meta).prototype = 0;
+    (*meta).attr_key_bits = 0;
+    (*meta).accessor_key_bits = 0;
+    // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
+    // followed by an object-slot barrier, mirroring `set_object_keys_array`.
+    (*obj).meta = meta;
+    crate::gc::runtime_write_barrier_slot(
+        obj as usize,
+        &(*obj).meta as *const _ as usize,
+        meta as u64,
+    );
+    meta
+}
+
+/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-
+/// pointer child slot exactly like `gc_keys_array_slot`. Returns `None` for
+/// a null meta AND for a `RegExpHeader` masquerading as `GC_TYPE_OBJECT`
+/// (its bytes at this offset are native data — see the regex special case
+/// in `gc_child_slots`).
+pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
+    if user_ptr == 0
+        || crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader)
+    {
+        return None;
+    }
+    let obj = user_ptr as *mut ObjectHeader;
+    if (*obj).meta.is_null() {
+        return None;
+    }
+    Some(&mut (*obj).meta as *mut _ as *mut u64)
 }
 
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
+    // #6759 C3c: a stamped shape id (plain objects reuse the otherwise-dead
+    // `parent_class_id` word) described the OLD keys array — clear it on a
+    // pointer CHANGE so the stamp invariant (`stamp != 0 ⟹ stamp == id of
+    // current keys`) holds; the resolve paths re-stamp on their next
+    // successful lookup. A same-pointer update (in-place append) keeps the
+    // stamp: slots are append-only, existing mappings stay valid — and the
+    // C3a grow-migration keeps the id itself alive across reallocs, so the
+    // fresh stamp after a grow resolves to the SAME id.
+    if (*obj).class_id == 0
+        && (*obj).keys_array != keys_array
+        && shapes::is_shape_id((*obj).parent_class_id)
+    {
+        (*obj).parent_class_id = 0;
+    }
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;
     crate::gc::runtime_write_barrier_slot(

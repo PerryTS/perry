@@ -376,13 +376,19 @@ pub extern "C" fn js_object_delete_field(
         //    `min(new_count, alloc_limit)`.
         (*obj).field_count = std::cmp::min(new_count, alloc_limit) as u32;
 
-        // 4) Invalidate the keys-index sidecar for this object — the
-        //    slot map is now stale (entries past `i` have shifted).
-        //    The next lookup at threshold will rebuild from current
-        //    keys_array.
-        KEYS_INDEX.with(|m| {
-            m.borrow_mut().remove(&(obj as usize));
-        });
+        // 4) Drop the (post-compaction) keys array's shape record — slots
+        //    past `i` have shifted, so any map is stale. The shrink check
+        //    in `shape_slot_lookup` would also catch this lazily; dropping
+        //    eagerly keeps the record from serving hash misses meanwhile.
+        crate::object::shapes::shape_drop((*obj).keys_array);
+        // #6759 C3c: the compaction changed the layout under the SAME keys
+        //    address, so the stamped shape id no longer describes this
+        //    object. Ids are never reused, so clearing here (plus the
+        //    record drop above) makes every stale id-keyed cache entry a
+        //    permanent miss; the next resolve stamps a fresh id.
+        if (*obj).class_id == 0 && crate::object::shapes::is_shape_id((*obj).parent_class_id) {
+            (*obj).parent_class_id = 0;
+        }
 
         1
     }

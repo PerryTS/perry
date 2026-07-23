@@ -327,23 +327,47 @@ pub(crate) fn lower_generic_property_get(
     let keys_ptr_p = ctx.block().inttoptr(I64, &keys_addr);
     let keys_val = ctx.block().load(I64, &keys_ptr_p);
 
-    // Load cached keys_array from the per-site global.
+    // #6804: the receiver's shape TOKEN. A plain object stamped with a
+    // runtime ShapeId (`parent_class_id` ∈ [0x8000_0000, 0xC000_0000) —
+    // see `shapes::SHAPE_ID_BASE/END`; a real parent class id can never
+    // fall in that range) compares by id: stable across keys grow-reallocs
+    // and GC moves, and immune to address recycling (ids are never
+    // reused). Everything else (class instances, unstamped receivers)
+    // keeps the keys-pointer compare. Id tokens are lifted above the
+    // 48-bit pointer space (bit 62, `shapes::PIC_ID_TOKEN_BIT`) so the
+    // two token kinds can never collide numerically — one compare, no
+    // discriminant word. `parent_class_id` is a u32 at offset 8 on every
+    // target (the four leading u32s precede the pointer fields).
+    let pcid_addr = ctx.block().add(I64, &safe_obj_handle, "8");
+    let pcid_ptr = ctx.block().inttoptr(I64, &pcid_addr);
+    let pcid = ctx.block().load(I32, &pcid_ptr);
+    // In-range test via wrapping add + ult: (pcid - 0x8000_0000) < 0x4000_0000.
+    // (-2147483648 is the i32 spelling of the 0x8000_0000 subtrahend.)
+    let pcid_rel = ctx.block().add(I32, &pcid, "-2147483648");
+    let is_stamp = ctx.block().icmp_ult(I32, &pcid_rel, "1073741824");
+    let pcid64 = ctx.block().zext(I32, &pcid, I64);
+    // PIC_ID_TOKEN_BIT = 1 << 62.
+    let id_token = ctx.block().or(I64, &pcid64, "4611686018427387904");
+    let token = ctx.block().select(I1, &is_stamp, I64, &id_token, &keys_val);
+
+    // Load the cached token from the per-site global.
     let cache_keys_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
-    let cached_keys = ctx.block().load(I64, &cache_keys_ptr);
-    let keys_eq = ctx.block().icmp_eq(I64, &keys_val, &cached_keys);
+    let cached_token = ctx.block().load(I64, &cache_keys_ptr);
+    let token_eq = ctx.block().icmp_eq(I64, &token, &cached_token);
     // #809: an object with `keys_array == null` (e.g. an
     // `Object.create(proto)` result, or any object with no own
     // string props) has no cacheable own-slot. The per-site cache
-    // global is zero-initialized, so `keys_val (0) == cached_keys
-    // (0)` spuriously "hits" and the hit path returns the empty
-    // slot[0] — never invoking the miss handler, so the runtime's
-    // prototype-chain walk in `js_object_get_field_by_name` is
-    // skipped and `Object.create(P).m()` reads `undefined`. Require
-    // a non-null keys_array for a hit so keyless receivers fall to
-    // the slow path (which resolves inherited props correctly).
-    let keys_nonnull = ctx.block().icmp_ne(I64, &keys_val, "0");
-    let hit_keys = ctx.block().and(I1, &is_object, &keys_eq);
-    let hit = ctx.block().and(I1, &hit_keys, &keys_nonnull);
+    // global is zero-initialized, so a zero token would spuriously
+    // "hit" and the hit path would return the empty slot[0] — never
+    // invoking the miss handler, so the runtime's prototype-chain
+    // walk in `js_object_get_field_by_name` is skipped and
+    // `Object.create(P).m()` reads `undefined`. Require a non-zero
+    // token for a hit so keyless receivers fall to the slow path
+    // (which resolves inherited props correctly). Id tokens always
+    // carry bit 62, so they are never zero.
+    let token_nonnull = ctx.block().icmp_ne(I64, &token, "0");
+    let hit_token = ctx.block().and(I1, &is_object, &token_eq);
+    let hit = ctx.block().and(I1, &hit_token, &token_nonnull);
 
     let hit_idx = ctx.new_block("pic.hit");
     let miss_idx = ctx.new_block("pic.miss");
@@ -353,14 +377,36 @@ pub(crate) fn lower_generic_property_get(
     let merge_label = ctx.block_label(merge_idx);
     ctx.block().cond_br(&hit, &hit_label, &miss_label);
 
-    // PIC hit: direct field load.
+    // PIC hit: bounds-check the cached slot, then direct field load.
     ctx.current_block = hit_idx;
+    let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let slot = ctx.block().load(I64, &cache_slot_ptr);
+    // #6804: bound the cached slot by THIS receiver's inline capacity.
+    // Same-shape siblings can differ in physical allocation (an object
+    // built at a small alloc site adopts a shared keys array whose later
+    // slots live in its OVERFLOW map) — a slot primed from a
+    // larger-capacity sibling must not drive a raw load past this
+    // receiver's field region. `alloc_limit = max(field_count,
+    // INLINE_SLOT_FLOOR=4)` mirrors the miss handler's cacheability
+    // rule; an out-of-bounds slot falls to the miss path, which reads
+    // the overflow map correctly (and records the guard failure —
+    // `record_guard_pass` only fires after the bounds check passes).
+    let fc_addr = ctx.block().add(I64, &safe_obj_handle, "12");
+    let fc_ptr = ctx.block().inttoptr(I64, &fc_addr);
+    let fc = ctx.block().load(I32, &fc_ptr);
+    let fc64 = ctx.block().zext(I32, &fc, I64);
+    let fc_floor = ctx.block().icmp_ult(I64, &fc64, "4"); // INLINE_SLOT_FLOOR
+    let limit = ctx.block().select(I1, &fc_floor, I64, "4", &fc64);
+    let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &limit);
+    let bounds_hit = ctx.new_block("pic.hit.load");
+    let bounds_hit_label = ctx.block_label(bounds_hit);
+    ctx.block()
+        .cond_br(&slot_in_bounds, &bounds_hit_label, &miss_label);
+    ctx.current_block = bounds_hit;
     ctx.block().call_void(
         "js_typed_feedback_record_guard_pass",
         &[(I64, &feedback_site_id)],
     );
-    let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
-    let slot = ctx.block().load(I64, &cache_slot_ptr);
     let offset = ctx.block().shl(I64, &slot, "3");
     // arm64_32 watchOS: the object fields region begins at
     // `size_of::<ObjectHeader>()` past the user pointer — 24 on 64-bit, 20 on
