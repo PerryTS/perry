@@ -1901,4 +1901,99 @@ mod tests {
         js_proxy_revoke(plain_proxy);
         assert!(!proxy_wraps_callable(plain_proxy));
     }
+
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    fn boxed_object(obj: *mut crate::ObjectHeader) -> f64 {
+        f64::from_bits(POINTER_TAG | (obj as u64 & POINTER_MASK))
+    }
+
+    fn boxed_interned_key(keys: *mut crate::ArrayHeader, slot: u32, name: &[u8]) -> f64 {
+        let key = crate::array::js_array_get(keys, slot).as_string_ptr();
+        let key = crate::string::js_string_intern(key, fnv1a(name));
+        f64::from_bits(crate::value::STRING_TAG | (key as u64 & POINTER_MASK))
+    }
+
+    /// #6809: the whole-loop preflight may only publish raw slot indexes when
+    /// every array element has the same writable data layout. The generated
+    /// clone performs no checks after this result, so heterogeneous shapes,
+    /// holes, descriptor flags, and unverified typed layouts must all reject.
+    #[test]
+    fn object_array_numeric_write2_guard_requires_complete_uniform_proof() {
+        let packed = b"a\0b\0c\0d\0";
+        let keys = crate::object::js_build_class_keys_array(
+            0x6809_01,
+            4,
+            packed.as_ptr(),
+            packed.len() as u32,
+        );
+        let first = crate::object::js_object_alloc_class_inline_keys(0x6809_01, 0, 4, keys);
+        let second = crate::object::js_object_alloc_class_inline_keys(0x6809_01, 0, 4, keys);
+        let values = [boxed_object(first), boxed_object(second)];
+        let array = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+        let array_box = boxed_object(array.cast());
+        let c = boxed_interned_key(keys, 2, b"c");
+        let d = boxed_interned_key(keys, 3, b"d");
+
+        assert_eq!(
+            put_value::js_object_array_numeric_write2_guard(array_box, c, d, 2),
+            (4u64 << 32) | 3,
+            "slots c=2 and d=3 should be published with the non-zero encoding"
+        );
+
+        unsafe {
+            let header =
+                (second as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            let original = (*header)._reserved;
+
+            (*header)._reserved = original | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+            assert_eq!(
+                put_value::js_object_array_numeric_write2_guard(array_box, c, d, 2),
+                0,
+                "descriptor-bearing receivers must use ordinary [[Set]]"
+            );
+
+            (*header)._reserved = original | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+            assert_eq!(
+                put_value::js_object_array_numeric_write2_guard(array_box, c, d, 2),
+                0,
+                "an intact typed layout without raw-f64 target slots must reject"
+            );
+            (*header)._reserved = original;
+        }
+
+        let hole_values = [boxed_object(first), f64::from_bits(crate::value::TAG_HOLE)];
+        let hole_array =
+            crate::array::js_array_from_f64(hole_values.as_ptr(), hole_values.len() as u32);
+        assert_eq!(
+            put_value::js_object_array_numeric_write2_guard(
+                boxed_object(hole_array.cast()),
+                c,
+                d,
+                2
+            ),
+            0,
+            "a hole cannot be treated as an object receiver"
+        );
+
+        let other_keys = crate::object::js_build_class_keys_array(
+            0x6809_02,
+            4,
+            packed.as_ptr(),
+            packed.len() as u32,
+        );
+        let other = crate::object::js_object_alloc_class_inline_keys(0x6809_02, 0, 4, other_keys);
+        let mixed_values = [boxed_object(first), boxed_object(other)];
+        let mixed =
+            crate::array::js_array_from_f64(mixed_values.as_ptr(), mixed_values.len() as u32);
+        assert_eq!(
+            put_value::js_object_array_numeric_write2_guard(boxed_object(mixed.cast()), c, d, 2),
+            0,
+            "content-equal but distinct shape keys arrays must not share raw slots"
+        );
+    }
 }

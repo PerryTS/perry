@@ -1617,6 +1617,433 @@ const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
     "Function",
 ];
 
+#[derive(Clone)]
+enum ObjectArrayWriteNumber {
+    OuterCounter,
+    InnerCounter,
+    Constant(f64),
+    Add(Box<Self>, Box<Self>),
+    Sub(Box<Self>, Box<Self>),
+}
+
+struct ObjectArrayWrite2Loop {
+    outer_counter_id: u32,
+    outer_start: i32,
+    outer_bound: i32,
+    inner_counter_id: u32,
+    inner_bound: i32,
+    array_id: u32,
+    alias_id: u32,
+    properties: [String; 2],
+    values: [ObjectArrayWriteNumber; 2],
+}
+
+fn match_nonnegative_constant_i32(expr: &perry_hir::Expr) -> Option<i32> {
+    match expr {
+        perry_hir::Expr::Integer(n) => i32::try_from(*n).ok().filter(|n| *n >= 0),
+        perry_hir::Expr::Number(n)
+            if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64 =>
+        {
+            Some(*n as i32)
+        }
+        _ => None,
+    }
+}
+
+fn match_object_array_write_number(
+    expr: &perry_hir::Expr,
+    outer_counter_id: u32,
+    inner_counter_id: u32,
+) -> Option<ObjectArrayWriteNumber> {
+    use perry_hir::{BinaryOp, Expr};
+    match expr {
+        Expr::LocalGet(id) if *id == outer_counter_id => Some(ObjectArrayWriteNumber::OuterCounter),
+        Expr::LocalGet(id) if *id == inner_counter_id => Some(ObjectArrayWriteNumber::InnerCounter),
+        Expr::Integer(n) if (-i64::from(i32::MAX)..=i64::from(i32::MAX)).contains(n) => {
+            Some(ObjectArrayWriteNumber::Constant(*n as f64))
+        }
+        Expr::Number(n) if n.is_finite() => Some(ObjectArrayWriteNumber::Constant(*n)),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            let left = match_object_array_write_number(left, outer_counter_id, inner_counter_id)?;
+            let right = match_object_array_write_number(right, outer_counter_id, inner_counter_id)?;
+            Some(if matches!(op, BinaryOp::Add) {
+                ObjectArrayWriteNumber::Add(Box::new(left), Box::new(right))
+            } else {
+                ObjectArrayWriteNumber::Sub(Box::new(left), Box::new(right))
+            })
+        }
+        _ => None,
+    }
+}
+
+fn match_constant_counted_for(
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+) -> Option<(u32, i32, i32)> {
+    use perry_hir::{CompareOp, Expr, UpdateOp};
+    let (counter_id, start) = match init? {
+        Stmt::Let {
+            id,
+            init: Some(start),
+            ..
+        } => (*id, match_nonnegative_constant_i32(start)?),
+        _ => return None,
+    };
+    let bound = match condition? {
+        Expr::Compare {
+            op: CompareOp::Lt,
+            left,
+            right,
+        } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
+            match_nonnegative_constant_i32(right)?
+        }
+        _ => return None,
+    };
+    if !matches!(
+        update?,
+        Expr::Update {
+            id,
+            op: UpdateOp::Increment,
+            ..
+        } if *id == counter_id
+    ) || start >= bound
+    {
+        return None;
+    }
+    Some((counter_id, start, bound))
+}
+
+/// Match the #6809 object-write micro shape. This is deliberately a separate,
+/// much narrower proof than generic loop purity: the fast clone has no side
+/// exits after its one runtime scan, so it may commit multiple stores per
+/// iteration without a replay protocol.
+fn match_object_array_write2_loop(
+    ctx: &FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<ObjectArrayWrite2Loop> {
+    use perry_hir::Expr;
+
+    if !ctx.pending_labels.is_empty() {
+        return None;
+    }
+    let (outer_counter_id, outer_start, outer_bound) =
+        match_constant_counted_for(init, condition, update)?;
+    let [Stmt::For {
+        init: inner_init,
+        condition: inner_condition,
+        update: inner_update,
+        body: inner_body,
+    }] = body
+    else {
+        return None;
+    };
+    let (inner_counter_id, inner_start, inner_bound) = match_constant_counted_for(
+        inner_init.as_deref(),
+        inner_condition.as_ref(),
+        inner_update.as_ref(),
+    )?;
+    // Starting at zero lets the runtime preflight prove one contiguous dense
+    // prefix and keeps the raw element address calculation minimal.
+    if inner_start != 0
+        || inner_bound > 16_000_000
+        || outer_counter_id == inner_counter_id
+        || ctx.boxed_vars.contains(&outer_counter_id)
+        || ctx.boxed_vars.contains(&inner_counter_id)
+    {
+        return None;
+    }
+
+    let [Stmt::Let {
+        id: alias_id,
+        mutable: false,
+        init: Some(Expr::IndexGet { object, index }),
+        ..
+    }, Stmt::Expr(first), Stmt::Expr(second)] = inner_body.as_slice()
+    else {
+        return None;
+    };
+    let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
+    else {
+        return None;
+    };
+    if *index_id != inner_counter_id
+        || *array_id == outer_counter_id
+        || *array_id == inner_counter_id
+        || *array_id == *alias_id
+        || ctx.boxed_vars.contains(array_id)
+        || ctx.boxed_vars.contains(alias_id)
+        || ctx.module_globals.contains_key(array_id)
+        || !ctx.locals.contains_key(array_id)
+        || ctx.scalar_replaced.contains_key(array_id)
+        || ctx.pod_records.contains_key(array_id)
+    {
+        return None;
+    }
+
+    let match_store = |effect: &Expr| -> Option<(String, ObjectArrayWriteNumber)> {
+        let Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } = effect
+        else {
+            return None;
+        };
+        if !matches!(
+            (target.as_ref(), receiver.as_ref()),
+            (Expr::LocalGet(target_id), Expr::LocalGet(receiver_id))
+                if target_id == alias_id && receiver_id == alias_id
+        ) {
+            return None;
+        }
+        let Expr::String(property) = key.as_ref() else {
+            return None;
+        };
+        let value = match_object_array_write_number(value, outer_counter_id, inner_counter_id)?;
+        Some((property.clone(), value))
+    };
+    let (property_1, value_1) = match_store(first)?;
+    let (property_2, value_2) = match_store(second)?;
+
+    Some(ObjectArrayWrite2Loop {
+        outer_counter_id,
+        outer_start,
+        outer_bound,
+        inner_counter_id,
+        inner_bound,
+        array_id: *array_id,
+        alias_id: *alias_id,
+        properties: [property_1, property_2],
+        values: [value_1, value_2],
+    })
+}
+
+fn emit_object_array_write_number(
+    ctx: &mut FnCtx<'_>,
+    expr: &ObjectArrayWriteNumber,
+    outer: &str,
+    inner: &str,
+) -> String {
+    match expr {
+        ObjectArrayWriteNumber::OuterCounter => outer.to_string(),
+        ObjectArrayWriteNumber::InnerCounter => inner.to_string(),
+        ObjectArrayWriteNumber::Constant(n) => crate::nanbox::double_literal(*n),
+        ObjectArrayWriteNumber::Add(left, right) => {
+            let left = emit_object_array_write_number(ctx, left, outer, inner);
+            let right = emit_object_array_write_number(ctx, right, outer, inner);
+            ctx.block().fadd(&left, &right)
+        }
+        ObjectArrayWriteNumber::Sub(left, right) => {
+            let left = emit_object_array_write_number(ctx, left, outer, inner);
+            let right = emit_object_array_write_number(ctx, right, outer, inner);
+            ctx.block().fsub(&left, &right)
+        }
+    }
+}
+
+/// Whole-nest versioning for a dense array of same-shape objects.
+///
+/// The runtime helper validates every receiver and resolves both slots before
+/// the first store. The successful clone contains no calls, allocations,
+/// barriers, or side exits, so all raw pointers remain valid for the complete
+/// outer × inner nest. A failed proof enters the untouched generic clone.
+fn lower_object_array_write2_versioned_for(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<bool> {
+    let Some(matched) = match_object_array_write2_loop(ctx, init, condition, update, body) else {
+        return Ok(false);
+    };
+
+    let slow_pre_idx = ctx.new_block("object_array_write2.loop.slow.preheader");
+    let merge_idx = ctx.new_block("object_array_write2.loop.merge");
+    let slow_pre_label = ctx.block_label(slow_pre_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let key_1_idx = ctx.strings.intern(&matched.properties[0]);
+    let key_2_idx = ctx.strings.intern(&matched.properties[1]);
+    let key_1_global = format!("@{}", ctx.strings.entry(key_1_idx).handle_global);
+    let key_2_global = format!("@{}", ctx.strings.entry(key_2_idx).handle_global);
+    let array_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.array_id))?;
+    let (key_1_box, key_2_box) = {
+        let blk = ctx.block();
+        (
+            blk.load(DOUBLE, &key_1_global),
+            blk.load(DOUBLE, &key_2_global),
+        )
+    };
+    let packed_slots = ctx.block().call(
+        I64,
+        "js_object_array_numeric_write2_guard",
+        &[
+            (DOUBLE, &array_box),
+            (DOUBLE, &key_1_box),
+            (DOUBLE, &key_2_box),
+            (I32, &matched.inner_bound.to_string()),
+        ],
+    );
+    let preheader_idx = ctx.current_block;
+    let preheader_label = ctx.block().label.clone();
+
+    // Emit the fallback first. Besides preserving the original semantics, this
+    // creates the ordinary local slots for the nested counter, allowing the
+    // fast completion block to synchronize loop variables before the merge.
+    ctx.current_block = slow_pre_idx;
+    lower_for_after_init(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for.object_array_write2_slow",
+    )?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    let fast_outer_cond_idx = ctx.new_block("object_array_write2.loop.fast.outer.cond");
+    let fast_inner_pre_idx = ctx.new_block("object_array_write2.loop.fast.inner.preheader");
+    let fast_inner_cond_idx = ctx.new_block("object_array_write2.loop.fast.inner.cond");
+    let fast_inner_body_idx = ctx.new_block("object_array_write2.loop.fast.inner.body");
+    let fast_inner_exit_idx = ctx.new_block("object_array_write2.loop.fast.inner.exit");
+    let fast_done_idx = ctx.new_block("object_array_write2.loop.fast.done");
+    let fast_outer_cond_label = ctx.block_label(fast_outer_cond_idx);
+    let fast_inner_pre_label = ctx.block_label(fast_inner_pre_idx);
+    let fast_inner_cond_label = ctx.block_label(fast_inner_cond_idx);
+    let fast_inner_body_label = ctx.block_label(fast_inner_body_idx);
+    let fast_inner_exit_label = ctx.block_label(fast_inner_exit_idx);
+    let fast_done_label = ctx.block_label(fast_done_idx);
+
+    let (slot_1, slot_2, array_ptr) = {
+        let blk = ctx
+            .func
+            .block_mut(preheader_idx)
+            .expect("object-array preheader block must exist");
+        let encoded_1 = blk.and(I64, &packed_slots, "4294967295");
+        let encoded_2 = blk.lshr(I64, &packed_slots, "32");
+        let slot_1 = blk.sub(I64, &encoded_1, "1");
+        let slot_2 = blk.sub(I64, &encoded_2, "1");
+        let array_bits = blk.bitcast_double_to_i64(&array_box);
+        let array_handle = blk.and(I64, &array_bits, crate::nanbox::POINTER_MASK_I64);
+        let array_ptr = blk.inttoptr(I64, &array_handle);
+        (slot_1, slot_2, array_ptr)
+    };
+
+    let fast_scan_start = fast_outer_cond_idx;
+    let (outer_next, inner_next) = {
+        let blk = ctx
+            .func
+            .block_mut(preheader_idx)
+            .expect("object-array preheader block must exist");
+        (blk.fresh_reg(), blk.fresh_reg())
+    };
+    ctx.current_block = fast_outer_cond_idx;
+    let outer = ctx.block().phi(
+        I32,
+        &[
+            (&matched.outer_start.to_string(), &preheader_label),
+            (&outer_next, &fast_inner_exit_label),
+        ],
+    );
+    let outer_double = ctx.block().sitofp(I32, &outer, DOUBLE);
+    let outer_more = ctx
+        .block()
+        .icmp_slt(I32, &outer, &matched.outer_bound.to_string());
+    ctx.block()
+        .cond_br(&outer_more, &fast_inner_pre_label, &fast_done_label);
+
+    ctx.current_block = fast_inner_pre_idx;
+    ctx.block().br(&fast_inner_cond_label);
+
+    ctx.current_block = fast_inner_cond_idx;
+    let inner = ctx.block().phi(
+        I32,
+        &[
+            ("0", &fast_inner_pre_label),
+            (&inner_next, &fast_inner_body_label),
+        ],
+    );
+    let inner_more = ctx
+        .block()
+        .icmp_slt(I32, &inner, &matched.inner_bound.to_string());
+    ctx.block()
+        .cond_br(&inner_more, &fast_inner_body_label, &fast_inner_exit_label);
+
+    ctx.current_block = fast_inner_body_idx;
+    let inner_double = ctx.block().sitofp(I32, &inner, DOUBLE);
+    let object_ptr = {
+        let blk = ctx.block();
+        let inner_i64 = blk.sext(I32, &inner, I64);
+        let element_word = blk.add(I64, &inner_i64, "1");
+        let element_ptr = blk.gep_inbounds(I64, &array_ptr, &[(I64, &element_word)]);
+        let object_box = blk.load(DOUBLE, &element_ptr);
+        let object_bits = blk.bitcast_double_to_i64(&object_box);
+        let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);
+        blk.inttoptr(I64, &object_handle)
+    };
+    let header_words =
+        (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
+    for (slot, value) in [(&slot_1, &matched.values[0]), (&slot_2, &matched.values[1])] {
+        let value = emit_object_array_write_number(ctx, value, &outer_double, &inner_double);
+        let field_ptr = {
+            let blk = ctx.block();
+            let field_word = blk.add(I64, slot, &header_words);
+            blk.gep_inbounds(I64, &object_ptr, &[(I64, &field_word)])
+        };
+        ctx.block().store(DOUBLE, &value, &field_ptr);
+    }
+    ctx.block()
+        .emit_raw(format!("{} = add i32 {}, 1", inner_next, inner));
+    ctx.block().br(&fast_inner_cond_label);
+
+    ctx.current_block = fast_inner_exit_idx;
+    ctx.block()
+        .emit_raw(format!("{} = add i32 {}, 1", outer_next, outer));
+    ctx.block().br(&fast_outer_cond_label);
+
+    // Keep the ordinary counter slots coherent on the fast edge. The values
+    // are normally block-scoped, but this also preserves transformed `var`
+    // cases and future HIR consumers without adding work inside either loop.
+    ctx.current_block = fast_done_idx;
+    for (id, final_value) in [
+        (matched.outer_counter_id, matched.outer_bound),
+        (matched.inner_counter_id, matched.inner_bound),
+    ] {
+        if let Some(slot) = ctx.locals.get(&id).cloned() {
+            let value = crate::nanbox::double_literal(final_value as f64);
+            ctx.block().store(DOUBLE, &value, &slot);
+        }
+        if let Some(slot) = ctx.i32_counter_slots.get(&id).cloned() {
+            ctx.block().store(I32, &final_value.to_string(), &slot);
+        }
+    }
+    ctx.block().br(&merge_label);
+
+    let fast_call_free = (fast_scan_start..ctx.func.num_blocks())
+        .all(|idx| !ctx.func.blocks()[idx].contains_gc_unsafe_call());
+    ctx.current_block = preheader_idx;
+    let guard_ok = ctx.block().icmp_ne(I64, &packed_slots, "0");
+    if fast_call_free {
+        ctx.block()
+            .cond_br(&guard_ok, &fast_outer_cond_label, &slow_pre_label);
+    } else {
+        ctx.block().br(&slow_pre_label);
+    }
+
+    ctx.current_block = merge_idx;
+    let _ = matched.alias_id;
+    Ok(true)
+}
+
 #[derive(Clone, Copy)]
 enum ClassFieldLoopBound {
     /// `i < <integer literal>`.
@@ -2950,6 +3377,13 @@ pub(crate) fn lower_for(
     // ctx.locals, which the body can then load via LocalGet.
     if let Some(init_stmt) = init {
         lower_stmt(ctx, init_stmt)?;
+    }
+
+    // #6809: validate a dense, same-shape object array once and run the
+    // complete nested two-field numeric write loop without receiver/shape
+    // guards or runtime calls in either hot loop.
+    if lower_object_array_write2_versioned_for(ctx, init, condition, update, body)? {
+        return Ok(());
     }
 
     if let Some(matched) = match_numeric_bulk_fill_loop(ctx, init, condition, update, body) {

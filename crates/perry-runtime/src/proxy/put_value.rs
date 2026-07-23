@@ -380,3 +380,198 @@ pub extern "C" fn js_put_value_set_ic_miss(
 
     result
 }
+
+/// Preflight for codegen's call-free nested object-write loop.
+///
+/// Returns two existing own-data slot indexes, encoded as
+/// `((slot_2 + 1) << 32) | (slot_1 + 1)`, or zero when the generated raw
+/// loop must not run. The caller scans once, then performs only finite numeric
+/// stores until both loops finish. That call-free interval is load-bearing:
+/// no GC can move the array, its elements, their shared keys array, or their
+/// typed-layout records after this function validates them.
+///
+/// This is intentionally stricter than ordinary `[[Set]]`: every receiver
+/// must be a regular, writable object with the exact same shared keys array,
+/// both keys must already be own data slots, and typed-layout receivers must
+/// prove both slots are raw f64. Any doubt falls back to the existing generic
+/// loop before the first observable store.
+#[no_mangle]
+pub extern "C" fn js_object_array_numeric_write2_guard(
+    array: f64,
+    key_1: f64,
+    key_2: f64,
+    count: u32,
+) -> u64 {
+    // Reuse the process gate js_gc_init disables for typed-feedback tracing,
+    // typed-layout verification, and the explicit inline-field escape hatch.
+    // This loop bypasses the same observations/checks as the class-field
+    // inline clone and therefore must honor the identical gate.
+    if count == 0 || !crate::object::class_field_inline_guard_enabled() {
+        return 0;
+    }
+
+    let array_bits = array.to_bits();
+    if (array_bits & !POINTER_MASK) != POINTER_TAG {
+        return 0;
+    }
+    let array_addr = (array_bits & POINTER_MASK) as usize;
+    let Some(array_gc) = (unsafe { crate::value::addr_class::try_read_gc_header(array_addr) })
+    else {
+        return 0;
+    };
+    if array_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        || array_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || array_gc._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+            .load(std::sync::atomic::Ordering::Relaxed)
+            != 0
+    {
+        return 0;
+    }
+
+    let arr = array_addr as *const crate::array::ArrayHeader;
+    let (length, capacity) = unsafe { ((*arr).length, (*arr).capacity) };
+    if length > 16_000_000 || capacity > 16_000_000 || length > capacity || count > length {
+        return 0;
+    }
+
+    let decode_key = |boxed: f64| -> Option<*const crate::StringHeader> {
+        let bits = boxed.to_bits();
+        if (bits & !POINTER_MASK) != crate::value::STRING_TAG {
+            return None;
+        }
+        let ptr = (bits & POINTER_MASK) as *const crate::StringHeader;
+        let gc = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }?;
+        (gc.obj_type == crate::gc::GC_TYPE_STRING
+            && gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_INTERNED)
+                == crate::gc::GC_FLAG_INTERNED)
+            .then_some(ptr)
+    };
+    let Some(key_1) = decode_key(key_1) else {
+        return 0;
+    };
+    let Some(key_2) = decode_key(key_2) else {
+        return 0;
+    };
+
+    const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+
+    unsafe fn validated_object(
+        bits: u64,
+    ) -> Option<(
+        *mut crate::ObjectHeader,
+        *mut crate::array::ArrayHeader,
+        u16,
+    )> {
+        if (bits & !POINTER_MASK) != POINTER_TAG {
+            return None;
+        }
+        let addr = (bits & POINTER_MASK) as usize;
+        let gc = crate::value::addr_class::try_read_gc_header(addr)?;
+        if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc._reserved & BLOCKING_FLAGS != 0
+        {
+            return None;
+        }
+        let obj = addr as *mut crate::ObjectHeader;
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+            || (*obj).class_id == 0
+            || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        {
+            return None;
+        }
+        let keys = (*obj).keys_array;
+        if keys.is_null() || (keys as u64) >> 48 != 0 {
+            return None;
+        }
+        let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
+        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
+                != crate::gc::GC_FLAG_SHAPE_SHARED
+        {
+            return None;
+        }
+        Some((obj, keys, gc._reserved))
+    }
+
+    unsafe fn find_slot(
+        keys: *mut crate::array::ArrayHeader,
+        key: *const crate::StringHeader,
+    ) -> Option<u32> {
+        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+        if key_count > 4096 {
+            return None;
+        }
+        for i in 0..key_count {
+            let candidate = crate::array::js_array_get(keys, i as u32);
+            if crate::string::js_string_key_matches(candidate, key) {
+                return Some(i as u32);
+            }
+        }
+        None
+    }
+
+    let elements = unsafe {
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64
+    };
+    let first_bits = unsafe { (*elements).to_bits() };
+    if first_bits == crate::value::TAG_HOLE {
+        return 0;
+    }
+    let Some((first, shared_keys, first_flags)) = (unsafe { validated_object(first_bits) }) else {
+        return 0;
+    };
+    let Some(slot_1) = (unsafe { find_slot(shared_keys, key_1) }) else {
+        return 0;
+    };
+    let Some(slot_2) = (unsafe { find_slot(shared_keys, key_2) }) else {
+        return 0;
+    };
+
+    let first_limit = unsafe {
+        std::cmp::max(
+            (*first).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32,
+        )
+    };
+    if slot_1 >= first_limit || slot_2 >= first_limit {
+        return 0;
+    }
+    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
+        && (!crate::gc::layout_typed_raw_f64_slot_for_user(first as usize, slot_1 as usize)
+            || !crate::gc::layout_typed_raw_f64_slot_for_user(first as usize, slot_2 as usize))
+    {
+        return 0;
+    }
+
+    for i in 1..count as usize {
+        let bits = unsafe { (*elements.add(i)).to_bits() };
+        if bits == crate::value::TAG_HOLE {
+            return 0;
+        }
+        let Some((obj, keys, flags)) = (unsafe { validated_object(bits) }) else {
+            return 0;
+        };
+        if keys != shared_keys {
+            return 0;
+        }
+        let limit =
+            unsafe { std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) };
+        if slot_1 >= limit || slot_2 >= limit {
+            return 0;
+        }
+        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
+            && (!crate::gc::layout_typed_raw_f64_slot_for_user(obj as usize, slot_1 as usize)
+                || !crate::gc::layout_typed_raw_f64_slot_for_user(obj as usize, slot_2 as usize))
+        {
+            return 0;
+        }
+    }
+
+    (u64::from(slot_2 + 1) << 32) | u64::from(slot_1 + 1)
+}

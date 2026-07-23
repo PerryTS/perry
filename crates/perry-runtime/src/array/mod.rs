@@ -84,6 +84,7 @@ pub(crate) use self::indexing::{
     invalidate_array_index_fast_path, keys_array_len_capped_to_capacity,
     note_array_proto_iterator_write, note_object_prototype_index_write, object_prototype_addr,
     object_prototype_addr_matches, object_prototype_has_index_flag,
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
