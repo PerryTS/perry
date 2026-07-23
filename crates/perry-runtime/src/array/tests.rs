@@ -733,6 +733,55 @@ fn test_numeric_array_raw_f64_payload_tracks_sets_and_downgrades() {
 }
 
 #[test]
+fn numeric_range_add_updates_only_the_validated_window_of_a_mixed_array() {
+    let mut arr = js_array_alloc(5);
+    for value in [1.0, 2.0, 3.0, 4.0, 5.0] {
+        arr = js_array_push_f64(arr, value);
+    }
+    let marker = string_value(string_key(b"mixed"));
+    js_array_set_f64(arr, 2, marker);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
+
+    let receiver = boxed_pointer(arr as *mut u8);
+    assert_eq!(js_array_numeric_range_add(receiver, 0.0, 2.0, 1.5), 2);
+    assert_eq!(js_array_numeric_range_add_len(receiver, 3.0, -2.0), 5);
+    assert_eq!(js_array_get_f64(arr, 0), 2.5);
+    assert_eq!(js_array_get_f64(arr, 1), 3.5);
+    assert_eq!(js_array_get_f64(arr, 2).to_bits(), marker.to_bits());
+    assert_eq!(js_array_get_f64(arr, 3), 2.0);
+    assert_eq!(js_array_get_f64(arr, 4), 3.0);
+}
+
+#[test]
+fn numeric_range_add_failure_is_transactional() {
+    let mut arr = js_array_alloc(3);
+    arr = js_array_push_f64(arr, 10.0);
+    arr = js_array_push_f64(arr, 20.0);
+    arr = js_array_push_f64(arr, 30.0);
+    let marker = string_value(string_key(b"stop"));
+    js_array_set_f64(arr, 1, marker);
+
+    let receiver = boxed_pointer(arr as *mut u8);
+    assert_eq!(js_array_numeric_range_add(receiver, 0.0, 3.0, 7.0), -1);
+    assert_eq!(js_array_get_f64(arr, 0), 10.0);
+    assert_eq!(js_array_get_f64(arr, 1).to_bits(), marker.to_bits());
+    assert_eq!(js_array_get_f64(arr, 2), 30.0);
+}
+
+#[test]
+fn numeric_range_add_rejects_frozen_arrays_without_writing() {
+    let mut arr = js_array_alloc(2);
+    arr = js_array_push_f64(arr, 4.0);
+    arr = js_array_push_f64(arr, 8.0);
+    let receiver = boxed_pointer(arr as *mut u8);
+    crate::object::js_object_freeze(receiver);
+
+    assert_eq!(js_array_numeric_range_add_len(receiver, 0.0, 1.0), -1);
+    assert_eq!(js_array_get_f64(arr, 0), 4.0);
+    assert_eq!(js_array_get_f64(arr, 1), 8.0);
+}
+
+#[test]
 fn pointer_only_array_allocation_clears_numeric_representation() {
     let arr = js_array_alloc_pointer_elements(2);
     assert_eq!(unsafe { super::header::array_numeric_layout(arr) }, None);

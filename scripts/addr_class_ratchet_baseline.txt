@@ -40,7 +40,7 @@ handle-floor | crates/perry-runtime/src/buffer/access.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/cmp.rs | 2
 handle-floor | crates/perry-runtime/src/buffer/copy_bytes.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/encode.rs | 6
-handle-floor | crates/perry-runtime/src/buffer/from.rs | 10
+handle-floor | crates/perry-runtime/src/buffer/from.rs | 9
 handle-floor | crates/perry-runtime/src/buffer/iter.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/query.rs | 7
 handle-floor | crates/perry-runtime/src/buffer/transcode.rs | 3
@@ -140,7 +140,7 @@ handle-floor | crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs 
 handle-floor | crates/perry-runtime/src/object/object_ops/has_own.rs | 4
 handle-floor | crates/perry-runtime/src/object/object_ops/keys_array.rs | 6
 handle-floor | crates/perry-runtime/src/object/object_ops/prototype.rs | 1
-handle-floor | crates/perry-runtime/src/object/object_ops_frozen.rs | 8
+handle-floor | crates/perry-runtime/src/object/object_ops_frozen.rs | 7
 handle-floor | crates/perry-runtime/src/object/polymorphic_index.rs | 2
 handle-floor | crates/perry-runtime/src/object/property_key.rs | 1
 handle-floor | crates/perry-runtime/src/object/prototype_chain.rs | 2
@@ -167,11 +167,11 @@ handle-floor | crates/perry-runtime/src/string/locale.rs | 1
 handle-floor | crates/perry-runtime/src/string/mod.rs | 1
 handle-floor | crates/perry-runtime/src/string/raw.rs | 1
 handle-floor | crates/perry-runtime/src/symbol.rs | 3
-handle-floor | crates/perry-runtime/src/symbol/constructors.rs | 3
+handle-floor | crates/perry-runtime/src/symbol/constructors.rs | 2
 handle-floor | crates/perry-runtime/src/symbol/get.rs | 6
 handle-floor | crates/perry-runtime/src/symbol/iterator.rs | 1
 handle-floor | crates/perry-runtime/src/text.rs | 2
-handle-floor | crates/perry-runtime/src/thread.rs | 13
+handle-floor | crates/perry-runtime/src/thread.rs | 10
 handle-floor | crates/perry-runtime/src/timer.rs | 2
 handle-floor | crates/perry-runtime/src/tls.rs | 1
 handle-floor | crates/perry-runtime/src/tty.rs | 1

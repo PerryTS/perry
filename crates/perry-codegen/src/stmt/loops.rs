@@ -28,6 +28,47 @@ struct NumericBulkFillLoop {
     value: NumericBulkFillValue,
 }
 
+#[derive(Clone)]
+enum NumericRangeAddBound {
+    Explicit(perry_hir::Expr),
+    ArrayLength,
+}
+
+struct NumericRangeAddLoop {
+    counter_id: u32,
+    array_id: u32,
+    bound: NumericRangeAddBound,
+    delta: f64,
+}
+
+fn match_indexed_store_shape(
+    store: &perry_hir::Expr,
+) -> Option<(&perry_hir::Expr, &perry_hir::Expr, &perry_hir::Expr)> {
+    use perry_hir::Expr;
+
+    match store {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => Some((object.as_ref(), index.as_ref(), value.as_ref())),
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } if matches!(
+            (target.as_ref(), receiver.as_ref()),
+            (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b
+        ) =>
+        {
+            Some((target.as_ref(), key.as_ref(), value.as_ref()))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LengthHoist {
     arr_id: u32,
@@ -285,6 +326,190 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
     if let Some(i32_slot) = ctx.i32_counter_slots.get(&matched.counter_id).cloned() {
         ctx.block().store(I32, &bound_i32, &i32_slot);
     }
+    Ok(true)
+}
+
+/// Match the mixed-layout numeric-window shape
+/// `for (let i = start; i < end; i++) arr[i] = arr[i] + constant`.
+///
+/// Number-typed arrays already use the raw-f64 versioned loop below. This
+/// matcher is for `any[]` / `unknown[]`, where a pointer or string elsewhere
+/// in the array clears the whole-array raw-layout bit even though the loop's
+/// window remains purely numeric. The runtime helper performs a transactional
+/// window validation before writing, so a wrong static hint simply falls back
+/// to the ordinary loop with no partial effects.
+fn match_numeric_range_add_loop(
+    ctx: &FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<NumericRangeAddLoop> {
+    use perry_hir::{BinaryOp, CompareOp, Expr, UpdateOp};
+    if !ctx.pending_labels.is_empty() {
+        return None;
+    }
+    let counter_id = match init? {
+        Stmt::Let {
+            id, init: Some(_), ..
+        } => *id,
+        _ => return None,
+    };
+    if !ctx.locals.contains_key(&counter_id)
+        || ctx.boxed_vars.contains(&counter_id)
+        || !matches!(
+            update,
+            Some(Expr::Update {
+                id,
+                op: UpdateOp::Increment,
+                ..
+            }) if *id == counter_id
+        )
+    {
+        return None;
+    }
+    let bound_expr = match condition? {
+        Expr::Compare {
+            op: CompareOp::Lt,
+            left,
+            right,
+        } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => right.as_ref(),
+        _ => return None,
+    };
+    let [Stmt::Expr(store)] = body else {
+        return None;
+    };
+    let (object, index, value) = match_indexed_store_shape(store)?;
+    let array_id = match object {
+        Expr::LocalGet(id) => *id,
+        _ => return None,
+    };
+    if !matches!(index, Expr::LocalGet(id) if *id == counter_id)
+        || !matches!(
+            local_array_element_type(ctx, array_id),
+            Some(perry_types::Type::Any | perry_types::Type::Unknown)
+        )
+        || !packed_loop_array_binding_storage_is_addressable(ctx, array_id)
+        || ctx.scalar_replaced_arrays.contains_key(&array_id)
+    {
+        return None;
+    }
+    let delta = match value {
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } if matches!(
+            left.as_ref(),
+            Expr::IndexGet {
+                object,
+                index
+            } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
+                && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
+        ) =>
+        {
+            match right.as_ref() {
+                Expr::Integer(value) => *value as f64,
+                Expr::Number(value) if value.is_finite() => *value,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let bound = match bound_expr {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length"
+            && matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) =>
+        {
+            NumericRangeAddBound::ArrayLength
+        }
+        Expr::Integer(_) | Expr::Number(_) => NumericRangeAddBound::Explicit(bound_expr.clone()),
+        Expr::LocalGet(bound_id)
+            if *bound_id != counter_id
+                && (ctx.locals.contains_key(bound_id)
+                    || ctx.module_globals.contains_key(bound_id))
+                && !(ctx.boxed_vars.contains(bound_id)
+                    && !ctx.module_globals.contains_key(bound_id))
+                && local_bound_is_loop_invariant(condition?, update, body, *bound_id) =>
+        {
+            NumericRangeAddBound::Explicit(bound_expr.clone())
+        }
+        _ => return None,
+    };
+    Some(NumericRangeAddLoop {
+        counter_id,
+        array_id,
+        bound,
+        delta,
+    })
+}
+
+fn lower_numeric_range_add_loop(
+    ctx: &mut FnCtx<'_>,
+    matched: NumericRangeAddLoop,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<bool> {
+    let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.array_id))?;
+    let start_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.counter_id))?;
+    let delta = crate::nanbox::double_literal(matched.delta);
+    let result = match &matched.bound {
+        NumericRangeAddBound::Explicit(bound) => {
+            let end_box = lower_expr(ctx, bound)?;
+            ctx.block().call(
+                I64,
+                "js_array_numeric_range_add",
+                &[
+                    (DOUBLE, &arr_box),
+                    (DOUBLE, &start_box),
+                    (DOUBLE, &end_box),
+                    (DOUBLE, &delta),
+                ],
+            )
+        }
+        NumericRangeAddBound::ArrayLength => ctx.block().call(
+            I64,
+            "js_array_numeric_range_add_len",
+            &[(DOUBLE, &arr_box), (DOUBLE, &start_box), (DOUBLE, &delta)],
+        ),
+    };
+    let succeeded = ctx.block().icmp_sge(I64, &result, "0");
+    let success_idx = ctx.new_block("numeric.range_add.success");
+    let fallback_idx = ctx.new_block("numeric.range_add.fallback");
+    let merge_idx = ctx.new_block("numeric.range_add.merge");
+    let success_label = ctx.block_label(success_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&succeeded, &success_label, &fallback_label);
+
+    ctx.current_block = success_idx;
+    let final_counter = ctx.block().sitofp(I64, &result, DOUBLE);
+    if let Some(slot) = ctx.locals.get(&matched.counter_id).cloned() {
+        ctx.block().store(DOUBLE, &final_counter, &slot);
+    }
+    if let Some(slot) = ctx.i32_counter_slots.get(&matched.counter_id).cloned() {
+        let final_i32 = ctx.block().trunc(I64, &result, I32);
+        ctx.block().store(I32, &final_i32, &slot);
+    }
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fallback_idx;
+    lower_for_after_init(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for.numeric_range_add_fallback",
+    )?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+    ctx.current_block = merge_idx;
     Ok(true)
 }
 
@@ -2688,7 +2913,11 @@ fn match_packed_f64_versioned_loop(
     if !ctx.pending_labels.is_empty() {
         return None;
     }
-    let hoist = condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))?;
+    let ordinary_hoist =
+        condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
+    let hoist = ordinary_hoist.or_else(|| {
+        condition.and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
+    })?;
     if !matches!(hoist.op, perry_hir::CompareOp::Lt) || hoist.lhs_addend != 0 {
         return None;
     }
@@ -2698,15 +2927,37 @@ fn match_packed_f64_versioned_loop(
     {
         return None;
     }
-    if !packed_loop_array_binding_is_eligible(ctx, hoist.arr_id) {
-        return None;
-    }
     let store_array_kind =
         supported_packed_numeric_loop_store_kind(ctx, body, hoist.arr_id, hoist.counter_id);
+    // The relaxed classifier above exists only for the exact guarded store
+    // loop. Other loop bodies keep the ordinary materialization-hazard gate.
+    if ordinary_hoist.is_none() && store_array_kind.is_none() {
+        return None;
+    }
+    let binding_is_eligible = if store_array_kind.is_some() {
+        // A helper call that produced the binding marks it with the
+        // conservative whole-function materialization hazard. For this exact
+        // store-loop shape that history is irrelevant: the entry guard
+        // validates the current receiver/layout, and the matched body cannot
+        // call out, escape an alias, grow the array, or otherwise invalidate
+        // the guard before the loop completes.
+        packed_loop_array_binding_storage_is_addressable(ctx, hoist.arr_id)
+            && !ctx.scalar_replaced_arrays.contains_key(&hoist.arr_id)
+    } else {
+        packed_loop_array_binding_is_eligible(ctx, hoist.arr_id)
+    };
+    if !binding_is_eligible {
+        return None;
+    }
     let array_kind = if let Some(store_array_kind) = store_array_kind {
-        if !ctx.native_facts.proves_noalias_array(hoist.arr_id) {
-            return None;
-        }
+        // The accepted store body is exactly `arr[i] = <numeric expression>`
+        // with an in-bounds `i < arr.length` induction variable. It contains
+        // no calls, alias writes, growth, or other side effects, and the
+        // runtime loop-entry guard revalidates the actual array/layout before
+        // entering the raw-slot clone. Requiring a whole-function no-alias
+        // provenance fact here therefore rejected safe arrays returned by
+        // helpers (the common `const arr = buildArray()` shape) even though
+        // nothing can invalidate the guarded layout inside this loop.
         store_array_kind
     } else if ctx.native_facts.proves_packed_i32_array(hoist.arr_id)
         && local_is_int32_array(ctx, hoist.arr_id)
@@ -2907,14 +3158,10 @@ fn supported_packed_numeric_loop_store_kind(
     arr_id: u32,
     counter_id: u32,
 ) -> Option<PackedNumericLoopKind> {
-    let [Stmt::Expr(perry_hir::Expr::IndexSet {
-        object,
-        index,
-        value,
-    })] = body
-    else {
+    let [Stmt::Expr(store)] = body else {
         return None;
     };
+    let (object, index, value) = match_indexed_store_shape(store)?;
     if !is_packed_f64_loop_index(object, index, arr_id, counter_id) {
         return None;
     }
@@ -3388,6 +3635,12 @@ pub(crate) fn lower_for(
 
     if let Some(matched) = match_numeric_bulk_fill_loop(ctx, init, condition, update, body) {
         if lower_numeric_bulk_fill_loop(ctx, matched)? {
+            return Ok(());
+        }
+    }
+
+    if let Some(matched) = match_numeric_range_add_loop(ctx, init, condition, update, body) {
+        if lower_numeric_range_add_loop(ctx, matched, init, condition, update, body)? {
             return Ok(());
         }
     }
@@ -4199,6 +4452,16 @@ fn classify_for_length_hoist(
     update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
 ) -> Option<LengthHoist> {
+    classify_for_length_hoist_impl(ctx, cond, update, body, false)
+}
+
+fn classify_for_length_hoist_impl(
+    ctx: &crate::expr::FnCtx<'_>,
+    cond: &perry_hir::Expr,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+    allow_materialization_hazard: bool,
+) -> Option<LengthHoist> {
     use perry_hir::{BinaryOp, CompareOp, Expr};
     let (op, left, right) = match cond {
         Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
@@ -4216,7 +4479,15 @@ fn classify_for_length_hoist(
         },
         _ => return None,
     };
-    if !array_length_receiver_is_loop_local(ctx, arr_id) {
+    let receiver_is_eligible = if allow_materialization_hazard {
+        ctx.locals.contains_key(&arr_id)
+            && !ctx.boxed_vars.contains(&arr_id)
+            && !ctx.module_globals.contains_key(&arr_id)
+            && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
+    } else {
+        array_length_receiver_is_loop_local(ctx, arr_id)
+    };
+    if !receiver_is_eligible {
         return None;
     }
     let guarded_aliases = guarded_array_aliases_for_loop(ctx, arr_id, update, body);
