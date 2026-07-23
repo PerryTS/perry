@@ -83,6 +83,13 @@ pub(crate) fn is_shape_id_token(v: usize) -> bool {
     v >= SHAPE_ID_BASE as usize && v < SHAPE_ID_END as usize
 }
 
+/// #6804: lifts a ShapeId into the per-site PIC token space, ABOVE the
+/// 48-bit pointer range, so an id token can never numerically equal a
+/// keys-array pointer token. MUST match the literal the PIC IR emits in
+/// `perry-codegen/src/expr/property_get/generic_dispatch.rs`
+/// (4611686018427387904 = 1 << 62).
+pub(crate) const PIC_ID_TOKEN_BIT: u64 = 1 << 62;
+
 fn alloc_shape_id() -> u32 {
     use std::sync::atomic::Ordering;
     let id = SHAPE_ID_NEXT.fetch_add(1, Ordering::Relaxed);

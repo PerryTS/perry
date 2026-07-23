@@ -459,16 +459,24 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     // ~900k times per run (40% inclusive samples per
                     // perfcomp.profile).
                     //
-                    // #6759 C3c: only prime the cache for SHAPE-SHARED keys
-                    // arrays (literal shapes, class-keys arrays — both
-                    // shape-cache-resident, process-rooted, address-stable).
-                    // An OWNED keys array can die and have its address
-                    // recycled under a DIFFERENT shape, and this compare is
-                    // the one unvalidated fast path in the system — a stale
-                    // hit reads the wrong slot. Owned/wide receivers are
-                    // served by the validated, shape-id-keyed FIELD_CACHE
-                    // instead.
-                    if keys_cacheable_for_pic(keys) {
+                    // #6804: a stamped plain receiver primes an ID token
+                    // (`stamp | PIC_ID_TOKEN_BIT`, matching the emitted
+                    // PIC's discriminated compare). Ids are never reused,
+                    // so id tokens are immune to the address-recycling ABA
+                    // that keys-pointer tokens have — which also makes
+                    // OWNED keys arrays safely cacheable again for plain
+                    // objects. #6759 C3c: keys-POINTER tokens stay
+                    // restricted to SHAPE-SHARED arrays (literal shapes,
+                    // class-keys arrays — shape-cache-resident,
+                    // process-rooted, address-stable), because that compare
+                    // is unvalidated and a recycled owned-array address
+                    // would read the wrong slot.
+                    let stamp = (*obj).parent_class_id;
+                    if (*obj).class_id == 0 && crate::object::shapes::is_shape_id(stamp) {
+                        (*cache)[0] =
+                            (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+                        (*cache)[1] = i as i64;
+                    } else if keys_cacheable_for_pic(keys) {
                         (*cache)[0] = keys as i64;
                         (*cache)[1] = i as i64;
                     }
