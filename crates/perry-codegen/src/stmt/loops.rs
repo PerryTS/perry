@@ -2224,6 +2224,8 @@ fn lower_object_array_write2_versioned_for(
             let field_word = blk.add(I64, slot, &header_words);
             blk.gep_inbounds(I64, &object_ptr, &[(I64, &field_word)])
         };
+        // GC_STORE_AUDIT(POINTER_FREE): the versioned loop emits only numeric
+        // values into fields proven numeric by the entry guard.
         ctx.block().store(DOUBLE, &value, &field_ptr);
     }
     ctx.block()

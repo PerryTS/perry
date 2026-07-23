@@ -119,9 +119,9 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
 }
 
 fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
-    let active = ctx
-        .block()
-        .load_volatile(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT");
+    let active =
+        ctx.block()
+            .load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
     let barrier_needed = ctx.block().icmp_ne(I32, &active, "0");
     let barrier_idx = ctx.new_block("shadow.root.barrier");
     let done_idx = ctx.new_block("shadow.root.barrier.done");

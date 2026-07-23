@@ -399,6 +399,8 @@ fn lower_put_value_static_write_ic(
             // A non-pointer overwrite cannot create a young edge or make a GC
             // pointer layout less conservative. The per-object typed layout
             // bit was already cleared on the miss that primed this cache.
+            // GC_STORE_AUDIT(POINTER_FREE): this branch only stores a value
+            // proven unable to contain GC pointer bits.
             blk.store(DOUBLE, &stored_value, &field_ptr);
         }
         blk.br(&merge_label);
