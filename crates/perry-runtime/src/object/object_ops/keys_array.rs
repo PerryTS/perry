@@ -113,7 +113,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let key_hash = super::super::key_bytes_hash(name_ptr, (*key).byte_len as usize);
         super::super::keys_index_insert(
-            obj as usize,
+            (*obj).keys_array,
             key_count as u32 + 1,
             key_hash,
             key_count as u32,

@@ -1068,6 +1068,17 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let Expr::LocalGet(id) = object.as_ref() else {
         return Ok(None);
     };
+    // #6750 follow-up: an active masked-window fact wins over the guarded
+    // inline-TA probe — the fact's entry guard already proved storage + the
+    // whole index window, so the read needs no per-access cache probe at all.
+    if let Some(fact) = super::masked_window::masked_window_fact_for_index(ctx, *id, index.as_ref())
+    {
+        let arr_box = lower_expr(ctx, object)?;
+        let idx_i32 = lower_expr_as_i32(ctx, index)?;
+        return Ok(Some(super::masked_window::lower_masked_window_index_get(
+            ctx, *id, &arr_box, &idx_i32, &fact,
+        )));
+    }
     let recv_unknown = matches!(
         crate::type_analysis::static_type_of(ctx, object),
         None | Some(HirType::Any) | Some(HirType::Unknown)
@@ -1528,6 +1539,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_string_index_get",
                     &[(I64, &s_handle), (DOUBLE, &idx_d)],
                 ));
+            }
+            // #6750 follow-up: a masked-window fact (dense range-loop or
+            // straight-line region fast copy) covering this access means the
+            // entry guard already proved the receiver's storage layout and
+            // the whole static index window — the read is a bare inline load
+            // even though the STATIC type is erased (`any` parameter). Must
+            // run before the unknown-receiver `js_dyn_index_get` route below.
+            if let Expr::LocalGet(arr_id) = object.as_ref() {
+                if let Some(fact) =
+                    super::masked_window::masked_window_fact_for_index(ctx, *arr_id, index.as_ref())
+                {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_i32 = lower_expr_as_i32(ctx, index)?;
+                    return Ok(super::masked_window::lower_masked_window_index_get(
+                        ctx, *arr_id, &arr_box, &idx_i32, &fact,
+                    ));
+                }
             }
             // Issue #514: when the receiver's static type is genuinely
             // unknown (`Type::Any` / `Type::Unknown`) and the index is

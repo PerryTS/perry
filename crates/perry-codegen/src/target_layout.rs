@@ -20,25 +20,29 @@ pub fn target_is_ilp32(target_triple: &str) -> bool {
         || target_triple.starts_with("wasm32")
         || target_triple.starts_with("i686")
         || target_triple.starts_with("i386")
+        // x32: 64-bit ISA with 32-bit pointers — the `x86_64` prefix alone
+        // would misclassify it as LP64.
+        || target_triple.ends_with("gnux32")
 }
 
 /// `std::mem::size_of::<perry_runtime::object::ObjectHeader>()` for the target.
 ///
 /// `ObjectHeader` is four `u32`s (`object_type`, `class_id`, `parent_class_id`,
-/// `field_count` = 16 bytes) followed by one pointer (`keys_array`): 8 bytes +
-/// 8-byte alignment → 24 on 64-bit; 4 bytes → 20 on ILP32. Inline object
-/// allocation, header init, and the property inline-cache fast path all use
-/// this as the field-region base (`fields = obj + object_header_size_bytes`).
-/// It MUST equal the runtime's `size_of::<ObjectHeader>()`, or inline-
-/// constructed objects and runtime-FFI field access diverge by 4 bytes and
-/// every property read/write is corrupt. (The closure header `type_tag` offset
-/// has the analogous problem; that one is handled runtime-side via
-/// `perry_runtime::closure::CLOSURE_TYPE_TAG_OFFSET` / `offset_of!`.)
+/// `field_count` = 16 bytes) followed by two pointers (`keys_array`, and the
+/// #6759 Phase B `meta` record pointer): 16 bytes → 32 on 64-bit; 8 bytes → 24
+/// on ILP32. Inline object allocation, header init, and the property
+/// inline-cache fast path all use this as the field-region base
+/// (`fields = obj + object_header_size_bytes`). It MUST equal the runtime's
+/// `size_of::<ObjectHeader>()`, or inline-constructed objects and runtime-FFI
+/// field access diverge and every property read/write is corrupt. (The closure
+/// header `type_tag` offset has the analogous problem; that one is handled
+/// runtime-side via `perry_runtime::closure::CLOSURE_TYPE_TAG_OFFSET` /
+/// `offset_of!`.)
 pub fn object_header_size_bytes(target_triple: &str) -> u64 {
     if target_is_ilp32(target_triple) {
-        20
-    } else {
         24
+    } else {
+        32
     }
 }
 
@@ -48,14 +52,15 @@ mod tests {
 
     #[test]
     fn object_header_size_matches_pointer_width() {
-        // 64-bit targets: 4×u32 + 8-byte aligned pointer = 24. Must stay 24 so
-        // the shipping arm64 / x86_64 IR is byte-identical to before this fix.
-        assert_eq!(object_header_size_bytes("aarch64-apple-darwin"), 24);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos"), 24);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos-sim"), 24);
-        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnu"), 24);
-        // arm64_32 watchOS (Series 4–8 / SE): 4×u32 + 4-byte pointer = 20.
-        assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 20);
+        // 64-bit targets: 4×u32 + two 8-byte-aligned pointers (keys_array +
+        // #6759 meta) = 32.
+        assert_eq!(object_header_size_bytes("aarch64-apple-darwin"), 32);
+        assert_eq!(object_header_size_bytes("aarch64-apple-watchos"), 32);
+        assert_eq!(object_header_size_bytes("aarch64-apple-watchos-sim"), 32);
+        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnu"), 32);
+        // arm64_32 watchOS (Series 4–8 / SE): 4×u32 + two 4-byte pointers = 24.
+        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnux32"), 24);
+        assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 24);
     }
 
     #[test]

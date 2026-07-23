@@ -510,6 +510,13 @@ fn lower_new_impl(
             // target-compiled runtime (no-op on 64-bit; see `target_layout`).
             let object_header_size: u64 =
                 crate::target_layout::object_header_size_bytes(ctx.target_triple);
+            // #6759 Phase B: pointer width for the trailing `meta` header
+            // field (computed here, before `ctx.block()` mutably borrows).
+            let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+                4
+            } else {
+                8
+            };
             const FIELD_SLOT_SIZE: u64 = 8;
             // Inline-slot floor — MUST match perry-runtime `object::INLINE_SLOT_FLOOR`
             // (they independently pad `new` objects to the same minimum; a mismatch
@@ -659,6 +666,17 @@ fn lower_new_impl(
             let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
             // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
             blk.store(I64, &keys_ptr, &oh_addr_3);
+
+            // #6759 Phase B: null the `meta` record pointer — the LAST header
+            // field, at header offset (object_header_size - pointer_size).
+            // Pointer-width store: on ILP32 the field is 4 bytes at a
+            // 4-aligned offset, and an i64 store there would violate the
+            // arm64_32 `i64:64` ABI alignment (and spill into slot 0).
+            let meta_off = GC_HEADER_SIZE + object_header_size - meta_ptr_size;
+            let meta_addr = blk.gep(I8, &raw, &[(I64, &meta_off.to_string())]);
+            // GC_STORE_AUDIT(INIT): fresh inline object starts with no per-object meta record (#6759 B).
+            let meta_store_ty = if meta_ptr_size == 4 { I32 } else { I64 };
+            blk.store(meta_store_ty, "0", &meta_addr);
 
             // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
             // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately

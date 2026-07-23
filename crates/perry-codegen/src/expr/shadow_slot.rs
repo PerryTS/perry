@@ -33,6 +33,14 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
         Expr::Compare { .. } | Expr::Void(_) => true,
         Expr::Unary { .. } => true,
         Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
+        // #6750 follow-up: a masked-index read covered by an ACTIVE
+        // masked-window fact is a guard-proven numeric element load — never
+        // a pointer — even when the receiver's static type is erased.
+        Expr::IndexGet { object, index } => matches!(
+            object.as_ref(),
+            Expr::LocalGet(arr_id)
+                if super::masked_window_fact_for_index(ctx, *arr_id, index).is_some()
+        ),
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -74,6 +82,14 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     value_reg: &str,
     rhs: &Expr,
 ) {
+    // #6750 follow-up: inside a masked-window region fast copy, a local
+    // flow-refined to Number had its slot cleared at the refinement point
+    // and every subsequent region write stores a proven number — no
+    // per-statement shadow traffic needed until the refinement is dropped
+    // (see `stmt::masked_window_region`).
+    if ctx.masked_region_scalar_locals.contains(&local_id) {
+        return;
+    }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
         return;
     };

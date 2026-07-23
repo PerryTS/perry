@@ -467,6 +467,7 @@ pub(super) fn compile_method(
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
         masked_window_array_facts: Vec::new(),
+        masked_region_scalar_locals: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         i1_local_slots: HashMap::new(),
@@ -1052,6 +1053,7 @@ pub(super) fn compile_typed_f64_receiver_method(
     method: &Function,
     methods: &HashMap<(String, String), String>,
     receiver: &TypedReceiverMethodInfo,
+    header_skip: u64,
 ) -> Result<()> {
     let generic_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -1076,7 +1078,7 @@ pub(super) fn compile_typed_f64_receiver_method(
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
-        lower_typed_f64_receiver_body(blk, &method.params, &method.body, receiver)?
+        lower_typed_f64_receiver_body(blk, &method.params, &method.body, receiver, header_skip)?
     };
     lf.block_mut(0).unwrap().ret(DOUBLE, &value);
     Ok(())
@@ -1463,6 +1465,7 @@ pub(super) fn compile_static_method(
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
         masked_window_array_facts: Vec::new(),
+        masked_region_scalar_locals: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         i1_local_slots: HashMap::new(),

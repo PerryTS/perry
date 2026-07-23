@@ -126,6 +126,7 @@ pub mod regex;
 pub mod safe_area;
 pub mod set;
 pub mod shared_sab;
+pub(crate) mod state;
 pub mod string;
 pub mod symbol;
 /// TC39 Temporal API (#4686): `Temporal.Duration`, `Temporal.Instant`,

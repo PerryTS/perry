@@ -341,7 +341,7 @@ pub extern "C" fn js_object_set_field_by_index(
                 // address must not pick up the previous tenant's stale accessor
                 // (it would silently drop `obj.k = v` for a getter-only stale
                 // entry). A fresh allocation has the flag clear.
-                if ACCESSORS_IN_USE.with(|c| c.get())
+                if crate::state::state().descriptors.accessors_in_use.get()
                     && super::super::object_has_descriptors(obj as usize)
                 {
                     if let Some(acc) = get_accessor_descriptor(obj as usize, name) {

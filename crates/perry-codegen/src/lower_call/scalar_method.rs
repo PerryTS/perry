@@ -675,10 +675,11 @@ fn emit_materialized_scalar_receiver_direct_field_store(
     value: &str,
 ) {
     let field_idx_str = field_index.to_string();
+    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
     let field_ptr = {
         let blk = ctx.block();
         let obj_ptr = blk.inttoptr(I64, obj_handle);
-        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
         blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)])
     };
     let is_raw_f64 = crate::type_analysis::class_field_declared_type(ctx, class_name, field)

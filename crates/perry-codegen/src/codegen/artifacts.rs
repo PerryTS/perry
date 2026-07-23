@@ -55,6 +55,7 @@ use super::string_pool::emit_string_pool;
 /// destructured.
 pub(super) struct ModuleArtifactsCtx<'a> {
     pub llmod: &'a mut LlModule,
+    pub target_triple: &'a str,
     pub strings: &'a mut StringPool,
     pub hir: &'a HirModule,
     pub import_function_prefixes: &'a std::collections::HashMap<String, String>,
@@ -181,6 +182,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // rest are shared borrows.
     let ModuleArtifactsCtx {
         llmod,
+        target_triple,
         strings,
         hir,
         import_function_prefixes,
@@ -338,13 +340,20 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 .typed_f64_receiver_methods
                 .get(&(class.name.clone(), method.name.clone()))
             {
-                compile_typed_f64_receiver_method(llmod, class, method, method_names, receiver)
-                    .with_context(|| {
-                        format!(
-                            "lowering typed-f64 receiver method clone '{}::{}'",
-                            class.name, method.name
-                        )
-                    })?;
+                compile_typed_f64_receiver_method(
+                    llmod,
+                    class,
+                    method,
+                    method_names,
+                    receiver,
+                    crate::target_layout::object_header_size_bytes(target_triple),
+                )
+                .with_context(|| {
+                    format!(
+                        "lowering typed-f64 receiver method clone '{}::{}'",
+                        class.name, method.name
+                    )
+                })?;
             }
             if cross_module
                 .typed_i32_methods

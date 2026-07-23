@@ -354,6 +354,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I32],
     );
+    // #6750 follow-up: masked-window typed-array tier probe (returns the
+    // MASKED_WINDOW_TA_KIND_* code) and the preheader element-0 data-pointer
+    // hoist consumed by the guarded typed-array fast copies.
+    module.declare_function(
+        "js_typed_feedback_masked_window_ta_kind",
+        I32,
+        &[I64, DOUBLE, I32, I32],
+    );
+    module.declare_function("js_typed_array_masked_window_data_ptr", I64, &[DOUBLE]);
     module.declare_function(
         "js_typed_feedback_packed_u32_array_loop_guard",
         I32,

@@ -2268,6 +2268,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // see the doc on that fn for the split rationale.
     emit_module_artifacts(ModuleArtifactsCtx {
         llmod: &mut llmod,
+        target_triple: &triple,
         strings: &mut strings,
         hir,
         import_function_prefixes: &opts.import_function_prefixes,

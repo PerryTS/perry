@@ -299,6 +299,9 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // #6759 A: one state fetch for the whole write path — the descriptor
+    // gates below all reuse it.
+    let st = crate::state::state();
     // #5135: the receiver may be a Proxy id arriving with its NaN-box tag
     // already masked off (the `obj.prop++` / `PropertyUpdate` codegen path
     // hands us the bare pointer band, not the full POINTER_TAG value). A Proxy
@@ -907,7 +910,7 @@ pub extern "C" fn js_object_set_field_by_name(
             // fresh array reusing a freed address (its `_reserved` zeroed at
             // allocation) skips this lookup and can't fire a previous tenant's
             // stale accessor.
-            if ACCESSORS_IN_USE.with(|c| c.get())
+            if st.descriptors.accessors_in_use.get()
                 && (*gc_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
             {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
@@ -1333,6 +1336,14 @@ pub extern "C" fn js_object_set_field_by_name(
             // fast path above instead of allocating a fresh 4-elem
             // keys_array here.
             transition_cache_insert(0, interned_key, new_keys as usize, 0);
+            // #6804: birth-stamp the new dynamic shape (once per shape
+            // birth — the transition edge above serves the siblings).
+            if (*obj).class_id == 0 {
+                let id = super::shapes::shape_id_for_keys_ensure(new_keys, 1);
+                if id != 0 {
+                    (*obj).parent_class_id = id;
+                }
+            }
             return;
         }
 
@@ -1351,7 +1362,8 @@ pub extern "C" fn js_object_set_field_by_name(
         // honored), so the descriptor key string can never be consulted: skip
         // the per-store String allocation entirely.
         let needs_descriptor_key = !plan_fast
-            && (ACCESSORS_IN_USE.with(|c| c.get()) || PROPERTY_ATTRS_IN_USE.with(|c| c.get()));
+            && (st.descriptors.accessors_in_use.get()
+                || st.descriptors.property_attrs_in_use.get());
         let incoming_key_str: Option<String> = if needs_descriptor_key && !key.is_null() {
             let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let name_len = (*key).byte_len as usize;
@@ -1379,7 +1391,7 @@ pub extern "C" fn js_object_set_field_by_name(
         // app-page-turbo runtime's `exports.Fragment = …`). A fresh allocation
         // has the flag clear, so it skips the stale lookup entirely.
         if !plan_fast
-            && ACCESSORS_IN_USE.with(|c| c.get())
+            && st.descriptors.accessors_in_use.get()
             && super::object_has_descriptors(obj as usize)
         {
             if let Some(ref k) = incoming_key_str {
@@ -1498,6 +1510,13 @@ pub extern "C" fn js_object_set_field_by_name(
                 refresh_roots_after_alloc!();
                 set_object_keys_array(obj, new_keys);
                 super::mark_object_dynamic_shape_unknown(obj);
+                // #6759 Phase C3a: an owned grow keeps its shape identity —
+                // migrate the record instead of orphaning it (a shared
+                // fork must NOT migrate: the old address still describes
+                // the siblings' live shape).
+                if !keys_shared {
+                    super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+                }
                 overflow_set(obj as usize, new_index, vbits);
                 mirror_class_object_static_write(obj, key, value);
                 transition_cache_insert(
@@ -1507,7 +1526,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     new_index as u32,
                 );
                 keys_index_insert(
-                    obj as usize,
+                    (*obj).keys_array,
                     (new_index + 1) as u32,
                     key_hash,
                     new_index as u32,
@@ -1525,6 +1544,11 @@ pub extern "C" fn js_object_set_field_by_name(
             refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
+            // #6759 Phase C3a: owned grow keeps its shape identity (see the
+            // overflow branch above).
+            if !keys_shared {
+                super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+            }
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
             mirror_class_object_static_write(obj, key, value);
             if new_index as u32 >= (*obj).field_count {
@@ -1536,19 +1560,12 @@ pub extern "C" fn js_object_set_field_by_name(
                 new_keys as usize,
                 new_index as u32,
             );
-            // The sidecar is keyed on the OBJECT pointer (see
-            // `keys_index_lookup`, which probes `obj as usize`), NOT the
-            // keys-array pointer — shape-sharing clones the keys array on
-            // every insert, so a keys-keyed entry would be orphaned each
-            // iteration. Previously this inline-slot append registered
-            // under `new_keys as usize`, so the obj-keyed lookup never
-            // found it and rebuilt the full O(key_count) index on every
-            // write — turning a wide build that stays on the inline-slot
-            // path (e.g. a class instance whose pre-sized inline capacity
-            // keeps appends below the overflow threshold) into O(n²). Use
-            // the object address to match the lookup + the overflow path.
+            // #6759 C1 note: `keys_index_insert` delegates to the keys-keyed
+            // shape records and takes the POST-append keys_array — with the
+            // C3a migration above, an owned grow lands the append on the
+            // migrated record rather than forcing a rebuild.
             keys_index_insert(
-                obj as usize,
+                (*obj).keys_array,
                 (new_index + 1) as u32,
                 key_hash,
                 new_index as u32,
@@ -1585,7 +1602,7 @@ pub extern "C" fn js_object_set_field_by_name(
                 // read only property" on a plain `{}` (Next.js app-page-turbo
                 // runtime's `exports.Fragment = …`). A fresh allocation has the
                 // flag clear, so it skips the lookup entirely.
-                if PROPERTY_ATTRS_IN_USE.with(|c| c.get())
+                if st.descriptors.property_attrs_in_use.get()
                     && super::object_has_descriptors(obj as usize)
                 {
                     if let Some(ref k) = incoming_key_str {
@@ -1691,6 +1708,10 @@ pub extern "C" fn js_object_set_field_by_name(
             refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
+            // #6759 Phase C3a: owned grow keeps its shape identity.
+            if !keys_shared {
+                super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+            }
             overflow_set(obj as usize, new_index, vbits);
             mirror_class_object_static_write(obj, key, value);
             // Record the shape transition so the next object sharing
@@ -1718,6 +1739,10 @@ pub extern "C" fn js_object_set_field_by_name(
         // Update the object's keys_array pointer in case js_array_push reallocated
         set_object_keys_array(obj, new_keys);
         super::mark_object_dynamic_shape_unknown(obj);
+        // #6759 Phase C3a: owned grow keeps its shape identity.
+        if !keys_shared {
+            super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
+        }
 
         // Set the field at the new index and update logical field_count
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));

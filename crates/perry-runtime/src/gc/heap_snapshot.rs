@@ -195,6 +195,7 @@ unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
         GC_TYPE_TYPED_ARRAY => (NODE_TYPE_NATIVE, "TypedArray".to_string()),
         GC_TYPE_DATE_CELL => (NODE_TYPE_OBJECT, "Date".to_string()),
         GC_TYPE_TEMPORAL => (NODE_TYPE_NATIVE, "Temporal".to_string()),
+        GC_TYPE_OBJECT_META => (NODE_TYPE_NATIVE, "ObjectMeta".to_string()),
         _ => (NODE_TYPE_NATIVE, "native".to_string()),
     }
 }
