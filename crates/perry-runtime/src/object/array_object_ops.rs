@@ -545,9 +545,11 @@ pub(crate) unsafe fn define_array_property(
 
         // Redefining an index that was previously an accessor back to a data
         // property: drop the stale accessor entry.
-        ACCESSOR_DESCRIPTORS.with(|m| {
-            m.borrow_mut().remove(&(obj as usize, key_name.to_string()));
-        });
+        crate::state::state()
+            .descriptors
+            .accessor_descriptors
+            .borrow_mut()
+            .remove(&(obj as usize, key_name.to_string()));
         // [[DefineOwnProperty]] writes the slot directly — clear any stale
         // attrs first so the extend helper's [[Set]]-side writability check
         // (added for ordinary `arr[i] = v` writes) can't reject this store.
@@ -726,9 +728,11 @@ pub(crate) unsafe fn define_array_property(
     // Redefining a former accessor back to a data property drops the stale
     // accessor entry (the non-configurable case already threw above).
     if cur_accessor.is_some() {
-        ACCESSOR_DESCRIPTORS.with(|m| {
-            m.borrow_mut().remove(&(obj as usize, key_name.to_string()));
-        });
+        crate::state::state()
+            .descriptors
+            .accessor_descriptors
+            .borrow_mut()
+            .remove(&(obj as usize, key_name.to_string()));
     }
 
     // Write the value: an explicit `value` wins; a NEW property with no value

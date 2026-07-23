@@ -222,6 +222,10 @@ fn fan_out(
     crate::object::prune_dead_descriptor_owner_entries(is_dead_owner);
     crate::object::prune_dead_arguments_object_entries(is_dead_owner);
     crate::object::prototype_chain::prune_dead_object_prototype_owners(is_dead_owner);
+    // #6759 C1: shape records are keyed on keys_array addresses; drop the
+    // ones whose keys_array died (memory only — per-hit validation covers
+    // correctness for anything this misses).
+    crate::object::shapes::prune_dead_shape_keys(is_dead_owner);
     crate::object::exotic_expando::prune_dead_exotic_expando_owners(is_dead_owner);
     crate::symbol::prune_dead_symbol_property_owners(is_dead_owner);
     crate::symbol::prune_dead_symbol_pointers(is_dead_symbol);

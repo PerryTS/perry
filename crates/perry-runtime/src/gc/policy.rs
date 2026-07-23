@@ -643,6 +643,45 @@ pub fn gc_unsuppress() {
     GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
 }
 
+/// True while GC triggers are suppressed (see [`gc_suppress`]).
+pub(crate) fn gc_is_suppressed() -> bool {
+    GC_FLAGS.with(|f| f.get()) & GC_FLAG_SUPPRESSED != 0
+}
+
+/// #6759 Phase C2: RAII no-move window for a TINY allocation. While alive,
+/// every GC trigger is blocked (`GC_FLAG_SUPPRESSED` gates `gc_check_trigger`,
+/// the budgeted stepper, and the safepoint moving minor), so no heap object
+/// can move and raw pointers held anywhere up the caller stack stay valid
+/// across the allocation.
+///
+/// Unlike [`gc_suppress`] this sets ONLY the flag: it skips the fresh-block /
+/// pre-suppress-bytes bookkeeping that exists for JSON.parse's multi-megabyte
+/// suppressed windows, because the intended use is a few dozen bytes (e.g. an
+/// `ObjectMeta` record) where that accounting is pure overhead. Nesting-safe:
+/// the previous suppression state is restored on drop, so a scope opened
+/// inside an outer `gc_suppress` window does not unsuppress it early.
+pub(crate) struct GcSuppressScope {
+    was_suppressed: bool,
+}
+
+impl GcSuppressScope {
+    pub(crate) fn new() -> Self {
+        let was_suppressed = gc_is_suppressed();
+        if !was_suppressed {
+            GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_SUPPRESSED));
+        }
+        GcSuppressScope { was_suppressed }
+    }
+}
+
+impl Drop for GcSuppressScope {
+    fn drop(&mut self) {
+        if !self.was_suppressed {
+            GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
+        }
+    }
+}
+
 /// Rebaseline the malloc-count AND arena-bytes triggers to the current
 /// live set so that objects just created during a GC-suppressed window
 /// (e.g. JSON.parse) don't immediately trip a collection on the next

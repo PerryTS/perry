@@ -378,8 +378,10 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     };
     if let Some(obj_ptr) = loop_fact_ptr {
         let field_idx_str = field_index.to_string();
+        let header_skip =
+            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
         let blk = ctx.block();
-        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
         let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
         let val = blk.load(DOUBLE, &field_ptr);
         let fast = LoweredValue {
@@ -480,9 +482,9 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         .cond_br(&guard_pass, &fast_label, &fallback_label);
 
     ctx.current_block = fast_idx;
+    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
     let blk = ctx.block();
     let obj_ptr = blk.inttoptr(I64, &obj_handle);
-    let header_skip = "24".to_string();
     let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
     let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
     let val_fast = blk.load(DOUBLE, &field_ptr);

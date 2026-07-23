@@ -182,7 +182,15 @@ impl Observation {
     }
 
     fn roots_shape_addr(&self) -> bool {
-        self.is_shape_keyed() && self.shape_addr != 0
+        // #6804: an id token is NOT a heap address — visiting it would let
+        // the GC mark garbage or, worse, rewrite the token if a moved
+        // object's from-space address numerically collided with the id
+        // range. Address tokens (class instances' keys arrays) keep the
+        // visit; a skipped low-address token can only go stale, which the
+        // equality-only usage reads as a benign mismatch.
+        self.is_shape_keyed()
+            && self.shape_addr != 0
+            && !crate::object::shapes::is_shape_id_token(self.shape_addr)
     }
 
     // #854: in-progress typed-feedback shape-change tracking
@@ -720,9 +728,47 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
             return (0, 0, gc_type);
         }
         let class_id = (*ptr).class_id;
-        let shape = (*ptr).keys_array as usize;
+        // #6804: plain objects canonicalize the token on the stable
+        // ShapeId. Shape-cached literals are stamped at birth; anything
+        // else is stamped HERE on first observation (self-healing), so one
+        // logical shape can never split into a pre-stamp address token and
+        // a post-stamp id token within a site. Class instances keep the
+        // keys-address token (their `parent_class_id` is inheritance data).
+        let shape = if class_id == 0 {
+            let stamp = (*ptr).parent_class_id;
+            if crate::object::shapes::is_shape_id(stamp) {
+                stamp as usize
+            } else if crate::regex::regex_header_has_magic(
+                addr as *const crate::regex::RegExpHeader,
+            ) {
+                // RegExpHeader aliases GC_TYPE_OBJECT with a different
+                // layout — never write through the ObjectHeader view; keep
+                // the legacy (equality-only) address token.
+                (*ptr).keys_array as usize
+            } else {
+                let keys = (*ptr).keys_array;
+                if keys.is_null() || (keys as u64) >> 48 != 0 || (keys as usize) < 0x10000 {
+                    keys as usize
+                } else {
+                    let id = crate::object::shapes::shape_id_for_keys_ensure(keys, (*keys).length);
+                    if id != 0 {
+                        (*(ptr as *mut ObjectHeader)).parent_class_id = id;
+                        id as usize
+                    } else {
+                        keys as usize
+                    }
+                }
+            }
+        } else {
+            (*ptr).keys_array as usize
+        };
         (shape, class_id, gc_type)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_object_shape_token(addr: usize) -> usize {
+    object_shape(addr).0
 }
 
 fn observe(site_id: u64, fallback_kind: TypedFeedbackSiteKind, observation: Observation) {
@@ -1382,6 +1428,80 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard_dense_i32(
     )
 }
 
+/// Kind codes returned by [`js_typed_feedback_masked_window_ta_kind`]. The
+/// codegen tier dispatch branches on these exact values — keep in sync with
+/// the masked-window TA tiers in `perry-codegen/src/stmt/loops.rs`.
+pub const MASKED_WINDOW_TA_KIND_NONE: i32 = 0;
+pub const MASKED_WINDOW_TA_KIND_I32: i32 = 1;
+pub const MASKED_WINDOW_TA_KIND_U32: i32 = 2;
+pub const MASKED_WINDOW_TA_KIND_F64: i32 = 3;
+
+/// Masked-window typed-array probe (#6750 follow-up): classify a receiver
+/// whose static type the compiler could not prove (an `any` function
+/// parameter — the bcryptjs S-box shape) as a typed array whose whole static
+/// index window `[min_idx, max_idx_exclusive)` is in bounds. O(1): a registry
+/// lookup plus a length compare — no window scan, so re-entering a short hot
+/// loop (one probe per accessed array per entry) stays cheap.
+///
+/// A view over a detached ArrayBuffer has `length == 0`
+/// (`zero_views_of_detached_backing`), so the window check also rejects
+/// detached backings. Kinds outside {Int32, Uint32, Float64} return NONE and
+/// fall through to the plain-array guard tiers / the slow loop.
+fn masked_window_ta_kind(addr: usize, min_idx: i32, max_idx_exclusive: i32) -> i32 {
+    if min_idx < 0 {
+        return MASKED_WINDOW_TA_KIND_NONE;
+    }
+    let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) else {
+        return MASKED_WINDOW_TA_KIND_NONE;
+    };
+    let code = match kind {
+        crate::typedarray::KIND_INT32 => MASKED_WINDOW_TA_KIND_I32,
+        crate::typedarray::KIND_UINT32 => MASKED_WINDOW_TA_KIND_U32,
+        crate::typedarray::KIND_FLOAT64 => MASKED_WINDOW_TA_KIND_F64,
+        _ => return MASKED_WINDOW_TA_KIND_NONE,
+    };
+    let len = unsafe { (*(addr as *const crate::typedarray::TypedArrayHeader)).length };
+    if i64::from(max_idx_exclusive) > i64::from(len) {
+        return MASKED_WINDOW_TA_KIND_NONE;
+    }
+    code
+}
+
+/// FFI wrapper for [`masked_window_ta_kind`] — the typed-array tier probe of
+/// the read-only masked-index range loop. Returns the `MASKED_WINDOW_TA_KIND_*`
+/// code; the codegen requires every accessed array to probe to the same
+/// non-NONE code before entering the matching typed-array fast copy.
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_masked_window_ta_kind(
+    site_id: u64,
+    receiver: f64,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> i32 {
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    let code = masked_window_ta_kind(raw_addr, min_idx, max_idx_exclusive);
+    if typed_feedback_enabled() {
+        let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
+        let observation = Observation {
+            source: ObservationSource::Array,
+            object_addr: 0,
+            shape_addr: 0,
+            key_hash: 0,
+            class_id,
+            heap_type,
+            aux,
+            value_tag: element_kind,
+        };
+        guard_observe(
+            site_id,
+            TypedFeedbackSiteKind::ArrayElement,
+            observation,
+            code != MASKED_WINDOW_TA_KIND_NONE,
+        );
+    }
+    code
+}
+
 fn packed_i32_array_loop_guard(arr: *const ArrayHeader) -> bool {
     if !packed_f64_array_loop_guard(arr) {
         return false;
@@ -1492,7 +1612,10 @@ fn object_key_matches_field(
             return false;
         }
         let keys = (*obj).keys_array;
-        if keys.is_null() || (keys as usize) != shape_addr {
+        // #6804: `shape_addr` is an opaque TOKEN (a stable ShapeId for
+        // stamped plain objects), not necessarily the keys address — the
+        // actual contract is carried by the key/slot validation below.
+        if keys.is_null() {
             return false;
         }
         if !plain_array_index_guard(keys, field_index, true) {
