@@ -161,7 +161,7 @@ fn expr_is_number_under(
             refined.contains(id)
                 || matches!(
                     ctx.local_types.get(id),
-                    Some(perry_types::Type::Number | perry_types::Type::Int32)
+                    Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
                 )
         }
         Expr::IndexGet { object, index } => {
@@ -362,7 +362,7 @@ pub(super) fn try_match_masked_window_region(
             && !ctx.closure_captures.contains_key(&id)
             && !matches!(
                 ctx.local_types.get(&id),
-                Some(perry_types::Type::Number | perry_types::Type::Int32)
+                Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
             )
     };
     for (offset, stmt) in stmts[..len].iter().enumerate() {
@@ -430,7 +430,7 @@ fn lower_region_copy(
         .map(|refinement| refinement.local_id)
         .collect();
     let mut privatized: Vec<(u32, String)> = Vec::new();
-    let mut saved: Vec<(u32, Option<perry_types::Type>)> = Vec::new();
+    let mut saved: Vec<(u32, Option<perry_hir::types::Type>)> = Vec::new();
     let mut saved_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut result = Ok(());
     'stmts: for (offset, stmt) in region_stmts.iter().enumerate() {
@@ -454,7 +454,7 @@ fn lower_region_copy(
                 saved.push((id, ctx.local_types.get(&id).cloned()));
             }
             if set_number {
-                ctx.local_types.insert(id, perry_types::Type::Number);
+                ctx.local_types.insert(id, perry_hir::types::Type::Number);
                 // The local now provably holds a number for the rest of the
                 // copy (or until an unset): clear its shadow slot once and
                 // suppress the per-statement shadow updates — numbers need

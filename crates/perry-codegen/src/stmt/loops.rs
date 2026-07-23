@@ -2405,7 +2405,7 @@ pub(super) fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
 pub(super) fn local_is_untyped_candidate(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         ctx.local_types.get(&local_id),
-        None | Some(perry_types::Type::Any | perry_types::Type::Unknown)
+        None | Some(perry_hir::types::Type::Any | perry_hir::types::Type::Unknown)
     )
 }
 
