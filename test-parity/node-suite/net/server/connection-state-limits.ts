@@ -6,27 +6,22 @@ function getConnections(server: net.Server): Promise<[any, number]> {
   });
 }
 
+let serverConnectionCount = 0;
+let acceptedError: any;
+let dropData: any;
+
+// The relative order of the independent client-side "connect" and
+// server-side "drop" callbacks varies across Node runs. Buffer those
+// observations so this fixture measures connection state, not scheduler luck.
 const server = net.createServer((socket) => {
-  console.log("server connection");
+  serverConnectionCount++;
   socket.on("error", (err: any) => {
-    console.log("accepted error:", err.code || err.message);
+    acceptedError = err;
   });
 });
 
 server.on("drop", (data: any) => {
-  console.log("server drop keys:", Object.keys(data).sort().join(","));
-  console.log(
-    "server drop local:",
-    typeof data.localAddress,
-    typeof data.localPort,
-    data.localFamily,
-  );
-  console.log(
-    "server drop remote:",
-    typeof data.remoteAddress,
-    typeof data.remotePort,
-    data.remoteFamily,
-  );
+  dropData = data;
 });
 server.on("close", () => console.log("server close event"));
 
@@ -69,11 +64,46 @@ const [oneErr, oneCount] = await getConnections(server);
 console.log("getConnections one:", oneErr && oneErr.name, oneCount);
 
 const client2 = net.connect(port, "127.0.0.1");
-client2.on("connect", () => console.log("client2 connected"));
-client2.on("error", (err: any) => console.log("client2 error:", err.name, err.code));
-client2.on("close", (hadError) => console.log("client2 close:", hadError));
+let client2Connected = false;
+let client2Error: any;
+let client2Close: boolean | undefined;
+client2.on("connect", () => {
+  client2Connected = true;
+});
+client2.on("error", (err: any) => {
+  client2Error = err;
+});
+client2.on("close", (hadError) => {
+  client2Close = hadError;
+});
 
 await new Promise((resolve) => setTimeout(resolve, 300));
+for (let i = 0; i < serverConnectionCount; i++) {
+  console.log("server connection");
+}
+if (acceptedError) {
+  console.log("accepted error:", acceptedError.code || acceptedError.message);
+}
+console.log("server drop keys:", Object.keys(dropData).sort().join(","));
+console.log(
+  "server drop local:",
+  typeof dropData.localAddress,
+  typeof dropData.localPort,
+  dropData.localFamily,
+);
+console.log(
+  "server drop remote:",
+  typeof dropData.remoteAddress,
+  typeof dropData.remotePort,
+  dropData.remoteFamily,
+);
+if (client2Connected) {
+  console.log("client2 connected");
+}
+if (client2Error) {
+  console.log("client2 error:", client2Error.name, client2Error.code);
+}
+console.log("client2 close:", client2Close);
 const [afterErr, afterCount] = await getConnections(server);
 console.log("getConnections after second:", afterErr && afterErr.name, afterCount);
 
