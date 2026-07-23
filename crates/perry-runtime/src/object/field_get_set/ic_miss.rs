@@ -203,12 +203,10 @@ pub(crate) fn is_timer_handle_method_key(key: &[u8]) -> bool {
 /// (process-rooted, so the address can never be freed and recycled under a
 /// different shape). Conservative `false` for anything else.
 pub(crate) unsafe fn keys_cacheable_for_pic(keys: *const crate::array::ArrayHeader) -> bool {
-    if (keys as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    let Some(gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
         return false;
-    }
-    let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
-        && (*gc).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+    };
+    gc.obj_type == crate::gc::GC_TYPE_ARRAY && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
 }
 
 /// Monomorphic inline cache miss handler (issue #51).

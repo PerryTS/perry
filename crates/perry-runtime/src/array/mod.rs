@@ -88,9 +88,10 @@ pub(crate) use self::indexing::{
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
     js_array_get_index_or_string, js_array_get_length, js_array_length,
-    js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
-    js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
-    js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
+    js_array_numeric_get_f64_unboxed, js_array_numeric_range_add, js_array_numeric_range_add_len,
+    js_array_numeric_set_f64_unboxed, js_array_set_f64, js_array_set_f64_extend,
+    js_array_set_f64_extend_strict, js_array_set_f64_unchecked, js_array_set_index_or_string,
+    js_array_set_index_or_string_strict, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
