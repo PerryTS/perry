@@ -116,6 +116,10 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
         // user own-property surface in the bundle walls, so keep dispatching
         // for any member to preserve existing behaviour.
         "events" | "net" => true,
+        // readline Interface stores its public `line` and `terminal` state
+        // behind a compact native handle. Bare reads must invoke the FFI
+        // getters; methods still travel through the call-expression path.
+        "readline" => matches!(prop, "line" | "terminal"),
         // #6364 — DisposableStack / AsyncDisposableStack: `disposed` is the
         // only native data getter (its value comes from the FFI helper
         // `js_disposable_stack_disposed`), so a bare read must dispatch as a
@@ -559,4 +563,29 @@ pub(crate) fn is_worker_instance_value_property(prop: &str) -> bool {
             | "once"
             | "off"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_native_dispatch_member;
+
+    #[test]
+    fn readline_interface_dispatches_only_native_data_getters() {
+        assert!(is_native_dispatch_member("readline", "Interface", "line"));
+        assert!(is_native_dispatch_member(
+            "readline",
+            "Interface",
+            "terminal"
+        ));
+        assert!(!is_native_dispatch_member(
+            "readline",
+            "Interface",
+            "getPrompt"
+        ));
+        assert!(!is_native_dispatch_member(
+            "readline",
+            "Interface",
+            "custom"
+        ));
+    }
 }

@@ -453,6 +453,17 @@ impl LlBlock {
         r
     }
 
+    /// Sequentially-consistent atomic load for globals shared with runtime
+    /// atomics. The explicit alignment is required by LLVM atomic loads.
+    pub fn load_atomic_seq_cst(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
+        let r = self.reg();
+        self.emit(format!(
+            "{} = load atomic {}, ptr {} seq_cst, align {}",
+            r, ty, ptr, alignment
+        ));
+        r
+    }
+
     /// (Issue #52) Load tagged with `!invariant.load !0`. LLVM's GVN +
     /// LICM are allowed to hoist these loads out of any enclosing loop —
     /// the contract is that the loaded memory does not change between

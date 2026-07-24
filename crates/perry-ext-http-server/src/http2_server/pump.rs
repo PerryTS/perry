@@ -273,20 +273,10 @@ pub(crate) fn has_active_h2_clients() -> bool {
 }
 
 pub(crate) fn process_pending_h2_events() -> i32 {
-    let mut events: Vec<Http2PendingEvent> = match H2_PENDING_EVENTS.lock() {
+    let events: Vec<Http2PendingEvent> = match H2_PENDING_EVENTS.lock() {
         Ok(mut q) => q.drain(..).collect(),
         Err(_) => return 0,
     };
-    // Causally, the server creates its session and sends its SETTINGS frame
-    // before a client can complete its connect handshake, so the server-side
-    // `session` event fires BEFORE the client-side `connect` (Node on Linux:
-    // `server>client`). Drain `Session` first so a single-process loopback
-    // observes `session` then `connect`, matching the causal/Linux ordering.
-    events.sort_by_key(|event| match event {
-        Http2PendingEvent::Session { .. } => 0,
-        Http2PendingEvent::ClientConnect { .. } => 1,
-        _ => 2,
-    });
     let count = events.len() as i32;
     for event in events {
         match event {
@@ -294,6 +284,13 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 server_handle,
                 session_handle,
             } => {
+                if !local_server_session_event_ready(session_handle) {
+                    push_h2_event(Http2PendingEvent::Session {
+                        server_handle,
+                        session_handle,
+                    });
+                    continue;
+                }
                 let listeners = get_handle::<Http2SecureServer>(server_handle)
                     .and_then(|s| s.base.listeners.get("session").cloned())
                     .unwrap_or_default();
@@ -321,6 +318,9 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     unsafe {
                         js_promise_run_microtasks();
                     }
+                }
+                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                    session.connect_event_emitted = true;
                 }
             }
             Http2PendingEvent::ClientResponse {
@@ -485,4 +485,69 @@ pub(crate) fn process_pending_h2_events() -> i32 {
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn test_session(
+        server_handle: i64,
+        session_type: i32,
+        connection_port: u16,
+        connect_event_emitted: bool,
+    ) -> Http2SessionHandle {
+        Http2SessionHandle {
+            server_handle,
+            connection_port,
+            session_event_emitted: false,
+            connect_event_emitted,
+            session_type,
+            connected: true,
+            encrypted: false,
+            alpn_protocol: "h2c".to_string(),
+            connecting: false,
+            closed: false,
+            destroyed: false,
+            pending_settings_ack: false,
+            authority: String::new(),
+            local_settings: Http2SettingsState::default(),
+            remote_settings: Http2SettingsState::default(),
+            local_window_size: 65_535,
+            sender: Arc::new(Mutex::new(None)),
+            listeners: HashMap::new(),
+            close_callbacks: Vec::new(),
+            pending_callbacks: Vec::new(),
+            timeout_callback: 0,
+        }
+    }
+
+    #[test]
+    fn loopback_session_waits_only_for_its_paired_client() {
+        let server_handle = i64::MAX - 6786;
+        let client_a = register_handle(test_session(server_handle, 1, 41_001, true));
+        let client_b = register_handle(test_session(server_handle, 1, 41_002, false));
+        let server_a = register_handle(test_session(server_handle, 0, 41_001, false));
+        let server_b = register_handle(test_session(server_handle, 0, 41_002, false));
+
+        assert!(
+            local_server_session_event_ready(server_a),
+            "client B must not delay client A's paired server session"
+        );
+        assert!(
+            !local_server_session_event_ready(server_b),
+            "a server session must wait for its own client connect callback"
+        );
+
+        get_handle_mut::<Http2SessionHandle>(client_b)
+            .unwrap()
+            .connect_event_emitted = true;
+        assert!(local_server_session_event_ready(server_b));
+
+        // Keep the handles visibly used so future cleanup instrumentation
+        // cannot optimize this into a single-pair test.
+        assert_ne!(client_a, client_b);
+    }
 }

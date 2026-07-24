@@ -109,6 +109,12 @@ crates/perry-hir/src/lower/expr_member.rs
 # Runtime `js_native_call_method` dispatch trunk (2002 lines): the by-name
 # native method switch; the peeled arms already live in native_call_method/.
 crates/perry-runtime/src/object/native_call_method.rs
+# Proxy runtime registry and trap dispatch: the shared ProxyEntry registry,
+# metadata state, and cross-cutting trap helpers currently form one coupled
+# dispatch surface. The object-write proxy routing in #6812 pushed it over the
+# gate; split the registry/metadata core in a dedicated follow-up rather than
+# mixing structural surgery into the optimization PR.
+crates/perry-runtime/src/proxy.rs
 # Inliner call-site rewriter (2056 lines): the single `CallInliner` pass with
 # its argument/return remapping tables threaded through one walker.
 crates/perry-transform/src/inline/call_inliner.rs
@@ -125,6 +131,11 @@ crates/perry-runtime/src/regex/grammar.rs
 # sub-controllers into siblings (tee.rs / byob already peeled) is a mechanical
 # follow-up.
 crates/perry-stdlib/src/streams.rs
+# GC policy core (2009 lines): phase-C descriptor-summary accounting pushed the
+# coupled collection-policy state machine nine lines over the gate on main. Its
+# phase/debt/budget groups should be split together in the tracked #1435 file
+# decomposition rather than mixed into an unrelated runtime fast-path PR.
+crates/perry-runtime/src/gc/policy.rs
 EOF
 )
 

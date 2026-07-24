@@ -865,8 +865,9 @@ pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
 ///
 /// `Object.getOwnPropertyDescriptor` reads `ACCESSOR_DESCRIPTORS` and
 /// `PROPERTY_DESCRIPTORS` *unconditionally*, so the descriptor is fully
-/// reflectable — but the hot object get/set paths (which only consult the
-/// side tables once a gate has flipped) keep skipping the HashMap lookup.
+/// reflectable. The owning object's `OBJ_FLAG_HAS_DESCRIPTORS` bit lets direct
+/// reads/writes consult the side tables without flipping a process-wide gate;
+/// unrelated objects keep skipping the HashMap lookup.
 /// This matters because built-in prototype accessors such as
 /// `%TypedArray%.prototype.length` are installed lazily at globalThis
 /// init for *every* program that merely touches a builtin global; flipping
@@ -880,6 +881,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
     attrs: PropertyAttrs,
 ) {
     super::prop_plan::prop_plan_epoch_bump();
+    note_descriptor_target(obj);
     note_accessor_descriptor_key(&key);
     // #6759 Phase C2: the meta summary must over-approximate the tables
     // even for gate-neutral builtin installs — the (unconditionally

@@ -64,6 +64,32 @@ fn remembered_maintenance_entry_count() -> usize {
 }
 
 #[test]
+fn incremental_mark_barrier_active_count_tracks_thread_activation() {
+    let _guard = GcTestIsolationGuard::new();
+    incremental_mark_barrier_disable();
+    let before = PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst);
+    let valid_ptrs = ValidPointerSet::new();
+
+    let active = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+    assert_eq!(
+        PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst),
+        before + 1
+    );
+    // Replacing the active cycle state on the same thread must not count the
+    // thread twice.
+    incremental_mark_barrier_enable(&valid_ptrs, true);
+    assert_eq!(
+        PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst),
+        before + 1
+    );
+    drop(active);
+    assert_eq!(
+        PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst),
+        before
+    );
+}
+
+#[test]
 fn test_write_barrier_old_to_young_records() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();

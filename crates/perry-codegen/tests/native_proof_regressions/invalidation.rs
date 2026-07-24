@@ -475,6 +475,113 @@ fn preloop_dynamic_call_invalidates_cached_and_packed_array_proofs() {
     );
 }
 
+#[test]
+fn guarded_put_value_store_loop_accepts_conservative_preloop_call_hazard() {
+    let body = vec![
+        number_array_let(1, "arr", vec![1, 2, 3]),
+        Stmt::Expr(extern_call("native_touch", Vec::new(), Type::Void)),
+        for_loop(
+            2,
+            length(1),
+            vec![Stmt::Expr(Expr::PutValueSet {
+                target: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(add(index_get(1, local(2)), int(1))),
+                receiver: Box::new(local(1)),
+                strict: true,
+            })],
+        ),
+        Stmt::Return(Some(index_get(1, int(0)))),
+    ];
+    let opts = native_library_opts(vec![("native_touch", vec![], "void")]);
+
+    let ir = compile_ir_with_opts("packed_f64_guarded_put_value_store.ts", body, opts);
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "an exact, guarded in-bounds store loop should not inherit an unrelated pre-loop call \
+         hazard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_f64_fast"),
+        "the transformed PutValueSet store must emit the packed-f64 fast clone:\n{ir}"
+    );
+}
+
+#[test]
+fn mixed_layout_numeric_window_loop_uses_transactional_bulk_helper() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "arr".to_string(),
+            ty: Type::Array(Box::new(Type::Any)),
+            mutable: true,
+            init: Some(Expr::Array(vec![int(1), int(2), int(3)])),
+        },
+        for_loop(
+            2,
+            length(1),
+            vec![Stmt::Expr(Expr::PutValueSet {
+                target: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(add(index_get(1, local(2)), int(1))),
+                receiver: Box::new(local(1)),
+                strict: true,
+            })],
+        ),
+        Stmt::Return(Some(index_get(1, int(0)))),
+    ];
+
+    let ir = compile_ir("mixed_layout_numeric_window.ts", body);
+    assert!(
+        ir.contains("call i64 @js_array_numeric_range_add_len"),
+        "an any[] numeric update window should use the transactional bulk helper:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.numeric_range_add_fallback"),
+        "the bulk helper must retain a generic-loop fallback for mixed/non-array values:\n{ir}"
+    );
+}
+
+#[test]
+fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "arr".to_string(),
+            ty: Type::Array(Box::new(Type::Any)),
+            mutable: true,
+            init: Some(Expr::Array(vec![int(1), int(2), int(3)])),
+        },
+        Stmt::Let {
+            id: 2,
+            name: "offset".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(int(0)),
+        },
+        for_loop_with_start_and_update(
+            3,
+            add(local(2), int(1)),
+            length(1),
+            Some(increment(3)),
+            vec![Stmt::Expr(Expr::PutValueSet {
+                target: Box::new(local(1)),
+                key: Box::new(local(3)),
+                value: Box::new(add(index_get(1, local(3)), int(1))),
+                receiver: Box::new(local(1)),
+                strict: true,
+            })],
+        ),
+        Stmt::Return(Some(index_get(1, int(1)))),
+    ];
+
+    let ir = compile_ir("mixed_layout_numeric_window_dynamic_start.ts", body);
+    assert!(
+        ir.contains("call i64 @js_array_numeric_range_add_len"),
+        "the transactional helper, not an unsafe compile-time cast, validates the start value:\n{ir}"
+    );
+}
+
 fn assert_array_alias_blocks_loop_proof(ir: &str) {
     let cond_ir = block_between(ir, "\nfor.cond.", "\nfor.body.");
     assert!(

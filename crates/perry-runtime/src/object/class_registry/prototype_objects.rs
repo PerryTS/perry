@@ -314,7 +314,7 @@ unsafe fn inherited_proto_accessor_value(
     key: *const crate::StringHeader,
     receiver: f64,
 ) -> Option<JSValue> {
-    if key.is_null() || !crate::state::state().descriptors.accessors_in_use.get() {
+    if key.is_null() || !crate::object::object_has_descriptors(proto_obj as usize) {
         return None;
     }
     let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
