@@ -176,6 +176,11 @@ pub(crate) struct FnCtx<'a> {
     /// tracking" extension). Populated from function params and `Stmt::Let`
     /// declarations as they're lowered.
     pub local_types: std::collections::HashMap<u32, HirType>,
+    /// Immutable locals whose initializer is a string literal. These values
+    /// can be resolved to the module's interned string global at a use site;
+    /// unlike a runtime dynamic-key cache, this does not retain a movable
+    /// string pointer in generated cache state.
+    pub const_string_locals: std::collections::HashMap<u32, String>,
     /// Index into `func.blocks()` pointing at the block currently receiving
     /// instructions. Lowering fns update this when control flow splits.
     pub current_block: usize,

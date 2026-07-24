@@ -2091,12 +2091,14 @@ fn match_object_array_write_loop(
         ) {
             return None;
         }
-        let Expr::String(property) = key.as_ref() else {
-            return None;
+        let property = match key.as_ref() {
+            Expr::String(property) => property.clone(),
+            Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
+            _ => return None,
         };
         let value = match_object_array_write_number(value, outer_counter_id, inner_counter_id)?;
         object_array_write_number_finite_range(&value, outer_start, outer_bound, inner_bound)?;
-        Some((property.clone(), value))
+        Some((property, value))
     };
     let mut properties = Vec::with_capacity(stores.len());
     let mut values = Vec::with_capacity(stores.len());
@@ -2559,15 +2561,17 @@ fn match_class_field_versioned_loop(
             if t != r {
                 return None;
             }
-            let Expr::String(prop) = key.as_ref() else {
-                return None;
+            let prop = match key.as_ref() {
+                Expr::String(prop) => prop.clone(),
+                Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
+                _ => return None,
             };
             recv = Some(*t);
             if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
                 return None;
             }
             props
-                .entry(prop.clone())
+                .entry(prop)
                 .and_modify(|written| *written = true)
                 .or_insert(true);
         }

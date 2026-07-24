@@ -470,6 +470,7 @@ pub(super) fn compile_function(
         native_facts: &native_facts,
         locals,
         local_types,
+        const_string_locals: std::collections::HashMap::new(),
         current_block: 0,
         discard_expr_value: false,
         func_names,

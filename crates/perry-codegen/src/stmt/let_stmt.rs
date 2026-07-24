@@ -1528,6 +1528,11 @@ pub(crate) fn lower_let(
         let lit = crate::nanbox::double_literal(*cv);
         ctx.block().store(DOUBLE, &lit, &slot);
     }
+    if !mutable {
+        if let Some(perry_hir::Expr::String(value)) = init {
+            ctx.const_string_locals.insert(id, value.clone());
+        }
+    }
     Ok(())
 }
 

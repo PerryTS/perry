@@ -13484,6 +13484,90 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
 }
 
 #[test]
+fn immutable_string_key_reuses_static_write_pic() {
+    let object = 1u32;
+    let key = 2u32;
+    let value = 3u32;
+    let module = module_with_classes_and_params(
+        "immutable_string_key_write_pic",
+        Vec::new(),
+        vec![
+            param(object, "object", Type::Any),
+            param(value, "value", Type::Number),
+        ],
+        Type::Any,
+        vec![
+            Stmt::Let {
+                id: key,
+                name: "key".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(Expr::String("x".to_string())),
+            },
+            Stmt::Return(Some(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(object)),
+                key: Box::new(Expr::LocalGet(key)),
+                value: Box::new(Expr::LocalGet(value)),
+                receiver: Box::new(Expr::LocalGet(object)),
+                strict: false,
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_put_value_set_ic_miss"),
+        "an immutable string key should reuse the static write PIC:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_put_value_set("),
+        "the immutable literal key should not fall through to generic PutValue:\n{ir}"
+    );
+}
+
+#[test]
+fn mutable_string_key_rejects_static_write_pic() {
+    let object = 1u32;
+    let key = 2u32;
+    let value = 3u32;
+    let module = module_with_classes_and_params(
+        "mutable_string_key_write_pic",
+        Vec::new(),
+        vec![
+            param(object, "object", Type::Any),
+            param(value, "value", Type::Number),
+        ],
+        Type::Any,
+        vec![
+            Stmt::Let {
+                id: key,
+                name: "key".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String("x".to_string())),
+            },
+            Stmt::Return(Some(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(object)),
+                key: Box::new(Expr::LocalGet(key)),
+                value: Box::new(Expr::LocalGet(value)),
+                receiver: Box::new(Expr::LocalGet(object)),
+                strict: false,
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        !ir.contains("call double @js_put_value_set_ic_miss"),
+        "a mutable key must retain dynamic PropertyKey semantics:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_put_value_set("),
+        "a mutable key must use the complete generic PutValue path:\n{ir}"
+    );
+}
+
+#[test]
 fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
     let object = 1u32;
     let module = module_with_classes_and_params(

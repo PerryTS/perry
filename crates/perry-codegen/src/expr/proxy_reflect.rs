@@ -236,7 +236,7 @@ fn lower_put_value_static_write_ic(
     receiver: &Expr,
     strict: bool,
 ) -> Result<Option<String>> {
-    let Expr::String(_) = key else {
+    let Some(property) = static_write_key(ctx, key) else {
         return Ok(None);
     };
     if !same_put_value_receiver_expr(target, receiver) || crate::codegen::full_outline_ic_enabled()
@@ -253,11 +253,16 @@ fn lower_put_value_static_write_ic(
     }
 
     downgrade_unknown_call_expr(ctx, target);
-    downgrade_unknown_call_expr(ctx, key);
+    // An immutable `const key = "x"` has no observable work at this use site;
+    // resolve it to the interned literal global instead of retaining a
+    // movable runtime string pointer in the cache. Mutable locals and all
+    // other computed keys stay on the ordinary dynamic PropertyKey path.
+    let static_key = Expr::String(property);
+    downgrade_unknown_call_expr(ctx, &static_key);
     downgrade_unknown_call_expr(ctx, value);
     downgrade_unknown_call_expr(ctx, receiver);
     let target_value = lower_expr(ctx, target)?;
-    let key_value = lower_expr(ctx, key)?;
+    let key_value = lower_expr(ctx, &static_key)?;
     let stored_value = lower_expr(ctx, value)?;
 
     let target_bits = ctx.block().bitcast_double_to_i64(&target_value);
@@ -432,6 +437,14 @@ fn lower_put_value_static_write_ic(
         ],
     );
     Ok(Some(result))
+}
+
+fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
+    match key {
+        Expr::String(property) => Some(property.clone()),
+        Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned(),
+        _ => None,
+    }
 }
 
 fn put_value_rhs_is_safepoint_free(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
