@@ -1532,6 +1532,13 @@ pub(crate) fn lower_let(
         if let Some(perry_hir::Expr::String(value)) = init {
             ctx.const_string_locals.insert(id, value.clone());
         }
+        if let Some(value) = init.and_then(|expr| match expr {
+            perry_hir::Expr::Integer(value) => Some(*value as f64),
+            perry_hir::Expr::Number(value) if value.is_finite() => Some(*value),
+            _ => None,
+        }) {
+            ctx.const_number_locals.insert(id, value);
+        }
     }
     Ok(())
 }

@@ -181,6 +181,7 @@ pub(crate) struct FnCtx<'a> {
     /// unlike a runtime dynamic-key cache, this does not retain a movable
     /// string pointer in generated cache state.
     pub const_string_locals: std::collections::HashMap<u32, String>,
+    pub const_number_locals: std::collections::HashMap<u32, f64>,
     /// Index into `func.blocks()` pointing at the block currently receiving
     /// instructions. Lowering fns update this when control flow splits.
     pub current_block: usize,

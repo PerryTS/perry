@@ -1960,6 +1960,7 @@ fn object_array_write_number_finite_range(
 }
 
 fn match_constant_counted_for(
+    ctx: &FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&perry_hir::Expr>,
     update: Option<&perry_hir::Expr>,
@@ -1970,7 +1971,7 @@ fn match_constant_counted_for(
             id,
             init: Some(start),
             ..
-        } => (*id, match_nonnegative_constant_i32(start)?),
+        } => (*id, match_nonnegative_constant_i32_with_ctx(ctx, start)?),
         _ => return None,
     };
     let bound = match condition? {
@@ -1979,7 +1980,7 @@ fn match_constant_counted_for(
             left,
             right,
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
-            match_nonnegative_constant_i32(right)?
+            match_nonnegative_constant_i32_with_ctx(ctx, right)?
         }
         _ => return None,
     };
@@ -1995,6 +1996,17 @@ fn match_constant_counted_for(
         return None;
     }
     Some((counter_id, start, bound))
+}
+
+fn match_nonnegative_constant_i32_with_ctx(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<i32> {
+    match expr {
+        perry_hir::Expr::LocalGet(id) => {
+            let value = *ctx.const_number_locals.get(id)?;
+            (value >= 0.0 && value <= i32::MAX as f64 && value.fract() == 0.0)
+                .then_some(value as i32)
+        }
+        _ => match_nonnegative_constant_i32(expr),
+    }
 }
 
 /// Match the bounded #6809/#6812 object-write micro shape. This is deliberately
@@ -2014,7 +2026,7 @@ fn match_object_array_write_loop(
         return None;
     }
     let (outer_counter_id, outer_start, outer_bound) =
-        match_constant_counted_for(init, condition, update)?;
+        match_constant_counted_for(ctx, init, condition, update)?;
     let [Stmt::For {
         init: inner_init,
         condition: inner_condition,
@@ -2025,6 +2037,7 @@ fn match_object_array_write_loop(
         return None;
     };
     let (inner_counter_id, inner_start, inner_bound) = match_constant_counted_for(
+        ctx,
         inner_init.as_deref(),
         inner_condition.as_ref(),
         inner_update.as_ref(),
