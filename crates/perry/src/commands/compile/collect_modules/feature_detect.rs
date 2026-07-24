@@ -10,6 +10,25 @@
 use super::crypto_ns::module_uses_global_crypto_namespace;
 use crate::commands::compile::CompilationContext;
 
+fn debug_hir_uses_regex(hir_debug: &str) -> bool {
+    hir_debug.contains("RegExp") // RegExp / RegExpDynamic / RegExpTest / RegExpExec / RegExpEscape / RegExpReplaceFn / RegExpExec{Index,Groups}
+        || hir_debug.contains("StringMatch") // dedicated .match / .matchAll variants
+        // Covers both `PathMatchesGlob` and
+        // `PathWin32 { method: MatchesGlob, ... }`.
+        || hir_debug.contains("MatchesGlob")
+        // Dynamic sub-namespace dispatch keeps the method name in a
+        // runtime-dispatch expression, but its Debug representation is not
+        // guaranteed to be a plain `method: "..."` field. Match the API name
+        // itself: a false positive only links the optional engine, whereas a
+        // false negative makes `matchesGlob` silently return false.
+        || hir_debug.contains("matchesGlob")
+        || hir_debug.contains("property: \"search\"")
+        || hir_debug.contains("property: \"match\"")
+        || hir_debug.contains("property: \"matchAll\"")
+        || hir_debug.contains("property: \"glob\"")
+        || hir_debug.contains("property: \"globSync\"")
+}
+
 /// Inspect a lowered module and set the optional-feature gates it needs.
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
@@ -122,15 +141,7 @@ pub(super) fn detect_optional_feature_usage(
     // non-functional in Perry so it can't create a regex at runtime.
     {
         let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        if hir_debug.contains("RegExp")            // RegExp / RegExpDynamic / RegExpTest / RegExpExec / RegExpEscape / RegExpReplaceFn / RegExpExec{Index,Groups}
-            || hir_debug.contains("StringMatch")   // dedicated .match / .matchAll variants
-            || hir_debug.contains("PathMatchesGlob")
-            || hir_debug.contains("property: \"search\"")
-            || hir_debug.contains("property: \"match\"")
-            || hir_debug.contains("property: \"matchAll\"")
-            || hir_debug.contains("property: \"glob\"")
-            || hir_debug.contains("property: \"globSync\"")
-        {
+        if debug_hir_uses_regex(&hir_debug) {
             ctx.uses_regex = true;
         }
     }
@@ -330,5 +341,20 @@ pub(super) fn detect_optional_feature_usage(
     if found_ioredis {
         ctx.needs_stdlib = true;
         ctx.native_module_imports.insert("ioredis".to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::debug_hir_uses_regex;
+
+    #[test]
+    fn regex_gate_detects_static_and_dynamic_path_matches_glob() {
+        assert!(debug_hir_uses_regex(
+            r#"PathWin32 { method: MatchesGlob, args: [] }"#
+        ));
+        assert!(debug_hir_uses_regex(
+            r#"NativeMethodCall { module: String("path.win32"), method: String("matchesGlob"), args: [] }"#
+        ));
     }
 }
