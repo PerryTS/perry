@@ -263,6 +263,8 @@ pub(crate) struct ServerState {
     pub bound_host: String,
     pub listening: bool,
     pub active_connections: usize,
+    pub pending_connections: usize,
+    pub pending_local_connect_events: usize,
     pub max_connections: Option<usize>,
     pub drop_max_connection: Option<bool>,
 }
@@ -335,6 +337,7 @@ pub(crate) struct SocketState {
     pub(crate) timeout: Option<u64>,
     pub(crate) type_of_service: u8,
     pub(crate) server_id: Option<i64>,
+    pub(crate) server_connection_active: bool,
 }
 
 #[cfg(test)]
@@ -354,6 +357,7 @@ impl SocketState {
             timeout: None,
             type_of_service: 0,
             server_id: None,
+            server_connection_active: false,
         }
     }
 }
@@ -384,7 +388,9 @@ pub(crate) enum SocketCommand {
 
 #[derive(Debug)]
 enum PendingNetEvent {
-    Connect(i64),
+    /// `.1` identifies a same-process server target and whether its admission
+    /// is expected to hit `dropMaxConnection`; external connects use `None`.
+    Connect(i64, Option<(i64, bool)>),
     /// One chunk of read data. Carried as a refcounted `Bytes` — a zero-copy
     /// view sliced out of the socket task's reused read buffer (`split_to`) —
     /// so the path from the receive buffer to the main-thread drain handler
@@ -403,7 +409,8 @@ enum PendingNetEvent {
     /// listeners with the new socket handle.
     ///   `.0` = server id (for listener lookup)
     ///   `.1` = socket id (passed to listeners as the arg)
-    ServerConnection(i64, i64),
+    ///   `.2` = loopback client callback has crossed a pump boundary
+    ServerConnection(i64, i64, bool),
     /// Issue #1123 followup — `listener.bind()` resolved + accept
     /// loop is running. Fires `'listening'` listeners + the
     /// `.listen(port, cb)` callback. `.0` = server id.
@@ -431,6 +438,11 @@ extern "C" {
 }
 
 fn push_event(ev: PendingNetEvent) {
+    if let PendingNetEvent::ServerConnection(server_id, socket_id, false) = &ev {
+        if !server_state::queue_server_connection(*server_id, *socket_id) {
+            return;
+        }
+    }
     statics::pending_events().lock().unwrap().push(ev);
     // Wake the main thread so its `js_wait_for_event` returns
     // promptly instead of waiting on the heartbeat cap (#84
@@ -439,28 +451,8 @@ fn push_event(ev: PendingNetEvent) {
     perry_ffi::notify_main_thread();
 }
 
-fn is_local_server_target(host: &str, port: u16) -> bool {
-    let local_host = matches!(host, "localhost" | "127.0.0.1" | "::1" | "0.0.0.0");
-    if !local_host {
-        return false;
-    }
-    statics::servers().lock().ok().is_some_and(|servers| {
-        servers
-            .values()
-            .any(|server| server.listening && server.bound_port == port)
-    })
-}
-
 fn mark_closed(id: i64) {
-    let owner = if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
-        s.is_open = false;
-        s.server_id.take()
-    } else {
-        None
-    };
-    if let Some(server_id) = owner {
-        server_state::socket_closed(server_id);
-    }
+    server_state::mark_socket_closed(id);
 }
 
 // ─── Spawning helper ─────────────────────────────────────────────────────────
@@ -624,6 +616,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             timeout: None,
             type_of_service: 0,
             server_id: None,
+            server_connection_active: false,
         },
     );
     statics::listeners()
@@ -661,6 +654,8 @@ pub unsafe extern "C" fn js_net_create_server(
             bound_host: String::new(),
             listening: false,
             active_connections: 0,
+            pending_connections: 0,
+            pending_local_connect_events: 0,
             max_connections: None,
             drop_max_connection: None,
         },
@@ -826,6 +821,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // loop; the synchronous client-facing entry points
                             // still surface a throwable EMFILE.
                             if socket_id == perry_ffi::INVALID_HANDLE {
+                                server_state::cancel_pending_connection(server_id);
                                 drop(stream);
                                 continue;
                             }
@@ -855,6 +851,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                                     timeout: None,
                                     type_of_service: 0,
                                     server_id: Some(server_id),
+                                    server_connection_active: false,
                                 },
                             );
                             statics::listeners()
@@ -870,7 +867,9 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // and we want those in place before
                             // bytes start arriving. The accepted
                             // stream's read loop spawns next.
-                            push_event(PendingNetEvent::ServerConnection(server_id, socket_id));
+                            push_event(PendingNetEvent::ServerConnection(
+                                server_id, socket_id, false,
+                            ));
 
                             // Spawn the per-socket read/write loop on
                             // the same shared runtime as this accept
@@ -1050,6 +1049,7 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
         }
     };
 
+    let local_server = server_state::begin_local_connect(&host, port);
     spawn_socket_runner(move || {
         Box::pin(async move {
             let mut rx = rx;
@@ -1057,6 +1057,7 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
             let tcp = match TcpStream::connect(&addr).await {
                 Ok(s) => s,
                 Err(e) => {
+                    server_state::cancel_local_connect(local_server);
                     push_event(PendingNetEvent::Error(handle, format!("{}", e)));
                     push_event(PendingNetEvent::Close(handle));
                     mark_closed(handle);
@@ -1073,12 +1074,8 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
                 s.is_open = true;
                 s.local_addr = local;
             }
-            if is_local_server_target(&host, port) {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            } else {
-                tokio::task::yield_now().await;
-            }
-            push_event(PendingNetEvent::Connect(handle));
+            tokio::task::yield_now().await;
+            push_event(PendingNetEvent::Connect(handle, local_server));
 
             run_socket_task(handle, Transport::Plain(tcp), &mut rx).await;
         })
@@ -1101,6 +1098,10 @@ pub(crate) fn spawn_socket_task(
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id_or_throw();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+    let local_server = direct_tls
+        .is_none()
+        .then(|| server_state::begin_local_connect(&host, port))
+        .flatten();
 
     statics::sockets().lock().unwrap().insert(
         id,
@@ -1116,6 +1117,7 @@ pub(crate) fn spawn_socket_task(
             timeout: None,
             type_of_service: 0,
             server_id: None,
+            server_connection_active: false,
         },
     );
     statics::listeners()
@@ -1130,6 +1132,7 @@ pub(crate) fn spawn_socket_task(
             let tcp = match TcpStream::connect(&addr).await {
                 Ok(s) => s,
                 Err(e) => {
+                    server_state::cancel_local_connect(local_server);
                     push_event(PendingNetEvent::Error(id, format!("{}", e)));
                     push_event(PendingNetEvent::Close(id));
                     mark_closed(id);
@@ -1150,6 +1153,7 @@ pub(crate) fn spawn_socket_task(
                     match do_tls_handshake(tcp, &servername, verify).await {
                         Ok(tls) => Transport::Tls(Box::new(tls)),
                         Err(e) => {
+                            server_state::cancel_local_connect(local_server);
                             push_event(PendingNetEvent::Error(id, e));
                             push_event(PendingNetEvent::Close(id));
                             mark_closed(id);
@@ -1164,12 +1168,8 @@ pub(crate) fn spawn_socket_task(
                 s.is_open = true;
                 s.local_addr = local;
             }
-            if is_local_server_target(&host, port) {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            } else {
-                tokio::task::yield_now().await;
-            }
-            push_event(PendingNetEvent::Connect(id));
+            tokio::task::yield_now().await;
+            push_event(PendingNetEvent::Connect(id, local_server));
 
             run_socket_task(id, transport, &mut rx).await;
         })
@@ -1490,7 +1490,8 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
 
     for ev in events.drain(..) {
         match ev {
-            PendingNetEvent::Connect(id) => {
+            PendingNetEvent::Connect(id, local_server) => {
+                server_state::finish_local_connect(local_server);
                 for cb in listeners_for(id, "connect") {
                     if cb != 0 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
@@ -1511,6 +1512,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
                 if cbs.is_empty() {
+                    server_state::buffer_pending_server_data(id, bytes);
                     continue;
                 }
                 // #4973: `socket.setEncoding(enc)` switches 'data' delivery
@@ -1584,18 +1586,24 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 statics::sockets().lock().unwrap().remove(&id);
                 statics::once_flags().lock().unwrap().remove(&id);
                 statics::encodings().lock().unwrap().remove(&id);
+                server_state::discard_pending_server_data(id);
             }
             // Issue #1123 followup — server-side events. The
             // accept loop pushes `ServerConnection`/`ServerListening`/
             // `ServerError`/`ServerClose`; the main-thread pump
             // converts them into the appropriate JS dispatch.
-            PendingNetEvent::ServerConnection(server_id, socket_id) => {
+            PendingNetEvent::ServerConnection(server_id, socket_id, released) => {
+                if !released && server_state::defer_server_connection(server_id, socket_id) {
+                    continue;
+                }
+                server_state::activate_connection(server_id, socket_id);
                 let cbs = listeners_for(server_id, "connection");
                 if cbs.is_empty() {
                     // Drain any `server.once('connection', cb)` flagged
                     // here too — listeners_for returned empty but the
                     // once-set may still be holding stale entries.
                     lifecycle::drain_once_listeners(server_id, "connection");
+                    server_state::release_pending_server_data(socket_id);
                     continue;
                 }
                 // Sockets returned by the codegen's `net.connect`
@@ -1618,6 +1626,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     }
                 }
                 lifecycle::drain_once_listeners(server_id, "connection");
+                server_state::release_pending_server_data(socket_id);
             }
             PendingNetEvent::ServerListening(server_id) => {
                 // Take + drain the 'listening' listeners so the
@@ -1659,6 +1668,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // Tear down the server entry so the keepalive gate
                 // (`js_ext_net_has_active_handles`) lets the runtime
                 // exit cleanly after the user's close() resolves.
+                server_state::remove_server(server_id);
                 statics::servers().lock().unwrap().remove(&server_id);
                 statics::listeners().lock().unwrap().remove(&server_id);
                 statics::once_flags().lock().unwrap().remove(&server_id);

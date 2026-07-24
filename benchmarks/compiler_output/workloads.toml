@@ -863,14 +863,13 @@ regex_none = [
 detail = "fast clone loads raw f64 array slots without per-access guards or numeric coercion"
 
 [[workloads.packed_f64_loop_versioning.ir_checks]]
-name = "packed_f64_store_loop_not_cloned"
-contains = "call i32 @js_typed_feedback_numeric_array_index_set_guard"
-regex_none = [
-  '''packed_f64_loop_store\.fast''',
-  '''packed_f64_loop_store\.fallback''',
-  '''array\[packed_f64_loop\]=''',
+name = "packed_f64_store_loop_guarded_clone"
+section = "llvm_before"
+regex_all = [
+  '''packed_f64_loop_store\.fast\.\d+:\n(?:(?!\n[^\s].*:)[\s\S])*?\bstore double\b''',
+  '''packed_f64_loop_store\.fallback\.\d+:\n(?:(?!\n[^\s].*:)[\s\S])*?\bbr label %packed_f64\.loop\.slow''',
 ]
-detail = "store-bearing loops stay out of the packed-f64 clone; guarded numeric store fallback handles invalidation"
+detail = "eligible store loops contain a raw-f64 fast store and a side exit to the ordinary guarded fallback"
 
 [[workloads.packed_f64_loop_versioning.stdout_checks]]
 name = "packed_f64_loop_versioning_checksum"
@@ -895,9 +894,9 @@ min = { load_f64 = 1 }
 detail = "fast clone contains raw double loads for read-only packed loops"
 
 [[workloads.packed_f64_loop_versioning.named_regions.checks]]
-name = "packed_f64_fast_loop_no_fp_int_conversions"
-max = { fptosi = 0, sitofp = 0, ptrtoint = 0 }
-detail = "fast clone does not perform per-access numeric conversions"
+name = "packed_f64_fast_loop_bounded_fp_int_conversions"
+max = { fptosi = 0, sitofp = 3, ptrtoint = 0 }
+detail = "fast clones avoid lossy conversions while permitting the source-required integer-index-to-number conversion in each materialized copy"
 
 [workloads.packed_f64_loop_versioning.native_rep_checks]
 allow_materialization_reasons = ["runtime_api", "return_abi"]

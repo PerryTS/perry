@@ -164,11 +164,11 @@ pub use class_meta_registry::{
 };
 pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
-    accessor_descriptor_keys_for_obj, class_instance_set_may_intercept, clear_accessor_descriptor,
-    clear_property_attrs, constructor_accessor_ever_installed, descriptors_in_use,
-    disable_class_field_inline_guard, get_accessor_descriptor, get_property_attrs,
-    json_object_getter_value, mark_all_keys, object_has_descriptors,
-    object_proto_may_intercept_key, owner_may_have_descriptor_entries,
+    accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
+    class_instance_set_may_intercept, clear_accessor_descriptor, clear_property_attrs,
+    constructor_accessor_ever_installed, descriptors_in_use, disable_class_field_inline_guard,
+    get_accessor_descriptor, get_property_attrs, json_object_getter_value, mark_all_keys,
+    object_has_descriptors, object_proto_may_intercept_key, owner_may_have_descriptor_entries,
     plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, DescriptorTables,
@@ -1619,7 +1619,15 @@ pub struct ObjectMeta {
     /// Same summary for accessor descriptors (`get`/`set` installs) — the
     /// `accessor_descriptors` table twin of `attr_key_bits`.
     pub accessor_key_bits: u64,
+    /// Object-only state that cannot share `GcHeader._reserved`: every bit in
+    /// that 16-bit word is already owned by GC layout/age or another object
+    /// flag. In particular, bit 12 is `GC_OBJ_TYPED_LAYOUT_INTACT`, so using
+    /// it for prototype divergence made every typed-layout object appear to
+    /// have a custom prototype.
+    pub flags: u64,
 }
+
+pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
 /// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
@@ -1649,6 +1657,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).prototype = 0;
     (*meta).attr_key_bits = 0;
     (*meta).accessor_key_bits = 0;
+    (*meta).flags = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;

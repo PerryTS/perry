@@ -473,6 +473,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
+        ("util", "isArray") => Some(1),
         ("util", "debug" | "debuglog" | "inherits") => Some(2),
         ("console", "context") => Some(1),
         ("console", "createTask") => Some(0),
@@ -1643,7 +1644,18 @@ pub(crate) fn set_bound_native_closure_name(
     // `name` is read-only, throwing `Cannot assign to read only property 'name'`
     // in strict mode (jsonwebtoken → Next.js). Pin the proper descriptor so
     // enumeration matches reflection.
-    crate::object::set_property_attrs(
+    //
+    // #6809: MUST be the gate-neutral BUILTIN install. This runs during
+    // `populate_global_this_builtins` for every program that touches a
+    // builtin global (`console.log` suffices) — the user-install variant
+    // flipped `GLOBAL_DESCRIPTORS_IN_USE` process-wide at startup, which
+    // pushed EVERY subsequent dynamic property write onto the descriptor-
+    // interception slow walk (prototype-chain vetting incl. a dynamic
+    // `.constructor` read per write; measured as the dominant cost of the
+    // #6759 write micro). Reflection and enumeration read the descriptor
+    // table unconditionally, so the builtin variant preserves the
+    // safe-buffer semantics above.
+    crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
         crate::object::PropertyAttrs::new(false, false, true),

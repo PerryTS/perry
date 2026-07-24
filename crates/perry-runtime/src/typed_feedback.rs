@@ -747,16 +747,25 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
                 (*ptr).keys_array as usize
             } else {
                 let keys = (*ptr).keys_array;
-                if keys.is_null() || (keys as u64) >> 48 != 0 || (keys as usize) < 0x10000 {
-                    keys as usize
-                } else {
-                    let id = crate::object::shapes::shape_id_for_keys_ensure(keys, (*keys).length);
-                    if id != 0 {
-                        (*(ptr as *mut ObjectHeader)).parent_class_id = id;
-                        id as usize
+                if let Some(keys_header) =
+                    crate::value::addr_class::try_read_gc_header(keys as usize)
+                {
+                    if keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
+                        || keys_header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+                    {
+                        let id =
+                            crate::object::shapes::shape_id_for_keys_ensure(keys, (*keys).length);
+                        if id != 0 {
+                            (*(ptr as *mut ObjectHeader)).parent_class_id = id;
+                            id as usize
+                        } else {
+                            keys as usize
+                        }
                     } else {
                         keys as usize
                     }
+                } else {
+                    keys as usize
                 }
             }
         } else {
@@ -892,6 +901,9 @@ fn observe_property(
     obj_bits: u64,
     key: *const crate::StringHeader,
 ) {
+    if site_id == 0 || !typed_feedback_enabled() {
+        return;
+    }
     let object_addr = normalize_raw_object_addr(obj_bits);
     let (shape_addr, class_id, gc_type) = object_shape(object_addr);
     observe(
@@ -996,6 +1008,12 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    if !typed_feedback_enabled() {
+        if crate::object::js_object_set_field_by_name_transition_fast(obj, key, value) == 0 {
+            crate::object::js_object_set_field_by_name(obj, key, value);
+        }
+        return;
+    }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_addr, class_id, gc_type) = object_shape(object_addr);
     let handled = crate::object::js_object_set_field_by_name_transition_fast(obj, key, value) != 0;
@@ -1189,8 +1207,25 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
 }
 
 fn numeric_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bounds: bool) -> bool {
-    plain_array_index_guard(arr, index, require_in_bounds)
-        && crate::array::js_array_is_numeric_f64_layout(arr) != 0
+    if !plain_array_index_guard(arr, index, require_in_bounds) {
+        return false;
+    }
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+    let Some(header) = gc_header_for_user_addr(raw_addr) else {
+        return false;
+    };
+    // Numeric arrays produced by literals/push already carry the raw-layout
+    // bit. Read it from the header that the plain-array guard just validated
+    // instead of entering `js_array_is_numeric_f64_layout`, which cleans the
+    // pointer and re-reads the header on every element access. Preserve the
+    // slower verify/rewrite path for arrays not marked yet.
+    unsafe {
+        if (*header)._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
+            true
+        } else {
+            crate::array::js_array_is_numeric_f64_layout(raw_addr as *const ArrayHeader) != 0
+        }
+    }
 }
 
 fn plain_array_index_set_guard(
@@ -1225,8 +1260,20 @@ fn numeric_array_index_set_guard(
     index: u32,
     require_in_bounds: bool,
 ) -> bool {
-    plain_array_index_set_guard(arr, index, require_in_bounds)
-        && crate::array::js_array_is_numeric_f64_layout(arr) != 0
+    if !plain_array_index_set_guard(arr, index, require_in_bounds) {
+        return false;
+    }
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+    let Some(header) = gc_header_for_user_addr(raw_addr) else {
+        return false;
+    };
+    unsafe {
+        if (*header)._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
+            true
+        } else {
+            crate::array::js_array_is_numeric_f64_layout(raw_addr as *const ArrayHeader) != 0
+        }
+    }
 }
 
 fn packed_f64_array_loop_guard(arr: *const ArrayHeader) -> bool {

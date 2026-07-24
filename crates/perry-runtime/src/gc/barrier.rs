@@ -766,17 +766,45 @@ thread_local! {
 
 pub(super) static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
 
+/// Number of threads whose incremental mark barrier is currently active.
+///
+/// Generated code reads this before calling a root barrier from a persistent
+/// shadow-slot update. Zero is authoritative: the current thread cannot have
+/// an active incremental cycle, so a root store needs no shading and can skip
+/// the Rust/TLS call entirely. A non-zero value is deliberately conservative:
+/// another thread's cycle may be active while this thread's is not, in which
+/// case the ordinary barrier call observes its null thread-local pointer and
+/// returns. The count (rather than a bool) prevents one worker disabling its
+/// cycle from hiding another worker's still-active cycle.
+#[no_mangle]
+pub static PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
 pub(super) fn incremental_mark_barrier_enable(valid_ptrs: &ValidPointerSet, minor_only: bool) {
     INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.set(minor_only));
-    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
+    let newly_active = INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
+        let newly_active = cell.get().is_null();
         cell.set(valid_ptrs as *const ValidPointerSet);
+        newly_active
     });
+    if newly_active {
+        PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 pub(super) fn incremental_mark_barrier_disable() {
-    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
+    let was_active = INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
+        let was_active = !cell.get().is_null();
         cell.set(std::ptr::null());
+        was_active
     });
+    if was_active {
+        let _ = PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_update(
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |count| count.checked_sub(1),
+        );
+    }
     INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.set(false));
     // Keep allocate-black aligned with the barrier (see enable). Sweep-phase
     // births need no mark either: both the arena cursor and the malloc sweep

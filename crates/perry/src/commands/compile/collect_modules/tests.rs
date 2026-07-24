@@ -137,6 +137,98 @@ console.log(got);
     );
 }
 
+#[test]
+fn fs_promises_named_glob_in_class_enables_regex_engine() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("entry.ts");
+    std::fs::write(
+        &entry,
+        r#"
+import { glob as findFiles } from "node:fs/promises";
+class Scanner {
+  static scan() {
+    return findFiles("**/*.ts");
+  }
+}
+const iterator = Scanner.scan();
+void iterator;
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect modules");
+
+    assert!(
+        ctx.uses_regex,
+        "aliased fs/promises.glob in a class body must retain the regex-backed glob engine"
+    );
+}
+
+#[test]
+fn unrelated_named_glob_does_not_enable_regex_engine() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("entry.ts");
+    std::fs::write(
+        dir.path().join("util.ts"),
+        r#"
+export function glob(pattern: string): string {
+  return pattern;
+}
+"#,
+    )
+    .expect("write dependency");
+    std::fs::write(
+        &entry,
+        r#"
+import { glob } from "./util";
+const value = glob("not-a-runtime-glob");
+void value;
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect modules");
+
+    assert!(
+        !ctx.uses_regex,
+        "an unrelated external named glob binding must not retain the regex engine"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_entry_resolves_relative_imports_from_lexical_path() {

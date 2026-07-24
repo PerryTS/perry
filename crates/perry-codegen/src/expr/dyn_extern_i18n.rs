@@ -544,101 +544,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
 
-            // Single-target fast path. Skip the runtime string compare
-            // — the static resolver already proved this is the only
-            // possible target.
-            if paths.len() == 1 {
-                // Evaluate the arg for side effects (most are pure but
-                // a template literal with computed parts can have e.g.
-                // function calls) and let registered module loader hooks
-                // observe/delegate the import. The statically known target
-                // still determines the namespace in Perry's compile-time graph.
-                let path_val = lower_expr(ctx, arg)?;
-                let _ = ctx.block().call(
-                    DOUBLE,
-                    "js_module_dynamic_import_apply_hooks",
-                    &[(DOUBLE, &path_val)],
-                );
-                let path = &paths[0];
-                let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
-                // #1671: a dynamic import of a known node-submodule
-                // (`await import('hono/jsx/server')`) carries the sentinel
-                // prefix `__node_submod__<key>` instead of a compiled-module
-                // prefix. Build its namespace via `js_node_submodule_namespace`
-                // and resolve the promise with it (mirrors the static
-                // namespace-import path).
-                if let Some(prefix) = &target_prefix {
-                    if let Some(key) = prefix.strip_prefix("__node_submod__") {
-                        let key = key.to_string();
-                        let submod_label = emit_string_literal_global(ctx, &key);
-                        let submod_len = key.len();
-                        let install_sym = crate::nm_install::nm_submod_install_symbol(&key);
-                        let blk = ctx.block();
-                        if let Some(s) = install_sym {
-                            blk.call_void(s, &[]);
-                        }
-                        let ns_val = blk.call(
-                            DOUBLE,
-                            "js_node_submodule_namespace",
-                            &[(PTR, &submod_label), (I32, &submod_len.to_string())],
-                        );
-                        let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
-                        return Ok(nanbox_pointer_inline(blk, &promise));
-                    }
-                    // #1673: a dynamic import of a general native builtin
-                    // (`await import('node:crypto')`) carries the sentinel
-                    // prefix `__native_mod__<name>`. Build its namespace via
-                    // `js_create_native_module_namespace` — the same
-                    // NATIVE_MODULE_CLASS_ID object `require('node:crypto')`
-                    // produces, whose member access dispatches natively at
-                    // runtime — and resolve the promise with it.
-                    if let Some(name) = prefix.strip_prefix("__native_mod__") {
-                        let name = name.to_string();
-                        let mod_label = emit_string_literal_global(ctx, &name);
-                        let mod_len = name.len();
-                        let blk = ctx.block();
-                        if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
-                            blk.call_void(s, &[]);
-                        }
-                        let ns_val = blk.call(
-                            DOUBLE,
-                            "js_create_native_module_namespace",
-                            &[(PTR, &mod_label), (I64, &mod_len.to_string())],
-                        );
-                        let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
-                        return Ok(nanbox_pointer_inline(blk, &promise));
-                    }
-                }
-                let blk = ctx.block();
-                let ns_val = match target_prefix {
-                    Some(prefix) => {
-                        // Issue #753: trigger the target's init before
-                        // loading its namespace. For Eager targets the
-                        // guard short-circuits; for Deferred targets
-                        // this is the only invocation that populates
-                        // `@__perry_ns_<prefix>`.
-                        blk.call_void(&format!("{}__init", prefix), &[]);
-                        blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix))
-                    }
-                    None => {
-                        // Driver didn't resolve this path to a target module —
-                        // route through the runtime fallback (#6660: builtin
-                        // specifiers resolve like Node, everything else rejects
-                        // with `ERR_MODULE_NOT_FOUND` instead of the old
-                        // literal-`undefined` rejection).
-                        return Ok(blk.call(
-                            DOUBLE,
-                            "js_module_dynamic_import_fallback",
-                            &[(DOUBLE, &path_val)],
-                        ));
-                    }
-                };
-                let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
-                return Ok(nanbox_pointer_inline(blk, &promise));
-            }
-
-            // Multi-target: evaluate the runtime path string, then
-            // emit a chain of `js_string_equals` compares. Each
+            // Evaluate the runtime path string, apply registered loader hooks,
+            // then emit a chain of `js_string_equals` compares. Do this even
+            // for a single statically-resolved candidate: TypeScript types are
+            // erased at runtime and a hook may rewrite the specifier, so the
+            // candidate count does not prove that the runtime value matches.
+            // Skipping the compare here used to silently initialize the sole
+            // candidate for `load("./other.ts" as any)` and for hook redirects.
+            // Each
             // successful compare resolves to its corresponding
             // namespace global. The final fallback emits a rejected
             // promise.

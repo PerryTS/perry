@@ -139,12 +139,21 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             crate::gc::GC_TYPE_LAZY_ARRAY => {
                 return unsafe { *(handle as *const u32) } as f64;
             }
-            // A closure's `.length` is its spec param count (own-property
-            // override first, then the codegen-registered length). Without
-            // this arm a `Function`-typed receiver — e.g. a folded
-            // `new Function("a,b", body)` — would read 0 here. Mirrors the
-            // generic PropertyGet reflection path.
+            // A closure's `.length` is its spec param count. Prefer
+            // native/builtin metadata over the codegen-registered physical
+            // wrapper length. Without those metadata checks, a named native
+            // constructor such as `Console` reports its zero-argument wrapper
+            // arity instead of its declared arity 1. This keeps the intrinsic
+            // fallback aligned with the generic PropertyGet reflection path.
             crate::gc::GC_TYPE_CLOSURE => {
+                if let Some(arity) =
+                    unsafe { crate::object::bound_native_callable_value_arity(value) }
+                {
+                    return arity as f64;
+                }
+                if let Some(length) = crate::object::builtin_closure_length(handle) {
+                    return length as f64;
+                }
                 return crate::closure::closure_length(
                     handle as *const crate::closure::ClosureHeader,
                 )
@@ -719,5 +728,34 @@ mod length_handle_band_tests {
                 "handle-band id {id:#x} must yield length 0 without dereferencing"
             );
         }
+    }
+
+    #[test]
+    fn named_native_callable_length_paths_use_declared_arity() {
+        let console_ctor = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"console".as_ptr(),
+                "console".len(),
+                b"Console".as_ptr(),
+                "Console".len(),
+            )
+        };
+        let console_ptr = crate::value::js_nanbox_get_pointer(console_ctor) as usize;
+        let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let mut cache = [0_i64; 2];
+
+        assert_eq!(js_value_length_f64(console_ctor), 1.0);
+        assert_eq!(
+            crate::closure::closure_get_dynamic_prop(console_ptr, "length"),
+            1.0
+        );
+        assert_eq!(
+            crate::object::js_object_get_field_ic_miss(
+                console_ptr as *const crate::ObjectHeader,
+                length_key,
+                &mut cache,
+            ),
+            1.0
+        );
     }
 }

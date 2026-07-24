@@ -107,6 +107,26 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
+    // Sloppy script assignment lowers to PutValue rather than the named-field
+    // setter.  Existing own data fields need none of PutValue's rooting,
+    // ToPropertyKey, Proxy, typed-array, or receiver-aware prototype work.
+    // Keep this before the handle scope: the helper validates both heap
+    // headers and only performs a barriered overwrite when the target and
+    // receiver are the same ordinary object and codegen supplied an interned
+    // heap-string key.
+    let target_bits = target.to_bits();
+    let key_bits = key.to_bits();
+    if target_bits == receiver.to_bits()
+        && (target_bits & !POINTER_MASK) == POINTER_TAG
+        && (key_bits & !POINTER_MASK) == crate::value::STRING_TAG
+    {
+        let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        let key_ptr = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
+            return value;
+        }
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
@@ -201,7 +221,6 @@ pub extern "C" fn js_put_value_set(
         }
     }
 
-    let target_bits = target.to_bits();
     if target_bits == TAG_NULL || target_bits == TAG_UNDEFINED {
         let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
         let msg = format!("Cannot set properties of null or undefined (setting '{key_name}')");
@@ -217,4 +236,450 @@ pub extern "C" fn js_put_value_set(
         crate::error::throw_immutable_write(0, &key_name);
     }
     value_handle.get_nanbox_f64()
+}
+
+/// Miss path for the codegen-emitted monomorphic PutValue store cache.
+///
+/// The full strict/sloppy `[[Set]]` semantics run first. Only a successful
+/// ordinary class-instance own-data overwrite may prime `[shape_token, slot]`;
+/// every exotic, descriptor-bearing, frozen, class-object, plain-class-zero,
+/// overflow, or typed-layout-intact receiver remains permanently on the miss
+/// path. The token mirrors the read PIC: a stamped runtime ShapeId is lifted
+/// above the pointer range with bit 62; otherwise the shared keys pointer is
+/// used. The generated hit path repeats all mutable per-object guards.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_ic_miss(
+    target: f64,
+    key: *const crate::StringHeader,
+    value: f64,
+    strict: i32,
+    cache: *mut [i64; 2],
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let key_value = if key.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits())
+    };
+    let result = js_put_value_set(
+        target_handle.get_nanbox_f64(),
+        key_value,
+        value_handle.get_nanbox_f64(),
+        target_handle.get_nanbox_f64(),
+        strict,
+    );
+
+    if cache.is_null() {
+        return result;
+    }
+
+    unsafe {
+        let target = target_handle.get_nanbox_f64();
+        let target_bits = target.to_bits();
+        if (target_bits & !POINTER_MASK) != POINTER_TAG {
+            return result;
+        }
+        let obj_addr = (target_bits & POINTER_MASK) as usize;
+        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
+            return result;
+        };
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            // A generated hit cannot update/downgrade a typed layout without
+            // calling the runtime. The miss store clears this bit; prime only
+            // once that per-object downgrade is visible.
+            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc_header._reserved & BLOCKING_FLAGS != 0
+            || key.is_null()
+        {
+            return result;
+        }
+
+        let obj = obj_addr as *mut crate::ObjectHeader;
+        let class_id = (*obj).class_id;
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+            || class_id == 0
+            || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        {
+            return result;
+        }
+        let Some(key_gc) = crate::value::addr_class::try_read_gc_header(key as usize) else {
+            return result;
+        };
+        if key_gc.obj_type != crate::gc::GC_TYPE_STRING
+            || key_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_INTERNED)
+                != crate::gc::GC_FLAG_INTERNED
+        {
+            return result;
+        }
+
+        let keys = (*obj).keys_array;
+        if keys.is_null() || (keys as u64) >> 48 != 0 {
+            return result;
+        }
+        let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
+            return result;
+        };
+        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
+                != crate::gc::GC_FLAG_SHAPE_SHARED
+        {
+            return result;
+        }
+
+        let mut own_idx = crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize);
+        if own_idx.is_none() {
+            let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+            if key_count > 4096 {
+                return result;
+            }
+            for i in 0..key_count {
+                let candidate = crate::array::js_array_get(keys, i as u32);
+                if crate::string::js_string_key_matches(candidate, key) {
+                    crate::object::prop_plan::read_plan_record(
+                        keys as usize,
+                        key as usize,
+                        i as u32,
+                    );
+                    own_idx = Some(i as u32);
+                    break;
+                }
+            }
+        }
+        let Some(idx) = own_idx else {
+            return result;
+        };
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        if idx as usize >= alloc_limit {
+            return result;
+        }
+
+        let parent_class_id = (*obj).parent_class_id;
+        let shape_token = if crate::object::shapes::is_shape_id(parent_class_id) {
+            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
+        } else {
+            keys as u64
+        };
+
+        // Publish the token last conceptually: a zero-initialized or stale
+        // token cannot hit this slot until it matches this receiver's current
+        // discriminated shape token. Perry's read PIC uses the same format.
+        (*cache)[1] = idx as i64;
+        (*cache)[0] = shape_token as i64;
+    }
+
+    result
+}
+
+#[cold]
+fn trace_object_array_numeric_write_rejection(reason: &'static str) {
+    if std::env::var_os("PERRY_TRACE_OBJECT_ARRAY_WRITE_GUARD").is_some() {
+        eprintln!("PERRY_OBJECT_ARRAY_WRITE_GUARD_REJECT: {reason}");
+    }
+}
+
+#[inline]
+fn trace_object_array_numeric_write_stage<T>(value: Option<T>, reason: &'static str) -> Option<T> {
+    if value.is_none() {
+        trace_object_array_numeric_write_rejection(reason);
+    }
+    value
+}
+
+/// Prove all receivers and return up to four inline numeric slot indexes.
+///
+/// The caller performs one bounded scan, then holds raw array/object pointers
+/// for a finite, call-free loop nest. Consequently this helper must reject any
+/// receiver, key, or layout state that could require ordinary `[[Set]]`
+/// semantics. The fixed array is stack-only; no descriptor allocation is
+/// introduced on the preflight path.
+fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Option<[u16; 4]> {
+    // Reuse the process gate js_gc_init disables for typed-feedback tracing,
+    // typed-layout verification, and the explicit inline-field escape hatch.
+    // This loop bypasses the same observations/checks as the class-field
+    // inline clone and therefore must honor the identical gate.
+    if count == 0
+        || keys.is_empty()
+        || keys.len() > 4
+        || !crate::object::class_field_inline_guard_enabled()
+    {
+        trace_object_array_numeric_write_rejection("disabled gate or invalid field/count bound");
+        return None;
+    }
+
+    let array_bits = array.to_bits();
+    if (array_bits & !POINTER_MASK) != POINTER_TAG {
+        trace_object_array_numeric_write_rejection("receiver container is not an array pointer");
+        return None;
+    }
+    let array_addr = (array_bits & POINTER_MASK) as usize;
+    let array_gc = trace_object_array_numeric_write_stage(
+        unsafe { crate::value::addr_class::try_read_gc_header(array_addr) },
+        "array header is unavailable",
+    )?;
+    if array_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        || array_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || array_gc._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+            .load(std::sync::atomic::Ordering::Relaxed)
+            != 0
+    {
+        trace_object_array_numeric_write_rejection(
+            "array kind, forwarding, descriptor, or index-fast-path state",
+        );
+        return None;
+    }
+
+    let arr = array_addr as *const crate::array::ArrayHeader;
+    let (length, capacity) = unsafe { ((*arr).length, (*arr).capacity) };
+    if length > 16_000_000 || capacity > 16_000_000 || length > capacity || count > length {
+        trace_object_array_numeric_write_rejection("array length/capacity/prefix bound");
+        return None;
+    }
+
+    // Unlike the per-site PIC, this proof does not retain key identity after
+    // the call or index a pointer-keyed cache. `find_slot` performs only
+    // allocation-free byte comparisons, so a live non-forwarded string-pool
+    // handle is sufficient; requiring INTERNED here made eligibility depend
+    // accidentally on whether some unrelated site had interned the same name.
+    let decode_key = |boxed: f64| -> Option<*const crate::StringHeader> {
+        let bits = boxed.to_bits();
+        if (bits & !POINTER_MASK) != crate::value::STRING_TAG {
+            return None;
+        }
+        let ptr = (bits & POINTER_MASK) as *const crate::StringHeader;
+        let gc = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }?;
+        (gc.obj_type == crate::gc::GC_TYPE_STRING
+            && gc.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
+            .then_some(ptr)
+    };
+    let mut decoded_keys = [std::ptr::null(); 4];
+    for (index, boxed) in keys.iter().enumerate() {
+        decoded_keys[index] = trace_object_array_numeric_write_stage(
+            decode_key(*boxed),
+            "target key is not a live heap string",
+        )?;
+    }
+
+    const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+
+    unsafe fn validated_object(
+        bits: u64,
+    ) -> Option<(
+        *mut crate::ObjectHeader,
+        *mut crate::array::ArrayHeader,
+        u16,
+    )> {
+        if (bits & !POINTER_MASK) != POINTER_TAG {
+            return None;
+        }
+        let addr = (bits & POINTER_MASK) as usize;
+        let gc = crate::value::addr_class::try_read_gc_header(addr)?;
+        if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc._reserved & BLOCKING_FLAGS != 0
+        {
+            return None;
+        }
+        let obj = addr as *mut crate::ObjectHeader;
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+            || (*obj).class_id == 0
+            || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        {
+            return None;
+        }
+        let keys = (*obj).keys_array;
+        if keys.is_null() || (keys as u64) >> 48 != 0 {
+            return None;
+        }
+        let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
+        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
+                != crate::gc::GC_FLAG_SHAPE_SHARED
+        {
+            return None;
+        }
+        Some((obj, keys, gc._reserved))
+    }
+
+    unsafe fn find_slot(
+        keys: *mut crate::array::ArrayHeader,
+        key: *const crate::StringHeader,
+    ) -> Option<u32> {
+        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+        if key_count > 4096 {
+            return None;
+        }
+        for i in 0..key_count {
+            let candidate = crate::array::js_array_get(keys, i as u32);
+            if crate::string::js_string_key_matches(candidate, key) {
+                return Some(i as u32);
+            }
+        }
+        None
+    }
+
+    let elements = unsafe {
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64
+    };
+    let first_bits = unsafe { (*elements).to_bits() };
+    if first_bits == crate::value::TAG_HOLE {
+        trace_object_array_numeric_write_rejection("first receiver is a hole");
+        return None;
+    }
+    let (first, shared_keys, first_flags) = trace_object_array_numeric_write_stage(
+        unsafe { validated_object(first_bits) },
+        "first receiver is not an eligible regular shared-shape object",
+    )?;
+    let mut slots = [0u16; 4];
+    for index in 0..keys.len() {
+        // `find_slot` caps the shared keys array at 4096 entries, so every
+        // non-zero-encoded index fits comfortably in one 16-bit result lane.
+        let slot = trace_object_array_numeric_write_stage(
+            unsafe { find_slot(shared_keys, decoded_keys[index]) },
+            "target key is absent from the shared shape",
+        )?;
+        slots[index] = trace_object_array_numeric_write_stage(
+            u16::try_from(slot).ok(),
+            "target slot cannot be encoded",
+        )?;
+    }
+
+    let first_limit = unsafe {
+        std::cmp::max(
+            (*first).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32,
+        )
+    };
+    if slots[..keys.len()]
+        .iter()
+        .any(|slot| u32::from(*slot) >= first_limit)
+    {
+        trace_object_array_numeric_write_rejection("first receiver target slot is out of bounds");
+        return None;
+    }
+    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
+        && slots[..keys.len()].iter().any(|slot| {
+            !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
+                first as usize,
+                usize::from(*slot),
+            )
+        })
+    {
+        trace_object_array_numeric_write_rejection(
+            "first receiver typed descriptor does not contain every target slot",
+        );
+        return None;
+    }
+
+    for i in 1..count as usize {
+        let bits = unsafe { (*elements.add(i)).to_bits() };
+        if bits == crate::value::TAG_HOLE {
+            trace_object_array_numeric_write_rejection("receiver prefix contains a hole");
+            return None;
+        }
+        let (obj, object_keys, flags) = trace_object_array_numeric_write_stage(
+            unsafe { validated_object(bits) },
+            "receiver prefix contains an ineligible object",
+        )?;
+        if object_keys != shared_keys {
+            trace_object_array_numeric_write_rejection(
+                "receiver prefix does not share one keys array",
+            );
+            return None;
+        }
+        let limit =
+            unsafe { std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) };
+        if slots[..keys.len()]
+            .iter()
+            .any(|slot| u32::from(*slot) >= limit)
+        {
+            trace_object_array_numeric_write_rejection(
+                "receiver prefix contains an out-of-bounds target slot",
+            );
+            return None;
+        }
+        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
+            && slots[..keys.len()].iter().any(|slot| {
+                !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
+                    obj as usize,
+                    usize::from(*slot),
+                )
+            })
+        {
+            trace_object_array_numeric_write_rejection(
+                "receiver typed descriptor does not contain every target slot",
+            );
+            return None;
+        }
+    }
+
+    Some(slots)
+}
+
+/// Preflight for codegen's bounded call-free nested object-write loop.
+///
+/// Each active slot is encoded as `slot + 1` in a 16-bit lane, with the first
+/// key in the least-significant lane. Zero means that the generated raw loop
+/// must not run. The caller scans once, then performs only finite numeric
+/// stores, whose bits are valid in both raw-f64 and ordinary numeric JSValue
+/// fields, until both loops finish. That call-free interval is load-bearing:
+/// no GC can move the array, its elements, their shared keys array, or their
+/// typed-layout records after this function validates them.
+#[no_mangle]
+pub extern "C" fn js_object_array_numeric_write_guard(
+    array: f64,
+    key_1: f64,
+    key_2: f64,
+    key_3: f64,
+    key_4: f64,
+    field_count: u32,
+    receiver_count: u32,
+) -> u64 {
+    if !(1..=4).contains(&field_count) {
+        return 0;
+    }
+    let keys = [key_1, key_2, key_3, key_4];
+    let Some(slots) =
+        object_array_numeric_write_slots(array, &keys[..field_count as usize], receiver_count)
+    else {
+        return 0;
+    };
+    slots[..field_count as usize]
+        .iter()
+        .enumerate()
+        .fold(0, |packed, (index, slot)| {
+            packed | ((u64::from(*slot) + 1) << (index * 16))
+        })
+}
+
+/// Preserve the #6811 internal ABI for cached generated objects. New codegen
+/// uses [`js_object_array_numeric_write_guard`], but an object cache entry
+/// produced before the runtime rebuild may still reference this symbol.
+#[no_mangle]
+pub extern "C" fn js_object_array_numeric_write2_guard(
+    array: f64,
+    key_1: f64,
+    key_2: f64,
+    receiver_count: u32,
+) -> u64 {
+    let Some(slots) = object_array_numeric_write_slots(array, &[key_1, key_2], receiver_count)
+    else {
+        return 0;
+    };
+    (u64::from(slots[1]) + 1) << 32 | (u64::from(slots[0]) + 1)
 }

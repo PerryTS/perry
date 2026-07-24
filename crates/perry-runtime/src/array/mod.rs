@@ -81,16 +81,18 @@ pub use self::immutable::{
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
     array_prototype_addr, array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
-    keys_array_len_capped_to_capacity, note_array_proto_iterator_write,
-    note_object_prototype_index_write, object_prototype_addr, object_prototype_addr_matches,
-    object_prototype_has_index_flag,
+    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity,
+    note_array_proto_iterator_write, note_object_prototype_index_write, object_prototype_addr,
+    object_prototype_addr_matches, object_prototype_has_index_flag,
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
     js_array_get_index_or_string, js_array_get_length, js_array_length,
-    js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
-    js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
-    js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
+    js_array_numeric_get_f64_unboxed, js_array_numeric_range_add, js_array_numeric_range_add_len,
+    js_array_numeric_set_f64_unboxed, js_array_set_f64, js_array_set_f64_extend,
+    js_array_set_f64_extend_strict, js_array_set_f64_unchecked, js_array_set_index_or_string,
+    js_array_set_index_or_string_strict, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;

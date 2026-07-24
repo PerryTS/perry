@@ -4,6 +4,8 @@
 use super::*;
 
 use std::collections::HashMap;
+use std::io;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -18,10 +20,12 @@ use crate::ensure_gc_scanner_registered;
 use crate::http2_session_settings::Http2SettingsState;
 use crate::types::jsvalue_to_owned_string;
 
-pub(crate) fn register_server_session(server_handle: i64) -> i64 {
+pub(crate) fn register_server_session(server_handle: i64, peer_addr: SocketAddr) -> i64 {
     let session_handle = register_handle(Http2SessionHandle {
         server_handle,
+        connection_port: peer_addr.port(),
         session_event_emitted: false,
+        connect_event_emitted: false,
         session_type: 0,
         connected: true,
         encrypted: false,
@@ -148,6 +152,95 @@ pub(crate) fn local_client_connect_ready(session_handle: i64) -> bool {
     has_active_server_session(server_handle)
 }
 
+pub(crate) fn local_server_session_event_ready(server_session_handle: i64) -> bool {
+    let Some(server_session) = get_handle::<Http2SessionHandle>(server_session_handle) else {
+        return true;
+    };
+    if server_session.session_type != 0
+        || server_session.server_handle == 0
+        || server_session.connection_port == 0
+    {
+        return true;
+    }
+    let server_handle = server_session.server_handle;
+    let connection_port = server_session.connection_port;
+    let mut ready = true;
+    iter_handles_of::<Http2SessionHandle, _>(|session| {
+        if session.session_type == 1
+            && session.server_handle == server_handle
+            && session.connection_port == connection_port
+            && !session.closed
+            && !session.destroyed
+            && !session.connect_event_emitted
+        {
+            ready = false;
+        }
+    });
+    ready
+}
+
+async fn connect_h2_stream(
+    host: &str,
+    port: u16,
+    session_handle: i64,
+    reserve_pairing_port: bool,
+) -> io::Result<tokio::net::TcpStream> {
+    if !reserve_pairing_port {
+        return tokio::net::TcpStream::connect(format!("{host}:{port}")).await;
+    }
+
+    // A same-process server accepts on another Tokio runtime. Reserve and
+    // publish the client's ephemeral port *before* connect(), so whichever
+    // runtime wakes first can pair the server session with this exact client.
+    // The peer port observed by accept() is the same reserved port.
+    let addresses: Vec<_> = tokio::net::lookup_host((host, port)).await?.collect();
+    let mut last_error = None;
+    for address in addresses {
+        let socket = if address.is_ipv4() {
+            tokio::net::TcpSocket::new_v4()
+        } else {
+            tokio::net::TcpSocket::new_v6()
+        };
+        let socket = match socket {
+            Ok(socket) => socket,
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+        let bind_addr = if address.is_ipv4() {
+            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
+        } else {
+            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
+        };
+        if let Err(err) = socket.bind(bind_addr) {
+            last_error = Some(err);
+            continue;
+        }
+        let local_port = match socket.local_addr() {
+            Ok(local) => local.port(),
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+        if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+            session.connection_port = local_port;
+        }
+        match socket.connect(address).await {
+            Ok(stream) => return Ok(stream),
+            Err(err) => last_error = Some(err),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("no address resolved for {host}:{port}"),
+        )
+    }))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http2_connect(
     authority_f64: f64,
@@ -174,7 +267,9 @@ pub unsafe extern "C" fn js_node_http2_connect(
     }
     let session_handle = register_handle(Http2SessionHandle {
         server_handle: local_server_handle,
+        connection_port: 0,
         session_event_emitted: false,
+        connect_event_emitted: false,
         session_type: 1,
         connected: false,
         encrypted: false,
@@ -200,8 +295,14 @@ pub unsafe extern "C" fn js_node_http2_connect(
             .build()
             .expect("Failed to create http2 client runtime");
         runtime.block_on(async move {
-            let addr = format!("{}:{}", host, port);
-            let stream = match tokio::net::TcpStream::connect(&addr).await {
+            let stream = match connect_h2_stream(
+                &host,
+                port,
+                session_handle,
+                local_server_handle != 0,
+            )
+            .await
+            {
                 Ok(stream) => {
                     // Node default: TCP_NODELAY on for a freshly-connected socket.
                     let _ = stream.set_nodelay(true);
