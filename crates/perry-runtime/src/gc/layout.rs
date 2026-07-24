@@ -945,6 +945,25 @@ pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: us
     })
 }
 
+/// Validate that an intact typed descriptor contains `slot_index`.
+///
+/// A finite numeric value is representation-compatible with either kind of
+/// typed object slot: raw-f64 slots consume the double directly, while every
+/// other slot consumes the same bits as an ordinary NaN-boxed JS number.
+/// Callers must separately prove the stored value finite; this helper also
+/// keeps a forged/stale intact header bit from standing in for the descriptor
+/// side-table invariant.
+pub(crate) fn layout_typed_accepts_finite_number_slot_for_user(
+    user_ptr: usize,
+    slot_index: usize,
+) -> bool {
+    TYPED_LAYOUTS.with(|m| {
+        m.borrow()
+            .get(&user_ptr)
+            .is_some_and(|layout| slot_index < layout.slot_count)
+    })
+}
+
 fn layout_typed_raw_f64_slot_count_for_user(user_ptr: usize, slot_count: usize) -> usize {
     TYPED_LAYOUTS.with(|m| {
         m.borrow()

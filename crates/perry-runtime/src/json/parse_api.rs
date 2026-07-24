@@ -105,7 +105,10 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
         return Err(syntax_error_value("Unexpected end of JSON input"));
     }
 
-    if let Err(err) = serde_json::from_slice::<serde_json::Value>(bytes) {
+    // Validate without constructing a second full JSON tree. The Perry parser
+    // below owns the runtime representation; asking serde_json for `Value`
+    // here doubled peak live memory (and allocation work) on large payloads.
+    if let Err(err) = serde_json::from_slice::<serde::de::IgnoredAny>(bytes) {
         return Err(syntax_error_value(&format!("JSON parse error: {}", err)));
     }
 
@@ -157,7 +160,10 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     if len == 0 {
         throw_syntax_error("Unexpected end of JSON input");
     }
-    if let Err(err) = serde_json::from_slice::<serde_json::Value>(bytes) {
+    // Keep serde_json's strict syntax validation, but discard tokens as they
+    // are read instead of allocating an intermediate `serde_json::Value`
+    // immediately before Perry builds its own tree.
+    if let Err(err) = serde_json::from_slice::<serde::de::IgnoredAny>(bytes) {
         throw_syntax_error(&format!("JSON parse error: {}", err));
     }
 

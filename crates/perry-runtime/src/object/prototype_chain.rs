@@ -61,8 +61,7 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 /// classification is a pure function of the allocation, so an owner is
 /// always on exactly one of the two storages.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
-    if obj_ptr < crate::gc::GC_HEADER_SIZE + 0x1000
-        || !crate::value::addr_class::is_above_handle_band(obj_ptr)
+    if !crate::value::addr_class::is_above_handle_band(obj_ptr)
         || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
     {
         return None;
@@ -113,6 +112,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
         };
         if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
+            crate::array::invalidate_array_index_fast_path();
         }
     }
     // A per-instance prototype override invalidates class-keyed interception
@@ -120,14 +120,6 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
     // object itself must never satisfy a class-keyed plan again.
     if instance_override {
         crate::object::prop_plan::prop_plan_epoch_bump();
-        unsafe {
-            if let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) {
-                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-                    let header = header as *const crate::gc::GcHeader as *mut crate::gc::GcHeader;
-                    (*header)._reserved |= crate::gc::OBJ_FLAG_PROTO_OVERRIDE;
-                }
-            }
-        }
     }
     // #6759 Phase B: shaped objects store the recorded prototype in their
     // own meta record; only non-object owners fall through to the residual
@@ -136,6 +128,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let meta = crate::object::object_meta_ensure(obj);
             (*meta).prototype = proto_bits;
+            if instance_override {
+                (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE;
+            }
             // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store —
             // the record is an arena allocation, so the ordinary object-slot
             // barrier applies (parent = the meta record).
@@ -189,6 +184,21 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
         .lock()
         .ok()
         .and_then(|map| map.get(&obj_ptr).copied())
+}
+
+/// True only for a per-instance `Object.setPrototypeOf` / literal
+/// `__proto__` override. Class-default prototype links use the same metadata
+/// record but deliberately leave this bit clear so class-keyed store plans
+/// remain valid.
+#[inline]
+pub(crate) fn object_has_prototype_override(obj_ptr: usize) -> bool {
+    unsafe {
+        let Some(obj) = meta_capable_object(obj_ptr) else {
+            return false;
+        };
+        let meta = (*obj).meta;
+        !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE != 0
+    }
 }
 
 pub(crate) fn default_object_prototype_bits() -> Option<u64> {

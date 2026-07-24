@@ -57,9 +57,48 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
 }
 
 pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
+    if ctx.persistent_shadow_slots.contains(&slot_idx) {
+        return;
+    }
     ctx.block().call_void(
         "js_shadow_slot_set",
         &[(I32, &slot_idx.to_string()), (I64, "0")],
+    );
+}
+
+/// Bind an immutable `const item = rootedArray[index]` local once in the
+/// function-entry setup and retain its current value until return.
+///
+/// The alloca is entry-hoisted and initialized to `undefined`, so the early
+/// bind is valid even when the declaration itself sits in a loop or branch.
+/// Every later iteration writes the same alloca, which the GC scanner follows
+/// through `slot_ptrs`. Pointer-capable updates still emit the root shading
+/// barrier required when an incremental collection has already scanned roots;
+/// only the repeated TLS slot rebinding and lexical-death clear are removed.
+pub(crate) fn enable_persistent_shadow_slot_for_array_alias(
+    ctx: &mut FnCtx<'_>,
+    local_id: u32,
+    init: &Expr,
+) {
+    let Expr::IndexGet { object, .. } = init else {
+        return;
+    };
+    if !matches!(object.as_ref(), Expr::LocalGet(_)) {
+        return;
+    }
+    let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
+        return;
+    };
+    let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
+        return;
+    };
+    if !ctx.persistent_shadow_slots.insert(slot_idx) {
+        return;
+    }
+    let slot_idx_string = slot_idx.to_string();
+    ctx.func.entry_setup_call_void(
+        "js_shadow_slot_bind",
+        &[(I32, &slot_idx_string), (PTR, &local_slot)],
     );
 }
 
@@ -67,6 +106,9 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
         return;
     };
+    if ctx.persistent_shadow_slots.contains(&slot_idx) {
+        return;
+    }
     let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
         return;
     };
@@ -74,6 +116,25 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
         "js_shadow_slot_bind",
         &[(I32, &slot_idx.to_string()), (PTR, &local_slot)],
     );
+}
+
+fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
+    let active =
+        ctx.block()
+            .load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
+    let barrier_needed = ctx.block().icmp_ne(I32, &active, "0");
+    let barrier_idx = ctx.new_block("shadow.root.barrier");
+    let done_idx = ctx.new_block("shadow.root.barrier.done");
+    let barrier_label = ctx.block_label(barrier_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block()
+        .cond_br(&barrier_needed, &barrier_label, &done_label);
+
+    ctx.current_block = barrier_idx;
+    ctx.block()
+        .call_void("js_write_barrier_root_nanbox", &[(I64, value_bits)]);
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
 }
 
 pub(crate) fn emit_shadow_slot_update_for_expr(
@@ -93,14 +154,20 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
         return;
     };
+    if ctx.persistent_shadow_slots.contains(&slot_idx) {
+        if !expr_is_known_non_pointer_shadow_value(ctx, rhs) {
+            let value_bits = ctx.block().bitcast_double_to_i64(value_reg);
+            emit_persistent_shadow_root_barrier(ctx, &value_bits);
+        }
+        return;
+    }
     if expr_is_known_non_pointer_shadow_value(ctx, rhs) {
         emit_shadow_slot_clear(ctx, slot_idx);
     } else {
+        // Every caller has already stored the new value in the local alloca.
+        // `js_shadow_slot_bind` copies that slot into the shadow frame, marks
+        // it active, and runs the root barrier, so a following slot-set call
+        // only repeated the same TLS lookup, copy, and barrier.
         emit_shadow_slot_bind_for_local(ctx, local_id);
-        let v_i64 = ctx.block().bitcast_double_to_i64(value_reg);
-        ctx.block().call_void(
-            "js_shadow_slot_set",
-            &[(I32, &slot_idx.to_string()), (I64, &v_i64)],
-        );
     }
 }
