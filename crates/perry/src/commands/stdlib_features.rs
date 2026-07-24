@@ -36,11 +36,10 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // ── HTTP client (reqwest) ─────────────────────────────────────
         // `http` / `https` / `http2` join the `http-client` umbrella since
         // they bottom out in reqwest just like axios + node-fetch — and
-        // perry-ext-http-server (issue #577) needs the same async-runtime
+        // perry-ext-http (issue #577) needs the same async-runtime
         // bridge for `perry_ffi_spawn_blocking_with_reactor`. The
         // well-known flip swaps perry-stdlib's http.rs for perry-ext-http
-        // (v0.5.571); `http2` flips to the same staticlib via the rlib
-        // dep on perry-ext-http-server. Programs that import `streams`
+        // (v0.5.571); `http2` flips to the same staticlib. Programs that import `streams`
         // should NOT also use the well-known flip — streams stays in
         // perry-stdlib until its own port lands.
         "axios" | "node-fetch" | "http" | "https" | "http2" => &["http-client"],

@@ -180,7 +180,7 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
 
 /// #2533: route a captured / aliased `http`/`https`/`http2` `createServer`
 /// (or the `Server` / `createSecureServer` aliases) back to the
-/// perry-ext-http-server factories. Registered with the runtime via
+/// perry-ext-http factories. Registered with the runtime via
 /// `js_set_native_http_dispatch` under `external-http-server-pump` (enabled
 /// whenever the program imports one of those modules), so we can safely
 /// `extern "C"`-reference the ext-crate symbols — they're guaranteed linked.
@@ -670,7 +670,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
-    // the perry-ext-http-server factories. Only registered when the http ext
+    // the perry-ext-http factories. Only registered when the http ext
     // crate is linked (its symbols are referenced by the dispatcher), so the
     // runtime arm stays null-and-undefined for non-http programs.
     #[cfg(feature = "external-http-server-pump")]

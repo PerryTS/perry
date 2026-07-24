@@ -609,7 +609,7 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += unsafe { crate::tls::js_tls_process_pending() };
     }
 
-    // Process pending HTTP server requests + WS upgrades (perry-ext-http-server).
+    // Process pending HTTP server requests + WS upgrades (perry-ext-http).
     // Closes #604 — pre-fix `js_node_http_server_listen` blocked the
     // main TS thread inside an inner event_loop, so axios.get/etc.
     // after a `server.listen(port, () => resolve())` callback never

@@ -7,13 +7,10 @@
 //!
 //! # Server-side surface (issue #577)
 //!
-//! `perry-ext-http-server` ships the server-side counterpart —
+//! The internal `server` module ships the server-side counterpart —
 //! `http.createServer`, `https.createServer`, `http2.createSecureServer`.
-//! It's pulled in here as an rlib dep so its `js_node_http_*` /
-//! `js_node_https_*` / `js_node_http2_*` symbols flow into
-//! `libperry_ext_http.a`. Don't remove the `extern crate` declaration
-//! after this docblock — it keeps the linker from dead-stripping the
-//! server symbols when no client-side code happens to reference them.
+//! Its `js_node_http_*` / `js_node_https_*` / `js_node_http2_*` symbols
+//! are exported from `libperry_ext_http.a` alongside the client surface.
 //!
 //! # Architecture (mirrors perry-ext-cron + perry-stdlib's http.rs)
 //!
@@ -42,10 +39,10 @@
 //! a v0.6.0 followup that needs a cooperative `spawn_async` surface
 //! on perry-ffi (today's surface is sync-via-blocking-pool only).
 
-extern crate perry_ext_http_server as _server_link;
-
 mod agent;
 pub use agent::*;
+
+pub(crate) mod server;
 
 // Client factory overload normalization (#3226 / #3227 / #3228) —
 // extracted from this file to stay under the 2000-line lint cap.
@@ -1874,8 +1871,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
 #[cfg(test)]
 mod tests;
 // Test-only `perry_ffi_*` async-bridge shims so the lib test links without the
-// host stdlib archive (mirrors perry-ext-net / perry-ext-http-server).
-#[cfg(test)]
+// host stdlib archive (mirrors perry-ext-net / the HTTP server module).
 #[cfg(test)]
 mod test_async_shims;
 
@@ -1885,6 +1881,5 @@ fn _force_link() -> Option<*mut ArrayHeader> {
     None
 }
 
-// #1652 / #4975: linker-retention anchors for the server FFI symbols live
-// in force_link.rs (extracted to keep this file under the 2000-line cap).
+// Retain server exports through release LTO/staticlib emission.
 mod force_link;

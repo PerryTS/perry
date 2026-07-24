@@ -168,9 +168,9 @@ external-zlib-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
 # the well-known flip routes `node:http` / `node:https` / `node:http2`
-# to perry-ext-http (which bundles perry-ext-http-server). Tells
+# to perry-ext-http (which contains the server implementation). Tells
 # perry-stdlib's `js_stdlib_process_pending` and
-# `js_stdlib_has_active_handles` to call into perry-ext-http-server's
+# `js_stdlib_has_active_handles` to call into perry-ext-http's
 # `js_node_http_server_process_pending` / `js_node_http_server_has_active`
 # externs each tick. Without this, the http server's accept-loop
 # tokio task pushes pending requests that nobody drains and the
@@ -360,9 +360,9 @@ rand = "0.8"  # Required by lodash (core module)
 tokio = { version = "1", features = ["full"], optional = true }
 
 # HTTP Server
-hyper = { version = "1.4", features = ["server", "http1", "http2"], optional = true }
-hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"], optional = true }
-http-body-util = { version = "0.1", optional = true }
+hyper = { workspace = true, features = ["server", "http1", "http2"], optional = true }
+hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"], optional = true }
+http-body-util = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 # DashMap is used by the always-on handle registry (`common/handle.rs`),
 # so it must NOT be optional — every minimal-stdlib build needs it.
@@ -376,10 +376,10 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], 
 futures-util = { version = "0.3", optional = true }
 
 # TLS (for net.Socket.upgradeToTLS and tls.connect) — rustls-only, no OpenSSL.
-tokio-rustls = { version = "0.26", optional = true }
-rustls = { version = "0.23", optional = true }
+tokio-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
-rustls-pemfile = { version = "2", optional = true }
+rustls-pemfile = { workspace = true, optional = true }
 
 # Database
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }

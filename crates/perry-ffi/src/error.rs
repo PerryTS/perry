@@ -4,7 +4,7 @@
 //!
 //! # Why
 //!
-//! Wrappers compiled into their own staticlib (e.g. `perry-ext-http-server`)
+//! Wrappers compiled into their own staticlib (e.g. `perry-ext-http`)
 //! cannot depend on `perry-runtime`'s Rust API and must not touch the
 //! runtime's thread-local registries directly: a direct
 //! `is_registered_buffer` / `register_error_code` call from the wrapper's

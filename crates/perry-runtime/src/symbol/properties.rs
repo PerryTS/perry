@@ -134,7 +134,7 @@ pub(crate) fn clear_all_symbol_properties_for_object(obj_key: usize) {
 
 /// #6710: clear every per-handle JS-property side table for a recycled handle
 /// id (the string expando table AND the symbol tables). Called on the MAIN
-/// (JS-owning) thread from perry-ext-http-server just before a recycled
+/// (JS-owning) thread from perry-ext-http just before a recycled
 /// `IncomingMessage`/`ServerResponse` id is handed to a new request's handler,
 /// so no request inherits a prior request's `req.__rid` / `isRSCRequest` /
 /// `NextInternalRequestMeta`. The `handle` id equals `obj_key_from_f64` of the

@@ -111,7 +111,7 @@ views reproduce each crate's category, decision, source path, Rust LOC,
 production dependencies, internal consumers, default membership, and workspace
 lint inheritance. LOC is reported live and is deliberately not committed.
 
-The committed baseline records only structural signals: the 78 reviewed member
+The committed baseline records only structural signals: the 76 reviewed member
 decisions, the default dependency closure, the `perry` CLI closure, and decision
 counts. Any structural change must update the policy intentionally; ordinary
 Rust source edits do not churn the baseline.

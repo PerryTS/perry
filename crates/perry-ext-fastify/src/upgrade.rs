@@ -1,7 +1,7 @@
 //! #1113 — `app.server.on("upgrade", (req, socket, head) => …)` for
 //! HTTP Upgrade requests (WebSocket handshakes) on a fastify app.
 //!
-//! Mirrors perry-ext-http-server's `upgrade.rs` (issue #577 Phase 4),
+//! Mirrors perry-ext-http's `upgrade.rs` (issue #577 Phase 4),
 //! the proven template for bidirectional WebSocket upgrade dispatch.
 //!
 //! # Design
@@ -46,7 +46,7 @@ extern "C" {
 /// `Connection: Upgrade` (case-insensitive contains) and
 /// `Upgrade: websocket` (case-insensitive). Hyper's `headers()`
 /// already lowercases names, so we only normalize values. Identical
-/// to perry-ext-http-server's `is_websocket_upgrade`.
+/// to perry-ext-http's `is_websocket_upgrade`.
 pub(crate) fn is_websocket_upgrade(req: &hyper::Request<hyper::body::Incoming>) -> bool {
     let h = req.headers();
     let connection_ok = h

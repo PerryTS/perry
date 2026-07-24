@@ -248,7 +248,7 @@ pub(crate) mod statics {
 }
 
 /// Backing state for an `net.Server` handle (`net.createServer(...)`).
-/// Mirrors `perry-ext-http-server::HttpServer` in shape but stripped to
+/// Mirrors `perry-ext-http::HttpServer` in shape but stripped to
 /// the raw-TCP surface — no hyper, no request/response channels, just
 /// the accept loop's shutdown sender + bound address. Per-server event
 /// listeners (`'connection'`, `'listening'`, `'close'`, `'error'`) live
@@ -954,7 +954,7 @@ pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
 
 /// `server.address()` — returns a JSON string the TS-side wrapper can
 /// `JSON.parse` into `{ port, address, family }`. Matches the
-/// perry-ext-http-server contract (`js_node_http_server_address_json`).
+/// perry-ext-http contract (`js_node_http_server_address_json`).
 ///
 /// Returns `null` (as a JS string) for an unlistening server.
 ///

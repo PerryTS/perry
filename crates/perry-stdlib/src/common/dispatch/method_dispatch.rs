@@ -507,7 +507,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     // External http-server path (#2153): when `node:http` / `node:https` /
-    // `node:http2` routes through perry-ext-http-server, the HttpServer handle
+    // `node:http2` routes through perry-ext-http, the HttpServer handle
     // returned by `http.createServer(...)` reaches `js_native_call_method` via
     // the small-handle range check above whenever the receiver's static type
     // is `any` (e.g. `const s: any = http.createServer(...); s.listen(0)` or

@@ -25,9 +25,11 @@ use std::time::{Duration, Instant};
 
 use perry_ffi::get_handle;
 
-use crate::request::close_incoming_message;
-use crate::response::ServerResponse;
-use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest, HttpServer};
+use crate::server::request::close_incoming_message;
+use crate::server::response::ServerResponse;
+use crate::server::server::{
+    synthesize_default_response_if_needed, HttpPendingRequest, HttpServer,
+};
 
 /// A request whose handler returned before finishing the response.
 pub(crate) struct InFlightRequest {
@@ -113,7 +115,7 @@ pub(crate) fn reap_in_flight_requests() {
             if !ended {
                 // Streaming backpressure cleared — fire `'drain'` (outside
                 // the lock) so `res.on('drain')` producer loops resume.
-                let ls = crate::response::take_drain_listeners_if_ready(e.response_handle);
+                let ls = crate::server::response::take_drain_listeners_if_ready(e.response_handle);
                 if !ls.is_empty() {
                     drain_listeners.push(ls);
                 }
@@ -127,7 +129,7 @@ pub(crate) fn reap_in_flight_requests() {
                 .and_then(|sr| sr.response_tx.as_ref())
                 .map(|tx| tx.is_closed())
                 .unwrap_or(false)
-                || crate::response::stream_receiver_gone(e.response_handle);
+                || crate::server::response::stream_receiver_gone(e.response_handle);
             let expired = now >= e.deadline;
             if ended || expired || peer_gone {
                 // Only synthesize when we're giving up on a handler
@@ -160,7 +162,7 @@ pub(crate) fn reap_in_flight_requests() {
         });
     }
     for ls in drain_listeners {
-        crate::request::emit_no_arg_to_listeners(&ls);
+        crate::server::request::emit_no_arg_to_listeners(&ls);
     }
     // Finalize outside the lock — `synthesize_default_response_if_needed`
     // and `drop_handle` don't touch `IN_FLIGHT`, but keeping them off the

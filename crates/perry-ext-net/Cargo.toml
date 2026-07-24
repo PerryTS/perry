@@ -20,8 +20,8 @@ tokio = { workspace = true }
 # `&[u8]`). Drops the per-read `Vec<u8>` alloc + memcpy. Already in the
 # lockfile via tokio/rustls, so declaring it pulls nothing new.
 bytes.workspace = true
-tokio-rustls = "0.26"
-rustls = "0.23"
+tokio-rustls.workspace = true
+rustls.workspace = true
 rustls-native-certs = "0.8"
 
 [dev-dependencies]

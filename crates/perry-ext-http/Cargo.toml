@@ -13,12 +13,17 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-# Server-side surface (issue #577) lives in perry-ext-http-server. Pulling
-# it in as an rlib dep makes the `js_node_http_*` / `js_node_https_*` /
-# `js_node_http2_*` symbols flow through into libperry_ext_http.a so a
-# single staticlib registration in well_known_bindings.toml covers
-# both client and server. The crate split keeps the source layered.
-perry-ext-http-server.workspace = true
+# Server-side HTTP/1.1, HTTPS, HTTP/2, and WebSocket upgrade support.
+perry-ext-ws.workspace = true
+perry-ext-net.workspace = true
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
+h2 = "0.4"
+http-body-util.workspace = true
+tokio-rustls.workspace = true
+rustls = { workspace = true, features = ["std", "ring", "tls12"] }
+rustls-pemfile.workspace = true
+tokio-tungstenite = { workspace = true }
 # #2154: Agent argument validation throws `RangeError [ERR_OUT_OF_RANGE]`
 # via `js_throw` + `register_error_code_pub`, which are perry-runtime's
 # Rust-ABI helpers (not perry-ffi's). Stays consistent with perry-stdlib's
@@ -56,6 +61,9 @@ tokio = { workspace = true }
 bytes.workspace = true
 serde_json.workspace = true
 lazy_static.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+socket2.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

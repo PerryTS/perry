@@ -266,7 +266,7 @@ pub(crate) fn build_optimized_libs(
                 // = ["web-fetch"]`, strip the umbrella and re-assert
                 // `web-fetch`: fetch.rs/fetch_blob.rs stay,
                 // http.rs/axios.rs go. The well-known staticlib
-                // (perry-ext-http / perry-ext-http-server) is still
+                // (perry-ext-http) is still
                 // added for the actual node:http surface.
                 if *feat == "http-client" && ctx.uses_fetch {
                     features.remove("http-client");
@@ -377,10 +377,10 @@ pub(crate) fn build_optimized_libs(
                 features.insert("external-fastify-pump");
             }
             // Closes #604 — when the well-known flip routes `node:http` /
-            // `node:https` / `node:http2` to perry-ext-http (which bundles
-            // perry-ext-http-server), activate `external-http-server-pump`
+            // `node:https` / `node:http2` to perry-ext-http, activate
+            // `external-http-server-pump`
             // so perry-stdlib's main-thread pump and active-handles gate
-            // call into perry-ext-http-server's queue each tick. Without
+            // call into perry-ext-http's queue each tick. Without
             // this, the http server's accept-loop tokio task pushes
             // requests that nobody drains, and the program hangs (pre-#604
             // listen() blocked the main thread; post-#604 listen() is
@@ -498,7 +498,7 @@ pub(crate) fn build_optimized_libs(
             // so the link uses the prebuilt full `libperry_stdlib.a`.
             // That full stdlib does NOT carry the `perry-ext-*` host
             // functions — `node:http`'s server lives in perry-ext-http /
-            // perry-ext-http-server, which aren't perry-stdlib deps — so
+            // perry-ext-http, which aren't perry-stdlib deps — so
             // an out-of-box `node:http` server otherwise fails to link
             // with `Undefined symbols: _js_node_http_create_server…`.
             // Resolve the well-known ext staticlibs the program needs

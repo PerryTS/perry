@@ -335,7 +335,7 @@ mod stdlib_pump {
     //
     // perry-stdlib owns the single `STDLIB_PUMP_FN` slot above and drains
     // every in-tree module's pending queue from there. But the
-    // `perry-ext-*` wrapper crates (perry-ext-http-server's request queue,
+    // `perry-ext-*` wrapper crates (perry-ext-http's request queue,
     // perry-ext-http's client response queue, …) are normally drained by
     // `js_stdlib_process_pending`'s `#[cfg(feature = "external-*-pump")]`
     // arms — which are only compiled in when the *workspace* auto-optimize
