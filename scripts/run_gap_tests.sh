@@ -45,13 +45,21 @@ trap 'rm -rf "$WORK"' EXIT
 echo "==> Running gap suite (test-files/test_gap_*.ts) via run_parity_tests.sh --filter test_gap_"
 # run_parity_tests.sh exits 1 when AGGREGATE parity < 80%. We gate on the
 # snapshot diff instead (below), so don't let its aggregate exit abort us.
-set +e
 # Forward extra args (notably --shard N/M) so CI can fan the gap suite out
 # across parallel runners; with no args this is the full serial gap suite.
-./run_parity_tests.sh --filter test_gap_ "$@"
-set -e
-
 REPORT="test-parity/reports/latest.json"
+rm -f "$REPORT"
+if ./run_parity_tests.sh --filter test_gap_ "$@"; then
+  parity_status=0
+else
+  parity_status=$?
+fi
+
+if [[ "$parity_status" -ne 0 && "$parity_status" -ne 1 ]]; then
+  echo "ERROR: run_parity_tests.sh failed with exit status $parity_status" >&2
+  exit "$parity_status"
+fi
+
 if [[ ! -f "$REPORT" ]]; then
   echo "ERROR: parity report not found at $REPORT (did run_parity_tests.sh run?)" >&2
   exit 2
