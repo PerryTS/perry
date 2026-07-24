@@ -29,6 +29,23 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"globSync\"")
 }
 
+fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
+    hir_module.imports.iter().any(|import| {
+        !import.type_only
+            && import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source)
+                == "fs/promises"
+            && import.specifiers.iter().any(|specifier| {
+                matches!(
+                    specifier,
+                    perry_hir::ImportSpecifier::Named { imported, .. } if imported == "glob"
+                )
+            })
+    })
+}
+
 /// Inspect a lowered module and set the optional-feature gates it needs.
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
@@ -140,8 +157,18 @@ pub(super) fn detect_optional_feature_usage(
     // correctness, cost); the goal is zero false negatives. `eval` is
     // non-functional in Perry so it can't create a regex at runtime.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        if debug_hir_uses_regex(&hir_debug) {
+        // Class methods and static initializers live under `classes`, not in
+        // `functions`; include them so a regex/glob use there cannot be
+        // stripped from an auto-optimized build.
+        let hir_debug = format!(
+            "{:?}{:?}{:?}",
+            &hir_module.init, &hir_module.functions, &hir_module.classes
+        );
+        // A named import lowers to an `ExternFuncRef` that carries only its
+        // local binding name. Use the structured import record for provenance
+        // instead of treating every unrelated external named `glob` as
+        // `node:fs/promises.glob`.
+        if debug_hir_uses_regex(&hir_debug) || imports_fs_promises_glob(hir_module) {
             ctx.uses_regex = true;
         }
     }
@@ -346,7 +373,8 @@ pub(super) fn detect_optional_feature_usage(
 
 #[cfg(test)]
 mod tests {
-    use super::debug_hir_uses_regex;
+    use super::{debug_hir_uses_regex, imports_fs_promises_glob};
+    use perry_hir::{Import, ImportSpecifier, Module, ModuleKind};
 
     #[test]
     fn regex_gate_detects_static_and_dynamic_path_matches_glob() {
@@ -356,5 +384,32 @@ mod tests {
         assert!(debug_hir_uses_regex(
             r#"NativeMethodCall { module: String("path.win32"), method: String("matchesGlob"), args: [] }"#
         ));
+    }
+
+    #[test]
+    fn fs_promises_glob_gate_uses_import_provenance() {
+        let mut module = Module::new("entry.ts");
+        module.imports.push(Import {
+            source: "node:fs/promises".to_string(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "glob".to_string(),
+                local: "findFiles".to_string(),
+            }],
+            is_native: true,
+            module_kind: ModuleKind::NativeCompiled,
+            resolved_path: None,
+            type_only: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        assert!(imports_fs_promises_glob(&module));
+
+        module.imports[0].source = "./util".to_string();
+        assert!(
+            !imports_fs_promises_glob(&module),
+            "an unrelated named glob import must not retain the regex engine"
+        );
     }
 }
