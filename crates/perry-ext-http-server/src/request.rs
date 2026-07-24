@@ -249,7 +249,7 @@ pub(crate) fn incoming_http_version_part(handle: i64, minor: bool) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_http_im_headers_json(handle: i64) -> *mut StringHeader {
     let s = get_handle::<IncomingMessage>(handle)
-        .map(|im| combined_headers_json(&im.raw_headers))
+        .map(|im| combined_headers_json(&im.raw_headers, Some(&im.headers)))
         .unwrap_or_else(|| "{}".to_string());
     alloc_string(&s).as_raw()
 }
@@ -282,12 +282,20 @@ fn is_single_value_header(name: &str) -> bool {
     )
 }
 
-/// Build the combined `req.headers` JSON object from the raw
-/// `(name, value)` pairs, applying Node's `matchKnownFields` rules
-/// (#5079): `set-cookie` → string array (even for one cookie),
-/// single-value fields keep-first, everything else joined with `, `.
-/// Keys are lower-cased to match Node's `headers` view.
-fn combined_headers_json(raw: &[(String, String)]) -> String {
+/// Build the combined `req.headers` JSON object from the raw `(name, value)`
+/// pairs, applying Node's `matchKnownFields` rules (#5079): `set-cookie` →
+/// string array (even for one cookie), single-value fields keep-first,
+/// everything else joined with `, `. Keys are lower-cased to match Node's
+/// `headers` view.
+///
+/// HTTP/2 pseudo-headers are synthesized into `IncomingMessage::headers` but
+/// intentionally omitted from `rawHeaders`. Add entries missing from the raw
+/// view after combining so `req.headers[":path"]` and its peers remain visible
+/// without leaking them into `rawHeaders`.
+fn combined_headers_json(
+    raw: &[(String, String)],
+    supplemental: Option<&HashMap<String, String>>,
+) -> String {
     use serde_json::Value;
     // Key order in the serialized object is not significant here (the
     // previous `HashMap` serialization was already unordered); what
@@ -317,6 +325,12 @@ fn combined_headers_json(raw: &[(String, String)]) -> String {
             _ => {
                 map.insert(key, Value::String(value.clone()));
             }
+        }
+    }
+    if let Some(supplemental) = supplemental {
+        for (name, value) in supplemental {
+            map.entry(name.to_ascii_lowercase())
+                .or_insert_with(|| Value::String(value.clone()));
         }
     }
     serde_json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
@@ -1124,6 +1138,21 @@ mod add_header_line_tests {
         assert_eq!(kind("Cookie"), (2, "cookie".to_string()));
         assert_eq!(kind("Set-Cookie"), (3, "set-cookie".to_string()));
         assert_eq!(kind("set-cookie"), (3, "set-cookie".to_string()));
+    }
+
+    #[test]
+    fn combined_headers_adds_http2_pseudo_headers_without_overwriting_raw_values() {
+        let raw = vec![("X-Test".to_string(), "raw".to_string())];
+        let supplemental = HashMap::from([
+            (":method".to_string(), "GET".to_string()),
+            (":path".to_string(), "/probe?x=1".to_string()),
+            ("x-test".to_string(), "supplemental".to_string()),
+        ]);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&combined_headers_json(&raw, Some(&supplemental))).unwrap();
+        assert_eq!(parsed["x-test"], "raw");
+        assert_eq!(parsed[":method"], "GET");
+        assert_eq!(parsed[":path"], "/probe?x=1");
     }
 
     #[test]

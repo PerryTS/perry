@@ -388,6 +388,8 @@ pub(super) fn compile_method(
         native_facts: &native_facts,
         locals,
         local_types,
+        const_string_locals: std::collections::HashMap::new(),
+        const_number_locals: std::collections::HashMap::new(),
         current_block: 0,
         discard_expr_value: false,
         func_names,
@@ -460,6 +462,7 @@ pub(super) fn compile_method(
         integer_locals: native_facts.integer_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
+        persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
@@ -981,7 +984,7 @@ pub(super) fn compile_method(
     }
     for ic_name in &ic_globals {
         llmod.add_raw_global(format!(
-            "@{} = private global [2 x i64] zeroinitializer",
+            "@{} = private global [8 x i64] zeroinitializer",
             ic_name
         ));
     }
@@ -1382,6 +1385,8 @@ pub(super) fn compile_static_method(
         native_facts: &native_facts,
         locals,
         local_types,
+        const_string_locals: std::collections::HashMap::new(),
+        const_number_locals: std::collections::HashMap::new(),
         current_block: 0,
         discard_expr_value: false,
         func_names,
@@ -1458,6 +1463,7 @@ pub(super) fn compile_static_method(
         integer_locals: native_facts.integer_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
+        persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
@@ -1587,7 +1593,7 @@ pub(super) fn compile_static_method(
     }
     for ic_name in &ic_globals {
         llmod.add_raw_global(format!(
-            "@{} = private global [2 x i64] zeroinitializer",
+            "@{} = private global [8 x i64] zeroinitializer",
             ic_name
         ));
     }

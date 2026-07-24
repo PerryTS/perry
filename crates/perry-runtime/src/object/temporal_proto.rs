@@ -91,23 +91,11 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str) {
         super::native_module::set_bound_native_closure_name(closure, &format!("get {name}"));
         super::native_module::set_builtin_closure_length(closure as usize, 0);
         super::native_module::set_builtin_closure_non_constructable(closure as usize);
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        super::object_ops::ensure_key_in_keys_array(proto_obj, key);
         let getter_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
+        // #6809: Temporal cell reads use the brand dispatcher and direct
+        // prototype reads use the per-owner descriptor marker installed by
+        // this helper. Keep startup gate-neutral.
         super::object_ops::install_builtin_getter(proto_obj, name, getter_bits);
-        super::set_accessor_descriptor(
-            proto_obj as usize,
-            name.to_string(),
-            super::AccessorDescriptor {
-                get: getter_bits,
-                set: 0,
-            },
-        );
-        super::set_property_attrs(
-            proto_obj as usize,
-            name.to_string(),
-            super::PropertyAttrs::new(true, false, true),
-        );
         super::set_builtin_property_attrs(
             closure as usize,
             "name".to_string(),

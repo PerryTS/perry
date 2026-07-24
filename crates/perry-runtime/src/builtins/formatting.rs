@@ -1409,7 +1409,15 @@ unsafe fn format_object_as_json(
             }
         }
 
-        let is_enumerable = if descriptors_in_use {
+        // `String` exotic objects always have a non-enumerable own `length`.
+        // Its descriptor is installed through the gate-neutral built-in
+        // descriptor path, so the process-wide user-descriptor fast-path flag
+        // can legitimately still be false. Do not let that optimization make
+        // util.inspect print `length` as an ordinary enumerable property.
+        let is_boxed_string_length = boxed_string_char_count.is_some() && key_str == "length";
+        let is_enumerable = if is_boxed_string_length {
+            false
+        } else if descriptors_in_use {
             crate::object::get_property_attrs(obj_addr, &key_str)
                 .map(|a| a.enumerable())
                 .unwrap_or(true)

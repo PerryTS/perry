@@ -213,6 +213,38 @@ fn top_level_loop_shadow_module() -> Module {
     module
 }
 
+fn persistent_index_alias_shadow_module() -> Module {
+    let mut module = top_level_shadow_module("entry_persistent_index_alias_shadow.ts");
+    module.init = vec![
+        Stmt::Let {
+            id: 21,
+            name: "items".to_string(),
+            ty: Type::Array(Box::new(Type::Any)),
+            mutable: false,
+            init: Some(Expr::Array(vec![Expr::MapNew])),
+        },
+        Stmt::For {
+            init: None,
+            condition: Some(Expr::Bool(false)),
+            update: None,
+            body: vec![
+                Stmt::Let {
+                    id: 22,
+                    name: "item".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(21)),
+                        index: Box::new(Expr::Integer(0)),
+                    }),
+                },
+                Stmt::Expr(Expr::LocalGet(22)),
+            ],
+        },
+    ];
+    module
+}
+
 fn flat_const_row_alias_shadow_module() -> Module {
     Module {
         name: "entry_flat_const_shadow.ts".to_string(),
@@ -545,8 +577,8 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
     );
 
     let dead_write = ir
-        .find("call void @js_shadow_slot_set(i32 0, i64 %")
-        .expect("dead array let should write its pointer to shadow slot 0");
+        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+        .expect("dead array let should bind its pointer local to shadow slot 0");
     let dead_clear = ir[dead_write..]
         .find("call void @js_shadow_slot_set(i32 0, i64 0)")
         .map(|offset| dead_write + offset)
@@ -612,8 +644,8 @@ fn entry_module_top_level_shadow_slots_update_and_clear() {
     );
 
     let dead_write = main_ir
-        .find("call void @js_shadow_slot_set(i32 0, i64 %")
-        .expect("top-level pointer let should write its pointer to shadow slot 0");
+        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+        .expect("top-level pointer let should bind its pointer local to shadow slot 0");
     let dead_clear = main_ir[dead_write..]
         .find("call void @js_shadow_slot_set(i32 0, i64 0)")
         .map(|offset| dead_write + offset)
@@ -657,8 +689,8 @@ fn non_entry_module_init_body_gets_post_init_shadow_frame() {
     assert!(strings_init < frame_push);
     assert!(frame_push < user_alloc);
     assert!(
-        init_ir.contains("call void @js_shadow_slot_set(i32 0, i64 %"),
-        "non-entry top-level pointer local should update its shadow slot"
+        init_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
+        "non-entry top-level pointer local should bind its shadow slot"
     );
     assert!(
         init_ir.contains("call void @js_shadow_frame_pop"),
@@ -674,8 +706,8 @@ fn top_level_loop_body_shadow_slots_clear_each_iteration() {
     let main_ir = function_slice(&ir, "main");
 
     let body_write = main_ir
-        .find("call void @js_shadow_slot_set(i32 0, i64 %")
-        .expect("loop-body pointer local should write its shadow slot");
+        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+        .expect("loop-body pointer local should bind its shadow slot");
     let body_clear = main_ir[body_write..]
         .find("call void @js_shadow_slot_set(i32 0, i64 0)")
         .map(|offset| body_write + offset)
@@ -687,6 +719,41 @@ fn top_level_loop_body_shadow_slots_clear_each_iteration() {
 
     assert!(body_write < body_clear);
     assert!(body_clear < loop_backedge);
+    assert!(
+        !main_ir[body_write..body_clear].contains("call void @js_shadow_slot_set(i32 0, i64 %"),
+        "binding the initialized local already copies and barriers its value"
+    );
+}
+
+#[test]
+fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
+    let ir = String::from_utf8(
+        compile_module(&persistent_index_alias_shadow_module(), entry_opts()).unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let main_ir = function_slice(&ir, "main");
+
+    assert_eq!(
+        main_ir
+            .matches("call void @js_shadow_slot_bind(i32 1, ptr %")
+            .count(),
+        1,
+        "loop-local index alias should bind its entry-hoisted alloca once"
+    );
+    assert!(
+        !main_ir.contains("call void @js_shadow_slot_set(i32 1, i64 0)"),
+        "persistent index alias must not be cleared on each backedge"
+    );
+    assert!(
+        main_ir.contains("call void @js_write_barrier_root_nanbox(i64 %"),
+        "pointer-capable alias updates must still shade a newly installed root"
+    );
+    assert!(
+        main_ir.contains(
+            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4"
+        ) && main_ir.contains("shadow.root.barrier"),
+        "an inactive incremental collector should skip the TLS-backed root barrier call"
+    );
 }
 
 #[test]
@@ -722,9 +789,9 @@ fn reassigned_any_from_number_to_pointer_reserves_and_updates_shadow_slot() {
         .find("call i64 @js_array_alloc")
         .expect("pointer reassignment should allocate an array");
     let slot_update = fn_ir[array_alloc..]
-        .find("call void @js_shadow_slot_set(i32 0, i64 %")
+        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
         .map(|offset| array_alloc + offset)
-        .expect("pointer reassignment should update the reserved shadow slot");
+        .expect("pointer reassignment should bind the reserved shadow slot");
     assert!(array_alloc < slot_update);
 }
 
@@ -744,8 +811,10 @@ fn mixed_any_writes_keep_alias_shadow_slots_precise() {
     );
     for slot_idx in 0..3 {
         assert!(
-            fn_ir.contains(&format!("call void @js_shadow_slot_set(i32 {slot_idx}")),
-            "expected writes or clears for shadow slot {slot_idx}:\n{fn_ir}"
+            fn_ir.contains(&format!(
+                "call void @js_shadow_slot_bind(i32 {slot_idx}, ptr %"
+            )) || fn_ir.contains(&format!("call void @js_shadow_slot_set(i32 {slot_idx}")),
+            "expected binds or clears for shadow slot {slot_idx}:\n{fn_ir}"
         );
     }
 }

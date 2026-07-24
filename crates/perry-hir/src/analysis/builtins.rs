@@ -183,9 +183,8 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
 /// (`Array.length === 1`, `Date.length === 7`, …). Folding the read here at
 /// lowering time yields the spec constant directly.
 ///
-/// Returns `None` for names that are *not* standard constructors with a
-/// well-defined `.length` (`globalThis`, `process`, `console`, `Buffer`,
-/// `TextEncoderStream`, `TextDecoderStream`) — those keep their existing
+/// Returns `None` for names that are *not* constructors tracked by this
+/// table (`globalThis`, `process`, `console`, …) — those keep their existing
 /// lowering so the read falls through to the runtime unchanged.
 ///
 /// Only consulted when the receiver lowered to bare `GlobalGet(0)` (no local
@@ -198,7 +197,8 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
             1
         }
         "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
-        | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage" => 0,
+        | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage"
+        | "FormData" => 0,
         "CompressionStream" | "DecompressionStream" => 1,
         "RegExp" | "Proxy" | "File" => 2,
         "BroadcastChannel" => 1,
@@ -209,6 +209,16 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
         _ => return None,
     };
     Some(len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builtin_constructor_length;
+
+    #[test]
+    fn form_data_constructor_has_zero_declared_parameters() {
+        assert_eq!(builtin_constructor_length("FormData"), Some(0));
+    }
 }
 
 /// Spec-defined `.length` for callable global function values that lower as

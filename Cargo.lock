@@ -6118,6 +6118,7 @@ dependencies = [
  "regex",
  "resolv-conf",
  "ryu",
+ "serde",
  "serde_json",
  "socket2",
  "taffy",

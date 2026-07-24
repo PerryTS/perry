@@ -1123,6 +1123,11 @@ pub(crate) fn lower_let(
     }
     ctx.locals.insert(id, slot.clone());
     ctx.local_types.insert(id, refined_ty.clone());
+    if !mutable {
+        if let Some(init_expr) = init {
+            crate::expr::enable_persistent_shadow_slot_for_array_alias(ctx, id, init_expr);
+        }
+    }
     // Int32 specialization (issue #48): if this local qualifies as
     // integer-valued (all writes are `| 0` / `>>> 0` / bitwise / int
     // literal / ++/--), allocate a parallel i32 slot. Update/LocalSet
@@ -1528,6 +1533,18 @@ pub(crate) fn lower_let(
         // of TAG_UNDEFINED (a NaN that fails all numeric comparisons).
         let lit = crate::nanbox::double_literal(*cv);
         ctx.block().store(DOUBLE, &lit, &slot);
+    }
+    if !mutable {
+        if let Some(perry_hir::Expr::String(value)) = init {
+            ctx.const_string_locals.insert(id, value.clone());
+        }
+        if let Some(value) = init.and_then(|expr| match expr {
+            perry_hir::Expr::Integer(value) => Some(*value as f64),
+            perry_hir::Expr::Number(value) if value.is_finite() => Some(*value),
+            _ => None,
+        }) {
+            ctx.const_number_locals.insert(id, value);
+        }
     }
     Ok(())
 }

@@ -675,6 +675,8 @@ pub(super) fn compile_module_entry(
             native_facts: &main_native_facts,
             locals: HashMap::new(),
             local_types: init_local_types,
+            const_string_locals: HashMap::new(),
+            const_number_locals: HashMap::new(),
             current_block: 0,
             discard_expr_value: false,
             func_names,
@@ -747,6 +749,7 @@ pub(super) fn compile_module_entry(
             integer_locals: main_native_facts.integer_locals(),
             unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slot_map: main_shadow_slot_map,
+            persistent_shadow_slots: std::collections::HashSet::new(),
             shadow_slot_clears_after_stmt: main_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
@@ -1108,7 +1111,7 @@ pub(super) fn compile_module_entry(
         }
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [2 x i64] zeroinitializer",
+                "@{} = private global [8 x i64] zeroinitializer",
                 ic_name
             ));
         }
@@ -1275,6 +1278,8 @@ pub(super) fn compile_module_entry(
             native_facts: &init_native_facts,
             locals: HashMap::new(),
             local_types: HashMap::new(),
+            const_string_locals: HashMap::new(),
+            const_number_locals: HashMap::new(),
             current_block: 0,
             discard_expr_value: false,
             func_names,
@@ -1347,6 +1352,7 @@ pub(super) fn compile_module_entry(
             integer_locals: init_native_facts.integer_locals(),
             unsigned_i32_locals: init_native_facts.unsigned_i32_locals(),
             shadow_slot_map: init_shadow_slot_map,
+            persistent_shadow_slots: std::collections::HashSet::new(),
             shadow_slot_clears_after_stmt: init_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
@@ -1504,7 +1510,7 @@ pub(super) fn compile_module_entry(
         // three symbols must be defined exactly once per shared library.
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [2 x i64] zeroinitializer",
+                "@{} = private global [8 x i64] zeroinitializer",
                 ic_name
             ));
         }

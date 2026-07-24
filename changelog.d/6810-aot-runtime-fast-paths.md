@@ -1,0 +1,1 @@
+fix(codegen/runtime): validate single-candidate dynamic imports after loader hooks, harden GC address classification, add transactional mixed-array numeric range updates, admit safely guarded packed numeric store loops, and avoid allocating a duplicate JSON tree during syntax validation.

@@ -77,8 +77,8 @@ pub(crate) use pump::{
 };
 pub(crate) use session::{
     h2_listening_server_for_authority, local_client_connect_ready, local_server_handle_for_client,
-    mark_server_sessions_closed, mark_session_closed, parse_headers_object,
-    register_server_session, start_client_request,
+    local_server_session_event_ready, mark_server_sessions_closed, mark_session_closed,
+    parse_headers_object, register_server_session, start_client_request,
 };
 
 // `handle_h2_request` is consumed by `js_node_http2_server_listen` below.
@@ -126,7 +126,13 @@ pub struct Http2SecureServer {
 
 pub struct Http2SessionHandle {
     pub server_handle: i64,
+    /// Client-side local TCP port / server-side peer TCP port. A loopback
+    /// client reserves and records its local port before connecting, so the
+    /// two independently-created session handles can be paired without
+    /// relying on global event order.
+    pub connection_port: u16,
     pub session_event_emitted: bool,
+    pub connect_event_emitted: bool,
     pub session_type: i32,
     pub connected: bool,
     pub encrypted: bool,
@@ -541,7 +547,8 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 tokio::spawn(async move {
-                                    let session_handle = register_server_session(server_handle);
+                                    let session_handle =
+                                        register_server_session(server_handle, peer);
                                     match acceptor {
                                         Some(acceptor) => {
                                             let tls_stream = match acceptor.accept(stream).await {
