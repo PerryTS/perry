@@ -472,6 +472,13 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
     }
     // Function length is an own intrinsic property.
     if prop == "length" && !closure_is_key_deleted(ptr, "length") {
+        let value = crate::value::js_nanbox_pointer(ptr as i64);
+        if let Some(arity) = unsafe { crate::object::bound_native_callable_value_arity(value) } {
+            return arity as f64;
+        }
+        if let Some(length) = crate::object::builtin_closure_length(ptr) {
+            return length as f64;
+        }
         return crate::closure::closure_length(ptr as *const ClosureHeader).unwrap_or(0) as f64;
     }
     // #36 / #321: own prop miss — walk the closure's static prototype chain

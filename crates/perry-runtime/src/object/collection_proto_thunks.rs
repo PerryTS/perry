@@ -234,17 +234,20 @@ fn install_collection_size_getter(proto_obj: *mut ObjectHeader, name: &str, func
         super::native_module::set_builtin_closure_length(closure as usize, 0);
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         super::object_ops::ensure_key_in_keys_array(proto_obj, key);
-        super::set_accessor_descriptor(
+        // #6809: gate-neutral BUILTIN install. `.size` reads on live Map/Set
+        // receivers are gc-type-routed inside the generic getter (they never
+        // dispatch through the gated accessor tables), so this entry exists
+        // for reflection only — and this installer runs inside
+        // `populate_global_this_builtins`, where the user-install variant
+        // flipped the process-wide descriptor gates at startup for every
+        // program touching a builtin global.
+        super::set_builtin_accessor_descriptor(
             proto_obj as usize,
             name.to_string(),
             super::AccessorDescriptor {
                 get: crate::value::js_nanbox_pointer(closure as i64).to_bits(),
                 set: 0,
             },
-        );
-        super::set_property_attrs(
-            proto_obj as usize,
-            name.to_string(),
             super::PropertyAttrs::new(true, false, true),
         );
         super::set_builtin_property_attrs(

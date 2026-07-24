@@ -19,8 +19,9 @@ use super::{
     array_kind_fact, buffer_access_materialization_reason, emit_typed_feedback_register_site,
     expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_load, lower_expr,
     lower_expr_as_i32, lower_typed_array_load, materialize_js_value, raw_f64_layout_fact,
-    try_lower_flat_const_index_get, unbox_str_handle, unbox_to_i64, BufferAccessSpec, FnCtx,
-    PackedF64LoopFact, TypedFeedbackContract, TypedFeedbackKind,
+    try_lower_flat_const_index_get, typed_feedback_emission_enabled, unbox_str_handle,
+    unbox_to_i64, BufferAccessSpec, FnCtx, PackedF64LoopFact, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -345,26 +346,94 @@ fn lower_guarded_array_index_get(
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let guard_ok = {
-        let blk = ctx.block();
-        let guard_fn = if require_numeric_layout {
-            "js_typed_feedback_numeric_array_index_get_guard"
-        } else {
-            "js_typed_feedback_plain_array_index_get_guard"
+    if !require_numeric_layout && !typed_feedback_emission_enabled() {
+        // Normal builds do not collect feedback. Inline the plain-array
+        // structural guard instead of paying an out-of-line call merely to
+        // rediscover the same header facts before the direct slot load below.
+        // Prototype-chain invalidators are summarized by one sticky runtime
+        // byte; per-array descriptors and forwarding remain receiver-local.
+        let deref_idx = ctx.new_block(&format!("{}.guard.deref", block_prefix));
+        let deref_label = ctx.block_label(deref_idx);
+        {
+            let blk = ctx.block();
+            let arr_bits = blk.bitcast_double_to_i64(arr_box);
+            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+            let tag = blk.lshr(I64, &arr_bits, "48");
+            let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
+            let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
+            let heap_candidate = blk.and(I1, &is_pointer, &above_handle_band);
+            blk.cond_br(&heap_candidate, &deref_label, &fallback_label);
+        }
+
+        ctx.current_block = deref_idx;
+        {
+            let blk = ctx.block();
+            let arr_bits = blk.bitcast_double_to_i64(arr_box);
+            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+
+            let gc_type_addr = blk.sub(I64, &arr_handle, "8");
+            let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+            let gc_type = blk.load(I8, &gc_type_ptr);
+            let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+
+            let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
+            let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
+            let gc_flags = blk.load(I8, &gc_flags_ptr);
+            let forwarded_bits = blk.and(I8, &gc_flags, "128");
+            let not_forwarded = blk.icmp_eq(I8, &forwarded_bits, "0");
+
+            let reserved_addr = blk.sub(I64, &arr_handle, "6");
+            let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+            let reserved = blk.load(I16, &reserved_ptr);
+            let descriptor_bits = blk.and(I16, &reserved, "1024");
+            let no_descriptors = blk.icmp_eq(I16, &descriptor_bits, "0");
+
+            let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+            let default_prototype_chain = blk.icmp_eq(I8, &invalidated, "0");
+
+            let arr_ptr = blk.inttoptr(I64, &arr_handle);
+            let length = blk.load(I32, &arr_ptr);
+            let capacity_ptr = blk.gep(I8, &arr_ptr, &[(I64, "4")]);
+            let capacity = blk.load(I32, &capacity_ptr);
+            let index_nonnegative = blk.icmp_slt(I32, idx_i32, "0");
+            let index_nonnegative = blk.icmp_eq(I1, &index_nonnegative, "false");
+            let index_in_bounds = blk.icmp_ult(I32, idx_i32, &length);
+            let length_sane = blk.icmp_ule(I32, &length, "16000000");
+            let capacity_sane = blk.icmp_ule(I32, &capacity, "16000000");
+            let length_within_capacity = blk.icmp_ule(I32, &length, &capacity);
+
+            let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
+            guard_ok = blk.and(I1, &guard_ok, &no_descriptors);
+            guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
+            guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
+            guard_ok = blk.and(I1, &guard_ok, &index_in_bounds);
+            guard_ok = blk.and(I1, &guard_ok, &length_sane);
+            guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
+            guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
+            blk.cond_br(&guard_ok, &fast_label, &fallback_label);
+        }
+    } else {
+        let guard_ok = {
+            let blk = ctx.block();
+            let guard_fn = if require_numeric_layout {
+                "js_typed_feedback_numeric_array_index_get_guard"
+            } else {
+                "js_typed_feedback_plain_array_index_get_guard"
+            };
+            let guard_i32 = blk.call(
+                I32,
+                guard_fn,
+                &[
+                    (I64, &feedback_site_id),
+                    (DOUBLE, arr_box),
+                    (I32, idx_i32),
+                    (I32, "1"),
+                ],
+            );
+            blk.icmp_ne(I32, &guard_i32, "0")
         };
-        let guard_i32 = blk.call(
-            I32,
-            guard_fn,
-            &[
-                (I64, &feedback_site_id),
-                (DOUBLE, arr_box),
-                (I32, idx_i32),
-                (I32, "1"),
-            ],
-        );
-        blk.icmp_ne(I32, &guard_i32, "0")
-    };
-    ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+        ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+    }
 
     ctx.current_block = fallback_idx;
     // Materialize the f64 index only here (cold path) so the int→fp conversion

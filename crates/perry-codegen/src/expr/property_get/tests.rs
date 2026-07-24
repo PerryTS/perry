@@ -1,9 +1,10 @@
-//! #5247 — cargo-test-visible coverage for the property-read-on-nullish source
-//! location. The integration twin (`crates/perry/tests/
+//! Cargo-test-visible property-get codegen regressions.
+//!
+//! #5247's integration twin (`crates/perry/tests/
 //! issue_5247_property_read_source_location.rs`) compiles + runs a real program
-//! and only executes on nightly/tag workflows; this unit test asserts the
-//! codegen contract directly on the emitted LLVM IR so it runs on every PR
-//! (#5960 guideline).
+//! and only executes on nightly/tag workflows; the tests here assert codegen
+//! contracts directly on emitted LLVM IR so they run on every PR (#5960
+//! guideline).
 //!
 //! Contract: a general `Expr::PropertyGet` carrying a non-zero `byte_offset`
 //! emits a `js_set_call_location` call in `lower_generic_property_get` under a
@@ -118,5 +119,30 @@ fn no_call_location_without_debug_symbols() {
     assert!(
         !ir.contains("call void @js_set_call_location"),
         "no js_set_call_location CALL should be emitted without --debug-symbols:\n{ir}"
+    );
+}
+
+#[test]
+fn fs_parent_promises_property_installs_before_resolution() {
+    let mut module = Module::new("fs_parent_promises_property.ts");
+    module.init = vec![Stmt::Return(Some(Expr::PropertyGet {
+        object: Box::new(Expr::NativeModuleRef("fs".to_string())),
+        property: "promises".to_string(),
+        byte_offset: 0,
+    }))];
+
+    let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    let install = ir
+        .find("call void @js_node_submod_install_fs_promises()")
+        .unwrap_or_else(|| panic!("fs.promises must emit its submodule installer:\n{ir}"));
+    let resolve = ir
+        .find("call double @js_native_module_property_by_name")
+        .unwrap_or_else(|| {
+            panic!("fs.promises must use the native-module property resolver:\n{ir}")
+        });
+    assert!(
+        install < resolve,
+        "fs.promises submodule installation must precede property resolution:\n{ir}"
     );
 }

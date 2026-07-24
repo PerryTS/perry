@@ -34,9 +34,8 @@
 //!
 //! Per-OBJECT conditions (frozen/sealed/no-extend, own descriptors,
 //! per-instance `setPrototypeOf` override, null-proto) are NOT part of the
-//! verdict — the caller checks those from header flags before honoring a hit
-//! (see `OBJ_FLAG_PROTO_OVERRIDE` / `OBJ_FLAG_NULL_PROTO` gating at the call
-//! site).
+//! verdict — the caller checks header flags plus the ObjectMeta prototype-
+//! override bit before honoring a hit.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

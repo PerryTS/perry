@@ -245,3 +245,76 @@ console.log("closure-again os:", typeof os2.homedir);
     assert_eq!(stderr, "");
     assert_eq!(rc, 0);
 }
+
+/// A one-candidate AOT set is not proof that the runtime value matches that
+/// candidate. TypeScript types are erased, so a cast (or untyped JS caller)
+/// can pass a different specifier. Perry must reject that value instead of
+/// silently initializing the sole compiled target.
+#[test]
+fn single_candidate_dynamic_import_rejects_runtime_mismatch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.ts"), "export const identity = \"A\";\n")
+        .expect("write a.ts");
+    std::fs::write(dir.path().join("b.ts"), "export const identity = \"B\";\n")
+        .expect("write b.ts");
+
+    let (stdout, stderr, rc) = compile_and_run(
+        dir.path(),
+        r#"
+async function load(specifier: "./a.ts") {
+  return import(specifier);
+}
+
+try {
+  const mod = await load("./b.ts" as any);
+  console.log("WRONG_MODULE:" + mod.identity);
+} catch (e: any) {
+  console.log("caught:" + e.code);
+}
+"#,
+    );
+    assert_eq!(stdout, "caught:ERR_MODULE_NOT_FOUND\n");
+    assert_eq!(stderr, "");
+    assert_eq!(rc, 0);
+}
+
+/// Synchronous module hooks can rewrite a statically-known specifier. A
+/// redirected path outside this import site's AOT candidate set cannot be
+/// loaded by Perry, but it must reach the fallback and reject descriptively;
+/// loading the pre-hook target would be silent wrong-code.
+#[test]
+fn single_candidate_dynamic_import_honors_hook_redirect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.ts"), "export const identity = \"A\";\n")
+        .expect("write a.ts");
+    std::fs::write(dir.path().join("b.ts"), "export const identity = \"B\";\n")
+        .expect("write b.ts");
+
+    let (stdout, stderr, rc) = compile_and_run(
+        dir.path(),
+        r#"
+import { registerHooks } from "node:module";
+
+const handle = registerHooks({
+  resolve(specifier: string, context: any, nextResolve: Function) {
+    if (specifier === "./a.ts") {
+      return { url: "./b.ts", shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+try {
+  const mod = await import("./a.ts");
+  console.log("WRONG_MODULE:" + mod.identity);
+} catch (e: any) {
+  console.log("caught:" + e.code);
+} finally {
+  handle.deregister();
+}
+"#,
+    );
+    assert_eq!(stdout, "caught:ERR_MODULE_NOT_FOUND\n");
+    assert_eq!(stderr, "");
+    assert_eq!(rc, 0);
+}

@@ -52,6 +52,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             timeout: None,
             type_of_service: 0,
             server_id: None,
+            server_connection_active: false,
         },
     );
     statics::listeners()

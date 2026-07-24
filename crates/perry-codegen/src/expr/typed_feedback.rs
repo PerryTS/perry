@@ -246,7 +246,7 @@ fn emit_typed_feedback_bytes_global(
 /// build (`PERRY_TYPED_FEEDBACK=1 perry app.ts -o app && ./app`, env inherited
 /// by the run) emits and uses it. The site-id is still allocated and returned
 /// so the shape *guard* call is unchanged — guards stay correct either way.
-fn typed_feedback_emission_enabled() -> bool {
+pub(crate) fn typed_feedback_emission_enabled() -> bool {
     // Read fresh (not cached) so tests that toggle the env per-case observe the
     // change. At compile time this is a cheap getenv per property-access site.
     std::env::var_os("PERRY_TYPED_FEEDBACK").is_some()

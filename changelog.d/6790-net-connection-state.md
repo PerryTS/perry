@@ -1,0 +1,1 @@
+Fixed `node:net` loopback connection event ordering and `Server#getConnections()` visibility while preserving `maxConnections` admission accounting and buffering accepted data until server listeners are installed.

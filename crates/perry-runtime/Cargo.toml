@@ -191,6 +191,7 @@ perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 # current-system-zone lookup used by Temporal.Now.*ISO() with no argument.
 temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data", "sys-local"], optional = true }
 
+serde.workspace = true
 serde_json.workspace = true
 unicode-normalization = { version = "0.1", optional = true }
 # #4877: extended grapheme-cluster / word / sentence segmentation backing

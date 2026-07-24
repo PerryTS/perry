@@ -854,6 +854,27 @@ fn wide_object_index_reads_and_descriptor_writes() {
     }
 }
 
+#[test]
+fn sloppy_put_value_rejects_disposable_stack_getter_without_own_shadow() {
+    unsafe {
+        let stack = crate::disposable::js_disposable_stack_new();
+        let key = crate::string::js_string_from_bytes(b"disposed".as_ptr(), 8);
+        let stack_value = crate::value::js_nanbox_pointer(stack as i64);
+        let key_value = f64::from_bits(JSValue::string_ptr(key).bits());
+
+        crate::proxy::js_put_value_set(stack_value, key_value, 1.0, stack_value, 0);
+
+        assert_eq!(
+            crate::disposable::js_disposable_stack_disposed(stack).to_bits(),
+            crate::value::TAG_FALSE
+        );
+        assert!(
+            !own_key_present(stack, key),
+            "a sloppy write to the inherited getter-only accessor must be a silent no-op"
+        );
+    }
+}
+
 /// #5736: `own_key_present` on a wide object (≥257 keys — e.g. a barrel
 /// `export *` namespace) must use the O(1) wide-key index rather than an O(n)
 /// keys_array scan, so `Object.values`/`Object.entries` (which re-check every

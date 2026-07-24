@@ -155,21 +155,11 @@ fn install_disposed_getter(proto_obj: *mut ObjectHeader, func_ptr: *const u8) {
         super::native_module::set_bound_native_closure_name(closure, "get disposed");
         super::native_module::set_builtin_closure_length(closure as usize, 0);
         let getter_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
-        let key = crate::string::js_string_from_bytes(b"disposed".as_ptr(), 8);
-        super::object_ops::ensure_key_in_keys_array(proto_obj, key);
-        super::set_accessor_descriptor(
-            proto_obj as usize,
-            "disposed".to_string(),
-            super::AccessorDescriptor {
-                get: getter_bits,
-                set: 0,
-            },
-        );
-        super::set_property_attrs(
-            proto_obj as usize,
-            "disposed".to_string(),
-            super::PropertyAttrs::new(true, false, true),
-        );
+        // #6809: reads have a dedicated native-instance route, while direct
+        // prototype reads use the per-owner descriptor flag. Keep startup
+        // gate-neutral so this builtin accessor does not poison every dynamic
+        // object write in the process.
+        super::object_ops::install_builtin_getter(proto_obj, "disposed", getter_bits);
     }
 }
 

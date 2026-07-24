@@ -28,7 +28,7 @@ mod generic_dispatch;
 mod globalget;
 mod helpers;
 #[cfg(test)]
-mod nullish_read_location_tests;
+mod tests;
 
 pub(crate) use generic_dispatch::lower_generic_property_get;
 pub(crate) use globalget::lower_globalget_property;
@@ -539,6 +539,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // handlers alive against the auto-optimize dead-strip.
                 if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
                     ctx.block().call_void(install_sym, &[]);
+                }
+                // `fs.promises` is backed by the `fs_promises` submodule
+                // registry, not the parent fs dispatch bucket. Direct
+                // `node:fs/promises` imports emit their submodule installer at
+                // the import site, but a parent-property read has no such
+                // site. Install the precise submodule here before
+                // `js_native_module_property_by_name` asks the runtime for its
+                // namespace; otherwise it receives the unresolved empty-object
+                // stub and destructuring yields `undefined` for every method.
+                //
+                // Keeping this in codegen (rather than making the runtime
+                // parent module unconditionally retain fs/promises) preserves
+                // auto-optimize dead stripping for programs that only use
+                // synchronous `node:fs`.
+                if module_name == "fs" && property == "promises" {
+                    ctx.block()
+                        .call_void("js_node_submod_install_fs_promises", &[]);
                 }
                 if module_name == "process" && property == "version" {
                     let blk = ctx.block();

@@ -633,6 +633,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_result_streaming_validation_rejects_malformed_and_trailing_input() {
+        for input in [
+            br#"{"a":[1,]}"#.as_slice(),
+            br#"{"a":1} trailing"#.as_slice(),
+        ] {
+            let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+            assert!(
+                unsafe { js_json_parse_result(text) }.is_err(),
+                "invalid JSON must be rejected before Perry tree construction"
+            );
+        }
+
+        let valid = br#"{"a":[1,2,3]}"#;
+        let text = js_string_from_bytes(valid.as_ptr(), valid.len() as u32);
+        assert!(unsafe { js_json_parse_result(text) }.is_ok());
+    }
+
+    #[test]
     fn stringify_set_serializes_as_empty_object() {
         // Regression: a Set/Map header is NOT an ObjectHeader, so the old
         // catch-all object path read its internals as a `keys_array` and
