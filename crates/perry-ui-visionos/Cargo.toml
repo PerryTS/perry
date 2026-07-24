@@ -15,7 +15,7 @@ default = []
 plugins = []
 geisterhand = []
 
-[dependencies]
+[target.'cfg(target_os = "visionos")'.dependencies]
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
 perry-runtime = { path = "../perry-runtime", default-features = false }

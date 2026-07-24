@@ -1,3 +1,5 @@
+#![cfg(target_os = "visionos")]
+
 pub mod app;
 pub mod audio;
 pub mod audio_playback;

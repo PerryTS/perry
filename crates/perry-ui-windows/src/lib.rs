@@ -1,3 +1,5 @@
+#![cfg(target_os = "windows")]
+
 pub mod app;
 pub mod audio;
 pub mod audio_playback;

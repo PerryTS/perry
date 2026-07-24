@@ -22,7 +22,7 @@ workspace = true
 # symbols), so no symbol is lost by going through this crate.
 crate-type = ["rlib", "staticlib"]
 
-[dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 # The entire current Windows backend. Re-exported wholesale (see src/lib.rs).
 perry-ui-windows = { path = "../perry-ui-windows" }
 
