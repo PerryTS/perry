@@ -756,18 +756,28 @@ for test_file in "${TEST_FILES[@]}"; do
     # fork-bombing test (cluster re-exec loop, 2026-07-22) stalls at ~50
     # orphans instead of saturating the user process limit — which would
     # starve the harness itself out of fork() and kill the whole run.
-    # If the proc count can't be measured, deliberately skip the cap (fail
-    # open): applying a bogus low limit would silently break every legit
-    # multi-process test, which is worse than one uncapped run. The cap is a
-    # containment layer, not a correctness gate — the post-test reap below
-    # still runs either way. Note the budget is per-UID, not per-tree, so a
-    # concurrent heavy job can transiently eat the +50 headroom; recomputing
+    # If the proc count can't be measured or the cap can't be applied, abort
+    # this test before exec: an uncapped run could recreate the fork bomb this
+    # containment layer exists to prevent. The budget is per-UID, not per-tree,
+    # so a concurrent heavy job can transiently eat the +50 headroom; recomputing
     # per test keeps that window small, and the worst case is one test
     # classified as crash rather than a wedged machine.
     run_with_timeout 10 /bin/sh -c '
-        nproc_now=$(ps -u "$(id -u)" -o pid= 2>/dev/null | wc -l)
-        if [ "$nproc_now" -gt 0 ] 2>/dev/null; then
-            ulimit -u $(( nproc_now + 50 )) 2>/dev/null || true
+        proc_list=$(ps -u "$(id -u)" -o pid= 2>/dev/null) || {
+            echo "failed to measure the current user process count" >&2
+            exit 125
+        }
+        nproc_now=$(printf "%s\n" "$proc_list" | awk "NF { count++ } END { print count + 0 }") || {
+            echo "failed to count the current user processes" >&2
+            exit 125
+        }
+        if ! [ "$nproc_now" -gt 0 ] 2>/dev/null; then
+            echo "invalid current user process count: $nproc_now" >&2
+            exit 125
+        fi
+        if ! ulimit -u $(( nproc_now + 50 )) 2>/dev/null; then
+            echo "failed to apply the per-test process limit" >&2
+            exit 125
         fi
         exec "$@"' _ env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
