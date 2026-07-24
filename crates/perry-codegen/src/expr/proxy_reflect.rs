@@ -286,12 +286,18 @@ fn lower_put_value_static_write_ic(
     let above_handles = ctx.block().icmp_ugt(I64, &target_handle, "1048575"); // 0x100000
     let heap_candidate = ctx.block().and(I1, &pointer_tag, &above_handles);
     let guard_idx = ctx.new_block("put.pic.guard");
+    let guard2_idx = ctx.new_block("put.pic.guard2");
+    let fallback_idx = ctx.new_block("put.pic.fallback");
     let hit_idx = ctx.new_block("put.pic.hit");
     let miss_idx = ctx.new_block("put.pic.miss");
+    let miss2_idx = ctx.new_block("put.pic.miss2");
     let merge_idx = ctx.new_block("put.pic.merge");
     let guard_label = ctx.block_label(guard_idx);
+    let guard2_label = ctx.block_label(guard2_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
+    let miss2_label = ctx.block_label(miss2_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block()
         .cond_br(&heap_candidate, &guard_label, &miss_label);
@@ -374,21 +380,52 @@ fn lower_put_value_static_write_ic(
     hit = ctx.block().and(I1, &hit, &token_nonzero);
     hit = ctx.block().and(I1, &hit, &slot_in_bounds);
 
-    ctx.block().cond_br(&hit, &hit_label, &miss_label);
+    ctx.block().cond_br(&hit, &hit_label, &fallback_label);
+
+    // A second bounded cache entry handles stable polymorphism without
+    // changing the miss ABI. The first entry is filled initially; only after
+    // it contains a different shape do we consult/prime the second entry.
+    ctx.current_block = fallback_idx;
+    let first_empty = ctx.block().icmp_eq(I64, &cached_token, "0");
+    ctx.block()
+        .cond_br(&first_empty, &miss_label, &guard2_label);
+
+    ctx.current_block = guard2_idx;
+    let cached2_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
+    let cached2_token = ctx.block().load(I64, &cached2_token_ptr);
+    let cached2_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
+    let slot2 = ctx.block().load(I64, &cached2_slot_ptr);
+    let token2_match = ctx.block().icmp_eq(I64, &shape_token, &cached2_token);
+    let token2_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
+    let slot2_in_bounds = ctx.block().icmp_ult(I64, &slot2, &inline_limit);
+    let mut hit2 = ctx.block().and(I1, &heap_candidate, &gc_object);
+    hit2 = ctx.block().and(I1, &hit2, &not_forwarded);
+    hit2 = ctx.block().and(I1, &hit2, &flags_clear);
+    hit2 = ctx.block().and(I1, &hit2, &regular);
+    hit2 = ctx.block().and(I1, &hit2, &class_nonzero);
+    hit2 = ctx.block().and(I1, &hit2, &not_native_module);
+    hit2 = ctx.block().and(I1, &hit2, &token2_match);
+    hit2 = ctx.block().and(I1, &hit2, &token2_nonzero);
+    hit2 = ctx.block().and(I1, &hit2, &slot2_in_bounds);
+    ctx.block().cond_br(&hit2, &hit_label, &miss2_label);
 
     ctx.current_block = hit_idx;
+    let selected_slot = ctx
+        .block()
+        .phi(I64, &[(&slot, &guard_label), (&slot2, &guard2_label)]);
+
     let pointer_possible = !(is_numeric_expr(ctx, value)
         || expr_produces_non_pointer_bits_by_construction(ctx, value));
     {
         let header_size =
             crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
         let blk = ctx.block();
-        let slot_offset = blk.shl(I64, &slot, "3");
+        let slot_offset = blk.shl(I64, &selected_slot, "3");
         let fields_base = blk.add(I64, &target_handle, &header_size);
         let field_addr = blk.add(I64, &fields_base, &slot_offset);
         let field_ptr = blk.inttoptr(I64, &field_addr);
         if pointer_possible {
-            let slot_i32 = blk.trunc(I64, &slot, I32);
+            let slot_i32 = blk.trunc(I64, &selected_slot, I32);
             emit_jsvalue_slot_store_scalar_aware_on_block(
                 blk,
                 &field_ptr,
@@ -428,12 +465,28 @@ fn lower_put_value_static_write_ic(
     let miss_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
+    ctx.current_block = miss2_idx;
+    let miss2_value = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set_ic_miss",
+        &[
+            (DOUBLE, &target_value),
+            (I64, &key_handle),
+            (DOUBLE, &stored_value),
+            (I32, strict_i32),
+            (PTR, &cached2_token_ptr),
+        ],
+    );
+    let miss2_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
     ctx.current_block = merge_idx;
     let result = ctx.block().phi(
         DOUBLE,
         &[
             (&stored_value, &hit_end_label),
             (&miss_value, &miss_end_label),
+            (&miss2_value, &miss2_end_label),
         ],
     );
     Ok(Some(result))

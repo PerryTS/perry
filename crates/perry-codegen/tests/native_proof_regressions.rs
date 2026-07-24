@@ -13481,6 +13481,10 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
         ir.contains("4611686018427387904") && ir.contains("1073741824"),
         "the write PIC must mirror the read PIC's discriminated, never-reused ShapeId token"
     );
+    assert!(
+        ir.contains("put.pic.guard2") && ir.contains("put.pic.miss2"),
+        "the write PIC should retain a bounded second shape entry"
+    );
 }
 
 #[test]
@@ -13746,8 +13750,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         rejected
             .matches("call double @js_put_value_set_ic_miss")
             .count(),
-        5,
-        "the bounded rejection must preserve all five semantic write sites:\n{rejected}"
+        10,
+        "the bounded rejection must preserve both cache miss entries for all five semantic write sites:\n{rejected}"
     );
 
     let mut nonfinite_body = loop_body(1);

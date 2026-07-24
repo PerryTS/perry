@@ -967,7 +967,7 @@ pub(super) fn compile_closure(
     }
     for ic_name in &ic_globals {
         llmod.add_raw_global(format!(
-            "@{} = private global [2 x i64] zeroinitializer",
+            "@{} = private global [4 x i64] zeroinitializer",
             ic_name
         ));
     }

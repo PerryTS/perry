@@ -1111,7 +1111,7 @@ pub(super) fn compile_module_entry(
         }
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [2 x i64] zeroinitializer",
+                "@{} = private global [4 x i64] zeroinitializer",
                 ic_name
             ));
         }
@@ -1510,7 +1510,7 @@ pub(super) fn compile_module_entry(
         // three symbols must be defined exactly once per shared library.
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [2 x i64] zeroinitializer",
+                "@{} = private global [4 x i64] zeroinitializer",
                 ic_name
             ));
         }
