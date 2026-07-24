@@ -24,7 +24,7 @@ Prerequisites match what CI installs — see [`.github/workflows/test.yml`](.git
 |---|---|---|
 | Rust | stable | Everything |
 | Rust nightly + `rust-src` | latest | tvOS / watchOS cross-compile only (`-Zbuild-std`) |
-| Node.js | 22 | Parity tests (`run_parity_tests.sh`) |
+| Node.js | version pinned in [`.node-version`](.node-version) | Parity tests (`run_parity_tests.sh`) |
 | C linker | any | Linking compiled binaries (`xcode-select --install` / `build-essential` / MSVC) |
 
 Platform-specific extras — only required if you're touching that backend:
@@ -80,16 +80,17 @@ Comment on the issue saying you'd like to take it. We'll assign it to you. If yo
 ## Running CI's checks locally
 
 Most red PRs come from gates that `cargo build` never looks at — a file
-that crossed the 2000-line cap, fmt drift, a clippy deny-level lint, an
-unbarriered GC store site. One command runs all of them:
+that crossed the 2000-line cap, fmt drift, or an unbarriered GC store site.
+Run the fast, non-compiling subset with:
 
 ```bash
 ./scripts/pre-tag-check.sh --quick
 ```
 
 That is every gate in the `lint` job that doesn't compile anything, so it
-costs seconds. Drop `--quick` to add `cargo check`, clippy, and cargo-deny;
-the script prints every failure in one pass rather than one per push.
+costs seconds. Drop `--quick` to add the docs linter, `cargo check`, and
+Clippy; it also runs `cargo deny` when installed. The script prints every
+failure in one pass rather than one per push.
 
 Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
 which diffs compiled programs byte-for-byte against Node:
