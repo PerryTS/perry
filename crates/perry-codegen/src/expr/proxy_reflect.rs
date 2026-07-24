@@ -287,17 +287,29 @@ fn lower_put_value_static_write_ic(
     let heap_candidate = ctx.block().and(I1, &pointer_tag, &above_handles);
     let guard_idx = ctx.new_block("put.pic.guard");
     let guard2_idx = ctx.new_block("put.pic.guard2");
+    let guard3_idx = ctx.new_block("put.pic.guard3");
+    let guard4_idx = ctx.new_block("put.pic.guard4");
     let fallback_idx = ctx.new_block("put.pic.fallback");
+    let dispatch3_idx = ctx.new_block("put.pic.dispatch3");
+    let dispatch4_idx = ctx.new_block("put.pic.dispatch4");
     let hit_idx = ctx.new_block("put.pic.hit");
     let miss_idx = ctx.new_block("put.pic.miss");
     let miss2_idx = ctx.new_block("put.pic.miss2");
+    let miss3_idx = ctx.new_block("put.pic.miss3");
+    let miss4_idx = ctx.new_block("put.pic.miss4");
     let merge_idx = ctx.new_block("put.pic.merge");
     let guard_label = ctx.block_label(guard_idx);
     let guard2_label = ctx.block_label(guard2_idx);
+    let guard3_label = ctx.block_label(guard3_idx);
+    let guard4_label = ctx.block_label(guard4_idx);
     let fallback_label = ctx.block_label(fallback_idx);
+    let dispatch3_label = ctx.block_label(dispatch3_idx);
+    let dispatch4_label = ctx.block_label(dispatch4_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
     let miss2_label = ctx.block_label(miss2_idx);
+    let miss3_label = ctx.block_label(miss3_idx);
+    let miss4_label = ctx.block_label(miss4_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block()
         .cond_br(&heap_candidate, &guard_label, &miss_label);
@@ -407,12 +419,66 @@ fn lower_put_value_static_write_ic(
     hit2 = ctx.block().and(I1, &hit2, &token2_match);
     hit2 = ctx.block().and(I1, &hit2, &token2_nonzero);
     hit2 = ctx.block().and(I1, &hit2, &slot2_in_bounds);
-    ctx.block().cond_br(&hit2, &hit_label, &miss2_label);
+    ctx.block().cond_br(&hit2, &hit_label, &dispatch3_label);
+
+    ctx.current_block = dispatch3_idx;
+    let second_empty = ctx.block().icmp_eq(I64, &cached2_token, "0");
+    ctx.block()
+        .cond_br(&second_empty, &miss2_label, &guard3_label);
+
+    ctx.current_block = guard3_idx;
+    let cached3_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "4")]);
+    let cached3_token = ctx.block().load(I64, &cached3_token_ptr);
+    let cached3_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "5")]);
+    let slot3 = ctx.block().load(I64, &cached3_slot_ptr);
+    let token3_match = ctx.block().icmp_eq(I64, &shape_token, &cached3_token);
+    let token3_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
+    let slot3_in_bounds = ctx.block().icmp_ult(I64, &slot3, &inline_limit);
+    let mut hit3 = ctx.block().and(I1, &heap_candidate, &gc_object);
+    hit3 = ctx.block().and(I1, &hit3, &not_forwarded);
+    hit3 = ctx.block().and(I1, &hit3, &flags_clear);
+    hit3 = ctx.block().and(I1, &hit3, &regular);
+    hit3 = ctx.block().and(I1, &hit3, &class_nonzero);
+    hit3 = ctx.block().and(I1, &hit3, &not_native_module);
+    hit3 = ctx.block().and(I1, &hit3, &token3_match);
+    hit3 = ctx.block().and(I1, &hit3, &token3_nonzero);
+    hit3 = ctx.block().and(I1, &hit3, &slot3_in_bounds);
+    ctx.block().cond_br(&hit3, &hit_label, &dispatch4_label);
+
+    ctx.current_block = dispatch4_idx;
+    let third_empty = ctx.block().icmp_eq(I64, &cached3_token, "0");
+    ctx.block()
+        .cond_br(&third_empty, &miss3_label, &guard4_label);
+
+    ctx.current_block = guard4_idx;
+    let cached4_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "6")]);
+    let cached4_token = ctx.block().load(I64, &cached4_token_ptr);
+    let cached4_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "7")]);
+    let slot4 = ctx.block().load(I64, &cached4_slot_ptr);
+    let token4_match = ctx.block().icmp_eq(I64, &shape_token, &cached4_token);
+    let token4_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
+    let slot4_in_bounds = ctx.block().icmp_ult(I64, &slot4, &inline_limit);
+    let mut hit4 = ctx.block().and(I1, &heap_candidate, &gc_object);
+    hit4 = ctx.block().and(I1, &hit4, &not_forwarded);
+    hit4 = ctx.block().and(I1, &hit4, &flags_clear);
+    hit4 = ctx.block().and(I1, &hit4, &regular);
+    hit4 = ctx.block().and(I1, &hit4, &class_nonzero);
+    hit4 = ctx.block().and(I1, &hit4, &not_native_module);
+    hit4 = ctx.block().and(I1, &hit4, &token4_match);
+    hit4 = ctx.block().and(I1, &hit4, &token4_nonzero);
+    hit4 = ctx.block().and(I1, &hit4, &slot4_in_bounds);
+    ctx.block().cond_br(&hit4, &hit_label, &miss4_label);
 
     ctx.current_block = hit_idx;
-    let selected_slot = ctx
-        .block()
-        .phi(I64, &[(&slot, &guard_label), (&slot2, &guard2_label)]);
+    let selected_slot = ctx.block().phi(
+        I64,
+        &[
+            (&slot, &guard_label),
+            (&slot2, &guard2_label),
+            (&slot3, &guard3_label),
+            (&slot4, &guard4_label),
+        ],
+    );
 
     let pointer_possible = !(is_numeric_expr(ctx, value)
         || expr_produces_non_pointer_bits_by_construction(ctx, value));
@@ -480,6 +546,36 @@ fn lower_put_value_static_write_ic(
     let miss2_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
+    ctx.current_block = miss3_idx;
+    let miss3_value = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set_ic_miss",
+        &[
+            (DOUBLE, &target_value),
+            (I64, &key_handle),
+            (DOUBLE, &stored_value),
+            (I32, strict_i32),
+            (PTR, &cached3_token_ptr),
+        ],
+    );
+    let miss3_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = miss4_idx;
+    let miss4_value = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set_ic_miss",
+        &[
+            (DOUBLE, &target_value),
+            (I64, &key_handle),
+            (DOUBLE, &stored_value),
+            (I32, strict_i32),
+            (PTR, &cached4_token_ptr),
+        ],
+    );
+    let miss4_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
     ctx.current_block = merge_idx;
     let result = ctx.block().phi(
         DOUBLE,
@@ -487,6 +583,8 @@ fn lower_put_value_static_write_ic(
             (&stored_value, &hit_end_label),
             (&miss_value, &miss_end_label),
             (&miss2_value, &miss2_end_label),
+            (&miss3_value, &miss3_end_label),
+            (&miss4_value, &miss4_end_label),
         ],
     );
     Ok(Some(result))
