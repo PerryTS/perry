@@ -1851,16 +1851,21 @@ enum ObjectArrayWriteNumber {
     Sub(Box<Self>, Box<Self>),
 }
 
-struct ObjectArrayWrite2Loop {
+/// Keep the transactional clone small enough that unrolling does not turn a
+/// compact hot loop into an instruction-cache liability. Four fields covers
+/// the measured #6812 gap while preserving a fixed-size, allocation-free
+/// preflight ABI.
+const MAX_OBJECT_ARRAY_WRITE_FIELDS: usize = 4;
+
+struct ObjectArrayWriteLoop {
     outer_counter_id: u32,
     outer_start: i32,
     outer_bound: i32,
     inner_counter_id: u32,
     inner_bound: i32,
     array_id: u32,
-    alias_id: u32,
-    properties: [String; 2],
-    values: [ObjectArrayWriteNumber; 2],
+    properties: Vec<String>,
+    values: Vec<ObjectArrayWriteNumber>,
 }
 
 fn match_nonnegative_constant_i32(expr: &perry_hir::Expr) -> Option<i32> {
@@ -1898,6 +1903,59 @@ fn match_object_array_write_number(
             })
         }
         _ => None,
+    }
+}
+
+/// Prove that every intermediate result is a finite, unboxed IEEE-754 number
+/// over the complete loop domain. Finite doubles have the same in-memory bits
+/// in raw-f64 and ordinary NaN-boxed numeric object slots, which lets the
+/// runtime preflight admit either typed representation without a per-store
+/// layout helper. Rejecting overflow here is also necessary because a NaN
+/// payload could otherwise alias one of Perry's boxed-value tags.
+fn object_array_write_number_finite_range(
+    expr: &ObjectArrayWriteNumber,
+    outer_start: i32,
+    outer_bound: i32,
+    inner_bound: i32,
+) -> Option<(f64, f64)> {
+    let finite_range =
+        |lo: f64, hi: f64| (lo.is_finite() && hi.is_finite() && lo <= hi).then_some((lo, hi));
+    match expr {
+        ObjectArrayWriteNumber::OuterCounter => {
+            finite_range(outer_start as f64, (outer_bound - 1) as f64)
+        }
+        ObjectArrayWriteNumber::InnerCounter => finite_range(0.0, (inner_bound - 1) as f64),
+        ObjectArrayWriteNumber::Constant(value) => finite_range(*value, *value),
+        ObjectArrayWriteNumber::Add(left, right) => {
+            let (left_lo, left_hi) = object_array_write_number_finite_range(
+                left,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            let (right_lo, right_hi) = object_array_write_number_finite_range(
+                right,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            finite_range(left_lo + right_lo, left_hi + right_hi)
+        }
+        ObjectArrayWriteNumber::Sub(left, right) => {
+            let (left_lo, left_hi) = object_array_write_number_finite_range(
+                left,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            let (right_lo, right_hi) = object_array_write_number_finite_range(
+                right,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            finite_range(left_lo - right_hi, left_hi - right_lo)
+        }
     }
 }
 
@@ -1939,17 +1997,17 @@ fn match_constant_counted_for(
     Some((counter_id, start, bound))
 }
 
-/// Match the #6809 object-write micro shape. This is deliberately a separate,
-/// much narrower proof than generic loop purity: the fast clone has no side
-/// exits after its one runtime scan, so it may commit multiple stores per
-/// iteration without a replay protocol.
-fn match_object_array_write2_loop(
+/// Match the bounded #6809/#6812 object-write micro shape. This is deliberately
+/// a separate, much narrower proof than generic loop purity: the fast clone
+/// has no side exits after its one runtime scan, so it may commit multiple
+/// stores per iteration without a replay protocol.
+fn match_object_array_write_loop(
     ctx: &FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&perry_hir::Expr>,
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
-) -> Option<ObjectArrayWrite2Loop> {
+) -> Option<ObjectArrayWriteLoop> {
     use perry_hir::Expr;
 
     if !ctx.pending_labels.is_empty() {
@@ -1982,15 +2040,21 @@ fn match_object_array_write2_loop(
         return None;
     }
 
-    let [Stmt::Let {
-        id: alias_id,
-        mutable: false,
-        init: Some(Expr::IndexGet { object, index }),
-        ..
-    }, Stmt::Expr(first), Stmt::Expr(second)] = inner_body.as_slice()
+    let Some((
+        Stmt::Let {
+            id: alias_id,
+            mutable: false,
+            init: Some(Expr::IndexGet { object, index }),
+            ..
+        },
+        stores,
+    )) = inner_body.split_first()
     else {
         return None;
     };
+    if stores.is_empty() || stores.len() > MAX_OBJECT_ARRAY_WRITE_FIELDS {
+        return None;
+    }
     let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
     else {
         return None;
@@ -2031,21 +2095,29 @@ fn match_object_array_write2_loop(
             return None;
         };
         let value = match_object_array_write_number(value, outer_counter_id, inner_counter_id)?;
+        object_array_write_number_finite_range(&value, outer_start, outer_bound, inner_bound)?;
         Some((property.clone(), value))
     };
-    let (property_1, value_1) = match_store(first)?;
-    let (property_2, value_2) = match_store(second)?;
+    let mut properties = Vec::with_capacity(stores.len());
+    let mut values = Vec::with_capacity(stores.len());
+    for store in stores {
+        let Stmt::Expr(effect) = store else {
+            return None;
+        };
+        let (property, value) = match_store(effect)?;
+        properties.push(property);
+        values.push(value);
+    }
 
-    Some(ObjectArrayWrite2Loop {
+    Some(ObjectArrayWriteLoop {
         outer_counter_id,
         outer_start,
         outer_bound,
         inner_counter_id,
         inner_bound,
         array_id: *array_id,
-        alias_id: *alias_id,
-        properties: [property_1, property_2],
-        values: [value_1, value_2],
+        properties,
+        values,
     })
 }
 
@@ -2074,48 +2146,56 @@ fn emit_object_array_write_number(
 
 /// Whole-nest versioning for a dense array of same-shape objects.
 ///
-/// The runtime helper validates every receiver and resolves both slots before
-/// the first store. The successful clone contains no calls, allocations,
-/// barriers, or side exits, so all raw pointers remain valid for the complete
-/// outer × inner nest. A failed proof enters the untouched generic clone.
-fn lower_object_array_write2_versioned_for(
+/// The runtime helper validates every receiver and resolves all bounded slots
+/// before the first store. The successful clone contains no calls,
+/// allocations, barriers, or side exits, so all raw pointers remain valid for
+/// the complete outer × inner nest. A failed proof enters the untouched
+/// generic clone.
+fn lower_object_array_write_versioned_for(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&perry_hir::Expr>,
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<bool> {
-    let Some(matched) = match_object_array_write2_loop(ctx, init, condition, update, body) else {
+    let Some(matched) = match_object_array_write_loop(ctx, init, condition, update, body) else {
         return Ok(false);
     };
 
-    let slow_pre_idx = ctx.new_block("object_array_write2.loop.slow.preheader");
-    let merge_idx = ctx.new_block("object_array_write2.loop.merge");
+    let slow_pre_idx = ctx.new_block("object_array_write.loop.slow.preheader");
+    let merge_idx = ctx.new_block("object_array_write.loop.merge");
     let slow_pre_label = ctx.block_label(slow_pre_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let key_1_idx = ctx.strings.intern(&matched.properties[0]);
-    let key_2_idx = ctx.strings.intern(&matched.properties[1]);
-    let key_1_global = format!("@{}", ctx.strings.entry(key_1_idx).handle_global);
-    let key_2_global = format!("@{}", ctx.strings.entry(key_2_idx).handle_global);
     let array_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.array_id))?;
-    let (key_1_box, key_2_box) = {
+    let mut key_boxes = Vec::with_capacity(MAX_OBJECT_ARRAY_WRITE_FIELDS);
+    for property in &matched.properties {
+        let key_idx = ctx.strings.intern(property);
+        let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        key_boxes.push(ctx.block().load(DOUBLE, &key_global));
+    }
+    let zero = crate::nanbox::double_literal(0.0);
+    while key_boxes.len() < MAX_OBJECT_ARRAY_WRITE_FIELDS {
+        key_boxes.push(zero.clone());
+    }
+    let field_count = matched.properties.len().to_string();
+    let inner_bound = matched.inner_bound.to_string();
+    let packed_slots = {
         let blk = ctx.block();
-        (
-            blk.load(DOUBLE, &key_1_global),
-            blk.load(DOUBLE, &key_2_global),
+        blk.call(
+            I64,
+            "js_object_array_numeric_write_guard",
+            &[
+                (DOUBLE, &array_box),
+                (DOUBLE, &key_boxes[0]),
+                (DOUBLE, &key_boxes[1]),
+                (DOUBLE, &key_boxes[2]),
+                (DOUBLE, &key_boxes[3]),
+                (I32, &field_count),
+                (I32, &inner_bound),
+            ],
         )
     };
-    let packed_slots = ctx.block().call(
-        I64,
-        "js_object_array_numeric_write2_guard",
-        &[
-            (DOUBLE, &array_box),
-            (DOUBLE, &key_1_box),
-            (DOUBLE, &key_2_box),
-            (I32, &matched.inner_bound.to_string()),
-        ],
-    );
     let preheader_idx = ctx.current_block;
     let preheader_label = ctx.block().label.clone();
 
@@ -2129,18 +2209,18 @@ fn lower_object_array_write2_versioned_for(
         condition,
         update,
         body,
-        "for.object_array_write2_slow",
+        "for.object_array_write_slow",
     )?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
 
-    let fast_outer_cond_idx = ctx.new_block("object_array_write2.loop.fast.outer.cond");
-    let fast_inner_pre_idx = ctx.new_block("object_array_write2.loop.fast.inner.preheader");
-    let fast_inner_cond_idx = ctx.new_block("object_array_write2.loop.fast.inner.cond");
-    let fast_inner_body_idx = ctx.new_block("object_array_write2.loop.fast.inner.body");
-    let fast_inner_exit_idx = ctx.new_block("object_array_write2.loop.fast.inner.exit");
-    let fast_done_idx = ctx.new_block("object_array_write2.loop.fast.done");
+    let fast_outer_cond_idx = ctx.new_block("object_array_write.loop.fast.outer.cond");
+    let fast_inner_pre_idx = ctx.new_block("object_array_write.loop.fast.inner.preheader");
+    let fast_inner_cond_idx = ctx.new_block("object_array_write.loop.fast.inner.cond");
+    let fast_inner_body_idx = ctx.new_block("object_array_write.loop.fast.inner.body");
+    let fast_inner_exit_idx = ctx.new_block("object_array_write.loop.fast.inner.exit");
+    let fast_done_idx = ctx.new_block("object_array_write.loop.fast.done");
     let fast_outer_cond_label = ctx.block_label(fast_outer_cond_idx);
     let fast_inner_pre_label = ctx.block_label(fast_inner_pre_idx);
     let fast_inner_cond_label = ctx.block_label(fast_inner_cond_idx);
@@ -2148,19 +2228,25 @@ fn lower_object_array_write2_versioned_for(
     let fast_inner_exit_label = ctx.block_label(fast_inner_exit_idx);
     let fast_done_label = ctx.block_label(fast_done_idx);
 
-    let (slot_1, slot_2, array_ptr) = {
+    let (slots, array_ptr) = {
         let blk = ctx
             .func
             .block_mut(preheader_idx)
             .expect("object-array preheader block must exist");
-        let encoded_1 = blk.and(I64, &packed_slots, "4294967295");
-        let encoded_2 = blk.lshr(I64, &packed_slots, "32");
-        let slot_1 = blk.sub(I64, &encoded_1, "1");
-        let slot_2 = blk.sub(I64, &encoded_2, "1");
+        let mut slots = Vec::with_capacity(matched.values.len());
+        for index in 0..matched.values.len() {
+            let shifted = if index == 0 {
+                packed_slots.clone()
+            } else {
+                blk.lshr(I64, &packed_slots, &(index * 16).to_string())
+            };
+            let encoded = blk.and(I64, &shifted, "65535");
+            slots.push(blk.sub(I64, &encoded, "1"));
+        }
         let array_bits = blk.bitcast_double_to_i64(&array_box);
         let array_handle = blk.and(I64, &array_bits, crate::nanbox::POINTER_MASK_I64);
         let array_ptr = blk.inttoptr(I64, &array_handle);
-        (slot_1, slot_2, array_ptr)
+        (slots, array_ptr)
     };
 
     let fast_scan_start = fast_outer_cond_idx;
@@ -2217,7 +2303,7 @@ fn lower_object_array_write2_versioned_for(
     };
     let header_words =
         (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
-    for (slot, value) in [(&slot_1, &matched.values[0]), (&slot_2, &matched.values[1])] {
+    for (slot, value) in slots.iter().zip(&matched.values) {
         let value = emit_object_array_write_number(ctx, value, &outer_double, &inner_double);
         let field_ptr = {
             let blk = ctx.block();
@@ -2267,7 +2353,6 @@ fn lower_object_array_write2_versioned_for(
     }
 
     ctx.current_block = merge_idx;
-    let _ = matched.alias_id;
     Ok(true)
 }
 
@@ -3628,10 +3713,10 @@ pub(crate) fn lower_for(
         lower_stmt(ctx, init_stmt)?;
     }
 
-    // #6809: validate a dense, same-shape object array once and run the
-    // complete nested two-field numeric write loop without receiver/shape
+    // #6809/#6812: validate a dense, same-shape object array once and run a
+    // bounded one-to-four-field numeric write nest without receiver/shape
     // guards or runtime calls in either hot loop.
-    if lower_object_array_write2_versioned_for(ctx, init, condition, update, body)? {
+    if lower_object_array_write_versioned_for(ctx, init, condition, update, body)? {
         return Ok(());
     }
 

@@ -13512,7 +13512,7 @@ fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
 }
 
 #[test]
-fn nested_same_shape_object_writes_version_the_whole_loop() {
+fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let objects = 1u32;
     let outer = 2u32;
     let inner = 3u32;
@@ -13530,101 +13530,168 @@ fn nested_same_shape_object_writes_version_the_whole_loop() {
             strict: false,
         })
     };
-    let body = vec![
-        Stmt::Let {
-            id: objects,
-            name: "objects".to_string(),
-            ty: Type::Array(Box::new(Type::Any)),
+
+    let loop_body = |field_count: usize| {
+        let mut inner_body = vec![Stmt::Let {
+            id: object,
+            name: "object".to_string(),
+            ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Array(vec![])),
-        },
-        Stmt::For {
-            init: Some(Box::new(Stmt::Let {
-                id: outer,
-                name: "outer".to_string(),
-                ty: Type::Number,
-                mutable: true,
-                init: Some(Expr::Integer(0)),
-            })),
-            condition: Some(Expr::Compare {
-                op: CompareOp::Lt,
-                left: Box::new(Expr::LocalGet(outer)),
-                right: Box::new(Expr::Integer(20)),
+            init: Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(objects)),
+                index: Box::new(Expr::LocalGet(inner)),
             }),
-            update: Some(Expr::Update {
-                id: outer,
-                op: UpdateOp::Increment,
-                prefix: false,
-            }),
-            body: vec![Stmt::For {
+        }];
+        for (index, property) in ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .take(field_count)
+            .enumerate()
+        {
+            inner_body.push(store(
+                property,
+                if index & 1 == 0 {
+                    BinaryOp::Add
+                } else {
+                    BinaryOp::Sub
+                },
+            ));
+        }
+        vec![
+            Stmt::Let {
+                id: objects,
+                name: "objects".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::Array(vec![])),
+            },
+            Stmt::For {
                 init: Some(Box::new(Stmt::Let {
-                    id: inner,
-                    name: "inner".to_string(),
+                    id: outer,
+                    name: "outer".to_string(),
                     ty: Type::Number,
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
                     op: CompareOp::Lt,
-                    left: Box::new(Expr::LocalGet(inner)),
-                    right: Box::new(Expr::Integer(10)),
+                    left: Box::new(Expr::LocalGet(outer)),
+                    right: Box::new(Expr::Integer(20)),
                 }),
                 update: Some(Expr::Update {
-                    id: inner,
+                    id: outer,
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![
-                    Stmt::Let {
-                        id: object,
-                        name: "object".to_string(),
-                        ty: Type::Any,
-                        mutable: false,
-                        init: Some(Expr::IndexGet {
-                            object: Box::new(Expr::LocalGet(objects)),
-                            index: Box::new(Expr::LocalGet(inner)),
-                        }),
-                    },
-                    store("c", BinaryOp::Add),
-                    store("d", BinaryOp::Sub),
-                ],
-            }],
-        },
-    ];
+                body: vec![Stmt::For {
+                    init: Some(Box::new(Stmt::Let {
+                        id: inner,
+                        name: "inner".to_string(),
+                        ty: Type::Number,
+                        mutable: true,
+                        init: Some(Expr::Integer(0)),
+                    })),
+                    condition: Some(Expr::Compare {
+                        op: CompareOp::Lt,
+                        left: Box::new(Expr::LocalGet(inner)),
+                        right: Box::new(Expr::Integer(10)),
+                    }),
+                    update: Some(Expr::Update {
+                        id: inner,
+                        op: UpdateOp::Increment,
+                        prefix: false,
+                    }),
+                    body: inner_body,
+                }],
+            },
+        ]
+    };
 
-    let ir = compile_ir("nested_object_write2_loop", body);
+    for field_count in [1usize, 2, 4] {
+        let ir = compile_ir(
+            &format!("nested_object_write{field_count}_loop"),
+            loop_body(field_count),
+        );
+        assert_eq!(
+            ir.matches("call i64 @js_object_array_numeric_write_guard")
+                .count(),
+            1,
+            "{field_count} fields must run one complete receiver/shape/slot scan:\n{ir}"
+        );
+        assert!(
+            ir.contains("object_array_write.loop.fast.outer.cond")
+                && ir.contains("object_array_write.loop.fast.inner.body")
+                && ir.contains("object_array_write.loop.slow.preheader"),
+            "the proof must retain distinct call-free and semantic fallback clones:\n{ir}"
+        );
+        let fast_body = ir
+            .split("\nobject_array_write.loop.fast.inner.body")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("\nobject_array_write.loop.fast.inner.exit")
+                    .next()
+            })
+            .expect("fast inner-loop block");
+        assert!(
+            !fast_body.contains("call "),
+            "the successful raw-pointer clone must stay call/GC-free:\n{fast_body}"
+        );
+        assert!(
+            fast_body.matches("store double").count() >= field_count
+                && fast_body.contains("getelementptr inbounds i64"),
+            "the fast clone should contain {field_count} direct numeric field stores:\n{fast_body}"
+        );
+        assert!(
+            ir.matches("call double @js_put_value_set_ic_miss").count() >= field_count,
+            "a failed whole-array proof must retain every original PutValue site:\n{ir}"
+        );
+        if field_count == 4 {
+            assert!(
+                ir.contains("lshr i64") && ir.contains(", 48"),
+                "the fourth 16-bit result lane must be decoded from the guard:\n{ir}"
+            );
+        }
+    }
+
+    let rejected = compile_ir("nested_object_write5_loop", loop_body(5));
+    assert!(
+        !rejected.contains("call i64 @js_object_array_numeric_write_guard")
+            && !rejected.contains("object_array_write.loop.fast"),
+        "five fields must remain outside the bounded clone:\n{rejected}"
+    );
     assert_eq!(
-        ir.matches("call i64 @js_object_array_numeric_write2_guard")
+        rejected
+            .matches("call double @js_put_value_set_ic_miss")
             .count(),
-        1,
-        "the complete receiver/shape/slot scan must run once before the loop nest:\n{ir}"
+        5,
+        "the bounded rejection must preserve all five semantic write sites:\n{rejected}"
     );
+
+    let mut nonfinite_body = loop_body(1);
+    let Stmt::For {
+        body: outer_body, ..
+    } = &mut nonfinite_body[1]
+    else {
+        panic!("expected outer loop");
+    };
+    let Stmt::For {
+        body: inner_body, ..
+    } = &mut outer_body[0]
+    else {
+        panic!("expected inner loop");
+    };
+    let Stmt::Expr(Expr::PutValueSet { value, .. }) = &mut inner_body[1] else {
+        panic!("expected object field write");
+    };
+    *value = Box::new(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::Number(f64::MAX)),
+        right: Box::new(Expr::Number(f64::MAX)),
+    });
+    let nonfinite = compile_ir("nested_object_write_nonfinite_loop", nonfinite_body);
     assert!(
-        ir.contains("object_array_write2.loop.fast.outer.cond")
-            && ir.contains("object_array_write2.loop.fast.inner.body")
-            && ir.contains("object_array_write2.loop.slow.preheader"),
-        "the proof must retain distinct call-free and semantic fallback clones:\n{ir}"
-    );
-    let fast_body = ir
-        .split("\nobject_array_write2.loop.fast.inner.body")
-        .nth(1)
-        .and_then(|tail| {
-            tail.split("\nobject_array_write2.loop.fast.inner.exit")
-                .next()
-        })
-        .expect("fast inner-loop block");
-    assert!(
-        !fast_body.contains("call "),
-        "the successful raw-pointer clone must stay call/GC-free:\n{fast_body}"
-    );
-    assert!(
-        fast_body.matches("store double").count() >= 2
-            && fast_body.contains("getelementptr inbounds i64"),
-        "the fast clone should be two direct numeric field stores:\n{fast_body}"
-    );
-    assert!(
-        ir.contains("call double @js_put_value_set_ic_miss"),
-        "a failed whole-array proof must retain the original PutValue semantics:\n{ir}"
+        !nonfinite.contains("call i64 @js_object_array_numeric_write_guard")
+            && nonfinite.contains("call double @js_put_value_set_ic_miss"),
+        "a potentially infinite/NaN result must retain ordinary boxed-number semantics:\n{nonfinite}"
     );
 }
 

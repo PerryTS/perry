@@ -1918,12 +1918,28 @@ mod tests {
         f64::from_bits(crate::value::STRING_TAG | (key as u64 & POINTER_MASK))
     }
 
-    /// #6809: the whole-loop preflight may only publish raw slot indexes when
-    /// every array element has the same writable data layout. The generated
-    /// clone performs no checks after this result, so heterogeneous shapes,
-    /// holes, descriptor flags, and unverified typed layouts must all reject.
+    fn object_array_numeric_write_guard(array: f64, keys: &[f64], count: u32) -> u64 {
+        assert!((1..=4).contains(&keys.len()));
+        let mut padded = [0.0; 4];
+        padded[..keys.len()].copy_from_slice(keys);
+        put_value::js_object_array_numeric_write_guard(
+            array,
+            padded[0],
+            padded[1],
+            padded[2],
+            padded[3],
+            keys.len() as u32,
+            count,
+        )
+    }
+
+    /// #6809/#6812: the whole-loop preflight may only publish raw slot indexes
+    /// when every array element has the same writable data layout. The
+    /// generated clone performs no checks after this result, so heterogeneous
+    /// shapes, holes, descriptor flags, class-id-zero objects, and forged or
+    /// stale typed-layout state must all reject.
     #[test]
-    fn object_array_numeric_write2_guard_requires_complete_uniform_proof() {
+    fn object_array_numeric_write_guard_requires_complete_uniform_proof() {
         let packed = b"a\0b\0c\0d\0";
         let keys = crate::object::js_build_class_keys_array(
             0x6809_01,
@@ -1936,13 +1952,56 @@ mod tests {
         let values = [boxed_object(first), boxed_object(second)];
         let array = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
         let array_box = boxed_object(array.cast());
+        let a = boxed_interned_key(keys, 0, b"a");
+        let b = boxed_interned_key(keys, 1, b"b");
         let c = boxed_interned_key(keys, 2, b"c");
         let d = boxed_interned_key(keys, 3, b"d");
 
         assert_eq!(
+            object_array_numeric_write_guard(array_box, &[c], 2),
+            3,
+            "one-field loops should publish one non-zero 16-bit lane"
+        );
+        let plain_a_ptr = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
+        let plain_a_gc =
+            unsafe { crate::value::addr_class::try_read_gc_header(plain_a_ptr as usize) }
+                .expect("fresh string header");
+        assert_eq!(
+            plain_a_gc.gc_flags & crate::gc::GC_FLAG_INTERNED,
+            0,
+            "the coverage key must exercise a non-interned string-pool handle"
+        );
+        let plain_a =
+            f64::from_bits(crate::value::STRING_TAG | (plain_a_ptr as u64 & POINTER_MASK));
+        assert_eq!(
+            object_array_numeric_write_guard(array_box, &[plain_a], 2),
+            1,
+            "the once-only content lookup must not depend on unrelated interning"
+        );
+        assert_eq!(
+            object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
+            (4u64 << 48) | (3u64 << 32) | (2u64 << 16) | 1,
+            "four inline slots should be published in source order"
+        );
+        assert_eq!(
+            object_array_numeric_write_guard(array_box, &[c, c, d], 2),
+            (4u64 << 32) | (3u64 << 16) | 3,
+            "duplicate target keys must preserve ordered duplicate stores"
+        );
+        assert_eq!(
             put_value::js_object_array_numeric_write2_guard(array_box, c, d, 2),
             (4u64 << 32) | 3,
-            "slots c=2 and d=3 should be published with the non-zero encoding"
+            "the cached-object compatibility ABI must keep its 32-bit lanes"
+        );
+        assert_eq!(
+            put_value::js_object_array_numeric_write_guard(array_box, a, b, c, d, 0, 2),
+            0,
+            "zero active fields must reject"
+        );
+        assert_eq!(
+            put_value::js_object_array_numeric_write_guard(array_box, a, b, c, d, 5, 2),
+            0,
+            "field counts beyond the fixed descriptor must reject"
         );
 
         unsafe {
@@ -1950,32 +2009,63 @@ mod tests {
                 (second as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             let original = (*header)._reserved;
 
-            (*header)._reserved = original | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
-            assert_eq!(
-                put_value::js_object_array_numeric_write2_guard(array_box, c, d, 2),
-                0,
-                "descriptor-bearing receivers must use ordinary [[Set]]"
-            );
+            for (flag, reason) in [
+                (
+                    crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
+                    "descriptor-bearing receivers",
+                ),
+                (crate::gc::OBJ_FLAG_FROZEN, "frozen receivers"),
+                (crate::gc::OBJ_FLAG_SEALED, "sealed receivers"),
+                (crate::gc::OBJ_FLAG_NO_EXTEND, "non-extensible receivers"),
+                (
+                    crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
+                    "typed-array-prototype receivers",
+                ),
+            ] {
+                (*header)._reserved = original | flag;
+                assert_eq!(
+                    object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
+                    0,
+                    "{reason} must use ordinary [[Set]]"
+                );
+            }
 
             (*header)._reserved = original | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
             assert_eq!(
-                put_value::js_object_array_numeric_write2_guard(array_box, c, d, 2),
+                object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
                 0,
-                "an intact typed layout without raw-f64 target slots must reject"
+                "an intact typed-layout bit without its descriptor must reject"
             );
             (*header)._reserved = original;
         }
+
+        for object in [first, second] {
+            crate::gc::js_gc_init_typed_shape_layout(
+                object as u64,
+                4,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            );
+        }
+        assert_eq!(
+            object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
+            (4u64 << 48) | (3u64 << 32) | (2u64 << 16) | 1,
+            "finite numbers are valid in verified ordinary JSValue typed slots"
+        );
+
+        assert_eq!(
+            object_array_numeric_write_guard(array_box, &[f64::NAN], 2),
+            0,
+            "non-interned/non-string keys must reject"
+        );
 
         let hole_values = [boxed_object(first), f64::from_bits(crate::value::TAG_HOLE)];
         let hole_array =
             crate::array::js_array_from_f64(hole_values.as_ptr(), hole_values.len() as u32);
         assert_eq!(
-            put_value::js_object_array_numeric_write2_guard(
-                boxed_object(hole_array.cast()),
-                c,
-                d,
-                2
-            ),
+            object_array_numeric_write_guard(boxed_object(hole_array.cast()), &[c, d], 2),
             0,
             "a hole cannot be treated as an object receiver"
         );
@@ -1991,9 +2081,44 @@ mod tests {
         let mixed =
             crate::array::js_array_from_f64(mixed_values.as_ptr(), mixed_values.len() as u32);
         assert_eq!(
-            put_value::js_object_array_numeric_write2_guard(boxed_object(mixed.cast()), c, d, 2),
+            object_array_numeric_write_guard(boxed_object(mixed.cast()), &[c, d], 2),
             0,
             "content-equal but distinct shape keys arrays must not share raw slots"
+        );
+
+        unsafe {
+            let original = (*first).class_id;
+            (*first).class_id = 0;
+            assert_eq!(
+                object_array_numeric_write_guard(array_box, &[c, d], 2),
+                0,
+                "class-id-zero objects cannot establish a stable raw layout identity"
+            );
+            (*first).class_id = original;
+        }
+
+        assert_eq!(
+            object_array_numeric_write_guard(array_box, &[a, b, c, d], 3),
+            0,
+            "the preflight must reject a receiver prefix longer than the array"
+        );
+
+        let wide_packed = b"a\0b\0c\0d\0e\0";
+        let wide_keys = crate::object::js_build_class_keys_array(
+            0x6812_03,
+            5,
+            wide_packed.as_ptr(),
+            wide_packed.len() as u32,
+        );
+        let narrow = crate::object::js_object_alloc_class_inline_keys(0x6812_03, 0, 4, wide_keys);
+        let narrow_values = [boxed_object(narrow)];
+        let narrow_array =
+            crate::array::js_array_from_f64(narrow_values.as_ptr(), narrow_values.len() as u32);
+        let e = boxed_interned_key(wide_keys, 4, b"e");
+        assert_eq!(
+            object_array_numeric_write_guard(boxed_object(narrow_array.cast()), &[e], 1),
+            0,
+            "a key beyond the four-slot physical allocation must reject"
         );
     }
 }
