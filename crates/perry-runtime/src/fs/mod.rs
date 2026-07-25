@@ -9,7 +9,6 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
 use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 
