@@ -444,6 +444,32 @@ fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         // Learn the class's true width so FUTURE instances allocate it
         // inline (same hook as the legacy path).
         note_learned_inline_fields((*obj).class_id, (field_index as u32).saturating_add(1));
+        // Hot path: meta and buffer already exist with capacity — the
+        // in-range barriered store cannot allocate or move anything, so no
+        // handle scope is needed. This is every write after the first to a
+        // given width (e.g. round-robin updates across an object array).
+        let meta = (*obj).meta;
+        if !meta.is_null() {
+            let spill = (*meta).spill as *mut crate::array::ArrayHeader;
+            if !spill.is_null() && ((*spill).capacity as usize) > field_index {
+                crate::array::js_array_set(
+                    spill,
+                    field_index as u32,
+                    crate::value::JSValue::from_bits(vbits),
+                );
+                return;
+            }
+        }
+        spill_set_slow(obj_ptr, field_index, vbits);
+    }
+}
+
+/// Allocation path: ensure the meta record and a buffer wide enough for
+/// `field_index`, then store. Roots the owner across the allocations.
+#[cold]
+fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
+    unsafe {
+        let obj = obj_ptr as *mut ObjectHeader;
         // Root the owner: meta/buffer allocation below can trigger a moving
         // minor GC. Reload through the handle after every allocation.
         let scope = crate::gc::RuntimeHandleScope::new();
