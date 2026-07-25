@@ -760,17 +760,69 @@ pub(crate) fn empty_builder_width_hints(
     module: &ast::Module,
 ) -> std::collections::HashMap<u32, u32> {
     let mut hints = std::collections::HashMap::new();
+    // Pair `const o = {}` (plain or `export const`) with a following build
+    // loop; the loop itself is always a plain Stmt.
     for w in module.body.windows(2) {
-        if let (ast::ModuleItem::Stmt(a), ast::ModuleItem::Stmt(b)) = (&w[0], &w[1]) {
-            note_hint_pair(a, b, &mut hints);
+        let ast::ModuleItem::Stmt(b) = &w[1] else {
+            continue;
+        };
+        if let Some((name, span_lo)) = item_empty_object_decl(&w[0]) {
+            note_hint_for_site(&name, span_lo, b, &mut hints);
         }
     }
     for item in &module.body {
-        if let ast::ModuleItem::Stmt(s) = item {
-            hint_walk_stmt(s, &mut hints);
+        match item {
+            ast::ModuleItem::Stmt(s) => hint_walk_stmt(s, &mut hints),
+            // Exported declarations are ModuleDecls, not Stmts — and
+            // `export function buildX() { const o = {}; ... }` is the most
+            // common real-world builder shape.
+            ast::ModuleItem::ModuleDecl(md) => match md {
+                ast::ModuleDecl::ExportDecl(e) => hint_walk_hint_decl(&e.decl, &mut hints),
+                ast::ModuleDecl::ExportDefaultDecl(d) => match &d.decl {
+                    ast::DefaultDecl::Fn(f) => {
+                        if let Some(body) = &f.function.body {
+                            hint_scan_stmts(&body.stmts, &mut hints);
+                        }
+                    }
+                    ast::DefaultDecl::Class(c) => hint_walk_class(&c.class, &mut hints),
+                    ast::DefaultDecl::TsInterfaceDecl(_) => {}
+                },
+                ast::ModuleDecl::ExportDefaultExpr(e) => hint_walk_expr(&e.expr, &mut hints),
+                _ => {}
+            },
         }
     }
     hints
+}
+
+/// `const/let name = {}` from a plain statement or an `export const`.
+/// Returns the binding name and the empty literal's span.lo.
+fn item_empty_object_decl(item: &ast::ModuleItem) -> Option<(String, u32)> {
+    match item {
+        ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(v))) => empty_object_decl(v),
+        ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(e)) => match &e.decl {
+            ast::Decl::Var(v) => empty_object_decl(v),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn empty_object_decl(var: &ast::VarDecl) -> Option<(String, u32)> {
+    if var.decls.len() != 1 {
+        return None;
+    }
+    let d = &var.decls[0];
+    let ast::Pat::Ident(bi) = &d.name else {
+        return None;
+    };
+    let ast::Expr::Object(obj) = d.init.as_deref()? else {
+        return None;
+    };
+    if !obj.props.is_empty() {
+        return None;
+    }
+    Some((bi.id.sym.to_string(), obj.span.lo.0))
 }
 
 fn hint_scan_stmts(stmts: &[ast::Stmt], hints: &mut std::collections::HashMap<u32, u32>) {
@@ -947,28 +999,28 @@ fn hint_walk_expr(e: &ast::Expr, hints: &mut std::collections::HashMap<u32, u32>
 const WIDTH_HINT_MAX: u32 = 64;
 
 fn note_hint_pair(a: &ast::Stmt, b: &ast::Stmt, hints: &mut std::collections::HashMap<u32, u32>) {
-    let (Some(name), Some(props)) = decl_object_binding(a) else {
-        return;
-    };
-    if !props.is_empty() {
-        return;
-    }
     let ast::Stmt::Decl(ast::Decl::Var(var)) = a else {
         return;
     };
-    let Some(init) = &var.decls[0].init else {
+    let Some((name, span_lo)) = empty_object_decl(var) else {
         return;
     };
-    let ast::Expr::Object(obj) = &**init else {
-        return;
-    };
-    let Some(width) = const_build_loop_width(b, &name) else {
+    note_hint_for_site(&name, span_lo, b, hints);
+}
+
+fn note_hint_for_site(
+    name: &str,
+    literal_span_lo: u32,
+    build_loop: &ast::Stmt,
+    hints: &mut std::collections::HashMap<u32, u32>,
+) {
+    let Some(width) = const_build_loop_width(build_loop, name) else {
         return;
     };
     if width == 0 || width > WIDTH_HINT_MAX {
         return;
     }
-    hints.insert(obj.span.lo.0, width);
+    hints.insert(literal_span_lo, width);
 }
 
 /// `for (let k = C0; k < C1; k++) body` where every body statement is a

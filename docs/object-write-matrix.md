@@ -49,7 +49,7 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 | w12_arb_dynkey | rotating keys from array | generic | 84 | 18 | 4.7 | GAP: GC-safe dynamic-key cache |
 | w13_int_key | `o[7]` on plain object | generic numeric-as-property | 160 | 13 | 12.3 | GAP |
 | w15_append_build | fresh `{}` + 6 assigns (builder) | *(pre-#6829 baseline)* generic transitions; `class_id==0` blocks PIC | 1489 → 196 (#6829) | 8 | 186 → 25 | #6829 folds builders into literals; residual tracked below |
-| w16_overflow_slot | writes past inline capacity | *(pre-#6812-w16 baseline)* runtime (PIC bounds reject) → whole-loop clone | 4150 → 3 | 23 | 180 → **0.10** | BEATS node — `{}` per-site classes + learned width + compile-time width hint make builder arrays uniform and clone-eligible |
+| w16_overflow_slot | writes past inline capacity | *(pre-#6812-w16 baseline)* runtime (PIC bounds reject) → whole-loop clone | 4163 → 3 | 29 | 173 → **0.10** | BEATS node — `{}` per-site classes + learned width + compile-time width hint make builder arrays uniform and clone-eligible. Each ratio vs its own run's node baseline (2026-07-25 sweeps: pre-fix 4163/24, post-fix 3/29) |
 | w17_alloc_rhs | allocating RHS (`"s"+i`) | NOT PIC (safepoint-free rule) | 26 | 18 | 1.4 | close; revisit only with receiver-reload design |
 | w18_class_inst | class instances via `any` | PIC | 6 | 12 | **0.50** | BEATS node (best row) |
 
