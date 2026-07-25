@@ -90,9 +90,7 @@ fn scan_stmt(s: &ast::Stmt) -> bool {
     match s {
         ast::Stmt::Block(b) => stmts_have_candidate(&b.stmts),
         ast::Stmt::If(i) => {
-            scan_expr(&i.test)
-                || scan_stmt(&i.cons)
-                || i.alt.as_deref().is_some_and(scan_stmt)
+            scan_expr(&i.test) || scan_stmt(&i.cons) || i.alt.as_deref().is_some_and(scan_stmt)
         }
         ast::Stmt::While(w) => scan_expr(&w.test) || scan_stmt(&w.body),
         ast::Stmt::DoWhile(d) => scan_stmt(&d.body) || scan_expr(&d.test),
@@ -115,8 +113,7 @@ fn scan_stmt(s: &ast::Stmt) -> bool {
                     .is_some_and(|f| stmts_have_candidate(&f.stmts))
         }
         ast::Stmt::Switch(sw) => {
-            scan_expr(&sw.discriminant)
-                || sw.cases.iter().any(|c| stmts_have_candidate(&c.cons))
+            scan_expr(&sw.discriminant) || sw.cases.iter().any(|c| stmts_have_candidate(&c.cons))
         }
         ast::Stmt::Decl(d) => scan_decl(d),
         ast::Stmt::Expr(es) => scan_expr(&es.expr),
@@ -209,13 +206,7 @@ fn scan_expr(e: &ast::Expr) -> bool {
             matches!(&c.callee, ast::Callee::Expr(e) if scan_expr(e))
                 || c.args.iter().any(|a| scan_expr(&a.expr))
         }
-        E::New(n) => {
-            scan_expr(&n.callee)
-                || n.args
-                    .iter()
-                    .flatten()
-                    .any(|a| scan_expr(&a.expr))
-        }
+        E::New(n) => scan_expr(&n.callee) || n.args.iter().flatten().any(|a| scan_expr(&a.expr)),
         E::Seq(s) => s.exprs.iter().any(|e| scan_expr(e)),
         E::Tpl(t) => t.exprs.iter().any(|e| scan_expr(e)),
         E::Paren(p) => scan_expr(&p.expr),

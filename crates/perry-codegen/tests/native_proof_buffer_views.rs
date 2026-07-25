@@ -1554,9 +1554,15 @@ fn native_owned_uint8array_get_fallback_uses_uint8array_helper() {
             })),
         ],
     );
+    // #6088/#6092 moved the unproven-bounds JS-value read off the i32
+    // `js_uint8array_get` accessor, whose out-of-range answer is the `0`
+    // byte-sentinel, onto `js_uint8array_index_get_value`, which reads
+    // `undefined` per IntegerIndexedExotic `[[Get]]`. What this test is about
+    // is unchanged: the fallback must go through the Uint8Array-shaped
+    // accessor, never the Buffer-shaped one.
     assert!(
-        ir.contains("call i32 @js_uint8array_get"),
-        "disposed native Uint8Array fallback should call js_uint8array_get:\n{ir}"
+        ir.contains("call double @js_uint8array_index_get_value"),
+        "disposed native Uint8Array fallback should call js_uint8array_index_get_value:\n{ir}"
     );
     assert!(
         !ir.contains("call i32 @js_buffer_get"),
@@ -1641,6 +1647,13 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
     assert!(
         !ir.contains("call i32 @js_uint8array_get"),
         "inline Uint8Array get should not call the runtime helper:\n{ir}"
+    );
+    // The JS-value getter is the other way this could fall back after
+    // #6088/#6092; without naming it here the negative assertion above would
+    // miss a regression that took the slow path.
+    assert!(
+        !ir.contains("call double @js_uint8array_index_get_value"),
+        "inline Uint8Array get should not call the JS-value runtime helper:\n{ir}"
     );
 }
 
