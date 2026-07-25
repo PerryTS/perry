@@ -155,9 +155,7 @@ extern "C" {
     fn js_node_http_res_set_strict_content_length(handle: i64, value: f64);
     fn js_node_http_res_req_handle(handle: i64) -> i64;
     fn js_node_http_res_write_head(handle: i64, status: f64, arg2: i64, arg3: i64);
-    fn js_node_http_res_write(handle: i64, chunk: f64) -> i32;
     fn js_node_http_res_add_trailers(handle: i64, headers_value: f64);
-    fn js_node_http_res_end(handle: i64, chunk: f64);
     fn js_node_http_res_flush_headers(handle: i64);
     fn js_node_http_res_cork(handle: i64);
     fn js_node_http_res_uncork(handle: i64);
