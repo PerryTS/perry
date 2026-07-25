@@ -360,6 +360,16 @@ fn lower_new_impl(
     if let Some(&authoritative) = ctx.class_field_counts.get(class_name) {
         field_count = authoritative;
     }
+    // #6812 (w16): a per-site empty-literal anon-shape class may carry a
+    // compile-time proven builder width. Allocate that many inline slots so
+    // the FIRST instance of the site is as wide as the runtime-learned
+    // resizes make every later one — a lone under-sized first instance
+    // permanently vetoes whole-loop clone eligibility for arrays built at
+    // the site. Capacity only: the keys array stays authoritative for
+    // enumeration, and the runtime treats header field_count as alloc_limit.
+    if class.alloc_width_hint > field_count {
+        field_count = class.alloc_width_hint;
+    }
 
     // Allocate the object with the per-class id and (if applicable)
     // parent class id, so the runtime registers the inheritance

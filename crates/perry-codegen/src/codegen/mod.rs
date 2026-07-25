@@ -422,6 +422,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let stub = perry_hir::Class {
             id: 0, // imported — no local ClassId
             name: effective_name.to_string(),
+            // #6812: width hints don't cross module metadata; imported stubs
+            // fall back to runtime learned sizing.
+            alloc_width_hint: 0,
             type_params: Vec::new(),
             extends: None,
             extends_name: ic.parent_name.clone(),

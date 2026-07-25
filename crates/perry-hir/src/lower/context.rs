@@ -80,6 +80,7 @@ impl LoweringContext {
             object_super_home_stack: Vec::new(),
             extern_func_types: Vec::new(),
             source_file_path,
+            empty_site_width_hints: std::collections::HashMap::new(),
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
             closure_display_names: HashMap::new(),
@@ -944,7 +945,7 @@ impl LoweringContext {
             shape_key.push_str(tag(ty));
             shape_key.push(',');
         }
-        self.mint_anon_shape_class(shape_key, field_shapes)
+        self.mint_anon_shape_class(shape_key, field_shapes, 0)
     }
 
     /// #6812 (w16): mint a UNIQUE per-source-site 0-field anon-shape class
@@ -959,15 +960,22 @@ impl LoweringContext {
     /// static-key write PIC's `class_id != 0` gate admits the objects. An
     /// empty literal that never grows allocates exactly as before (learned
     /// width 0 keeps the INLINE_SLOT_FLOOR minimum).
-    pub(crate) fn synthesize_empty_site_class(&mut self, byte_offset: u32) -> String {
+    /// `width_hint` (#6812 w16): compile-time proven builder width — see
+    /// [`crate::Class::alloc_width_hint`]. 0 = rely on runtime learning only.
+    pub(crate) fn synthesize_empty_site_class(
+        &mut self,
+        byte_offset: u32,
+        width_hint: u32,
+    ) -> String {
         let site_key = format!("@empty-site:{}:{}", self.source_file_path, byte_offset);
-        self.mint_anon_shape_class(site_key, &[])
+        self.mint_anon_shape_class(site_key, &[], width_hint)
     }
 
     fn mint_anon_shape_class(
         &mut self,
         shape_key: String,
         field_shapes: &[(String, Type)],
+        alloc_width_hint: u32,
     ) -> String {
         // Field names in source order, so a call-site can recover a config
         // object's keys after the literal is lowered to `New { class_name }`.
@@ -1091,6 +1099,7 @@ impl LoweringContext {
             // Synthetic anon-shape class; no static fields, so static-init
             // timing is irrelevant.
             is_nested: false,
+            alloc_width_hint,
         });
 
         self.anon_shape_classes

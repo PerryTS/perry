@@ -419,6 +419,10 @@ pub fn lower_module_full(
     let folded = super::builder_fold::fold_builder_sequences(ast_module);
     let ast_module = folded.as_ref().unwrap_or(ast_module);
     let mut ctx = LoweringContext::with_class_id_start(source_file_path, start_class_id);
+    // #6812 (w16): scan the module lowering actually consumes (post-fold) for
+    // constant-bounded dynamic-key builder widths; `lower_object` attaches
+    // them to the per-site empty-literal classes as alloc_width_hint.
+    ctx.empty_site_width_hints = super::builder_fold::empty_builder_width_hints(ast_module);
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;

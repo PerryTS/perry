@@ -258,6 +258,16 @@ pub struct Class {
     /// inside a turbopack factory threw at module init). Codegen
     /// (`init_static_fields_*`) skips module-init static init for these.
     pub is_nested: bool,
+    /// #6812 (w16): minimum inline slot count to allocate for instances,
+    /// beyond `fields.len()`. Set only on per-site empty-literal anon-shape
+    /// classes when the lowering can prove the builder's final width (e.g. a
+    /// `{}` declarator followed by a constant-bounded single-write build
+    /// loop), so even the FIRST instance allocates every field inline
+    /// instead of spilling to the overflow side-table and permanently
+    /// poisoning whole-loop clone eligibility for arrays built at that
+    /// site. Pure capacity: does not add fields, keys, or enumeration
+    /// entries. 0 = no hint.
+    pub alloc_width_hint: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

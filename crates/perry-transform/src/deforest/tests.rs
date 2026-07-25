@@ -352,6 +352,7 @@ fn deforests_producer_called_from_class_method() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     };
 
@@ -470,6 +471,7 @@ fn rejects_deforest_when_class_method_uses_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     };
 
@@ -560,6 +562,7 @@ fn still_deforests_when_method_has_no_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     };
 

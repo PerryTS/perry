@@ -291,6 +291,11 @@ pub struct LoweringContext {
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
     /// Source file path (for import.meta.url)
     pub(crate) source_file_path: String,
+    /// #6812 (w16): span.lo of empty object literals whose builder width the
+    /// pre-lowering scan proved (`builder_fold::empty_builder_width_hints`)
+    /// → final width. Consumed by `lower_object`'s empty-literal branch to
+    /// set `Class::alloc_width_hint` on the per-site anon-shape class.
+    pub(crate) empty_site_width_hints: std::collections::HashMap<u32, u32>,
     /// Variables that hold closures or other values needing cross-module export globals
     /// (arrow functions, object literals, call expressions, arrays, new expressions)
     // #854: initialized in `new` but not yet read on this lowering path.

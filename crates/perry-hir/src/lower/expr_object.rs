@@ -657,7 +657,12 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     // class_id, so class-0 builder objects could never leave the overflow
     // side-table slow path.
     if obj.props.is_empty() {
-        let class_name = ctx.synthesize_empty_site_class(obj.span.lo.0);
+        let width_hint = ctx
+            .empty_site_width_hints
+            .get(&obj.span.lo.0)
+            .copied()
+            .unwrap_or(0);
+        let class_name = ctx.synthesize_empty_site_class(obj.span.lo.0, width_hint);
         return Ok(Expr::New {
             class_name,
             args: Vec::new(),

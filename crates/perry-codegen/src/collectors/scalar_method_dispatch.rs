@@ -465,6 +465,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            alloc_width_hint: 0,
             aliases: Vec::new(),
         }
     }
