@@ -55,11 +55,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return value;
     }
 
-    #[cfg(feature = "http-client")]
-    if let Some(value) = unsafe { crate::http::dispatch_agent_method(handle, method_name, &args) } {
-        return value;
-    }
-
     #[cfg(feature = "external-http-client-pump")]
     {
         extern "C" {
@@ -91,11 +86,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 args.len(),
             );
         }
-    }
-
-    #[cfg(feature = "http-client")]
-    if let Some(value) = crate::http::dispatch_client_request_method(handle, method_name, &args) {
-        return value;
     }
 
     // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3
