@@ -727,6 +727,9 @@ pub fn select_linker_command(
         // When cross-compiling from macOS, use clang + ld.lld + a glibc
         // sysroot pointed to by PERRY_LINUX_SYSROOT (matching the
         // PERRY_IOS_SYSROOT/PERRY_WINDOWS_SYSROOT builder pattern).
+        // Only the cross-compile block below mutates `c`; building on Linux
+        // hands back a bare `cc`.
+        #[cfg_attr(target_os = "linux", allow(unused_mut))]
         let mut c = Command::new("cc");
         #[cfg(not(target_os = "linux"))]
         {

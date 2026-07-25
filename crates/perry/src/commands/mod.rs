@@ -31,6 +31,10 @@ pub mod perry_lock;
 pub(crate) mod progress;
 pub mod publish;
 pub mod run;
+// #506 MVP is macOS-only (sandbox-exec profiles); the seccomp and AppContainer
+// equivalents are follow-ups. Its only caller is `#[cfg(target_os = "macos")]`,
+// so off macOS the whole module is dead.
+#[cfg(target_os = "macos")]
 pub mod sandbox_profile;
 pub mod sanitize;
 pub mod setup;
