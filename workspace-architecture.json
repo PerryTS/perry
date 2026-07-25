@@ -3,9 +3,7 @@
   "expected_default_members": [
     "perry"
   ],
-  "allowed_binding_runtime_dependencies": [
-    "perry-ext-http"
-  ],
+  "allowed_binding_runtime_dependencies": [],
   "ci": {
     "linux_host_excluded_members": [
       "perry-ui-android",

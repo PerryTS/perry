@@ -851,10 +851,10 @@ unsafe fn invoke_create_socket(
     // of reading an uninitialized register for the second parameter.
     static REGISTER_ARITY: Once = Once::new();
     REGISTER_ARITY.call_once(|| {
-        perry_runtime::closure::js_register_closure_arity(http_create_socket_cb as *const u8, 2);
+        perry_ffi::register_closure_arity(http_create_socket_cb as *const u8, 2);
     });
 
-    let cb = perry_runtime::closure::js_closure_alloc(http_create_socket_cb as *const u8, 1);
+    let cb = perry_ffi::alloc_closure(http_create_socket_cb as *const u8, 1);
     if cb.is_null() {
         return;
     }
@@ -862,7 +862,7 @@ unsafe fn invoke_create_socket(
     // (still-stored) method/url/headers/body and resume dispatch. Stored as an
     // f64 (a small registry id, not a heap pointer) — pointer-free, so it
     // needs no GC layout fixup, matching `sqlite_tx_wrapper`'s db-handle slot.
-    perry_runtime::closure::js_closure_set_capture_f64(cb, 0, request_handle as f64);
+    perry_ffi::set_closure_capture_f64(cb, 0, request_handle as f64);
 
     let cb_val = f64::from_bits(POINTER_TAG | (cb as usize as u64 & PTR_MASK));
     let req_val = f64::from_bits(POINTER_TAG | (request_handle as u64 & PTR_MASK));
@@ -879,12 +879,11 @@ unsafe fn invoke_create_socket(
 /// the override hands back a `net.Socket` (POINTER_TAG-boxed handle, or a bare
 /// small handle on some codegen paths).
 unsafe extern "C" fn http_create_socket_cb(
-    closure: *const perry_runtime::ClosureHeader,
+    closure: *const RawClosureHeader,
     err: f64,
     socket: f64,
 ) -> f64 {
-    let request_handle =
-        perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as i64 as Handle;
+    let request_handle = perry_ffi::closure_capture_f64(closure, 0) as i64 as Handle;
 
     // Node calls `cb(err)` on failure, `cb(null, socket)` on success.
     let err_bits = err.to_bits();
@@ -1468,16 +1467,7 @@ unsafe fn emit_socket_timeout_overflow_warning(ms: f64) {
         "{value_text} does not fit into a 32-bit signed integer.\n\
          Timer duration was truncated to 2147483647."
     );
-    let msg_ptr = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let label = "TimeoutOverflowWarning";
-    let label_ptr = perry_runtime::js_string_from_bytes(label.as_ptr(), label.len() as u32);
-    let msg_value = f64::from_bits(perry_runtime::JSValue::string_ptr(msg_ptr).bits());
-    let label_value = f64::from_bits(perry_runtime::JSValue::string_ptr(label_ptr).bits());
-    perry_runtime::process::js_process_emit_warning(
-        msg_value,
-        label_value,
-        f64::from_bits(TAG_UNDEFINED),
-    );
+    perry_ffi::emit_warning(&message, "TimeoutOverflowWarning");
 }
 
 /// `IncomingMessage.setEncoding(encoding)` for client responses. The same
