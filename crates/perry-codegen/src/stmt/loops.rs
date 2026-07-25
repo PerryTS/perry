@@ -908,9 +908,7 @@ fn packed_f64_range_loop_index_offset(index: &perry_hir::Expr, counter_id: u32) 
     use perry_hir::{BinaryOp, Expr};
     let offset = match index {
         Expr::LocalGet(id) if *id == counter_id => Some(0i64),
-        Expr::Binary { op, left, right }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
-        {
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(id), Expr::Integer(c)) if *id == counter_id => {
                     if matches!(op, BinaryOp::Sub) {
@@ -1896,7 +1894,9 @@ fn match_object_array_write_number(
             Some(ObjectArrayWriteNumber::Constant(*n as f64))
         }
         Expr::Number(n) if n.is_finite() => Some(ObjectArrayWriteNumber::Constant(*n)),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary { op, left, right }
+            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
+        {
             let left = match_object_array_write_number(left, outer_counter_id, inner_counter_id)?;
             let right = match_object_array_write_number(right, outer_counter_id, inner_counter_id)?;
             Some(if matches!(op, BinaryOp::Mul) {
@@ -1947,10 +1947,18 @@ fn object_array_write_number_finite_range(
             finite_range(left_lo + right_lo, left_hi + right_hi)
         }
         ObjectArrayWriteNumber::Mul(left, right) => {
-            let (left_lo, left_hi) =
-                object_array_write_number_finite_range(left, outer_start, outer_bound, inner_bound)?;
-            let (right_lo, right_hi) =
-                object_array_write_number_finite_range(right, outer_start, outer_bound, inner_bound)?;
+            let (left_lo, left_hi) = object_array_write_number_finite_range(
+                left,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            let (right_lo, right_hi) = object_array_write_number_finite_range(
+                right,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
             let products = [
                 left_lo * right_lo,
                 left_lo * right_hi,
