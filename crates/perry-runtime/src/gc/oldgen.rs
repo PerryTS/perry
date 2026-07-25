@@ -197,9 +197,9 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
     selection
 }
 
-/// gh #6206 test hook: the defrag machinery's unit tests exercise the
-/// selection/copy/re-remember mechanics directly and must bypass the
-/// production off-gate below. Thread-local so parallel tests don't race.
+// gh #6206 test hook: the defrag machinery's unit tests exercise the
+// selection/copy/re-remember mechanics directly and must bypass the
+// production off-gate below. Thread-local so parallel tests don't race.
 #[cfg(test)]
 thread_local! {
     pub(crate) static OLD_DEFRAG_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =

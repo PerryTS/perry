@@ -1723,19 +1723,19 @@ pub extern "C" fn js_node_stream_method_uncork(stream_handle: i64) -> f64 {
 // `pub(super)` helpers remain crate-internal.
 #[path = "node_stream_keys.rs"]
 mod keys;
-pub use keys::*;
+use keys::*;
 
 #[path = "node_stream_dispatch.rs"]
 mod dispatch;
-pub use dispatch::*;
+pub(crate) use dispatch::*;
 
 #[path = "node_stream_iter_helpers.rs"]
 mod iter_helpers;
-pub use iter_helpers::*;
+use iter_helpers::*;
 
 #[path = "node_stream_pipeline.rs"]
 mod pipeline;
-pub use pipeline::*;
+use pipeline::*;
 
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
@@ -1743,19 +1743,19 @@ pub use readwrite::*;
 
 #[path = "node_stream_readable_read.rs"]
 mod readable_read;
-pub use readable_read::*;
+use readable_read::*;
 
 #[path = "node_stream_duplex_methods.rs"]
 mod duplex_method_table;
-pub use duplex_method_table::*;
+use duplex_method_table::*;
 
 #[path = "node_stream_compose_live.rs"]
 mod compose_live;
-pub use compose_live::*;
+use compose_live::*;
 
 #[path = "node_stream_json.rs"]
 mod json_stream;
-pub use json_stream::*;
+pub(crate) use json_stream::*;
 
 #[path = "node_stream_constructors.rs"]
 mod constructors;

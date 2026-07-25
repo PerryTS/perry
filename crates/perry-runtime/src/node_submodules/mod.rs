@@ -75,7 +75,7 @@ impl ExportThunk {
 /// `(submodule_key, export_name)` and falls back to `TAG_TRUE` if no
 /// matching entry is found (preserving the pre-#841 behavior for any
 /// future export Perry doesn't yet know about).
-struct SubmoduleSpec {
+pub(super) struct SubmoduleSpec {
     /// Stable key — matches the prefix used in the generated FFI symbol
     /// names (`js_node_submod_<key>_export_<name>`).
     key: &'static str,

@@ -211,9 +211,9 @@ pub fn register_external_nsview(nsview_ptr: i64) -> i64 {
             // Set low content hugging so it stretches in both axes.
             unsafe {
                 let _: () =
-                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 0i64]; // horizontal
+                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32, forOrientation: 0i64]; // horizontal
                 let _: () =
-                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 1i64];
+                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32, forOrientation: 1i64];
                 // vertical
             }
             // Clip to bounds — prevent the view from drawing outside its frame

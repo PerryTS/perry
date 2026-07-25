@@ -41,7 +41,7 @@ pub use policy::*;
 mod progress;
 pub use progress::*;
 mod heap_budget;
-pub use heap_budget::*;
+pub(crate) use heap_budget::*;
 mod pressure;
 pub use pressure::*;
 mod telemetry;

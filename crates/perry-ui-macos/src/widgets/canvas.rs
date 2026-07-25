@@ -17,7 +17,7 @@ use crate::ffi::CGContextStrokePath;
 use crate::ffi::CGContextStrokeRect;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
+use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
 use objc2_app_kit::NSView;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::MainThreadMarker;
@@ -564,7 +564,7 @@ pub fn create(width: f64, height: f64) -> i64 {
     });
 
     // Cast to NSView for registration
-    let ns_view: Retained<NSView> = unsafe { Retained::cast(view) };
+    let ns_view: Retained<NSView> = unsafe { Retained::cast_unchecked(view) };
     register_widget(ns_view)
 }
 

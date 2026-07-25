@@ -115,7 +115,7 @@ extern "C" fn signal_handler(sig: libc::c_int) {
     unsafe {
         if CRASH_LOG_PATH_LEN > 0 {
             let fd = libc::open(
-                CRASH_LOG_PATH_BUF.as_ptr() as *const libc::c_char,
+                (&raw const CRASH_LOG_PATH_BUF) as *const libc::c_char,
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
                 0o644,
             );

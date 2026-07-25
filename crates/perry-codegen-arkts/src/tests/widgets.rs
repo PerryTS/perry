@@ -340,7 +340,7 @@ fn animation_modifier_maps_curve_string_to_curve_enum() {
 }
 
 #[test]
-fn shadow_modifier_maps_blur_to_radius_offsets_to_offsetXY() {
+fn shadow_modifier_maps_blur_to_radius_offsets_to_offset_xy() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "Text",
@@ -518,7 +518,7 @@ fn inline_style_border_combines_color_and_width() {
 }
 
 #[test]
-fn text_with_id_string_is_NOT_treated_as_style() {
+fn text_with_id_string_is_not_treated_as_style() {
     // Text("Count: 0", "counter") — second string arg is the reactive
     // id, NOT a style object. extract_style_object returns None for
     // String args, so the v3.2 reactive path still wins.

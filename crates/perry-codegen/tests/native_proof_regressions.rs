@@ -1,3 +1,7 @@
+// See native_proof_buffer_views.rs — shared HIR builder toolkit, each file in
+// this family drives a different subset.
+#![allow(dead_code)]
+
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{

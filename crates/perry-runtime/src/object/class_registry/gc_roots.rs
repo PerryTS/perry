@@ -585,11 +585,6 @@ pub(crate) fn test_class_prototype_object_root_addr(class_id: u32) -> usize {
 }
 
 #[cfg(test)]
-pub(crate) fn test_seed_class_parent_closure_root(class_id: u32, addr: usize) {
-    class_parent_closure_root_store(class_id, addr);
-}
-
-#[cfg(test)]
 pub(crate) fn test_class_parent_closure_root_addr(class_id: u32) -> usize {
     CLASS_PARENT_CLOSURES
         .read()

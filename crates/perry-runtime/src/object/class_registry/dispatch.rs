@@ -249,7 +249,7 @@ pub(crate) unsafe fn call_vtable_method(
     // `(number).forEach is not a function`. The synthesized-`arguments` slot
     // holds ALL passed args; a user rest slot holds only args from the rest
     // position onward (so `method(a, ...rest)` keeps `a` positional).
-    let mut adjusted_args_storage: Option<Vec<f64>> = None;
+    let adjusted_args_storage: Option<Vec<f64>>;
     let (call_args_ptr, call_args_len) = if has_synthetic_arguments || has_rest {
         let visible_params = (param_count as usize).saturating_sub(1);
         let pack_start = if has_synthetic_arguments {

@@ -272,13 +272,13 @@ pub extern "C" fn perry_audio_load_sound(path_ptr: i64, bus: f64, stream: f64) -
         let ns_name = objc2_foundation::NSString::from_str(name);
         let ns_ext = objc2_foundation::NSString::from_str(ext);
         let mut url: *mut AnyObject =
-            msg_send![bundle, URLForResource: &*ns_name withExtension: &*ns_ext];
+            msg_send![bundle, URLForResource: &*ns_name, withExtension: &*ns_ext];
         if url.is_null() {
             let ns_subdir = objc2_foundation::NSString::from_str("sounds");
             url = msg_send![
                 bundle,
-                URLForResource: &*ns_name
-                withExtension: &*ns_ext
+                URLForResource: &*ns_name,
+                withExtension: &*ns_ext,
                 subdirectory: &*ns_subdir
             ];
         }
@@ -332,7 +332,7 @@ pub extern "C" fn perry_audio_load_sound(path_ptr: i64, bus: f64, stream: f64) -
             let format_ptr: *mut AnyObject = &*format as *const AnyObject as *mut AnyObject;
             let buffer_raw: *mut AnyObject = msg_send![
                 buf_alloc,
-                initWithPCMFormat: format_ptr
+                initWithPCMFormat: format_ptr,
                 frameCapacity: capacity
             ];
             if buffer_raw.is_null() {
@@ -341,7 +341,7 @@ pub extern "C" fn perry_audio_load_sound(path_ptr: i64, bus: f64, stream: f64) -
             let buffer = Retained::retain(buffer_raw).unwrap();
 
             error = std::ptr::null_mut();
-            let read_ok: bool = msg_send![&*file, readIntoBuffer: &*buffer error: &mut error];
+            let read_ok: bool = msg_send![&*file, readIntoBuffer: &*buffer, error: &mut error];
             if !read_ok || !error.is_null() {
                 eprintln!("[perry/audio] loadSound: read failed: {}", filename);
                 return 0;
@@ -494,14 +494,14 @@ pub extern "C" fn perry_audio_play(
                     let _: () = msg_send![&**engine, attachNode: &**vs];
                     let _: () = msg_send![
                         &**engine,
-                        connect: &*player_node
-                        to: &**vs
+                        connect: &*player_node,
+                        to: &**vs,
                         format: buf_format
                     ];
                     let _: () = msg_send![
                         &**engine,
-                        connect: &**vs
-                        to: bus_node
+                        connect: &**vs,
+                        to: bus_node,
                         format: buf_format
                     ];
                 } else {
@@ -515,8 +515,8 @@ pub extern "C" fn perry_audio_play(
                     });
                     let _: () = msg_send![
                         &**engine,
-                        connect: &*player_node
-                        to: bus_node
+                        connect: &*player_node,
+                        to: bus_node,
                         format: buf_format
                     ];
                 }
@@ -548,8 +548,8 @@ pub extern "C" fn perry_audio_play(
                 let cb = make_ended_block(voice_idx);
                 let _: () = msg_send![
                     &*player_node,
-                    scheduleFile: &**file
-                    atTime: std::ptr::null::<AnyObject>()
+                    scheduleFile: &**file,
+                    atTime: std::ptr::null::<AnyObject>(),
                     completionHandler: &*cb
                 ];
                 std::mem::forget(cb);
@@ -565,9 +565,9 @@ pub extern "C" fn perry_audio_play(
             };
             let _: () = msg_send![
                 &*player_node,
-                scheduleBuffer: &**buffer_ret
-                atTime: std::ptr::null::<AnyObject>()
-                options: options
+                scheduleBuffer: &**buffer_ret,
+                atTime: std::ptr::null::<AnyObject>(),
+                options: options,
                 completionHandler: &*cb
             ];
             std::mem::forget(cb);
@@ -674,8 +674,8 @@ fn drain_pending_callbacks() {
                 let cb = make_ended_block(idx);
                 let _: () = msg_send![
                     &*player_node,
-                    scheduleFile: &*file
-                    atTime: std::ptr::null::<AnyObject>()
+                    scheduleFile: &*file,
+                    atTime: std::ptr::null::<AnyObject>(),
                     completionHandler: &*cb
                 ];
                 std::mem::forget(cb);
@@ -1051,8 +1051,8 @@ pub extern "C" fn perry_audio_create_bus(name_ptr: i64, parent: f64) -> i64 {
                 let null_fmt: *const AnyObject = std::ptr::null();
                 let _: () = msg_send![
                     &**engine,
-                    connect: &*mixer
-                    to: parent_node
+                    connect: &*mixer,
+                    to: parent_node,
                     format: null_fmt
                 ];
                 true

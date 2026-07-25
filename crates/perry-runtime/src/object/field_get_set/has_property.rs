@@ -1274,7 +1274,6 @@ pub(crate) unsafe fn native_module_own_field_by_key(
 // accelerator, never authoritative — and a scan hit back-fills the map so
 // interleaved appends stay amortized O(1).
 pub(crate) const WIDE_KEY_INDEX_MIN_KEYS: usize = 257;
-const WIDE_KEY_INDEX_CAPACITY: usize = 4;
 
 // #6759 C1: the wide-object key index folded into the shape records
 // (`object::shapes`, keyed on keys_array identity, unbounded — the old
