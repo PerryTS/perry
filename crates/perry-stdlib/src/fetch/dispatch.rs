@@ -37,7 +37,7 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     // payload came back all zeroes (#5435). Materialize the bytes into a heap
     // StringHeader so `js_response_new`'s lossless byte read recovers them.
     if let Some(bytes) = unsafe { body_value_buffer_bytes(value) } {
-        return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
+        return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
     }
     // A Blob / File body contributes its raw bytes. Blob handles are handle-band
     // ids (>= FETCH_HANDLE_BAND_START, 0x40000), NOT real pointers, so they must
@@ -50,8 +50,7 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             let addr = jsval.as_pointer::<u8>() as usize;
             if perry_runtime::value::addr_class::is_handle_band(addr) {
                 if let Some(bytes) = crate::fetch::blob_bytes_clone(addr) {
-                    return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) }
-                        as i64;
+                    return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
                 }
             }
         }
@@ -68,7 +67,7 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         // kind == 1 ⇒ live ReadableStream.
         if crate::streams::js_stream_handle_kind(id) == 1 {
             let bytes = crate::streams::drain_readable_into_bytes(id);
-            return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
+            return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
         }
     }
     // #5437: a Node `IncomingMessage` body — the request-body bridge Next.js's
@@ -80,7 +79,7 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             if let Some(bytes) =
                 unsafe { incoming_message_raw_body_bytes(jsval.as_pointer::<u8>() as usize) }
             {
-                return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
+                return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
             }
         }
     }

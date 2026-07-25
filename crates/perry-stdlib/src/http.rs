@@ -1179,7 +1179,7 @@ pub extern "C" fn js_http_client_request_method(handle: Handle) -> *mut StringHe
             String::new()
         }
     };
-    unsafe { js_string_from_bytes(method.as_ptr(), method.len() as u32) }
+    js_string_from_bytes(method.as_ptr(), method.len() as u32)
 }
 
 #[no_mangle]
@@ -1198,7 +1198,7 @@ pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut String
             String::new()
         }
     };
-    unsafe { js_string_from_bytes(protocol.as_ptr(), protocol.len() as u32) }
+    js_string_from_bytes(protocol.as_ptr(), protocol.len() as u32)
 }
 
 #[no_mangle]
@@ -1216,7 +1216,7 @@ pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHead
             String::new()
         }
     };
-    unsafe { js_string_from_bytes(host.as_ptr(), host.len() as u32) }
+    js_string_from_bytes(host.as_ptr(), host.len() as u32)
 }
 
 #[no_mangle]
@@ -1243,7 +1243,7 @@ pub extern "C" fn js_http_client_request_path(handle: Handle) -> *mut StringHead
             String::new()
         }
     };
-    unsafe { js_string_from_bytes(path.as_ptr(), path.len() as u32) }
+    js_string_from_bytes(path.as_ptr(), path.len() as u32)
 }
 
 #[no_mangle]
@@ -1546,7 +1546,7 @@ fn throw_agent_out_of_range(name: &str, bound: &str, received: f64) -> ! {
         "The value of \"{}\" is out of range. It must be {}. Received {}",
         name, bound, received_str
     );
-    let msg_ptr = unsafe { js_string_from_bytes(message.as_ptr(), message.len() as u32) };
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(msg_ptr, "ERR_OUT_OF_RANGE");
     let err = perry_runtime::error::js_rangeerror_new(msg_ptr);
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
@@ -1846,7 +1846,7 @@ pub extern "C" fn js_http_agent_protocol(handle: Handle) -> *mut StringHeader {
     let s = get_handle_mut::<AgentHandle>(handle)
         .and_then(|a| a.protocol.clone())
         .unwrap_or_else(|| "http:".to_string());
-    unsafe { js_string_from_bytes(s.as_ptr(), s.len() as u32) }
+    js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
 #[no_mangle]

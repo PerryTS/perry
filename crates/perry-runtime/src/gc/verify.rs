@@ -205,7 +205,7 @@ pub(super) fn restore_surviving_dirty_coverage(snapshot: &RememberedDirtySnapsho
         {
             return;
         }
-        visit_gc_rewrite_slots(header, |slot| unsafe {
+        visit_gc_rewrite_slots(header, |slot| {
             if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                 return;
             }
@@ -760,7 +760,7 @@ pub(super) fn verify_minor_unmarked_young_children_report(phase: &str) {
             return;
         }
         checked_parents += 1;
-        visit_gc_rewrite_slots(header, |slot| unsafe {
+        visit_gc_rewrite_slots(header, |slot| {
             if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                 return;
             }

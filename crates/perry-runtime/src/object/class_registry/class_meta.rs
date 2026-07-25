@@ -318,7 +318,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     }
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = unsafe { js_object_get_field_by_name(global_obj, key) };
+        let v = js_object_get_field_by_name(global_obj, key);
         if v.bits() == jv.bits() {
             return Some(name);
         }

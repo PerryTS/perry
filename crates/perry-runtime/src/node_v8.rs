@@ -405,7 +405,7 @@ pub(crate) fn v8_instance_id_from_value(val: f64) -> usize {
     if !jsv.is_pointer() {
         return 0;
     }
-    unsafe {
+    {
         let obj = (val.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
         let f = crate::object::js_object_get_field(obj, 1);
         if f.is_number() {
@@ -533,7 +533,7 @@ pub(crate) fn v8_deserializer_read_uint64(recv: f64) -> f64 {
     // Node returns `[hi, lo]`.
     let (hi, lo) =
         crate::child_process::v8_class_deserializer_read_uint64(v8_instance_id_from_value(recv));
-    unsafe {
+    {
         let arr = crate::array::js_array_alloc(2);
         crate::array::js_array_push_f64(arr, hi as f64);
         crate::array::js_array_push_f64(arr, lo as f64);
@@ -626,7 +626,7 @@ pub extern "C" fn js_v8_promise_hook_register() -> f64 {
 /// `new v8.GCProfiler()` → fresh profiler object.
 #[no_mangle]
 pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
-    unsafe {
+    {
         let module = "v8.GCProfiler";
         crate::object::install_native_module_vtable();
         let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
@@ -659,9 +659,7 @@ fn gc_profiler_object(recv: f64) -> Option<*mut ObjectHeader> {
 #[no_mangle]
 pub extern "C" fn js_v8_gc_profiler_start(recv: f64) -> f64 {
     if let Some(obj) = gc_profiler_object(recv) {
-        unsafe {
-            crate::object::js_object_set_field(obj, 1, JSValue::bool(true));
-        }
+        crate::object::js_object_set_field(obj, 1, JSValue::bool(true));
     }
     undefined()
 }
@@ -672,13 +670,11 @@ pub extern "C" fn js_v8_gc_profiler_stop(recv: f64) -> f64 {
     let Some(obj) = gc_profiler_object(recv) else {
         return undefined();
     };
-    let started = unsafe { crate::object::js_object_get_field(obj, 1) };
+    let started = crate::object::js_object_get_field(obj, 1);
     if !started.is_bool() || !started.as_bool() {
         return undefined();
     }
-    unsafe {
-        crate::object::js_object_set_field(obj, 1, JSValue::bool(false));
-    }
+    crate::object::js_object_set_field(obj, 1, JSValue::bool(false));
     js_v8_gc_profiler_report()
 }
 

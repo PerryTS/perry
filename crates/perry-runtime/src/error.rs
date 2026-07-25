@@ -981,7 +981,7 @@ pub extern "C" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
         let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         let key = crate::builtins::js_string_coerce(name_value);
         if !gptr.is_null() && !key.is_null() {
-            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            let v = crate::object::js_object_get_field_by_name(gptr, key);
             if !v.is_undefined() {
                 return f64::from_bits(v.bits());
             }
@@ -1032,12 +1032,10 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
     let old = if gj.is_pointer() && !key.is_null() {
         let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() {
-            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            let v = crate::object::js_object_get_field_by_name(gptr, key);
             if !v.is_undefined()
-                || unsafe {
-                    crate::object::js_object_has_own(g, name_value).to_bits()
-                        == crate::value::TAG_TRUE
-                }
+                || crate::object::js_object_has_own(g, name_value).to_bits()
+                    == crate::value::TAG_TRUE
             {
                 present = true;
             }
@@ -1058,7 +1056,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
     let numeric = unsafe { crate::value::js_to_numeric(old) };
     let stepped = unsafe { crate::value::js_numeric_step(numeric, is_increment) };
     let gptr = (gj.bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
-    unsafe { crate::object::js_object_set_field_by_name(gptr, key, stepped) };
+    crate::object::js_object_set_field_by_name(gptr, key, stepped);
     if is_prefix {
         stepped
     } else {
@@ -1095,12 +1093,10 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
     if gj.is_pointer() && !key.is_null() {
         let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() {
-            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            let v = crate::object::js_object_get_field_by_name(gptr, key);
             if !v.is_undefined()
-                || unsafe {
-                    crate::object::js_object_has_own(g, name_value).to_bits()
-                        == crate::value::TAG_TRUE
-                }
+                || crate::object::js_object_has_own(g, name_value).to_bits()
+                    == crate::value::TAG_TRUE
             {
                 present = true;
             }
@@ -1132,7 +1128,7 @@ pub extern "C" fn js_global_get_optional(name_value: f64) -> f64 {
         let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         let key = crate::builtins::js_string_coerce(name_value);
         if !gptr.is_null() && !key.is_null() {
-            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            let v = crate::object::js_object_get_field_by_name(gptr, key);
             return f64::from_bits(v.bits());
         }
     }

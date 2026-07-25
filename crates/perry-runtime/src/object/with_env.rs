@@ -153,7 +153,7 @@ pub extern "C" fn js_with_implicit_read(value: f64, name: f64) -> f64 {
             let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
             let key = crate::builtins::js_string_coerce(name);
             if !gptr.is_null() && !key.is_null() {
-                let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+                let v = crate::object::js_object_get_field_by_name(gptr, key);
                 return f64::from_bits(v.bits());
             }
         }

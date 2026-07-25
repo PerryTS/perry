@@ -590,7 +590,7 @@ pub fn add_overlay(parent_handle: i64, child_handle: i64) {
 /// x/y are relative to the parent's coordinate system.
 pub fn set_overlay_frame(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     if let Some(view) = get_widget(handle) {
-        unsafe {
+        {
             view.setTranslatesAutoresizingMaskIntoConstraints(true);
             let frame = objc2_core_foundation::CGRect::new(
                 objc2_core_foundation::CGPoint::new(x, y),
@@ -851,14 +851,12 @@ pub fn set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64
         };
         if is_stack {
             let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&view) as *const NSStackView) };
-            unsafe {
-                stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
-                    top,
-                    left,
-                    bottom,
-                    right,
-                });
-            }
+            stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
+                top,
+                left,
+                bottom,
+                right,
+            });
         }
     }
 }

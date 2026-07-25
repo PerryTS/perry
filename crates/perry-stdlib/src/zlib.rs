@@ -25,7 +25,7 @@ use std::sync::Mutex;
 /// reports invalid input so callers see a Node-shaped exception instead
 /// of a sentinel null return.
 fn throw_zlib_error(message: &str) -> ! {
-    unsafe {
+    {
         let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
         let err = perry_runtime::error::js_error_new_with_message(msg);
         perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))

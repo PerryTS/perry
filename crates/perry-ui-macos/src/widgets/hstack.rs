@@ -31,14 +31,12 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
     stack.setSpacing(spacing);
     stack.setAlignment(NSLayoutAttribute::CenterY);
     set_gravity_distribution(&stack);
-    unsafe {
-        stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
-            top,
-            left,
-            bottom,
-            right,
-        });
-    }
+    stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
+        top,
+        left,
+        bottom,
+        right,
+    });
     let view: Retained<NSView> = unsafe { Retained::cast_unchecked(stack) };
     super::register_widget(view)
 }

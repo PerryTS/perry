@@ -524,12 +524,10 @@ fn items_is_iterable(items: f64) -> bool {
     }
     // A bare iterator / generator object exposes a callable `next`.
     let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
-    let next_val = unsafe {
-        crate::object::js_object_get_field_by_name(
-            raw as *const crate::object::ObjectHeader,
-            next_key,
-        )
-    };
+    let next_val = crate::object::js_object_get_field_by_name(
+        raw as *const crate::object::ObjectHeader,
+        next_key,
+    );
     if next_val.is_undefined() {
         return false;
     }

@@ -1237,9 +1237,7 @@ fn fs_promises_constants_value() -> f64 {
 fn set_named_value(obj: *mut ObjectHeader, name: &str, value: f64) {
     let name_bytes = name.as_bytes();
     let name_header = js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
-    unsafe {
-        crate::object::js_object_set_field_by_name(obj, name_header, value);
-    }
+    crate::object::js_object_set_field_by_name(obj, name_header, value);
 }
 
 fn submodule_export_value(submod: &'static SubmoduleSpec, spec: &'static ExportSpec) -> f64 {
@@ -1341,9 +1339,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
         let value = value_from_ptr(obj as *const u8);
         let name = b"default";
         let name_header = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        unsafe {
-            crate::object::js_object_set_field_by_name(obj, name_header, value);
-        }
+        crate::object::js_object_set_field_by_name(obj, name_header, value);
     }
     if submod.key == "timers" {
         let value = crate::object::timers_promises_parent_namespace();

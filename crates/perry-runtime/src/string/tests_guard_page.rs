@@ -291,7 +291,7 @@ fn split_parts_preserve_lone_surrogate_flag() {
         f0, STRING_FLAG_HAS_LONE_SURROGATES,
         "the part holding the lone surrogate must stay flagged"
     );
-    let part0 = unsafe {
+    let part0 = {
         let v = crate::array::js_array_get_f64(arr, 0);
         crate::value::js_nanbox_get_pointer(v) as *const StringHeader
     };

@@ -394,7 +394,7 @@ fn make_assertion_error(
         js_register_class_extends_error(crate::error::CLASS_ID_ASSERTION_ERROR);
     });
     let obj = js_object_alloc(crate::error::CLASS_ID_ASSERTION_ERROR, 8);
-    unsafe {
+    {
         let set = |key: &str, value: f64| {
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
             js_object_set_field_by_name(obj, key_ptr, value);
@@ -1219,7 +1219,7 @@ pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    unsafe {
+    {
         let read = |key: &str| -> f64 {
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
             let obj_ptr =

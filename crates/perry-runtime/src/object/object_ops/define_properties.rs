@@ -24,8 +24,7 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
     let target_is_class_ref = super::super::class_ref_id(target).is_some();
     let target_is_handle = {
         let jv = crate::value::JSValue::from_bits(target.to_bits());
-        jv.is_pointer()
-            && crate::value::addr_class::is_small_handle(unsafe { jv.as_pointer::<u8>() } as usize)
+        jv.is_pointer() && crate::value::addr_class::is_small_handle(jv.as_pointer::<u8>() as usize)
     };
     if !target_is_class_ref && !target_is_handle && !unsafe { value_is_object_like(target) } {
         throw_object_type_error(b"Object.defineProperties called on non-object");
@@ -61,9 +60,9 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
         crate::value::js_nanbox_get_pointer(names_value) as *const crate::array::ArrayHeader;
     let mut keys: Vec<f64> = Vec::new();
     if !names_arr.is_null() {
-        let len = unsafe { crate::array::js_array_length(names_arr) } as usize;
+        let len = crate::array::js_array_length(names_arr) as usize;
         for i in 0..len {
-            let k = unsafe { crate::array::js_array_get(names_arr, i as u32) };
+            let k = crate::array::js_array_get(names_arr, i as u32);
             let k_f64 = f64::from_bits(k.bits());
             // Skip non-enumerable own keys (spec step: descriptor must be
             // enumerable). `propertyIsEnumerable` returns false for absent or

@@ -200,7 +200,7 @@ fn undefined() -> f64 {
 }
 
 fn nanbox_str(s: &str) -> f64 {
-    unsafe {
+    {
         let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
         f64::from_bits(JSValue::string_ptr(ptr).bits())
     }
@@ -297,7 +297,7 @@ fn throw_type_error(message: &str, code: &'static str) -> ! {
 }
 
 fn throw_error(message: &str, code: &'static str) -> ! {
-    unsafe {
+    {
         let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
         perry_runtime::node_submodules::register_error_code_pub(msg, code);
         let err = perry_runtime::error::js_error_new_with_message(msg);

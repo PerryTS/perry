@@ -1414,9 +1414,9 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
             let arr_handle = scope.root_nanbox_f64(arr_value);
             let arr_ptr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64()) as *mut ArrayHeader;
             if !arr_ptr.is_null() {
-                let len = unsafe { js_array_length(arr_ptr) as usize };
+                let len = js_array_length(arr_ptr) as usize;
                 for i in 0..len {
-                    let entry = unsafe {
+                    let entry = {
                         let arr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
                             as *const ArrayHeader;
                         js_array_get_f64(arr, i as u32)
@@ -1723,9 +1723,9 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
             let arr_handle = scope.root_nanbox_f64(arr_value);
             let arr_ptr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64()) as *mut ArrayHeader;
             if !arr_ptr.is_null() {
-                let len = unsafe { js_array_length(arr_ptr) as usize };
+                let len = js_array_length(arr_ptr) as usize;
                 for i in 0..len {
-                    let element = unsafe {
+                    let element = {
                         let arr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
                             as *const ArrayHeader;
                         js_array_get_f64(arr, i as u32)

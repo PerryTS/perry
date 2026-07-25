@@ -694,14 +694,14 @@ pub(crate) fn closure_ptr(v: f64) -> *const ClosureHeader {
 }
 
 pub(crate) fn set_field_value(obj: *mut ObjectHeader, name: &str, value: f64) {
-    unsafe {
+    {
         let key = js_string_from_bytes(name.as_bytes().as_ptr(), name.len() as u32);
         js_object_set_field_by_name(obj, key, value);
     }
 }
 
 pub(crate) fn get_field_value(obj: *mut ObjectHeader, name: &str) -> f64 {
-    unsafe {
+    {
         let key = js_string_from_bytes(name.as_bytes().as_ptr(), name.len() as u32);
         js_object_get_field_by_name_f64(obj, key)
     }

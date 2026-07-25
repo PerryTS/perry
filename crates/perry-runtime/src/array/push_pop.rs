@@ -400,7 +400,7 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
     if arr.is_null() {
         return;
     }
-    if unsafe { array_object_flags(arr) } & crate::gc::OBJ_FLAG_FROZEN != 0 {
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0 {
         throw_non_writable_length();
     }
     js_array_set_length(arr, new_length);

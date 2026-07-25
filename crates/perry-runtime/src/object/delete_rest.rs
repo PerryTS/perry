@@ -595,7 +595,7 @@ mod sso_tests_1781 {
     /// vacuously") and the property stayed put.
     #[test]
     fn delete_dynamic_removes_property_via_sso_key() {
-        unsafe {
+        {
             let obj = crate::object::js_object_alloc(0, 0);
             let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
             crate::object::js_object_set_field_by_name(obj, key, 42.0);

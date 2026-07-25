@@ -561,7 +561,7 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_BITS {
             let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
             let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
-            let joined = unsafe { crate::array::js_array_join(arr_ptr, comma) };
+            let joined = crate::array::js_array_join(arr_ptr, comma);
             return js_number_coerce(crate::value::js_nanbox_string(joined as i64));
         }
         // TypedArray → OrdinaryToPrimitive(number): a *patched own*

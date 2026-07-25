@@ -554,7 +554,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         // (bounds) and the own/inherited members property-get can resolve.
         if crate::buffer::is_registered_buffer(obj_addr as usize) {
             let buf = obj_addr as *const crate::buffer::BufferHeader;
-            let len = unsafe { crate::buffer::js_buffer_length(buf) };
+            let len = crate::buffer::js_buffer_length(buf);
             if key_val.is_int32() {
                 let idx = key_val.as_int32();
                 return if idx >= 0 && idx < len {

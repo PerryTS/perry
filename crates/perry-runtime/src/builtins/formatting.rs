@@ -1531,7 +1531,7 @@ fn format_accessor_property(acc: crate::object::AccessorDescriptor, depth: usize
         let closure =
             (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
         if !closure.is_null() {
-            let value = unsafe { crate::closure::js_closure_call0(closure) };
+            let value = crate::closure::js_closure_call0(closure);
             return format!("[{}: {}]", label, format_jsvalue_for_json(value, depth + 1));
         }
     }

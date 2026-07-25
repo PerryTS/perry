@@ -57,10 +57,10 @@ mod tests {
         assert_eq!(bits & 0xFFFF_0000_0000_0000, POINTER_TAG);
         let obj_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
 
-        let top = unsafe { js_object_get_field(obj_ptr, 0) };
-        let right = unsafe { js_object_get_field(obj_ptr, 1) };
-        let bottom = unsafe { js_object_get_field(obj_ptr, 2) };
-        let left = unsafe { js_object_get_field(obj_ptr, 3) };
+        let top = js_object_get_field(obj_ptr, 0);
+        let right = js_object_get_field(obj_ptr, 1);
+        let bottom = js_object_get_field(obj_ptr, 2);
+        let left = js_object_get_field(obj_ptr, 3);
 
         assert_eq!(f64::from_bits(top.bits()), 59.0);
         assert_eq!(f64::from_bits(right.bits()), 0.0);

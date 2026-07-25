@@ -316,7 +316,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'j' => {
-                    unsafe {
+                    {
                         if util_format_json_arg_has_cycle(val) {
                             out.push_str("[Circular]");
                             i += 2;

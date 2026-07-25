@@ -1123,7 +1123,7 @@ pub fn add_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64) 
     let app = NSApplication::sharedApplication(mtm);
 
     // If the menu bar exists, install immediately; otherwise buffer for later.
-    let has_menu = unsafe { app.mainMenu().is_some() };
+    let has_menu = app.mainMenu().is_some();
     if has_menu {
         install_keyboard_shortcut(key_ptr, modifiers, callback, mtm);
     } else {

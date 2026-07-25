@@ -598,7 +598,7 @@ pub extern "C" fn js_commander_args_array(handle: Handle) -> Handle {
         Some(cmd) => cmd.args.clone(),
         None => Vec::new(),
     };
-    unsafe {
+    {
         let boxed: Vec<f64> = args
             .iter()
             .map(|a| {

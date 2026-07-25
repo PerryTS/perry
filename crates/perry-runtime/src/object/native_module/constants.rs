@@ -1588,7 +1588,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "perf_histogram" => match property {
             "mean" | "min" | "max" | "stddev" | "exceeds" | "count" => Some(0.0),
             "percentiles" | "percentilesBigInt" => {
-                let obj = unsafe { js_object_alloc(0, 0) };
+                let obj = js_object_alloc(0, 0);
                 Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
             }
             _ => None,
