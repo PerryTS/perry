@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use perry_ffi::{alloc_string, JsValue, ObjectHeader};
+use perry_ffi::{alloc_string, js_array_alloc, js_array_push, JsValue, ObjectHeader};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
@@ -95,14 +95,13 @@ pub(crate) fn build_response_headers_object(raw: &[(String, String)]) -> f64 {
     if !obj.is_null() {
         for (i, key) in order.iter().enumerate() {
             let v = if key == "set-cookie" {
-                let mut arr = perry_runtime::js_array_alloc(set_cookie.len() as u32);
+                let mut arr = unsafe { js_array_alloc(set_cookie.len() as u32) };
                 for cookie in &set_cookie {
-                    let ptr =
-                        perry_runtime::js_string_from_bytes(cookie.as_ptr(), cookie.len() as u32);
-                    arr =
-                        perry_runtime::js_array_push(arr, perry_runtime::JSValue::string_ptr(ptr));
+                    arr = unsafe {
+                        js_array_push(arr, JsValue::from_string_ptr(alloc_string(cookie).as_raw()))
+                    };
                 }
-                JsValue::from_bits(perry_runtime::JSValue::array_ptr(arr).bits())
+                JsValue::from_object_ptr(arr)
             } else if let Some(val) = combined.get(key) {
                 let s = alloc_string(val);
                 JsValue::from_string_ptr(s.as_raw())

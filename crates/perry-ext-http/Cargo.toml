@@ -24,33 +24,6 @@ tokio-rustls.workspace = true
 rustls = { workspace = true, features = ["std", "ring", "tls12"] }
 rustls-pemfile.workspace = true
 tokio-tungstenite = { workspace = true }
-# #2154: Agent argument validation throws `RangeError [ERR_OUT_OF_RANGE]`
-# via `js_throw` + `register_error_code_pub`, which are perry-runtime's
-# Rust-ABI helpers (not perry-ffi's). Stays consistent with perry-stdlib's
-# parallel `http.rs` AgentHandle, which already calls into perry-runtime
-# directly. Cargo feature unification keeps the stdlib feature on when
-# both stdlib and this crate link the same perry-runtime — no duplicate
-# symbols, no behaviour change for the default `full` build.
-# #6303: perry-runtime MUST be built here with the same feature set the shipped
-# `libperry_runtime.a` / `libperry_stdlib.a` carry (i.e. its `default`). This crate
-# is a `staticlib`, so it BUNDLES the perry-runtime rlib objects into
-# `libperry_ext_*.a` — and perry links the ext archives BEFORE stdlib/runtime
-# (`prefer_well_known_before_stdlib`), so those bundled objects WIN the link for
-# every symbol they define. The workspace dep is `default-features = false`, so
-# without `"default"` here a per-crate `cargo build -p perry-ext-<x>` (exactly what
-# release-packages.yml does in its per-crate loop) bundles a runtime with
-# `regex-engine`/`temporal`/... compiled OUT. The dispatchers those features gate
-# are exported UNCONDITIONALLY (`js_string_replace_search_dyn`,
-# `js_native_call_method`, ...) with the feature-gated logic `#[cfg]`-ed out of the
-# BODY — so the degraded copy silently ToString-coerces a RegExp argument and
-# searches for it literally instead of matching it (str.replace(re, fn) never fires
-# its callback). Keep `"default"` in lock-step with perry-runtime's default feature
-# list; the `ext_crates_bundle_a_full_featured_perry_runtime` test (well_known.rs) guards it.
-# #6314: `stdlib` drops the bundled no-op `stdlib_stubs` (js_stdlib_init_dispatch,
-# ...) from this staticlib's perry-runtime copy. Linked before stdlib, the no-op
-# `js_stdlib_init_dispatch` otherwise wins first-definition and never registers
-# the tokio reactor — every node:http server dies on its first accept.
-perry-runtime = { workspace = true, features = ["default", "external-ws-symbols", "stdlib"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false }
 tokio = { workspace = true }
 # Zero-copy body chunks: reqwest::Response::chunk() yields a refcounted
@@ -66,4 +39,6 @@ lazy_static.workspace = true
 socket2.workspace = true
 
 [dev-dependencies]
+# GC and async test shims call runtime internals; production code uses only perry-ffi.
+perry-runtime.workspace = true
 perry-ffi = { workspace = true, features = ["runtime-link"] }

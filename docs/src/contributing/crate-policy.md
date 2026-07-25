@@ -63,8 +63,6 @@ reason to split or merge it.
 
 - Native bindings use `perry-ffi` as their production interface to Perry.
 - A production dependency from `perry-ext-*` to `perry-runtime` is forbidden.
-  `perry-ext-http` is the sole recorded migration debt while its missing FFI
-  capabilities are introduced.
 - Test binaries may enable `perry-ffi/runtime-link`; that edge provides runtime
   symbols for tests and is not part of the binding's distributed contract.
 - Runtime and stdlib functionality must have one production implementation.
