@@ -649,6 +649,23 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         }
         true
     }
+    // #6812 (w16): `{}` — the builder-pattern seed — lowers to `new
+    // __AnonShape_<site-hash>()`, a unique 0-field shape-only class per
+    // source site, instead of the legacy class-0 empty object. See
+    // `synthesize_empty_site_class` for why: the runtime's learned inline
+    // right-sizing and the static-key write PIC both key on a non-zero
+    // class_id, so class-0 builder objects could never leave the overflow
+    // side-table slow path.
+    if obj.props.is_empty() {
+        let class_name = ctx.synthesize_empty_site_class(obj.span.lo.0);
+        return Ok(Expr::New {
+            class_name,
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        });
+    }
     if is_closed_shape(obj) {
         let mut fields: Vec<(String, Type, Expr)> = Vec::new();
         let mut bail = false;

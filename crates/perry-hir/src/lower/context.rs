@@ -944,7 +944,31 @@ impl LoweringContext {
             shape_key.push_str(tag(ty));
             shape_key.push(',');
         }
+        self.mint_anon_shape_class(shape_key, field_shapes)
+    }
 
+    /// #6812 (w16): mint a UNIQUE per-source-site 0-field anon-shape class
+    /// for an EMPTY object literal (`{}`). Unlike
+    /// [`Self::synthesize_anon_shape_class`], the dedup key is the SITE
+    /// (source path + byte offset), not the field shape — every `{}`
+    /// occurrence gets its own class_id. That gives builder-pattern objects
+    /// a learnable identity: the runtime's learned inline sizing
+    /// (`note_learned_inline_fields` / `learned_inline_field_count`, keyed
+    /// by class_id) can attribute overflow growth to this site and
+    /// right-size later allocations so all fields land inline, and the
+    /// static-key write PIC's `class_id != 0` gate admits the objects. An
+    /// empty literal that never grows allocates exactly as before (learned
+    /// width 0 keeps the INLINE_SLOT_FLOOR minimum).
+    pub(crate) fn synthesize_empty_site_class(&mut self, byte_offset: u32) -> String {
+        let site_key = format!("@empty-site:{}:{}", self.source_file_path, byte_offset);
+        self.mint_anon_shape_class(site_key, &[])
+    }
+
+    fn mint_anon_shape_class(
+        &mut self,
+        shape_key: String,
+        field_shapes: &[(String, Type)],
+    ) -> String {
         // Field names in source order, so a call-site can recover a config
         // object's keys after the literal is lowered to `New { class_name }`.
         let field_names: Vec<String> = field_shapes.iter().map(|(name, _)| name.clone()).collect();
