@@ -37,7 +37,7 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 | w0_canonical | 2 static writes, const alias, nested const `for`s, `+`/`-` RHS | whole-loop clone | 6 | 9 | **0.67** | BEATS node |
 | w1_three_writes | 3 static writes, same loop | whole-loop clone (≤4 fields) | 7 | 9 | **0.78** | BEATS node |
 | w2_one_write | 1 static write | whole-loop clone | 5 | 7 | **0.71** | BEATS node |
-| w3_mul_rhs | RHS uses `*` | *(pre-#6830 baseline)* PIC → whole-loop clone | 47 → 6 | 7 | 6.7 → **0.75** | BEATS node (#6830 admits `Mul` with endpoint-product ranges) |
+| w3_mul_rhs | RHS uses `*` | *(pre-#6830 baseline)* PIC → whole-loop clone | 47 → 6 | 7 | 6.7 → **0.86** | BEATS node (#6830 admits `Mul` with endpoint-product ranges) |
 | w4_dyn_bound | inner bound `objs.length` | *(pre-#6830 baseline)* PIC → whole-loop clone | 51 → 6 | 8 | 6.4 → **0.75** | BEATS node (#6830 sentinel-resolved dynamic bound) |
 | w5_while | same body, `while` form | *(pre-#6830 baseline)* PIC → whole-loop clone | 46 → 5 | 7 | 6.6 → **0.71** | BEATS node (#6830 while normalization) |
 | w6_call_in_body | user call inside body | NOT clone → PIC + call | 100 | 7 | 14.3 | GAP: call-tolerant clone / inlining |

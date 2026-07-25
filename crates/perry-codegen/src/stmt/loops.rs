@@ -1857,6 +1857,38 @@ enum ObjectArrayWriteNumber {
 /// the measured #6812 gap while preserving a fixed-size, allocation-free
 /// preflight ABI.
 const MAX_OBJECT_ARRAY_WRITE_FIELDS: usize = 4;
+/// #6812 (w8): caps for the leading numeric-temp run. Substituting a temp
+/// duplicates its tree at every use (`let b = a + a;` doubles per level), so
+/// both the temp count and every parsed tree's node count are budgeted —
+/// the range/emit walkers recurse over these trees and must stay on a
+/// bounded stack for generated/inlined bodies of any size.
+const MAX_OBJECT_ARRAY_WRITE_TEMPS: usize = 8;
+const MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES: usize = 64;
+
+/// Iterative (explicit-worklist) node count with early exit past the cap, so
+/// counting an oversized tree never recurses either.
+fn object_array_write_number_node_count(root: &ObjectArrayWriteNumber) -> usize {
+    let mut count = 0usize;
+    let mut work = vec![root];
+    while let Some(node) = work.pop() {
+        count += 1;
+        if count > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
+            return count;
+        }
+        match node {
+            ObjectArrayWriteNumber::Add(left, right)
+            | ObjectArrayWriteNumber::Sub(left, right)
+            | ObjectArrayWriteNumber::Mul(left, right) => {
+                work.push(left);
+                work.push(right);
+            }
+            ObjectArrayWriteNumber::OuterCounter
+            | ObjectArrayWriteNumber::InnerCounter
+            | ObjectArrayWriteNumber::Constant(_) => {}
+        }
+    }
+    count
+}
 
 struct ObjectArrayWriteLoop {
     outer_counter_id: u32,
@@ -2264,11 +2296,17 @@ fn match_object_array_write_loop(
         rest,
     )) = stores.split_first()
     {
-        if ctx.boxed_vars.contains(temp_id) {
+        if ctx.boxed_vars.contains(temp_id) || temps.len() >= MAX_OBJECT_ARRAY_WRITE_TEMPS {
             return None;
         }
         let parsed =
             match_object_array_write_number(temp_init, outer_counter_id, inner_counter_id, &temps)?;
+        // Substitution can compound: `let b = a + a; let c = b + b;` doubles
+        // the tree per level, so a size budget — not a temp-count cap alone —
+        // keeps the recursive range/emit walkers on bounded stacks.
+        if object_array_write_number_node_count(&parsed) > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
+            return None;
+        }
         temps.insert(*temp_id, parsed);
         stores = rest;
     }
@@ -2308,6 +2346,12 @@ fn match_object_array_write_loop(
         };
         let value =
             match_object_array_write_number(value, outer_counter_id, inner_counter_id, &temps)?;
+        // Same size budget as the temps: a value combining several
+        // substituted temps must still hand the recursive range/emit
+        // walkers a bounded tree.
+        if object_array_write_number_node_count(&value) > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
+            return None;
+        }
         object_array_write_number_finite_range(&value, outer_start, outer_bound, inner_bound)?;
         Some((property, value))
     };
