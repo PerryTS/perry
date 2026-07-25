@@ -208,14 +208,6 @@ pub(crate) unsafe fn array_species_create_with_capacity(
     }
 }
 
-/// `true` when `array_species_create` would take the default fast path — used
-/// by callers that only need to *validate* the constructor (throwing on a bad
-/// one) while keeping their existing plain-array result building, and want to
-/// know whether a custom container must instead be populated element-by-element.
-pub(crate) unsafe fn species_is_default(original: f64) -> bool {
-    matches!(resolve_species(original), SpeciesChoice::Default)
-}
-
 /// `true` when a species `result` (NaN-boxed) is an ordinary `ArrayHeader` —
 /// i.e. the default fast path — so the caller can use direct slot writes.
 pub(crate) unsafe fn species_result_is_plain_array(result: f64) -> bool {

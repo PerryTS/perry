@@ -54,19 +54,6 @@ fn date_arg_to_clipped_ms(value: f64) -> f64 {
     ms.trunc()
 }
 
-pub(crate) extern "C" fn date_time_format_format_thunk(
-    _closure: *const ClosureHeader,
-    value: f64,
-) -> f64 {
-    let obj = this_intl_object("format", KIND_DATE_TIME);
-    let temporal_kind = crate::temporal::temporal_kind(value);
-    if let Some(kind) = temporal_kind {
-        validate_temporal_dtf_overlap(kind, obj);
-    }
-    let ms = date_arg_to_clipped_ms(value);
-    string_value(&format_ms_with_dtf_obj(obj, ms, temporal_kind))
-}
-
 pub(crate) extern "C" fn date_time_format_bound_format_thunk(
     closure: *const ClosureHeader,
     value: f64,
@@ -89,13 +76,6 @@ pub(crate) extern "C" fn date_time_format_format_getter_thunk(
 ) -> f64 {
     let obj = this_intl_object("format", KIND_DATE_TIME);
     get_field(obj, KEY_DTF_BOUND_FORMAT)
-}
-
-/// Fallback path: no DTF object context, produce short UTC date. Still used by
-/// some internal callers that pre-date the obj-aware thunks.
-pub(crate) fn date_time_format_format_value(value: f64) -> f64 {
-    let ms = date_arg_to_clipped_ms(value);
-    string_value(&date_short_utc_from_ms(ms))
 }
 
 pub(crate) extern "C" fn date_time_format_to_parts_thunk(
@@ -694,15 +674,6 @@ fn time_zone_name_display(time_zone: &str, style: &str) -> String {
         return format!("GMT{time_zone}");
     }
     "GMT".to_string()
-}
-
-/// `M/D/YYYY` short form rendered directly from an integer-millisecond
-/// timestamp. Shared by `format`, `formatToParts`, and both range variants so
-/// all four stay byte-for-byte consistent.
-pub(crate) fn date_short_utc_from_ms(ms: f64) -> String {
-    let secs = (ms as i64).div_euclid(1000);
-    let (year, month, day, _, _, _) = crate::date::timestamp_to_components(secs);
-    format!("{}/{}/{}", month, day, year)
 }
 
 pub(crate) fn date_range_parts_from_ms(ms: f64) -> Vec<(&'static str, String)> {

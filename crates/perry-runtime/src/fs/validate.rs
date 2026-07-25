@@ -627,18 +627,6 @@ pub(crate) fn validate_fs_mode(value: f64) {
     }
 }
 
-pub(crate) fn fs_mode_value(value: f64) -> i32 {
-    validate_fs_mode(value);
-    let jv = JSValue::from_bits(value.to_bits());
-    if is_nullish(jv) {
-        0
-    } else if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        jv.as_number() as i32
-    }
-}
-
 /// Validate that `value` is a finite integer in `[min, max]`. On type or
 /// range failure throws Node's `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE`
 /// with the same `Received` clause shape Node uses.

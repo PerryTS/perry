@@ -44,27 +44,6 @@ pub(crate) fn stmt_list_starts_with_use_strict_directive(stmts: &[ast::Stmt]) ->
     false
 }
 
-pub(crate) fn module_starts_with_use_strict_directive(module: &ast::Module) -> bool {
-    for item in &module.body {
-        match item {
-            ast::ModuleItem::Stmt(stmt) => match is_use_strict_directive_stmt(stmt) {
-                Some(true) => return true,
-                Some(false) => continue,
-                None => return false,
-            },
-            ast::ModuleItem::ModuleDecl(_) => return false,
-        }
-    }
-    false
-}
-
-pub(crate) fn module_has_module_declaration(module: &ast::Module) -> bool {
-    module
-        .body
-        .iter()
-        .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
-}
-
 /// Map a function's declared return type to a native-instance class when it
 /// matches a known stdlib pattern. Lets a wrapper function like
 /// `function openSocket(host, port): Socket { ... }` advertise that calls

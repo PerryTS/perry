@@ -1,21 +1,5 @@
 use super::*;
 
-/// Resolve `(start, end)` byte indices from Node-style `offset` / `size`
-/// arguments against a buffer of `total` bytes. Out-of-range values are
-/// clamped to `[0, total]`.
-pub(super) fn resolve_range(
-    total: usize,
-    offset: Option<usize>,
-    size: Option<usize>,
-) -> (usize, usize) {
-    let start = offset.unwrap_or(0).min(total);
-    let end = match size {
-        Some(s) => start.saturating_add(s).min(total),
-        None => total,
-    };
-    (start, end)
-}
-
 /// Create HMAC-SHA256
 /// crypto.createHmac('sha256', key).update(data).digest('hex') -> string
 #[no_mangle]

@@ -465,6 +465,10 @@ fn join_win32_paths(base: &str, tail: &str) -> String {
     }
 }
 
+pub(crate) fn resolve_win32_str(path_str: &str) -> String {
+    win32_resolve_inner(path_str)
+}
+
 fn win32_resolve_inner(path_str: &str) -> String {
     let split = split_win32(path_str);
     if split.is_absolute {
@@ -495,10 +499,6 @@ fn win32_resolve_inner(path_str: &str) -> String {
         }
     };
     normalize_win32_str(&path)
-}
-
-pub(crate) fn resolve_win32_str(path_str: &str) -> String {
-    win32_resolve_inner(path_str)
 }
 
 /// Get directory name from path — Node's `path.posix.dirname`, which is purely

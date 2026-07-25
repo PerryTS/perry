@@ -39,16 +39,6 @@ pub enum DataViewKind {
 }
 
 impl DataViewKind {
-    #[inline]
-    fn width(self) -> usize {
-        match self {
-            DataViewKind::Int8 | DataViewKind::Uint8 => 1,
-            DataViewKind::Int16 | DataViewKind::Uint16 => 2,
-            DataViewKind::Int32 | DataViewKind::Uint32 | DataViewKind::Float32 => 4,
-            DataViewKind::Float64 | DataViewKind::BigInt64 | DataViewKind::BigUint64 => 8,
-        }
-    }
-
     /// Is this a BigInt-valued accessor (`getBigInt64`/`setBigUint64`/…)? Those
     /// read/write a NaN-boxed BigInt rather than a Number.
     #[inline]

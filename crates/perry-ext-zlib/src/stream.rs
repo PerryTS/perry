@@ -335,6 +335,7 @@ impl CodecState {
     }
 }
 
+#[allow(dead_code)] // test scaffolding: default-level wrapper used only by the cfg(test) streaming tests
 fn make_codec_state(codec: Codec) -> Option<CodecState> {
     make_codec_state_with_level(codec, Compression::default())
 }

@@ -103,8 +103,6 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
     target
 }
 
-const TAG_UNDEFINED_LOCAL: u64 = 0x7FFC_0000_0000_0001;
-
 /// Coerce an arbitrary key value (f64 — usually a STRING_TAG NaN-box) to a
 /// `*const StringHeader` for use with `js_object_get_field_by_name_f64`.
 /// Returns null if the value isn't string-like.

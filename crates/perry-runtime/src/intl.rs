@@ -458,6 +458,7 @@ fn throw_invalid_language_tag(tag: &str) -> ! {
     crate::exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
+#[allow(dead_code)] // used only in the #[cfg(not(feature = "intl-locale"))] fallback branch
 fn canonical_locale(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return None;

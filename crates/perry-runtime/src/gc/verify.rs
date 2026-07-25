@@ -628,6 +628,7 @@ impl MarkInvariantVerifyStats {
 }
 
 #[cold]
+#[allow(dead_code)] // GC heap-invariant verifier (PERRY_GC_VERIFY_EVACUATION); driven by verify_marked_heap_no_unmarked_children and its cfg(test) callers in gc/tests/barrier.rs
 pub(super) fn panic_mark_invariant_verifier_failed(stats: MarkInvariantVerifyStats) -> ! {
     let missing = stats.first_missing.unwrap_or_default();
     panic!(
@@ -670,6 +671,7 @@ pub(super) unsafe fn verify_marked_object_child_marks(
     });
 }
 
+#[allow(dead_code)] // GC heap-invariant verifier exercised by cfg(test) suite in gc/tests/barrier.rs
 pub(super) fn verify_marked_heap_no_unmarked_children() -> MarkInvariantVerifyStats {
     let mut stats = MarkInvariantVerifyStats::default();
     crate::arena::arena_walk_objects(|hp| unsafe {

@@ -212,9 +212,9 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut
 // dead-strips them from the stdlib archive, breaking the link of any program
 // that uses zlib (surfaced by Next.js's resume-data-cache `inflateSync` once the
 // #5437 live-import fix makes that module reachable). `#[used]` keeps them.
-struct KeepZlibFfi([*const (); 32]);
-// SAFETY: a link-time keepalive anchor only — the pointers are never read or
-// dereferenced, so cross-thread sharing of the raw pointers is sound.
+struct KeepZlibFfi(#[allow(dead_code)] [*const (); 32]); // link-time keepalive anchor; field never read, only #[used] to retain FFI symbols
+                                                         // SAFETY: a link-time keepalive anchor only — the pointers are never read or
+                                                         // dereferenced, so cross-thread sharing of the raw pointers is sound.
 unsafe impl Sync for KeepZlibFfi {}
 #[used]
 static KEEP_ZLIB_FFI: KeepZlibFfi = KeepZlibFfi([

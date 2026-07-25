@@ -1200,17 +1200,6 @@ impl LoweringContext {
         }
     }
 
-    /// Current depth of the module-shadow stack (a scope mark).
-    pub(crate) fn module_shadow_mark(&self) -> usize {
-        self.module_shadow_stack.len()
-    }
-
-    /// Restore the module-shadow stack to `mark`, re-exposing modules whose
-    /// shadowing local bindings went out of scope.
-    pub(crate) fn truncate_module_shadow(&mut self, mark: usize) {
-        self.module_shadow_stack.truncate(mark);
-    }
-
     pub(crate) fn register_builtin_module_alias(
         &mut self,
         local_name: String,

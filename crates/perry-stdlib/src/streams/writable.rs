@@ -258,24 +258,6 @@ fn writable_capture_promise(closure: *const ClosureHeader, idx: u32) -> *mut Pro
     perry_runtime::closure::js_closure_get_capture_ptr(closure, idx) as *mut Promise
 }
 
-extern "C" fn writable_write_start_microtask(closure: *const ClosureHeader) -> f64 {
-    unsafe {
-        let stream_id = writable_capture_usize(closure, 0);
-        let writer_id = writable_capture_usize(closure, 1);
-        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2);
-        let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as u64;
-        let write_promise = writable_capture_promise(closure, 4);
-        run_writable_write(
-            stream_id,
-            writer_id,
-            cb,
-            f64::from_bits(chunk_bits),
-            write_promise,
-        );
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
-
 extern "C" fn writable_write_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
     unsafe {
         let stream_id = writable_capture_usize(closure, 0);

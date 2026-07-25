@@ -485,12 +485,6 @@ fn promise_value_from_ptr(promise: *mut crate::promise::Promise) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
 }
 
-fn fulfilled_promise(value: f64) -> *mut crate::promise::Promise {
-    let promise = crate::promise::js_promise_new();
-    crate::promise::js_promise_resolve(promise, value);
-    promise
-}
-
 fn rejected_promise(reason: f64) -> *mut crate::promise::Promise {
     let promise = crate::promise::js_promise_new();
     crate::promise::js_promise_reject(promise, reason);

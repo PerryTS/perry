@@ -500,37 +500,3 @@ fn eval_module_has_strict_eval_arguments_violation(
     };
     stmts.iter().any(|s| stmt_has_violation(s, top_strict))
 }
-
-fn strict_eval_source_assigns_arguments(source: &str) -> bool {
-    let bytes = source.as_bytes();
-    let needle = b"arguments";
-    let mut i = 0usize;
-    while i + needle.len() <= bytes.len() {
-        if &bytes[i..i + needle.len()] != needle {
-            i += 1;
-            continue;
-        }
-        let before_ok = i == 0 || !is_ident_continue(bytes[i - 1]);
-        let after = i + needle.len();
-        let after_ok = after == bytes.len() || !is_ident_continue(bytes[after]);
-        if before_ok && after_ok {
-            let mut j = after;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if j < bytes.len()
-                && bytes[j] == b'='
-                && bytes.get(j + 1).copied() != Some(b'=')
-                && bytes.get(j + 1).copied() != Some(b'>')
-            {
-                return true;
-            }
-        }
-        i = after;
-    }
-    false
-}
-
-fn is_ident_continue(byte: u8) -> bool {
-    byte == b'_' || byte == b'$' || byte.is_ascii_alphanumeric()
-}

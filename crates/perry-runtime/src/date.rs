@@ -872,13 +872,6 @@ fn jsvalue_to_number(v: f64) -> f64 {
     }
 }
 
-/// True if a NaN-boxed JS value is `undefined`.
-#[inline]
-fn jsvalue_is_undefined(v: f64) -> bool {
-    let bits = v.to_bits();
-    ((bits >> 48) & 0xFFFF) == 0x7FFC && (bits & 0xFF) == 0x01
-}
-
 /// `Date.prototype.set*` family with optional trailing arguments (#2851).
 ///
 /// `field` selects which component the *leading* argument sets:

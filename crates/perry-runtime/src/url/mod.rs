@@ -146,19 +146,6 @@ pub(crate) fn object_prop_f64(obj: *mut ObjectHeader, key: &str) -> f64 {
     crate::object::js_object_get_field_by_name_f64(obj, key_ptr)
 }
 
-/// Read a `*mut StringHeader` (NULL → empty) into a Rust `String`.
-pub(crate) fn string_header_to_string(value: *mut crate::StringHeader) -> String {
-    if value.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let len = (*value).byte_len as usize;
-        let data_ptr = (value as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let slice = std::slice::from_raw_parts(data_ptr, len);
-        String::from_utf8_lossy(slice).into_owned()
-    }
-}
-
 /// WHATWG host canonicalization via the `url` crate (#3056, #3059).
 ///
 /// Perry's URL uses a custom hostname parser that runs only IDNA

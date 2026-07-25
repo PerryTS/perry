@@ -14,6 +14,8 @@ extern "C" {
 }
 
 struct TableEntry {
+    #[allow(dead_code)]
+    // owning handle: keeps the AppKit scroll view retained for the entry's lifetime
     scroll_view: Retained<NSView>,
     table_view: Retained<NSView>,
     handle: i64,

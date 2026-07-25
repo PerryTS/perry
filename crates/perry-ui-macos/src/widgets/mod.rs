@@ -1050,7 +1050,6 @@ pub fn match_parent_width(child_handle: i64) {
 
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 

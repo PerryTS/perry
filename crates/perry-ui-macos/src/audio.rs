@@ -58,10 +58,6 @@ impl AWeightState {
             sections: [[0.0; 4]; 3],
         }
     }
-
-    fn reset(&mut self) {
-        self.sections = [[0.0; 4]; 3];
-    }
 }
 
 // A-weighting filter coefficients for 48000 Hz sample rate.
@@ -147,14 +143,6 @@ thread_local! {
 
 extern "C" {
     fn js_array_create() -> i64;
-}
-
-/// ObjC type encoding for AVAudioPCMBuffer block:
-/// void (^)(AVAudioPCMBuffer *, AVAudioTime *)
-/// We use raw pointers since we access through msg_send! anyway.
-#[repr(C)]
-struct AudioBufferList {
-    _opaque: [u8; 0],
 }
 
 // =============================================================================

@@ -142,7 +142,9 @@ struct TlsServerState {
 
 struct TlsSocketState {
     cmd_tx: Option<mpsc::UnboundedSender<TlsSocketCommand>>,
+    #[allow(dead_code)] // captured socket local address for future localAddress exposure
     local_addr: Option<SocketAddr>,
+    #[allow(dead_code)] // captured socket peer address for future remoteAddress exposure
     peer_addr: Option<SocketAddr>,
     authorized: bool,
     server_side: bool,

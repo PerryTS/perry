@@ -102,6 +102,8 @@ struct VoiceEntry {
     player_node: Retained<AnyObject>,       // AVAudioPlayerNode
     varispeed: Option<Retained<AnyObject>>, // AVAudioUnitVarispeed (None if fallback)
     sound_idx: usize,
+    #[allow(dead_code)]
+    // carries the sound's bus handle (read from SoundEntry.bus_handle) into the voice; kept so the value chain stays intact
     bus_handle: f64,
     is_playing: bool,
     is_paused: bool,

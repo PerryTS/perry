@@ -925,19 +925,6 @@ fn throw_promise_prototype_incompatible_receiver(method: &str, receiver: f64) ->
     crate::exception::js_throw(f64::from_bits(err_value))
 }
 
-fn promise_prototype_receiver(method: &str) -> *mut Promise {
-    let receiver = crate::object::js_implicit_this_get();
-    if js_value_is_promise(receiver) != 0 {
-        return crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
-    }
-    // `class X extends Promise` instance: unwrap its hidden backing Promise cell
-    // so `inst.then/catch(...)` dispatches against the real promise state.
-    if let Some(backing) = super::subclass::subclass_backing_promise(receiver) {
-        return backing;
-    }
-    throw_promise_prototype_incompatible_receiver(method, receiver)
-}
-
 /// ECMA-262 Invoke(receiver, "then", args): read the `then` property and call it.
 /// Unlike `js_native_call_method`, this reads the own/inherited `then` property
 /// first (invoking accessor getters) and throws TypeError if it is not callable —
@@ -1442,35 +1429,6 @@ pub(crate) extern "C" fn promise_prototype_finally_thunk(
     // Invoke(receiver, "then", [thenFinally, catchFinally]).
     let args = [then_finally, catch_finally];
     call_receiver_then(receiver, &args)
-}
-
-extern "C" fn promise_then_bound(
-    closure: *const crate::closure::ClosureHeader,
-    on_fulfilled: f64,
-    on_rejected: f64,
-) -> f64 {
-    let p = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    box_promise_ptr(js_promise_then(
-        p,
-        arg_to_closure(on_fulfilled),
-        arg_to_closure(on_rejected),
-    ))
-}
-
-extern "C" fn promise_catch_bound(
-    closure: *const crate::closure::ClosureHeader,
-    on_rejected: f64,
-) -> f64 {
-    let p = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    box_promise_ptr(js_promise_catch(p, arg_to_closure(on_rejected)))
-}
-
-extern "C" fn promise_finally_bound(
-    closure: *const crate::closure::ClosureHeader,
-    on_finally: f64,
-) -> f64 {
-    let p = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    box_promise_ptr(js_promise_finally(p, arg_to_closure(on_finally)))
 }
 
 /// Return the `Promise.prototype[property]` closure for a promise's

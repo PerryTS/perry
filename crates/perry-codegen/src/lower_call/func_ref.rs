@@ -45,14 +45,6 @@ fn typed_i1_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
     }
 }
 
-fn typed_i32_signature_note(arg_count: usize) -> String {
-    match arg_count {
-        0 => "typed_signature=i32()->i32".to_string(),
-        1 => "typed_signature=i32(i32)->i32".to_string(),
-        _ => "typed_signature=i32(i32, ...)->i32".to_string(),
-    }
-}
-
 fn typed_signature_note(
     ret: &str,
     reps: &[crate::codegen::TypedParamRep],

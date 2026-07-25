@@ -17,12 +17,6 @@ fn buffer_payload_size(capacity: usize) -> usize {
     std::mem::size_of::<BufferHeader>() + capacity
 }
 
-#[inline]
-fn buffer_gc_total_size(capacity: usize) -> usize {
-    let payload = buffer_payload_size(capacity);
-    (crate::gc::GC_HEADER_SIZE + payload + 7) & !7
-}
-
 /// Thread-local registry of buffer pointers for instanceof checks.
 /// Since BufferHeader has the same layout as ArrayHeader (no type_id field),
 /// we track buffer pointers separately to distinguish them from arrays.

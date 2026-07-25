@@ -285,17 +285,3 @@ pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
     }
     chunk
 }
-
-pub(super) fn string_chunk_to_buffer(value: f64) -> Option<f64> {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_any_string() {
-        return None;
-    }
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
-        return None;
-    }
-    Some(box_pointer(
-        crate::buffer::js_buffer_from_string(ptr, 0) as *const u8
-    ))
-}

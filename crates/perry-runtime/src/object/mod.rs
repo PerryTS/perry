@@ -67,7 +67,6 @@ pub(crate) use native_module::{class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME}
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;
-mod native_module_dispatch_crypto;
 mod native_module_registry;
 pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_ctor_lookup;

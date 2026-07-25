@@ -1048,6 +1048,7 @@ impl ObjectCache {
     /// reading the object bytes into memory. We still open the file once so
     /// unreadable cache entries fall back to a fresh compile just like
     /// `lookup` would.
+    #[allow(dead_code)] // exercised by #[cfg(test)] object_cache_tests; prod uses lookup_path_with_ffi
     pub fn lookup_path(&self, key: u64) -> Option<PathBuf> {
         let path = self.path_for(key)?;
         match fs::File::open(&path).and_then(|f| f.metadata()) {

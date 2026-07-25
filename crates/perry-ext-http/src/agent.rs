@@ -78,10 +78,6 @@ fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
     unsafe { js_class_method_bind(instance, name.as_ptr(), name.len()) }
 }
 
-fn pointer_value(handle: Handle) -> f64 {
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
-}
-
 // ------------------------------------------------------------------
 // AgentHandle
 // ------------------------------------------------------------------

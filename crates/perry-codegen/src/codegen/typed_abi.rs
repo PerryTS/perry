@@ -614,10 +614,6 @@ pub(crate) fn typed_i1_closure_rejection_reason_with_types(
     typed_i1_body_rejection_reason(body, locals)
 }
 
-pub(crate) fn typed_i32_closure_rejection_reason(expr: &Expr) -> Option<TypedCloneRejectionReason> {
-    typed_i32_closure_rejection_reason_with_types(expr, &HashMap::new())
-}
-
 pub(crate) fn typed_i32_closure_rejection_reason_with_types(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,

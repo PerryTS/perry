@@ -36,6 +36,7 @@ struct TreeNode {
 }
 
 struct TreeEntry {
+    #[allow(dead_code)] // keep-alive owner: retains the NSScrollView container for this tree entry
     scroll_view: Retained<NSView>,
     outline_view: Retained<NSView>,
     handle: i64,

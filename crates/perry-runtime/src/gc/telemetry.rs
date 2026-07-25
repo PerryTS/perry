@@ -92,6 +92,8 @@ pub(super) struct OldYoungEdgeVerifyStats {
 }
 
 impl OldYoungEdgeVerifyStats {
+    #[allow(dead_code)]
+    // GC old→young edge-verify telemetry hook; simple companion to record_missing_diag for diagnostic call sites
     #[inline]
     pub(super) fn record_missing(&mut self, parent: usize, slot: usize, child: usize) {
         self.record_missing_diag(parent, slot, child, 0, 0, false, false);
