@@ -1,7 +1,7 @@
 # Object-write coverage matrix (#6812)
 
 Status: MEASURED (triage pass) — path column derived from code gates on
-`main` @ `8bda0351e`; numbers are medians of 3 alternated runs, node v26.3.0,
+`main` @ `8bda0351e`; numbers are medians of 3 alternated runs on the RECORDED runtime (node v26.3.0 — re-pin here when the comparison baseline moves),
 macOS arm64, release + default pipeline, checksums identical on every cell
 (raw samples: `matrix_raw_2026-07-25.csv`; ambient load ~7 — cells promoted
 to PR evidence get the full 15-run idle protocol). Goal per the raised bar:
@@ -48,7 +48,7 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 | w11_stable_dynkey | `o[k]`, `const k = "c"` | clone (const-string local = static) | 6 | 8 | **0.75** | BEATS node |
 | w12_arb_dynkey | rotating keys from array | generic | 84 | 18 | 4.7 | GAP: GC-safe dynamic-key cache |
 | w13_int_key | `o[7]` on plain object | generic numeric-as-property | 160 | 13 | 12.3 | GAP |
-| w15_append_build | fresh `{}` + 6 assigns (builder) | generic transitions; `class_id==0` blocks PIC | 1489 | 8 | **186** | TOP GAP — ubiquitous pattern |
+| w15_append_build | fresh `{}` + 6 assigns (builder) | *(pre-#6829 baseline)* generic transitions; `class_id==0` blocks PIC | 1489 → 196 (#6829) | 8 | 186 → 25 | #6829 folds builders into literals; residual tracked below |
 | w16_overflow_slot | writes past inline capacity | runtime (PIC bounds reject) | 4150 | 23 | **180** | TOP GAP — wide objects |
 | w17_alloc_rhs | allocating RHS (`"s"+i`) | NOT PIC (safepoint-free rule) | 26 | 18 | 1.4 | close; revisit only with receiver-reload design |
 | w18_class_inst | class instances via `any` | PIC | 6 | 12 | **0.50** | BEATS node (best row) |

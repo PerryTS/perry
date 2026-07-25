@@ -52,73 +52,12 @@ pub(crate) fn fold_builder_sequences(module: &ast::Module) -> Option<ast::Module
     changed.then_some(folded)
 }
 
-/// Cheap read-only pre-scan: is there any `const/let/var x = {…}` statement
-/// list anywhere that is immediately followed by a static member assignment
-/// to the same name? (False positives are fine — they only cost the clone.)
+/// Cheap read-only pre-scan: is any statement list anywhere (including
+/// function bodies nested in expressions) a `const/let/var x = {…}`
+/// immediately followed by a static member assignment to the same name?
+/// False positives only cost the clone; a false negative would skip a
+/// fold, so the walk mirrors the mutating one's reach.
 fn module_has_candidate(module: &ast::Module) -> bool {
-    struct Scan {
-        found: bool,
-    }
-    impl Scan {
-        fn stmts(&mut self, stmts: &[ast::Stmt]) {
-            if self.found {
-                return;
-            }
-            for pair in stmts.windows(2) {
-                if let (Some(name), _) = decl_object_binding(&pair[0]) {
-                    if assign_to_name_key(&pair[1], name.as_str()).is_some() {
-                        self.found = true;
-                        return;
-                    }
-                }
-            }
-            for s in stmts {
-                self.stmt(s);
-            }
-        }
-        fn stmt(&mut self, s: &ast::Stmt) {
-            if self.found {
-                return;
-            }
-            match s {
-                ast::Stmt::Block(b) => self.stmts(&b.stmts),
-                ast::Stmt::If(i) => {
-                    self.stmt(&i.cons);
-                    if let Some(alt) = &i.alt {
-                        self.stmt(alt);
-                    }
-                }
-                ast::Stmt::While(w) => self.stmt(&w.body),
-                ast::Stmt::DoWhile(d) => self.stmt(&d.body),
-                ast::Stmt::For(f) => self.stmt(&f.body),
-                ast::Stmt::ForIn(f) => self.stmt(&f.body),
-                ast::Stmt::ForOf(f) => self.stmt(&f.body),
-                ast::Stmt::Labeled(l) => self.stmt(&l.body),
-                ast::Stmt::Try(t) => {
-                    self.stmts(&t.block.stmts);
-                    if let Some(h) = &t.handler {
-                        self.stmts(&h.body.stmts);
-                    }
-                    if let Some(f) = &t.finalizer {
-                        self.stmts(&f.stmts);
-                    }
-                }
-                ast::Stmt::Switch(sw) => {
-                    for case in &sw.cases {
-                        self.stmts(&case.cons);
-                    }
-                }
-                ast::Stmt::Decl(ast::Decl::Fn(f)) => {
-                    if let Some(body) = &f.function.body {
-                        self.stmts(&body.stmts);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut scan = Scan { found: false };
-    // Top level: treat consecutive ModuleItem::Stmt entries as a window.
     for pair in module.body.windows(2) {
         if let (ast::ModuleItem::Stmt(a), ast::ModuleItem::Stmt(b)) = (&pair[0], &pair[1]) {
             if let (Some(name), _) = decl_object_binding(a) {
@@ -128,35 +67,165 @@ fn module_has_candidate(module: &ast::Module) -> bool {
             }
         }
     }
-    for item in &module.body {
-        match item {
-            ast::ModuleItem::Stmt(s) => scan.stmt(s),
-            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ed)) => {
-                if let ast::Decl::Fn(f) = &ed.decl {
-                    if let Some(body) = &f.function.body {
-                        scan.stmts(&body.stmts);
-                    }
-                }
-            }
-            _ => {}
-        }
-        if scan.found {
-            return true;
-        }
-    }
-    // Function bodies nested in expressions are found during the mutating
-    // walk; missing them here only skips the fold for modules whose ONLY
-    // candidates hide inside expression-nested functions. Cover the common
-    // case cheaply: any module containing an arrow/function expression gets
-    // the full walk.
-    module_contains_function_expr(module) || scan.found
+    module.body.iter().any(|item| match item {
+        ast::ModuleItem::Stmt(s) => scan_stmt(s),
+        ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ed)) => scan_decl(&ed.decl),
+        ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(e)) => scan_expr(&e.expr),
+        _ => false,
+    })
 }
 
-fn module_contains_function_expr(_m: &ast::Module) -> bool {
-    // Conservative: assume yes. The clone cost is paid once per module and
-    // the mutating walk is linear; modules with no candidates simply come
-    // back unchanged (changed == false → original is used).
-    true
+fn stmts_have_candidate(stmts: &[ast::Stmt]) -> bool {
+    for pair in stmts.windows(2) {
+        if let (Some(name), _) = decl_object_binding(&pair[0]) {
+            if assign_to_name_key(&pair[1], name.as_str()).is_some() {
+                return true;
+            }
+        }
+    }
+    stmts.iter().any(scan_stmt)
+}
+
+fn scan_stmt(s: &ast::Stmt) -> bool {
+    match s {
+        ast::Stmt::Block(b) => stmts_have_candidate(&b.stmts),
+        ast::Stmt::If(i) => {
+            scan_expr(&i.test)
+                || scan_stmt(&i.cons)
+                || i.alt.as_deref().is_some_and(scan_stmt)
+        }
+        ast::Stmt::While(w) => scan_expr(&w.test) || scan_stmt(&w.body),
+        ast::Stmt::DoWhile(d) => scan_stmt(&d.body) || scan_expr(&d.test),
+        ast::Stmt::For(f) => {
+            matches!(&f.init, Some(ast::VarDeclOrExpr::Expr(e)) if scan_expr(e))
+                || f.test.as_deref().is_some_and(scan_expr)
+                || f.update.as_deref().is_some_and(scan_expr)
+                || scan_stmt(&f.body)
+        }
+        ast::Stmt::ForIn(f) => scan_stmt(&f.body),
+        ast::Stmt::ForOf(f) => scan_stmt(&f.body),
+        ast::Stmt::Labeled(l) => scan_stmt(&l.body),
+        ast::Stmt::Try(t) => {
+            stmts_have_candidate(&t.block.stmts)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| stmts_have_candidate(&h.body.stmts))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| stmts_have_candidate(&f.stmts))
+        }
+        ast::Stmt::Switch(sw) => {
+            scan_expr(&sw.discriminant)
+                || sw.cases.iter().any(|c| stmts_have_candidate(&c.cons))
+        }
+        ast::Stmt::Decl(d) => scan_decl(d),
+        ast::Stmt::Expr(es) => scan_expr(&es.expr),
+        ast::Stmt::Return(r) => r.arg.as_deref().is_some_and(scan_expr),
+        ast::Stmt::Throw(t) => scan_expr(&t.arg),
+        _ => false,
+    }
+}
+
+fn scan_decl(d: &ast::Decl) -> bool {
+    match d {
+        ast::Decl::Fn(f) => f
+            .function
+            .body
+            .as_ref()
+            .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+        ast::Decl::Class(c) => scan_class(&c.class),
+        ast::Decl::Var(v) => v
+            .decls
+            .iter()
+            .any(|d| d.init.as_deref().is_some_and(scan_expr)),
+        _ => false,
+    }
+}
+
+fn scan_class(class: &ast::Class) -> bool {
+    class.body.iter().any(|m| match m {
+        ast::ClassMember::Method(m) => m
+            .function
+            .body
+            .as_ref()
+            .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+        ast::ClassMember::PrivateMethod(m) => m
+            .function
+            .body
+            .as_ref()
+            .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+        ast::ClassMember::Constructor(c) => c
+            .body
+            .as_ref()
+            .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+        ast::ClassMember::StaticBlock(b) => stmts_have_candidate(&b.body.stmts),
+        ast::ClassMember::ClassProp(p) => p.value.as_deref().is_some_and(scan_expr),
+        ast::ClassMember::PrivateProp(p) => p.value.as_deref().is_some_and(scan_expr),
+        _ => false,
+    })
+}
+
+fn scan_expr(e: &ast::Expr) -> bool {
+    use ast::Expr as E;
+    match e {
+        E::Fn(f) => f
+            .function
+            .body
+            .as_ref()
+            .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+        E::Arrow(a) => match &*a.body {
+            ast::BlockStmtOrExpr::BlockStmt(b) => stmts_have_candidate(&b.stmts),
+            ast::BlockStmtOrExpr::Expr(e) => scan_expr(e),
+        },
+        E::Class(c) => scan_class(&c.class),
+        E::Array(a) => a.elems.iter().flatten().any(|el| scan_expr(&el.expr)),
+        E::Object(o) => o.props.iter().any(|p| match p {
+            ast::PropOrSpread::Spread(sp) => scan_expr(&sp.expr),
+            ast::PropOrSpread::Prop(prop) => match &**prop {
+                ast::Prop::KeyValue(kv) => scan_expr(&kv.value),
+                ast::Prop::Method(m) => m
+                    .function
+                    .body
+                    .as_ref()
+                    .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+                ast::Prop::Getter(g) => g
+                    .body
+                    .as_ref()
+                    .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+                ast::Prop::Setter(st) => st
+                    .body
+                    .as_ref()
+                    .is_some_and(|b| stmts_have_candidate(&b.stmts)),
+                _ => false,
+            },
+        }),
+        E::Unary(u) => scan_expr(&u.arg),
+        E::Update(u) => scan_expr(&u.arg),
+        E::Bin(b) => scan_expr(&b.left) || scan_expr(&b.right),
+        E::Assign(a) => scan_expr(&a.right),
+        E::Member(m) => scan_expr(&m.obj),
+        E::Cond(c) => scan_expr(&c.test) || scan_expr(&c.cons) || scan_expr(&c.alt),
+        E::Call(c) => {
+            matches!(&c.callee, ast::Callee::Expr(e) if scan_expr(e))
+                || c.args.iter().any(|a| scan_expr(&a.expr))
+        }
+        E::New(n) => {
+            scan_expr(&n.callee)
+                || n.args
+                    .iter()
+                    .flatten()
+                    .any(|a| scan_expr(&a.expr))
+        }
+        E::Seq(s) => s.exprs.iter().any(|e| scan_expr(e)),
+        E::Tpl(t) => t.exprs.iter().any(|e| scan_expr(e)),
+        E::Paren(p) => scan_expr(&p.expr),
+        E::Await(a) => scan_expr(&a.arg),
+        E::Yield(y) => y.arg.as_deref().is_some_and(scan_expr),
+        E::TsAs(t) => scan_expr(&t.expr),
+        E::TsNonNull(t) => scan_expr(&t.expr),
+        E::TsSatisfies(t) => scan_expr(&t.expr),
+        _ => false,
+    }
 }
 
 fn process_module_items(items: &mut [ast::ModuleItem], changed: &mut bool) {
@@ -217,7 +286,7 @@ fn fold_module_stmt_run(items: &mut [ast::ModuleItem], changed: &mut bool) {
             let Some((key, value)) = assign_to_name_key(fs, &name_start) else {
                 break;
             };
-            if !fold_key_ok(&key, &keys) || expr_references_ident(value, &name_start) {
+            if !fold_key_ok(&key, &keys) || !value_is_fold_safe(value, &name_start) {
                 break;
             }
             if existing.len() + appended.len() >= MAX_FOLDED_PROPS {
@@ -264,7 +333,7 @@ fn fold_stmts(stmts: &mut Vec<ast::Stmt>, changed: &mut bool) {
             let Some((key, value)) = assign_to_name_key(follower, &name) else {
                 break;
             };
-            if !fold_key_ok(&key, &keys) || expr_references_ident(value, &name) {
+            if !fold_key_ok(&key, &keys) || !value_is_fold_safe(value, &name) {
                 break;
             }
             if existing_len + appended.len() >= MAX_FOLDED_PROPS {
@@ -407,86 +476,61 @@ fn append_props(s: &mut ast::Stmt, appended: Vec<(ast::PropName, Box<ast::Expr>)
     }
 }
 
-/// Conservative: does `e` mention an identifier with this symbol name
-/// anywhere (ignoring shadowing — false positives only block the fold)?
-fn expr_references_ident(e: &ast::Expr, name: &str) -> bool {
+/// May this VALUE expression fold into a literal that now evaluates it
+/// BEFORE the builder binding is initialized? Only expressions that
+/// provably cannot execute user code qualify — a call, `new`, member read
+/// (getters), optional chain, tagged template, spread (iterator
+/// protocols), `in`/`instanceof` (traps / `Symbol.hasInstance`),
+/// `await`/`yield`, or any function-bearing form could reach the binding
+/// through a closure or trap WITHOUT naming it (e.g. a hoisted
+/// `function f() { return o.a; }` observed via `o.b = f()` — folding
+/// would turn the original's successful read into a TDZ ReferenceError).
+/// Reading OTHER identifiers is safe (identical evaluation either side of
+/// the allocation); reading the builder's own name is excluded directly.
+fn value_is_fold_safe(e: &ast::Expr, name: &str) -> bool {
     use ast::Expr as E;
     match e {
-        E::Ident(i) => i.sym.as_ref() == name,
-        E::Lit(_) | E::This(_) => false,
-        E::Array(a) => a.elems.iter().flatten().any(|el| expr_references_ident(&el.expr, name)),
-        E::Object(o) => o.props.iter().any(|p| match p {
-            ast::PropOrSpread::Spread(sp) => expr_references_ident(&sp.expr, name),
-            ast::PropOrSpread::Prop(prop) => match &**prop {
-                ast::Prop::KeyValue(kv) => {
-                    expr_references_ident(&kv.value, name)
-                        || matches!(&kv.key, ast::PropName::Computed(c) if expr_references_ident(&c.expr, name))
-                }
-                ast::Prop::Shorthand(i) => i.sym.as_ref() == name,
-                // Accessors/methods may close over the name — be safe.
-                _ => true,
-            },
-        }),
-        E::Unary(u) => expr_references_ident(&u.arg, name),
-        E::Update(u) => expr_references_ident(&u.arg, name),
-        E::Bin(b) => expr_references_ident(&b.left, name) || expr_references_ident(&b.right, name),
-        E::Assign(a) => {
-            // Any assignment inside a value expression: too clever — block.
-            let _ = a;
-            true
-        }
-        E::Member(m) => {
-            expr_references_ident(&m.obj, name)
-                || matches!(&m.prop, ast::MemberProp::Computed(c) if expr_references_ident(&c.expr, name))
-        }
-        E::SuperProp(sp) => {
-            matches!(&sp.prop, ast::SuperProp::Computed(c) if expr_references_ident(&c.expr, name))
+        E::Lit(_) | E::This(_) => true,
+        E::Ident(i) => i.sym.as_ref() != name,
+        E::Paren(p) => value_is_fold_safe(&p.expr, name),
+        E::Tpl(t) => t.exprs.iter().all(|x| value_is_fold_safe(x, name)),
+        E::Unary(u) => u.op != ast::UnaryOp::Delete && value_is_fold_safe(&u.arg, name),
+        E::Bin(b) => {
+            !matches!(b.op, ast::BinaryOp::In | ast::BinaryOp::InstanceOf)
+                && value_is_fold_safe(&b.left, name)
+                && value_is_fold_safe(&b.right, name)
         }
         E::Cond(c) => {
-            expr_references_ident(&c.test, name)
-                || expr_references_ident(&c.cons, name)
-                || expr_references_ident(&c.alt, name)
+            value_is_fold_safe(&c.test, name)
+                && value_is_fold_safe(&c.cons, name)
+                && value_is_fold_safe(&c.alt, name)
         }
-        E::Call(c) => {
-            (match &c.callee {
-                ast::Callee::Expr(e) => expr_references_ident(e, name),
+        E::Seq(sq) => sq.exprs.iter().all(|x| value_is_fold_safe(x, name)),
+        E::Array(a) => a.elems.iter().all(|el| match el {
+            None => true,
+            Some(el) => el.spread.is_none() && value_is_fold_safe(&el.expr, name),
+        }),
+        E::Object(o) => o.props.iter().all(|p| match p {
+            ast::PropOrSpread::Spread(_) => false,
+            ast::PropOrSpread::Prop(prop) => match &**prop {
+                ast::Prop::KeyValue(kv) => {
+                    matches!(kv.key, ast::PropName::Ident(_) | ast::PropName::Str(_))
+                        && value_is_fold_safe(&kv.value, name)
+                }
+                ast::Prop::Shorthand(i) => i.sym.as_ref() != name,
                 _ => false,
-            }) || c.args.iter().any(|a| expr_references_ident(&a.expr, name))
-        }
-        E::New(n) => {
-            expr_references_ident(&n.callee, name)
-                || n.args
-                    .iter()
-                    .flatten()
-                    .any(|a| expr_references_ident(&a.expr, name))
-        }
-        E::Seq(s) => s.exprs.iter().any(|e| expr_references_ident(e, name)),
-        E::Tpl(t) => t.exprs.iter().any(|e| expr_references_ident(e, name)),
-        E::TaggedTpl(t) => {
-            expr_references_ident(&t.tag, name)
-                || t.tpl.exprs.iter().any(|e| expr_references_ident(e, name))
-        }
-        E::Paren(p) => expr_references_ident(&p.expr, name),
-        E::Await(a) => expr_references_ident(&a.arg, name),
-        E::Yield(y) => y.arg.as_deref().is_some_and(|a| expr_references_ident(a, name)),
-        E::TsAs(t) => expr_references_ident(&t.expr, name),
-        E::TsNonNull(t) => expr_references_ident(&t.expr, name),
-        E::TsTypeAssertion(t) => expr_references_ident(&t.expr, name),
-        E::TsSatisfies(t) => expr_references_ident(&t.expr, name),
-        E::OptChain(oc) => match &*oc.base {
-            ast::OptChainBase::Member(m) => {
-                expr_references_ident(&m.obj, name)
-                    || matches!(&m.prop, ast::MemberProp::Computed(c) if expr_references_ident(&c.expr, name))
-            }
-            ast::OptChainBase::Call(c) => {
-                expr_references_ident(&c.callee, name)
-                    || c.args.iter().any(|a| expr_references_ident(&a.expr, name))
-            }
-        },
-        // Function-bearing expressions may close over the name — be safe.
-        E::Arrow(_) | E::Fn(_) | E::Class(_) => true,
-        // Unknown/rare forms: be safe.
-        _ => true,
+            },
+        }),
+        E::TsAs(t) => value_is_fold_safe(&t.expr, name),
+        E::TsNonNull(t) => value_is_fold_safe(&t.expr, name),
+        E::TsTypeAssertion(t) => value_is_fold_safe(&t.expr, name),
+        E::TsSatisfies(t) => value_is_fold_safe(&t.expr, name),
+        E::TsConstAssertion(t) => value_is_fold_safe(&t.expr, name),
+        // Everything else — calls, news, member/optional access, tagged
+        // templates, await/yield, updates, assignments, function-bearing
+        // forms, unknown variants — may execute user code: unsafe to hoist
+        // past the allocation.
+        _ => false,
     }
 }
 
@@ -498,6 +542,13 @@ fn walk_decl(d: &mut ast::Decl, changed: &mut bool) {
     }
     if let ast::Decl::Class(c) = d {
         walk_class(&mut c.class, changed);
+    }
+    if let ast::Decl::Var(v) = d {
+        for decl in &mut v.decls {
+            if let Some(init) = &mut decl.init {
+                walk_expr(init, changed);
+            }
+        }
     }
 }
 
@@ -520,6 +571,16 @@ fn walk_class(class: &mut ast::Class, changed: &mut bool) {
                 }
             }
             ast::ClassMember::StaticBlock(b) => fold_stmts(&mut b.body.stmts, changed),
+            ast::ClassMember::ClassProp(prop) => {
+                if let Some(v) = &mut prop.value {
+                    walk_expr(v, changed);
+                }
+            }
+            ast::ClassMember::PrivateProp(prop) => {
+                if let Some(v) = &mut prop.value {
+                    walk_expr(v, changed);
+                }
+            }
             _ => {}
         }
     }
