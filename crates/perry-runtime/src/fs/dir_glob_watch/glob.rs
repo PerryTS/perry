@@ -7,12 +7,16 @@ use super::string_value;
 // directly here (we are a grandchild of `fs`); the two private-to-`fs/mod.rs`
 // helpers are named explicitly so a glob that skips privates can't drop them.
 
+#[cfg(feature = "regex-engine")]
 use std::collections::BTreeMap;
+#[cfg(feature = "regex-engine")]
 use std::fs;
+#[cfg(feature = "regex-engine")]
 use std::path::Path;
 #[cfg(feature = "regex-engine")]
 use std::path::PathBuf;
 
+#[cfg(feature = "regex-engine")]
 use crate::closure::ClosureHeader;
 
 /// Compiled exclude-pattern type for `fs.glob`. Backed by `fancy_regex::Regex`.

@@ -341,6 +341,7 @@ pub(crate) unsafe fn array_named_property_set(
 /// bypassing `js_array_set_string_key`'s guard ladder sound. Keys must not be
 /// numeric index strings or `"length"` (those live in element storage /
 /// the header, not this side table).
+#[cfg(feature = "regex-engine")]
 pub(crate) unsafe fn array_named_props_install_fresh(
     arr: *mut ArrayHeader,
     entries: &[(&'static str, f64)],

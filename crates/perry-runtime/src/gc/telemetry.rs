@@ -589,6 +589,7 @@ pub(super) struct GcPauseStepTrace {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) enum AllocatorMaintenanceStatus {
     Skipped,
     Executed,
@@ -608,6 +609,7 @@ impl AllocatorMaintenanceStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) enum AllocatorMaintenanceReason {
     OrdinaryBudgeted,
     NotSupported,

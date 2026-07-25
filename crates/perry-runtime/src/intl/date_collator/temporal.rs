@@ -9,6 +9,7 @@ use super::*;
 /// Context tag for [`temporal_locale_string`] — which Temporal type is being formatted.
 /// Controls default options, type-specific TypeError guards, and timezone handling.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "temporal"), allow(dead_code))]
 pub(crate) enum TemporalLocaleCtx {
     PlainDate,
     PlainDateTime,
