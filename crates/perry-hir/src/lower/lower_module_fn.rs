@@ -411,6 +411,13 @@ pub fn lower_module_full(
     is_entry_module: bool,
     is_external_module: bool,
 ) -> Result<(Module, ClassId)> {
+    // #6812: fold straight-line builder sequences (`const o = {…}; o.k = v;`)
+    // into the literal they spell out, so they lower through the anon-shape
+    // literal machinery (shape-cached keys, typed slots, direct stores)
+    // instead of N dynamic transition writes. `None` (the common case for
+    // modules without candidates) lowers the original with no clone.
+    let folded = super::builder_fold::fold_builder_sequences(ast_module);
+    let ast_module = folded.as_ref().unwrap_or(ast_module);
     let mut ctx = LoweringContext::with_class_id_start(source_file_path, start_class_id);
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
