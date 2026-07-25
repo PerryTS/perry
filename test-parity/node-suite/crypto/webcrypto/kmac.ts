@@ -98,7 +98,8 @@ async function main() {
   await logReject("kmac128 bad usage", crypto.subtle.generateKey("KMAC128", true, ["encrypt" as any]));
   await logReject("kmac128 bad key length", crypto.subtle.generateKey({ name: "KMAC128", length: 7 }, true, ["sign"]));
   await logReject("kmac128 zero key", crypto.subtle.importKey("jwk", { kty: "oct", alg: "K128", k: "", ext: true, key_ops: ["sign"] }, "KMAC128", true, ["sign"]));
-  await logReject("kmac128 bad output", crypto.subtle.sign({ name: "KMAC128", outputLength: 7 }, key128, data));
+  const shortSig = await crypto.subtle.sign({ name: "KMAC128", outputLength: 7 }, key128, data);
+  console.log("kmac128 short output:", Buffer.from(shortSig).toString("hex"));
 }
 
 await main();

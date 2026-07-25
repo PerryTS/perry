@@ -33,7 +33,7 @@ console.log("typeof toLegacyObject:", typeof toLegacy);
 if (typeof toLegacy !== "function") {
   console.log("legacy unavailable");
 } else {
-  const legacy = toLegacy();
+  const legacy = cert["toLegacyObject"]();
   console.log("legacy subject CN:", legacy["subject"]["CN"]);
   console.log("legacy issuer CN:", legacy["issuer"]["CN"]);
   console.log("legacy ca:", legacy["ca"]);

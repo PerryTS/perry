@@ -657,13 +657,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
                 "KmacKeyGenParams.length cannot be 0",
             );
         }
-        if bit_len % 8 != 0 {
-            return reject_with_dom_exception(
-                "NotSupportedError",
-                "Unsupported KmacKeyGenParams.length",
-            );
-        }
-        let mut key_bytes = vec![0u8; (bit_len / 8) as usize];
+        let mut key_bytes = vec![0u8; bit_len.div_ceil(8) as usize];
         use rand::RngCore;
         rand::rngs::OsRng.fill_bytes(&mut key_bytes);
         let buf = alloc_uint8array_from_slice(&key_bytes);

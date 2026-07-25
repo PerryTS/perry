@@ -973,10 +973,7 @@ pub(super) fn compute_kmac(
     data: &[u8],
     output_bits: u32,
 ) -> Option<Vec<u8>> {
-    if output_bits % 8 != 0 {
-        return None;
-    }
-    let mut out = vec![0u8; (output_bits / 8) as usize];
+    let mut out = vec![0u8; output_bits.div_ceil(8) as usize];
     match algo {
         KeyAlgo::Kmac128 => {
             use sha3_010::digest::{core_api::CoreProxy, ExtendableOutput, Update, XofReader};
