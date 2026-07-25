@@ -908,7 +908,9 @@ fn packed_f64_range_loop_index_offset(index: &perry_hir::Expr, counter_id: u32) 
     use perry_hir::{BinaryOp, Expr};
     let offset = match index {
         Expr::LocalGet(id) if *id == counter_id => Some(0i64),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary { op, left, right }
+            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
+        {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(id), Expr::Integer(c)) if *id == counter_id => {
                     if matches!(op, BinaryOp::Sub) {
@@ -1849,6 +1851,7 @@ enum ObjectArrayWriteNumber {
     Constant(f64),
     Add(Box<Self>, Box<Self>),
     Sub(Box<Self>, Box<Self>),
+    Mul(Box<Self>, Box<Self>),
 }
 
 /// Keep the transactional clone small enough that unrolling does not turn a
@@ -1896,7 +1899,9 @@ fn match_object_array_write_number(
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             let left = match_object_array_write_number(left, outer_counter_id, inner_counter_id)?;
             let right = match_object_array_write_number(right, outer_counter_id, inner_counter_id)?;
-            Some(if matches!(op, BinaryOp::Add) {
+            Some(if matches!(op, BinaryOp::Mul) {
+                ObjectArrayWriteNumber::Mul(Box::new(left), Box::new(right))
+            } else if matches!(op, BinaryOp::Add) {
                 ObjectArrayWriteNumber::Add(Box::new(left), Box::new(right))
             } else {
                 ObjectArrayWriteNumber::Sub(Box::new(left), Box::new(right))
@@ -1940,6 +1945,21 @@ fn object_array_write_number_finite_range(
                 inner_bound,
             )?;
             finite_range(left_lo + right_lo, left_hi + right_hi)
+        }
+        ObjectArrayWriteNumber::Mul(left, right) => {
+            let (left_lo, left_hi) =
+                object_array_write_number_finite_range(left, outer_start, outer_bound, inner_bound)?;
+            let (right_lo, right_hi) =
+                object_array_write_number_finite_range(right, outer_start, outer_bound, inner_bound)?;
+            let products = [
+                left_lo * right_lo,
+                left_lo * right_hi,
+                left_hi * right_lo,
+                left_hi * right_hi,
+            ];
+            let lo = products.iter().copied().fold(f64::INFINITY, f64::min);
+            let hi = products.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            finite_range(lo, hi)
         }
         ObjectArrayWriteNumber::Sub(left, right) => {
             let (left_lo, left_hi) = object_array_write_number_finite_range(
@@ -2027,21 +2047,67 @@ fn match_object_array_write_loop(
     }
     let (outer_counter_id, outer_start, outer_bound) =
         match_constant_counted_for(ctx, init, condition, update)?;
-    let [Stmt::For {
-        init: inner_init,
-        condition: inner_condition,
-        update: inner_update,
-        body: inner_body,
-    }] = body
-    else {
-        return None;
-    };
-    let (inner_counter_id, inner_start, inner_bound) = match_constant_counted_for(
-        ctx,
-        inner_init.as_deref(),
-        inner_condition.as_ref(),
-        inner_update.as_ref(),
-    )?;
+    let (inner_counter_id, inner_start, inner_bound, inner_body): (u32, i32, i32, &[Stmt]) =
+        match body {
+            [Stmt::For {
+                init: inner_init,
+                condition: inner_condition,
+                update: inner_update,
+                body: inner_body,
+            }] => {
+                let (id, start, bound) = match_constant_counted_for(
+                    ctx,
+                    inner_init.as_deref(),
+                    inner_condition.as_ref(),
+                    inner_update.as_ref(),
+                )?;
+                (id, start, bound, inner_body.as_slice())
+            }
+            // `let i = 0; while (i < N) { …; i++ }` is the same counted loop
+            // spelled differently. The store-shape constraints below admit
+            // ONLY PutValueSet statements between the alias binding and the
+            // trailing increment — no `continue` (which would skip a
+            // while-loop's trailing increment but not a for-update) or other
+            // control flow can be present in a matched body. The emitter
+            // already finalizes both counter slots after the fast nest, so
+            // the function-scoped `i` observes its post-loop value.
+            [Stmt::Let {
+                id: while_counter,
+                init: Some(counter_init),
+                ..
+            }, Stmt::While {
+                condition: while_cond,
+                body: while_body,
+            }] => {
+                use perry_hir::{CompareOp, UpdateOp};
+                let start = match_nonnegative_constant_i32_with_ctx(ctx, counter_init)?;
+                let bound = match while_cond {
+                    Expr::Compare {
+                        op: CompareOp::Lt,
+                        left,
+                        right,
+                    } if matches!(left.as_ref(), Expr::LocalGet(id) if id == while_counter) => {
+                        match_nonnegative_constant_i32_with_ctx(ctx, right)?
+                    }
+                    _ => return None,
+                };
+                let Some((last, head)) = while_body.split_last() else {
+                    return None;
+                };
+                if !matches!(
+                    last,
+                    Stmt::Expr(Expr::Update {
+                        id,
+                        op: UpdateOp::Increment,
+                        ..
+                    }) if id == while_counter
+                ) {
+                    return None;
+                }
+                (*while_counter, start, bound, head)
+            }
+            _ => return None,
+        };
     // Starting at zero lets the runtime preflight prove one contiguous dense
     // prefix and keeps the raw element address calculation minimal.
     if inner_start != 0
@@ -2056,7 +2122,10 @@ fn match_object_array_write_loop(
     let Some((
         Stmt::Let {
             id: alias_id,
-            mutable: false,
+            // `let` aliases qualify too: every statement in the matched
+            // region must be a PutValueSet on the alias (anything else
+            // rejects the loop), so reassignment is structurally
+            // impossible; captures are excluded via `boxed_vars` below.
             init: Some(Expr::IndexGet { object, index }),
             ..
         },
@@ -2155,6 +2224,11 @@ fn emit_object_array_write_number(
             let left = emit_object_array_write_number(ctx, left, outer, inner);
             let right = emit_object_array_write_number(ctx, right, outer, inner);
             ctx.block().fsub(&left, &right)
+        }
+        ObjectArrayWriteNumber::Mul(left, right) => {
+            let left = emit_object_array_write_number(ctx, left, outer, inner);
+            let right = emit_object_array_write_number(ctx, right, outer, inner);
+            ctx.block().fmul(&left, &right)
         }
     }
 }
