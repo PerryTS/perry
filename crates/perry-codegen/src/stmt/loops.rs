@@ -1894,11 +1894,19 @@ fn match_object_array_write_number(
     expr: &perry_hir::Expr,
     outer_counter_id: u32,
     inner_counter_id: u32,
+    temps: &std::collections::HashMap<u32, ObjectArrayWriteNumber>,
 ) -> Option<ObjectArrayWriteNumber> {
     use perry_hir::{BinaryOp, Expr};
     match expr {
         Expr::LocalGet(id) if *id == outer_counter_id => Some(ObjectArrayWriteNumber::OuterCounter),
         Expr::LocalGet(id) if *id == inner_counter_id => Some(ObjectArrayWriteNumber::InnerCounter),
+        // #6812 (w8): a body-local immutable numeric temp (`let x = r + i;`)
+        // — the shape the call inliner leaves behind — substitutes its parsed
+        // expression tree. Recomputation at each use is safe: the grammar
+        // admits only pure numeric expressions over counters/constants/
+        // earlier temps, and the finite-range proof runs on the substituted
+        // tree exactly as if the user had written it inline.
+        Expr::LocalGet(id) => temps.get(id).cloned(),
         Expr::Integer(n) if (-i64::from(i32::MAX)..=i64::from(i32::MAX)).contains(n) => {
             Some(ObjectArrayWriteNumber::Constant(*n as f64))
         }
@@ -1906,8 +1914,10 @@ fn match_object_array_write_number(
         Expr::Binary { op, left, right }
             if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
         {
-            let left = match_object_array_write_number(left, outer_counter_id, inner_counter_id)?;
-            let right = match_object_array_write_number(right, outer_counter_id, inner_counter_id)?;
+            let left =
+                match_object_array_write_number(left, outer_counter_id, inner_counter_id, temps)?;
+            let right =
+                match_object_array_write_number(right, outer_counter_id, inner_counter_id, temps)?;
             Some(if matches!(op, BinaryOp::Mul) {
                 ObjectArrayWriteNumber::Mul(Box::new(left), Box::new(right))
             } else if matches!(op, BinaryOp::Add) {
@@ -2200,7 +2210,10 @@ fn match_object_array_write_loop(
     else {
         return None;
     };
-    if stores.is_empty() || stores.len() > MAX_OBJECT_ARRAY_WRITE_FIELDS {
+    // Only emptiness here: `stores` may still carry leading numeric temps
+    // (#6812 w8), so the MAX_OBJECT_ARRAY_WRITE_FIELDS cap applies to the
+    // real writes after the temp run is split off below.
+    if stores.is_empty() {
         return None;
     }
     let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
@@ -2229,6 +2242,40 @@ fn match_object_array_write_loop(
         }
     }
 
+    // #6812 (w8): admit a leading run of body-local immutable numeric temps
+    // between the alias and the writes — the exact shape the call inliner
+    // produces (`setCD(o, r + i, r - i)` becomes `let x = r + i;
+    // let y = r - i; o.c = x; o.d = y`). Each temp's init must parse in the
+    // same pure-numeric grammar (over counters, constants, and earlier
+    // temps); write values then resolve `LocalGet(temp)` by substitution, so
+    // the emitter and the finite-range proof see the trees the user could
+    // have written inline (recomputation of a pure numeric expression is
+    // unobservable). A temp that is captured (boxed) or fails the grammar
+    // rejects the whole loop — statements are never skipped.
+    let mut temps = std::collections::HashMap::new();
+    let mut stores = stores;
+    while let Some((
+        Stmt::Let {
+            id: temp_id,
+            mutable: false,
+            init: Some(temp_init),
+            ..
+        },
+        rest,
+    )) = stores.split_first()
+    {
+        if ctx.boxed_vars.contains(temp_id) {
+            return None;
+        }
+        let parsed =
+            match_object_array_write_number(temp_init, outer_counter_id, inner_counter_id, &temps)?;
+        temps.insert(*temp_id, parsed);
+        stores = rest;
+    }
+    if stores.is_empty() || stores.len() > MAX_OBJECT_ARRAY_WRITE_FIELDS {
+        return None;
+    }
+
     let match_store = |effect: &Expr| -> Option<(String, ObjectArrayWriteNumber)> {
         let Expr::PutValueSet {
             target,
@@ -2250,9 +2297,17 @@ fn match_object_array_write_loop(
         let property = match key.as_ref() {
             Expr::String(property) => property.clone(),
             Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
+            // #6812 (w13): `o[7] = v` — a constant integer key IS the
+            // canonical numeric-string property ("7") on a plain object.
+            // Receivers that are real arrays at runtime are safe: the
+            // preflight guard type-checks every element as GC_TYPE_OBJECT
+            // and rejects the nest, and the per-write fallback handles
+            // element writes generically.
+            Expr::Integer(n) => n.to_string(),
             _ => return None,
         };
-        let value = match_object_array_write_number(value, outer_counter_id, inner_counter_id)?;
+        let value =
+            match_object_array_write_number(value, outer_counter_id, inner_counter_id, &temps)?;
         object_array_write_number_finite_range(&value, outer_start, outer_bound, inner_bound)?;
         Some((property, value))
     };

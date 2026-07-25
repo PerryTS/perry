@@ -594,6 +594,13 @@ fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
     match key {
         Expr::String(property) => Some(property.clone()),
         Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned(),
+        // #6812 (w13): `o[7] = v` — a constant integer key is the canonical
+        // numeric-string property key ("7"; i64 formatting is canonical for
+        // every integer, including negatives). Real arrays never take the IC
+        // hit path: the miss handler and the emitted guards validate the
+        // receiver as a REGULAR heap object, so array receivers fall to the
+        // generic write, which performs the element store.
+        Expr::Integer(n) => Some(n.to_string()),
         _ => None,
     }
 }
