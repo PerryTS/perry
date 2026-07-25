@@ -203,8 +203,8 @@ pub(super) fn emit_guarded_direct_method_call(
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
     let bytes_global = format!("@{}", entry.bytes_global);
-    let key_handle_global = format!("@{}", entry.handle_global);
     let name_len_str = entry.byte_len.to_string();
+    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let site_id = if shape_only_guard {
         None
     } else {
@@ -782,11 +782,7 @@ pub(super) fn emit_guarded_direct_method_call(
         ctx.block()
             .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
     }
-    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-    let method_id = ctx
-        .block()
-        .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+    let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     let fallback_value = ctx.block().call(
         DOUBLE,
         "js_native_call_method_by_id",

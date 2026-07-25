@@ -9,7 +9,6 @@ use super::*;
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
@@ -29,15 +28,13 @@ pub(crate) fn lower_runtime_property_get_by_name(
 ) -> Result<String> {
     let recv_box = lower_expr(ctx, object)?;
     let key_idx = ctx.strings.intern(property);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(&recv_box);
     // The helper takes a raw `*const ObjectHeader`, so strip the NaN-box
-    // POINTER_TAG to a canonical pointer (mirrors the property_id masking).
-    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-    let key_box = blk.load(DOUBLE, &key_handle_global);
-    let key_bits = blk.bitcast_double_to_i64(&key_box);
-    let property_id = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    // POINTER_TAG to a canonical pointer.
+    let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
+    let property_id = crate::strings::emit_static_dispatch_id(blk, &dispatch_global);
     Ok(blk.call(
         DOUBLE,
         "js_object_get_field_by_property_id_f64",
@@ -52,11 +49,9 @@ pub(crate) fn lower_class_method_bind(
 ) -> Result<String> {
     let recv_box = lower_expr(ctx, object)?;
     let key_idx = ctx.strings.intern(method_name);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let blk = ctx.block();
-    let key_box = blk.load(DOUBLE, &key_handle_global);
-    let key_bits = blk.bitcast_double_to_i64(&key_box);
-    let method_id = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    let method_id = crate::strings::emit_static_dispatch_id(blk, &dispatch_global);
     Ok(blk.call(
         DOUBLE,
         "js_class_method_bind_by_id",

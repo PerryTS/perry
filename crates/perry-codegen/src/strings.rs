@@ -17,6 +17,11 @@
 //! @.str.<idx>.handle = internal global double 0.0
 //! ```
 //!
+//! Static property/method names used by a `*_by_id` runtime ABI also receive
+//! an immutable `.str.<idx>.dispatch` descriptor. Descriptors are emitted only
+//! for entries that need them, avoiding binary/RSS overhead for ordinary
+//! literals.
+//!
 //! The `bytes` global lives in `.rodata` — it's static, immutable, and never
 //! touched by the GC. The `handle` global is mutable and holds the
 //! NaN-boxed string pointer that the runtime allocates at init time.
@@ -108,6 +113,16 @@ pub struct StringEntry {
     pub bytes_global: String,
     /// Symbol name of the mutable handle global (`.str.N.handle`).
     pub handle_global: String,
+    /// Symbol name of the immutable static-dispatch descriptor
+    /// (`.str.N.dispatch`). Property/method by-id ABIs use this instead of
+    /// smuggling the GC-backed `handle_global` string pointer across
+    /// `perry/thread` arena boundaries.
+    pub dispatch_global: String,
+    /// Precomputed FNV-1a content hash carried by the dispatch descriptor.
+    pub dispatch_hash: u64,
+    /// Whether codegen emitted a `*_by_id` use for this entry. Ordinary string
+    /// literals do not need a descriptor in the final object.
+    pub dispatch_used: bool,
     /// true = bytes contain WTF-8 lone surrogates; use js_string_from_wtf8_bytes at init.
     pub is_wtf8: bool,
 }
@@ -220,6 +235,11 @@ impl StringPool {
         } else {
             format!("{}_.str.{}.handle", self.module_prefix, idx)
         };
+        let dispatch_global = if self.module_prefix.is_empty() {
+            format!(".str.{}.dispatch", idx)
+        } else {
+            format!("{}_.str.{}.dispatch", self.module_prefix, idx)
+        };
         let entry = StringEntry {
             idx,
             value: value.to_string(),
@@ -227,6 +247,9 @@ impl StringPool {
             escaped_ir,
             bytes_global,
             handle_global,
+            dispatch_global,
+            dispatch_hash: fnv1a(value.as_bytes()),
+            dispatch_used: false,
             is_wtf8: false,
         };
         self.entries.push(entry);
@@ -254,6 +277,11 @@ impl StringPool {
         } else {
             format!("{}_.str.{}.handle", self.module_prefix, idx)
         };
+        let dispatch_global = if self.module_prefix.is_empty() {
+            format!(".str.{}.dispatch", idx)
+        } else {
+            format!("{}_.str.{}.dispatch", self.module_prefix, idx)
+        };
         let entry = StringEntry {
             idx,
             value: key.clone(),
@@ -261,6 +289,9 @@ impl StringPool {
             escaped_ir,
             bytes_global,
             handle_global,
+            dispatch_global,
+            dispatch_hash: fnv1a(bytes),
+            dispatch_used: false,
             is_wtf8: true,
         };
         self.entries.push(entry);
@@ -270,6 +301,14 @@ impl StringPool {
 
     pub fn entry(&self, idx: u32) -> &StringEntry {
         &self.entries[idx as usize]
+    }
+
+    /// Mark an interned entry as a static property/method dispatch key and
+    /// return the descriptor symbol codegen should tag into the by-id ABI.
+    pub fn static_dispatch_global(&mut self, idx: u32) -> String {
+        let entry = &mut self.entries[idx as usize];
+        entry.dispatch_used = true;
+        entry.dispatch_global.clone()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &StringEntry> {
@@ -283,6 +322,23 @@ impl StringPool {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// Emit the process-stable id consumed by the runtime's property/method by-id
+/// ABIs. The id is a tagged pointer to an immutable
+/// `{ byte_len, flags, hash, bytes }` descriptor in the compiled module's
+/// read-only data, so it is safe to use from a `perry/thread` worker with an
+/// independent GC arena.
+pub(crate) fn emit_static_dispatch_id(
+    block: &mut crate::block::LlBlock,
+    dispatch_global: &str,
+) -> String {
+    let descriptor = block.ptrtoint(&format!("@{dispatch_global}"), crate::types::I64);
+    block.or(
+        crate::types::I64,
+        &descriptor,
+        &crate::nanbox::i64_literal(crate::nanbox::STATIC_DISPATCH_TAG),
+    )
 }
 
 impl Default for StringPool {
@@ -310,6 +366,15 @@ fn escape_for_llvm_ir(bytes: &[u8]) -> String {
     s
 }
 
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +398,29 @@ mod tests {
         assert_eq!(e.byte_len, 11);
         assert_eq!(e.bytes_global, ".str.0.bytes");
         assert_eq!(e.handle_global, ".str.0.handle");
+        assert_eq!(e.dispatch_global, ".str.0.dispatch");
+        assert!(!e.dispatch_used);
+    }
+
+    #[test]
+    fn entries_apply_module_prefix_to_dispatch_descriptors() {
+        let mut pool = StringPool::with_prefix("worker".to_string());
+        let idx = pool.intern("publish");
+        let e = pool.entry(idx);
+        assert_eq!(e.bytes_global, "worker_.str.0.bytes");
+        assert_eq!(e.handle_global, "worker_.str.0.handle");
+        assert_eq!(e.dispatch_global, "worker_.str.0.dispatch");
+    }
+
+    #[test]
+    fn dispatch_descriptors_are_opt_in_and_prehashed() {
+        let mut pool = StringPool::new();
+        let idx = pool.intern("publish");
+        let global = pool.static_dispatch_global(idx);
+        let e = pool.entry(idx);
+        assert_eq!(global, ".str.0.dispatch");
+        assert!(e.dispatch_used);
+        assert_eq!(e.dispatch_hash, 0xe2bf_e841_1c47_2768);
     }
 
     #[test]

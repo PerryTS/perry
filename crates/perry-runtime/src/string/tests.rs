@@ -2,7 +2,7 @@
 //!
 //! Moved verbatim from the pre-split monolithic `string.rs`.
 
-use super::intern::{with_intern_table, InternEntry, INTERN_TABLE_MASK};
+use super::intern::{with_intern_table, INTERN_TABLE_MASK};
 use super::*;
 
 fn malloc_object_count_for_test() -> usize {
@@ -67,6 +67,66 @@ fn dispatch_id_resolver_accepts_raw_heap_and_sso_string_forms() {
         .unwrap()
         .bits() as i64;
     assert_eq!(bytes_from(boxed_sso), b"id");
+}
+
+#[test]
+fn dispatch_id_resolver_accepts_static_rodata_descriptor_form() {
+    let bytes = b"publish";
+    let descriptor = StaticDispatchString {
+        byte_len: bytes.len() as u32,
+        flags: 0,
+        hash: 0xe2bf_e841_1c47_2768,
+        bytes: bytes.as_ptr(),
+    };
+    let id = STATIC_DISPATCH_TAG
+        | ((&descriptor as *const StaticDispatchString as u64) & crate::value::POINTER_MASK);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let resolved = perry_string_ref_from_dispatch_id(id as i64, &mut scratch).unwrap();
+    assert!(resolved.heap.is_null());
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(resolved.ptr, resolved.len) },
+        bytes
+    );
+}
+
+#[test]
+fn static_dispatch_key_materialization_is_cached_per_thread() {
+    let bytes = b"publish";
+    let descriptor = StaticDispatchString {
+        byte_len: bytes.len() as u32,
+        flags: 0,
+        hash: 0xe2bf_e841_1c47_2768,
+        bytes: bytes.as_ptr(),
+    };
+    let id = STATIC_DISPATCH_TAG
+        | ((&descriptor as *const StaticDispatchString as u64) & crate::value::POINTER_MASK);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let key = perry_string_ref_from_dispatch_id(id as i64, &mut scratch).unwrap();
+    let first = materialize_dispatch_key(key);
+    let second = materialize_dispatch_key(key);
+    assert!(!first.is_null());
+    assert_eq!(first, second);
+}
+
+#[test]
+fn static_dispatch_key_materialization_preserves_wtf8_flag() {
+    let bytes = b"\xED\xA0\x80";
+    let descriptor = StaticDispatchString {
+        byte_len: bytes.len() as u32,
+        flags: STATIC_DISPATCH_FLAG_WTF8,
+        hash: fnv1a_for_test(bytes),
+        bytes: bytes.as_ptr(),
+    };
+    let id = STATIC_DISPATCH_TAG
+        | ((&descriptor as *const StaticDispatchString as u64) & crate::value::POINTER_MASK);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let key = perry_string_ref_from_dispatch_id(id as i64, &mut scratch).unwrap();
+    let heap = materialize_dispatch_key(key);
+    assert!(!heap.is_null());
+    assert_ne!(
+        unsafe { (*heap).flags } & STRING_FLAG_HAS_LONE_SURROGATES,
+        0
+    );
 }
 
 #[test]

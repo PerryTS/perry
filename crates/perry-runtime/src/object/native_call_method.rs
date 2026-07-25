@@ -189,10 +189,9 @@ pub unsafe extern "C" fn js_native_call_method_str_key(
     )
 }
 
-/// Static-name compiled callsites pass an interned method id rather than raw
-/// bytes. For now the id is the interned heap StringHeader pointer emitted by
-/// the StringPool, which lets the runtime preserve the existing dispatch tower
-/// while codegen stops plumbing byte pointer + length pairs through hot paths.
+/// Static-name compiled callsites pass an immutable AOT descriptor rather than
+/// a thread-local heap pointer. The runtime resolves it to its read-only byte
+/// slice while preserving the existing dispatch tower.
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method_by_id(
     object: f64,

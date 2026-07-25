@@ -51,12 +51,10 @@ fn lower_runtime_property_set_by_name(
     let recv_box = lower_expr(ctx, object)?;
     let val_double = lower_expr(ctx, value)?;
     let key_idx = ctx.strings.intern(property);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-    let key_box = blk.load(DOUBLE, &key_handle_global);
-    let key_bits = blk.bitcast_double_to_i64(&key_box);
-    let property_id = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    let property_id = crate::strings::emit_static_dispatch_id(blk, &dispatch_global);
     blk.call_void(
         "js_object_set_field_by_property_id",
         &[(I64, &obj_bits), (I64, &property_id), (DOUBLE, &val_double)],

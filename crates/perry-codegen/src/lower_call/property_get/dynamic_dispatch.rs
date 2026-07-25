@@ -451,13 +451,8 @@ pub(crate) fn try_lower_instance_method_call(
             // method of the same name.
             ctx.current_block = default_idx;
             let key_idx = ctx.strings.intern(property);
-            let entry = ctx.strings.entry(key_idx);
-            let key_handle_global = format!("@{}", entry.handle_global);
-            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-            let method_id = ctx
-                .block()
-                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+            let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+            let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
             let (fb_args_ptr, fb_args_len) = if static_user_args.is_empty() {
                 ("null".to_string(), "0".to_string())
             } else {

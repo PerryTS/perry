@@ -845,17 +845,13 @@ pub fn try_lower_native_method_str_dispatch(
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
             }
-            // Intern the method name and pass its heap string handle as the
-            // static-name method id. The typed-feedback wrapper resolves the
-            // id to bytes only at the runtime boundary.
+            // Pass a tagged pointer to the immutable StringPool dispatch
+            // descriptor. A GC-backed string handle belongs to the main
+            // thread's arena and cannot be resolved safely by a
+            // `perry/thread` worker executing this compiled closure.
             let key_idx = ctx.strings.intern(property);
-            let entry = ctx.strings.entry(key_idx);
-            let key_handle_global = format!("@{}", entry.handle_global);
-            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-            let method_id = ctx
-                .block()
-                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+            let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+            let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
             // Stack-allocate the args array if any. The alloca MUST live in
             // the function entry block — emitting it into the current block
             // (which may be a loop body) makes LLVM lower it as a runtime

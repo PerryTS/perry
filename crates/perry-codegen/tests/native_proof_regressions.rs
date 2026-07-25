@@ -13184,7 +13184,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
 }
 
 #[test]
-fn static_name_method_fallback_uses_method_id_wrapper() {
+fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
     let module = module_with_classes_and_params(
         "method_id_static_name_fallback.ts",
         Vec::new(),
@@ -13208,6 +13208,14 @@ fn static_name_method_fallback_uses_method_id_wrapper() {
     assert!(
         !ir.contains("call double @js_typed_feedback_native_call_method(i64"),
         "static-name dynamic method fallback should not pass raw name bytes:\n{ir}"
+    );
+    assert!(
+        ir.contains(".dispatch = private unnamed_addr constant { i32, i32, i64, ptr }"),
+        "static method ids should be immutable rodata descriptors:\n{ir}"
+    );
+    assert!(
+        ir.contains(".dispatch to i64"),
+        "method-id lowering should tag the descriptor address, not load a GC string handle:\n{ir}"
     );
 }
 

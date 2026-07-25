@@ -34,6 +34,11 @@ pub const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 /// Must match `perry-runtime::value::tags::SHORT_STRING_TAG` (used by the
 /// inline `is-number` guard in `stmt::loops`).
 pub const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
+/// Internal-only tag for a pointer to an immutable static-dispatch string
+/// descriptor. This is not a JavaScript value; it travels only through the
+/// property/method `*_by_id` ABI. `0x7FF8` is outside Perry's JS-value tag
+/// band and corresponds to the otherwise-unused canonical quiet-NaN prefix.
+pub const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;
 pub const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 
 pub const TAG_UNDEFINED_I64: &str = "9222246136947933185";
@@ -101,6 +106,7 @@ mod tests {
         assert_eq!(i64_literal(INT32_TAG), INT32_TAG_I64);
         assert_eq!(i64_literal(STRING_TAG), STRING_TAG_I64);
         assert_eq!(i64_literal(BIGINT_TAG), BIGINT_TAG_I64);
+        assert_eq!(i64_literal(STATIC_DISPATCH_TAG), "9221120237041090560");
     }
 
     #[test]
