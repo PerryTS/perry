@@ -79,12 +79,8 @@ bundled-commander = []
 # perry-stdlib's per-tick bridge into it lives behind `external-fastify-pump`.
 http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
 
-# HTTP client (node-fetch, axios) — single umbrella for both. The
-# well-known flip strips this when the user imports either module
-# (both perry-ext-fetch and perry-ext-axios cover the symbol surface
-# under the umbrella). Per-binding splits could land later if a
-# program needs e.g. axios-only without fetch, but in practice they
-# share the reqwest dep so splitting saves no binary size.
+# Web Fetch and Axios compatibility surface. The well-known flip can
+# strip this when the external binding owns the imported surface.
 # `bundled-streams` rides under the umbrella for backwards-compat
 # with v0.5.571's `--features http-client` callers (which got
 # `pub mod streams` transitively). The well-known flip strips
@@ -92,19 +88,9 @@ http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes",
 # axios / node-fetch / http / https is imported through the
 # well-known table — both ends move in lockstep.
 #
-# #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API —
-# `fetch()`, `Headers`, `Request`, `Response`, `Blob`/`File`, in
-# `src/fetch/` + `src/fetch_blob.rs`) plus the bundled node:http client
-# (`src/http.rs` + `src/axios.rs`). The halves share the
-# reqwest/async-runtime/streams deps but are otherwise independent.
-# Keeping them separable lets the well-known flip strip *only* the
-# bundled node:http client when `node:http` routes to perry-ext-http,
-# while preserving the Web Fetch FFIs a program needs for a bare
-# `new Headers()` / `new Response()`. Linking both the bundled client
-# and perry-ext-http previously produced duplicate
-# `js_http_process_pending` (et al.) symbols, and perry-ext-http's
-# aux-pump call bound to perry-stdlib's empty-queue copy — wedging the
-# in-process response pump (#5174).
+# #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API)
+# plus the Axios compatibility module. Node HTTP is provided only by
+# perry-ext-http.
 web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams"]
 http-client = ["web-fetch"]
 

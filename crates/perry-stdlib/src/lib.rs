@@ -6,7 +6,7 @@
 //! # Features
 //! - `core` - Minimal runtime (always included)
 //! - `http-server` - Native HTTP server (hyper-based)
-//! - `http-client` - HTTP client (reqwest/node-fetch)
+//! - `http-client` - Web Fetch and Axios compatibility surface
 //! - `database` - All databases (postgres, mysql, sqlite, redis, mongodb)
 //! - `crypto` - Cryptographic functions
 //! - `compression` - zlib compression
@@ -131,13 +131,8 @@ pub use framework::*;
 // `external-fastify-pump` feature (drained from `async_bridge`).
 
 // === Web Fetch API (fetch / Headers / Request / Response / Blob) ===
-// #5174: gated on `web-fetch`, NOT `http-client`. The Web Fetch surface
-// (reqwest-backed `fetch()` + the WHATWG data types) is independent of
-// the bundled node:http client below, so a program that only needs
-// `new Headers()` while routing `node:http` to perry-ext-http keeps
-// these without dragging in the colliding bundled http.rs symbols.
-// `http-client = ["web-fetch"]`, so `--features http-client` still
-// compiles all of this exactly as before.
+// #5174: gated on `web-fetch`, not `http-client`, so Web Fetch stays
+// independent from the external node:http implementation.
 #[cfg(feature = "web-fetch")]
 pub mod fetch;
 #[cfg(feature = "web-fetch")]
@@ -149,16 +144,7 @@ pub mod fetch_blob;
 #[cfg(feature = "web-fetch")]
 pub use fetch_blob::*;
 
-// === Bundled node:http client (http.request / http.get / axios) ===
-// Stays on `http-client`. The well-known flip strips `http-client`
-// (keeping `web-fetch`) when `node:http` routes to perry-ext-http, so
-// these modules — which export the same `js_http_*` symbols as
-// perry-ext-http — are absent and can't collide (#5174).
-#[cfg(feature = "http-client")]
-pub mod http;
-#[cfg(feature = "http-client")]
-pub use http::*;
-
+// === Axios compatibility surface ===
 #[cfg(feature = "http-client")]
 pub mod axios;
 #[cfg(feature = "http-client")]

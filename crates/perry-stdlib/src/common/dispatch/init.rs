@@ -83,10 +83,6 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
 
     // #4904: Agent tunables (`agent.maxSockets = 4`) and the
     // `agent.createConnection = fn` monkeypatch pattern Node's tests use.
-    #[cfg(feature = "http-client")]
-    if crate::http::dispatch_agent_property_set(handle, property_name, value) {
-        return;
-    }
     #[cfg(feature = "external-http-client-pump")]
     if matches!(
         property_name,
@@ -487,7 +483,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
         // #4965: Headers → `res.setHeaders` entries-JSON producer.
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_headers_entries_json(
             f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
         );
@@ -532,7 +528,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     );
     #[cfg(feature = "web-fetch")]
     js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
     #[cfg(feature = "web-fetch")]
     js_register_global_headers_object_json(crate::fetch::js_headers_fetch_object_json);

@@ -143,23 +143,8 @@ pub(crate) fn build_optimized_libs(
     // through perry-stdlib's tokio. Their workspace-built .a stays
     // fine.
     let mut tokio_using_bindings: Vec<(String, String, Option<String>)> = Vec::new();
-    // Closes #589: hono + node:http combinations dropped js_headers_new /
-    // js_response_new / js_request_new at link time. The well-known flip
-    // strips perry-stdlib's `http-client` feature when `node:http` is
-    // imported and routes to perry-ext-http — but perry-ext-http only
-    // exports the HTTP-client surface (`js_http_*` / `js_node_http_*`),
-    // not the Web Fetch ctors that hono's compiled output references.
-    //
-    // When the user's TS code (or any compilePackages-resolved module like
-    // hono) constructs `new Headers(...)` / `new Request(...)` / `new Response(...)`,
-    // the HIR sets `ctx.uses_fetch = true` (see
-    // `crates/perry-hir/src/destructuring.rs::1469-1492` + the explicit
-    // `fetch(...)` arms in `lower/expr_call.rs`). Keep `http-client` below
-    // so perry-stdlib supplies both the constructors and the erased-type
-    // Request/Response/Headers/Blob dispatch registries. Do not synthesize
-    // the `"fetch"` well-known binding from `uses_fetch`: perry-ext-fetch has
-    // separate registries, so a builtin `new Request()` constructed there
-    // would make `(req as any).url` miss stdlib's dispatch path.
+    // Web Fetch is selected independently from the external node:http
+    // binding. `uses_fetch` adds `web-fetch` in compute_required_features.
     if use_well_known {
         for module in &iteration_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);
@@ -248,31 +233,6 @@ pub(crate) fn build_optimized_libs(
             // `compute_required_features` consulted above, so we
             // know exactly what to remove.
             for feat in crate::commands::stdlib_features::module_to_features(module_normalized) {
-                // Fix #589 / #5174: `node:http` / `node:https` /
-                // `node:http2` map to `http-client`, but that umbrella
-                // covers BOTH the bundled node:http client
-                // (`src/http.rs` + `src/axios.rs`) AND the Web Fetch
-                // FFIs (`js_headers_new`, `js_response_new`,
-                // `js_request_new`, …). When a program uses
-                // `new Headers()` / `new Response()` (directly or via a
-                // compilePackages package like hono) while also
-                // importing `node:http`, we must keep the Web Fetch
-                // half but drop the bundled client — otherwise its
-                // `js_http_process_pending` (and the rest of the
-                // `js_http_*` surface) duplicate perry-ext-http's
-                // symbols, and perry-ext-http's aux-pump call binds to
-                // perry-stdlib's empty-queue copy, wedging the
-                // in-process response pump (#5174). Since `http-client
-                // = ["web-fetch"]`, strip the umbrella and re-assert
-                // `web-fetch`: fetch.rs/fetch_blob.rs stay,
-                // http.rs/axios.rs go. The well-known staticlib
-                // (perry-ext-http) is still
-                // added for the actual node:http surface.
-                if *feat == "http-client" && ctx.uses_fetch {
-                    features.remove("http-client");
-                    features.insert("web-fetch");
-                    continue;
-                }
                 // Refs #643: keep `database-sqlite` enabled even when
                 // `better-sqlite3` routes to perry-ext-better-sqlite3.
                 // perry-stdlib's `dispatch_sqlite_stmt` (the dynamic
