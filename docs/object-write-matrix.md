@@ -37,27 +37,30 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 | w0_canonical | 2 static writes, const alias, nested const `for`s, `+`/`-` RHS | whole-loop clone | 6 | 9 | **0.67** | BEATS node |
 | w1_three_writes | 3 static writes, same loop | whole-loop clone (≤4 fields) | 7 | 9 | **0.78** | BEATS node |
 | w2_one_write | 1 static write | whole-loop clone | 5 | 7 | **0.71** | BEATS node |
-| w3_mul_rhs | RHS uses `*` | NOT clone (`Add\|Sub` only) → PIC | 47 | 7 | 6.7 | GAP: extend numeric matcher |
-| w4_dyn_bound | inner bound `objs.length` | NOT clone (const bounds only) → PIC | 51 | 8 | 6.4 | GAP: length-stable versioning |
-| w5_while | same body, `while` form | NOT clone (`for`-only) → PIC | 46 | 7 | 6.6 | GAP: while normalization |
+| w3_mul_rhs | RHS uses `*` | *(pre-#6830 baseline)* PIC → whole-loop clone | 47 → 6 | 7 | 6.7 → **0.75** | BEATS node (#6830 admits `Mul` with endpoint-product ranges) |
+| w4_dyn_bound | inner bound `objs.length` | *(pre-#6830 baseline)* PIC → whole-loop clone | 51 → 6 | 8 | 6.4 → **0.75** | BEATS node (#6830 sentinel-resolved dynamic bound) |
+| w5_while | same body, `while` form | *(pre-#6830 baseline)* PIC → whole-loop clone | 46 → 5 | 7 | 6.6 → **0.71** | BEATS node (#6830 while normalization) |
 | w6_call_in_body | user call inside body | NOT clone → PIC + call | 100 | 7 | 14.3 | GAP: call-tolerant clone / inlining |
-| w7_mut_alias | `let o = objs[i]` | NOT clone (const alias only) | 70 | 8 | 8.8 | GAP: SSA no-reassign proof |
-| w8_helper_mono | writes inside helper fn, mono | static-key PIC hit (~10 ns/write) | 47 | 8 | 5.9 | GAP: call overhead + guard chain vs node's full inlining |
+| w7_mut_alias | `let o = objs[i]` | *(pre-#6830 baseline)* generic → whole-loop clone | 70 → 6 | 8 | 8.8 → **0.75** | BEATS node (#6830: matched region structurally forbids reassignment) |
+| w8_helper_mono | writes inside helper fn, mono | *(pre-#6812-w8 baseline)* per-write PIC → whole-loop clone | 47 → 6 | 8 | 5.9 → **0.75** | BEATS node — the inliner's temp `let`s are admitted by substitution, so inlined helper bodies clone |
 | w9_poly2 | 2 shapes through one site | PIC entries 1–2 | 27 | 6 | 4.5 | GAP: same as w8 + entry chain |
 | w10_poly8 | 8 shapes through one site | PIC exhausted → runtime miss | 27 | 19 | 1.4 | close; megamorphic path is decent |
 | w11_stable_dynkey | `o[k]`, `const k = "c"` | clone (const-string local = static) | 6 | 8 | **0.75** | BEATS node |
 | w12_arb_dynkey | rotating keys from array | generic | 84 | 18 | 4.7 | GAP: GC-safe dynamic-key cache |
-| w13_int_key | `o[7]` on plain object | generic numeric-as-property | 160 | 13 | 12.3 | GAP |
+| w13_int_key | `o[7]` on plain object | generic numeric-as-property; append past inline capacity | 160 | 13 | 12.3 | PARTIAL: integer keys are static clone keys and iteration #1 is peeled, so a within-capacity append clones (variant: 5 vs 12 ms, **0.42**, beats node). The canonical cell appends a 6th key past the literal's 5-slot capacity → overflow side-table; needs the object-owned spill (next slice) |
 | w15_append_build | fresh `{}` + 6 assigns (builder) | *(pre-#6829 baseline)* generic transitions; `class_id==0` blocks PIC | 1489 → 196 (#6829) | 8 | 186 → 25 | #6829 folds builders into literals; residual tracked below |
-| w16_overflow_slot | writes past inline capacity | *(pre-#6812-w16 baseline)* runtime (PIC bounds reject) → whole-loop clone | 4163 → 3 | 29 | 173 → **0.10** | BEATS node — `{}` per-site classes + learned width + compile-time width hint make builder arrays uniform and clone-eligible. Each ratio vs its own run's node baseline (2026-07-25 sweeps: pre-fix 4163/24, post-fix 3/29) |
+| w16_overflow_slot | writes past inline capacity | *(pre-#6812-w16 baseline)* runtime (PIC bounds reject) → whole-loop clone | 4163 → 3 | 29 | 173 → **0.26** | BEATS node — `{}` per-site classes + learned width + compile-time width hint make builder arrays uniform and clone-eligible. The #6812-w13 peel adds one ordinary outer round (3 → 6 ms; reclaimable with a guard-first second-chance design). Ratios vs each run's own node baseline (2026-07-25 sweeps) |
 | w17_alloc_rhs | allocating RHS (`"s"+i`) | NOT PIC (safepoint-free rule) | 26 | 18 | 1.4 | close; revisit only with receiver-reload design |
 | w18_class_inst | class instances via `any` | PIC | 6 | 12 | **0.50** | BEATS node (best row) |
 
 ### Reading of the triage pass
 
-- **Beating node already (5 rows):** everything the whole-loop clone covers,
-  plus class instances through the PIC. The #6811/#6823 architecture wins
-  when it applies.
+- **Beating node (11 of 18 rows as of #6812 w8/w13):** everything the
+  whole-loop clone covers — including, since #6830/#6833/#6812-w8, `Mul`
+  RHS, dynamic bounds, `while` form, `let` aliases, builder-pattern arrays,
+  inlined-helper bodies, and peeled first-write appends — plus class
+  instances through the PIC. The #6811/#6823 architecture wins when it
+  applies.
 - **Two catastrophic rows (~180×), both ubiquitous in real code:**
   the builder pattern (fresh `{}` + property assigns — every API response,
   parser, ORM row) and wide-object overflow-slot writes. These dominate the
