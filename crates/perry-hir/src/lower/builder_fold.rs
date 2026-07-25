@@ -211,8 +211,12 @@ fn fold_module_stmt_run(items: &mut [ast::ModuleItem], changed: &mut bool) {
         let mut appended: Vec<(ast::PropName, Box<ast::Expr>)> = Vec::new();
         let mut consumed = 0usize;
         for follower in items[idx + 1..].iter() {
-            let ast::ModuleItem::Stmt(fs) = follower else { break };
-            let Some((key, value)) = assign_to_name_key(fs, &name_start) else { break };
+            let ast::ModuleItem::Stmt(fs) = follower else {
+                break;
+            };
+            let Some((key, value)) = assign_to_name_key(fs, &name_start) else {
+                break;
+            };
             if !fold_key_ok(&key, &keys) || expr_references_ident(value, &name_start) {
                 break;
             }
@@ -257,7 +261,9 @@ fn fold_stmts(stmts: &mut Vec<ast::Stmt>, changed: &mut bool) {
         let mut appended: Vec<(ast::PropName, Box<ast::Expr>)> = Vec::new();
         let mut consumed = 0usize;
         for follower in stmts[idx + 1..].iter() {
-            let Some((key, value)) = assign_to_name_key(follower, &name) else { break };
+            let Some((key, value)) = assign_to_name_key(follower, &name) else {
+                break;
+            };
             if !fold_key_ok(&key, &keys) || expr_references_ident(value, &name) {
                 break;
             }
@@ -307,14 +313,18 @@ fn assign_to_name_key<'a>(
     name: &str,
 ) -> Option<(ast::PropName, &'a Box<ast::Expr>)> {
     let ast::Stmt::Expr(es) = s else { return None };
-    let ast::Expr::Assign(a) = &*es.expr else { return None };
+    let ast::Expr::Assign(a) = &*es.expr else {
+        return None;
+    };
     if a.op != ast::AssignOp::Assign {
         return None;
     }
     let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m)) = &a.left else {
         return None;
     };
-    let ast::Expr::Ident(obj) = &*m.obj else { return None };
+    let ast::Expr::Ident(obj) = &*m.obj else {
+        return None;
+    };
     if obj.sym.as_ref() != name {
         return None;
     }
@@ -380,13 +390,20 @@ fn fold_key_ok(key: &ast::PropName, existing: &[String]) -> bool {
 }
 
 fn append_props(s: &mut ast::Stmt, appended: Vec<(ast::PropName, Box<ast::Expr>)>) {
-    let ast::Stmt::Decl(ast::Decl::Var(var)) = s else { return };
-    let Some(init) = &mut var.decls[0].init else { return };
-    let ast::Expr::Object(obj) = &mut **init else { return };
+    let ast::Stmt::Decl(ast::Decl::Var(var)) = s else {
+        return;
+    };
+    let Some(init) = &mut var.decls[0].init else {
+        return;
+    };
+    let ast::Expr::Object(obj) = &mut **init else {
+        return;
+    };
     for (key, value) in appended {
-        obj.props.push(ast::PropOrSpread::Prop(Box::new(ast::Prop::KeyValue(
-            ast::KeyValueProp { key, value },
-        ))));
+        obj.props
+            .push(ast::PropOrSpread::Prop(Box::new(ast::Prop::KeyValue(
+                ast::KeyValueProp { key, value },
+            ))));
     }
 }
 
