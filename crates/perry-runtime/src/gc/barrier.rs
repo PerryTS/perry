@@ -1292,6 +1292,7 @@ pub(super) fn remember_old_to_young_external_slot(parent_addr: usize, slot_addr:
 
 pub(super) fn mark_dirty_old_page(page: usize) -> bool {
     bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageMarkAttempts);
+    ever_dirty_note(page);
     DIRTY_OLD_PAGES.with(|s| {
         let inserted = s.borrow_mut().insert(page);
         crate::arena::old_page_mark_dirty(page);
@@ -1300,6 +1301,38 @@ pub(super) fn mark_dirty_old_page(page: usize) -> bool {
         }
         inserted
     })
+}
+
+thread_local! {
+    /// PERRY_GC_VERIFY_EVACUATION diagnostic only: every old page EVER marked
+    /// dirty over the process lifetime (never cleared). Lets the verifier's
+    /// missing-edge report say whether the slot's page was recorded at some
+    /// point (edge recorded-then-LOST by a clear/restore gap) or never recorded
+    /// at all (a store path that skips the barrier) — the decisive split for the
+    /// missing old→young edge bug. Empty/unused unless the verifier env is set.
+    static EVER_DIRTY_OLD_PAGES: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_set());
+}
+
+fn ever_dirty_tracking_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| std::env::var_os("PERRY_GC_VERIFY_EVACUATION").is_some())
+}
+
+fn ever_dirty_note(page: usize) {
+    if !ever_dirty_tracking_enabled() {
+        return;
+    }
+    EVER_DIRTY_OLD_PAGES.with(|s| {
+        s.borrow_mut().insert(page);
+    });
+}
+
+/// Was `page` ever dirtied over the process lifetime? (Diagnostic; only
+/// meaningful when PERRY_GC_VERIFY_EVACUATION is set.)
+pub(super) fn ever_dirty_old_page(page: usize) -> bool {
+    EVER_DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page))
 }
 
 pub(super) fn mark_dirty_external_slot_page(header_addr: usize, page: usize) -> bool {

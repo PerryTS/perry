@@ -530,8 +530,13 @@ pub(super) fn panic_old_young_edge_verifier_failed(stats: OldYoungEdgeVerifyStat
             child_hist.push_str(&format!(" {}({})={}", type_name(t), t, c));
         }
     }
+    // Decisive split for the missing-edge hunt: was the slot's page EVER dirtied
+    // (edge recorded by a barrier then LOST by a clear/restore gap) or never
+    // (a store path that skips the barrier entirely)?
+    let slot_page_ever_dirty =
+        super::barrier::ever_dirty_old_page(crate::arena::generation_page_for_addr(missing.slot));
     panic!(
-        "old-young-edge-verifier failed: checked_old_objects={} checked_remembered_pages={} checked_old_to_young_edges={} missing_edges={} malloc_parents={} unmarked_parents={}\n  first_missing: parent=0x{:x} type={}({}) old_arena={} marked={} slot=0x{:x} child=0x{:x} child_type={}({})\n  missing_by_parent_type:{}\n  missing_by_child_type:{}",
+        "old-young-edge-verifier failed: checked_old_objects={} checked_remembered_pages={} checked_old_to_young_edges={} missing_edges={} malloc_parents={} unmarked_parents={}\n  first_missing: parent=0x{:x} type={}({}) old_arena={} marked={} slot=0x{:x} child=0x{:x} child_type={}({}) slot_page_ever_dirty={slot_page_ever_dirty}\n  missing_by_parent_type:{}\n  missing_by_child_type:{}",
         stats.checked_old_objects,
         stats.checked_remembered_pages,
         stats.checked_old_to_young_edges,
