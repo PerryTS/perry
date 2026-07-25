@@ -522,22 +522,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         // #4904: http twins of the https entries above.
         ("http", "request") => Some(0),
         ("http", "get") => Some(3),
-        (
-            "stream",
-            "isDestroyed"
-            | "isDisturbed"
-            | "isErrored"
-            | "isReadable"
-            | "isWritable"
-            | "getDefaultHighWaterMark"
-            | "_isArrayBufferView"
-            | "_isUint8Array"
-            | "_uint8ArrayToBuffer",
-        ) => Some(1),
-        ("stream", "finished") => Some(3),
-        ("stream", "addAbortSignal" | "destroy" | "setDefaultHighWaterMark") => Some(2),
-        ("stream", "compose" | "pipeline") => Some(0),
-        ("stream", "duplexPair") => Some(1),
+        ("stream", "destroy") => Some(2),
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
@@ -583,7 +568,6 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("fs", "Stats") => Some(18),
         ("fs", "mkdtempDisposableSync") => Some(2),
         ("fs", "openAsBlob") => Some(1),
-        ("fs", "_toUnixTimestamp") => Some(1),
         ("events", "init") => Some(1),
         ("repl", "Recoverable") => Some(1),
         ("repl", "REPLServer" | "start") => Some(6),
@@ -602,7 +586,6 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("module", "flushCompileCache") => Some(0),
         ("module", "getCompileCacheDir") => Some(0),
         ("module", "getSourceMapsSupport") => Some(0),
-        ("module", "Module") => Some(0),
         ("module", "_findPath") => Some(3),
         ("module", "_initPaths") => Some(0),
         ("module", "_load") => Some(3),

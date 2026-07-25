@@ -1184,7 +1184,7 @@ pub(super) fn take_test_last_gc_trace_json() -> Option<serde_json::Value> {
     TEST_LAST_GC_TRACE_JSON.with(|slot| slot.borrow_mut().take())
 }
 
-pub(super) struct GcCollectOutcome {
+pub(crate) struct GcCollectOutcome {
     pub(super) freed_bytes: u64,
     pub(super) malloc_swept: bool,
     pub(super) trace: Option<GcCycleTrace>,

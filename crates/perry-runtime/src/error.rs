@@ -1051,7 +1051,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
         let msg = format!("{} is not defined", name);
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err_ptr = js_referenceerror_new(msg_str);
-        return crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
     }
     let numeric = unsafe { crate::value::js_to_numeric(old) };
     let stepped = unsafe { crate::value::js_numeric_step(numeric, is_increment) };
@@ -1107,7 +1107,7 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
         let msg = format!("{} is not defined", name);
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err_ptr = js_referenceerror_new(msg_str);
-        return crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
     }
     let gptr = (gj.bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
     crate::object::js_object_set_field_by_name(gptr, key, value);

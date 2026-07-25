@@ -105,7 +105,6 @@ use perry_ffi::{
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, Once};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;

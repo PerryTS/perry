@@ -17,14 +17,14 @@ pub(crate) const INTERN_TABLE_MASK: usize = INTERN_TABLE_SIZE - 1;
 /// Maximum byte length for strings eligible for interning.
 pub(crate) const INTERN_MAX_BYTE_LEN: u32 = 64;
 
-/// Per-thread intern table.
-///
-/// Each thread (main + every `perry/thread` worker) has its own arena, so
-/// cached `StringHeader*` pointers MUST be per-thread — a string interned
-/// from worker A's arena is a use-after-free / cross-arena pointer when
-/// read from worker B. The previous design used a single process-wide
-/// `static mut`, which both raced under concurrent allocation and risked
-/// handing back foreign-arena pointers.
+// Per-thread intern table.
+//
+// Each thread (main + every `perry/thread` worker) has its own arena, so
+// cached `StringHeader*` pointers MUST be per-thread — a string interned
+// from worker A's arena is a use-after-free / cross-arena pointer when
+// read from worker B. The previous design used a single process-wide
+// `static mut`, which both raced under concurrent allocation and risked
+// handing back foreign-arena pointers.
 thread_local! {
     // arm64_32 fix: HEAP-allocate (Box) this ~128KB table instead of inline TLS.
     // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its

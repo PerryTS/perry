@@ -736,12 +736,12 @@ pub(crate) static SOURCE_MAPS_GENERATED_CODE: AtomicBool = AtomicBool::new(false
 pub(crate) static MODULE_COMPILE_CACHE_DIR: std::sync::Mutex<Option<String>> =
     std::sync::Mutex::new(None);
 
-/// Thread-local cell holding the process title set via `process.title = X`
-/// (#1401). `None` means "not assigned yet, fall back to argv[0]". The
-/// setter records the value here; on Linux it also calls `prctl(PR_SET_NAME)`
-/// so `/proc/<pid>/comm` reflects the new value. macOS has no per-process
-/// analog — the assignment is still observable via subsequent `process.title`
-/// reads, matching Node's best-effort semantics.
+// Thread-local cell holding the process title set via `process.title = X`
+// (#1401). `None` means "not assigned yet, fall back to argv[0]". The
+// setter records the value here; on Linux it also calls `prctl(PR_SET_NAME)`
+// so `/proc/<pid>/comm` reflects the new value. macOS has no per-process
+// analog — the assignment is still observable via subsequent `process.title`
+// reads, matching Node's best-effort semantics.
 thread_local! {
     pub(crate) static PROCESS_TITLE: std::cell::RefCell<Option<String>> = const {
         std::cell::RefCell::new(None)

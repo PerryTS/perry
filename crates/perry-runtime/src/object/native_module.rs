@@ -545,7 +545,6 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             b"process".as_ptr(),
             "process".len(),
         )),
-        "module" => Some(bound_native_callable_export_value("module", "Module")),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "node-pty"
         | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl"
         | "sea" | "url" | "util" | "inspector" | "inspector/promises" => {

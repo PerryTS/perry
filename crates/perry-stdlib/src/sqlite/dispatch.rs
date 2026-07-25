@@ -382,7 +382,9 @@ pub unsafe fn dispatch_node_sqlite_limits_set(
     };
     let new_value = non_negative_i32_value(value_from_f64(value), property_name, true);
     with_open_node_connection(limits.db_handle, |conn| {
-        conn.set_limit(limit, new_value);
+        // limit id is pre-validated by node_sqlite_limit above; deliberately
+        // discard set_limit's prior-value Result.
+        let _ = conn.set_limit(limit, new_value);
     });
     true
 }

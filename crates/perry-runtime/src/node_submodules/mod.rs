@@ -93,6 +93,7 @@ struct SubmoduleSpec {
 
 macro_rules! thunk {
     ($name:ident, $msg:expr) => {
+        #[allow(non_snake_case)] // thunk name mirrors JS API surface
         pub(crate) extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
             _arg: f64,

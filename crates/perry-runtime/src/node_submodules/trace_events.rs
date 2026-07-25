@@ -326,6 +326,7 @@ fn validate_categories(options_obj: *mut ObjectHeader) -> Vec<String> {
     result
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_trace_events_createTracing(
     _closure: *const ClosureHeader,
     options: f64,
@@ -360,6 +361,7 @@ pub(crate) extern "C" fn thunk_trace_events_createTracing(
     obj_value
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_trace_events_getEnabledCategories(
     _closure: *const ClosureHeader,
     _arg: f64,

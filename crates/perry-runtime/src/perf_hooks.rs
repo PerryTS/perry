@@ -77,7 +77,7 @@ const UV_METRICS_INFO_SHAPE: u32 = 0x7FFF_FF51;
 const UV_METRICS_INFO_KEYS: &[u8] = b"loopCount\0events\0eventsWaiting\0";
 
 #[derive(Clone)]
-struct PerfEntry {
+pub(crate) struct PerfEntry {
     name: String,
     entry_type: u8,
     start_time: f64,
@@ -1459,7 +1459,7 @@ pub extern "C" fn js_perf_observer_flush_all(
 
 /// Build an array from the in-flight observer `list` entries (for the
 /// `perf_observer_list` namespace methods).
-pub unsafe fn current_list_to_array(filter: impl Fn(&PerfEntry) -> bool) -> f64 {
+pub(crate) unsafe fn current_list_to_array(filter: impl Fn(&PerfEntry) -> bool) -> f64 {
     let mut snapshot: Vec<PerfEntry> =
         CURRENT_LIST.with(|c| c.borrow().iter().filter(|e| filter(e)).cloned().collect());
     sort_entries_by_start_time(&mut snapshot);

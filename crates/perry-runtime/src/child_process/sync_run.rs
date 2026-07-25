@@ -12,7 +12,7 @@ use super::{
 const CP_DEFAULT_MAX_BUFFER: usize = 1024 * 1024;
 
 /// Options that affect buffered sync execution after the `Command` is built.
-pub(super) struct CpRunOptions {
+pub(crate) struct CpRunOptions {
     input: Option<Vec<u8>>,
     timeout: Option<Duration>,
     kill_signal: i32,
@@ -183,7 +183,7 @@ impl CpRunError {
 }
 
 /// Outcome of running a child to completion (buffered).
-pub(super) struct CpRun {
+pub(crate) struct CpRun {
     pub(super) stdout: Vec<u8>,
     pub(super) stderr: Vec<u8>,
     pub(super) stdout_piped: bool,

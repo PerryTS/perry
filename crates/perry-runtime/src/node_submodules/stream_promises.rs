@@ -570,6 +570,7 @@ fn catch_stream_promises_throw(call: impl FnOnce()) -> Result<(), f64> {
     }
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_pipeline(
     _closure: *const ClosureHeader,
     source: f64,
@@ -614,6 +615,7 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     promise_value
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_finished(
     _closure: *const ClosureHeader,
     stream: f64,

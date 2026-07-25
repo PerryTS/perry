@@ -210,11 +210,11 @@ pub(crate) fn format_bigint_literal(val: f64) -> String {
     }
 }
 
-/// Per-thread override for the depth at which nested objects/arrays
-/// collapse to `[Object]` / `[Array]`. Defaults to Node's `util.inspect`
-/// default of 2. The `%o` format specifier raises this temporarily to
-/// Node's object-format depth of 4, while `%O` uses the current inspect
-/// options unchanged.
+// Per-thread override for the depth at which nested objects/arrays
+// collapse to `[Object]` / `[Array]`. Defaults to Node's `util.inspect`
+// default of 2. The `%o` format specifier raises this temporarily to
+// Node's object-format depth of 4, while `%O` uses the current inspect
+// options unchanged.
 thread_local! {
     static INSPECT_DEPTH_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(2) };
 }
@@ -467,11 +467,11 @@ pub fn function_source_for_func_ptr(func_ptr: usize) -> String {
     format!("function {name}() {{ [native code] }}")
 }
 
-/// Per-thread override for the `showHidden` inspect option. Defaults to
-/// `false` (Node default): `util.inspect` / `console.log` only show
-/// enumerable properties. `console.dir(value, { showHidden: true })`
-/// flips this for the duration of the print so non-enumerable props
-/// surface in `[bracketed]` form. See #1200.
+// Per-thread override for the `showHidden` inspect option. Defaults to
+// `false` (Node default): `util.inspect` / `console.log` only show
+// enumerable properties. `console.dir(value, { showHidden: true })`
+// flips this for the duration of the print so non-enumerable props
+// surface in `[bracketed]` form. See #1200.
 thread_local! {
     static INSPECT_SHOW_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_SHOW_PROXY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -517,12 +517,12 @@ impl Drop for InspectShowProxyGuard {
     }
 }
 
-/// Per-thread override for the `customInspect` inspect option. Defaults to
-/// `true` (Node default for `util.inspect` / `console.log`): when an object
-/// has a `[util.inspect.custom]` symbol-keyed method, the hook is invoked
-/// and its return value replaces the default object body. `console.dir`
-/// flips this to `false` so the symbol surfaces as a property listing.
-/// See #1201.
+// Per-thread override for the `customInspect` inspect option. Defaults to
+// `true` (Node default for `util.inspect` / `console.log`): when an object
+// has a `[util.inspect.custom]` symbol-keyed method, the hook is invoked
+// and its return value replaces the default object body. `console.dir`
+// flips this to `false` so the symbol surfaces as a property listing.
+// See #1201.
 thread_local! {
     static INSPECT_CUSTOM_INSPECT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }

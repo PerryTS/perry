@@ -613,6 +613,7 @@ pub(crate) extern "C" fn thunk_consumers_buffer(
     consume_stream(ConsumerKind::Buffer, stream)
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_consumers_arrayBuffer(
     _closure: *const ClosureHeader,
     stream: f64,

@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use http_body_util::BodyExt;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request};
 use hyper_util::rt::{TokioExecutor, TokioIo};

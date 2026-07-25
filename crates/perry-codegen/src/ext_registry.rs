@@ -586,23 +586,23 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
 /// optimization horizon worth measuring.
 static USED_PROVIDERS: Mutex<Option<HashSet<OwnerKind>>> = Mutex::new(None);
 
-/// Per-module capture buffer, active only between [`begin_module_capture`]
-/// and [`take_module_capture`] on the same thread.
-///
-/// Why a thread-local rather than another field on [`USED_PROVIDERS`]:
-/// the object cache (`crates/perry/src/commands/compile/object_cache.rs`)
-/// needs to know which registry symbols *this one module* emitted, so it
-/// can persist them next to the module's cached `.o` and replay them on a
-/// later cache hit. [`USED_PROVIDERS`] is process-wide and rayon compiles
-/// many modules concurrently, so it cannot attribute a symbol to a module.
-/// `perry-codegen` itself never uses rayon and `compile_module` runs start
-/// to finish on its caller's worker thread, so a thread-local scoped
-/// around that one call captures exactly this module's emissions.
-///
-/// We record the matched symbol *names* rather than [`OwnerKind`]s: replay
-/// re-runs them through [`record_ffi_call`], so the symbol→owner mapping is
-/// always the one in today's table, never a stale routing decision baked
-/// into a cache entry written by an older perry.
+// Per-module capture buffer, active only between [`begin_module_capture`]
+// and [`take_module_capture`] on the same thread.
+//
+// Why a thread-local rather than another field on [`USED_PROVIDERS`]:
+// the object cache (`crates/perry/src/commands/compile/object_cache.rs`)
+// needs to know which registry symbols *this one module* emitted, so it
+// can persist them next to the module's cached `.o` and replay them on a
+// later cache hit. [`USED_PROVIDERS`] is process-wide and rayon compiles
+// many modules concurrently, so it cannot attribute a symbol to a module.
+// `perry-codegen` itself never uses rayon and `compile_module` runs start
+// to finish on its caller's worker thread, so a thread-local scoped
+// around that one call captures exactly this module's emissions.
+//
+// We record the matched symbol *names* rather than [`OwnerKind`]s: replay
+// re-runs them through [`record_ffi_call`], so the symbol→owner mapping is
+// always the one in today's table, never a stale routing decision baked
+// into a cache entry written by an older perry.
 thread_local! {
     static MODULE_CAPTURE: RefCell<Option<HashSet<&'static str>>> = const { RefCell::new(None) };
 }

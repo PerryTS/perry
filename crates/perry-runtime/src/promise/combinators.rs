@@ -13,7 +13,7 @@ use super::assimilate::{
 };
 
 #[derive(Clone, Copy)]
-pub(super) struct PromiseAllState {
+pub(crate) struct PromiseAllState {
     pub result_promise: *mut Promise,
     pub results_arr: *mut crate::array::ArrayHeader,
     pub state_arr: *mut crate::array::ArrayHeader,
