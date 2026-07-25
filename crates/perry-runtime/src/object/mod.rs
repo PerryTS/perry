@@ -420,6 +420,26 @@ fn object_spill_enabled() -> bool {
     })
 }
 
+/// Raw in-range element access for the spill buffer. The buffer is a plain
+/// `GC_TYPE_ARRAY` this module allocated itself, so the user-facing
+/// `js_array_get`/`js_array_set` — which classify the receiver against the
+/// typed-array/buffer/SAB registries on EVERY call (three TLS probes,
+/// measured as the hot leaves of round-robin overflow writes) — are the
+/// wrong tool. Store = raw slot write + layout note + generational barrier,
+/// the exact triple the retired side-table Vec store performed.
+#[inline]
+unsafe fn spill_elements(spill: *const crate::array::ArrayHeader) -> *mut u64 {
+    (spill as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+}
+
+#[inline]
+unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, vbits: u64) {
+    let slot = spill_elements(spill).add(index);
+    *slot = vbits;
+    crate::gc::layout_note_slot(spill as usize, index, vbits);
+    crate::gc::runtime_write_barrier_slot(spill as usize, slot as usize, vbits);
+}
+
 fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
@@ -430,7 +450,7 @@ fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
         if spill.is_null() || field_index >= (*spill).length as usize {
             return None;
         }
-        let bits = crate::array::js_array_get(spill, field_index as u32).bits();
+        let bits = *spill_elements(spill).add(field_index);
         // Never-written positions are TAG_HOLE from allocation (or
         // TAG_UNDEFINED via the legacy-parity fillers); both report as
         // absent, matching the side-table Vec's TAG_UNDEFINED semantics.
@@ -452,11 +472,7 @@ fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         if !meta.is_null() {
             let spill = (*meta).spill as *mut crate::array::ArrayHeader;
             if !spill.is_null() && ((*spill).capacity as usize) > field_index {
-                crate::array::js_array_set(
-                    spill,
-                    field_index as u32,
-                    crate::value::JSValue::from_bits(vbits),
-                );
+                spill_store_slot(spill, field_index, vbits);
                 return;
             }
         }
@@ -498,13 +514,8 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
                 for i in 0..old_len {
                     let bits = *elements.add(i);
                     if bits != crate::value::TAG_HOLE && bits != crate::value::TAG_UNDEFINED {
-                        // Barriered + layout-aware store; in range by
-                        // construction (old_len <= old cap < new_cap).
-                        crate::array::js_array_set(
-                            new_spill,
-                            i as u32,
-                            crate::value::JSValue::from_bits(bits),
-                        );
+                        // In range by construction (old_len <= old cap < new_cap).
+                        spill_store_slot(new_spill, i, bits);
                     }
                 }
             }
@@ -520,13 +531,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let meta = (*obj).meta;
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
-        // No owner-side layout note: the value lives in the buffer, whose
-        // own layout/barrier bookkeeping `js_array_set` maintains.
-        crate::array::js_array_set(
-            spill,
-            field_index as u32,
-            crate::value::JSValue::from_bits(vbits),
-        );
+        spill_store_slot(spill, field_index, vbits);
     }
 }
 
