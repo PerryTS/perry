@@ -2377,9 +2377,61 @@ fn lower_object_array_write_versioned_for(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<bool> {
-    let Some(matched) = match_object_array_write_loop(ctx, init, condition, update, body) else {
+    let Some(mut matched) = match_object_array_write_loop(ctx, init, condition, update, body)
+    else {
         return Ok(false);
     };
+
+    // #6812 (w13): peel outer iteration #1 through the ordinary lowering
+    // before versioning. A first-write loop (`o[7] = v` where "7" is a new
+    // key) appends the key to every receiver — a shape transition — so a
+    // preflight taken before any iteration rejects with "target key is
+    // absent from the shared shape" and the ENTIRE nest runs generically.
+    // The peeled round primes the shapes with exact source semantics; the
+    // guard then proves the remaining [start+1, bound) rounds, which run in
+    // the call-free clone. When the guard would have passed anyway the cost
+    // is one ordinary outer round of a multi-round nest. The peel calls
+    // `lower_for_after_init` directly, so it cannot re-enter this
+    // versioning path.
+    let mut peeled_init_stmt: Option<Stmt> = None;
+    if matched.outer_start < matched.outer_bound {
+        let Some(Stmt::Let {
+            id,
+            name,
+            ty,
+            mutable,
+            ..
+        }) = init
+        else {
+            // match_constant_counted_for only admits a Let-counted for;
+            // defensive rather than unreachable.
+            return Ok(false);
+        };
+        let peel_cond = perry_hir::Expr::Compare {
+            op: perry_hir::CompareOp::Lt,
+            left: Box::new(perry_hir::Expr::LocalGet(*id)),
+            right: Box::new(perry_hir::Expr::Integer(i64::from(matched.outer_start) + 1)),
+        };
+        lower_for_after_init(
+            ctx,
+            init,
+            Some(&peel_cond),
+            update,
+            body,
+            "for.object_array_write_peel",
+        )?;
+        matched.outer_start += 1;
+        peeled_init_stmt = Some(Stmt::Let {
+            id: *id,
+            name: name.clone(),
+            ty: ty.clone(),
+            mutable: *mutable,
+            init: Some(perry_hir::Expr::Integer(i64::from(matched.outer_start))),
+        });
+    }
+    // Both the guard-fail fallback and the fast nest must cover only the
+    // un-peeled rounds.
+    let init = peeled_init_stmt.as_ref().or(init);
 
     let slow_pre_idx = ctx.new_block("object_array_write.loop.slow.preheader");
     let merge_idx = ctx.new_block("object_array_write.loop.merge");
