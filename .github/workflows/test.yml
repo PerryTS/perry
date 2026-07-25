@@ -231,6 +231,73 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
+  # rustc warnings gate
+  #
+  # `cargo check` with `-D warnings`, so a PR cannot add a rustc warning. This
+  # is deliberately separate from the clippy job above: clippy's own warn-level
+  # lints are informational here, while rustc's are not.
+  #
+  # Both legs are needed because they compile different code. `perry` depends on
+  # perry-runtime with `default-features = false`, so the product leg sees a
+  # runtime with regex-engine, diagnostics and temporal off, where items the
+  # workspace leg finds live are dead. The workspace leg passes `--all-targets`
+  # so test and bench targets count too — without it, test-only code drifts.
+  #
+  # perry-ui-macos is in the excluded scope (this runs on ubuntu), so its
+  # warnings are not gated here.
+  # ---------------------------------------------------------------------------
+  rustc-warnings:
+    name: Warnings (${{ matrix.scope }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [product, host-compatible]
+    env:
+      RUSTFLAGS: -D warnings
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache sccache objects
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check for rustc warnings
+        run: |
+          if [[ "${{ matrix.scope }}" == "product" ]]; then
+            cargo check -p perry --bins
+          else
+            mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
+              --print-excluded-scope host-compatible)
+            cargo_args=(--workspace --all-targets)
+            for package in "${excluded[@]}"; do
+              cargo_args+=(--exclude "$package")
+            done
+            cargo check "${cargo_args[@]}"
+          fi
+
+  # ---------------------------------------------------------------------------
   # API docs drift gate (#465)
   #
   # Regenerates `docs/src/api/reference.md` and `docs/api/perry.d.ts` from
