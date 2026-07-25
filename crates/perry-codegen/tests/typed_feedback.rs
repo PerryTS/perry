@@ -217,11 +217,44 @@ fn typed_feedback_trace_dump_runs_before_entry_return() {
     ));
 
     assert!(ir.contains("declare void @js_typed_feedback_maybe_dump_trace()"));
-    let dump_pos = ir
-        .rfind("call void @js_typed_feedback_maybe_dump_trace()")
-        .expect("entry should call typed-feedback trace dump");
-    let ret_pos = ir.rfind("ret i32 0").expect("entry should return i32 0");
-    assert!(dump_pos < ret_pos);
+
+    // Scope the ordering check to `main`'s body, and check every return site.
+    // `main` has more than one `ret` (the host-return early exit returns
+    // `i32 0`, the event-loop exit returns the pending exit code), and later
+    // functions in the module carry their own returns. A positional
+    // `rfind(dump) < rfind("ret i32 0")` over the whole module text therefore
+    // compares two unrelated sites and proves nothing about the ordering.
+    let body = entry_fn_body(&ir);
+    let mut returns = 0;
+    let mut prev = "";
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("ret ") {
+            returns += 1;
+            assert_eq!(
+                prev, "call void @js_typed_feedback_maybe_dump_trace()",
+                "every `main` return must dump the typed-feedback trace first, \
+                 else a PERRY_TYPED_FEEDBACK trace is truncated at exit; \
+                 found `{trimmed}` preceded by `{prev}`"
+            );
+        }
+        prev = trimmed;
+    }
+    assert!(returns > 0, "expected at least one return in `main`");
+}
+
+/// Body of the entry `main` function, without its `define`/`}` lines.
+fn entry_fn_body(ir: &str) -> &str {
+    let header = "define i32 @main() {\n";
+    let start = ir
+        .find(header)
+        .expect("entry module should define `i32 @main()`")
+        + header.len();
+    let rest = &ir[start..];
+    let end = rest
+        .find("\n}\n")
+        .expect("`main` should be terminated by a closing brace");
+    &rest[..end]
 }
 
 #[test]
