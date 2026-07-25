@@ -660,11 +660,16 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let mut key_bytes = vec![0u8; bit_len.div_ceil(8) as usize];
         use rand::RngCore;
         rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        if bit_len % 8 != 0 {
+            if let Some(last) = key_bytes.last_mut() {
+                *last &= 0xFF << (8 - bit_len % 8);
+            }
+        }
         let buf = alloc_uint8array_from_slice(&key_bytes);
         if buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
-        register_crypto_key(
+        register_crypto_key_with_bit_length(
             buf as usize,
             CryptoKeyMaterial::new(
                 key_algo,
@@ -673,6 +678,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
                 extractable,
                 usages,
             ),
+            bit_len,
         );
         return resolve_with_bits(JSValue::pointer(buf as *const u8).bits());
     }

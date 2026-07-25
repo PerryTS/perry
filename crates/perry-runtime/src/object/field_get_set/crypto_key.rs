@@ -23,9 +23,9 @@ const CRYPTO_USAGE_ENCAPSULATE_KEY: u32 = 1 << 10;
 const CRYPTO_USAGE_DECAPSULATE_KEY: u32 = 1 << 11;
 
 pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
-    let (algo, hash, kind, extractable, usages) = crate::buffer::crypto_key_meta(addr)?;
+    let (algo, hash, kind, extractable, usages, bit_length) = crate::buffer::crypto_key_meta(addr)?;
     match key_bytes {
-        b"algorithm" => Some(crypto_key_algorithm_value(addr, algo, hash)),
+        b"algorithm" => Some(crypto_key_algorithm_value(addr, algo, hash, bit_length)),
         b"extractable" => Some(JSValue::bool(extractable)),
         b"type" => Some(string_value(match kind {
             2 => "private",
@@ -41,7 +41,7 @@ pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) ->
     }
 }
 
-unsafe fn crypto_key_algorithm_value(addr: usize, algo: u8, hash: u8) -> JSValue {
+unsafe fn crypto_key_algorithm_value(addr: usize, algo: u8, hash: u8, bit_length: u32) -> JSValue {
     let obj = js_object_alloc(0, 3);
     if obj.is_null() {
         return JSValue::undefined();
@@ -56,7 +56,9 @@ unsafe fn crypto_key_algorithm_value(addr: usize, algo: u8, hash: u8) -> JSValue
     }
     if crypto_key_algorithm_has_length(algo) {
         let key = addr as *const crate::buffer::BufferHeader;
-        let bits = if key.is_null() {
+        let bits = if bit_length != 0 {
+            bit_length as f64
+        } else if key.is_null() {
             0.0
         } else {
             crate::buffer::js_buffer_length(key) as f64 * 8.0

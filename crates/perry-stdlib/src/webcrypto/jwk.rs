@@ -250,7 +250,13 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     }
 
     let key_bytes = if format_lower == "jwk" {
-        jwk_import_key_bytes(key_bits.to_bits(), key_algo, kind).unwrap_or_else(|| Vec::new())
+        match jwk_import_key_bytes(key_bits.to_bits(), key_algo, kind) {
+            Some(bytes) => bytes,
+            None if matches!(key_algo, KeyAlgo::Kmac128 | KeyAlgo::Kmac256) => {
+                return reject_with_dom_exception("DataError", "Invalid keyData");
+            }
+            None => Vec::new(),
+        }
     } else {
         bytes_from_jsvalue(key_bits.to_bits())
     };
@@ -800,9 +806,12 @@ pub(super) unsafe fn jwk_import_key_bytes(
             }
         }
         let k = object_field_string(obj_bits, b"k")?;
-        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(k.as_bytes())
-            .ok()?;
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(k.as_bytes());
+        let bytes = if matches!(key_algo, KeyAlgo::Kmac128 | KeyAlgo::Kmac256) {
+            decoded.unwrap_or_default()
+        } else {
+            decoded.ok()?
+        };
         if key_algo == KeyAlgo::AesOcb {
             if let Some(alg) = object_field_string(obj_bits, b"alg") {
                 if let Some(expected) = aes_ocb_jwk_alg(bytes.len()) {
