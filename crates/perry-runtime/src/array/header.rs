@@ -1477,6 +1477,21 @@ pub(crate) unsafe fn note_array_slot_layout_only(
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    // "Fresh/suppressed caller" does NOT imply barrier-free: a BORN-OLD array
+    // (>16KB, e.g. a >2048-element JSON.parse result) is old-gen from birth, so
+    // storing a young child creates an old→young edge that later minors need in
+    // the remembered set — GC suppression only protects DURING the caller's
+    // fill, not after it returns. This was the missing-edge bug behind the
+    // old-young-edge-verifier failures (155 edges, all born-old array→young
+    // object; slot_page_ever_dirty=false = the store never hit any barrier):
+    // JSON.parse filled born-old arrays through this helper, the children were
+    // swept live on a later minor → "value is not a function". The old-gen
+    // check hits the page-generation cache (same array → same cached range), so
+    // young arrays pay ~one cached compare.
+    if crate::arena::pointer_in_old_gen(arr as usize) {
+        let slot = array_elements_ptr(arr).add(index) as usize;
+        crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
+    }
 }
 
 #[inline]

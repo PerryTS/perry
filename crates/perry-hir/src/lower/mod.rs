@@ -34,6 +34,7 @@
 //   the largest single arm extracted so far).
 // - `expr_member.rs` / `expr_assign.rs` / `expr_new.rs` (v0.5.339):
 //   property access, assignment, and `new C()` constructor calls.
+pub(crate) mod builder_fold;
 mod context;
 pub(crate) mod expr_assign;
 mod expr_call;

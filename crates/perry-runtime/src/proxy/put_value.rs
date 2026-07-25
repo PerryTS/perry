@@ -442,6 +442,16 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
 
     let arr = array_addr as *const crate::array::ArrayHeader;
     let (length, capacity) = unsafe { ((*arr).length, (*arr).capacity) };
+    // #6812 dynamic-bound loops (`i < arr.length`): the u32::MAX sentinel
+    // resolves to the VALIDATED array's own length — after the array-kind
+    // checks above, before the 16M cap below, so the emitter's fast nest
+    // (which loads the same header length after guard-ok) can never outrun
+    // the proven prefix. An empty array is not worth the fast path.
+    let count = if count == u32::MAX { length } else { count };
+    if count == 0 {
+        trace_object_array_numeric_write_rejection("empty dynamic-length prefix");
+        return None;
+    }
     if length > 16_000_000 || capacity > 16_000_000 || length > capacity || count > length {
         trace_object_array_numeric_write_rejection("array length/capacity/prefix bound");
         return None;

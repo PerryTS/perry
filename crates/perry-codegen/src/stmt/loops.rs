@@ -1849,6 +1849,7 @@ enum ObjectArrayWriteNumber {
     Constant(f64),
     Add(Box<Self>, Box<Self>),
     Sub(Box<Self>, Box<Self>),
+    Mul(Box<Self>, Box<Self>),
 }
 
 /// Keep the transactional clone small enough that unrolling does not turn a
@@ -1862,7 +1863,16 @@ struct ObjectArrayWriteLoop {
     outer_start: i32,
     outer_bound: i32,
     inner_counter_id: u32,
+    /// Constant inner bound, or — when `inner_bound_from_length` — the 16M
+    /// ceiling used only by the finite-range proof (the runtime bound is the
+    /// matched array's own length, resolved by the preflight guard).
     inner_bound: i32,
+    /// #6812: `for (let i = 0; i < arr.length; i++)` over the SAME array the
+    /// loop writes into. The guard receives a `u32::MAX` sentinel, validates
+    /// the array first, resolves the scan length from the header (rejecting
+    /// > 16M so the fast nest can never outrun the proven prefix), and the
+    /// emitter loads the length register after guard-ok.
+    inner_bound_from_length: bool,
     array_id: u32,
     properties: Vec<String>,
     values: Vec<ObjectArrayWriteNumber>,
@@ -1893,10 +1903,14 @@ fn match_object_array_write_number(
             Some(ObjectArrayWriteNumber::Constant(*n as f64))
         }
         Expr::Number(n) if n.is_finite() => Some(ObjectArrayWriteNumber::Constant(*n)),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary { op, left, right }
+            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
+        {
             let left = match_object_array_write_number(left, outer_counter_id, inner_counter_id)?;
             let right = match_object_array_write_number(right, outer_counter_id, inner_counter_id)?;
-            Some(if matches!(op, BinaryOp::Add) {
+            Some(if matches!(op, BinaryOp::Mul) {
+                ObjectArrayWriteNumber::Mul(Box::new(left), Box::new(right))
+            } else if matches!(op, BinaryOp::Add) {
                 ObjectArrayWriteNumber::Add(Box::new(left), Box::new(right))
             } else {
                 ObjectArrayWriteNumber::Sub(Box::new(left), Box::new(right))
@@ -1940,6 +1954,29 @@ fn object_array_write_number_finite_range(
                 inner_bound,
             )?;
             finite_range(left_lo + right_lo, left_hi + right_hi)
+        }
+        ObjectArrayWriteNumber::Mul(left, right) => {
+            let (left_lo, left_hi) = object_array_write_number_finite_range(
+                left,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            let (right_lo, right_hi) = object_array_write_number_finite_range(
+                right,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            let products = [
+                left_lo * right_lo,
+                left_lo * right_hi,
+                left_hi * right_lo,
+                left_hi * right_hi,
+            ];
+            let lo = products.iter().copied().fold(f64::INFINITY, f64::min);
+            let hi = products.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            finite_range(lo, hi)
         }
         ObjectArrayWriteNumber::Sub(left, right) => {
             let (left_lo, left_hi) = object_array_write_number_finite_range(
@@ -2027,21 +2064,116 @@ fn match_object_array_write_loop(
     }
     let (outer_counter_id, outer_start, outer_bound) =
         match_constant_counted_for(ctx, init, condition, update)?;
-    let [Stmt::For {
-        init: inner_init,
-        condition: inner_condition,
-        update: inner_update,
-        body: inner_body,
-    }] = body
-    else {
-        return None;
-    };
-    let (inner_counter_id, inner_start, inner_bound) = match_constant_counted_for(
-        ctx,
-        inner_init.as_deref(),
-        inner_condition.as_ref(),
-        inner_update.as_ref(),
-    )?;
+    let mut dyn_len_source: Option<u32> = None;
+    let (inner_counter_id, inner_start, inner_bound, inner_body): (u32, i32, i32, &[Stmt]) =
+        match body {
+            [Stmt::For {
+                init: inner_init,
+                condition: inner_condition,
+                update: inner_update,
+                body: inner_body,
+            }] => {
+                if let Some((id, start, bound)) = match_constant_counted_for(
+                    ctx,
+                    inner_init.as_deref(),
+                    inner_condition.as_ref(),
+                    inner_update.as_ref(),
+                ) {
+                    (id, start, bound, inner_body.as_slice())
+                } else {
+                    // `for (let i = 0; i < xs.length; i++)` — the bound is the
+                    // length of some local; required below to be the SAME
+                    // array this loop writes into (which the matched body
+                    // cannot mutate structurally: only field stores on the
+                    // element alias are admitted).
+                    use perry_hir::UpdateOp;
+                    let (id, start) = match inner_init.as_deref()? {
+                        Stmt::Let {
+                            id,
+                            init: Some(start),
+                            ..
+                        } => (*id, match_nonnegative_constant_i32_with_ctx(ctx, start)?),
+                        _ => return None,
+                    };
+                    let len_source = match inner_condition.as_ref()? {
+                        Expr::Compare {
+                            op: perry_hir::CompareOp::Lt,
+                            left,
+                            right,
+                        } if matches!(left.as_ref(), Expr::LocalGet(l) if *l == id) => {
+                            match right.as_ref() {
+                                Expr::PropertyGet {
+                                    object, property, ..
+                                } if property == "length" => match object.as_ref() {
+                                    Expr::LocalGet(src) => *src,
+                                    _ => return None,
+                                },
+                                _ => return None,
+                            }
+                        }
+                        _ => return None,
+                    };
+                    if !matches!(
+                        inner_update.as_ref()?,
+                        Expr::Update {
+                            id: uid,
+                            op: UpdateOp::Increment,
+                            ..
+                        } if *uid == id
+                    ) {
+                        return None;
+                    }
+                    dyn_len_source = Some(len_source);
+                    // 16M is the guard's hard cap in sentinel mode, so it is
+                    // a sound ceiling for the finite-range proof.
+                    (id, start, 16_000_000, inner_body.as_slice())
+                }
+            }
+            // `let i = 0; while (i < N) { …; i++ }` is the same counted loop
+            // spelled differently. The store-shape constraints below admit
+            // ONLY PutValueSet statements between the alias binding and the
+            // trailing increment — no `continue` (which would skip a
+            // while-loop's trailing increment but not a for-update) or other
+            // control flow can be present in a matched body. The emitter
+            // already finalizes both counter slots after the fast nest, so
+            // the function-scoped `i` observes its post-loop value.
+            [Stmt::Let {
+                id: while_counter,
+                init: Some(counter_init),
+                ..
+            }, Stmt::While {
+                condition: while_cond,
+                body: while_body,
+            }] => {
+                use perry_hir::{CompareOp, UpdateOp};
+                let start = match_nonnegative_constant_i32_with_ctx(ctx, counter_init)?;
+                let bound = match while_cond {
+                    Expr::Compare {
+                        op: CompareOp::Lt,
+                        left,
+                        right,
+                    } if matches!(left.as_ref(), Expr::LocalGet(id) if id == while_counter) => {
+                        match_nonnegative_constant_i32_with_ctx(ctx, right)?
+                    }
+                    _ => return None,
+                };
+                let Some((last, head)) = while_body.split_last() else {
+                    return None;
+                };
+                if !matches!(
+                    last,
+                    Stmt::Expr(Expr::Update {
+                        id,
+                        op: UpdateOp::Increment,
+                        ..
+                    }) if id == while_counter
+                ) {
+                    return None;
+                }
+                (*while_counter, start, bound, head)
+            }
+            _ => return None,
+        };
     // Starting at zero lets the runtime preflight prove one contiguous dense
     // prefix and keeps the raw element address calculation minimal.
     if inner_start != 0
@@ -2056,7 +2188,10 @@ fn match_object_array_write_loop(
     let Some((
         Stmt::Let {
             id: alias_id,
-            mutable: false,
+            // `let` aliases qualify too: every statement in the matched
+            // region must be a PutValueSet on the alias (anything else
+            // rejects the loop), so reassignment is structurally
+            // impossible; captures are excluded via `boxed_vars` below.
             init: Some(Expr::IndexGet { object, index }),
             ..
         },
@@ -2084,6 +2219,14 @@ fn match_object_array_write_loop(
         || ctx.pod_records.contains_key(array_id)
     {
         return None;
+    }
+    // Dynamic bound: `i < xs.length` must read the SAME array being written
+    // (its length is then loop-invariant — the matched body admits only
+    // element-field stores, never structural array mutation).
+    if let Some(len_source) = dyn_len_source {
+        if len_source != *array_id {
+            return None;
+        }
     }
 
     let match_store = |effect: &Expr| -> Option<(String, ObjectArrayWriteNumber)> {
@@ -2130,6 +2273,7 @@ fn match_object_array_write_loop(
         outer_bound,
         inner_counter_id,
         inner_bound,
+        inner_bound_from_length: dyn_len_source.is_some(),
         array_id: *array_id,
         properties,
         values,
@@ -2155,6 +2299,11 @@ fn emit_object_array_write_number(
             let left = emit_object_array_write_number(ctx, left, outer, inner);
             let right = emit_object_array_write_number(ctx, right, outer, inner);
             ctx.block().fsub(&left, &right)
+        }
+        ObjectArrayWriteNumber::Mul(left, right) => {
+            let left = emit_object_array_write_number(ctx, left, outer, inner);
+            let right = emit_object_array_write_number(ctx, right, outer, inner);
+            ctx.block().fmul(&left, &right)
         }
     }
 }
@@ -2194,7 +2343,14 @@ fn lower_object_array_write_versioned_for(
         key_boxes.push(zero.clone());
     }
     let field_count = matched.properties.len().to_string();
-    let inner_bound = matched.inner_bound.to_string();
+    // Dynamic-bound loops pass the u32::MAX sentinel: the guard validates the
+    // array FIRST, then resolves the scan length from its header (rejecting
+    // > 16M), so the fast nest can never outrun the proven prefix.
+    let inner_bound = if matched.inner_bound_from_length {
+        u32::MAX.to_string()
+    } else {
+        matched.inner_bound.to_string()
+    };
     let packed_slots = {
         let blk = ctx.block();
         blk.call(
@@ -2230,12 +2386,14 @@ fn lower_object_array_write_versioned_for(
         ctx.block().br(&merge_label);
     }
 
+    let fast_entry_idx = ctx.new_block("object_array_write.loop.fast.entry");
     let fast_outer_cond_idx = ctx.new_block("object_array_write.loop.fast.outer.cond");
     let fast_inner_pre_idx = ctx.new_block("object_array_write.loop.fast.inner.preheader");
     let fast_inner_cond_idx = ctx.new_block("object_array_write.loop.fast.inner.cond");
     let fast_inner_body_idx = ctx.new_block("object_array_write.loop.fast.inner.body");
     let fast_inner_exit_idx = ctx.new_block("object_array_write.loop.fast.inner.exit");
     let fast_done_idx = ctx.new_block("object_array_write.loop.fast.done");
+    let fast_entry_label = ctx.block_label(fast_entry_idx);
     let fast_outer_cond_label = ctx.block_label(fast_outer_cond_idx);
     let fast_inner_pre_label = ctx.block_label(fast_inner_pre_idx);
     let fast_inner_cond_label = ctx.block_label(fast_inner_cond_idx);
@@ -2264,7 +2422,7 @@ fn lower_object_array_write_versioned_for(
         (slots, array_ptr)
     };
 
-    let fast_scan_start = fast_outer_cond_idx;
+    let fast_scan_start = fast_entry_idx;
     let (outer_next, inner_next) = {
         let blk = ctx
             .func
@@ -2272,11 +2430,24 @@ fn lower_object_array_write_versioned_for(
             .expect("object-array preheader block must exist");
         (blk.fresh_reg(), blk.fresh_reg())
     };
+    // Guard-ok entry: the array is proven live/dense here, so a length load
+    // is safe. Constant-bound loops use the compile-time bound unchanged.
+    ctx.current_block = fast_entry_idx;
+    let inner_bound_operand = if matched.inner_bound_from_length {
+        let bits = ctx.block().bitcast_double_to_i64(&array_box);
+        let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+        let len_ptr = ctx.block().inttoptr(I64, &handle);
+        ctx.block().load(I32, &len_ptr)
+    } else {
+        matched.inner_bound.to_string()
+    };
+    ctx.block().br(&fast_outer_cond_label);
+
     ctx.current_block = fast_outer_cond_idx;
     let outer = ctx.block().phi(
         I32,
         &[
-            (&matched.outer_start.to_string(), &preheader_label),
+            (&matched.outer_start.to_string(), &fast_entry_label),
             (&outer_next, &fast_inner_exit_label),
         ],
     );
@@ -2298,9 +2469,7 @@ fn lower_object_array_write_versioned_for(
             (&inner_next, &fast_inner_body_label),
         ],
     );
-    let inner_more = ctx
-        .block()
-        .icmp_slt(I32, &inner, &matched.inner_bound.to_string());
+    let inner_more = ctx.block().icmp_slt(I32, &inner, &inner_bound_operand);
     ctx.block()
         .cond_br(&inner_more, &fast_inner_body_label, &fast_inner_exit_label);
 
@@ -2342,16 +2511,23 @@ fn lower_object_array_write_versioned_for(
     // are normally block-scoped, but this also preserves transformed `var`
     // cases and future HIR consumers without adding work inside either loop.
     ctx.current_block = fast_done_idx;
-    for (id, final_value) in [
-        (matched.outer_counter_id, matched.outer_bound),
-        (matched.inner_counter_id, matched.inner_bound),
+    let inner_final: String = if matched.inner_bound_from_length {
+        // Dynamic bound: the post-loop counter value is the length register
+        // (fast_done is dominated by fast_entry, so it is in scope).
+        inner_bound_operand.clone()
+    } else {
+        matched.inner_bound.to_string()
+    };
+    for (id, final_i32) in [
+        (matched.outer_counter_id, matched.outer_bound.to_string()),
+        (matched.inner_counter_id, inner_final),
     ] {
         if let Some(slot) = ctx.locals.get(&id).cloned() {
-            let value = crate::nanbox::double_literal(final_value as f64);
+            let value = ctx.block().sitofp(I32, &final_i32, DOUBLE);
             ctx.block().store(DOUBLE, &value, &slot);
         }
         if let Some(slot) = ctx.i32_counter_slots.get(&id).cloned() {
-            ctx.block().store(I32, &final_value.to_string(), &slot);
+            ctx.block().store(I32, &final_i32, &slot);
         }
     }
     ctx.block().br(&merge_label);
@@ -2362,7 +2538,7 @@ fn lower_object_array_write_versioned_for(
     let guard_ok = ctx.block().icmp_ne(I64, &packed_slots, "0");
     if fast_call_free {
         ctx.block()
-            .cond_br(&guard_ok, &fast_outer_cond_label, &slow_pre_label);
+            .cond_br(&guard_ok, &fast_entry_label, &slow_pre_label);
     } else {
         ctx.block().br(&slow_pre_label);
     }
