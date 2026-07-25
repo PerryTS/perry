@@ -1555,9 +1555,16 @@ fn native_owned_uint8array_get_fallback_uses_uint8array_helper() {
             })),
         ],
     );
+    // Codegen migrated the disposed-view fallback from `js_uint8array_get`
+    // to `js_uint8array_index_get_value` (#6088-era JS-value getter), which
+    // validates the address against the typed-array kind registry before any
+    // dereference and returns undefined for dead views — the memory-safety
+    // property this test exists to pin. The suite was not CI-selected when
+    // that landed, so the old helper name went stale here.
     assert!(
-        ir.contains("call i32 @js_uint8array_get"),
-        "disposed native Uint8Array fallback should call js_uint8array_get:\n{ir}"
+        ir.contains("call double @js_uint8array_index_get_value"),
+        "disposed native Uint8Array fallback should call the registry-validating \
+         js_uint8array_index_get_value:\n{ir}"
     );
     assert!(
         !ir.contains("call i32 @js_buffer_get"),
