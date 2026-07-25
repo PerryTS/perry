@@ -1,7 +1,5 @@
 //! Top-level `class` hoisting and `module.exports = class …` rewrite passes.
 
-use super::*;
-
 /// Issue #665 (fifth pass): rewrite the leaf-file shape
 /// `module.exports = class Name { ... };` into declaration form
 /// `class Name { ... }\nmodule.exports = Name;` so the existing

@@ -7,13 +7,9 @@
 
 use super::*;
 
-use anyhow::{anyhow, Result};
-use rayon::prelude::*;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs;
+use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 

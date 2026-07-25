@@ -2,7 +2,7 @@
 //!
 //! Moved verbatim from the pre-split monolithic `string.rs`.
 
-use super::intern::{with_intern_table, InternEntry, INTERN_TABLE_MASK};
+use super::intern::{with_intern_table, INTERN_TABLE_MASK};
 use super::*;
 
 fn malloc_object_count_for_test() -> usize {

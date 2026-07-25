@@ -93,8 +93,6 @@ pub(crate) use class_meta::{
 };
 #[cfg(test)]
 pub(crate) use prototype_methods::CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED;
-#[cfg(test)]
-pub(crate) use state::CLASS_DELETED_KEYS;
 
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{
@@ -131,9 +129,8 @@ pub(crate) use gc_roots::{
     test_class_prototype_method_root_bits, test_class_prototype_method_value_root_bits,
     test_class_prototype_object_root_addr, test_clear_class_side_table_roots,
     test_function_class_id_key_for_class, test_seed_class_dynamic_prop_root,
-    test_seed_class_parent_closure_root, test_seed_class_prototype_method_root,
-    test_seed_class_prototype_method_value_root, test_seed_class_prototype_object_root,
-    test_seed_function_class_id_key,
+    test_seed_class_prototype_method_root, test_seed_class_prototype_method_value_root,
+    test_seed_class_prototype_object_root, test_seed_function_class_id_key,
 };
 
 // ── registration.rs ─────────────────────────────────────────────────────────

@@ -96,7 +96,7 @@ pub(crate) use scanners::{
     test_async_step_thunk_cache, test_clear_promise_scanner_roots, test_current_microtask_value,
     test_promise_context_keys, test_promise_scanner_snapshot, test_seed_async_step_thunk_cache,
     test_seed_many_promise_task_roots, test_seed_promise_context, test_seed_promise_scanner_roots,
-    test_store_with_resolvers_result_fields, TestPromiseScannerSnapshot,
+    test_store_with_resolvers_result_fields,
 };
 
 // Cached `PERRY_MT_PROFILE` flag, populated once at process start.

@@ -1,16 +1,11 @@
-use super::*;
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::SystemTime;
 
-use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
 use crate::OutputFormat;
 
-use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
-use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
+use super::super::{rust_target_triple, CompilationContext};
 
 pub(crate) fn auto_optimized_archives_are_fresh(
     workspace_root: &Path,

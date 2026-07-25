@@ -2368,7 +2368,7 @@ fn lower_object_array_write_versioned_for(
         )
     };
     let preheader_idx = ctx.current_block;
-    let preheader_label = ctx.block().label.clone();
+    let _preheader_label = ctx.block().label.clone();
 
     // Emit the fallback first. Besides preserving the original semantics, this
     // creates the ordinary local slots for the nested counter, allowing the

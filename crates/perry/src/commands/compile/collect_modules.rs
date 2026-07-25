@@ -227,7 +227,7 @@ fn collect_module_one(
     target: Option<&str>,
     next_class_id: &mut perry_hir::ClassId,
     progress: &VerboseProgress,
-    mut parse_cache: Option<&mut ParseCache>,
+    parse_cache: Option<&mut ParseCache>,
 ) -> Result<ModuleDiscovery> {
     let mut pending = Vec::new();
 

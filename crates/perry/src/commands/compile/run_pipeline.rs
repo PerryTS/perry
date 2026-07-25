@@ -8,7 +8,6 @@
 use super::*;
 
 use anyhow::{anyhow, bail, Context, Result};
-use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};

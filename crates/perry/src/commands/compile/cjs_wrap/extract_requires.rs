@@ -1,7 +1,5 @@
 //! `require(...)` specifier extraction and alias detection.
 
-use super::*;
-
 /// Extract `require('X')` / `require("X")` specifiers, preserving order and
 /// deduping. Only matches static string literal arguments — dynamic
 /// `require(someVar)` is unrepresentable as ESM and the bound `require`

@@ -378,7 +378,7 @@ mod tests {
         for i in 1..70 {
             args.push(i as f64);
         }
-        let got = unsafe { call_all_f64(sum70 as usize, &args) };
+        let got = unsafe { call_all_f64(sum70 as *const () as usize, &args) };
         // expected = sum(args[i]*(i+1))
         let expected: f64 = args
             .iter()
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn trampoline_stack_spill_args_9_and_10() {
         let args = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 42.0, 7.0];
-        let got = unsafe { call_all_f64(pick as usize, &args) };
+        let got = unsafe { call_all_f64(pick as *const () as usize, &args) };
         assert_eq!(got, 42.0 * 1000.0 + 7.0);
     }
 }
