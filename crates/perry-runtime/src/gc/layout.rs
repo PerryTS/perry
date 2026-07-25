@@ -1515,6 +1515,9 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // 0-unset sentinels, which the slot visitor ignores).
             let meta = user_ptr as *mut crate::object::ObjectMeta;
             visit(fixed_slot(&mut (*meta).prototype as *mut u64));
+            // #6812: the object-owned overflow buffer is a raw-pointer child
+            // edge (0 = none), traced and rewritten exactly like `prototype`.
+            visit(fixed_slot(&mut (*meta).spill as *mut u64));
         }
         GcRewriteDescriptorKind::Leaf => {}
     }
