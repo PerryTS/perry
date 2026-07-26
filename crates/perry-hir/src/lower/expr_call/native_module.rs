@@ -37,6 +37,7 @@ fn is_cluster_default_event_emitter_method(method_name: &str) -> bool {
     )
 }
 
+/// Internal process helpers that return arrays through native dispatch.
 fn is_process_active_array_helper(method: &str) -> bool {
     matches!(method, "_getActiveHandles" | "_getActiveRequests")
 }
@@ -1876,7 +1877,7 @@ mod bundled_mysql2_tests {
     use super::{is_process_active_array_helper, mysql2_config_signature};
 
     #[test]
-    fn process_active_array_helpers_use_native_dispatch() {
+    fn process_active_array_helper_predicate_matches_supported_methods() {
         assert!(is_process_active_array_helper("_getActiveHandles"));
         assert!(is_process_active_array_helper("_getActiveRequests"));
         assert!(!is_process_active_array_helper("getActiveResourcesInfo"));

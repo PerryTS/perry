@@ -294,6 +294,7 @@ fn cp_default_shell() -> String {
     }
 }
 
+/// Whether a self-launch uses a Node CLI mode that evaluates source text.
 fn cp_should_use_node_interpreter(cmd: &str, args: &[String]) -> bool {
     let is_self = std::env::args().next().as_deref() == Some(cmd)
         || std::env::current_exe().is_ok_and(|current| current == std::path::Path::new(cmd));
@@ -301,9 +302,14 @@ fn cp_should_use_node_interpreter(cmd: &str, args: &[String]) -> bool {
         && args
             .iter()
             .take_while(|arg| arg.as_str() != "--" && arg.starts_with('-'))
-            .any(|arg| matches!(arg.as_str(), "-e" | "--eval") || arg.starts_with("--eval="))
+            .any(|arg| {
+                matches!(arg.as_str(), "-e" | "--eval" | "-p" | "--print")
+                    || arg.starts_with("--eval=")
+                    || arg.starts_with("--print=")
+            })
 }
 
+/// Node interpreter used for source-evaluating self-launches.
 fn cp_default_node_interpreter() -> String {
     std::env::var("PERRY_FORK_EXECPATH")
         .ok()
@@ -364,7 +370,7 @@ mod tests {
     use super::cp_should_use_node_interpreter;
 
     #[test]
-    fn self_exec_eval_uses_node_interpreter() {
+    fn self_exec_node_cli_eval_modes_use_node_interpreter() {
         let current = std::env::current_exe().expect("current executable");
         let current = current.to_string_lossy();
 
@@ -383,6 +389,16 @@ mod tests {
                 "--eval".to_string(),
                 "console.log(44)".to_string(),
             ],
+        ));
+        for flag in ["-p", "--print"] {
+            assert!(cp_should_use_node_interpreter(
+                &current,
+                &[flag.to_string(), "40 + 2".to_string()],
+            ));
+        }
+        assert!(cp_should_use_node_interpreter(
+            &current,
+            &["--print=40 + 2".to_string()],
         ));
         assert!(!cp_should_use_node_interpreter(
             &current,
