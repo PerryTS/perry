@@ -93,7 +93,7 @@ nameserver.
 
 Three complete Node rounds ran all 43 fixtures with zero errors, crashes, or
 timeouts and byte-identical aggregate SHA-256
-`014f34411fbadf4ba8a7c0e78fb741053458437133212524553900ae5657c252`. Three
+`e18b3a7e82b9309c1f8db862d25a5ee1ec2210a61a4f0ad09582ebff948a2f2d`. Three
 complete focused Perry runs produced the same **18 pass / 25 diff / 0 compile
 failure / 0 crash / 0 timeout** result. The baseline records `18/43`.
 
@@ -195,6 +195,10 @@ Excluded on purpose:
 - Successful `reverse()` was prototyped against the local server. Perry did not
   settle within 70 seconds, so retaining it would leave cleanup to the harness
   timeout and would not isolate a useful result. Input validation remains.
+- The valid callback `Resolver.resolve(hostname, callback)` default-rrtype
+  overload was prototyped against the local server. Node and Deno settled, but
+  Perry did not invoke the callback. Retaining it would require an arbitrary
+  timeout or fire-and-forget cleanup; argument validation remains covered.
 - Node's two-channel query test was prototyped with two local sockets. Perry did
   not pass the auxiliary-server ready barrier within 30 seconds. Server-state
   independence remains covered without keeping a timeout that mixes child

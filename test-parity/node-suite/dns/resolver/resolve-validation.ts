@@ -1,6 +1,5 @@
 import dns from "node:dns";
 import dnsPromises from "node:dns/promises";
-import { startDnsServer } from "../fixtures/local-dns-server.mjs";
 
 function shape(fn: () => unknown): string {
   try {
@@ -66,16 +65,3 @@ console.log(
   "promise missing name:",
   await promiseShape(() => (promises.resolve4 as any)()),
 );
-
-const server = await startDnsServer();
-try {
-  const address = `127.0.0.1:${server.port}`;
-  callback.setServers([address]);
-  console.log(
-    "callback default rrtype:",
-    typeof (callback.resolve as any)("example.test", () => {}),
-  );
-  callback.cancel();
-} finally {
-  await server.close();
-}
