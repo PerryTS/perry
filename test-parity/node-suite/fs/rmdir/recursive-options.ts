@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { rmdir as rmdirPromise } from "node:fs/promises";
 
 // @ts-ignore
 process.emitWarning = function () {};
@@ -23,3 +24,19 @@ try {
 } catch (err) {
   console.log("rmdir promises recursive error:", err?.code);
 }
+
+try {
+  await fs.promises.rmdir();
+} catch (err) {
+  console.log("rmdir promises missing path error:", err?.code);
+}
+
+try {
+  await rmdirPromise();
+} catch (err) {
+  console.log("rmdir promises namespace missing path error:", err?.code);
+}
+
+fs.mkdirSync(ROOT);
+fs.rmdirSync(ROOT, {});
+console.log("rmdir empty options removed:", !fs.existsSync(ROOT));

@@ -210,8 +210,12 @@ pub fn try_lower_namespace_member_call(
                 );
                 return Ok(Some(promise));
             }
-            "rmdir" if !args.is_empty() => {
-                let path = lower_expr(ctx, &args[0])?;
+            "rmdir" => {
+                let path = if let Some(path) = args.first() {
+                    lower_expr(ctx, path)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
                 let options = if args.len() >= 2 {
                     lower_expr(ctx, &args[1])?
                 } else {
