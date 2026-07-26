@@ -1859,6 +1859,13 @@ pub struct ObjectMeta {
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
+// #6812 spill lanes: the versioned write-loop emitter
+// (perry-codegen/src/stmt/loops.rs) addresses `meta.spill` at word 4 of the
+// ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
+// codegen and these structs in lock-step.
+const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
+const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
+
 /// Fetch-or-allocate the per-object meta record. Caller must have already
 /// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
 /// (see `prototype_chain::meta_capable_object`).

@@ -569,31 +569,79 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         )?;
     }
 
+    // #6812 spill lanes: classify each lane as INLINE (slot within the
+    // receiver's inline alloc_limit) or SPILL (slot lives in the
+    // object-owned overflow buffer, `meta.spill`). The FIRST receiver fixes
+    // each lane's mode; every later receiver must be on the SAME side of its
+    // own alloc_limit and pass the same coverage proof, so the emitter's
+    // per-lane store sequence (raw inline store vs the meta → spill
+    // indirection) is uniform across the whole proven prefix. A spill lane
+    // sets bit 15 of its result lane; the caller's `+1` packing cannot carry
+    // into it (slot ≤ 4096).
+    unsafe fn spill_lane_covers(obj: *const crate::ObjectHeader, slot: u32) -> bool {
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return false;
+        }
+        let spill = (*meta).spill as *const crate::array::ArrayHeader;
+        if spill.is_null() {
+            return false;
+        }
+        // Mirror the shared-keys validation: a live, non-forwarded plain
+        // array whose length high-water covers the slot (a key present in
+        // the shape implies its value slot was written, so length > slot —
+        // verified rather than assumed).
+        let Some(gc) = crate::value::addr_class::try_read_gc_header(spill as usize) else {
+            return false;
+        };
+        if gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return false;
+        }
+        slot < (*spill).length && slot < (*spill).capacity
+    }
+
     let first_limit = unsafe {
         std::cmp::max(
             (*first).field_count,
             crate::object::INLINE_SLOT_FLOOR as u32,
         )
     };
-    if slots[..keys.len()]
-        .iter()
-        .any(|slot| u32::from(*slot) >= first_limit)
-    {
-        trace_object_array_numeric_write_rejection("first receiver target slot is out of bounds");
-        return None;
+    let mut lane_spill = [false; 4];
+    for index in 0..keys.len() {
+        let slot = u32::from(slots[index]);
+        if slot >= first_limit {
+            if !unsafe { spill_lane_covers(first, slot) } {
+                trace_object_array_numeric_write_rejection(
+                    "first receiver target slot is out of bounds",
+                );
+                return None;
+            }
+            lane_spill[index] = true;
+        }
     }
-    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
-        && slots[..keys.len()].iter().any(|slot| {
+    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+        // Typed-intact receivers keep raw-f64 inline invariants; a spill
+        // lane on one is unexpected — reject conservatively rather than
+        // reason about typed descriptors for out-of-line slots.
+        if lane_spill[..keys.len()].iter().any(|s| *s) {
+            trace_object_array_numeric_write_rejection(
+                "first receiver typed descriptor does not contain every target slot",
+            );
+            return None;
+        }
+        if slots[..keys.len()].iter().any(|slot| {
             !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
                 first as usize,
                 usize::from(*slot),
             )
-        })
-    {
-        trace_object_array_numeric_write_rejection(
-            "first receiver typed descriptor does not contain every target slot",
-        );
-        return None;
+        }) {
+            trace_object_array_numeric_write_rejection(
+                "first receiver typed descriptor does not contain every target slot",
+            );
+            return None;
+        }
     }
 
     for i in 1..count as usize {
@@ -614,30 +662,51 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         }
         let limit =
             unsafe { std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) };
-        if slots[..keys.len()]
-            .iter()
-            .any(|slot| u32::from(*slot) >= limit)
-        {
-            trace_object_array_numeric_write_rejection(
-                "receiver prefix contains an out-of-bounds target slot",
-            );
-            return None;
+        for index in 0..keys.len() {
+            let slot = u32::from(slots[index]);
+            if lane_spill[index] {
+                // Mode uniformity: this receiver must ALSO hold the slot in
+                // its spill buffer (a wider receiver holding it inline would
+                // make the emitter's spill store write the wrong memory).
+                if slot < limit || !unsafe { spill_lane_covers(obj, slot) } {
+                    trace_object_array_numeric_write_rejection(
+                        "receiver prefix contains an out-of-bounds target slot",
+                    );
+                    return None;
+                }
+            } else if slot >= limit {
+                trace_object_array_numeric_write_rejection(
+                    "receiver prefix contains an out-of-bounds target slot",
+                );
+                return None;
+            }
         }
-        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
-            && slots[..keys.len()].iter().any(|slot| {
+        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+            if lane_spill[..keys.len()].iter().any(|s| *s) {
+                trace_object_array_numeric_write_rejection(
+                    "receiver typed descriptor does not contain every target slot",
+                );
+                return None;
+            }
+            if slots[..keys.len()].iter().any(|slot| {
                 !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
                     obj as usize,
                     usize::from(*slot),
                 )
-            })
-        {
-            trace_object_array_numeric_write_rejection(
-                "receiver typed descriptor does not contain every target slot",
-            );
-            return None;
+            }) {
+                trace_object_array_numeric_write_rejection(
+                    "receiver typed descriptor does not contain every target slot",
+                );
+                return None;
+            }
         }
     }
 
+    for index in 0..keys.len() {
+        if lane_spill[index] {
+            slots[index] |= 0x8000;
+        }
+    }
     Some(slots)
 }
 

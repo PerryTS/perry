@@ -2542,6 +2542,10 @@ fn lower_object_array_write_versioned_for(
     let fast_inner_pre_idx = ctx.new_block("object_array_write.loop.fast.inner.preheader");
     let fast_inner_cond_idx = ctx.new_block("object_array_write.loop.fast.inner.cond");
     let fast_inner_body_idx = ctx.new_block("object_array_write.loop.fast.inner.body");
+    // #6812 spill lanes: the per-lane store chain ends in a `done` block, so
+    // the inner back-edge needs a dedicated latch — the counter phi must
+    // name its true predecessor.
+    let fast_inner_latch_idx = ctx.new_block("object_array_write.loop.fast.inner.latch");
     let fast_inner_exit_idx = ctx.new_block("object_array_write.loop.fast.inner.exit");
     let fast_done_idx = ctx.new_block("object_array_write.loop.fast.done");
     let fast_entry_label = ctx.block_label(fast_entry_idx);
@@ -2549,6 +2553,7 @@ fn lower_object_array_write_versioned_for(
     let fast_inner_pre_label = ctx.block_label(fast_inner_pre_idx);
     let fast_inner_cond_label = ctx.block_label(fast_inner_cond_idx);
     let fast_inner_body_label = ctx.block_label(fast_inner_body_idx);
+    let fast_inner_latch_label = ctx.block_label(fast_inner_latch_idx);
     let fast_inner_exit_label = ctx.block_label(fast_inner_exit_idx);
     let fast_done_label = ctx.block_label(fast_done_idx);
 
@@ -2565,7 +2570,13 @@ fn lower_object_array_write_versioned_for(
                 blk.lshr(I64, &packed_slots, &(index * 16).to_string())
             };
             let encoded = blk.and(I64, &shifted, "65535");
-            slots.push(blk.sub(I64, &encoded, "1"));
+            // #6812 spill lanes: bit 15 of a lane means the store goes
+            // through the object-owned spill buffer (obj → meta → buffer);
+            // the low 15 bits carry slot + 1 (find_slot caps slots at 4096,
+            // so the +1 packing can never carry into the flag).
+            let spill_flag = blk.and(I64, &encoded, "32768");
+            let low = blk.and(I64, &encoded, "32767");
+            slots.push((blk.sub(I64, &low, "1"), spill_flag));
         }
         let array_bits = blk.bitcast_double_to_i64(&array_box);
         let array_handle = blk.and(I64, &array_bits, crate::nanbox::POINTER_MASK_I64);
@@ -2617,7 +2628,7 @@ fn lower_object_array_write_versioned_for(
         I32,
         &[
             ("0", &fast_inner_pre_label),
-            (&inner_next, &fast_inner_body_label),
+            (&inner_next, &fast_inner_latch_label),
         ],
     );
     let inner_more = ctx.block().icmp_slt(I32, &inner, &inner_bound_operand);
@@ -2636,10 +2647,34 @@ fn lower_object_array_write_versioned_for(
         let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);
         blk.inttoptr(I64, &object_handle)
     };
-    let header_words =
-        (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
-    for (slot, value) in slots.iter().zip(&matched.values) {
+    let header_words_n = crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8;
+    let header_words = header_words_n.to_string();
+    // `meta` is the LAST ObjectHeader field (a documented invariant of the
+    // header layout), i.e. the word directly before the field region.
+    let meta_word = (header_words_n - 1).to_string();
+    for (lane_index, ((slot, spill_flag), value)) in slots.iter().zip(&matched.values).enumerate() {
         let value = emit_object_array_write_number(ctx, value, &outer_double, &inner_double);
+        // #6812 spill lanes: the guard proved every receiver holds this
+        // lane's slot on the SAME side (inline vs spill), so the flag is
+        // loop-invariant — LLVM unswitches the branch out of the nest. Both
+        // paths remain call-free raw stores, preserving the guard's no-GC
+        // interval.
+        let spill_idx = ctx.new_block(&format!(
+            "object_array_write.loop.fast.store.spill.{lane_index}"
+        ));
+        let inline_idx = ctx.new_block(&format!(
+            "object_array_write.loop.fast.store.inline.{lane_index}"
+        ));
+        let done_idx = ctx.new_block(&format!(
+            "object_array_write.loop.fast.store.done.{lane_index}"
+        ));
+        let spill_label = ctx.block_label(spill_idx);
+        let inline_label = ctx.block_label(inline_idx);
+        let done_label = ctx.block_label(done_idx);
+        let is_spill = ctx.block().icmp_ne(I64, spill_flag, "0");
+        ctx.block().cond_br(&is_spill, &spill_label, &inline_label);
+
+        ctx.current_block = inline_idx;
         let field_ptr = {
             let blk = ctx.block();
             let field_word = blk.add(I64, slot, &header_words);
@@ -2648,7 +2683,35 @@ fn lower_object_array_write_versioned_for(
         // GC_STORE_AUDIT(POINTER_FREE): the versioned loop emits only numeric
         // values into fields proven numeric by the entry guard.
         ctx.block().store(DOUBLE, &value, &field_ptr);
+        ctx.block().br(&done_label);
+
+        ctx.current_block = spill_idx;
+        {
+            let blk = ctx.block();
+            let meta_slot_ptr = blk.gep_inbounds(I64, &object_ptr, &[(I64, &meta_word)]);
+            let meta_i64 = blk.load(I64, &meta_slot_ptr);
+            let meta_ptr = blk.inttoptr(I64, &meta_i64);
+            // ObjectMeta layout word 4 = `spill`; buffer elements start one
+            // word past the 8-byte ArrayHeader. Both offsets are locked by
+            // const assertions next to the runtime structs
+            // (perry-runtime/src/object/mod.rs, #6812 spill lanes).
+            let spill_slot_ptr = blk.gep_inbounds(I64, &meta_ptr, &[(I64, "4")]);
+            let spill_i64 = blk.load(I64, &spill_slot_ptr);
+            let spill_ptr = blk.inttoptr(I64, &spill_i64);
+            let elem_word = blk.add(I64, slot, "1");
+            let elem_ptr = blk.gep_inbounds(I64, &spill_ptr, &[(I64, &elem_word)]);
+            // GC_STORE_AUDIT(POINTER_FREE): finite numeric bits into a
+            // guard-proven live spill slot; numbers create no references,
+            // so no barrier or layout note is needed (same argument as the
+            // inline lane above).
+            blk.store(DOUBLE, &value, &elem_ptr);
+        }
+        ctx.block().br(&done_label);
+
+        ctx.current_block = done_idx;
     }
+    ctx.block().br(&fast_inner_latch_label);
+    ctx.current_block = fast_inner_latch_idx;
     ctx.block()
         .emit_raw(format!("{} = add i32 {}, 1", inner_next, inner));
     ctx.block().br(&fast_inner_cond_label);
