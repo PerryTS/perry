@@ -274,23 +274,21 @@ fn set_trace_enabled(id: i64, enabled: bool) {
                 output.categories.extend(categories.iter().cloned());
             });
         }
-        let flush = TRACE_ENABLED_OBJECTS.with(|count| {
+        let (flush, warn) = TRACE_ENABLED_OBJECTS.with(|count| {
             let mut count = count.borrow_mut();
             if enabled {
                 *count += 1;
-                if *count > 10 {
-                    TRACE_WARNING_EMITTED.with(|warned| {
-                        if !warned.replace(true) {
-                            emit_enabled_trace_warning();
-                        }
-                    });
-                }
-                false
+                let warn =
+                    *count > 10 && TRACE_WARNING_EMITTED.with(|warned| !warned.replace(true));
+                (false, warn)
             } else {
                 *count = count.saturating_sub(1);
-                *count == 0
+                (*count == 0, false)
             }
         });
+        if warn {
+            emit_enabled_trace_warning();
+        }
         if flush {
             flush_trace_events_output();
         }
@@ -485,24 +483,29 @@ fn trace_options_from_args(args: impl IntoIterator<Item = String>) -> TraceOutpu
     let mut output = TraceOutput::default();
     let mut index = 0;
     while index < args.len() {
-        match args[index].as_str() {
-            "--trace-events-enabled" => output.enabled = true,
-            "--trace-event-categories" => {
-                output.enabled = true;
-                if let Some(value) = args.get(index + 1) {
-                    output
-                        .categories
-                        .extend(value.split(',').map(str::to_owned));
-                    index += 1;
-                }
+        let arg = &args[index];
+        if arg == "--trace-events-enabled" {
+            output.enabled = true;
+        } else if arg == "--trace-event-categories" {
+            output.enabled = true;
+            if let Some(value) = args.get(index + 1) {
+                output
+                    .categories
+                    .extend(value.split(',').map(str::to_owned));
+                index += 1;
             }
-            "--trace-event-file-pattern" => {
-                if let Some(value) = args.get(index + 1) {
-                    output.file_pattern = Some(value.clone());
-                    index += 1;
-                }
+        } else if let Some(value) = arg.strip_prefix("--trace-event-categories=") {
+            output.enabled = true;
+            output
+                .categories
+                .extend(value.split(',').map(str::to_owned));
+        } else if arg == "--trace-event-file-pattern" {
+            if let Some(value) = args.get(index + 1) {
+                output.file_pattern = Some(value.clone());
+                index += 1;
             }
-            _ => {}
+        } else if let Some(value) = arg.strip_prefix("--trace-event-file-pattern=") {
+            output.file_pattern = Some(value.to_owned());
         }
         index += 1;
     }
@@ -603,18 +606,27 @@ mod tests {
 
     #[test]
     fn parses_trace_file_options() {
-        let output = trace_options_from_args([
-            "perry".to_string(),
-            "--trace-event-categories".to_string(),
-            "flag.beta,flag.alpha".to_string(),
-            "--trace-event-file-pattern".to_string(),
-            "trace-${pid}-${rotation}.json".to_string(),
-        ]);
-        assert!(output.enabled);
-        assert!(output.categories.contains("flag.alpha"));
-        assert_eq!(
-            output.file_pattern.as_deref(),
-            Some("trace-${pid}-${rotation}.json")
-        );
+        for args in [
+            vec![
+                "perry",
+                "--trace-event-categories=flag.beta,flag.alpha",
+                "--trace-event-file-pattern=trace-${pid}-${rotation}.json",
+            ],
+            vec![
+                "perry",
+                "--trace-event-categories",
+                "flag.beta,flag.alpha",
+                "--trace-event-file-pattern",
+                "trace-${pid}-${rotation}.json",
+            ],
+        ] {
+            let output = trace_options_from_args(args.into_iter().map(str::to_owned));
+            assert!(output.enabled);
+            assert!(output.categories.contains("flag.alpha"));
+            assert_eq!(
+                output.file_pattern.as_deref(),
+                Some("trace-${pid}-${rotation}.json")
+            );
+        }
     }
 }
