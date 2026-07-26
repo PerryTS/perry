@@ -1599,28 +1599,44 @@ pub extern "C" fn js_fs_rmdir_sync(path_value: f64) -> i32 {
     js_fs_rmdir_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
-/// `fs.rmdirSync(path[, options])` — removes an empty directory, or a
-/// non-empty tree when the legacy/deprecated `{ recursive: true }` option is
-/// supplied. Returns i32 status.
+/// `fs.rmdirSync(path[, options])` — removes an empty directory. Returns i32
+/// status.
 /// Shared `fs.rmdir` op. Reports removal failures (#2747) with the real errno
 /// and `syscall: "rmdir"` — `ENOENT` (missing), `ENOTDIR` (not a directory),
 /// `ENOTEMPTY` (non-empty, non-recursive).
 pub(crate) unsafe fn js_fs_rmdir_result(path_value: f64, options_value: f64) -> Result<(), f64> {
     validate::validate_path("path", path_value);
-    validate::validate_object_options("options", options_value);
+    validate_rmdir_options(options_value)?;
     let path_str = match decode_path_value(path_value) {
         Some(s) => s,
         None => return Ok(()),
     };
-    let result = if options_bool_field(options_value, b"recursive") {
-        fs::remove_dir_all(&path_str)
-    } else {
-        fs::remove_dir(&path_str)
-    };
-    match result {
+    match fs::remove_dir(&path_str) {
         Ok(_) => Ok(()),
         Err(err) => Err(build_fs_error_value(&err, "rmdir", &path_str)),
     }
+}
+
+pub(crate) unsafe fn validate_rmdir_options(options_value: f64) -> Result<(), f64> {
+    validate::validate_object_options("options", options_value);
+    let Some(recursive) = options_field_value(options_value, b"recursive") else {
+        return Ok(());
+    };
+    if crate::value::JSValue::from_bits(recursive.bits()).is_undefined() {
+        return Ok(());
+    }
+    let received = crate::exception::string_header_to_string(crate::value::js_jsvalue_to_string(
+        f64::from_bits(recursive.bits()),
+    ));
+    let received = if crate::value::JSValue::from_bits(recursive.bits()).is_any_string() {
+        format!("'{received}'")
+    } else {
+        received
+    };
+    Err(validate::build_type_error_with_code_value(
+        &format!("The property 'options.recursive' is no longer supported. Received {received}"),
+        "ERR_INVALID_ARG_VALUE",
+    ))
 }
 
 #[no_mangle]

@@ -69,6 +69,19 @@ pub(crate) fn arm_fs_promises(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr])
                 &[(DOUBLE, &p), (DOUBLE, &options)],
             ))
         }
+        "rmdir" if !args.is_empty() => {
+            let p = lower_expr(ctx, &args[0])?;
+            let options = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_fs_promises_rmdir",
+                &[(DOUBLE, &p), (DOUBLE, &options)],
+            ))
+        }
         _ => {
             // Unsupported — return a resolved promise holding
             // undefined so `await` sees a real pending→settled
