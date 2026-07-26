@@ -902,6 +902,33 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Inline-hot-small (#6850 follow-up): the enable flag changes the emitted
+    // IR (`inlinehint` attribute) AND the clang args (`-inlinehint-threshold`),
+    // and the size-cap / threshold change which functions get the hint and how
+    // aggressively they inline — all affect the .o bytes, so a warm cache must
+    // not serve an object built under a different setting.
+    h.field(
+        "env_inline_hot_small",
+        env_var("PERRY_INLINE_HOT_SMALL").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_inline_hot_small_cap",
+        env_var("PERRY_INLINE_HOT_SMALL_CAP")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_inline_hot_small_threshold",
+        env_var("PERRY_INLINE_HOT_SMALL_THRESHOLD")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_inline_hot_small_max_sites",
+        env_var("PERRY_INLINE_HOT_SMALL_MAX_SITES")
+            .as_deref()
+            .unwrap_or(""),
+    );
 
     h.finish()
 }

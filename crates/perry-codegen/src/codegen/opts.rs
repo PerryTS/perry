@@ -911,4 +911,12 @@ pub(crate) struct CrossModuleCtx {
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`
     /// is empty (side-effect-only modules with no `export`s).
     pub is_dynamic_import_target: bool,
+    /// Inline-hot-small pre-pass result: `FuncId`s in THIS module that have
+    /// ≥1 direct call site inside a loop (`for`/`while`/`do-while`). Consumed
+    /// by `compile_function` to decide whether a small callee earns LLVM's
+    /// `inlinehint`. Built once per module via
+    /// `collectors::collect_hot_loop_callees`. Empty when
+    /// `PERRY_INLINE_HOT_SMALL` is off (the flag is checked at the decision
+    /// site, so the set is still populated but simply not consulted).
+    pub hot_loop_callees: std::collections::HashSet<u32>,
 }

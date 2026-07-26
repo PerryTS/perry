@@ -15,6 +15,7 @@ use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::helpers::shadow_stack_enabled;
+use super::helpers::{inline_hot_small_enabled, inline_hot_small_size_cap, INLINE_HOT_SMALL_MIN};
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_function_body_name, lower_typed_f64_body,
@@ -393,6 +394,25 @@ pub(super) fn compile_function(
     // step closure's iter capture, hanging async chains (issue #447).
     if f.body.len() <= 8 && !f.is_async && !f.is_generator && !f.was_plain_async {
         lf.force_inline = true;
+    }
+    // Inline-hot-small (PERRY_INLINE_HOT_SMALL, default ON): bias — do not
+    // force — LLVM toward inlining a *small* function that has a *hot* (in-loop)
+    // call site. `inlinehint` only raises LLVM's inline threshold for this
+    // callee; its `-O3` growth budget still refuses cold/oversized inlines, so
+    // cold utility functions never bloat the binary (that is the anti-bloat
+    // property, proved by the binary-size gate). We skip `alwaysinline`
+    // functions (the hint would be redundant), async/generator forms, and rely
+    // on `to_ir`'s `has_try`-first attribute precedence to keep any function
+    // whose body later turns out to need `noinline` (try/setjmp/volatile) out.
+    if !lf.force_inline
+        && inline_hot_small_enabled()
+        && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async
+        && cross_module.hot_loop_callees.contains(&f.id)
+    {
+        lf.inline_hint = true;
     }
     let _ = lf.create_block("entry");
 

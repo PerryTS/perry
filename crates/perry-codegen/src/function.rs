@@ -37,6 +37,17 @@ pub struct LlFunction {
     /// function at every call site, exposing integer operations to the
     /// caller's optimizer context (critical for vectorization of clamp patterns).
     pub force_inline: bool,
+    /// When true (and `force_inline` is not), emit the `inlinehint` attribute.
+    /// Unlike `alwaysinline`, `inlinehint` only *raises* LLVM's inline
+    /// threshold for this callee — LLVM keeps its `-O3` growth budget and can
+    /// still decline to inline into cold / many call sites. Set for small
+    /// functions with a hot (in-loop) call site so a bit-mixer-style kernel
+    /// gets inlined into its loop without the binary-size blowup an
+    /// unconditional `alwaysinline` threshold bump causes. See the
+    /// inline-hot-small heuristic in `codegen/function.rs`. `alwaysinline`
+    /// already implies the hint, so the two are never emitted together, and
+    /// `has_try` (noinline) still wins over both in `to_ir`.
+    pub inline_hint: bool,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -120,6 +131,7 @@ impl LlFunction {
             linkage: String::new(),
             has_try: false,
             force_inline: false,
+            inline_hint: false,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
@@ -418,9 +430,14 @@ impl LlFunction {
         };
 
         let attrs = if self.has_try {
+            // noinline (setjmp/volatile/async-rejecting boundary) always wins,
+            // even if an inline attribute was optimistically set before body
+            // lowering discovered the try.
             " #1"
         } else if self.force_inline {
             " alwaysinline"
+        } else if self.inline_hint {
+            " inlinehint"
         } else {
             ""
         };

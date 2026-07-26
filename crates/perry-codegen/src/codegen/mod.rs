@@ -47,7 +47,9 @@ mod closure_collect;
 mod entry;
 mod func_registry;
 mod function;
-mod helpers;
+// `pub(crate)` so `crate::linker` can read the inline-hot-small policy
+// (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
+pub(crate) mod helpers;
 mod i64_spec;
 mod method;
 mod method_registry;
@@ -1545,6 +1547,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
         module_dispatch: crate::collectors::collect_module_dispatch_facts(hir),
+        // Inline-hot-small pre-pass (#6850 follow-up): FuncIds with an in-loop
+        // call site AND few total call sites, so small hot callees can earn
+        // `inlinehint` while the call-site cap bounds duplication.
+        hot_loop_callees: crate::collectors::collect_hot_loop_callees(
+            hir,
+            crate::codegen::helpers::inline_hot_small_max_call_sites(),
+        ),
         clamp3_functions: hir
             .functions
             .iter()

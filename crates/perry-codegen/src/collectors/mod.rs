@@ -13,6 +13,7 @@ mod escape_check;
 mod escape_news;
 mod escape_objects;
 mod hir_facts;
+mod hot_callees;
 mod i32_locals;
 mod i64_emit;
 mod index_uses;
@@ -42,6 +43,7 @@ pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
 pub(crate) use escape_check::{check_escapes_in_stmts, find_new_candidates};
 pub(crate) use escape_news::MAX_SCALAR_ARRAY_LEN;
 pub(crate) use hir_facts::{collect_native_region_fact_graph, NativeRegionFactGraph};
+pub(crate) use hot_callees::collect_hot_loop_callees;
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,
     is_ushr_zero,
