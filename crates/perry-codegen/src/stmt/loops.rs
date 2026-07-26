@@ -13,7 +13,7 @@ use crate::native_value::{
     BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, LengthSource, LoweredValue,
     MaterializationReason,
 };
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 #[derive(Clone, Copy)]
 enum NumericBulkFillValue {
@@ -2647,11 +2647,21 @@ fn lower_object_array_write_versioned_for(
         let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);
         blk.inttoptr(I64, &object_handle)
     };
-    let header_words_n = crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8;
-    let header_words = header_words_n.to_string();
+    let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header_words = (object_header_size / 8).to_string();
     // `meta` is the LAST ObjectHeader field (a documented invariant of the
-    // header layout), i.e. the word directly before the field region.
-    let meta_word = (header_words_n - 1).to_string();
+    // header layout): a POINTER-WIDTH field at byte offset
+    // (header_size - pointer_size). On ILP32 (arm64_32) the header is 24
+    // bytes with a 4-byte `meta` at offset 20 — neither 8-byte-word-indexable
+    // nor i64-loadable — so the spill path addresses it by BYTE offset and
+    // loads pointer-width, mirroring the `new.rs` allocator's meta store.
+    let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        4
+    } else {
+        8
+    };
+    let meta_byte_off = (object_header_size - meta_ptr_size).to_string();
+    let meta_load_ty = if meta_ptr_size == 4 { I32 } else { I64 };
     for (lane_index, ((slot, spill_flag), value)) in slots.iter().zip(&matched.values).enumerate() {
         let value = emit_object_array_write_number(ctx, value, &outer_double, &inner_double);
         // #6812 spill lanes: the guard proved every receiver holds this
@@ -2688,8 +2698,13 @@ fn lower_object_array_write_versioned_for(
         ctx.current_block = spill_idx;
         {
             let blk = ctx.block();
-            let meta_slot_ptr = blk.gep_inbounds(I64, &object_ptr, &[(I64, &meta_word)]);
-            let meta_i64 = blk.load(I64, &meta_slot_ptr);
+            let meta_slot_ptr = blk.gep(I8, &object_ptr, &[(I64, &meta_byte_off)]);
+            let meta_loaded = blk.load(meta_load_ty, &meta_slot_ptr);
+            let meta_i64 = if meta_ptr_size == 4 {
+                blk.zext(I32, &meta_loaded, I64)
+            } else {
+                meta_loaded
+            };
             let meta_ptr = blk.inttoptr(I64, &meta_i64);
             // ObjectMeta layout word 4 = `spill`; buffer elements start one
             // word past the 8-byte ArrayHeader. Both offsets are locked by
