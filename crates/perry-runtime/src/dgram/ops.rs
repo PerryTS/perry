@@ -22,6 +22,37 @@ pub(crate) fn create_socket_impl(args: &[f64]) -> f64 {
         throw_bad_socket_type(first);
     }
     let socket = socket_object(&socket_type);
+    if let Some(options) = object_ptr_from_value(first) {
+        let options = boxed_pointer(options as *const u8);
+        if let Some(lookup) = get_prop(options, "lookup") {
+            if !is_callable_value(lookup) {
+                throw_invalid_arg_type("options.lookup", "function", lookup);
+            }
+            set_hidden_value(socket, KEY_LOOKUP, lookup);
+        }
+        if let Some(signal) = get_prop(options, "signal") {
+            if get_prop(signal, "aborted").is_none() {
+                throw_invalid_arg_type("options.signal", "AbortSignal", signal);
+            }
+        }
+        if let Some(size) = get_prop(options, "recvBufferSize") {
+            set_hidden_value(
+                socket,
+                KEY_RECV_BUFFER_SIZE,
+                validate_option_buffer_size(size).max(1.0),
+            );
+        }
+        if let Some(size) = get_prop(options, "sendBufferSize") {
+            set_hidden_value(
+                socket,
+                KEY_SEND_BUFFER_SIZE,
+                validate_option_buffer_size(size).max(1.0),
+            );
+        }
+        if let Some(block_list) = get_prop(options, "sendBlockList") {
+            set_hidden_value(socket, KEY_SEND_BLOCK_LIST, block_list);
+        }
+    }
     if let Some(callback) = callback_from_args(args) {
         add_listener(socket, str_value("message"), callback, false);
     }
@@ -47,6 +78,9 @@ pub(crate) fn bind_impl(socket: f64, args: &[f64]) -> f64 {
             }
         }
     }
+    if let Some(lookup) = get_hidden_value(socket, KEY_LOOKUP) {
+        invoke_lookup(socket, lookup, &address);
+    }
     let bind_result = if deterministic() {
         bind_socket(socket, port, address);
         Ok(())
@@ -61,6 +95,7 @@ pub(crate) fn bind_impl(socket: f64, args: &[f64]) -> f64 {
             }
         }
         Err(error) => {
+            set_hidden_value(socket, KEY_BIND_ATTEMPTED, bool_value(true));
             emit_event(socket, "error", &[error]);
         }
     }
@@ -69,6 +104,15 @@ pub(crate) fn bind_impl(socket: f64, args: &[f64]) -> f64 {
 
 pub(crate) fn address_impl(socket: f64) -> f64 {
     if !is_truthy_hidden(socket, KEY_BOUND) {
+        if is_truthy_hidden(socket, KEY_BIND_ATTEMPTED) {
+            return build_address_info(
+                &default_bind_address(socket),
+                family_for_type(
+                    &hidden_string(socket, KEY_TYPE).unwrap_or_else(|| "udp4".to_string()),
+                ),
+                0,
+            );
+        }
         throw_not_bound();
     }
     let address =
@@ -90,14 +134,20 @@ pub(crate) fn close_impl(socket: f64, args: &[f64]) -> f64 {
     set_hidden_value(socket, KEY_BOUND, bool_value(false));
     set_hidden_value(socket, KEY_CONNECTED, bool_value(false));
     set_hidden_value(socket, KEY_CLOSED, bool_value(true));
+    emit_event(socket, "close", &[]);
     if let Some(callback) = callback_from_args(args) {
         call_function(callback, socket, &[]);
     }
-    emit_event(socket, "close", &[]);
-    undefined_value()
+    socket
 }
 
 pub(crate) fn connect_impl(socket: f64, args: &[f64]) -> f64 {
+    if is_truthy_hidden(socket, KEY_CONNECTED) {
+        crate::fs::validate::throw_error_with_code(
+            "Already connected",
+            "ERR_SOCKET_DGRAM_IS_CONNECTED",
+        );
+    }
     let port = args
         .first()
         .copied()
@@ -109,6 +159,14 @@ pub(crate) fn connect_impl(socket: f64, args: &[f64]) -> f64 {
         .and_then(string_to_rust)
         .unwrap_or_else(|| default_loopback_address(socket));
     let address = normalize_address(&address, socket);
+    if send_blocked(socket, &address) {
+        let error = socket_error_value("connect ERR_IP_BLOCKED", "ERR_IP_BLOCKED", "connect");
+        if let Some(callback) = callback_from_args(args) {
+            call_function(callback, socket, &[error]);
+            return undefined_value();
+        }
+        crate::exception::js_throw(error);
+    }
     ensure_bound(socket);
     set_hidden_value(socket, KEY_REMOTE_ADDRESS, str_value(&address));
     set_hidden_value(
@@ -155,17 +213,19 @@ pub(crate) fn send_destination(socket: f64, args: &[f64]) -> (u16, String) {
             .unwrap_or_else(|| default_loopback_address(socket));
         return (hidden_port(socket, KEY_REMOTE_PORT), address);
     }
+    if is_truthy_hidden(socket, KEY_CONNECTED) && args.len() >= 4 {
+        crate::fs::validate::throw_error_with_code(
+            "Already connected",
+            "ERR_SOCKET_DGRAM_IS_CONNECTED",
+        );
+    }
     if args.len() >= 4
         && is_number_like(args[1])
         && is_number_like(args[2])
         && is_number_like(args[3])
     {
         let port = port_from_value(args[3], false);
-        let address = args
-            .get(4)
-            .copied()
-            .and_then(string_to_rust)
-            .unwrap_or_else(|| default_loopback_address(socket));
+        let address = send_address(socket, args.get(4).copied());
         return (port, address);
     }
     let port = args
@@ -173,23 +233,27 @@ pub(crate) fn send_destination(socket: f64, args: &[f64]) -> (u16, String) {
         .copied()
         .map(|value| port_from_value(value, false))
         .unwrap_or_else(|| port_from_value(undefined_value(), false));
-    let address = args
-        .get(2)
-        .copied()
-        .and_then(string_to_rust)
-        .unwrap_or_else(|| default_loopback_address(socket));
+    let address = send_address(socket, args.get(2).copied());
     (port, address)
 }
 
 pub(crate) fn send_impl(socket: f64, args: &[f64]) -> f64 {
-    if !deterministic() {
-        return real_send(socket, args);
-    }
-    let msg = args.first().copied().unwrap_or_else(undefined_value);
-    let Some((message, size)) = message_value(msg) else {
-        throw_invalid_message(msg);
-    };
+    let (message, size, bytes) = send_message(args);
     let (port, address) = send_destination(socket, args);
+    if send_blocked(socket, &address) {
+        return finish_send(
+            socket,
+            args,
+            Err(socket_error_value(
+                "send ERR_IP_BLOCKED",
+                "ERR_IP_BLOCKED",
+                "send",
+            )),
+        );
+    }
+    if !deterministic() {
+        return real_send_bytes(socket, args, bytes, port, address);
+    }
     ensure_bound(socket);
     let source_address =
         hidden_string(socket, KEY_ADDRESS).unwrap_or_else(|| default_loopback_address(socket));
@@ -202,10 +266,106 @@ pub(crate) fn send_impl(socket: f64, args: &[f64]) -> f64 {
             emit_event(target, "message", &[message, rinfo]);
         }
     }
-    if let Some(callback) = callback_from_args(args) {
-        call_function(callback, socket, &[null_value(), size as f64]);
+    finish_send(socket, args, Ok(size))
+}
+
+pub(crate) fn sendto_impl(socket: f64, args: &[f64]) -> f64 {
+    let message = args.first().copied().unwrap_or_else(undefined_value);
+    if message_bytes(message).is_none() {
+        throw_invalid_arg_type("msg", "Buffer, TypedArray, DataView, or string", message);
     }
+    for (index, name) in [(1, "offset"), (2, "length")] {
+        let value = args.get(index).copied().unwrap_or_else(undefined_value);
+        if number_value(value).is_none() {
+            throw_invalid_arg_type(name, "number", value);
+        }
+    }
+    let port = args.get(3).copied().unwrap_or_else(undefined_value);
+    if number_value(port).is_none() {
+        throw_invalid_arg_type("port", "number", port);
+    }
+    let address = args.get(4).copied().unwrap_or_else(undefined_value);
+    if string_to_rust(address).is_none() {
+        throw_invalid_arg_type("address", "string", address);
+    }
+    send_impl(socket, args)
+}
+
+fn send_address(socket: f64, value: Option<f64>) -> String {
+    let Some(value) = value else {
+        return default_loopback_address(socket);
+    };
+    if matches!(value.to_bits(), TAG_UNDEFINED | TAG_NULL) || is_callable_value(value) {
+        return default_loopback_address(socket);
+    }
+    let address =
+        string_to_rust(value).unwrap_or_else(|| throw_invalid_arg_type("address", "string", value));
+    if address.is_empty() {
+        default_loopback_address(socket)
+    } else {
+        address
+    }
+}
+
+fn send_message(args: &[f64]) -> (f64, usize, Vec<u8>) {
+    let value = args.first().copied().unwrap_or_else(undefined_value);
+    let mut bytes = message_bytes(value).unwrap_or_else(|| throw_invalid_message(value));
+    if args.len() >= 4 && is_number_like(args[1]) && is_number_like(args[2]) {
+        let offset = number_value(args[1]).unwrap() as usize;
+        let length = number_value(args[2]).unwrap() as usize;
+        if !number_value(args[1]).unwrap().is_finite()
+            || !number_value(args[2]).unwrap().is_finite()
+            || number_value(args[1]).unwrap() < 0.0
+            || number_value(args[2]).unwrap() < 0.0
+            || offset.saturating_add(length) > bytes.len()
+        {
+            crate::fs::validate::throw_range_error_named(
+                "Attempt to access memory outside buffer bounds",
+                "ERR_BUFFER_OUT_OF_BOUNDS",
+            );
+        }
+        bytes = bytes[offset..offset + length].to_vec();
+    }
+    let message = make_buffer(&bytes);
+    (message, bytes.len(), bytes)
+}
+
+fn send_blocked(socket: f64, address: &str) -> bool {
+    let Some(list) = get_hidden_value(socket, KEY_SEND_BLOCK_LIST) else {
+        return false;
+    };
+    let Some(check) = dynamic_prop(list, b"check") else {
+        return false;
+    };
+    let family = if address.contains(':') {
+        "ipv6"
+    } else {
+        "ipv4"
+    };
+    crate::value::js_is_truthy(call_function(
+        check,
+        list,
+        &[str_value(address), str_value(family)],
+    )) != 0
+}
+
+extern "C" fn lookup_callback(_closure: *const ClosureHeader, _rest: f64) -> f64 {
     undefined_value()
+}
+
+fn invoke_lookup(socket: f64, lookup: f64, address: &str) {
+    crate::closure::js_register_closure_rest(lookup_callback as *const u8, 0);
+    let callback = js_closure_alloc(lookup_callback as *const u8, 0);
+    let family = if address.contains(':') { 6.0 } else { 4.0 };
+    call_function(
+        lookup,
+        socket,
+        &[
+            str_value(address),
+            family,
+            boxed_pointer(callback as *const u8),
+        ],
+    );
 }
 
 pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
@@ -325,7 +485,7 @@ pub(crate) fn set_ttl_impl(socket: f64, args: &[f64]) -> f64 {
 
 pub(crate) fn set_multicast_ttl_impl(socket: f64, args: &[f64]) -> f64 {
     let ttl = validate_number_arg(args.first().copied().unwrap_or_else(undefined_value), "ttl");
-    if !(0.0..=255.0).contains(&ttl) {
+    if ttl.is_nan() || (ttl.is_finite() && !(0.0..=255.0).contains(&ttl)) {
         throw_socket_errno("setMulticastTTL", "EINVAL");
     }
     ensure_running(socket, "setMulticastTTL");
@@ -376,6 +536,13 @@ pub(crate) fn validate_buffer_size(value: f64) -> f64 {
         throw_bad_buffer_size();
     }
     size
+}
+
+fn validate_option_buffer_size(value: f64) -> f64 {
+    if number_value(value).is_none() {
+        throw_invalid_arg_type("options.recvBufferSize", "number", value);
+    }
+    validate_buffer_size(value)
 }
 
 pub(crate) fn set_buffer_size_impl(
