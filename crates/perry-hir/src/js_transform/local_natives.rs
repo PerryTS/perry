@@ -1346,7 +1346,10 @@ pub fn detect_native_instance_creation_with_context(
                 ("http2", "createSecureServer") => "Http2SecureServer",
                 ("node-cron", "schedule") => "CronJob",
                 ("readline", "createInterface") => "Interface",
-                ("axios", "get" | "post" | "put" | "delete" | "patch" | "request") => "Response",
+                (
+                    "axios",
+                    "get" | "post" | "put" | "delete" | "patch" | "head" | "options" | "request",
+                ) => "Response",
                 // Issue #1193: `const $ = load(html)` / `loadFragment(html)`
                 // returns the jQuery-like callable used as `$(selector)`.
                 // Tagging the local as CheerioAPI lets the rewriter below

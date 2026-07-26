@@ -25,7 +25,11 @@ async function main(): Promise<void> {
     });
 
     const r = await axios.get(`http://127.0.0.1:${port}/json`);
+    const head = await axios.head(`http://127.0.0.1:${port}/json`);
+    const options = await axios.options(`http://127.0.0.1:${port}/json`);
     console.log(`status=${r.status}`);
+    console.log(`head.status=${head.status}`);
+    console.log(`options.status=${options.status}`);
     console.log(`data.ok=${r.data.ok}`);
     console.log(`data.path=${r.data.path}`);
 

@@ -11,8 +11,12 @@ fn awaited_axios_response_properties_keep_native_dispatch() {
 
         async function main() {
             const response = await axios.get("https://example.com/data");
+            const head = await axios.head("https://example.com/data");
+            const options = await axios.options("https://example.com/data");
             console.log(`status=${response.status}`);
             console.log(`ok=${response.data.ok}`);
+            console.log(`head=${head.status}:${head.data}`);
+            console.log(`options=${options.status}:${options.data}`);
         }
         "#,
         "/tmp/axios_response_property_lowering.ts",
@@ -35,8 +39,8 @@ fn awaited_axios_response_properties_keep_native_dispatch() {
         .expect("main function");
     let hir = format!("{:#?}", main.body);
     assert!(
-        hir.matches("class_name: Some(").count() == 2
-            && hir.matches("\"Response\"").count() == 2
+        hir.matches("class_name: Some(").count() == 6
+            && hir.matches("\"Response\"").count() == 6
             && hir.contains("method: \"status\"")
             && hir.contains("method: \"data\""),
         "awaited Axios response properties lost native dispatch:\n{hir}"

@@ -149,6 +149,30 @@ pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Prom
     run_request("GET", url, |client, url| client.get(&url))
 }
 
+/// `axios.head(url) -> Promise<Response>`.
+///
+/// # Safety
+///
+/// `url_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_axios_head(url_ptr: *const StringHeader) -> *mut Promise {
+    let url = read_str(url_ptr).ok_or("Invalid URL");
+    run_request("HEAD", url, |client, url| client.head(&url))
+}
+
+/// `axios.options(url) -> Promise<Response>`.
+///
+/// # Safety
+///
+/// `url_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_axios_options(url_ptr: *const StringHeader) -> *mut Promise {
+    let url = read_str(url_ptr).ok_or("Invalid URL");
+    run_request("OPTIONS", url, |client, url| {
+        client.request(reqwest::Method::OPTIONS, &url)
+    })
+}
+
 /// `axios.post(url, data) -> Promise<Response>`.
 ///
 /// # Safety
