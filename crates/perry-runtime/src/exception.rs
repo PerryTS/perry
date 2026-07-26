@@ -31,7 +31,10 @@ impl JmpBuf {
     }
 }
 
-use crate::gc::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
+use crate::gc::{
+    runtime_handle_stack_restore, runtime_handle_stack_savepoint, shadow_stack_restore,
+    shadow_stack_savepoint, ShadowSavepoint,
+};
 
 extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
@@ -67,6 +70,10 @@ struct ExceptionState {
     /// `js_throw` / issue #1830). Indexed by try-depth, in lockstep with
     /// `jump_buffers`.
     shadow_savepoints: Box<[ShadowSavepoint]>,
+    /// Runtime-handle stack depth captured with each `try`. A `longjmp` skips
+    /// `RuntimeHandleScope` drops, so stale roots must be removed before the
+    /// catch path can allocate or trigger GC.
+    runtime_handle_savepoints: Box<[usize]>,
     /// `js_native_call_method` recursion depth captured when each `try` was
     /// pushed. A throw `longjmp`s past the in-flight method frames, skipping
     /// their `CallMethodDepthGuard` `Drop`s; the unwind path restores this so
@@ -95,6 +102,7 @@ impl ExceptionState {
         ExceptionState {
             jump_buffers: vec![JmpBuf::new(); MAX_TRY_DEPTH].into_boxed_slice(),
             shadow_savepoints: vec![ShadowSavepoint::EMPTY; MAX_TRY_DEPTH].into_boxed_slice(),
+            runtime_handle_savepoints: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
             #[cfg(feature = "dyn-eval")]
             dyn_eval_savepoints: vec![0u64; MAX_TRY_DEPTH].into_boxed_slice(),
@@ -129,6 +137,7 @@ pub extern "C" fn js_try_push() -> *mut i32 {
         // can push any callee frames, so the unwind path can restore to
         // exactly this point and drop the frames `longjmp` orphans (#1830).
         (*s).shadow_savepoints[depth] = shadow_stack_savepoint();
+        (*s).runtime_handle_savepoints[depth] = runtime_handle_stack_savepoint();
         // Capture the method-dispatch recursion depth too, so a throw caught by
         // this `try` can restore it — `longjmp` skips the `CallMethodDepthGuard`
         // `Drop`s of the method frames it unwinds (#5591).
@@ -234,6 +243,7 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         // already-unwound stack frames (#1830). Restore to the depth captured
         // when this `try` was pushed.
         shadow_stack_restore((*s).shadow_savepoints[depth]);
+        runtime_handle_stack_restore((*s).runtime_handle_savepoints[depth]);
         // Restore the method-dispatch recursion depth captured when this `try`
         // was pushed. The frames we are about to `longjmp` past never run their
         // `CallMethodDepthGuard` `Drop`s, so without this the counter leaks one
@@ -438,6 +448,7 @@ pub(crate) fn test_unwind_innermost_shadow_restore() {
         assert!((*s).try_depth > 0, "no open try to unwind");
         let depth = (*s).try_depth - 1;
         shadow_stack_restore((*s).shadow_savepoints[depth]);
+        runtime_handle_stack_restore((*s).runtime_handle_savepoints[depth]);
     });
 }
 
@@ -446,6 +457,7 @@ mod tests {
     use super::*;
     use crate::gc::{
         js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_set, shadow_stack_depth,
+        RuntimeHandleScope,
     };
 
     // Issue #1830: js_try_push must capture a shadow-stack savepoint, and the
@@ -488,6 +500,22 @@ mod tests {
 
         js_shadow_frame_pop(run_frame);
         assert_eq!(shadow_stack_depth(), base_depth);
+    }
+
+    #[test]
+    fn js_throw_path_restores_runtime_handles_across_unwound_frames() {
+        let base_try = test_try_depth();
+        let base_handles = RuntimeHandleScope::active_len_for_tests();
+        let _jb = js_try_push();
+        let scope = RuntimeHandleScope::new();
+        let _orphaned = scope.root_nanbox_f64(0x7FFD_0000_0000_00A1u64 as f64);
+        assert!(RuntimeHandleScope::active_len_for_tests() > base_handles);
+
+        test_unwind_innermost_shadow_restore();
+        js_try_end();
+
+        assert_eq!(test_try_depth(), base_try);
+        assert_eq!(RuntimeHandleScope::active_len_for_tests(), base_handles);
     }
 
     #[test]

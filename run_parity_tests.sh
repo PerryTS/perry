@@ -295,6 +295,17 @@ cap_output() {
     '
 }
 
+# Unimported globals fixtures exercise script semantics. The repository root
+# marks `.ts` files as ESM, which makes Node run those scripts in strict mode.
+# Retry only a failed, import-free globals fixture as a `.cts` copy so both
+# Node and Perry use CommonJS without changing ESM fixtures or source files.
+can_retry_node_globals_as_commonjs() {
+    local test_id=$1
+    local test_file=$2
+    [[ "$test_id" == node-suite/globals/* && "$test_file" == *.ts ]] || return 1
+    ! grep -qE '^[[:space:]]*(import|export)[[:space:]{]' "$test_file"
+}
+
 # Function to normalize output for comparison
 normalize_output() {
     local input="$1"
@@ -633,6 +644,8 @@ for test_file in "${TEST_FILES[@]}"; do
     node_output_file="$OUTPUT_DIR/node/${safe_test_id}.txt"
     perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
     perry_binary="$PARITY_TMP/perry_parity_$safe_test_id"
+    parity_test_file="$test_file"
+    perry_compile_command=()
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_env_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-env:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
@@ -675,6 +688,14 @@ for test_file in "${TEST_FILES[@]}"; do
     run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
         node --experimental-strip-types "${node_argv[@]}" "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
+    if [[ $node_exit -ne 0 ]] && can_retry_node_globals_as_commonjs "$test_id" "$test_file"; then
+        parity_test_file="$PARITY_TMP/${safe_test_id}.cts"
+        cp "$test_file" "$parity_test_file"
+        perry_compile_command=(compile)
+        run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+            node --experimental-strip-types "${node_argv[@]}" "$parity_test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
+        node_exit=$?
+    fi
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"
 
@@ -720,10 +741,10 @@ for test_file in "${TEST_FILES[@]}"; do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${compile_flags[@]}" "$test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${compile_flags[@]}" --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 

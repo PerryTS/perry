@@ -197,7 +197,7 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
             1
         }
         "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
-        | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage"
+        | "Navigator" | "EventTarget" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage"
         | "FormData" => 0,
         "CompressionStream" | "DecompressionStream" => 1,
         "RegExp" | "Proxy" | "File" => 2,
@@ -218,6 +218,11 @@ mod tests {
     #[test]
     fn form_data_constructor_has_zero_declared_parameters() {
         assert_eq!(builtin_constructor_length("FormData"), Some(0));
+    }
+
+    #[test]
+    fn event_target_constructor_has_zero_declared_parameters() {
+        assert_eq!(builtin_constructor_length("EventTarget"), Some(0));
     }
 }
 

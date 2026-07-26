@@ -57,6 +57,17 @@ fn navigator_platform() -> &'static str {
     }
 }
 
+fn navigator_language() -> String {
+    std::env::var("LC_ALL")
+        .ok()
+        .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
+        .or_else(|| std::env::var("LANG").ok())
+        .and_then(|locale| locale.split('.').next().map(str::to_owned))
+        .map(|locale| locale.replace('_', "-"))
+        .filter(|locale| locale.contains('-'))
+        .unwrap_or_else(|| "en-US".to_string())
+}
+
 /// Build the `navigator` object. Fields (positional, matching the packed
 /// key order): `userAgent`, `language`, `languages`, `hardwareConcurrency`,
 /// `platform`, `locks`.
@@ -85,9 +96,10 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     js_object_set_field(obj, 0, nb_str(&ua));
 
     // language / languages
-    js_object_set_field(obj, 1, nb_str("en-US"));
+    let language = navigator_language();
+    js_object_set_field(obj, 1, nb_str(&language));
     let mut langs = js_array_alloc(1);
-    langs = js_array_push_f64(langs, f64::from_bits(nb_str("en-US").bits()));
+    langs = js_array_push_f64(langs, f64::from_bits(nb_str(&language).bits()));
     js_object_set_field(
         obj,
         2,

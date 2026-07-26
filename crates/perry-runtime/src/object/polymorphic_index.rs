@@ -239,6 +239,13 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     } else {
         obj_handle as u64
     };
+    // A proxy is a small tagged handle, not a heap header. Rebuild the tag so
+    // unknown-typed computed stores use its [[Set]] path.
+    let boxed = f64::from_bits(crate::value::POINTER_TAG | raw);
+    if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+        crate::proxy::js_proxy_set(boxed, idx, value);
+        return;
+    }
     if raw < 0x1000 {
         return;
     }

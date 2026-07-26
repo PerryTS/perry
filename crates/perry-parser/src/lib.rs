@@ -560,9 +560,10 @@ fn file_is_in_esm_package_context(filename: &str) -> bool {
         let package_json = dir.join("package.json");
         if package_json.exists() {
             if let Ok(content) = std::fs::read_to_string(&package_json) {
-                if package_json_declares_esm_context(&content, dir, path) {
-                    return true;
-                }
+                // Node stops at the nearest package scope. A nested
+                // `{ "type": "commonjs" }` must not fall through to an
+                // ancestor package that declares ESM.
+                return package_json_declares_esm_context(&content, dir, path);
             }
         }
         current = dir.parent();

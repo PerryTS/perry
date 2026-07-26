@@ -9,6 +9,7 @@ pub(super) use runtime_handles::{
     new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
     scan_runtime_handle_roots_mut_step,
 };
+pub(crate) use runtime_handles::{runtime_handle_stack_restore, runtime_handle_stack_savepoint};
 pub use runtime_handles::{RuntimeHandle, RuntimeHandleScope};
 pub use scanner_shims::{
     async_context_mutable_root_scanner, async_context_root_scanner,
