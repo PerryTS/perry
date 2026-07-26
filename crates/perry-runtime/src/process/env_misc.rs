@@ -101,6 +101,7 @@ pub extern "C" fn js_process_exit(code: f64) {
         None => js_process_pending_exit_code(),
     };
     js_process_run_finalization_exit();
+    crate::node_submodules::flush_trace_events_output();
     crate::gc::js_gc_release_current_thread_collection_side_allocations();
     terminate_without_atexit(exit_code)
 }

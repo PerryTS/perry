@@ -556,6 +556,7 @@ pub extern "C" fn js_gc_init() {
     #[cfg(windows)]
     crate::win_console::enable_vt_output();
     crate::node_submodules::diagnostics_channel_init_main_thread();
+    crate::node_submodules::init_trace_events_runtime();
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:
     //   - typed-feedback tracing is on (the guard observes every access), or
