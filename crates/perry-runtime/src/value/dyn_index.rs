@@ -382,6 +382,12 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
+    // Proxies use small tagged handles rather than heap addresses. They must
+    // take their [[Set]] path before any direct-property fast path.
+    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
+        crate::proxy::js_proxy_set(obj, index, value);
+        return value;
+    }
     // #5525: a Symbol *index* (`obj[sym] = v`) routes to the symbol side-table,
     // mirroring the get side. Codegen sends all non-string-literal unknown-
     // receiver writes here, so the runtime owns the symbol triage.
@@ -389,12 +395,6 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         unsafe {
             crate::symbol::js_object_set_symbol_property(obj, index, value);
         }
-        return value;
-    }
-    // Proxies use small tagged handles rather than heap addresses. They must
-    // take their [[Set]] path before any pointer-based fast path.
-    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
-        crate::proxy::js_proxy_set(obj, index, value);
         return value;
     }
     // #5525 hot fast path mirroring `js_dyn_index_get` — an owning numeric

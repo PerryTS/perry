@@ -166,6 +166,9 @@ mod tests {
     #[test]
     fn path_slash_submodules_install_the_path_dispatch_bucket() {
         assert_eq!(nm_install_symbol("path/posix"), Some("js_nm_install_path"));
-        assert_eq!(nm_install_symbol("node:path/win32"), Some("js_nm_install_path"));
+        assert_eq!(
+            nm_install_symbol("node:path/win32"),
+            Some("js_nm_install_path")
+        );
     }
 }

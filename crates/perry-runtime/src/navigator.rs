@@ -57,14 +57,36 @@ fn navigator_platform() -> &'static str {
     }
 }
 
+fn normalize_navigator_locale(locale: &str) -> Option<String> {
+    let locale = locale.split('.').next()?;
+    let (locale, modifier) = locale.split_once('@').unwrap_or((locale, ""));
+    if locale.is_empty() || matches!(locale, "C" | "POSIX") {
+        return None;
+    }
+
+    let mut tag = locale.replace('_', "-");
+    if !modifier.is_empty() {
+        tag.push('-');
+        // POSIX modifiers with an invalid BCP-47 variant shape are exposed by
+        // Node through the private `x-lvariant-` sequence (`@euro`).
+        let is_variant = ((5..=8).contains(&modifier.len())
+            || (modifier.len() == 4 && modifier.as_bytes()[0].is_ascii_digit()))
+            && modifier.bytes().all(|byte| byte.is_ascii_alphanumeric());
+        if !is_variant {
+            tag.push_str("x-lvariant-");
+        }
+        tag.push_str(modifier);
+    }
+    crate::intl::canonical_locale(&tag)
+}
+
 fn navigator_language() -> String {
     std::env::var("LC_ALL")
         .ok()
         .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
         .or_else(|| std::env::var("LANG").ok())
-        .and_then(|locale| locale.split('.').next().map(str::to_owned))
-        .map(|locale| locale.replace('_', "-"))
-        .filter(|locale| locale.contains('-'))
+        .as_deref()
+        .and_then(normalize_navigator_locale)
         .unwrap_or_else(|| "en-US".to_string())
 }
 
@@ -135,4 +157,26 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
 #[cfg(test)]
 pub(crate) fn test_navigator_object_with_constructor(constructor: f64) -> f64 {
     navigator_object_with_constructor(constructor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_navigator_locale;
+
+    #[test]
+    fn normalizes_posix_locale_modifiers() {
+        assert_eq!(
+            normalize_navigator_locale("de_DE@euro"),
+            Some("de-DE-x-lvariant-euro".into())
+        );
+        assert_eq!(
+            normalize_navigator_locale("zh_CN@pinyin"),
+            Some("zh-CN-pinyin".into())
+        );
+        assert_eq!(
+            normalize_navigator_locale("bogus-locale"),
+            Some("bogus-locale".into())
+        );
+        assert_eq!(normalize_navigator_locale("C.UTF-8"), None);
+    }
 }

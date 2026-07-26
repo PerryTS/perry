@@ -197,8 +197,8 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
             1
         }
         "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
-        | "Navigator" | "EventTarget" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage"
-        | "FormData" => 0,
+        | "Navigator" | "EventTarget" | "TextEncoderStream" | "TextDecoderStream"
+        | "DOMException" | "Storage" | "FormData" => 0,
         "CompressionStream" | "DecompressionStream" => 1,
         "RegExp" | "Proxy" | "File" => 2,
         "BroadcastChannel" => 1,

@@ -1261,6 +1261,25 @@ if (!ASCII_WHITESPACE_REPLACE_REGEX.test(' ')) {
     }
 
     #[test]
+    fn nearest_package_scope_overrides_ancestor_esm_type() {
+        let dir = std::env::temp_dir().join(format!(
+            "perry_parser_nearest_package_scope_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{ "type": "module" }"#).unwrap();
+        std::fs::write(nested.join("package.json"), r#"{ "type": "commonjs" }"#).unwrap();
+        let source_path = nested.join("index.js");
+
+        assert!(!file_is_in_esm_package_context(
+            source_path.to_str().unwrap()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_parse_js_referenced_by_import_export_metadata_uses_module_parser() {
         let dir = std::env::temp_dir().join(format!(
             "perry_parser_exports_module_{}",

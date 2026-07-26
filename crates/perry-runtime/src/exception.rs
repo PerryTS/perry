@@ -508,7 +508,7 @@ mod tests {
         let base_handles = RuntimeHandleScope::active_len_for_tests();
         let _jb = js_try_push();
         let scope = RuntimeHandleScope::new();
-        let _orphaned = scope.root_nanbox_f64(0x7FFD_0000_0000_00A1u64 as f64);
+        let _orphaned = scope.root_nanbox_f64(f64::from_bits(0x7FFD_0000_0000_00A1));
         assert!(RuntimeHandleScope::active_len_for_tests() > base_handles);
 
         test_unwind_innermost_shadow_restore();
