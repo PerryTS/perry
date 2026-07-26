@@ -12,8 +12,9 @@ use crate::type_analysis::{is_definitely_string_expr, is_numeric_expr, map_stati
 use crate::types::{DOUBLE, F32, I1, I32, I64};
 
 use super::{
-    can_lower_expr_as_i32, lower_expr, lower_expr_native, lower_math_operand,
-    nanbox_pointer_inline, nanbox_string_inline, record_collection_number_key_fallback,
+    can_lower_expr_as_i32, imul_operand_i32_lowerable_in_current_region, lower_expr,
+    lower_expr_native, lower_imul_operand_i32, lower_math_operand, nanbox_pointer_inline,
+    nanbox_string_inline, record_collection_number_key_fallback,
     record_collection_number_key_selected, record_collection_string_key_fallback,
     record_collection_string_key_selected, record_collection_string_key_value_selected,
     record_collection_typed_value_fallback, record_collection_typed_value_selected,
@@ -416,9 +417,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Math.imul — 32-bit wrapping integer multiply --------
-        // Route through the runtime helper so non-finite inputs use JS
-        // ToInt32 semantics (`NaN`/±Infinity -> 0) instead of LLVM fptosi.
+        // Lower to a single native `mul i32` when BOTH operands are provably
+        // in-range i32: multiplication mod 2^32 has identical low 32 bits for
+        // signed and unsigned operands, so `mul i32(ToInt32(a), ToInt32(b))`
+        // is exact. Arbitrary operands (`NaN`/±Infinity/fractional/`>2^32`)
+        // MUST keep the runtime helper — a bare `fptosi` would violate JS
+        // ToUint32/ToInt32 semantics (`NaN`->0, `Inf`->0, truncation).
         Expr::MathImul(a, b) => {
+            if imul_operand_i32_lowerable_in_current_region(ctx, a)
+                && imul_operand_i32_lowerable_in_current_region(ctx, b)
+            {
+                let a_i32 = lower_imul_operand_i32(ctx, a)?;
+                let b_i32 = lower_imul_operand_i32(ctx, b)?;
+                let r = ctx.block().mul(I32, &a_i32, &b_i32);
+                return Ok(ctx.block().sitofp(I32, &r, DOUBLE));
+            }
             let av = lower_expr(ctx, a)?;
             let bv = lower_expr(ctx, b)?;
             Ok(ctx

@@ -43,6 +43,40 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
     }
 }
 
+/// Cold fallback for the codegen inline **checked i32** typed-array element read
+/// (integer-kind receivers reached through an erased / typed parameter — e.g.
+/// `function f(S: Int32Array){ return S[i] | 0 }`). The inline path serves the
+/// overwhelmingly common inline-storage, correct-kind, in-bounds case with a
+/// bare native load, and yields `0` directly for a genuine in-kind out-of-bounds
+/// read (`== ToInt32(undefined)`, the only observable value in the i32/ToInt32
+/// consumer context that path serves). It routes here only when its guard
+/// rejects the access — a view/detached/resizable backing
+/// (`PERRY_TA_VIEW_GUARD != 0`), a kind-cache miss, or a receiver that is not the
+/// statically-expected kind. This helper performs the full ECMAScript
+/// IntegerIndexedExotic `[[Get]]` (bounds-checked, view-aware, detach-safe) and
+/// applies `ToInt32` to the result (`undefined` / non-finite -> `0`). Because it
+/// is only ever consumed where the surrounding expression `ToInt32`s the value,
+/// returning the i32 directly is exact.
+#[no_mangle]
+pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: i32) -> i32 {
+    let v = js_typed_array_get(ta, index);
+    // `js_typed_array_get` returns a plain finite f64 element for an in-bounds
+    // read and TAG_UNDEFINED (a NaN) for OOB. `ToInt32` maps NaN / ±Inf -> 0.
+    if !v.is_finite() {
+        return 0;
+    }
+    const TWO_32: f64 = 4_294_967_296.0;
+    (v.trunc().rem_euclid(TWO_32) as u32) as i32
+}
+
+// Codegen-only export: the inline checked-i32 read emits the call in
+// `perry-codegen/src/expr/i32_fast_path.rs`; a whole-program bitcode link is
+// otherwise free to internalize and dead-strip it (it has no internal Rust
+// caller). The `#[used]` anchor pins it, mirroring the getter above.
+#[used]
+static KEEP_JS_TYPED_ARRAY_READ_INT32: extern "C" fn(*const TypedArrayHeader, i32) -> i32 =
+    js_typed_array_read_int32;
+
 /// #2063 — dynamic / string-key `[[Get]]` on a TypedArray (`ta[key]`).
 ///
 /// The codegen element-read fast path only fires for statically-proven
