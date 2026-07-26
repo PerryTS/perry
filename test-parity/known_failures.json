@@ -211,5 +211,35 @@
     "added": "2026-07-13",
     "category": "bug-open",
     "reason": "DisposableStack/Symbol.dispose surface incomplete: `.disposed` returns undefined where Node returns false/true, and the dispose path leaves the adopt/defer callback count at 0. NEWLY VISIBLE, not a regression: DisposableStack is Node 24+, so under CI's old Node 22 pin *node itself* exited non-zero, the harness classified the test `node_fail`, and it was dropped from the gate entirely. Raising the oracle to 26 (.node-version) makes the pre-existing gap observable for the first time. Perry's implementation lives in crates/perry-runtime/src/disposable.rs. Flips to PASS when #6364 lands."
+  },
+  "test_gap_zlib_4917_level": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_zlib_fs_assert_2935_2752_2971": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_3662_node_argvalidation": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_constants_tail_3683plus": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_handle_band_object_ops": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
   }
 }
