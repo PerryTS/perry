@@ -40,7 +40,16 @@ struct HotCalleeScan {
 
 /// Collect the set of `FuncId`s eligible for `inlinehint`: those with ≥1 direct
 /// call site inside a loop AND at most `max_call_sites` total direct call sites
-/// across the whole module (`init` + every function / constructor / method).
+/// across the whole module (`init` + every function + every executable
+/// class-member body: constructor, instance/static methods, getters/setters,
+/// computed-key members, and instance/static field initializers).
+///
+/// Counting *every* call site matters for the anti-bloat cap, not just for
+/// finding hot callees: `max_call_sites` bounds duplication, so a call site the
+/// scan misses is a call site the cap can't see — a function with many real
+/// call sites hidden in (say) a getter or a field initializer could slip under
+/// the cap and get hinted despite being widely used. Scanning all member bodies
+/// keeps the count accurate so the cap stays a true upper bound.
 pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u32> {
     let mut scan = HotCalleeScan::default();
     walk_stmts(&hir.init, false, &mut scan);
@@ -51,8 +60,36 @@ pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u3
         if let Some(ctor) = &c.constructor {
             walk_stmts(&ctor.body, false, &mut scan);
         }
-        for m in &c.methods {
+        // Instance methods, static methods, and instance/static accessors all
+        // carry ordinary statement bodies. (Static accessors live in `getters`
+        // / `setters` alongside instance accessors — see `Class` docs — so
+        // scanning those covers them.)
+        for m in c.methods.iter().chain(c.static_methods.iter()) {
             walk_stmts(&m.body, false, &mut scan);
+        }
+        for (_, g) in &c.getters {
+            walk_stmts(&g.body, false, &mut scan);
+        }
+        for (_, s) in &c.setters {
+            walk_stmts(&s.body, false, &mut scan);
+        }
+        // Computed-key members: the member body *and* its key expression (the
+        // key is evaluated at class-declaration time and can hold a call).
+        for cm in &c.computed_members {
+            walk_expr(&cm.key_expr, false, &mut scan);
+            walk_stmts(&cm.function.body, false, &mut scan);
+        }
+        // Instance + static field initializers (and any computed key exprs).
+        // These run once per construction / at class-eval time, so they stay
+        // `in_loop = false`: they contribute to the call-site *count* (feeding
+        // the cap) without spuriously marking a callee hot.
+        for field in c.fields.iter().chain(c.static_fields.iter()) {
+            if let Some(key) = &field.key_expr {
+                walk_expr(key, false, &mut scan);
+            }
+            if let Some(init) = &field.init {
+                walk_expr(init, false, &mut scan);
+            }
         }
     }
     scan.in_loop
