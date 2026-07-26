@@ -436,6 +436,16 @@ unsafe fn spill_elements(spill: *const crate::array::ArrayHeader) -> *mut u64 {
 unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, vbits: u64) {
     let slot = spill_elements(spill).add(index);
     *slot = vbits;
+    // Length is the buffer's high-water mark: `js_array_alloc_with_length`
+    // sets length = REQUESTED capacity while the physical capacity rounds up
+    // (MIN_ARRAY_CAPACITY), and the in-capacity fast path stores past the
+    // current length. Everything keys off length — `spill_get`'s bounds
+    // check, the GC element range (a value past length is invisible to
+    // marking/rewriting), and the growth copy — so extend it here. Slots
+    // between the old and new length are TAG_HOLE from allocation.
+    if index >= (*spill).length as usize {
+        (*spill).length = (index + 1) as u32;
+    }
     crate::gc::layout_note_slot(spill as usize, index, vbits);
     crate::gc::runtime_write_barrier_slot(spill as usize, slot as usize, vbits);
 }
@@ -1536,6 +1546,11 @@ pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
 
 #[cfg(test)]
 pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
+    // Mode-aware probe: overflow values live in the spill buffer by default
+    // and in the legacy side table under PERRY_OBJECT_SPILL=0.
+    if object_spill_enabled() {
+        return spill_get(owner, index).unwrap_or(0);
+    }
     crate::state::state()
         .object_hot
         .overflow_fields
@@ -1543,6 +1558,23 @@ pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
         .get(&owner)
         .and_then(|fields| fields.get(index).copied())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+pub(crate) fn test_object_spill_enabled() -> bool {
+    object_spill_enabled()
+}
+
+/// Test probe: address of the owner's spill buffer allocation (0 = none).
+#[cfg(test)]
+pub(crate) fn test_spill_buffer_addr(owner: usize) -> usize {
+    unsafe {
+        let obj = owner as *const ObjectHeader;
+        if (*obj).meta.is_null() {
+            return 0;
+        }
+        (*(*obj).meta).spill as usize
+    }
 }
 
 #[cfg(test)]

@@ -1043,6 +1043,11 @@ fn test_heap_child_iterator_pointer_free_object_yields_no_child_slots() {
 fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
     clear_marks();
     clear_mark_seeds();
+    // #6812 spill: overflow writes now allocate GC memory (meta record +
+    // spill buffer), so an automatic minor GC mid-build could move `obj`
+    // out from under this test's raw pointers. The test asserts layout and
+    // tracing, not move-resilience — pin the heap while building.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let child = crate::string::js_string_from_bytes(b"overflow-child".as_ptr(), 14) as *mut u8;
     let child_header = unsafe { header_from_user_ptr(child) };
@@ -1058,11 +1063,29 @@ fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
         crate::object::js_object_set_field_by_name(obj, key, value);
     }
 
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 9), Some(1));
+    // #6812 spill: the k8 pointer lives in the object-owned spill buffer
+    // (owner inline slots hold only k0..k3 numerics), so the pointer-slot
+    // count moves from the owner's mask to the buffer's. Legacy mode keeps
+    // the original owner-mask expectation.
+    if crate::object::test_object_spill_enabled() {
+        let spill = crate::object::test_spill_buffer_addr(obj as usize);
+        assert_ne!(spill, 0, "overflow write must have created a spill buffer");
+        assert_eq!(test_layout_pointer_slot_count(spill, 9), Some(1));
+    } else {
+        assert_eq!(test_layout_pointer_slot_count(obj as usize, 9), Some(1));
+    }
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
     unsafe {
         trace_object(obj as *mut u8, &valid_ptrs, &mut worklist);
+        // #6812 spill: the overflow value is no longer owner-adjacent — the
+        // chain is obj → meta record → spill buffer → child, so drain the
+        // worklist exactly like production marking does instead of relying
+        // on a single hop.
+        while let Some(queued) = worklist.pop() {
+            let user = (queued as *mut u8).add(crate::gc::GC_HEADER_SIZE);
+            trace_object(user, &valid_ptrs, &mut worklist);
+        }
     }
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);

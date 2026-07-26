@@ -362,7 +362,9 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
         GcLayoutSlotKind::ArrayElements
         | GcLayoutSlotKind::ObjectFields
         | GcLayoutSlotKind::ClosureCaptures => Some(header),
-        GcLayoutSlotKind::None => None,
+        // #6812: meta records keep no layout mask — their two child slots
+        // (prototype, spill) are enumerated unconditionally.
+        GcLayoutSlotKind::None | GcLayoutSlotKind::ObjectMeta => None,
     }
 }
 
@@ -1047,6 +1049,9 @@ pub(super) enum HeapPayloadSlotSelection {
 
 pub(crate) struct HeapChildSlotIterator {
     pub(super) prefix_slot: Option<*mut u64>,
+    /// #6812: second prefix — the object's `meta` header edge. Kept
+    /// separate from `prefix_slot` so payload indices stay mask-aligned.
+    pub(super) meta_slot: Option<*mut u64>,
     pub(super) payload: HeapSlotRange,
     pub(super) selection: HeapPayloadSlotSelection,
 }
@@ -1055,6 +1060,7 @@ impl HeapChildSlotIterator {
     pub(super) fn empty() -> Self {
         Self {
             prefix_slot: None,
+            meta_slot: None,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             selection: HeapPayloadSlotSelection::Empty,
         }
@@ -1068,9 +1074,19 @@ impl HeapChildSlotIterator {
         let selection = unsafe { heap_payload_slot_selection(header, payload) };
         Self {
             prefix_slot,
+            meta_slot: None,
             payload,
             selection,
         }
+    }
+
+    pub(super) fn with_meta_slot(mut self, slot: Option<*mut u64>) -> Self {
+        self.meta_slot = slot;
+        self
+    }
+
+    pub(super) fn take_meta_child_slot(&mut self) -> Option<*mut u64> {
+        self.meta_slot.take()
     }
 
     pub(super) fn take_prefix_child_slot(&mut self) -> Option<*mut u64> {
@@ -1099,6 +1115,9 @@ impl Iterator for HeapChildSlotIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(slot) = self.prefix_slot.take() {
+            return Some(HeapChildSlot::Child(slot, HeapChildSlotReadKind::Prefix));
+        }
+        if let Some(slot) = self.meta_slot.take() {
             return Some(HeapChildSlot::Child(slot, HeapChildSlotReadKind::Prefix));
         }
         match &mut self.selection {
@@ -1246,7 +1265,23 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
                 return HeapChildSlotIterator::empty();
             };
             let keys_slot = crate::object::gc_keys_array_slot(obj);
+            // #6812: the meta record is a raw-pointer child edge; before the
+            // spill buffer it was enumerated only on the rewrite path, which
+            // left it invisible to MARKING (latent for custom prototypes,
+            // which are usually rooted elsewhere; fatal for the spill
+            // buffer, reachable through meta alone). A second prefix slot
+            // keeps payload slot indices aligned with the layout masks.
             HeapChildSlotIterator::new(header, keys_slot, range)
+                .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
+        }
+        GcLayoutSlotKind::ObjectMeta => {
+            // #6812: prototype (NaN-boxed / raw / sentinel) as the prefix
+            // slot, the raw spill-buffer pointer as a 1-slot range. Mirrors
+            // the rewrite descriptor arm — marking must see the same edges.
+            let meta = user_ptr as *mut crate::object::ObjectMeta;
+            let proto_slot = Some(&mut (*meta).prototype as *mut u64);
+            let range = HeapSlotRange::new(&mut (*meta).spill as *mut u64, 1);
+            HeapChildSlotIterator::new(header, proto_slot, range)
         }
         GcLayoutSlotKind::ClosureCaptures => {
             let closure = user_ptr as *mut crate::closure::ClosureHeader;
@@ -1322,6 +1357,9 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
 ) {
     let mut child_slots = gc_child_slots(header);
     if let Some(slot) = child_slots.take_prefix_child_slot() {
+        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+    }
+    if let Some(slot) = child_slots.take_meta_child_slot() {
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
 
