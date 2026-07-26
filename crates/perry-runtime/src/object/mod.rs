@@ -528,7 +528,12 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
         let needed = field_index + 1;
         if spill.is_null() || ((*spill).capacity as usize) < needed {
-            let new_cap = u32::try_from(needed.next_power_of_two().max(8)).unwrap_or(u32::MAX);
+            // In range by the SPILL_MAX_FIELD_INDEX dispatch gate, so the
+            // conversion is exact (2^24 max); arena allocation panics on
+            // genuine OOM (after one emergency reclaim) and never returns
+            // null, so the store below always has a live buffer.
+            let new_cap =
+                u32::try_from(needed.next_power_of_two().max(8)).expect("bounded by dispatch gate");
             // length == capacity and every slot TAG_HOLE from birth, so the
             // GC element range covers the whole buffer and in-range
             // `js_array_set` can never trigger array growth/forwarding —
@@ -571,9 +576,18 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
 /// Positions never written are stored as `TAG_UNDEFINED`; this helper reports
 /// them as `None` so callers can return JS `undefined` uniformly with the
 /// "no Vec entry at all" case.
+/// Spill indices share the runtime's canonical 16M field ceiling (the
+/// same cap `layout_note_slot` and the write-loop guard enforce); a larger
+/// index would need a >128MB buffer for one property, so it stays on the
+/// address-keyed legacy table like exotic owners do.
+const SPILL_MAX_FIELD_INDEX: usize = 16_000_000;
+
 #[inline]
 fn overflow_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
-    if object_spill_enabled() && unsafe { spill_capable_owner(obj_ptr) } {
+    if object_spill_enabled()
+        && field_index < SPILL_MAX_FIELD_INDEX
+        && unsafe { spill_capable_owner(obj_ptr) }
+    {
         return spill_get(obj_ptr, field_index);
     }
     crate::state::state()
@@ -657,7 +671,10 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
 /// overflow slots fill in sequence.
 #[inline]
 fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
-    if object_spill_enabled() && unsafe { spill_capable_owner(obj_ptr) } {
+    if object_spill_enabled()
+        && field_index < SPILL_MAX_FIELD_INDEX
+        && unsafe { spill_capable_owner(obj_ptr) }
+    {
         return spill_set(obj_ptr, field_index, vbits);
     }
     // Learn the class's true width so FUTURE instances allocate it inline.
@@ -1570,7 +1587,10 @@ pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
 pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
     // Mode-aware probe: overflow values live in the spill buffer by default
     // and in the legacy side table under PERRY_OBJECT_SPILL=0.
-    if object_spill_enabled() && unsafe { spill_capable_owner(owner) } {
+    if object_spill_enabled()
+        && index < SPILL_MAX_FIELD_INDEX
+        && unsafe { spill_capable_owner(owner) }
+    {
         return spill_get(owner, index).unwrap_or(0);
     }
     crate::state::state()

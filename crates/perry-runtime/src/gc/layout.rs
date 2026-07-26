@@ -1422,16 +1422,14 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             visit_gc_layout_slot_descriptors(header, &mut visit);
         }
         GcRewriteDescriptorKind::Object => {
+            // #6759 Phase B / #6812: the per-object meta record is a raw-
+            // pointer child edge exactly like `keys_array`'s prefix slot.
+            // Since the child-slot iterator gained the meta second-prefix
+            // (so MARKING sees it too), the layout-descriptor visit below
+            // already emits it — no explicit `gc_object_meta_slot` visit
+            // here, or the rewrite pass would hand the same slot to the
+            // visitor twice and double-count in verification statistics.
             visit_gc_layout_slot_descriptors(header, &mut visit);
-            // #6759 Phase B: the per-object meta record is a GC allocation
-            // reachable ONLY through this header slot — a raw-pointer child
-            // edge exactly like `keys_array`'s prefix slot (marked live here,
-            // rewritten when the record itself is evacuated). The accessor
-            // returns `None` for RegExp headers, whose bytes at the meta
-            // offset are native data.
-            if let Some(slot) = crate::object::gc_object_meta_slot(user_ptr as usize) {
-                visit(fixed_slot(slot));
-            }
             crate::object::visit_overflow_field_slots_mut(user_ptr as usize, |slot| {
                 visit(fixed_slot(slot));
             });
