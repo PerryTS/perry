@@ -2008,6 +2008,27 @@ pub(crate) unsafe fn gc_field_slot_range(
     Some(crate::gc::HeapSlotRange::new(fields, field_count))
 }
 
+/// #6812 (w15): one-shot layout registration for a freshly-initialized
+/// anon-shape instance. The `new`-site emitter stores every constructor
+/// argument straight into the inline slots (the receiver's class id, keys
+/// array, and slot bounds hold by construction right after the allocator
+/// returns), then calls this ONCE instead of running the shared ctor
+/// symbol whose body re-validates every store through the class-field
+/// guard and notes layout per slot.
+#[no_mangle]
+pub extern "C" fn js_object_init_field_layout(obj: *mut ObjectHeader, count: u32) {
+    if obj.is_null() {
+        return;
+    }
+    unsafe { rebuild_object_field_layout(obj, count as usize) }
+}
+
+// #6088-style keep: zero internal Rust callers (codegen emits the only
+// call), so a whole-program bitcode link would otherwise dead-strip it.
+#[used]
+static KEEP_JS_OBJECT_INIT_FIELD_LAYOUT: extern "C" fn(*mut ObjectHeader, u32) =
+    js_object_init_field_layout;
+
 #[inline]
 pub(super) unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;

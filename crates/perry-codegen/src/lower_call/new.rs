@@ -787,6 +787,59 @@ fn lower_new_impl(
     // instance gets no fields → wall 44 `BaseContext.setValue` → "Cannot read
     // properties of undefined"). The standalone symbol takes `this` as an
     // explicit parameter, so it is immune to the collision.
+    // #6812 (w15): the synthesized anon-shape constructor is EXACTLY
+    // `this.f_i = param_i` for each declared field and nothing else (see
+    // `mint_anon_shape_class` in perry-hir). Right after the allocator
+    // returns, the receiver's class id, keys array, and slot bounds hold by
+    // construction, and the args were all evaluated BEFORE the allocation —
+    // so nothing between the alloc and these stores can run user code or
+    // GC. Store the lowered args straight into the inline slots and
+    // register the layout once, skipping the shared ctor symbol whose body
+    // re-validates every store through the class-field guard and notes
+    // layout per slot (the dominant cost of builder-pattern allocation).
+    // Bisection kill-switch: PERRY_ANON_INIT=0 keeps the shared-ctor path.
+    let anon_init_enabled = std::env::var_os("PERRY_ANON_INIT")
+        .map(|v| v != "0" && v != "off" && v != "false")
+        .unwrap_or(true);
+    if anon_init_enabled
+        && class_name.starts_with("__AnonShape_")
+        && class.extends.is_none()
+        && class.extends_name.is_none()
+        && class.extends_expr.is_none()
+        && class.native_extends.is_none()
+        && class
+            .constructor
+            .as_ref()
+            .is_some_and(|c| c.params.len() == class.fields.len())
+        && lowered_args.len() == class.fields.len()
+        && caps_absent_from_args
+    {
+        let header_words =
+            (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
+        let obj_ptr = ctx.block().inttoptr(I64, &obj_handle);
+        for (i, arg) in lowered_args.iter().enumerate() {
+            let blk = ctx.block();
+            let word = blk.add(I64, &header_words, &i.to_string());
+            let slot = blk.gep(I64, &obj_ptr, &[(I64, &word)]);
+            // GC_STORE_AUDIT(INIT): unpublished fresh allocation; the
+            // allocator zero-initialized every slot and no call separates
+            // the alloc from these stores.
+            blk.store(DOUBLE, arg, &slot);
+        }
+        ctx.pending_declares.push((
+            "js_object_init_field_layout".to_string(),
+            crate::types::VOID,
+            vec![I64, I32],
+        ));
+        let count = lowered_args.len().to_string();
+        ctx.block().call_void(
+            "js_object_init_field_layout",
+            &[(I64, &obj_handle), (I32, &count)],
+        );
+        emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
+        return Ok(obj_box);
+    }
+
     let ctor_alias_collision = !ctx.closure_captures.is_empty()
         && local_constructor_symbol_exists(ctx, class)
         && class.constructor.as_ref().is_some_and(|c| {
