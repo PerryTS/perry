@@ -28,14 +28,23 @@ const records = (type) => {
 function start() {
   const socket = dgram.createSocket("udp4");
   socket.on("message", (request, remote) => {
-    let end = 12;
-    while (request[end] !== 0) end += request[end] + 1;
-    end += 1;
+    const labels = [];
+    let cursor = 12;
+    while (request[cursor] !== 0) {
+      const length = request[cursor++];
+      labels.push(request.subarray(cursor, cursor + length).toString("ascii"));
+      cursor += length;
+    }
+    const end = cursor + 1;
     const type = request.readUInt16BE(end);
-    process.stdout.write("QUERY\n");
+    process.stdout.write("QUERY:" + labels.join(".") + "\n");
     if (mode === "silent") return;
     const question = request.subarray(12, end + 4);
-    const answers = ["nxdomain", "nodata", "refused"].includes(mode) ? [] : records(type);
+    const answers = ["nxdomain", "nodata", "refused"].includes(mode)
+      ? []
+      : mode === "idna" && labels.join(".") !== "xn--maana-pta.example"
+      ? [record(1, Buffer.from([203, 0, 113, 8]), 120)]
+      : records(type);
     const rcode = mode === "nxdomain" ? 3 : mode === "refused" ? 5 : 0;
     const header = Buffer.concat([request.subarray(0, 2), Buffer.from([0x81, 0x80 | rcode]), u16(1), u16(answers.length), u16(0), u16(0)]);
     socket.send(Buffer.concat([header, question, ...answers]), remote.port, remote.address);

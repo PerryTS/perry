@@ -2,7 +2,7 @@ import dns from "node:dns";
 import dnsPromises from "node:dns/promises";
 import { startDnsServer } from "../fixtures/local-dns-server.mjs";
 
-const server = await startDnsServer();
+const server = await startDnsServer("idna");
 try {
   const address = `127.0.0.1:${server.port}`;
   dns.setServers([address]);
