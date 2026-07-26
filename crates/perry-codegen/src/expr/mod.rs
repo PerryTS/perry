@@ -599,6 +599,17 @@ pub(crate) struct FnCtx<'a> {
     /// values above INT32_MAX remain observable as unsigned numbers.
     pub unsigned_i32_locals: &'a std::collections::HashSet<u32>,
 
+    /// LocalIds whose runtime value provably can never be a BigInt: every
+    /// assignment to the local is a non-BigInt expression (an `Int32Array`
+    /// element, a bitwise result, a comparison, …). Computed once per region by
+    /// `collect_not_bigint_locals`. Consumed by `is_provably_not_bigint` to
+    /// authorize the inline non-BigInt bitwise fast path for `Any`-typed
+    /// accumulators (bcryptjs's Feistel `l`/`r`) that `is_numeric_expr` can't
+    /// prove numeric. Never treat this as "finite" — an out-of-bounds
+    /// typed-array read is `undefined`/NaN (still non-BigInt), so the bitwise
+    /// lowering keeps the NaN-safe guarded `toint32_wrap` for these.
+    pub not_bigint_locals: &'a std::collections::HashSet<u32>,
+
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
     /// frame slot index. Empty when `PERRY_SHADOW_STACK` is off.
     /// Sub-phase 3b uses this map at `Stmt::Let` / `LocalSet`

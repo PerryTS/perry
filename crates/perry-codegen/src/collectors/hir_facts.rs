@@ -35,6 +35,10 @@ pub(crate) type NativeRegionFactGraph = TypeFacts;
 pub(crate) struct RepresentationFacts {
     pub integer_locals: HashSet<u32>,
     pub unsigned_i32_locals: HashSet<u32>,
+    /// Locals whose runtime value provably can never be a BigInt (every write
+    /// is a non-BigInt expression). Seeds `is_provably_not_bigint`, which gates
+    /// the inline non-BigInt bitwise fast path. See `collect_not_bigint_locals`.
+    pub not_bigint_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +127,10 @@ impl TypeFacts {
 
     pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.unsigned_i32_locals
+    }
+
+    pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
+        &self.representation.not_bigint_locals
     }
 
     pub(crate) fn array_kind(&self, local_id: u32) -> ArrayKindFact {
@@ -316,6 +324,8 @@ pub(crate) fn collect_type_facts(
         arg_dependent_clamp_fn_ids,
     );
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
+    let not_bigint_locals =
+        super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);
     let (array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
@@ -369,6 +379,7 @@ pub(crate) fn collect_type_facts(
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
             unsigned_i32_locals,
+            not_bigint_locals,
         },
         arrays: array_facts,
         effect: effect_facts,

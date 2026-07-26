@@ -100,6 +100,35 @@ fn small_bigint_native_op(op: BinaryOp) -> Option<(&'static str, &'static str)> 
     }
 }
 
+/// Six bitwise/shift ops whose result is always `ToInt32`/`ToUint32`-wrapped
+/// (a plain JS Number). These are the ops the non-BigInt inline fast path
+/// covers; the arithmetic ops in the same dynamic-helper bail (`Mul`/`Div`/
+/// `Mod`/`Sub`/`Pow`) are deliberately excluded.
+fn is_bitwise_op(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr
+    )
+}
+
+/// `PERRY_INLINE_NONBIGINT_BITWISE` fast-path gate. Enabled by default;
+/// `=0`/`off`/`false` reverts to the BigInt-aware `js_dynamic_bit*` runtime
+/// call for every non-statically-numeric bitwise operand (pre-fix behavior).
+/// Kept as an env flag for A/B bisection, consistent with the sibling codegen
+/// fast paths (the object cache keys this var so a warm cache can't serve an
+/// object built under the other setting).
+fn inline_nonbigint_bitwise_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_INLINE_NONBIGINT_BITWISE").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 fn bigint_dynamic_helper(op: BinaryOp) -> &'static str {
     match op {
         BinaryOp::Add => "js_dynamic_add",
@@ -356,12 +385,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let r_prim =
                     crate::type_analysis::is_numeric_expr(ctx, right) || is_bool_expr(ctx, right);
                 if !(l_prim && r_prim) {
-                    let fname = bigint_dynamic_helper(*op);
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx
-                        .block()
-                        .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                    // Non-BigInt inline fast path (the bcryptjs `_encipher`
+                    // Feistel lever): for the six BITWISE ops, when BOTH
+                    // operands are provably-not-BigInt we skip the dynamic
+                    // helper and fall through to the inline `ToInt32 <op>
+                    // ToInt32 + sitofp` lowering below. That path already
+                    // picks the NaN-safe guarded `toint32_wrap` for any
+                    // operand not proven finite (e.g. an OOB typed-array read
+                    // → `undefined`/NaN), and `js_number_coerce`s non-numeric
+                    // operands, so semantics are preserved. We keep the
+                    // dynamic-helper bail whenever an operand *could* be a
+                    // BigInt (so `bigint <op> number` still throws and
+                    // `bigint <op> bigint` still computes a BigInt), and for
+                    // the arithmetic ops (`Mul`/`Div`/`Mod`/`Sub`/`Pow`),
+                    // which are out of scope for this fast path.
+                    let inline_bitwise = is_bitwise_op(*op)
+                        && inline_nonbigint_bitwise_enabled()
+                        && crate::type_analysis::is_provably_not_bigint(ctx, left)
+                        && crate::type_analysis::is_provably_not_bigint(ctx, right);
+                    if !inline_bitwise {
+                        let fname = bigint_dynamic_helper(*op);
+                        let l = lower_expr(ctx, left)?;
+                        let r = lower_expr(ctx, right)?;
+                        return Ok(ctx
+                            .block()
+                            .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                    }
                 }
             }
             // Fast path: `<integer-valued> % <integer literal>` (the

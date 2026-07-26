@@ -20,6 +20,7 @@ mod index_uses;
 mod integer_locals;
 mod local_refs;
 mod mutation;
+mod not_bigint_locals;
 mod pointer_locals;
 mod refs;
 mod scalar_method_dispatch;

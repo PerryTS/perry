@@ -316,6 +316,133 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// Statically prove that an expression's runtime value can **never** be a
+/// BigInt.
+///
+/// Consumed by the bitwise-op lowering (`expr/binary.rs`): a bitwise op on two
+/// operands neither of which can `ToNumeric` to a BigInt is safe to lower
+/// inline (`ToInt32 <op> ToInt32 + sitofp`) instead of bailing to the
+/// BigInt-aware `js_dynamic_bit*` runtime helper.
+///
+/// SOUNDNESS CONTRACT — a `true` return authorizes skipping the dynamic
+/// helper. That helper is exactly what makes `bigint <op> number` throw the
+/// spec-mandated `TypeError` and `bigint <op> bigint` compute a BigInt. So
+/// this MUST only return `true` when the operand's `ToNumeric` provably cannot
+/// yield a BigInt; when unsure, return `false` (keep the safe bail). The
+/// bitwise lowering additionally requires BOTH operands to pass before
+/// inlining, so a possibly-BigInt operand on EITHER side still preserves the
+/// throw / bigint result.
+pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    // Check statically-BigInt FIRST — a defensive short-circuit for anything
+    // `is_bigint_expr` can prove is (or involves) a BigInt: BigInt literals,
+    // BigInt-typed locals, and BigInt arith/bitwise chains (`5n ^ 3n`,
+    // `bigintLocal & mask`). Keeps the answer unambiguously `false` for those
+    // before the structural rules below get a chance to reason about operands.
+    if is_bigint_expr(ctx, e) {
+        return false;
+    }
+    // Handle arithmetic/bitwise/unary nodes STRUCTURALLY, before the
+    // `is_numeric_expr` shortcut below. `is_numeric_expr` blanket-treats every
+    // non-`Add` binary and every `-x`/`+x`/`~x` unary as numeric — fine for its
+    // own callers (they guard BigInt upstream), but it would over-approximate
+    // here: `anyA ^ anyB` could be `bigint ^ bigint` (a BigInt result), yet
+    // `is_bigint_expr` can't see it when both operands are `Any`. The
+    // structural rules recurse into the operands instead.
+    match e {
+        // Every arithmetic / bitwise binary op yields a BigInt ONLY when BOTH
+        // operands `ToNumeric` to BigInt (a mixed operand throws; a string
+        // operand of `+` concatenates). So the result is provably non-BigInt as
+        // soon as EITHER operand is. (`BinaryOp` has no non-arithmetic variants
+        // — comparisons / logicals are separate `Expr`s.)
+        Expr::Binary { left, right, .. } => {
+            return is_provably_not_bigint(ctx, left) || is_provably_not_bigint(ctx, right);
+        }
+        // `!x` → boolean and `+x` → Number-or-throw (unary plus on a BigInt is a
+        // `TypeError`, so it never yields a BigInt VALUE). `-x` / `~x` PRESERVE
+        // BigInt, so they are non-BigInt only when the operand is.
+        Expr::Unary { op, operand } => {
+            return match op {
+                UnaryOp::Not | UnaryOp::Pos => true,
+                UnaryOp::Neg | UnaryOp::BitNot => is_provably_not_bigint(ctx, operand),
+            };
+        }
+        _ => {}
+    }
+    // Already-proven primitives: a real Number/Int32, a Boolean, or a String
+    // are all definitionally non-BigInt.
+    if is_numeric_expr(ctx, e) || is_bool_expr(ctx, e) || is_definitely_string_expr(ctx, e) {
+        return true;
+    }
+    match e {
+        // Non-BigInt literals. `BigInt`/`BigIntCoerce` are deliberately absent.
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::WtfString(_) => true,
+
+        // Definitionally non-BigInt value producers: `typeof` → string,
+        // `void` → undefined, comparisons / `instanceof` / `in` / brand-checks
+        // and the `Number.is*` / `isNaN` / `isFinite` family → boolean, and the
+        // explicit numeric / string / boolean coercions.
+        Expr::TypeOf(_)
+        | Expr::Void(_)
+        | Expr::Compare { .. }
+        | Expr::InstanceOf { .. }
+        | Expr::In { .. }
+        | Expr::PrivateBrandCheck { .. }
+        | Expr::NumberCoerce(_)
+        | Expr::StringCoerce(_)
+        | Expr::BooleanCoerce(_)
+        | Expr::IsNaN(_)
+        | Expr::IsFinite(_)
+        | Expr::NumberIsNaN(_)
+        | Expr::NumberIsFinite(_)
+        | Expr::NumberIsInteger(_)
+        | Expr::IsUndefinedOrBareNan(_)
+        | Expr::DateNow => true,
+
+        // Typed-array element reads yield Number | undefined (OOB), never a
+        // BigInt. `Uint8ArrayGet` / `BufferIndexGet` are byte reads; a general
+        // `IndexGet` qualifies only when the receiver is a numeric typed array
+        // (a plain object / array element could hold a BigInt).
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        Expr::IndexGet { object, .. } => receiver_class_name(ctx, object)
+            .as_deref()
+            .is_some_and(is_numeric_typed_array_class),
+
+        // (`Expr::Binary` / `Expr::Unary` are handled structurally above.)
+
+        // Ternary / logical selection: non-BigInt when every branch that can
+        // become the result value is non-BigInt.
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => is_provably_not_bigint(ctx, then_expr) && is_provably_not_bigint(ctx, else_expr),
+        Expr::Logical { left, right, .. } => {
+            is_provably_not_bigint(ctx, left) && is_provably_not_bigint(ctx, right)
+        }
+
+        // A local proven never to hold a BigInt — even when its declared type
+        // is erased to `Any`. This is what lets bcryptjs's Feistel accumulators
+        // (`l` / `r`: init from an `Int32Array` element, then only ever `^=` /
+        // `+=` updated) reach the inline path. `not_bigint_locals` is the
+        // dedicated flow set (`collect_not_bigint_locals`); `integer_locals` /
+        // `unsigned_i32_locals` prove an integer VALUE, which is strictly a JS
+        // Number, so they imply non-BigInt too.
+        Expr::LocalGet(id) => {
+            ctx.not_bigint_locals.contains(id)
+                || ctx.integer_locals.contains(id)
+                || ctx.unsigned_i32_locals.contains(id)
+        }
+
+        _ => false,
+    }
+}
+
 /// Statically determine whether an expression is provably an integer-valued
 /// number — i.e., its result has no fractional part. Stricter than
 /// `is_numeric_expr`, which accepts any numeric f64.

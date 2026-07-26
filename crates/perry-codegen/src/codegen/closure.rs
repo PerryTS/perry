@@ -834,6 +834,7 @@ pub(super) fn compile_closure(
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: native_facts.integer_locals(),
+        not_bigint_locals: native_facts.not_bigint_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),

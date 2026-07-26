@@ -31,7 +31,9 @@ mod predicates;
 mod refine;
 mod strings;
 
-pub(crate) use numeric::{is_bigint_expr, is_bool_expr, is_integer_valued_expr, is_numeric_expr};
+pub(crate) use numeric::{
+    is_bigint_expr, is_bool_expr, is_integer_valued_expr, is_numeric_expr, is_provably_not_bigint,
+};
 pub(crate) use pod::{
     add_operands_have_pod_materialization_hazard,
     expr_may_return_boxed_value_from_raw_f64_fallback, expression_has_numeric_length,

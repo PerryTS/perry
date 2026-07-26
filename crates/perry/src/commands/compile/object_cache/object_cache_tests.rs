@@ -609,6 +609,8 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_INLINE_HOT_SMALL_CAP",
         "PERRY_INLINE_HOT_SMALL_THRESHOLD",
         "PERRY_INLINE_HOT_SMALL_MAX_SITES",
+        // Non-BigInt inline bitwise fast path.
+        "PERRY_INLINE_NONBIGINT_BITWISE",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.

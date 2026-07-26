@@ -929,6 +929,16 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Non-BigInt inline bitwise fast path: `=0`/`off`/`false` reverts the six
+    // bitwise ops to the `js_dynamic_bit*` runtime call for non-statically-
+    // numeric operands, which changes the emitted IR / .o bytes — a warm cache
+    // must not serve an object built under the other setting.
+    h.field(
+        "env_inline_nonbigint_bitwise",
+        env_var("PERRY_INLINE_NONBIGINT_BITWISE")
+            .as_deref()
+            .unwrap_or(""),
+    );
 
     h.finish()
 }
