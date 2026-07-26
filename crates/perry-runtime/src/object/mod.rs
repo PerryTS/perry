@@ -450,6 +450,28 @@ unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, 
     crate::gc::runtime_write_barrier_slot(spill as usize, slot as usize, vbits);
 }
 
+/// Only genuine shaped objects carry a meta record at the ObjectHeader
+/// offset. Exotic GC_TYPE_OBJECT aliases (RegExpHeader) and every other
+/// GC type (errors, maps, ...) have unrelated bytes there — the legacy
+/// side table was address-keyed and safe for ANY owner, so those owners
+/// keep it (in both modes) instead of deref'ing garbage. Classification
+/// via the canonical header probe, mirroring `gc_object_meta_slot`.
+#[inline]
+unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
+    if obj_ptr == 0 {
+        return false;
+    }
+    match crate::value::addr_class::try_read_gc_header(obj_ptr) {
+        Some(h) => {
+            h.obj_type == crate::gc::GC_TYPE_OBJECT
+                && !crate::regex::regex_header_has_magic(
+                    obj_ptr as *const crate::regex::RegExpHeader,
+                )
+        }
+        None => false,
+    }
+}
+
 fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
@@ -551,7 +573,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
 /// "no Vec entry at all" case.
 #[inline]
 fn overflow_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
-    if object_spill_enabled() {
+    if object_spill_enabled() && unsafe { spill_capable_owner(obj_ptr) } {
         return spill_get(obj_ptr, field_index);
     }
     crate::state::state()
@@ -635,7 +657,7 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
 /// overflow slots fill in sequence.
 #[inline]
 fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
-    if object_spill_enabled() {
+    if object_spill_enabled() && unsafe { spill_capable_owner(obj_ptr) } {
         return spill_set(obj_ptr, field_index, vbits);
     }
     // Learn the class's true width so FUTURE instances allocate it inline.
@@ -1548,7 +1570,7 @@ pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
 pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
     // Mode-aware probe: overflow values live in the spill buffer by default
     // and in the legacy side table under PERRY_OBJECT_SPILL=0.
-    if object_spill_enabled() {
+    if object_spill_enabled() && unsafe { spill_capable_owner(owner) } {
         return spill_get(owner, index).unwrap_or(0);
     }
     crate::state::state()
