@@ -43,7 +43,7 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 | w6_call_in_body | user call inside body | NOT clone → PIC + call | 100 | 7 | 14.3 | GAP: call-tolerant clone / inlining |
 | w7_mut_alias | `let o = objs[i]` | *(pre-#6830 baseline)* generic → whole-loop clone | 70 → 6 | 8 | 8.8 → **0.75** | BEATS node (#6830: matched region structurally forbids reassignment) |
 | w8_helper_mono | writes inside helper fn, mono | *(pre-#6812-w8 baseline)* per-write PIC → whole-loop clone | 47 → 6 | 8 | 5.9 → **0.75** | BEATS node — the inliner's temp `let`s are admitted by substitution, so inlined helper bodies clone |
-| w9_poly2 | 2 shapes through one site | PIC entries 1–2 | 27 | 6 | 4.5 | GAP: same as w8 + entry chain |
+| w9_poly2 | 2 shapes through one site | *(pre-multi-group baseline)* PIC → per-group whole-loop clone | 27 → 5-8 | 6 | 4.5 → **~1.0** | Ties/beats node — the inliner's two-array body matches as two monomorphic groups, one guard call each (idle 15-run pending for the exact ratio) |
 | w10_poly8 | 8 shapes through one site | PIC exhausted → runtime miss | 27 | 19 | 1.4 | close; megamorphic path is decent |
 | w11_stable_dynkey | `o[k]`, `const k = "c"` | clone (const-string local = static) | 6 | 8 | **0.75** | BEATS node |
 | w12_arb_dynkey | rotating keys from array | generic | 84 | 18 | 4.7 | GAP: GC-safe dynamic-key cache |
