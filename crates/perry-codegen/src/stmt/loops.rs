@@ -1890,6 +1890,17 @@ fn object_array_write_number_node_count(root: &ObjectArrayWriteNumber) -> usize 
     count
 }
 
+/// #6812 (w9): one (alias, temps, writes) group of a multi-group body.
+/// Group 0 lives in the flat `ObjectArrayWriteLoop` fields (the peel and
+/// dynamic-bound logic reference it); groups 1+ live in `extra_groups`.
+struct ObjectArrayWriteGroup {
+    array_id: u32,
+    properties: Vec<String>,
+    values: Vec<ObjectArrayWriteNumber>,
+}
+
+const MAX_OBJECT_ARRAY_WRITE_GROUPS: usize = 2;
+
 struct ObjectArrayWriteLoop {
     outer_counter_id: u32,
     outer_start: i32,
@@ -1908,6 +1919,11 @@ struct ObjectArrayWriteLoop {
     array_id: u32,
     properties: Vec<String>,
     values: Vec<ObjectArrayWriteNumber>,
+    /// #6812 (w9): additional monomorphic groups over their own arrays —
+    /// the inliner's output for a helper applied to parallel arrays. Each
+    /// gets its own preflight guard call; the fast nest interleaves the
+    /// groups' stores. Empty for the classic single-array body.
+    extra_groups: Vec<ObjectArrayWriteGroup>,
 }
 
 fn match_nonnegative_constant_i32(expr: &perry_hir::Expr) -> Option<i32> {
@@ -2227,145 +2243,190 @@ fn match_object_array_write_loop(
         return None;
     }
 
-    let Some((
-        Stmt::Let {
-            id: alias_id,
-            // `let` aliases qualify too: every statement in the matched
-            // region must be a PutValueSet on the alias (anything else
-            // rejects the loop), so reassignment is structurally
-            // impossible; captures are excluded via `boxed_vars` below.
-            init: Some(Expr::IndexGet { object, index }),
-            ..
-        },
-        stores,
-    )) = inner_body.split_first()
-    else {
-        return None;
-    };
-    // Only emptiness here: `stores` may still carry leading numeric temps
-    // (#6812 w8), so the MAX_OBJECT_ARRAY_WRITE_FIELDS cap applies to the
-    // real writes after the temp run is split off below.
-    if stores.is_empty() {
-        return None;
+    // #6812 (w9): the body is a SEQUENCE of up to
+    // MAX_OBJECT_ARRAY_WRITE_GROUPS (alias, temps, writes) groups — the
+    // shape the inliner produces for a write helper applied to parallel
+    // arrays (`setC(objs[i], r + i); setC(objsB[i], r - i);`). Every group
+    // is monomorphic on its own array; a `Let` whose init is `arr[i]`
+    // starts the next group (a numeric-init `Let` is a temp). `let`
+    // aliases qualify: each group's region admits only its temps and
+    // PutValueSets on its alias, so reassignment is structurally
+    // impossible; captures are excluded via `boxed_vars`.
+    struct ParsedGroup {
+        array_id: u32,
+        properties: Vec<String>,
+        values: Vec<ObjectArrayWriteNumber>,
     }
-    let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
-    else {
-        return None;
-    };
-    if *index_id != inner_counter_id
-        || *array_id == outer_counter_id
-        || *array_id == inner_counter_id
-        || *array_id == *alias_id
-        || ctx.boxed_vars.contains(array_id)
-        || ctx.boxed_vars.contains(alias_id)
-        || ctx.module_globals.contains_key(array_id)
-        || !ctx.locals.contains_key(array_id)
-        || ctx.scalar_replaced.contains_key(array_id)
-        || ctx.pod_records.contains_key(array_id)
-    {
-        return None;
-    }
-    // Dynamic bound: `i < xs.length` must read the SAME array being written
-    // (its length is then loop-invariant — the matched body admits only
-    // element-field stores, never structural array mutation).
-    if let Some(len_source) = dyn_len_source {
-        if len_source != *array_id {
-            return None;
-        }
-    }
-
-    // #6812 (w8): admit a leading run of body-local immutable numeric temps
-    // between the alias and the writes — the exact shape the call inliner
-    // produces (`setCD(o, r + i, r - i)` becomes `let x = r + i;
-    // let y = r - i; o.c = x; o.d = y`). Each temp's init must parse in the
-    // same pure-numeric grammar (over counters, constants, and earlier
-    // temps); write values then resolve `LocalGet(temp)` by substitution, so
-    // the emitter and the finite-range proof see the trees the user could
-    // have written inline (recomputation of a pure numeric expression is
-    // unobservable). A temp that is captured (boxed) or fails the grammar
-    // rejects the whole loop — statements are never skipped.
-    let mut temps = std::collections::HashMap::new();
-    let mut stores = stores;
-    while let Some((
-        Stmt::Let {
-            id: temp_id,
-            mutable: false,
-            init: Some(temp_init),
-            ..
-        },
-        rest,
-    )) = stores.split_first()
-    {
-        if ctx.boxed_vars.contains(temp_id) || temps.len() >= MAX_OBJECT_ARRAY_WRITE_TEMPS {
-            return None;
-        }
-        let parsed =
-            match_object_array_write_number(temp_init, outer_counter_id, inner_counter_id, &temps)?;
-        // Substitution can compound: `let b = a + a; let c = b + b;` doubles
-        // the tree per level, so a size budget — not a temp-count cap alone —
-        // keeps the recursive range/emit walkers on bounded stacks.
-        if object_array_write_number_node_count(&parsed) > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
-            return None;
-        }
-        temps.insert(*temp_id, parsed);
-        stores = rest;
-    }
-    if stores.is_empty() || stores.len() > MAX_OBJECT_ARRAY_WRITE_FIELDS {
-        return None;
-    }
-
-    let match_store = |effect: &Expr| -> Option<(String, ObjectArrayWriteNumber)> {
-        let Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } = effect
+    fn alias_split<'a>(stmts: &'a [Stmt], inner_counter_id: u32) -> Option<(u32, u32, &'a [Stmt])> {
+        let Some((
+            Stmt::Let {
+                id: alias_id,
+                init: Some(Expr::IndexGet { object, index }),
+                ..
+            },
+            tail,
+        )) = stmts.split_first()
         else {
             return None;
         };
-        if !matches!(
-            (target.as_ref(), receiver.as_ref()),
-            (Expr::LocalGet(target_id), Expr::LocalGet(receiver_id))
-                if target_id == alias_id && receiver_id == alias_id
-        ) {
-            return None;
-        }
-        let property = match key.as_ref() {
-            Expr::String(property) => property.clone(),
-            Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
-            // #6812 (w13): `o[7] = v` — a constant integer key IS the
-            // canonical numeric-string property ("7") on a plain object.
-            // Receivers that are real arrays at runtime are safe: the
-            // preflight guard type-checks every element as GC_TYPE_OBJECT
-            // and rejects the nest, and the per-write fallback handles
-            // element writes generically.
-            Expr::Integer(n) => n.to_string(),
-            _ => return None,
-        };
-        let value =
-            match_object_array_write_number(value, outer_counter_id, inner_counter_id, &temps)?;
-        // Same size budget as the temps: a value combining several
-        // substituted temps must still hand the recursive range/emit
-        // walkers a bounded tree.
-        if object_array_write_number_node_count(&value) > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
-            return None;
-        }
-        object_array_write_number_finite_range(&value, outer_start, outer_bound, inner_bound)?;
-        Some((property, value))
-    };
-    let mut properties = Vec::with_capacity(stores.len());
-    let mut values = Vec::with_capacity(stores.len());
-    for store in stores {
-        let Stmt::Expr(effect) = store else {
+        let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) =
+            (object.as_ref(), index.as_ref())
+        else {
             return None;
         };
-        let (property, value) = match_store(effect)?;
-        properties.push(property);
-        values.push(value);
+        if *index_id != inner_counter_id {
+            return None;
+        }
+        Some((*alias_id, *array_id, tail))
     }
 
+    let mut temps = std::collections::HashMap::new();
+    let mut groups: Vec<ParsedGroup> = Vec::new();
+    let mut alias_ids: Vec<u32> = Vec::new();
+    let mut array_ids: Vec<u32> = Vec::new();
+    let mut rest: &[Stmt] = inner_body;
+    while !rest.is_empty() {
+        if groups.len() >= MAX_OBJECT_ARRAY_WRITE_GROUPS {
+            return None;
+        }
+        let (alias_id, array_id, tail) = alias_split(rest, inner_counter_id)?;
+        if array_id == outer_counter_id
+            || array_id == inner_counter_id
+            || array_id == alias_id
+            || alias_ids.contains(&array_id)
+            || array_ids.contains(&alias_id)
+            || alias_ids.contains(&alias_id)
+            || ctx.boxed_vars.contains(&array_id)
+            || ctx.boxed_vars.contains(&alias_id)
+            || ctx.module_globals.contains_key(&array_id)
+            || !ctx.locals.contains_key(&array_id)
+            || ctx.scalar_replaced.contains_key(&array_id)
+            || ctx.pod_records.contains_key(&array_id)
+            || temps.contains_key(&alias_id)
+        {
+            return None;
+        }
+        alias_ids.push(alias_id);
+        array_ids.push(array_id);
+
+        // #6812 (w8): a leading run of body-local immutable numeric temps
+        // between the alias and the writes. Each temp's init must parse in
+        // the pure-numeric grammar (over counters, constants, and earlier
+        // temps); write values then resolve `LocalGet(temp)` by
+        // substitution, so the emitter and the finite-range proof see the
+        // trees the user could have written inline. A `Let` whose init is
+        // the NEXT group's `arr[i]` alias ends the run instead (handled by
+        // the store loop below rejecting it as a non-store only if no
+        // stores were parsed). A captured (boxed) temp or one that fails
+        // the grammar rejects the loop — statements are never skipped.
+        let mut cursor = tail;
+        while let Some((
+            Stmt::Let {
+                id: temp_id,
+                mutable: false,
+                init: Some(temp_init),
+                ..
+            },
+            t2,
+        )) = cursor.split_first()
+        {
+            if matches!(temp_init, Expr::IndexGet { .. }) {
+                // Next group's alias — but a group needs >= 1 store first,
+                // enforced below when the store loop parses nothing.
+                break;
+            }
+            if ctx.boxed_vars.contains(temp_id) || temps.len() >= MAX_OBJECT_ARRAY_WRITE_TEMPS {
+                return None;
+            }
+            let parsed = match_object_array_write_number(
+                temp_init,
+                outer_counter_id,
+                inner_counter_id,
+                &temps,
+            )?;
+            // Substitution can compound: `let b = a + a; let c = b + b;`
+            // doubles the tree per level, so a size budget — not a
+            // temp-count cap alone — keeps the recursive range/emit walkers
+            // on bounded stacks.
+            if object_array_write_number_node_count(&parsed) > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
+                return None;
+            }
+            temps.insert(*temp_id, parsed);
+            cursor = t2;
+        }
+
+        let mut properties = Vec::new();
+        let mut values = Vec::new();
+        while let Some((Stmt::Expr(effect), t2)) = cursor.split_first() {
+            let Expr::PutValueSet {
+                target,
+                key,
+                value,
+                receiver,
+                ..
+            } = effect
+            else {
+                return None;
+            };
+            if !matches!(
+                (target.as_ref(), receiver.as_ref()),
+                (Expr::LocalGet(target_id), Expr::LocalGet(receiver_id))
+                    if *target_id == alias_id && *receiver_id == alias_id
+            ) {
+                return None;
+            }
+            let property = match key.as_ref() {
+                Expr::String(property) => property.clone(),
+                Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
+                // #6812 (w13): `o[7] = v` — a constant integer key IS the
+                // canonical numeric-string property ("7") on a plain
+                // object. Receivers that are real arrays at runtime are
+                // safe: the preflight guard type-checks every element as
+                // GC_TYPE_OBJECT and rejects the nest, and the per-write
+                // fallback handles element writes generically.
+                Expr::Integer(n) => n.to_string(),
+                _ => return None,
+            };
+            let value =
+                match_object_array_write_number(value, outer_counter_id, inner_counter_id, &temps)?;
+            // Same size budget as the temps: a value combining several
+            // substituted temps must still hand the recursive range/emit
+            // walkers a bounded tree.
+            if object_array_write_number_node_count(&value) > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
+                return None;
+            }
+            object_array_write_number_finite_range(&value, outer_start, outer_bound, inner_bound)?;
+            properties.push(property);
+            values.push(value);
+            if properties.len() > MAX_OBJECT_ARRAY_WRITE_FIELDS {
+                return None;
+            }
+            cursor = t2;
+        }
+        if properties.is_empty() {
+            return None;
+        }
+        groups.push(ParsedGroup {
+            array_id,
+            properties,
+            values,
+        });
+        rest = cursor;
+    }
+    if groups.is_empty() {
+        return None;
+    }
+    // Dynamic bound: `i < xs.length` must read the SAME array being written,
+    // and only the classic single-group body qualifies (the sentinel guard
+    // resolves the scan length from ITS OWN array's header; a second group's
+    // guard would resolve a different length).
+    if let Some(len_source) = dyn_len_source {
+        if groups.len() > 1 || len_source != groups[0].array_id {
+            return None;
+        }
+    }
+
+    let first = groups.remove(0);
     Some(ObjectArrayWriteLoop {
         outer_counter_id,
         outer_start,
@@ -2373,9 +2434,17 @@ fn match_object_array_write_loop(
         inner_counter_id,
         inner_bound,
         inner_bound_from_length: dyn_len_source.is_some(),
-        array_id: *array_id,
-        properties,
-        values,
+        array_id: first.array_id,
+        properties: first.properties,
+        values: first.values,
+        extra_groups: groups
+            .into_iter()
+            .map(|g| ObjectArrayWriteGroup {
+                array_id: g.array_id,
+                properties: g.properties,
+                values: g.values,
+            })
+            .collect(),
     })
 }
 
@@ -2518,6 +2587,42 @@ fn lower_object_array_write_versioned_for(
             ],
         )
     };
+    // #6812 (w9): one preflight guard call per extra group — each group is
+    // monomorphic on its own array, so the single-shape guard applies
+    // verbatim. Multi-group bodies are constant-bound (the matcher rejects
+    // dynamic-length multi-group), so the same inner_bound literal is
+    // correct for every call.
+    let mut extra_guards: Vec<(String, String)> = Vec::new();
+    for group in &matched.extra_groups {
+        let g_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(group.array_id))?;
+        let mut g_keys = Vec::with_capacity(MAX_OBJECT_ARRAY_WRITE_FIELDS);
+        for property in &group.properties {
+            let key_idx = ctx.strings.intern(property);
+            let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            g_keys.push(ctx.block().load(DOUBLE, &key_global));
+        }
+        while g_keys.len() < MAX_OBJECT_ARRAY_WRITE_FIELDS {
+            g_keys.push(zero.clone());
+        }
+        let g_field_count = group.properties.len().to_string();
+        let g_packed = {
+            let blk = ctx.block();
+            blk.call(
+                I64,
+                "js_object_array_numeric_write_guard",
+                &[
+                    (DOUBLE, &g_box),
+                    (DOUBLE, &g_keys[0]),
+                    (DOUBLE, &g_keys[1]),
+                    (DOUBLE, &g_keys[2]),
+                    (DOUBLE, &g_keys[3]),
+                    (I32, &g_field_count),
+                    (I32, &inner_bound),
+                ],
+            )
+        };
+        extra_guards.push((g_packed, g_box));
+    }
     let preheader_idx = ctx.current_block;
     let preheader_label = ctx.block().label.clone();
 
@@ -2583,6 +2688,30 @@ fn lower_object_array_write_versioned_for(
         let array_ptr = blk.inttoptr(I64, &array_handle);
         (slots, array_ptr)
     };
+    // #6812 (w9): lane decode + array pointer per extra group, same scheme.
+    let mut extra_lanes: Vec<(Vec<(String, String)>, String)> = Vec::new();
+    for (group, (g_packed, g_box)) in matched.extra_groups.iter().zip(&extra_guards) {
+        let blk = ctx
+            .func
+            .block_mut(preheader_idx)
+            .expect("object-array preheader block must exist");
+        let mut g_slots = Vec::with_capacity(group.values.len());
+        for index in 0..group.values.len() {
+            let shifted = if index == 0 {
+                g_packed.clone()
+            } else {
+                blk.lshr(I64, g_packed, &(index * 16).to_string())
+            };
+            let encoded = blk.and(I64, &shifted, "65535");
+            let spill_flag = blk.and(I64, &encoded, "32768");
+            let low = blk.and(I64, &encoded, "32767");
+            g_slots.push((blk.sub(I64, &low, "1"), spill_flag));
+        }
+        let g_bits = blk.bitcast_double_to_i64(g_box);
+        let g_handle = blk.and(I64, &g_bits, crate::nanbox::POINTER_MASK_I64);
+        let g_ptr = blk.inttoptr(I64, &g_handle);
+        extra_lanes.push((g_slots, g_ptr));
+    }
 
     let fast_scan_start = fast_entry_idx;
     let (outer_next, inner_next) = {
@@ -2637,15 +2766,18 @@ fn lower_object_array_write_versioned_for(
 
     ctx.current_block = fast_inner_body_idx;
     let inner_double = ctx.block().sitofp(I32, &inner, DOUBLE);
-    let object_ptr = {
-        let blk = ctx.block();
-        let inner_i64 = blk.sext(I32, &inner, I64);
-        let element_word = blk.add(I64, &inner_i64, "1");
-        let element_ptr = blk.gep_inbounds(I64, &array_ptr, &[(I64, &element_word)]);
-        let object_box = blk.load(DOUBLE, &element_ptr);
-        let object_bits = blk.bitcast_double_to_i64(&object_box);
-        let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);
-        blk.inttoptr(I64, &object_handle)
+    // #6812 (w9): interleave every group's stores in the shared inner body —
+    // each group loads ITS array's element and stores its own proven lanes.
+    let group_plans: Vec<(
+        &Vec<(String, String)>,
+        &String,
+        &Vec<ObjectArrayWriteNumber>,
+    )> = {
+        let mut plans = vec![(&slots, &array_ptr, &matched.values)];
+        for ((g_slots, g_ptr), group) in extra_lanes.iter().zip(&matched.extra_groups) {
+            plans.push((g_slots, g_ptr, &group.values));
+        }
+        plans
     };
     let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);
     let header_words = (object_header_size / 8).to_string();
@@ -2662,68 +2794,82 @@ fn lower_object_array_write_versioned_for(
     };
     let meta_byte_off = (object_header_size - meta_ptr_size).to_string();
     let meta_load_ty = if meta_ptr_size == 4 { I32 } else { I64 };
-    for (lane_index, ((slot, spill_flag), value)) in slots.iter().zip(&matched.values).enumerate() {
-        let value = emit_object_array_write_number(ctx, value, &outer_double, &inner_double);
-        // #6812 spill lanes: the guard proved every receiver holds this
-        // lane's slot on the SAME side (inline vs spill), so the flag is
-        // loop-invariant — LLVM unswitches the branch out of the nest. Both
-        // paths remain call-free raw stores, preserving the guard's no-GC
-        // interval.
-        let spill_idx = ctx.new_block(&format!(
-            "object_array_write.loop.fast.store.spill.{lane_index}"
-        ));
-        let inline_idx = ctx.new_block(&format!(
-            "object_array_write.loop.fast.store.inline.{lane_index}"
-        ));
-        let done_idx = ctx.new_block(&format!(
-            "object_array_write.loop.fast.store.done.{lane_index}"
-        ));
-        let spill_label = ctx.block_label(spill_idx);
-        let inline_label = ctx.block_label(inline_idx);
-        let done_label = ctx.block_label(done_idx);
-        let is_spill = ctx.block().icmp_ne(I64, spill_flag, "0");
-        ctx.block().cond_br(&is_spill, &spill_label, &inline_label);
-
-        ctx.current_block = inline_idx;
-        let field_ptr = {
+    for (group_index, (g_slots, g_array_ptr, g_values)) in group_plans.iter().enumerate() {
+        let object_ptr = {
             let blk = ctx.block();
-            let field_word = blk.add(I64, slot, &header_words);
-            blk.gep_inbounds(I64, &object_ptr, &[(I64, &field_word)])
+            let inner_i64 = blk.sext(I32, &inner, I64);
+            let element_word = blk.add(I64, &inner_i64, "1");
+            let element_ptr = blk.gep_inbounds(I64, g_array_ptr, &[(I64, &element_word)]);
+            let object_box = blk.load(DOUBLE, &element_ptr);
+            let object_bits = blk.bitcast_double_to_i64(&object_box);
+            let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);
+            blk.inttoptr(I64, &object_handle)
         };
-        // GC_STORE_AUDIT(POINTER_FREE): the versioned loop emits only numeric
-        // values into fields proven numeric by the entry guard.
-        ctx.block().store(DOUBLE, &value, &field_ptr);
-        ctx.block().br(&done_label);
-
-        ctx.current_block = spill_idx;
+        for (lane_index, ((slot, spill_flag), value)) in
+            g_slots.iter().zip(g_values.iter()).enumerate()
         {
-            let blk = ctx.block();
-            let meta_slot_ptr = blk.gep(I8, &object_ptr, &[(I64, &meta_byte_off)]);
-            let meta_loaded = blk.load(meta_load_ty, &meta_slot_ptr);
-            let meta_i64 = if meta_ptr_size == 4 {
-                blk.zext(I32, &meta_loaded, I64)
-            } else {
-                meta_loaded
-            };
-            let meta_ptr = blk.inttoptr(I64, &meta_i64);
-            // ObjectMeta layout word 4 = `spill`; buffer elements start one
-            // word past the 8-byte ArrayHeader. Both offsets are locked by
-            // const assertions next to the runtime structs
-            // (perry-runtime/src/object/mod.rs, #6812 spill lanes).
-            let spill_slot_ptr = blk.gep_inbounds(I64, &meta_ptr, &[(I64, "4")]);
-            let spill_i64 = blk.load(I64, &spill_slot_ptr);
-            let spill_ptr = blk.inttoptr(I64, &spill_i64);
-            let elem_word = blk.add(I64, slot, "1");
-            let elem_ptr = blk.gep_inbounds(I64, &spill_ptr, &[(I64, &elem_word)]);
-            // GC_STORE_AUDIT(POINTER_FREE): finite numeric bits into a
-            // guard-proven live spill slot; numbers create no references,
-            // so no barrier or layout note is needed (same argument as the
-            // inline lane above).
-            blk.store(DOUBLE, &value, &elem_ptr);
-        }
-        ctx.block().br(&done_label);
+            let value = emit_object_array_write_number(ctx, value, &outer_double, &inner_double);
+            // #6812 spill lanes: the guard proved every receiver holds this
+            // lane's slot on the SAME side (inline vs spill), so the flag is
+            // loop-invariant — LLVM unswitches the branch out of the nest. Both
+            // paths remain call-free raw stores, preserving the guard's no-GC
+            // interval.
+            let spill_idx = ctx.new_block(&format!(
+                "object_array_write.loop.fast.store.spill.{group_index}.{lane_index}"
+            ));
+            let inline_idx = ctx.new_block(&format!(
+                "object_array_write.loop.fast.store.inline.{group_index}.{lane_index}"
+            ));
+            let done_idx = ctx.new_block(&format!(
+                "object_array_write.loop.fast.store.done.{group_index}.{lane_index}"
+            ));
+            let spill_label = ctx.block_label(spill_idx);
+            let inline_label = ctx.block_label(inline_idx);
+            let done_label = ctx.block_label(done_idx);
+            let is_spill = ctx.block().icmp_ne(I64, spill_flag, "0");
+            ctx.block().cond_br(&is_spill, &spill_label, &inline_label);
 
-        ctx.current_block = done_idx;
+            ctx.current_block = inline_idx;
+            let field_ptr = {
+                let blk = ctx.block();
+                let field_word = blk.add(I64, slot, &header_words);
+                blk.gep_inbounds(I64, &object_ptr, &[(I64, &field_word)])
+            };
+            // GC_STORE_AUDIT(POINTER_FREE): the versioned loop emits only numeric
+            // values into fields proven numeric by the entry guard.
+            ctx.block().store(DOUBLE, &value, &field_ptr);
+            ctx.block().br(&done_label);
+
+            ctx.current_block = spill_idx;
+            {
+                let blk = ctx.block();
+                let meta_slot_ptr = blk.gep(I8, &object_ptr, &[(I64, &meta_byte_off)]);
+                let meta_loaded = blk.load(meta_load_ty, &meta_slot_ptr);
+                let meta_i64 = if meta_ptr_size == 4 {
+                    blk.zext(I32, &meta_loaded, I64)
+                } else {
+                    meta_loaded
+                };
+                let meta_ptr = blk.inttoptr(I64, &meta_i64);
+                // ObjectMeta layout word 4 = `spill`; buffer elements start one
+                // word past the 8-byte ArrayHeader. Both offsets are locked by
+                // const assertions next to the runtime structs
+                // (perry-runtime/src/object/mod.rs, #6812 spill lanes).
+                let spill_slot_ptr = blk.gep_inbounds(I64, &meta_ptr, &[(I64, "4")]);
+                let spill_i64 = blk.load(I64, &spill_slot_ptr);
+                let spill_ptr = blk.inttoptr(I64, &spill_i64);
+                let elem_word = blk.add(I64, slot, "1");
+                let elem_ptr = blk.gep_inbounds(I64, &spill_ptr, &[(I64, &elem_word)]);
+                // GC_STORE_AUDIT(POINTER_FREE): finite numeric bits into a
+                // guard-proven live spill slot; numbers create no references,
+                // so no barrier or layout note is needed (same argument as the
+                // inline lane above).
+                blk.store(DOUBLE, &value, &elem_ptr);
+            }
+            ctx.block().br(&done_label);
+
+            ctx.current_block = done_idx;
+        }
     }
     ctx.block().br(&fast_inner_latch_label);
     ctx.current_block = fast_inner_latch_idx;
@@ -2764,7 +2910,11 @@ fn lower_object_array_write_versioned_for(
     let fast_call_free = (fast_scan_start..ctx.func.num_blocks())
         .all(|idx| !ctx.func.blocks()[idx].contains_gc_unsafe_call());
     ctx.current_block = preheader_idx;
-    let guard_ok = ctx.block().icmp_ne(I64, &packed_slots, "0");
+    let mut guard_ok = ctx.block().icmp_ne(I64, &packed_slots, "0");
+    for (g_packed, _) in &extra_guards {
+        let g_ok = ctx.block().icmp_ne(I64, g_packed, "0");
+        guard_ok = ctx.block().and(I1, &guard_ok, &g_ok);
+    }
     if fast_call_free {
         ctx.block()
             .cond_br(&guard_ok, &fast_entry_label, &slow_pre_label);
