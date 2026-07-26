@@ -188,6 +188,9 @@ pub(crate) fn abort_signal_ptr_from_value(value: f64) -> Option<*mut ObjectHeade
     if ptr.is_null() {
         return None;
     }
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
+        return None;
+    }
     let is_signal = unsafe { (*ptr).class_id == ABORT_SIGNAL_CLASS_ID };
     is_signal.then_some(ptr)
 }
@@ -641,3 +644,14 @@ static KEEP_ABORT_SIGNAL_ANY: extern "C" fn(*mut crate::array::ArrayHeader) -> *
 #[used]
 static KEEP_ABORT_SIGNAL_THROW_IF_ABORTED: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_abort_signal_throw_if_aborted;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_ptr_rejects_pointer_tagged_handle() {
+        let value = f64::from_bits(POINTER_TAG_AC | 5);
+        assert!(js_abort_signal_resolve_ptr(value).is_null());
+    }
+}
