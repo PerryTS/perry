@@ -60,6 +60,14 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
         return;
     }
+    // #6794 follow-up (b): the slot was already cleared to 0 for a currently
+    // shadow-suppressed masked-window-region local, and suppression blocks every
+    // subsequent write to it (`emit_shadow_slot_update_for_expr`), so it provably
+    // still holds 0 — this clear is a redundant `js_shadow_slot_set(slot, 0)`
+    // (the `_tlv_get_addr` TLS hit that dominated bcryptjs `_encipher`). Skip it.
+    if ctx.suppressed_cleared_shadow_slots.contains(&slot_idx) {
+        return;
+    }
     ctx.block().call_void(
         "js_shadow_slot_set",
         &[(I32, &slot_idx.to_string()), (I64, "0")],

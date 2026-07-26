@@ -553,6 +553,11 @@ fn lower_region_copy(
                         if !already_cleared {
                             crate::expr::emit_shadow_slot_clear(ctx, slot_idx);
                         }
+                        // #6794 (b): the slot now holds 0 and suppression blocks
+                        // every further write to it, so record it — each later
+                        // per-statement clear of this slot is a redundant
+                        // `js_shadow_slot_set(slot, 0)` TLS hit we now skip.
+                        ctx.suppressed_cleared_shadow_slots.insert(slot_idx);
                     }
                 }
                 if privatize && !unset_ids.contains(&id) {
@@ -600,6 +605,9 @@ fn lower_region_copy(
                 // it again.
                 if ctx.masked_region_scalar_locals.remove(&id) {
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
+                        // #6794 (b): suppression ended — later clears of this slot
+                        // are real again, so stop skipping them.
+                        ctx.suppressed_cleared_shadow_slots.remove(&slot_idx);
                         if let Some(local_slot) = ctx.locals.get(&id).cloned() {
                             crate::expr::emit_shadow_slot_bind_for_local(ctx, id);
                             let current = ctx.block().load(DOUBLE, &local_slot);
@@ -637,6 +645,9 @@ fn lower_region_copy(
     for (id, _) in &saved {
         ctx.masked_region_scalar_locals.remove(id);
     }
+    // #6794 (b): the redundant-clear skip set is scoped to this copy; drop it so
+    // the next copy / post-region code emits real clears again.
+    ctx.suppressed_cleared_shadow_slots.clear();
     for (id, original) in saved {
         match original {
             Some(original) => {

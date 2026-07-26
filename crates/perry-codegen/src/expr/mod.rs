@@ -682,6 +682,17 @@ pub(crate) struct FnCtx<'a> {
     /// until the refinement is dropped (`expr::shadow_slot`).
     pub masked_region_scalar_locals: std::collections::HashSet<u32>,
 
+    /// #6794 follow-up (b): shadow slots that a masked-window region fast copy
+    /// has already cleared to 0 for a currently-suppressed local. Because
+    /// `emit_shadow_slot_update_for_expr` skips every write to a local in
+    /// `masked_region_scalar_locals`, such a slot provably stays 0 for the rest
+    /// of the suppression window — so every later per-statement clear of it (the
+    /// `_tlv_get_addr`-heavy `js_shadow_slot_set(slot, 0)` that dominated
+    /// bcryptjs `_encipher` profiles) is a redundant no-op. `emit_shadow_slot_clear`
+    /// skips slots in this set; entries are added right after the first clear and
+    /// removed the moment the local leaves `masked_region_scalar_locals`.
+    pub suppressed_cleared_shadow_slots: std::collections::HashSet<u32>,
+
     /// #5093: scoped loop-versioning facts for monomorphic class-field loops.
     /// Pushed only around the FAST clone of `lower_class_field_versioned_for`
     /// (`stmt/loops.rs`): the loop preheader already proved the receiver's
