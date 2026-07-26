@@ -12,6 +12,10 @@ use crate::OutputFormat;
 use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
 use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
 
+fn needs_http2_constants(ctx: &CompilationContext) -> bool {
+    ctx.native_module_imports.contains("http2") || ctx.uses_get_builtin_module
+}
+
 pub(crate) fn auto_optimized_archives_are_fresh(
     workspace_root: &Path,
     runtime_path: &Path,
@@ -77,10 +81,10 @@ pub(crate) fn auto_optimized_cache_key(
         ctx.uses_intl_locale,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
-        // #6468: an http2 import pulls in `perry-runtime/mod-http2-constants`,
-        // so a runtime built without the constant tables must not be reused for
-        // an http2 program — key the freshness stamp on it like the other gates.
-        ctx.native_module_imports.contains("http2"),
+        // HTTP/2 imports and dynamic builtin resolution pull in
+        // `perry-runtime/mod-http2-constants`, so key the cache on the shared
+        // gate like the other optional runtime features.
+        needs_http2_constants(ctx),
         // #6559: dyn-eval presence changes the built archive, so it must
         // key the freshness stamp like every other runtime feature toggle.
         perry_hir::has_deferred_dynamic_code_sites(),
@@ -155,13 +159,10 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_dgram {
         cross_features.push("perry-runtime/mod-dgram".to_string());
     }
-    // #6468 — the `node:http2` constant tables (`node_http2_constants`, ~20 KB
-    // of NGHTTP2_*/HTTP_STATUS_* cold data) are only reachable through the http2
-    // namespace object, which only exists when the program imports `node:http2`.
-    // `http2` is a stdlib-backed module, so its import is recorded in
-    // `native_module_imports` — a reliable, zero-false-negative activation
-    // signal. A program that never imports it links none of the tables.
-    if ctx.native_module_imports.contains("http2") {
+    // #6468 — keep the `node:http2` constant tables (~20 KB) when source imports
+    // `node:http2` or calls `process.getBuiltinModule`, whose target is only
+    // known at runtime. Programs using neither path still link none of them.
+    if needs_http2_constants(ctx) {
         cross_features.push("perry-runtime/mod-http2-constants".to_string());
     }
     // #6559: a deferred dynamic-code site (`eval(...)` / `new Function(...)`

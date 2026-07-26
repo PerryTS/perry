@@ -29,6 +29,12 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"globSync\"")
 }
 
+fn debug_hir_uses_get_builtin_module(hir_debug: &str) -> bool {
+    hir_debug.contains("property: \"getBuiltinModule\"")
+        || (hir_debug.contains("module: \"process\"")
+            && hir_debug.contains("method: \"getBuiltinModule\""))
+}
+
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
     hir_module.imports.iter().any(|import| {
         !import.type_only
@@ -319,7 +325,10 @@ pub(super) fn detect_optional_feature_usage(
     // diagnostics (GC-diag / typed-feedback JSON) ride the same feature and
     // degrade gracefully when off, so they need no detection.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        let hir_debug: String = format!(
+            "{:?}{:?}{:?}",
+            &hir_module.init, &hir_module.functions, &hir_module.classes
+        );
         if hir_debug.contains("method: \"getHeapSnapshot\"")
             || hir_debug.contains("method: \"writeHeapSnapshot\"")
             || hir_debug.contains("property: \"report\"")
@@ -331,6 +340,9 @@ pub(super) fn detect_optional_feature_usage(
         // in `native_module_imports`).
         if hir_debug.contains("module: \"dgram\"") {
             ctx.uses_dgram = true;
+        }
+        if debug_hir_uses_get_builtin_module(&hir_debug) {
+            ctx.uses_get_builtin_module = true;
         }
     }
 
@@ -373,7 +385,9 @@ pub(super) fn detect_optional_feature_usage(
 
 #[cfg(test)]
 mod tests {
-    use super::{debug_hir_uses_regex, imports_fs_promises_glob};
+    use super::{
+        debug_hir_uses_get_builtin_module, debug_hir_uses_regex, imports_fs_promises_glob,
+    };
     use perry_hir::{Import, ImportSpecifier, Module, ModuleKind};
 
     #[test]
@@ -383,6 +397,19 @@ mod tests {
         ));
         assert!(debug_hir_uses_regex(
             r#"NativeMethodCall { module: String("path.win32"), method: String("matchesGlob"), args: [] }"#
+        ));
+    }
+
+    #[test]
+    fn get_builtin_module_gate_detects_direct_and_extracted_calls() {
+        assert!(debug_hir_uses_get_builtin_module(
+            r#"NativeMethodCall { module: "process", method: "getBuiltinModule" }"#
+        ));
+        assert!(debug_hir_uses_get_builtin_module(
+            r#"PropertyGet { property: "getBuiltinModule" }"#
+        ));
+        assert!(!debug_hir_uses_get_builtin_module(
+            r#"NativeMethodCall { module: "process", method: "cwd" }"#
         ));
     }
 

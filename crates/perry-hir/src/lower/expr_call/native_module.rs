@@ -37,6 +37,10 @@ fn is_cluster_default_event_emitter_method(method_name: &str) -> bool {
     )
 }
 
+fn is_process_active_array_helper(method: &str) -> bool {
+    matches!(method, "_getActiveHandles" | "_getActiveRequests")
+}
+
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
@@ -372,6 +376,15 @@ pub(super) fn try_native_module_methods(
                             }
                         }
                         "ref" | "unref" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
+                        }
+                        method_name if is_process_active_array_helper(method_name) => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "process".to_string(),
                                 class_name: None,
@@ -1860,7 +1873,14 @@ pub(super) fn try_native_module_methods(
 
 #[cfg(test)]
 mod bundled_mysql2_tests {
-    use super::mysql2_config_signature;
+    use super::{is_process_active_array_helper, mysql2_config_signature};
+
+    #[test]
+    fn process_active_array_helpers_use_native_dispatch() {
+        assert!(is_process_active_array_helper("_getActiveHandles"));
+        assert!(is_process_active_array_helper("_getActiveRequests"));
+        assert!(!is_process_active_array_helper("getActiveResourcesInfo"));
+    }
 
     #[test]
     fn matches_pool_with_uri_and_pool_option() {

@@ -703,6 +703,10 @@ pub struct CompilationContext {
     /// none of it. NB: not via `native_module_imports`, which only tracks
     /// `requires_stdlib` modules — dgram is runtime-only.
     pub uses_dgram: bool,
+    /// Whether any module calls `process.getBuiltinModule`. The requested
+    /// module is only known at runtime, so auto-optimized runtimes must retain
+    /// optional builtin namespace data such as the HTTP/2 key tables.
+    pub uses_get_builtin_module: bool,
     /// Whether `perry/thread` is imported. When true, the runtime must
     /// keep `panic = "unwind"` so that worker-thread panics translate to
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
@@ -1028,6 +1032,7 @@ impl CompilationContext {
             uses_intl_datetime: false,
             uses_diagnostics: false,
             uses_dgram: false,
+            uses_get_builtin_module: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             cross_module_class_accessors: HashMap::new(),
