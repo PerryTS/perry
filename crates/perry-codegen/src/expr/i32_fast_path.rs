@@ -771,7 +771,14 @@ pub(crate) fn can_lower_expr_as_i32_in_current_region(ctx: &FnCtx<'_>, e: &Expr)
         Expr::IndexGet { object, index } => {
             ta_int_elem_load_is_i32_provable(ctx, object, index)
                 || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
-                || checked_typed_array_i32_kind(ctx, object).is_some()
+                // The checked-kind fast path lowers `index` through `fptosi`
+                // (ToInt32), so a fractional index like `S[3.9]` would read
+                // element 3 — JS reads a fractional typed-array index as
+                // `undefined` (→ 0 in this ToInt32 consumer). Only take it with a
+                // proven integer index (the same gate the sibling typed-array
+                // read paths use in `index_get.rs`).
+                || (checked_typed_array_i32_kind(ctx, object).is_some()
+                    && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index))
         }
         _ => false,
     }

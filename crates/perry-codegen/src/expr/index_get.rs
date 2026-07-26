@@ -48,7 +48,7 @@ fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     )
 }
 
-fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+pub(crate) fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index: &Expr) -> bool {
     fn range_is_nonnegative_i32(ctx: &FnCtx<'_>, index: &Expr) -> bool {
         int_range_expr(ctx, index)
             .is_some_and(|range| range.min >= 0 && range.max <= i32::MAX as i64)

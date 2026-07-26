@@ -59,6 +59,20 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
 /// returning the i32 directly is exact.
 #[no_mangle]
 pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: i32) -> i32 {
+    // Memory safety: this cold fallback is entered on a kind-cache miss / wrong
+    // runtime kind, which INCLUDES a receiver that is not actually a typed array
+    // — TS types are erased, so `function f(S: Int32Array){ S[i] }` compiles the
+    // statically-emitted checked path but may be called with an arbitrary value.
+    // `js_typed_array_get` would read `(*ta).length` (a `TypedArrayHeader` field)
+    // before classifying the pointer, type-confusing the first GC-header read.
+    // Validate the raw pointer is a registered typed array first (the same gate
+    // `strict_typed_array_from_raw` uses — it covers native/inline views); a
+    // non-typed-array receiver has no element to read, and
+    // `ToInt32(undefined) == 0` in this i32 consumer context.
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+        return 0;
+    }
     let v = js_typed_array_get(ta, index);
     // `js_typed_array_get` returns a plain finite f64 element for an in-bounds
     // read and TAG_UNDEFINED (a NaN) for OOB. `ToInt32` maps NaN / ±Inf -> 0.

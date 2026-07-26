@@ -137,3 +137,17 @@ console.log("predetach", viewRead(det, 0), viewXor(det, 4));
 ab2.transfer(); // detach ab2 (and its view `det`)
 console.log("postdetach-plain", viewRead(det, 0)); // undefined
 console.log("postdetach-i32", viewXor(det, 4)); // 0 (all OOB after detach)
+
+// ---- fractional index in i32 context must NOT take the checked native path ----
+// (regression: the fast path lowers the index via ToInt32, so `S[3.9]` would
+//  read element 3; JS reads a fractional typed-array index as undefined -> 0.)
+function fracI32(S: Int32Array): number {
+  return S[3.9] | 0;
+}
+function fracVar(S: Int32Array, i: number): number {
+  return S[i] | 0;
+}
+const fr = new Int32Array([10, 20, 30, 40, 50]);
+console.log("frac-lit", fracI32(fr)); // 0 (not 40)
+console.log("frac-var", fracVar(fr, 2.5)); // 0 (not 30)
+console.log("int-var", fracVar(fr, 3)); // 40 (integer var still fast+correct)
