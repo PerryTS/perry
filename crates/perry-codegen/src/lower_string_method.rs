@@ -1457,6 +1457,20 @@ fn lower_canonical_str_self_append(
 
     // Proven-string rhs: mirror the legacy fast path's evaluation order
     // (rhs first, then the lhs slot load).
+    //
+    // Arm layout — the load-bearing property is that a HEAP destination
+    // ALWAYS reaches `js_string_append` (whose refcount==1 in-place path is
+    // what makes accumulator loops amortized O(n)). Routing a heap-dest /
+    // SSO-rhs iteration through `js_string_concat_box` instead would copy
+    // the whole accumulator every time a ≤5-byte part arrives — O(n²).
+    //
+    //   dest heap, rhs heap  → append(h, h)                 (hot, no calls)
+    //   dest heap, rhs other → append(h, unified(rhs))      (legacy-exact:
+    //                          unified materializes SSO / coerces a lie)
+    //   dest SSO             → js_string_concat_box          (SSO-aware,
+    //                          nothing to mutate in place; result may stay
+    //                          SSO — no per-op heap materialization)
+    //   dest other (lie)     → unified ×2 + append           (legacy-exact)
     let rhs_box = lower_expr(ctx, rhs)?;
     let lhs_box = ctx.block().load(DOUBLE, slot);
     let bits_d = ctx.block().bitcast_double_to_i64(&lhs_box);
@@ -1464,20 +1478,27 @@ fn lower_canonical_str_self_append(
     let tag_d = ctx.block().lshr(I64, &bits_d, "48");
     let tag_r = ctx.block().lshr(I64, &bits_r, "48");
     let d_heap = ctx.block().icmp_eq(I64, &tag_d, TAG_HEAP_STR);
-    let r_heap = ctx.block().icmp_eq(I64, &tag_r, TAG_HEAP_STR);
-    let both_heap = ctx.block().and(I1, &d_heap, &r_heap);
 
+    let dheap_idx = ctx.new_block("strapp.dheap");
     let heap_idx = ctx.new_block("strapp.heap");
-    let strs_idx = ctx.new_block("strapp.strs");
+    let rcold_idx = ctx.new_block("strapp.rcold");
+    let dother_idx = ctx.new_block("strapp.dother");
     let sso_idx = ctx.new_block("strapp.sso");
     let cold_idx = ctx.new_block("strapp.cold");
     let merge_idx = ctx.new_block("strapp.merge");
+    let dheap_label = ctx.block_label(dheap_idx);
     let heap_label = ctx.block_label(heap_idx);
-    let strs_label = ctx.block_label(strs_idx);
+    let rcold_label = ctx.block_label(rcold_idx);
+    let dother_label = ctx.block_label(dother_idx);
     let sso_label = ctx.block_label(sso_idx);
     let cold_label = ctx.block_label(cold_idx);
     let merge_label = ctx.block_label(merge_idx);
-    ctx.block().cond_br(&both_heap, &heap_label, &strs_label);
+    ctx.block().cond_br(&d_heap, &dheap_label, &dother_label);
+
+    // dest heap: split on the rhs tag.
+    ctx.current_block = dheap_idx;
+    let r_heap = ctx.block().icmp_eq(I64, &tag_r, TAG_HEAP_STR);
+    ctx.block().cond_br(&r_heap, &heap_label, &rcold_label);
 
     ctx.current_block = heap_idx;
     let h_d = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
@@ -1489,13 +1510,28 @@ fn lower_canonical_str_self_append(
     let heap_pred = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
-    ctx.current_block = strs_idx;
+    ctx.current_block = rcold_idx;
+    let h_d1 = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
+    let r_h1 = unbox_str_handle(ctx.block(), &rhs_box);
+    let h_rc = ctx
+        .block()
+        .call(I64, "js_string_append", &[(I64, &h_d1), (I64, &r_h1)]);
+    let box_rcold = nanbox_string_inline(ctx.block(), &h_rc);
+    let rcold_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    // dest not heap: an SSO dest with a real-string rhs takes the SSO-aware
+    // pairwise concat; a lie on EITHER side keeps the exact legacy sequence
+    // (`js_string_concat_box` treats a non-string operand as empty, but the
+    // legacy unified path ToString-coerces it — `"ab" += 42` must stay
+    // `"ab42"`).
+    ctx.current_block = dother_idx;
     let d_sso = ctx.block().icmp_eq(I64, &tag_d, TAG_SSO_STR);
+    let r_heap2 = ctx.block().icmp_eq(I64, &tag_r, TAG_HEAP_STR);
     let r_sso = ctx.block().icmp_eq(I64, &tag_r, TAG_SSO_STR);
-    let d_str = ctx.block().or(I1, &d_heap, &d_sso);
-    let r_str = ctx.block().or(I1, &r_heap, &r_sso);
-    let both_str = ctx.block().and(I1, &d_str, &r_str);
-    ctx.block().cond_br(&both_str, &sso_label, &cold_label);
+    let r_str = ctx.block().or(I1, &r_heap2, &r_sso);
+    let take_sso = ctx.block().and(I1, &d_sso, &r_str);
+    ctx.block().cond_br(&take_sso, &sso_label, &cold_label);
 
     ctx.current_block = sso_idx;
     let box_sso = ctx.block().call(
@@ -1521,6 +1557,7 @@ fn lower_canonical_str_self_append(
         DOUBLE,
         &[
             (&box_heap, &heap_pred),
+            (&box_rcold, &rcold_pred),
             (&box_sso, &sso_pred),
             (&box_cold, &cold_pred),
         ],

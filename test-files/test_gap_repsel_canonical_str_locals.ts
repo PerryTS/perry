@@ -73,6 +73,22 @@ function lyingAnnotation(): void {
   // flag-off arm too.)
   const s: string = undefined as unknown as string;
   console.log("lie-eq:", s === "boom", s !== "boom");
+
+  // `+=` with a lying rhs must ToString-coerce on every destination shape
+  // (SSO-at-rest and heap-at-rest) — the SSO arm must not swallow the rhs.
+  const lie: string = 42 as unknown as string;
+  let sso: string = JSON.parse('"ab"'); // runtime-SSO destination bits
+  sso += lie;
+  console.log("lie-append-sso:", sso, sso.length);
+  let heap = "abcdefgh"; // literal init → heap destination bits
+  heap += lie;
+  console.log("lie-append-heap:", heap, heap.length);
+  // SSO dest + SSO-ish rhs stays on the SSO-aware concat (result may stay
+  // SSO): both sides real strings.
+  let sk: string = JSON.parse('"x"');
+  const sv: string = JSON.parse('"y"');
+  sk += sv;
+  console.log("sso-sso-append:", sk, sk.length, sk === "xy");
 }
 lyingAnnotation();
 
