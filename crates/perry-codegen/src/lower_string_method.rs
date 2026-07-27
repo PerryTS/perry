@@ -637,8 +637,8 @@ pub(crate) fn lower_string_method(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
+            let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_at returns a NaN-boxed string or undefined directly.
             Ok(blk.call(
@@ -658,8 +658,8 @@ pub(crate) fn lower_string_method(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
+            let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // Returns NaN-boxed number or undefined directly.
             Ok(blk.call(
@@ -679,8 +679,8 @@ pub(crate) fn lower_string_method(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
+            let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_char_code_at returns a plain f64 (NaN for OOB).
             Ok(blk.call(
@@ -1257,6 +1257,13 @@ pub(crate) fn lower_string_self_append(
         .ok_or_else(|| anyhow!("string self-append: local {} not in scope", local_id))?
         .clone();
 
+    // Representation-selection Phase 3a: canonical-Str destination —
+    // tag-dispatch on the slot bits inline instead of paying the two opaque
+    // `js_get_string_pointer_unified` calls per iteration.
+    if crate::expr::local_is_canonical_str(ctx, local_id) {
+        return lower_canonical_str_self_append(ctx, local_id, rhs, &slot);
+    }
+
     // Lower the RHS first (might be a string literal, a local, or a
     // computed expression). For non-string RHS we'd need to coerce, but
     // the bench_string_ops case always uses a string literal, so for the
@@ -1298,6 +1305,229 @@ pub(crate) fn lower_string_self_append(
     Ok(new_box)
 }
 
+/// Representation-selection Phase 3a: `s += rhs` for a canonical-Str
+/// destination (`SlotRep::Str` — the `ctx.locals` slot provably holds
+/// NaN-box string bits at rest). Replaces the two opaque
+/// `js_get_string_pointer_unified` calls per iteration with an inline tag
+/// dispatch on the slot bits:
+///
+/// - **both heap** (`STRING_TAG` on both sides): `and POINTER_MASK` →
+///   `js_string_append(h, h)` → `or STRING_TAG` — the hot accumulator-loop
+///   arm; keeps the refcount==1 in-place append (every alias demote site is
+///   untouched by this phase, so `let b = a` still demotes first).
+/// - **both strings, SSO involved**: `js_string_concat_box(box, box)` —
+///   SSO-aware pairwise concat, assembles ≤5-byte ASCII results inline and
+///   never mutates in place. No per-op heap materialization of SSO bits
+///   (RFC §4 "short-string values stay by-value").
+/// - **anything else** (a lying `string` annotation): the exact pre-phase
+///   sequence — `js_get_string_pointer_unified` ×2 (SSO materialize +
+///   number coercion included) → `js_string_append` — so acceptance
+///   behavior is bit-identical to today's on non-string bits (RFC §5.5:
+///   mismatches route to the legacy path, never a new coercion).
+/// Repsel Phase 3a: is this expression PROVEN to lower to a heap-tagged
+/// (`STRING_TAG`) NaN-box — never SSO bits, never a non-string? String
+/// literals load the interned pool handle (`@.str.N.handle`, always a heap
+/// `StringHeader` from `js_string_from_bytes`); `String(x)` routes through
+/// `js_string_coerce`, which always allocates a heap header. Deliberately
+/// NOT included: `Binary Add` string results — the pairwise concat lowering
+/// returns `js_string_concat_box`, which assembles ≤5-byte ASCII results as
+/// SSO bits.
+fn proven_heap_string_operand(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::String(_) | Expr::WtfString(_) | Expr::StringCoerce(_) => true,
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            proven_heap_string_operand(ctx, then_expr) && proven_heap_string_operand(ctx, else_expr)
+        }
+        _ => false,
+    }
+}
+
+/// Repsel Phase 3a: operand → raw `StringHeader*` handle for the string
+/// helpers, tag-dispatched:
+///
+/// - proven heap-tagged operand (see `proven_heap_string_operand`) → inline
+///   `bitcast; and POINTER_MASK` — zero calls;
+/// - canonical-Str `LocalGet` → 2-arm dispatch: heap `STRING_TAG` bits →
+///   bare `and POINTER_MASK` (hot arm, no call); anything else (SSO bits,
+///   annotation lie) → the legacy `js_get_string_pointer_unified` (which
+///   materializes SSO — cold);
+/// - everything else (or flag off) → the legacy unified call, unchanged.
+fn str_operand_handle_tag_dispatched(ctx: &mut FnCtx<'_>, object: &Expr, recv_box: &str) -> String {
+    use crate::nanbox::POINTER_MASK_I64;
+    if !crate::expr::canonical_str_locals_enabled() {
+        return unbox_str_handle(ctx.block(), recv_box);
+    }
+    if proven_heap_string_operand(ctx, object) {
+        let bits = ctx.block().bitcast_double_to_i64(recv_box);
+        return ctx.block().and(I64, &bits, POINTER_MASK_I64);
+    }
+    let canonical = matches!(
+        object, Expr::LocalGet(id) if crate::expr::local_is_canonical_str(ctx, *id)
+    );
+    if !canonical {
+        return unbox_str_handle(ctx.block(), recv_box);
+    }
+    let bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let tag = ctx.block().lshr(I64, &bits, "48");
+    let is_heap = ctx.block().icmp_eq(I64, &tag, "32767"); // 0x7FFF
+
+    let heap_idx = ctx.new_block("strrecv.heap");
+    let cold_idx = ctx.new_block("strrecv.cold");
+    let merge_idx = ctx.new_block("strrecv.merge");
+    let heap_label = ctx.block_label(heap_idx);
+    let cold_label = ctx.block_label(cold_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&is_heap, &heap_label, &cold_label);
+
+    ctx.current_block = heap_idx;
+    let h_heap = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+    let heap_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = cold_idx;
+    let h_cold = unbox_str_handle(ctx.block(), recv_box);
+    let cold_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(I64, &[(&h_heap, &heap_pred), (&h_cold, &cold_pred)])
+}
+
+fn lower_canonical_str_self_append(
+    ctx: &mut FnCtx<'_>,
+    _local_id: u32,
+    rhs: &Expr,
+    slot: &str,
+) -> Result<String> {
+    use crate::nanbox::POINTER_MASK_I64;
+    const TAG_HEAP_STR: &str = "32767"; // 0x7FFF (STRING_TAG >> 48)
+    const TAG_SSO_STR: &str = "32761"; // 0x7FF9 (SHORT_STRING_TAG >> 48)
+
+    if !is_string_expr(ctx, rhs) {
+        // Non-string rhs: mirror the legacy fallback's evaluation order
+        // (lhs slot load, then rhs), coerce the rhs once (heap handle
+        // guaranteed), then 2-arm on the destination tag only.
+        let lhs_box = ctx.block().load(DOUBLE, slot);
+        let rhs_val = lower_expr(ctx, rhs)?;
+        let r_handle = ctx
+            .block()
+            .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &rhs_val)]);
+        let bits_d = ctx.block().bitcast_double_to_i64(&lhs_box);
+        let tag_d = ctx.block().lshr(I64, &bits_d, "48");
+        let is_heap = ctx.block().icmp_eq(I64, &tag_d, TAG_HEAP_STR);
+
+        let heap_idx = ctx.new_block("strapp.heap");
+        let cold_idx = ctx.new_block("strapp.cold");
+        let merge_idx = ctx.new_block("strapp.merge");
+        let heap_label = ctx.block_label(heap_idx);
+        let cold_label = ctx.block_label(cold_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        ctx.block().cond_br(&is_heap, &heap_label, &cold_label);
+
+        ctx.current_block = heap_idx;
+        let h_d = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
+        let h_heap = ctx
+            .block()
+            .call(I64, "js_string_append", &[(I64, &h_d), (I64, &r_handle)]);
+        let heap_pred = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = cold_idx;
+        let h_d2 = unbox_str_handle(ctx.block(), &lhs_box);
+        let h_cold = ctx
+            .block()
+            .call(I64, "js_string_append", &[(I64, &h_d2), (I64, &r_handle)]);
+        let cold_pred = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = merge_idx;
+        let handle = ctx
+            .block()
+            .phi(I64, &[(&h_heap, &heap_pred), (&h_cold, &cold_pred)]);
+        let new_box = nanbox_string_inline(ctx.block(), &handle);
+        ctx.block().store(DOUBLE, &new_box, slot);
+        return Ok(new_box);
+    }
+
+    // Proven-string rhs: mirror the legacy fast path's evaluation order
+    // (rhs first, then the lhs slot load).
+    let rhs_box = lower_expr(ctx, rhs)?;
+    let lhs_box = ctx.block().load(DOUBLE, slot);
+    let bits_d = ctx.block().bitcast_double_to_i64(&lhs_box);
+    let bits_r = ctx.block().bitcast_double_to_i64(&rhs_box);
+    let tag_d = ctx.block().lshr(I64, &bits_d, "48");
+    let tag_r = ctx.block().lshr(I64, &bits_r, "48");
+    let d_heap = ctx.block().icmp_eq(I64, &tag_d, TAG_HEAP_STR);
+    let r_heap = ctx.block().icmp_eq(I64, &tag_r, TAG_HEAP_STR);
+    let both_heap = ctx.block().and(I1, &d_heap, &r_heap);
+
+    let heap_idx = ctx.new_block("strapp.heap");
+    let strs_idx = ctx.new_block("strapp.strs");
+    let sso_idx = ctx.new_block("strapp.sso");
+    let cold_idx = ctx.new_block("strapp.cold");
+    let merge_idx = ctx.new_block("strapp.merge");
+    let heap_label = ctx.block_label(heap_idx);
+    let strs_label = ctx.block_label(strs_idx);
+    let sso_label = ctx.block_label(sso_idx);
+    let cold_label = ctx.block_label(cold_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&both_heap, &heap_label, &strs_label);
+
+    ctx.current_block = heap_idx;
+    let h_d = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
+    let h_r = ctx.block().and(I64, &bits_r, POINTER_MASK_I64);
+    let h_new = ctx
+        .block()
+        .call(I64, "js_string_append", &[(I64, &h_d), (I64, &h_r)]);
+    let box_heap = nanbox_string_inline(ctx.block(), &h_new);
+    let heap_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = strs_idx;
+    let d_sso = ctx.block().icmp_eq(I64, &tag_d, TAG_SSO_STR);
+    let r_sso = ctx.block().icmp_eq(I64, &tag_r, TAG_SSO_STR);
+    let d_str = ctx.block().or(I1, &d_heap, &d_sso);
+    let r_str = ctx.block().or(I1, &r_heap, &r_sso);
+    let both_str = ctx.block().and(I1, &d_str, &r_str);
+    ctx.block().cond_br(&both_str, &sso_label, &cold_label);
+
+    ctx.current_block = sso_idx;
+    let box_sso = ctx.block().call(
+        DOUBLE,
+        "js_string_concat_box",
+        &[(DOUBLE, &lhs_box), (DOUBLE, &rhs_box)],
+    );
+    let sso_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = cold_idx;
+    let l_h = unbox_str_handle(ctx.block(), &lhs_box);
+    let r_h = unbox_str_handle(ctx.block(), &rhs_box);
+    let h_cold = ctx
+        .block()
+        .call(I64, "js_string_append", &[(I64, &l_h), (I64, &r_h)]);
+    let box_cold = nanbox_string_inline(ctx.block(), &h_cold);
+    let cold_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let new_box = ctx.block().phi(
+        DOUBLE,
+        &[
+            (&box_heap, &heap_pred),
+            (&box_sso, &sso_pred),
+            (&box_cold, &cold_pred),
+        ],
+    );
+    ctx.block().store(DOUBLE, &new_box, slot);
+    Ok(new_box)
+}
+
 /// Lower `string + non_string` (or vice versa) concat with runtime
 /// coercion of the non-string side. The non-string operand passes through
 /// `js_jsvalue_to_string` which inspects its NaN tag and produces the
@@ -1317,15 +1547,17 @@ pub(crate) fn lower_string_coerce_concat(
 ) -> Result<String> {
     let l_box = lower_expr(ctx, left)?;
     let r_box = lower_expr(ctx, right)?;
-    let blk = ctx.block();
 
     // Issue #58: fused string+value concat — when one side is a string
     // and the other is not, use the fused runtime call that collapses
     // js_jsvalue_to_string + js_string_concat into a single allocation
     // for number operands (the common `"item_" + i` pattern).
     if l_is_string && !r_is_string {
-        // Issue #214: SSO-safe unbox — see lower_string_concat.
-        let l_handle = unbox_str_handle(blk, &l_box);
+        // Issue #214: SSO-safe unbox; repsel Phase 3a: inline `bitcast+and`
+        // for proven-heap operands (string literals — the `"user_" + i`
+        // shape) and tag-dispatch for canonical-Str locals.
+        let l_handle = str_operand_handle_tag_dispatched(ctx, left, &l_box);
+        let blk = ctx.block();
         let result_handle = blk.call(
             I64,
             "js_string_concat_value",
@@ -1335,8 +1567,9 @@ pub(crate) fn lower_string_coerce_concat(
     }
 
     if !l_is_string && r_is_string {
-        // Issue #214: SSO-safe unbox — see lower_string_concat.
-        let r_handle = unbox_str_handle(blk, &r_box);
+        // Issue #214: SSO-safe unbox; repsel Phase 3a: see above.
+        let r_handle = str_operand_handle_tag_dispatched(ctx, right, &r_box);
+        let blk = ctx.block();
         let result_handle = blk.call(
             I64,
             "js_value_concat_string",
@@ -1347,6 +1580,7 @@ pub(crate) fn lower_string_coerce_concat(
 
     // Both non-string (shouldn't normally reach here) — fall back to
     // the generic path.
+    let blk = ctx.block();
     let l_handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &l_box)]);
     let r_handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &r_box)]);
 

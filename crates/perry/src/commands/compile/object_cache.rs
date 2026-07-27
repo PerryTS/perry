@@ -970,6 +970,18 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Representation-selection Phase 3a — canonical string locals
+    // (tagged-at-rest): `=0`/`off`/`false` reverts the Str-gated lowerings
+    // (`+=` tag-dispatch, inline `.length`, direct string compares, the
+    // char-access receiver fast arm, and the inline StringRef retag) back to
+    // the pre-phase sequences, which changes the emitted IR / .o bytes — a
+    // warm cache must not serve an object built under the other setting.
+    h.field(
+        "env_canonical_str_locals",
+        env_var("PERRY_CANONICAL_STR_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
     // Representation-selection Phase 2 — specialized calling convention:
     // `PERRY_SPECIALIZED_ABI=0/off/false` removes the specialized entries and
     // their static/guarded dispatch sites; `PERRY_SPECIALIZED_ABI_MAX`

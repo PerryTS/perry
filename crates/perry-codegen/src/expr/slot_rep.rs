@@ -86,6 +86,24 @@ pub(crate) enum SlotRep {
     /// materialize with `uitofp` so values above `INT32_MAX` stay observable
     /// as unsigned numbers.
     U32,
+    /// Representation-selection Phase 3a: canonical string local,
+    /// TAGGED-AT-REST. The slot (still the `ctx.locals` double alloca — the
+    /// bits ARE the boxed form) always holds full NaN-box string bits:
+    /// `STRING_TAG|ptr` for heap strings or inline `SHORT_STRING_TAG` SSO
+    /// bits. Unlike `I32`/`U32` this rep does NOT move storage: boxed reads
+    /// and writes are bit-identical to the pre-phase model, shadow-slot GC
+    /// binding is unchanged (the mark/evacuation path is NaN-box-driven and
+    /// already handles these bits), and every alias/refcount demote site
+    /// keeps firing. What the rep buys is a compile-time PROOF consumed by
+    /// the string-op lowerings (`+=` self-append, `.length`, `===`/`<`,
+    /// `charCodeAt`-family): they tag-dispatch inline on the slot bits and
+    /// call the raw string helpers directly on proven-heap handles instead
+    /// of routing every operand through the opaque (and SSO-heap-
+    /// materializing, number-coercing) `js_get_string_pointer_unified`.
+    /// Every specialized site keeps a fallback arm with the legacy sequence,
+    /// so a type-annotation lie degrades to today's behavior, never to a
+    /// wrong-value coercion (RFC §5.5 acceptance contract).
+    Str,
 }
 
 /// `PERRY_CANONICAL_I32_LOCALS` gate. Enabled by default; `=0`/`off`/`false`
@@ -98,6 +116,22 @@ pub(crate) fn canonical_i32_locals_enabled() -> bool {
     *CACHED.get_or_init(|| {
         !matches!(
             std::env::var("PERRY_CANONICAL_I32_LOCALS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// `PERRY_CANONICAL_STR_LOCALS` gate (repsel Phase 3a). Enabled by default;
+/// `=0`/`off`/`false` disables canonical-Str selection and every lowering it
+/// gates (the `+=`/`length`/compare/char-scan fast arms and the inline
+/// `StringRef` retag), reverting to the pre-phase IR byte-for-byte. Keyed
+/// into the object cache (`object_cache.rs`).
+pub(crate) fn canonical_str_locals_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_CANONICAL_STR_LOCALS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         )
     })
@@ -132,12 +166,38 @@ pub(crate) fn note_canonical_i32_local(ctx: &FnCtx<'_>, id: u32, name: &str, rep
 pub(crate) fn canonical_local_i32_slot(ctx: &FnCtx<'_>, id: u32) -> Option<(String, SlotRep)> {
     let rep = *ctx.local_slot_reps.get(&id)?;
     debug_assert!(!matches!(rep, SlotRep::Boxed), "Boxed rep is never stored");
+    // Phase 3a: a canonical-Str local has no i32 slot — its storage is the
+    // ordinary `ctx.locals` double alloca (tagged-at-rest). Every i32-rep
+    // query site (LocalGet materialize, LocalSet store, Update, loops,
+    // capture write-back) must treat it as "not canonical-i32" and fall
+    // through to the plain boxed path, which is bit-exact for Str.
+    if matches!(rep, SlotRep::Str) {
+        return None;
+    }
     let slot = ctx
         .i32_counter_slots
         .get(&id)
         .cloned()
         .expect("canonical-i32 local must have a registered i32 slot");
     Some((slot, rep))
+}
+
+/// True when `id` selected the Phase 3a canonical-Str representation: the
+/// local's `ctx.locals` slot provably holds NaN-box STRING bits (heap
+/// `STRING_TAG` or inline SSO) on every proven-string write, and the
+/// string-op lowerings may tag-dispatch on those bits directly.
+pub(crate) fn local_is_canonical_str(ctx: &FnCtx<'_>, id: u32) -> bool {
+    matches!(ctx.local_slot_reps.get(&id), Some(SlotRep::Str))
+}
+
+/// True when `id` selected canonical-i32/u32 storage (NOT Str — Str keeps
+/// the plain double slot). Use instead of `local_slot_reps.contains_key`
+/// wherever the follow-up action assumes an i32 slot exists.
+pub(crate) fn local_rep_is_canonical_i32(ctx: &FnCtx<'_>, id: u32) -> bool {
+    matches!(
+        ctx.local_slot_reps.get(&id),
+        Some(SlotRep::I32 | SlotRep::U32)
+    )
 }
 
 /// Materialize the boxed-double view of a canonical-i32 local at a boxed use
@@ -186,6 +246,263 @@ pub(crate) fn store_canonical_local_from_double(
 /// on the boxed protocol: closure capture creation snapshots the double slot,
 /// and the capture/writeback machinery assumes it exists. Under-approximating
 /// eligibility here is free.
+/// Phase 3a eligibility pre-pass: locals that must NOT select the
+/// canonical-Str representation, computed once per function body before
+/// lowering (ctx-free — runs at `FnCtx` build time, so it works from
+/// declared `Stmt::Let` types + syntax only and under-approximates freely).
+///
+/// A local is marked ineligible when any of these hold:
+///
+/// - **Non-string-proven write**: some `LocalSet(id, v)` where `v` is not
+///   syntactically a definite string (mirrors
+///   `type_analysis::strings::is_definitely_string_expr`, minus the
+///   ctx-dependent arms), or any `Update` (++/--) on it.
+/// - **Compare hazard** (mirrors `compare.rs`'s `other_side_is_any`
+///   demote): the local appears on one side of an equality compare whose
+///   other side is not itself a proven string — the static `string` type
+///   may be a lie there (the NestJS `token === name` shape), so the local
+///   keeps the fully generic model.
+/// - **Catch binding**: `catch (e)` bindings rebind exceptional values of
+///   unknown representation.
+///
+/// Closure bodies are NOT walked: closure-referenced locals are excluded
+/// wholesale via `collect_closure_referenced_locals` (same as Phase 1),
+/// which sees explicit capture lists too.
+pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
+    use perry_hir::{Expr, Stmt};
+
+    // Forward pass: ids declared `let x: string` / `let x = "lit"` — the
+    // set syntactic string-ness of `LocalGet` operands is judged against.
+    let mut declared_str: HashSet<u32> = HashSet::new();
+    fn scan_declared(stmts: &[Stmt], out: &mut HashSet<u32>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { id, ty, init, .. } => {
+                    let ty_str = matches!(
+                        ty,
+                        perry_hir::types::Type::String | perry_hir::types::Type::StringLiteral(_)
+                    );
+                    let init_str = init
+                        .as_ref()
+                        .is_some_and(|e| matches!(e, Expr::String(_) | Expr::WtfString(_)));
+                    if ty_str || init_str {
+                        out.insert(*id);
+                    }
+                }
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    scan_declared(then_branch, out);
+                    if let Some(e) = else_branch {
+                        scan_declared(e, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => scan_declared(body, out),
+                Stmt::For { init, body, .. } => {
+                    if let Some(i) = init {
+                        scan_declared(std::slice::from_ref(i), out);
+                    }
+                    scan_declared(body, out);
+                }
+                Stmt::Labeled { body, .. } => scan_declared(std::slice::from_ref(body), out),
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    scan_declared(body, out);
+                    if let Some(c) = catch {
+                        scan_declared(&c.body, out);
+                    }
+                    if let Some(f) = finally {
+                        scan_declared(f, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        scan_declared(&c.body, out);
+                    }
+                }
+                Stmt::Expr(_)
+                | Stmt::Return(_)
+                | Stmt::Throw(_)
+                | Stmt::Break
+                | Stmt::Continue
+                | Stmt::LabeledBreak(_)
+                | Stmt::LabeledContinue(_)
+                | Stmt::PreallocateBoxes(_)
+                | Stmt::PreallocateTdzBoxes(_) => {}
+            }
+        }
+    }
+    scan_declared(stmts, &mut declared_str);
+
+    // Ctx-free mirror of `is_definitely_string_expr` for the write / compare
+    // scans. Under-approximates: anything unrecognized is "not a string".
+    fn syntactic_str(e: &Expr, declared: &HashSet<u32>) -> bool {
+        match e {
+            Expr::String(_) | Expr::WtfString(_) | Expr::StringCoerce(_) | Expr::TypeOf(_) => true,
+            Expr::LocalGet(id) => declared.contains(id),
+            Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left,
+                right,
+            } => syntactic_str(left, declared) || syntactic_str(right, declared),
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => syntactic_str(then_expr, declared) && syntactic_str(else_expr, declared),
+            Expr::Call { callee, .. } => matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { property, .. } if matches!(
+                    property.as_str(),
+                    "toString" | "toLowerCase" | "toUpperCase" | "trim"
+                        | "trimStart" | "trimEnd" | "slice" | "substring"
+                        | "substr" | "charAt" | "repeat" | "replace"
+                        | "replaceAll" | "padStart" | "padEnd" | "concat"
+                        | "normalize" | "toFixed" | "toPrecision" | "toExponential"
+                )
+            ),
+            _ => false,
+        }
+    }
+
+    struct Scan<'a> {
+        declared: &'a HashSet<u32>,
+        out: HashSet<u32>,
+    }
+    impl Scan<'_> {
+        fn expr(&mut self, e: &Expr) {
+            match e {
+                Expr::LocalSet(id, v) => {
+                    if !syntactic_str(v, self.declared) {
+                        self.out.insert(*id);
+                    }
+                }
+                Expr::Update { id, .. } => {
+                    self.out.insert(*id);
+                }
+                Expr::Compare { op, left, right }
+                    if matches!(
+                        op,
+                        perry_hir::CompareOp::Eq
+                            | perry_hir::CompareOp::Ne
+                            | perry_hir::CompareOp::LooseEq
+                            | perry_hir::CompareOp::LooseNe
+                    ) =>
+                {
+                    if let Expr::LocalGet(id) = left.as_ref() {
+                        if !syntactic_str(right, self.declared) {
+                            self.out.insert(*id);
+                        }
+                    }
+                    if let Expr::LocalGet(id) = right.as_ref() {
+                        if !syntactic_str(left, self.declared) {
+                            self.out.insert(*id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // Do not descend into closure bodies: closure-referenced locals
+            // are excluded wholesale by `collect_closure_referenced_locals`.
+            if !matches!(e, Expr::Closure { .. }) {
+                perry_hir::walker::walk_expr_children(e, &mut |child| self.expr(child));
+            }
+        }
+        fn stmts(&mut self, stmts: &[Stmt]) {
+            for s in stmts {
+                self.stmt(s);
+            }
+        }
+        fn stmt(&mut self, s: &Stmt) {
+            match s {
+                Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
+                Stmt::Return(Some(e)) => self.expr(e),
+                Stmt::Let { init: Some(e), .. } => self.expr(e),
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    self.expr(condition);
+                    self.stmts(then_branch);
+                    if let Some(eb) = else_branch {
+                        self.stmts(eb);
+                    }
+                }
+                Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                    self.expr(condition);
+                    self.stmts(body);
+                }
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
+                    if let Some(i) = init {
+                        self.stmt(i);
+                    }
+                    if let Some(c) = condition {
+                        self.expr(c);
+                    }
+                    if let Some(u) = update {
+                        self.expr(u);
+                    }
+                    self.stmts(body);
+                }
+                Stmt::Labeled { body, .. } => self.stmt(body),
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    self.stmts(body);
+                    if let Some(c) = catch {
+                        if let Some((catch_id, _)) = &c.param {
+                            self.out.insert(*catch_id);
+                        }
+                        self.stmts(&c.body);
+                    }
+                    if let Some(f) = finally {
+                        self.stmts(f);
+                    }
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                } => {
+                    self.expr(discriminant);
+                    for c in cases {
+                        if let Some(t) = &c.test {
+                            self.expr(t);
+                        }
+                        self.stmts(&c.body);
+                    }
+                }
+                Stmt::Return(None)
+                | Stmt::Let { init: None, .. }
+                | Stmt::Break
+                | Stmt::Continue
+                | Stmt::LabeledBreak(_)
+                | Stmt::LabeledContinue(_)
+                | Stmt::PreallocateBoxes(_)
+                | Stmt::PreallocateTdzBoxes(_) => {}
+            }
+        }
+    }
+    let mut scan = Scan {
+        declared: &declared_str,
+        out: HashSet::new(),
+    };
+    scan.stmts(stmts);
+    scan.out
+}
+
 pub(crate) fn collect_closure_referenced_locals(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
     let mut closures: Vec<(perry_hir::types::FuncId, perry_hir::Expr)> = Vec::new();
     let mut seen: HashSet<perry_hir::types::FuncId> = HashSet::new();

@@ -769,6 +769,8 @@ pub(super) fn compile_module_entry(
             // import/init machinery; the win lives in function bodies).
             repsel_context_allows_canonical_i32: false,
             repsel_closure_ref_locals: std::collections::HashSet::new(),
+            repsel_context_allows_canonical_str: false,
+            repsel_str_ineligible_locals: std::collections::HashSet::new(),
             spec_abi_functions: &cross_module.spec_abi_functions,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),
@@ -1384,6 +1386,8 @@ pub(super) fn compile_module_entry(
             // import/init machinery; the win lives in function bodies).
             repsel_context_allows_canonical_i32: false,
             repsel_closure_ref_locals: std::collections::HashSet::new(),
+            repsel_context_allows_canonical_str: false,
+            repsel_str_ineligible_locals: std::collections::HashSet::new(),
             spec_abi_functions: &cross_module.spec_abi_functions,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),

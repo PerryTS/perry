@@ -381,8 +381,18 @@ pub(super) fn compile_method(
         && !method.is_async
         && !method.is_generator
         && !method.was_plain_async;
-    let repsel_closure_refs = if repsel_allows {
+    // Phase 3a: same context restrictions, independent env gate.
+    let repsel_str_allows = crate::expr::canonical_str_locals_enabled()
+        && !method.is_async
+        && !method.is_generator
+        && !method.was_plain_async;
+    let repsel_closure_refs = if repsel_allows || repsel_str_allows {
         crate::expr::collect_closure_referenced_locals(&method.body)
+    } else {
+        std::collections::HashSet::new()
+    };
+    let repsel_str_ineligible = if repsel_str_allows {
+        crate::expr::collect_canonical_str_ineligible_locals(&method.body)
     } else {
         std::collections::HashSet::new()
     };
@@ -492,6 +502,8 @@ pub(super) fn compile_method(
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
         repsel_closure_ref_locals: repsel_closure_refs,
+        repsel_context_allows_canonical_str: repsel_str_allows,
+        repsel_str_ineligible_locals: repsel_str_ineligible,
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
@@ -1400,8 +1412,18 @@ pub(super) fn compile_static_method(
         && !f.is_async
         && !f.is_generator
         && !f.was_plain_async;
-    let repsel_closure_refs = if repsel_allows {
+    // Phase 3a: same context restrictions, independent env gate.
+    let repsel_str_allows = crate::expr::canonical_str_locals_enabled()
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    let repsel_closure_refs = if repsel_allows || repsel_str_allows {
         crate::expr::collect_closure_referenced_locals(&f.body)
+    } else {
+        std::collections::HashSet::new()
+    };
+    let repsel_str_ineligible = if repsel_str_allows {
+        crate::expr::collect_canonical_str_ineligible_locals(&f.body)
     } else {
         std::collections::HashSet::new()
     };
@@ -1515,6 +1537,8 @@ pub(super) fn compile_static_method(
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
         repsel_closure_ref_locals: repsel_closure_refs,
+        repsel_context_allows_canonical_str: repsel_str_allows,
+        repsel_str_ineligible_locals: repsel_str_ineligible,
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),

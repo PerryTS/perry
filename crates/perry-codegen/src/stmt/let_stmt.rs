@@ -1134,7 +1134,12 @@ pub(crate) fn lower_let(
     // falling through to the plain path would allocate a double slot that
     // shadows the canonical one (reads through `local_slot_reps` would see a
     // stale 0). Mirrors the canonical branch's init lowering exactly.
-    if ctx.local_slot_reps.contains_key(&id) {
+    //
+    // Phase 3a: canonical-Str locals are NOT routed here — their storage is
+    // the ordinary `ctx.locals` double slot, so a re-declaration must take
+    // exactly the pre-phase plain path below (`local_rep_is_canonical_i32`
+    // is false for `SlotRep::Str`).
+    if crate::expr::local_rep_is_canonical_i32(ctx, id) {
         if let Some(init_expr) = init {
             let i32_slots = ctx.i32_counter_slots.clone();
             let flat_ca = ctx.flat_const_arrays.clone();
@@ -1264,6 +1269,33 @@ pub(crate) fn lower_let(
             }
         }
         return Ok(());
+    }
+
+    // Representation-selection Phase 3a: canonical-Str selection
+    // (tagged-at-rest). Unlike canonical-i32, this does NOT change storage:
+    // the local keeps the ordinary `ctx.locals` double slot allocated below,
+    // its shadow-slot GC binding, and every alias/refcount demote — the
+    // NaN-box string bits at rest ARE the canonical representation. The rep
+    // entry is a compile-time proof consumed by the string-op lowerings
+    // (`+=` self-append, `.length`, `===`/`<`, `charCodeAt`-family), which
+    // tag-dispatch on the slot bits inline instead of routing operands
+    // through `js_get_string_pointer_unified`. See `expr/slot_rep.rs`.
+    let canonical_str = ctx.repsel_context_allows_canonical_str
+        && matches!(
+            refined_ty,
+            perry_hir::types::Type::String | perry_hir::types::Type::StringLiteral(_)
+        )
+        && !ctx.local_slot_reps.contains_key(&id)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.repsel_closure_ref_locals.contains(&id)
+        && !ctx.repsel_str_ineligible_locals.contains(&id)
+        && !ctx.i32_counter_slots.contains_key(&id);
+    if canonical_str {
+        ctx.local_slot_reps.insert(id, crate::expr::SlotRep::Str);
+        crate::expr::note_canonical_i32_local(ctx, id, name, crate::expr::SlotRep::Str);
+        // Fall through: storage, init lowering, aliasing demotes, and GC
+        // binding are exactly the plain path's.
     }
 
     // Slot must live in the entry block — see the boxed-var case

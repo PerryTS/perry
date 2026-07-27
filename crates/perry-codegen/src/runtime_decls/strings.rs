@@ -663,6 +663,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
     module.declare_function("js_string_compare", I32, &[I64, I64]);
+    // Repsel Phase 3a (canonical-Str locals): boxed-operand variants for the
+    // non-proven-heap compare arms. `js_jsvalue_equals` content-compares
+    // strings in any representation mix (heap × SSO) without materializing
+    // SSO bits to the heap, and never number-coerces (`5 === "5"` is false).
+    // `js_string_compare_value` is the relational (`<`/`>`) counterpart.
+    module.declare_function("js_jsvalue_equals", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_string_compare_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_random", DOUBLE, &[]);
     // WebAssembly host runtime (issue #76). All take/return NaN-boxed
