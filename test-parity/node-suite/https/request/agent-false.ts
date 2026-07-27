@@ -15,7 +15,8 @@ server.listen(0, "127.0.0.1", () => {
     host: "127.0.0.1",
     port: (server.address() as any).port,
   }, (res) => {
-    console.log("agent:", req.agent === false);
+    console.log("https agent:", req.agent instanceof https.Agent);
+    console.log("global agent:", req.agent === https.globalAgent);
     console.log("authorized:", req.socket.authorized);
     res.resume();
     res.on("end", () => server.close());
