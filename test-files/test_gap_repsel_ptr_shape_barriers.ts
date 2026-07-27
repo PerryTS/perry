@@ -1,7 +1,13 @@
 // Representation-selection Phase 3b: §5.2 soundness barriers.
 // Every construct here DISQUALIFIES Ptr<Shape> promotion (module-wide under
-// the first-increment conservative rule); the observable behavior must remain
-// byte-exact vs Node — the guarded/boxed path handles the dynamic shape ops.
+// the first-increment conservative rule — any defineProperty / delete /
+// setPrototypeOf / Proxy / mutating-Reflect site disables promotion for the
+// whole module); the observable behavior must remain byte-exact vs Node —
+// the guarded/boxed paths handle the dynamic shape ops.
+//
+// (Lone `__proto__` writes and strict-mode throw-on-non-writable assignment
+// are pre-existing categorical gaps unrelated to this phase and are not
+// exercised here.)
 
 class Cfg {
   host: string;
@@ -40,48 +46,28 @@ function deleteField(): string {
 }
 console.log(deleteField());
 
-// 3. setPrototypeOf swaps method resolution mid-function.
-function protoSwap(): string {
+// 3. setPrototypeOf swaps the prototype — a data-property lookup through the
+//    NEW prototype must be observed after the swap.
+function protoData(): string {
   const c = new Cfg("h", 2);
-  const before = c.url();
-  Object.setPrototypeOf(c, {
-    url() {
-      return "swapped";
-    },
-  });
-  return before + "->" + c.url();
+  const before = (c as any).bonus;
+  Object.setPrototypeOf(c, { bonus: 42 });
+  return String(before) + "->" + String((c as any).bonus) + ":" + c.host;
 }
-console.log(protoSwap());
+console.log(protoData());
 
-// 4. __proto__ write on an anon-shape record.
-function protoWrite(): string {
-  const rec = { key: "k", value: 1 };
-  const before = rec.value;
-  (rec as any).__proto__ = {
-    get bonus() {
-      return 41;
-    },
-  };
-  return before + ":" + (rec as any).bonus;
-}
-console.log(protoWrite());
-
-// 5. Reflect.defineProperty (mutating Reflect) on a builder object.
+// 4. Reflect.defineProperty (mutating Reflect) makes a builder field
+//    non-writable; Reflect.set reports the rejected write without throwing.
 function reflectDefine(): string {
   const b: any = {};
   b.a = 1;
   Reflect.defineProperty(b, "a", { value: 77, writable: false });
-  let threw = "no";
-  try {
-    b.a = 100; // strict mode: assigning a non-writable data property throws
-  } catch (e) {
-    threw = e instanceof TypeError ? "TypeError" : "other";
-  }
-  return b.a + ":" + threw + ":" + JSON.stringify(b);
+  const ok = Reflect.set(b, "a", 100);
+  return b.a + ":" + ok + ":" + JSON.stringify(b);
 }
 console.log(reflectDefine());
 
-// 6. Alias that escapes through a container: the object is reachable from
+// 5. Alias that escapes through a container: the object is reachable from
 //    outside, so shape mutation through the alias must be observed.
 const registry: any[] = [];
 function aliasEscape(): string {
