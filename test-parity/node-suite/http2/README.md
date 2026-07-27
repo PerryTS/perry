@@ -51,10 +51,10 @@ cleanup, and waited on a timer instead of a protocol event.
 
 Node 26.5.0 ran all 59 fixtures three times with no failures or output changes.
 Each run produced the same combined stdout digest:
-`ffb546784c0092a9c8224d50c3ab7665dd1bcc5c253379eda034961b79f6ceca`.
+`902c9e6a695d33df3653724f01459f346b6ed29929fed42f3fb8820db27b5747`.
 
-Perry ran the 57-fixture focused suite three times. The two appended fixtures
-and the two fixtures changed during final review then ran in isolation three
+Perry ran the focused suite with 57 fixtures three times. The two appended
+fixtures and every fixture changed during review then ran in isolation three
 times. All classifications stayed fixed, yielding:
 
 ```text

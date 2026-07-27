@@ -22,10 +22,14 @@ try {
     client.on("error", reject);
     client.on("connect", resolve);
   });
-  const request = client.request({ ":method": "PATCH", ":path": "/compat" });
-  request.resume();
-  request.end();
-  await received;
+  const completed = new Promise<void>((resolve, reject) => {
+    const request = client.request({ ":method": "PATCH", ":path": "/compat" });
+    request.on("error", reject);
+    request.on("end", resolve);
+    request.resume();
+    request.end();
+  });
+  await Promise.all([received, completed]);
 } finally {
   client?.destroy();
   await new Promise<void>((resolve) => server.close(() => resolve()));

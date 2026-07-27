@@ -14,5 +14,9 @@ const cases = [
 ] as const;
 
 for (const [key, value] of cases) {
-  console.log(key, value, getPackedSettings({ [key]: value }).length);
+  console.log(
+    key,
+    value,
+    getPackedSettings({ [key]: value }).toString("hex"),
+  );
 }
