@@ -4112,9 +4112,7 @@ fn emit_guarded_i32_bound(
     let shared_counter_i32 = ctx.i32_counter_slots.get(&counter_id).cloned();
     let counter_slot = match ctx.locals.get(&counter_id).cloned() {
         Some(slot) => slot,
-        None if shared_counter_i32.is_some()
-            && ctx.local_slot_reps.contains_key(&counter_id) =>
-        {
+        None if shared_counter_i32.is_some() && ctx.local_slot_reps.contains_key(&counter_id) => {
             // Unused: the shared branch returns before any counter load. The
             // sentinel register name makes any future misuse fail the LLVM
             // parser loudly instead of silently emitting an empty operand.
@@ -4546,54 +4544,53 @@ fn lower_for_after_init_with_i32_bound(
     // site having done so already).  Only the site that inserted should
     // remove it at loop exit to avoid disturbing a pre-existing slot.
     let local_bound_counter_i32_was_fresh: bool;
-    let i32_local_bound_slot: Option<String> =
-        if let Some((counter_id, bound_id, _op)) = local_bound_classification {
-            // Allocate a parallel i32 slot for the counter if not already
-            // present.  Counters that fall outside `integer_locals`
-            // (e.g. `for (let i = 0; i < arr.length; i++)` where `i` is
-            // captured by a closure or escapes) skip the Let-site
-            // allocation; providing one here enables both `icmp slt i32`
-            // in the condition and `add i32 1` in Update.
-            let fresh = if !ctx.i32_counter_slots.contains_key(&counter_id) {
-                if let Some(counter_slot) = ctx.locals.get(&counter_id).cloned() {
-                    let i32_slot = ctx.func.alloca_entry(I32);
-                    let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
-                    let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
-                    ctx.block().store(I32, &cur_i32, &i32_slot);
-                    ctx.i32_counter_slots.insert(counter_id, i32_slot);
-                    true
-                } else {
-                    false
-                }
+    let i32_local_bound_slot: Option<String> = if let Some((counter_id, bound_id, _op)) =
+        local_bound_classification
+    {
+        // Allocate a parallel i32 slot for the counter if not already
+        // present.  Counters that fall outside `integer_locals`
+        // (e.g. `for (let i = 0; i < arr.length; i++)` where `i` is
+        // captured by a closure or escapes) skip the Let-site
+        // allocation; providing one here enables both `icmp slt i32`
+        // in the condition and `add i32 1` in Update.
+        let fresh = if !ctx.i32_counter_slots.contains_key(&counter_id) {
+            if let Some(counter_slot) = ctx.locals.get(&counter_id).cloned() {
+                let i32_slot = ctx.func.alloca_entry(I32);
+                let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
+                let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
+                ctx.block().store(I32, &cur_i32, &i32_slot);
+                ctx.i32_counter_slots.insert(counter_id, i32_slot);
+                true
             } else {
                 false
-            };
-            local_bound_counter_i32_was_fresh = fresh;
-            // Hoist `fptosi(n)` to a fresh i32 alloca before the cond block
-            // so LLVM sees a loop-invariant integer bound — critical for
-            // SCEV / LoopVectorizer to recognize the induction variable.
-            // Repsel Phase 1: a canonical-i32 bound has no double slot — its
-            // i32 slot already holds the exact value, no conversion needed.
-            if let Some((bound_i32_slot, _rep)) =
-                crate::expr::canonical_local_i32_slot(ctx, bound_id)
-            {
-                let bound_i32 = ctx.block().load(I32, &bound_i32_slot);
-                let slot = ctx.func.alloca_entry(I32);
-                ctx.block().store(I32, &bound_i32, &slot);
-                Some(slot)
-            } else if let Some(bound_slot) = ctx.locals.get(&bound_id).cloned() {
-                let bound_dbl = ctx.block().load(DOUBLE, &bound_slot);
-                let bound_i32 = ctx.block().fptosi(DOUBLE, &bound_dbl, I32);
-                let slot = ctx.func.alloca_entry(I32);
-                ctx.block().store(I32, &bound_i32, &slot);
-                Some(slot)
-            } else {
-                None
             }
         } else {
-            local_bound_counter_i32_was_fresh = false;
-            None
+            false
         };
+        local_bound_counter_i32_was_fresh = fresh;
+        // Hoist `fptosi(n)` to a fresh i32 alloca before the cond block
+        // so LLVM sees a loop-invariant integer bound — critical for
+        // SCEV / LoopVectorizer to recognize the induction variable.
+        // Repsel Phase 1: a canonical-i32 bound has no double slot — its
+        // i32 slot already holds the exact value, no conversion needed.
+        if let Some((bound_i32_slot, _rep)) = crate::expr::canonical_local_i32_slot(ctx, bound_id) {
+            let bound_i32 = ctx.block().load(I32, &bound_i32_slot);
+            let slot = ctx.func.alloca_entry(I32);
+            ctx.block().store(I32, &bound_i32, &slot);
+            Some(slot)
+        } else if let Some(bound_slot) = ctx.locals.get(&bound_id).cloned() {
+            let bound_dbl = ctx.block().load(DOUBLE, &bound_slot);
+            let bound_i32 = ctx.block().fptosi(DOUBLE, &bound_dbl, I32);
+            let slot = ctx.func.alloca_entry(I32);
+            ctx.block().store(I32, &bound_i32, &slot);
+            Some(slot)
+        } else {
+            None
+        }
+    } else {
+        local_bound_counter_i32_was_fresh = false;
+        None
+    };
     // Issue #168 follow-up: when neither the `arr.length` hoist nor the static
     // `i < n` peephole fired, try the runtime-guarded path. We emit a
     // finite-integral-i32 guard and `fptosi(n)` once here, in the pre-loop

@@ -1154,7 +1154,23 @@ pub(crate) fn lower_let(
     // capture machinery snapshots the double slot), flat-const row aliases
     // (array-valued), and async/generator contexts (gated at FnCtx build).
     // See `expr/slot_rep.rs` for the mechanism and range-soundness audit.
-    let canonical_i32 = needs_i32_slot
+    //
+    // Canonical-only safety term: an `int_valued_ta_locals` member (#6898) is
+    // eligible even when neither index-used nor strictly-i32-bounded — its
+    // whole-function proof (every write i32-producing or an int-kind TA read,
+    // every observation ToInt32-coercing) makes canonical-i32 storage
+    // output-invariant with the NaN-safe entry conversion. The parallel-shadow
+    // gate (`needs_i32_slot` below) is deliberately NOT widened, so the
+    // flag-off model stays exactly the pre-phase one.
+    let canonical_safe_local =
+        i32_safe_local || ctx.native_facts.int_valued_ta_locals().contains(&id);
+    let canonical_i32 = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+        && canonical_safe_local
+        && init_in_i32_range
+        && !matches!(refined_ty, perry_hir::types::Type::BigInt)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.i32_counter_slots.contains_key(&id)
         && ctx.repsel_context_allows_canonical_i32
         && !ctx.repsel_closure_ref_locals.contains(&id)
         && !ctx.array_row_aliases.contains_key(&id);

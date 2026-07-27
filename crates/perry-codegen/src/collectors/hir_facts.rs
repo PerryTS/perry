@@ -39,6 +39,14 @@ pub(crate) struct RepresentationFacts {
     /// is a non-BigInt expression). Seeds `is_provably_not_bigint`, which gates
     /// the inline non-BigInt bitwise fast path. See `collect_not_bigint_locals`.
     pub not_bigint_locals: HashSet<u32>,
+    /// The `int_valued_ta_locals` subset of `integer_locals` (#6898): every
+    /// write is i32-producing OR a possibly-OOB int-kind typed-array read, and
+    /// every observation is ToInt32-coercing. Retained separately because that
+    /// whole-function observation proof makes canonical-i32 storage (repsel
+    /// Phase 1) output-invariant even when the local is neither index-used nor
+    /// strictly-i32-bounded — the box `slot.ts` mix shape (`let l = P[0]` from
+    /// an Int32Array PARAM, bitwise-only updates and observations).
+    pub int_valued_ta_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +135,10 @@ impl TypeFacts {
 
     pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.unsigned_i32_locals
+    }
+
+    pub(crate) fn int_valued_ta_locals(&self) -> &HashSet<u32> {
+        &self.representation.int_valued_ta_locals
     }
 
     pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
@@ -330,12 +342,16 @@ pub(crate) fn collect_type_facts(
     // `PERRY_INT_VALUED_LOCALS` (keyed into the object cache). Boxed / module-
     // global locals are excluded (they never take the i32 shadow slot and would
     // only pollute the fact for other consumers).
+    let mut int_valued_ta_locals: HashSet<u32> = HashSet::new();
     if super::int_valued_ta_locals::enabled() {
         let extra =
             super::int_valued_ta_locals::collect_int_valued_ta_locals(stmts, params, binding_types);
         for id in extra {
             if !boxed_vars.contains(&id) && !module_globals.contains_key(&id) {
                 integer_locals.insert(id);
+                // Retained as its own fact for repsel Phase 1 eligibility —
+                // see `RepresentationFacts::int_valued_ta_locals`.
+                int_valued_ta_locals.insert(id);
             }
         }
     }
@@ -407,6 +423,7 @@ pub(crate) fn collect_type_facts(
             integer_locals: integer_locals.clone(),
             unsigned_i32_locals,
             not_bigint_locals,
+            int_valued_ta_locals,
         },
         arrays: array_facts,
         effect: effect_facts,
