@@ -14,7 +14,8 @@ const server = http.createServer((req: any, res: any) => {
   );
   console.log(
     "req signal:",
-    [typeof signal, signal === req.signal, signal.aborted, typeof signal.reason].join("|"),
+    [typeof signal, signal === req.signal, signal.aborted, typeof signal.reason]
+      .join("|"),
   );
   req.on("close", () => {
     console.log("req close signal:", req.signal.aborted);
@@ -145,5 +146,3 @@ server.listen(0, "127.0.0.1", () => {
   );
   req.end("body");
 });
-
-setTimeout(() => {}, 1500);

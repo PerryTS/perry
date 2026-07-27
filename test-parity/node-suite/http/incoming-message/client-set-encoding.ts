@@ -22,5 +22,3 @@ server.listen(0, () => {
     });
   });
 });
-
-setTimeout(() => {}, 1500);

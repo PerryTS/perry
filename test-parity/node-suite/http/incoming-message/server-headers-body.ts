@@ -45,5 +45,3 @@ server.listen(0, () => {
   );
   req.end("hello body");
 });
-
-setTimeout(() => {}, 1500);

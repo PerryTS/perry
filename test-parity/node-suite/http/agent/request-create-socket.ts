@@ -23,7 +23,7 @@ server.listen(0, () => {
   let createdSocket = false;
   agent.createSocket = (req: any, options: any, cb: any) => {
     createdSocket = true;
-    const sock = net.connect(options.port, options.host);
+    const sock = net.connect(options.port, "127.0.0.1");
     cb(null, sock);
   };
 
@@ -38,6 +38,7 @@ server.listen(0, () => {
         console.log("status:", res.statusCode);
         console.log("body:", body);
         console.log("createSocket called:", createdSocket);
+        agent.destroy();
         server.close();
       });
     },

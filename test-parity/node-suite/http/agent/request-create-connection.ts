@@ -23,7 +23,7 @@ server.listen(0, () => {
   let created = false;
   agent.createConnection = (options: any) => {
     created = true;
-    return net.connect(options.port, options.host);
+    return net.connect(options.port, "127.0.0.1");
   };
 
   const req = http.request(
@@ -37,6 +37,7 @@ server.listen(0, () => {
         console.log("status:", res.statusCode);
         console.log("body:", body);
         console.log("createConnection called:", created);
+        agent.destroy();
         server.close();
       });
     },

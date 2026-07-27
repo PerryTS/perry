@@ -7,7 +7,6 @@
 
 import { createServer, get } from "node:http";
 
-const PORT = 19044;
 const sockets: any[] = [];
 
 const server = createServer((req: any, res: any) => {
@@ -19,24 +18,30 @@ const server = createServer((req: any, res: any) => {
 
 function probe(path: string, headers: any): Promise<void> {
   return new Promise((resolve) => {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing address");
+    }
     const req = get(
-      { hostname: "127.0.0.1", port: PORT, path, headers },
+      { hostname: "127.0.0.1", port: address.port, path, headers },
       (res: any) => {
         res.on("data", () => {});
         res.on("end", () => {
           const h = res.headers;
           console.log(
-            `${path} -> connection=${h.connection} keep-alive=${h["keep-alive"]}`
+            `${path} -> connection=${h.connection} keep-alive=${
+              h["keep-alive"]
+            }`,
           );
           resolve();
         });
-      }
+      },
     );
     req.on("socket", (s: any) => sockets.push(s));
   });
 }
 
-server.listen(PORT, async () => {
+server.listen(0, "127.0.0.1", async () => {
   // Default HTTP/1.1 request: server keeps the connection alive.
   await probe("/", {});
   // Client asks to close: server echoes Connection: close, no Keep-Alive.
@@ -47,5 +52,3 @@ server.listen(PORT, async () => {
   for (const s of sockets) s.destroy();
   server.close(() => console.log("closed"));
 });
-
-setTimeout(() => {}, 1500);
