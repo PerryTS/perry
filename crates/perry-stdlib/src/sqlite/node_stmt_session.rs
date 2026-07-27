@@ -116,7 +116,13 @@ pub unsafe extern "C" fn js_node_sqlite_statement_sync_iterate(
     // Node (#6561): exhaustion and `return()` produce
     // `{ done: true, value: null }`, and `return()` terminates iteration.
     let rows = js_node_sqlite_statement_sync_all(stmt_handle, params_arr);
-    perry_runtime::array::array_values_iter_null_done(f64_from_jsvalue(JSValue::array_ptr(rows)))
+    let stmt = get_handle::<NodeSqliteStmtHandle>(stmt_handle)
+        .unwrap_or_else(|| throw_invalid_state("statement has been finalized"));
+    perry_runtime::array::array_values_iter_null_done(
+        f64_from_jsvalue(JSValue::array_ptr(rows)),
+        &stmt.iteration_epoch,
+        stmt.iteration_epoch.load(Ordering::Relaxed),
+    )
 }
 
 #[no_mangle]

@@ -246,21 +246,16 @@ pub(crate) fn non_negative_i32_value(value: JSValue, name: &str, allow_infinity:
     if allow_infinity && number == f64::INFINITY {
         return i32::MAX;
     }
-    if !number.is_finite() || number < 0.0 || number.fract() != 0.0 || number > i32::MAX as f64 {
+    if !number.is_finite() || number.fract() != 0.0 {
+        throw_type(&format!("The \"{}\" option must be an integer", name));
+    }
+    if number < 0.0 || number > i32::MAX as f64 {
         throw_range(&format!(
             "The value of \"{}\" is out of range. It must be a non-negative integer.",
             name
         ));
     }
     number as i32
-}
-
-pub(crate) unsafe fn non_negative_i32_option(options_value: f64, name: &str, default: i32) -> i32 {
-    let value = object_field(options_value, name);
-    if value.is_undefined() {
-        return default;
-    }
-    non_negative_i32_value(value, name, false)
 }
 
 pub(crate) fn node_sqlite_limit(name: &str) -> Option<(usize, Limit)> {
@@ -302,7 +297,7 @@ pub(crate) unsafe fn parse_node_sqlite_options(options_value: f64) -> NodeSqlite
         "enableDoubleQuotedStringLiterals",
         options.enable_dqs,
     );
-    options.timeout_ms = non_negative_i32_option(options_value, "timeout", options.timeout_ms);
+    options.timeout_ms = int32_option(options_value, "timeout", options.timeout_ms);
     options.read_bigints = bool_option(options_value, "readBigInts", options.read_bigints);
     options.return_arrays = bool_option(options_value, "returnArrays", options.return_arrays);
     options.allow_bare_named_parameters = bool_option(

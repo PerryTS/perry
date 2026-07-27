@@ -164,6 +164,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_own_property_names_dispatch(handle: i64) -> f64 {
+    #[cfg(feature = "database-sqlite")]
+    if let Some(names) = crate::sqlite::dispatch_node_sqlite_own_property_names(handle) {
+        return names;
+    }
     if crate::string_decoder::is_string_decoder_handle(handle) {
         return crate::string_decoder::string_decoder_own_property_names(handle);
     }

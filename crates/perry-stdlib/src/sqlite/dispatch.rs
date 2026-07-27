@@ -37,6 +37,13 @@ pub unsafe fn dispatch_node_sqlite_database_method(
             let stmt = js_node_sqlite_database_sync_prepare(handle, arg0, arg1);
             Some(js_nanbox_pointer(stmt))
         }
+        "serialize" => Some(js_nanbox_pointer(
+            js_node_sqlite_database_sync_serialize(handle, arg0) as i64,
+        )),
+        "deserialize" => {
+            js_node_sqlite_database_sync_deserialize(handle, arg0);
+            Some(undefined_f64())
+        }
         "function" => {
             js_node_sqlite_database_sync_function(handle, arg0, arg1, arg2);
             Some(undefined_f64())
@@ -94,6 +101,8 @@ pub unsafe fn dispatch_node_sqlite_database_property(
         | "close"
         | "exec"
         | "prepare"
+        | "serialize"
+        | "deserialize"
         | "function"
         | "aggregate"
         | "enableDefensive"
@@ -385,6 +394,30 @@ pub unsafe fn dispatch_node_sqlite_limits_set(
         conn.set_limit(limit, new_value);
     });
     true
+}
+
+pub unsafe fn dispatch_node_sqlite_own_property_names(handle: Handle) -> Option<f64> {
+    if js_node_sqlite_is_limits_handle(handle) == 0 {
+        return None;
+    }
+    let mut names = js_array_alloc(0);
+    for name in [
+        "length",
+        "sqlLength",
+        "column",
+        "exprDepth",
+        "compoundSelect",
+        "vdbeOp",
+        "functionArg",
+        "attach",
+        "likePatternLength",
+        "variableNumber",
+        "triggerDepth",
+    ] {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        names = js_array_push_f64(names, f64_from_jsvalue(JSValue::string_ptr(key)));
+    }
+    Some(js_nanbox_pointer(names as i64))
 }
 
 #[no_mangle]
