@@ -33,6 +33,18 @@ pub(super) fn transform_static_literal_requires(
             let Some(full) = cap.name("call") else {
                 continue;
             };
+            // Skip matches that only exist inside a comment or string literal
+            // — their span is blank in the masked copy. Same filter the
+            // hoisting loop below applies. Without it a phantom mention like
+            // `// fallback: require("./generated")` outside a `try` would
+            // flip a genuinely optional specifier back to mandatory and
+            // reintroduce the #6873 hard error.
+            if masked_source[full.start()..full.end()]
+                .bytes()
+                .all(|b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
+            {
+                continue;
+            }
             let specifier = cap.name("spec").map(|m| m.as_str()).unwrap_or_default();
             let in_try = is_inside_try_block(&masked_source, full.start());
             optional_specs
@@ -387,6 +399,31 @@ try { const lazy = require("./shared"); } catch {}
         assert!(
             got.contains(r#"import * as __perry_static_require_0 from "./shared";"#),
             "specifier with an unguarded use must stay hoisted, got:\n{got}"
+        );
+    }
+
+    /// A `require(...)` mention that exists only inside a comment or a string
+    /// is not a call site, so it must not drag a genuinely optional specifier
+    /// back to mandatory. Before the masked-span filter in the classification
+    /// loop, the commented mention below (outside any `try`) flipped
+    /// `./absent-generated` to non-optional and the hoist reintroduced the
+    /// exact #6873 hard error this change removes.
+    #[test]
+    fn comment_and_string_mentions_do_not_defeat_optional_classification() {
+        let source = r#"
+// fallback: require("./absent-generated")
+const doc = 'see require("./absent-generated") for details';
+let B = null;
+try { B = require("./absent-generated").DATA; } catch {}
+"#;
+        let got = transform_static_literal_requires(
+            source,
+            &HashSet::new(),
+            Path::new("/nonexistent-test-dir"),
+        );
+        assert!(
+            !got.contains("import * as"),
+            "comment/string mentions must not make the specifier mandatory, got:\n{got}"
         );
     }
 
