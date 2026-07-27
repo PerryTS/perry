@@ -15,6 +15,7 @@ mod host_safepoints;
 mod incremental_sweep_reclaim;
 mod layout_trace;
 mod oldgen;
+mod os_tag;
 mod roots;
 mod runtime_roots;
 mod smoke;

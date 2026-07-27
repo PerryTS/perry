@@ -245,6 +245,15 @@ socket2 = { version = "0.6", features = ["all"] }
 [target.'cfg(target_pointer_width = "64")'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
+# #6882: mimalloc tags its OS mappings with VM tag 100, which macOS tooling
+# (vmmap, Instruments' VM Tracker, `footprint`) decodes as `IOAccelerator` —
+# the entire JS heap renders as GPU-driver memory. `js_gc_init` retags to
+# VM_MEMORY_APPLICATION_SPECIFIC_1 (240) via mi_option_set(mi_option_os_tag),
+# which lives behind libmimalloc-sys's `extended` API. Apple-only: the tag is
+# only consulted by Apple kernels, and mimalloc itself is 64-bit-only (above).
+[target.'cfg(all(target_pointer_width = "64", target_vendor = "apple"))'.dependencies]
+libmimalloc-sys = { version = "0.1", features = ["extended"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_System_Console",

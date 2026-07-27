@@ -555,6 +555,21 @@ pub extern "C" fn js_gc_init() {
     // a second js_gc_init on another thread is harmless.
     #[cfg(windows)]
     crate::win_console::enable_vt_output();
+    // #6882: mimalloc (the global allocator, #62) tags its OS mappings with
+    // VM tag 100, which macOS tooling — vmmap, Instruments' VM Tracker,
+    // `footprint` — decodes as `IOAccelerator`: the entire JS heap renders
+    // as GPU-driver memory (644 MB of "IOAccelerator" on an allocation-heavy
+    // benchmark). Retag to VM_MEMORY_APPLICATION_SPECIFIC_1 (240) so heap
+    // regions show up as a neutral, distinctive "Memory Tag 240" instead.
+    // An explicit `MIMALLOC_OS_TAG` env setting still wins — skip the
+    // override so profilers can keep steering the tag themselves. Regions
+    // mapped before this call (early Rust startup) keep tag 100; the bulk
+    // of the heap (arena blocks, GC metadata) maps afterwards. Idempotent,
+    // like the rest of this function.
+    #[cfg(all(target_pointer_width = "64", target_vendor = "apple"))]
+    if std::env::var_os("MIMALLOC_OS_TAG").is_none() {
+        unsafe { libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_os_tag, 240) };
+    }
     crate::node_submodules::diagnostics_channel_init_main_thread();
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:

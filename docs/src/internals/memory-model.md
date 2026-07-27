@@ -125,6 +125,30 @@ The combination — NaN-boxing for cheap value representation, per-thread arenas
 
 Going to native code does not preclude having a GC. It just means the GC's relationship with the compiled code is mediated by an ABI: codegen emits calls to `gc_malloc`, `js_shadow_frame_push/pop`/`js_shadow_slot_set`, and `js_write_barrier`, and the runtime crate (linked in as native code) is a real generational mark-sweep collector. There is nothing reference-counted at runtime.
 
+## Profiling Perry's memory on macOS
+
+Two things to know before reading `vmmap`, Instruments' VM Tracker, or
+`footprint` output for a Perry binary:
+
+- **The heap does not show up under `MALLOC_*`.** Perry routes all runtime
+  allocation through mimalloc (`#[global_allocator]`, issue #62), whose
+  mappings appear as their own anonymous regions, not in the system malloc
+  zones.
+- **Those regions used to render as `IOAccelerator`** — i.e. GPU driver
+  memory — because mimalloc tags its mappings with VM tag 100, which macOS
+  tooling decodes as `IOAccelerator`. Since #6882 the runtime retags them to
+  `VM_MEMORY_APPLICATION_SPECIFIC_1` (240) during `js_gc_init`, so the JS
+  heap shows up as **`Memory Tag 240`**. If you see large `IOAccelerator`
+  regions in a Perry process, you are either on a pre-#6882 build or looking
+  at the few pages mapped before `js_gc_init` ran; there is no GPU memory
+  involved. Set `MIMALLOC_OS_TAG=<n>` to steer the tag yourself — the
+  runtime's retag defers to an explicit env setting.
+
+Also note that mimalloc purges freed memory with `MADV_FREE`-style advice:
+macOS keeps such pages counted in RSS and `phys_footprint` until memory
+pressure, so headline RSS numbers overstate what the process would actually
+hold onto under pressure.
+
 ## Source map
 
 | Topic | File |
