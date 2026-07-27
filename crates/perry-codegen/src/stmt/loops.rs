@@ -2609,6 +2609,45 @@ fn match_object_array_write_loop(
     })
 }
 
+/// #6812 (w12): integer-domain emission for INDEX expressions — every node
+/// is integer-proven (`object_array_write_number_integer_valued`), so the
+/// counters' native i32 registers drive i64 add/sub/mul/srem directly: no
+/// float round-trip and, critically, no `frem` (which lowers to an fmod
+/// LIBRARY CALL on AArch64 — ~10ns per element). `srem` equals JS `%` on
+/// the proven domain (nonnegative dividend, positive divisor).
+fn emit_object_array_write_index_i64(
+    ctx: &mut FnCtx<'_>,
+    expr: &ObjectArrayWriteNumber,
+    outer_i32: &str,
+    inner_i32: &str,
+) -> String {
+    match expr {
+        ObjectArrayWriteNumber::OuterCounter => ctx.block().sext(I32, outer_i32, I64),
+        ObjectArrayWriteNumber::InnerCounter => ctx.block().sext(I32, inner_i32, I64),
+        ObjectArrayWriteNumber::Constant(c) => format!("{}", *c as i64),
+        ObjectArrayWriteNumber::Add(l, r) => {
+            let l = emit_object_array_write_index_i64(ctx, l, outer_i32, inner_i32);
+            let r = emit_object_array_write_index_i64(ctx, r, outer_i32, inner_i32);
+            ctx.block().add(I64, &l, &r)
+        }
+        ObjectArrayWriteNumber::Sub(l, r) => {
+            let l = emit_object_array_write_index_i64(ctx, l, outer_i32, inner_i32);
+            let r = emit_object_array_write_index_i64(ctx, r, outer_i32, inner_i32);
+            ctx.block().sub(I64, &l, &r)
+        }
+        ObjectArrayWriteNumber::Mul(l, r) => {
+            let l = emit_object_array_write_index_i64(ctx, l, outer_i32, inner_i32);
+            let r = emit_object_array_write_index_i64(ctx, r, outer_i32, inner_i32);
+            ctx.block().mul(I64, &l, &r)
+        }
+        ObjectArrayWriteNumber::Mod(l, r) => {
+            let l = emit_object_array_write_index_i64(ctx, l, outer_i32, inner_i32);
+            let r = emit_object_array_write_index_i64(ctx, r, outer_i32, inner_i32);
+            ctx.block().srem(I64, &l, &r)
+        }
+    }
+}
+
 fn emit_object_array_write_number(
     ctx: &mut FnCtx<'_>,
     expr: &ObjectArrayWriteNumber,
@@ -3011,11 +3050,9 @@ fn lower_object_array_write_versioned_for(
         };
         let value =
             emit_object_array_write_number(ctx, &matched.values[0], &outer_double, &inner_double);
-        let idx_double =
-            emit_object_array_write_number(ctx, &kt.index, &outer_double, &inner_double);
+        let idx_i64 = emit_object_array_write_index_i64(ctx, &kt.index, &outer, &inner);
         let (lane, spill_flag, slot) = {
             let blk = ctx.block();
-            let idx_i64 = blk.fptosi(DOUBLE, &idx_double, I64);
             let lane_ptr = blk.gep(I64, out_alloca, &[(I64, &idx_i64)]);
             let lane = blk.load(I64, &lane_ptr);
             let spill_flag = blk.and(I64, &lane, "32768");
