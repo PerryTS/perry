@@ -1752,6 +1752,21 @@ pub fn dispatch_arraylike_read_method(
 /// engine; any other receiver yields `undefined`. `recv` is the call-site
 /// `this` (IMPLICIT_THIS) the thunk read.
 pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_len: usize) -> f64 {
+    // A Proxy receiver reaches this generic path whenever the eager HIR array
+    // fold bails (untyped receiver — #6397) and the dispatcher resolves the
+    // method through `Get(proxy, name)` → prototype thunk → here. Neither
+    // normalization below can represent it: `as_real_array` rightly rejects
+    // handle-band ids (deref = the #6279 segfault class) and
+    // `run_object_mutator` only accepts plain objects — so the mutation was
+    // silently DROPPED (immer's `draft.list.push(x)` returned undefined and
+    // mutated nothing). Route the traps instead.
+    if crate::proxy::js_proxy_is_proxy(recv) == 1 {
+        if let Some(r) = super::push_pop::proxy_array_mutator(recv, method, args_ptr, args_len) {
+            return r;
+        }
+        // Mutators not yet trap-routed (reverse/sort/splice/fill/copyWithin)
+        // keep the pre-existing fall-through.
+    }
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { real_array_mutator(arr, method, args_ptr, args_len) };

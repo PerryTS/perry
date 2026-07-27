@@ -175,6 +175,117 @@ unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
     crate::proxy::js_proxy_set(proxy, key_f64, value);
 }
 
+/// `Get(proxy, <string key>)` through the proxy's `get` trap; fresh key
+/// string per call, same GC rationale as `proxy_set_str_key`.
+unsafe fn proxy_get_str_key(proxy: f64, key_bytes: &[u8]) -> f64 {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    crate::proxy::js_proxy_get(proxy, key_f64)
+}
+
+/// `DeleteProperty(proxy, <string key>)` through the proxy's `deleteProperty`
+/// trap.
+unsafe fn proxy_delete_str_key(proxy: f64, key_bytes: &[u8]) {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    crate::proxy::js_proxy_delete(proxy, key_f64);
+}
+
+/// `Array.prototype` mutators on a Proxy receiver, spec-routed through the
+/// proxy's `get`/`set`/`deleteProperty` traps (§23.1.3.21 push, §23.1.3.19
+/// pop, §23.1.3.24 shift, §23.1.3.32 unshift — length reads/writes and every
+/// element move go through `[[Get]]`/`[[Set]]`, which is what fires the
+/// traps).
+///
+/// This is the receiver-normalization gap behind the `holder.list.push(3)`
+/// silent no-op: `array_proto_mutator` normalized the receiver with
+/// `as_real_array` (which rightly rejects handle-band proxy ids — deref'ing
+/// one as an ArrayHeader is the #6279 segfault class) and then
+/// `run_object_mutator` (proxy ids are not plain objects), so the whole call
+/// fell through to `undefined` WITHOUT mutating anything. The eager HIR fold
+/// used to hide this by calling `js_array_push_f64` (proxy-aware via
+/// `array_ptr_as_proxy`) directly, until #6397 correctly deferred untyped
+/// receivers to the runtime dispatch.
+///
+/// Returns `None` for mutators not yet routed (reverse/sort/splice/fill/
+/// copyWithin) — callers keep their previous fall-through behavior for those.
+pub(super) fn proxy_array_mutator(
+    proxy: f64,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg = |i: usize| -> f64 {
+        if !args_ptr.is_null() && i < args_len {
+            unsafe { *args_ptr.add(i) }
+        } else {
+            undefined
+        }
+    };
+    unsafe {
+        match method {
+            "push" => {
+                let len = proxy_array_length(proxy);
+                for i in 0..args_len {
+                    proxy_set_str_key(proxy, (len + i as u64).to_string().as_bytes(), arg(i));
+                }
+                let new_len = len + args_len as u64;
+                proxy_set_str_key(proxy, b"length", new_len as f64);
+                Some(new_len as f64)
+            }
+            "pop" => {
+                let len = proxy_array_length(proxy);
+                if len == 0 {
+                    proxy_set_str_key(proxy, b"length", 0.0);
+                    return Some(undefined);
+                }
+                let idx = (len - 1).to_string();
+                let value = proxy_get_str_key(proxy, idx.as_bytes());
+                proxy_delete_str_key(proxy, idx.as_bytes());
+                proxy_set_str_key(proxy, b"length", (len - 1) as f64);
+                Some(value)
+            }
+            "shift" => {
+                let len = proxy_array_length(proxy);
+                if len == 0 {
+                    proxy_set_str_key(proxy, b"length", 0.0);
+                    return Some(undefined);
+                }
+                let first = proxy_get_str_key(proxy, b"0");
+                for k in 1..len {
+                    let from = k.to_string();
+                    let to = (k - 1).to_string();
+                    let v = proxy_get_str_key(proxy, from.as_bytes());
+                    proxy_set_str_key(proxy, to.as_bytes(), v);
+                }
+                proxy_delete_str_key(proxy, (len - 1).to_string().as_bytes());
+                proxy_set_str_key(proxy, b"length", (len - 1) as f64);
+                Some(first)
+            }
+            "unshift" => {
+                let len = proxy_array_length(proxy);
+                let count = args_len as u64;
+                if count > 0 {
+                    for k in (0..len).rev() {
+                        let from = k.to_string();
+                        let to = (k + count).to_string();
+                        let v = proxy_get_str_key(proxy, from.as_bytes());
+                        proxy_set_str_key(proxy, to.as_bytes(), v);
+                    }
+                    for i in 0..args_len {
+                        proxy_set_str_key(proxy, i.to_string().as_bytes(), arg(i));
+                    }
+                }
+                let new_len = len + count;
+                proxy_set_str_key(proxy, b"length", new_len as f64);
+                Some(new_len as f64)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {

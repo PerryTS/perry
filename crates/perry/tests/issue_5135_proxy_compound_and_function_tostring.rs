@@ -120,3 +120,53 @@ console.log(target.join(","), holder.list.length);
         "obj.list.push must mutate the proxied array through its set trap"
     );
 }
+
+/// The dispatch-tower variant of fix #3: when the receiver is untyped, #6397
+/// defers `proxy.push(x)` to `js_native_call_method`, whose proxy branch
+/// resolves the method via `Get(proxy, "push")` and lands in the
+/// `Array.prototype` thunk → `array_proto_mutator`. That normalization had no
+/// proxy branch (`as_real_array` rightly rejects handle-band ids;
+/// `run_object_mutator` only accepts plain objects), so the whole mutation was
+/// silently dropped — no trap fired, nothing mutated, `undefined` returned.
+/// Pin the spec trap sequence byte-for-byte against node: push fires
+/// `get(length)` then `set(<index>)` + `set(length)`, on top of the method
+/// lookup's own `get(push)`.
+#[test]
+fn proxy_array_push_via_dispatch_fires_traps_in_spec_order() {
+    let out = compile_and_run(
+        r#"
+let gets = 0, sets = 0;
+const target: any = [1, 2];
+const inner: any = new Proxy(target, {
+  get(t: any, k: any) { gets++; return t[k]; },
+  set(t: any, k: any, v: any) { sets++; t[k] = v; return true; },
+});
+const r0 = inner[0];
+inner[5] = 42;
+inner.push(9);
+console.log("r0=" + r0, "t5=" + target[5], "t=" + target.join(","), "gets=" + gets, "sets=" + sets);
+"#,
+    );
+    assert_eq!(
+        out, "r0=1 t5=42 t=1,2,,,,42,9 gets=3 sets=3\n",
+        "proxy push must fire get(length) + set(index) + set(length) traps and mutate the target"
+    );
+}
+
+/// Same dispatch path with a default (empty-handler) Proxy: every trap
+/// forwards to the target, so push must land on the target array.
+#[test]
+fn proxy_array_push_empty_handler_forwards_to_target() {
+    let out = compile_and_run(
+        r#"
+const target: any = [1, 2];
+const p: any = new Proxy(target, {});
+p.push(3);
+console.log(target.join(","), p.length);
+"#,
+    );
+    assert_eq!(
+        out, "1,2,3 3\n",
+        "empty-handler proxy push must forward to the target"
+    );
+}
