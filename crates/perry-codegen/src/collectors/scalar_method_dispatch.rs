@@ -50,15 +50,23 @@ pub struct ModuleDispatchFacts {
     /// a declared class (`k.prototype`, `x.constructor.prototype`, …). Nothing
     /// in the module can then be trusted to keep a stable method table.
     opaque_prototype_mutation: bool,
+    /// Representation-selection Phase 3b: the module contains at least one
+    /// §5.2 shape-barrier site (`Object.defineProperty` family, `delete`,
+    /// `setPrototypeOf`/`__proto__` write, `Proxy`, mutating `Reflect.*`).
+    /// Under the first-increment conservative policy, any such site disables
+    /// ALL `Ptr<Shape>` promotion in the module. See
+    /// `collectors/ptr_shape.rs` for the rule's soundness discussion.
+    shape_barrier_sites: bool,
 }
 
 impl Default for ModuleDispatchFacts {
     /// Fail safe: a fact set that was never populated must not license the
-    /// scalar-method summary.
+    /// scalar-method summary (nor any `Ptr<Shape>` promotion).
     fn default() -> Self {
         Self {
             prototype_touched_classes: HashSet::new(),
             opaque_prototype_mutation: true,
+            shape_barrier_sites: true,
         }
     }
 }
@@ -95,6 +103,12 @@ impl ModuleDispatchFacts {
         }
         true
     }
+
+    /// Representation-selection Phase 3b: does the module contain any §5.2
+    /// shape-barrier site (first-increment module-wide kill rule)?
+    pub(crate) fn has_shape_barrier_sites(&self) -> bool {
+        self.shape_barrier_sites
+    }
 }
 
 /// Scan a whole module — top-level init, every function, and every class body
@@ -104,6 +118,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     let mut facts = ModuleDispatchFacts {
         prototype_touched_classes: HashSet::new(),
         opaque_prototype_mutation: false,
+        shape_barrier_sites: false,
     };
 
     note_stmts(&hir.init, &mut facts);
@@ -141,11 +156,21 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
 }
 
 fn note_stmts(stmts: &[Stmt], facts: &mut ModuleDispatchFacts) {
-    for_each_expr_in_stmts(stmts, &mut |expr| note_prototype_effect(expr, facts));
+    for_each_expr_in_stmts(stmts, &mut |expr| {
+        note_prototype_effect(expr, facts);
+        if super::ptr_shape::expr_is_shape_barrier(expr) {
+            facts.shape_barrier_sites = true;
+        }
+    });
 }
 
 fn note_expr_tree(expr: &Expr, facts: &mut ModuleDispatchFacts) {
-    for_each_expr(expr, &mut |node| note_prototype_effect(node, facts));
+    for_each_expr(expr, &mut |node| {
+        note_prototype_effect(node, facts);
+        if super::ptr_shape::expr_is_shape_barrier(node) {
+            facts.shape_barrier_sites = true;
+        }
+    });
 }
 
 /// Record what a single expression node does to some class's prototype.

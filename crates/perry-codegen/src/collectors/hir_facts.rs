@@ -120,6 +120,13 @@ pub(crate) struct ShapeStabilityFacts {
     // codegen consumer reads it yet.
     #[allow(dead_code)]
     pub scalar_replaceable_object_locals: HashSet<u32>,
+    /// Representation-selection Phase 3b: function-locals proven to hold
+    /// exactly one object of a statically-immutable shape for their entire
+    /// lifetime (`collectors/ptr_shape.rs`). Consumers: guard-free fixed-
+    /// offset field access (`expr/property_get.rs`, `expr/property_set.rs`)
+    /// and unguarded direct method dispatch
+    /// (`lower_call/property_get/dynamic_dispatch.rs`).
+    pub shape_proven_ptr_locals: HashMap<u32, super::PtrShapeLocal>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -296,6 +303,12 @@ impl TypeFacts {
         &self.shape_stability.scalar_replaceable_object_locals
     }
 
+    /// Representation-selection Phase 3b: the shape-proof fact for a local,
+    /// when it is a proven `Ptr<Shape>` local (`collectors/ptr_shape.rs`).
+    pub(crate) fn shape_proven_ptr_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
+        self.shape_stability.shape_proven_ptr_locals.get(&local_id)
+    }
+
     pub(crate) fn proves_scalar_replacement(&self, local_id: u32) -> bool {
         self.shape_stability
             .scalar_replaceable_object_locals
@@ -423,6 +436,17 @@ pub(crate) fn collect_type_facts(
         .chain(non_escaping_object_literals.keys())
         .copied()
         .collect();
+    // Representation-selection Phase 3b: shape-proven pointer locals. Gated
+    // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
+    // inside the collector.
+    let shape_proven_ptr_locals = super::ptr_shape::collect_shape_proven_ptr_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        &not_bigint_locals,
+    );
     let graph = TypeFacts {
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
@@ -460,6 +484,7 @@ pub(crate) fn collect_type_facts(
         },
         shape_stability: ShapeStabilityFacts {
             scalar_replaceable_object_locals,
+            shape_proven_ptr_locals,
         },
         materialization_hazards,
     };
