@@ -1047,12 +1047,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
             let v = lower_expr(ctx, value)?;
-            let r = if same_put_value_receiver_expr(target, receiver) {
-                t.clone()
-            } else {
-                lower_expr(ctx, receiver)?
-            };
             let strict_i32 = if *strict { "1" } else { "0" };
+            // #6812 (w12): same-receiver dynamic-key stores route through the
+            // outlined 3-way dynamic-key IC — per-site cache in the same
+            // `perry_ic_N` global family as the static write PIC. The helper
+            // validates everything against the receiver's LIVE state (cached
+            // token/slot are compared, never dereferenced) and falls through
+            // to full `[[Set]]` + re-prime on any mismatch, so every call is
+            // at worst the generic path. Distinct-receiver stores keep the
+            // receiver-aware generic helper.
+            if same_put_value_receiver_expr(target, receiver) {
+                let site_id = ctx.ic_site_counter;
+                ctx.ic_site_counter += 1;
+                let cache_name = format!("perry_ic_{}", site_id);
+                ctx.ic_globals.push(cache_name.clone());
+                let cache_ref = format!("@{}", cache_name);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_put_value_set_dyn_ic",
+                    &[
+                        (crate::types::PTR, &cache_ref),
+                        (DOUBLE, &t),
+                        (DOUBLE, &k),
+                        (DOUBLE, &v),
+                        (I32, strict_i32),
+                    ],
+                ));
+            }
+            let r = lower_expr(ctx, receiver)?;
             Ok(ctx.block().call(
                 DOUBLE,
                 "js_put_value_set",

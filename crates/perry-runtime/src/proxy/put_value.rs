@@ -381,6 +381,249 @@ pub extern "C" fn js_put_value_set_ic_miss(
     result
 }
 
+// ---------------------------------------------------------------------------
+// #6812 (w12): 3-way dynamic-key write IC.
+//
+// Layout of the per-site `[8 x i64]` cache (same global family as the
+// static write PIC): `[shape_token, k0, s0, k1, s1, k2, s2, _spare]`.
+// A way's key is the NaN-boxed key VALUE's bits: SSO keys (<= 5 bytes)
+// compare by CONTENT — move-immune and hitting across distinct string
+// instances — while heap keys compare by identity (a moved or re-built key
+// simply misses; identity can never false-hit). The shape token mirrors the
+// static PIC (stamped ShapeId lifted with the ID bit, else the shared keys
+// pointer) and, like every Perry IC, is only COMPARED, never dereferenced:
+// stale entries self-heal by missing. That property is what the discarded
+// safepointing-RHS approach lacked — nothing here roots or revalidates
+// across safepoints, so the hot path is pure compares before a store.
+
+const DYN_IC_WAYS: usize = 3;
+
+/// Outlined dynamic-key PutValue with per-site cache. Fast path: shape token
+/// + key-bits match -> validated own-slot overwrite. Everything else falls
+/// through to the full `[[Set]]` semantics and re-primes.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_dyn_ic(
+    cache: *mut [i64; 8],
+    target: f64,
+    key: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    if !cache.is_null() {
+        let hit = unsafe {
+            let c = &*cache;
+            let token = c[0] as u64;
+            if token != 0 {
+                let key_bits = key.to_bits() as i64;
+                let mut found = None;
+                for way in 0..DYN_IC_WAYS {
+                    if c[1 + way * 2] == key_bits {
+                        found = Some(c[2 + way * 2] as u32);
+                        break;
+                    }
+                }
+                found.and_then(|slot| dyn_ic_try_store(target, token, slot, value))
+            } else {
+                None
+            }
+        };
+        if let Some(ret) = hit {
+            return ret;
+        }
+    }
+    js_put_value_set_dyn_ic_miss(cache, target, key, value, strict)
+}
+
+/// Validated fast store: the receiver must still be an ordinary,
+/// non-forwarded, unblocked, class-tagged heap object whose CURRENT shape
+/// token equals the cached one and whose inline region covers the slot.
+/// Every check reads the receiver's live state — the cached token/slot are
+/// never dereferenced — so a GC between prime and hit at worst causes a
+/// miss, never a wrong store.
+#[inline]
+unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Option<f64> {
+    let target_bits = target.to_bits();
+    if (target_bits & !POINTER_MASK) != POINTER_TAG {
+        return None;
+    }
+    let obj_addr = (target_bits & POINTER_MASK) as usize;
+    let gc_header = crate::value::addr_class::try_read_gc_header(obj_addr)?;
+    const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || gc_header._reserved & BLOCKING_FLAGS != 0
+    {
+        return None;
+    }
+    let obj = obj_addr as *mut crate::ObjectHeader;
+    let class_id = (*obj).class_id;
+    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+        || class_id == 0
+        || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+    {
+        return None;
+    }
+    let current_token = {
+        let parent_class_id = (*obj).parent_class_id;
+        if crate::object::shapes::is_shape_id(parent_class_id) {
+            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
+        } else {
+            (*obj).keys_array as u64
+        }
+    };
+    if current_token != token {
+        return None;
+    }
+    let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+    if slot >= alloc_limit {
+        return None;
+    }
+    crate::object::store_object_field_slot(obj, slot as usize, value.to_bits());
+    Some(value)
+}
+
+// #6088-style keep: codegen emits the only call; a whole-program bitcode
+// link would otherwise dead-strip the IC entry.
+#[used]
+static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(*mut [i64; 8], f64, f64, f64, i32) -> f64 =
+    js_put_value_set_dyn_ic;
+
+/// Full `[[Set]]` semantics + prime. Mirrors the static PIC's prime policy
+/// (only a successful ordinary own-data overwrite on a class-tagged,
+/// unblocked, shape-shared receiver may prime), with the key resolved from
+/// its VALUE (SSO or heap) instead of requiring an interned pointer.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_dyn_ic_miss(
+    cache: *mut [i64; 8],
+    target: f64,
+    key: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let result = js_put_value_set(
+        target_handle.get_nanbox_f64(),
+        key_handle.get_nanbox_f64(),
+        value_handle.get_nanbox_f64(),
+        target_handle.get_nanbox_f64(),
+        strict,
+    );
+    if cache.is_null() {
+        return result;
+    }
+    unsafe {
+        let target = target_handle.get_nanbox_f64();
+        let key = key_handle.get_nanbox_f64();
+        let target_bits = target.to_bits();
+        if (target_bits & !POINTER_MASK) != POINTER_TAG {
+            return result;
+        }
+        let obj_addr = (target_bits & POINTER_MASK) as usize;
+        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
+            return result;
+        };
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc_header._reserved & BLOCKING_FLAGS != 0
+        {
+            return result;
+        }
+        let obj = obj_addr as *mut crate::ObjectHeader;
+        let class_id = (*obj).class_id;
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+            || class_id == 0
+            || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+            || crate::array::object_prototype_addr_matches(obj_addr)
+        {
+            return result;
+        }
+        let keys = (*obj).keys_array;
+        if keys.is_null() || (keys as u64) >> 48 != 0 {
+            return result;
+        }
+        let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
+            return result;
+        };
+        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
+                != crate::gc::GC_FLAG_SHAPE_SHARED
+        {
+            return result;
+        }
+        // Resolve the key's own-field index by VALUE (SSO or heap bytes).
+        let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let key_jsval = crate::value::JSValue::from_bits(key.to_bits());
+        let Some(key_bytes) = crate::string::js_string_key_bytes(key_jsval, &mut key_buf) else {
+            return result;
+        };
+        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+        if key_count > 4096 {
+            return result;
+        }
+        let mut own_idx = None;
+        let mut cand_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..key_count {
+            let candidate = crate::array::js_array_get(keys, i as u32);
+            if let Some(cand_bytes) = crate::string::js_string_key_bytes(candidate, &mut cand_buf) {
+                if cand_bytes == key_bytes {
+                    own_idx = Some(i as u32);
+                    break;
+                }
+            }
+        }
+        let Some(idx) = own_idx else {
+            return result;
+        };
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+        if idx >= alloc_limit {
+            return result;
+        }
+        let parent_class_id = (*obj).parent_class_id;
+        let shape_token = if crate::object::shapes::is_shape_id(parent_class_id) {
+            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
+        } else {
+            keys as u64
+        };
+        let c = &mut *cache;
+        let key_bits = key.to_bits() as i64;
+        if c[0] as u64 != shape_token {
+            // New shape at this site: restart the way set.
+            *c = [0; 8];
+        }
+        // MRU insert: shift ways down, newest first. A duplicate key way is
+        // moved to the front rather than duplicated.
+        let mut ways: Vec<(i64, i64)> = (0..DYN_IC_WAYS)
+            .map(|w| (c[1 + w * 2], c[2 + w * 2]))
+            .filter(|(k, _)| *k != 0 && *k != key_bits)
+            .collect();
+        ways.insert(0, (key_bits, idx as i64));
+        ways.truncate(DYN_IC_WAYS);
+        for (w, (k, sl)) in ways.iter().enumerate() {
+            c[1 + w * 2] = *k;
+            c[2 + w * 2] = *sl;
+        }
+        // Token last: a zero or stale token cannot hit until it matches the
+        // receiver's current discriminated shape.
+        c[0] = shape_token as i64;
+    }
+    result
+}
+
 #[cold]
 fn trace_object_array_numeric_write_rejection(reason: &'static str) {
     if std::env::var_os("PERRY_TRACE_OBJECT_ARRAY_WRITE_GUARD").is_some() {
