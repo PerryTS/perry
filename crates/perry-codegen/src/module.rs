@@ -66,12 +66,12 @@ fn promote_global_for_units(line: &str) -> String {
 /// call. The two groups below re-enable those optimizations for a small,
 /// individually audited allowlist:
 ///
-/// * `#2` (PURE) = `nounwind willreturn memory(none)`. Invariant: the
+/// * `#2` (PURE) = `nounwind willreturn readnone`. Invariant: the
 ///   helper's Rust body (transitively) performs NaN-box BIT manipulation
 ///   only — no loads, no stores, no allocation, no GC trigger, no
 ///   `js_throw`/longjmp, and it is total over arbitrary input bits (no
 ///   panic, no UB), so LLVM may CSE/hoist/sink/delete it freely.
-/// * `#3` (READONLY) = `nounwind willreturn memory(read)`. Invariant: the
+/// * `#3` (READONLY) = `nounwind willreturn readonly`. Invariant: the
 ///   helper may READ heap memory (string headers, BigInt limbs) but never
 ///   writes, never allocates, never triggers GC, never takes a lock, and
 ///   never throws. LLVM may CSE/LICM it across write-free regions and
@@ -79,10 +79,21 @@ fn promote_global_for_units(line: &str) -> String {
 ///   possibly-writing call — which keeps it correct w.r.t. the moving GC,
 ///   because every GC-capable helper stays maximally clobbering.
 ///
+/// SYNTAX NOTE: the groups are spelled with the LEGACY `readnone` /
+/// `readonly` function attributes, NOT the modern `memory(none)` /
+/// `memory(read)` — old LLVM asm parsers (e.g. the Apple clang 15 shipped
+/// on macos-14 CI runners, and any user clang predating LLVM's `memory`
+/// attribute) reject the modern spelling with "unterminated attribute
+/// group", which killed every `--backend llvm` compile through that clang
+/// (caught by the simctl iOS smoke gating the v0.5.1265 release). New
+/// parsers still accept the legacy spelling and auto-upgrade it to the
+/// equivalent `memory(...)` form, so semantics are identical everywhere.
+///
 /// SOUNDNESS NOTES (read before adding an entry):
-/// * Deliberately `memory(read)`, NOT `memory(argmem: read)`: helper args
-///   are f64 NaN-boxes, not LLVM pointer arguments, so `argmem` would mean
-///   "reads no memory at all" and license CSE/DSE across real heap reads.
+/// * Deliberately reads-any (`readonly`, i.e. `memory(read)`), NOT an
+///   argmem-scoped form: helper args are f64 NaN-boxes, not LLVM pointer
+///   arguments, so `argmem` would mean "reads no memory at all" and
+///   license CSE/DSE across real heap reads.
 /// * Anything that can allocate or trigger GC gets NO group — the moving
 ///   GC's shadow-stack reload discipline depends on those calls staying
 ///   maximally clobbering.
@@ -471,10 +482,10 @@ impl LlModule {
             }
         }
         if used_pure {
-            ir.push_str("\nattributes #2 = { nounwind willreturn memory(none) }\n");
+            ir.push_str("\nattributes #2 = { nounwind willreturn readnone }\n");
         }
         if used_readonly {
-            ir.push_str("\nattributes #3 = { nounwind willreturn memory(read) }\n");
+            ir.push_str("\nattributes #3 = { nounwind willreturn readonly }\n");
         }
         // Issue #52: `!0 = !{}` referenced by `!invariant.load !0`, plus the
         // buffer alias-scope metadata. LICM/GVN hoist invariant loads out of
@@ -756,12 +767,12 @@ mod tests {
         );
         assert!(!ir.contains("js_nanbox_string(i64) #"));
         assert_eq!(
-            ir.matches("attributes #2 = { nounwind willreturn memory(none) }")
+            ir.matches("attributes #2 = { nounwind willreturn readnone }")
                 .count(),
             1
         );
         assert_eq!(
-            ir.matches("attributes #3 = { nounwind willreturn memory(read) }")
+            ir.matches("attributes #3 = { nounwind willreturn readonly }")
                 .count(),
             1
         );
@@ -798,7 +809,7 @@ mod tests {
         for u in &units {
             assert!(u.contains("declare i32 @js_is_truthy(double) #3"));
             assert_eq!(
-                u.matches("attributes #3 = { nounwind willreturn memory(read) }")
+                u.matches("attributes #3 = { nounwind willreturn readonly }")
                     .count(),
                 1
             );
