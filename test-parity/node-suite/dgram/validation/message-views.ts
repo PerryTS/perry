@@ -53,11 +53,12 @@ try {
   });
   console.log("scatter accepted:", scatterResult);
   if (scatterResult === "none") {
-    console.log(
-      "scatter delivery:",
-      await scatterReceived,
-      await scatterCallback,
-    );
+    const callbackResult = await scatterCallback;
+    if (callbackResult.startsWith("true:")) {
+      console.log("scatter delivery:", await scatterReceived, callbackResult);
+    } else {
+      console.log("scatter callback:", callbackResult);
+    }
   }
 } finally {
   await Promise.all([

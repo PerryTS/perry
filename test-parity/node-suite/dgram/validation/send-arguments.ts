@@ -13,6 +13,7 @@ function codeOf(fn: () => unknown): string {
 const socket = dgram.createSocket("udp4");
 const buffer = Buffer.from("hello");
 try {
+  await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
   console.log("missing message:", codeOf(() => socket.send()));
   console.log(
     "number message:",
@@ -28,6 +29,5 @@ try {
     codeOf(() => socket.send(buffer, 65536, "127.0.0.1")),
   );
 } finally {
-  await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
   await new Promise<void>((resolve) => socket.close(resolve));
 }

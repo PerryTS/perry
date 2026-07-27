@@ -12,6 +12,7 @@ function codeOf(fn: () => unknown): string {
 
 const socket = dgram.createSocket("udp4");
 try {
+  await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
   console.log("missing args:", codeOf(() => socket.sendto()));
   console.log(
     "bad offset:",
@@ -34,6 +35,5 @@ try {
     codeOf(() => socket.sendto("buffer", 1, 1, 12345, false as never)),
   );
 } finally {
-  await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
   await new Promise<void>((resolve) => socket.close(resolve));
 }
