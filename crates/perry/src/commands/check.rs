@@ -194,9 +194,21 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         ) {
             Ok(result) => result,
             Err(e) => {
-                if verbose > 0 {
-                    eprintln!("Parse error in {}: {}", canonical.display(), e);
-                }
+                // A file that does not parse is a check FAILURE, not a file to
+                // skip. Before this, the error was printed only under `-v` and
+                // the file was dropped without touching `all_diagnostics`, so
+                // `error_count()` stayed 0 and `perry check` reported "All
+                // checks passed!" with exit 0 on syntactically invalid code —
+                // while `perry compile` correctly rejected the same file.
+                // Record it as a real diagnostic so the text summary, the JSON
+                // `success` field and the exit code all agree.
+                all_diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticCode::ParseError,
+                        format!("{}: {}", canonical.display(), e),
+                    )
+                    .build(),
+                );
                 continue;
             }
         };
