@@ -170,3 +170,47 @@ console.log(target.join(","), p.length);
         "empty-handler proxy push must forward to the target"
     );
 }
+
+/// CodeRabbit follow-ups on the trap-routed mutators: holes must be preserved
+/// (`HasProperty` gates each element move; a source hole DELETES the
+/// destination instead of materializing an own `undefined`), and a
+/// `deleteProperty` trap returning false must throw the spec TypeError BEFORE
+/// the length write (DeletePropertyOrThrow). All expectations byte-identical
+/// to `node --experimental-strip-types`.
+#[test]
+fn proxy_array_mutators_preserve_holes_and_throw_on_refused_delete() {
+    let out = compile_and_run(
+        r#"
+{
+  const t: any = [1, , 3];
+  const p: any = new Proxy(t, {});
+  const r = p.shift();
+  console.log("shift:", r, t.join(","), t.length, (0 in t) ? "has0" : "hole0");
+}
+{
+  const t: any = [7, 8];
+  const p: any = new Proxy(t, {});
+  const r = p.pop();
+  console.log("pop:", r, t.join(","), t.length);
+}
+{
+  const t: any = [5, , 6];
+  const p: any = new Proxy(t, {});
+  const r = p.unshift(0);
+  console.log("unshift:", r, t.join(","), t.length, (2 in t) ? "has2" : "hole2");
+}
+{
+  const t: any = [1, 2];
+  const p: any = new Proxy(t, { deleteProperty() { return false; } });
+  try { p.pop(); console.log("delthrow: NO-THROW"); }
+  catch (e: any) { console.log("delthrow: threw", (e instanceof TypeError) ? "TypeError" : "other"); }
+  console.log("delthrow-after:", t.join(","), t.length);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "shift: 1 ,3 2 hole0\npop: 8 7 1\nunshift: 4 0,5,,6 4 hole2\ndelthrow: threw TypeError\ndelthrow-after: 1,2 2\n",
+        "proxy mutators must preserve holes and DeletePropertyOrThrow"
+    );
+}

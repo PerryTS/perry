@@ -183,12 +183,27 @@ unsafe fn proxy_get_str_key(proxy: f64, key_bytes: &[u8]) -> f64 {
     crate::proxy::js_proxy_get(proxy, key_f64)
 }
 
-/// `DeleteProperty(proxy, <string key>)` through the proxy's `deleteProperty`
-/// trap.
-unsafe fn proxy_delete_str_key(proxy: f64, key_bytes: &[u8]) {
+/// `HasProperty(proxy, <string key>)` through the proxy's `has` trap.
+unsafe fn proxy_has_str_key(proxy: f64, key_bytes: &[u8]) -> bool {
     let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     let key_f64 = crate::value::js_nanbox_string(key as i64);
-    crate::proxy::js_proxy_delete(proxy, key_f64);
+    crate::proxy::js_proxy_has(proxy, key_f64).to_bits() == crate::value::TAG_TRUE
+}
+
+/// Spec `DeletePropertyOrThrow(proxy, <string key>)`: routes the
+/// `deleteProperty` trap and throws the spec TypeError when the trap reports
+/// failure — `pop`/`shift`/`unshift` must abort BEFORE their length write
+/// rather than report a successful mutation.
+unsafe fn proxy_delete_str_key_or_throw(proxy: f64, key_bytes: &[u8]) {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    if crate::proxy::js_proxy_delete(proxy, key_f64).to_bits() != crate::value::TAG_TRUE {
+        let msg = format!(
+            "'deleteProperty' on proxy: trap returned falsish for property '{}'",
+            String::from_utf8_lossy(key_bytes)
+        );
+        crate::collection_iter::throw_type_error(&msg);
+    }
 }
 
 /// `Array.prototype` mutators on a Proxy receiver, spec-routed through the
@@ -216,69 +231,100 @@ pub(super) fn proxy_array_mutator(
     args_len: usize,
 ) -> Option<f64> {
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // Every trap below runs arbitrary user JS, which can allocate and move
+    // heap values. Root the proxy and the incoming args once and reload each
+    // carried value from its handle after any trap/allocating call (same
+    // pattern as `js_native_call_method`'s dispatch prologue). The proxy
+    // value itself is a registry handle id (not a heap pointer), but rooting
+    // it is free and keeps the discipline uniform.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proxy_handle = scope.root_nanbox_f64(proxy);
+    let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
+        unsafe { std::slice::from_raw_parts(args_ptr, args_len).to_vec() }
+    } else {
+        Vec::new()
+    };
+    let arg_handles = scope.root_nanbox_f64_slice(&original_args);
+    let p = || proxy_handle.get_nanbox_f64();
     let arg = |i: usize| -> f64 {
-        if !args_ptr.is_null() && i < args_len {
-            unsafe { *args_ptr.add(i) }
-        } else {
-            undefined
-        }
+        arg_handles
+            .get(i)
+            .map(|h| h.get_nanbox_f64())
+            .unwrap_or(undefined)
     };
     unsafe {
         match method {
+            // §23.1.3.21 Array.prototype.push
             "push" => {
-                let len = proxy_array_length(proxy);
+                let len = proxy_array_length(p());
                 for i in 0..args_len {
-                    proxy_set_str_key(proxy, (len + i as u64).to_string().as_bytes(), arg(i));
+                    proxy_set_str_key(p(), (len + i as u64).to_string().as_bytes(), arg(i));
                 }
                 let new_len = len + args_len as u64;
-                proxy_set_str_key(proxy, b"length", new_len as f64);
+                proxy_set_str_key(p(), b"length", new_len as f64);
                 Some(new_len as f64)
             }
+            // §23.1.3.19 Array.prototype.pop
             "pop" => {
-                let len = proxy_array_length(proxy);
+                let len = proxy_array_length(p());
                 if len == 0 {
-                    proxy_set_str_key(proxy, b"length", 0.0);
+                    proxy_set_str_key(p(), b"length", 0.0);
                     return Some(undefined);
                 }
                 let idx = (len - 1).to_string();
-                let value = proxy_get_str_key(proxy, idx.as_bytes());
-                proxy_delete_str_key(proxy, idx.as_bytes());
-                proxy_set_str_key(proxy, b"length", (len - 1) as f64);
-                Some(value)
+                let value_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), idx.as_bytes()));
+                proxy_delete_str_key_or_throw(p(), idx.as_bytes());
+                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                Some(value_handle.get_nanbox_f64())
             }
+            // §23.1.3.24 Array.prototype.shift — HasProperty gates each move:
+            // a hole in the source deletes the destination instead of
+            // materializing an own `undefined`.
             "shift" => {
-                let len = proxy_array_length(proxy);
+                let len = proxy_array_length(p());
                 if len == 0 {
-                    proxy_set_str_key(proxy, b"length", 0.0);
+                    proxy_set_str_key(p(), b"length", 0.0);
                     return Some(undefined);
                 }
-                let first = proxy_get_str_key(proxy, b"0");
+                let first_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), b"0"));
                 for k in 1..len {
                     let from = k.to_string();
                     let to = (k - 1).to_string();
-                    let v = proxy_get_str_key(proxy, from.as_bytes());
-                    proxy_set_str_key(proxy, to.as_bytes(), v);
+                    if proxy_has_str_key(p(), from.as_bytes()) {
+                        let v_handle =
+                            scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
+                        proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                    } else {
+                        proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                    }
                 }
-                proxy_delete_str_key(proxy, (len - 1).to_string().as_bytes());
-                proxy_set_str_key(proxy, b"length", (len - 1) as f64);
-                Some(first)
+                proxy_delete_str_key_or_throw(p(), (len - 1).to_string().as_bytes());
+                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                Some(first_handle.get_nanbox_f64())
             }
+            // §23.1.3.32 Array.prototype.unshift — same HasProperty gating on
+            // the right-shift loop.
             "unshift" => {
-                let len = proxy_array_length(proxy);
+                let len = proxy_array_length(p());
                 let count = args_len as u64;
                 if count > 0 {
                     for k in (0..len).rev() {
                         let from = k.to_string();
                         let to = (k + count).to_string();
-                        let v = proxy_get_str_key(proxy, from.as_bytes());
-                        proxy_set_str_key(proxy, to.as_bytes(), v);
+                        if proxy_has_str_key(p(), from.as_bytes()) {
+                            let v_handle =
+                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
+                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        } else {
+                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                        }
                     }
                     for i in 0..args_len {
-                        proxy_set_str_key(proxy, i.to_string().as_bytes(), arg(i));
+                        proxy_set_str_key(p(), i.to_string().as_bytes(), arg(i));
                     }
                 }
                 let new_len = len + count;
-                proxy_set_str_key(proxy, b"length", new_len as f64);
+                proxy_set_str_key(p(), b"length", new_len as f64);
                 Some(new_len as f64)
             }
             _ => None,
