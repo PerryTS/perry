@@ -126,6 +126,12 @@ pub(crate) use write_barrier::{
 mod dispatch;
 mod record_value;
 mod shadow_slot;
+mod slot_rep;
+pub(crate) use slot_rep::{
+    canonical_i32_locals_enabled, canonical_local_i32_slot, collect_closure_referenced_locals,
+    load_canonical_local_boxed, note_canonical_i32_local, store_canonical_local_from_double,
+    SlotRep,
+};
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
 pub(crate) use shadow_slot::{
@@ -731,6 +737,30 @@ pub(crate) struct FnCtx<'a> {
     /// on hot array-walking loops like `for (let i = 0; i < arr.length;
     /// i++) arr[i] = expr`.
     pub i32_counter_slots: std::collections::HashMap<u32, String>,
+
+    /// Representation-selection Phase 1 (RFC `docs/representation-selection-
+    /// rfc.md`): LocalId → selected slot representation. Absent = `Boxed`
+    /// (double slot in `ctx.locals`, exactly the pre-phase behavior). An
+    /// `I32`/`U32` entry means the i32 alloca registered in
+    /// `ctx.i32_counter_slots` is the CANONICAL AND ONLY storage for the
+    /// local: there is no double slot, no dual writes, and no shadow-stack GC
+    /// binding — a boxed double is materialized (`sitofp`/`uitofp`) only at
+    /// genuinely-boxed use sites. See `expr/slot_rep.rs` for the mechanism,
+    /// eligibility, and the range-soundness audit.
+    pub local_slot_reps: std::collections::HashMap<u32, SlotRep>,
+
+    /// Whether this function context permits canonical-i32 storage selection.
+    /// False for async / generator / `was_plain_async` bodies (the async-to-
+    /// generator transform boxes body locals into shared cells) and for module
+    /// init. Checked at the `Stmt::Let` eligibility site together with the
+    /// `PERRY_CANONICAL_I32_LOCALS` env gate.
+    pub repsel_context_allows_canonical_i32: bool,
+
+    /// Locals referenced anywhere inside a nested closure body (including
+    /// explicit capture lists). Excluded from canonical-i32 selection — the
+    /// capture machinery stays on the boxed protocol. Empty when
+    /// `repsel_context_allows_canonical_i32` is false.
+    pub repsel_closure_ref_locals: std::collections::HashSet<u32>,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a

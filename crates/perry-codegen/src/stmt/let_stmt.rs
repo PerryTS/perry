@@ -310,7 +310,12 @@ pub(crate) fn lower_let(
     // the canonical write path that maintains every shadow (boxed cell,
     // i32 mirror, GC shadow slot, closure capture). A redeclaration with
     // no initializer (`var x;`) keeps the prior value, matching JS.
-    if ctx.locals.contains_key(&id) {
+    //
+    // Repsel Phase 1: a canonical-i32 local has NO `ctx.locals` entry — its
+    // storage is the i32 slot tracked through `local_slot_reps` — so the
+    // reuse guard must consider the rep map too, or a redeclaration would
+    // re-run the allocation path and leave the local with two slots.
+    if ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id) {
         if let Some(init_expr) = init {
             // The binding's OWN declaration ends its Temporal Dead Zone: the
             // reused-slot write below (plain, unchecked) overwrites any TAG_TDZ
@@ -1122,6 +1127,91 @@ pub(crate) fn lower_let(
         }
         return Ok(());
     }
+    // Int32 eligibility (issue #48 / #436 / repsel Phase 1). Computed BEFORE
+    // any storage is allocated so the canonical-i32 path can skip the double
+    // slot entirely. See the block comments below (kept at their historical
+    // position) for the full gate rationale.
+    let init_in_i32_range = match init {
+        Some(perry_hir::Expr::Integer(n)) => i32::try_from(*n).is_ok(),
+        _ => true, // non-Integer init: writes will always go via i32-coercing paths
+    };
+    let is_unsigned_i32_local = ctx.unsigned_i32_locals.contains(&id);
+    let i32_safe_local = ctx.index_used_locals.contains(&id)
+        || ctx.strictly_i32_bounded_locals.contains(&id)
+        || is_unsigned_i32_local;
+    let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+        && i32_safe_local
+        && init_in_i32_range
+        && !matches!(refined_ty, perry_hir::types::Type::BigInt)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.i32_counter_slots.contains_key(&id);
+
+    // Representation-selection Phase 1: for an eligible local in a context
+    // that allows it, the i32 slot IS the canonical (and only) storage — no
+    // double slot, no dual writes, no shadow-stack GC binding. Excluded (stay
+    // on the parallel-shadow / boxed model): closure-referenced locals (the
+    // capture machinery snapshots the double slot), flat-const row aliases
+    // (array-valued), and async/generator contexts (gated at FnCtx build).
+    // See `expr/slot_rep.rs` for the mechanism and range-soundness audit.
+    let canonical_i32 = needs_i32_slot
+        && ctx.repsel_context_allows_canonical_i32
+        && !ctx.repsel_closure_ref_locals.contains(&id)
+        && !ctx.array_row_aliases.contains_key(&id);
+    if canonical_i32 {
+        let rep = if is_unsigned_i32_local {
+            crate::expr::SlotRep::U32
+        } else {
+            crate::expr::SlotRep::I32
+        };
+        // Entry-block alloca, zero-initialized: a branch-skipped `Let` (switch
+        // fallthrough, hoisted `var`) reads 0 — identical to the parallel-
+        // shadow model, whose reads already preferred the 0-seeded i32 slot.
+        let i32_slot = ctx.func.alloca_entry(I32);
+        ctx.func.entry_allocas_push_store(I32, "0", &i32_slot);
+        ctx.i32_counter_slots.insert(id, i32_slot.clone());
+        ctx.local_slot_reps.insert(id, rep);
+        ctx.local_types.insert(id, refined_ty.clone());
+        crate::expr::note_canonical_i32_local(ctx, id, name, rep);
+        if let Some(init_expr) = init {
+            let i32_slots = ctx.i32_counter_slots.clone();
+            let flat_ca = ctx.flat_const_arrays.clone();
+            let ara = ctx.array_row_aliases.clone();
+            let int_locals = ctx.integer_locals.clone();
+            if crate::expr::can_lower_expr_as_i32(
+                init_expr,
+                &i32_slots,
+                &flat_ca,
+                &ara,
+                &int_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
+            ) {
+                // i32-native init: compute directly in i32, single store.
+                let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
+                ctx.block().store(I32, &v_i32, &i32_slot);
+            } else {
+                // Boxed init entering the i32 slot: NaN-safe conversion (the
+                // #6898 trap — an OOB int-typed-array read is a NaN-boxed
+                // `undefined`; raw fptosi of it is poison on x86-64).
+                let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                crate::expr::store_canonical_local_from_double(ctx, id, &v, Some(init_expr));
+            }
+        }
+        if !mutable {
+            if let Some(value) = init.and_then(|expr| match expr {
+                perry_hir::Expr::Integer(value) => Some(*value as f64),
+                perry_hir::Expr::Number(value) if value.is_finite() => Some(*value),
+                _ => None,
+            }) {
+                ctx.const_number_locals.insert(id, value);
+            }
+        }
+        return Ok(());
+    }
+
     // Slot must live in the entry block — see the boxed-var case
     // above. Putting allocas inside an `if` arm causes verifier
     // failures the moment a closure in another branch captures
@@ -1157,10 +1247,7 @@ pub(crate) fn lower_let(
     // and silently corrupts every read of the i32 slot. Mutable locals
     // are always written through paths we control (Update, `(expr) | 0`)
     // which produce in-range int32 values per JS ToInt32 semantics.
-    let init_in_i32_range = match init {
-        Some(perry_hir::Expr::Integer(n)) => i32::try_from(*n).is_ok(),
-        _ => true, // non-Integer init: writes will always go via i32-coercing paths
-    };
+    // (`init_in_i32_range` is computed once, above the canonical-i32 branch.)
     // Issue #140 follow-up + #435 fix: gate the Let-site i32
     // shadow on `index_used_locals` (with transitive closure —
     // see `collect_index_used_locals` in collectors.rs).  The
@@ -1199,17 +1286,9 @@ pub(crate) fn lower_let(
     // recovers the FNV-1a `h` accumulator and similar
     // explicit-i32-coerce shapes without reintroducing #435's
     // accumulator overflow).
-    let is_unsigned_i32_local = ctx.unsigned_i32_locals.contains(&id);
-    let i32_safe_local = ctx.index_used_locals.contains(&id)
-        || ctx.strictly_i32_bounded_locals.contains(&id)
-        || is_unsigned_i32_local;
-    let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
-        && i32_safe_local
-        && init_in_i32_range
-        && !matches!(refined_ty, perry_hir::types::Type::BigInt)
-        && !ctx.boxed_vars.contains(&id)
-        && !ctx.module_globals.contains_key(&id)
-        && !ctx.i32_counter_slots.contains_key(&id);
+    // (`needs_i32_slot` and its inputs are computed once, above the
+    // canonical-i32 branch; when that branch fires this parallel-shadow
+    // allocation is skipped entirely.)
     if needs_i32_slot {
         let i32_slot = ctx.func.alloca_entry(I32);
         ctx.func.entry_allocas_push_store(I32, "0", &i32_slot);

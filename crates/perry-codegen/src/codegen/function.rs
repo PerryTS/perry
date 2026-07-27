@@ -481,6 +481,20 @@ pub(super) fn compile_function(
         &cross_module.module_dispatch,
     );
 
+    // Representation-selection Phase 1: canonical-i32 locals are allowed in
+    // plain synchronous function bodies only. Async / generator /
+    // `was_plain_async` bodies route locals through shared cells (the
+    // async-to-generator transform), which the canonical model must not touch.
+    let repsel_allows = crate::expr::canonical_i32_locals_enabled()
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    let repsel_closure_refs = if repsel_allows {
+        crate::expr::collect_closure_referenced_locals(&f.body)
+    } else {
+        std::collections::HashSet::new()
+    };
+
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -577,6 +591,9 @@ pub(super) fn compile_function(
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        local_slot_reps: HashMap::new(),
+        repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_closure_ref_locals: repsel_closure_refs,
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

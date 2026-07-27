@@ -762,6 +762,12 @@ pub(super) fn compile_module_entry(
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
             class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
+            local_slot_reps: HashMap::new(),
+            // Representation-selection Phase 1: module-init contexts keep the
+            // boxed/parallel-shadow model (top-level locals interleave with
+            // import/init machinery; the win lives in function bodies).
+            repsel_context_allows_canonical_i32: false,
+            repsel_closure_ref_locals: std::collections::HashSet::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: main_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: main_native_facts.strictly_i32_bounded_locals(),
@@ -1367,6 +1373,12 @@ pub(super) fn compile_module_entry(
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
             class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
+            local_slot_reps: HashMap::new(),
+            // Representation-selection Phase 1: module-init contexts keep the
+            // boxed/parallel-shadow model (top-level locals interleave with
+            // import/init machinery; the win lives in function bodies).
+            repsel_context_allows_canonical_i32: false,
+            repsel_closure_ref_locals: std::collections::HashSet::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: init_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: init_native_facts.strictly_i32_bounded_locals(),

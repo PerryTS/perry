@@ -79,9 +79,13 @@ pub(crate) fn emit_class_capture_writeback(
         };
         // Only write back to locals that are actually in scope (same-function
         // construction). Cross-module construction has no accessible outer local.
-        let Some(outer_slot) = ctx.locals.get(&outer_id).cloned() else {
+        // Repsel Phase 1: a canonical-i32 local is in scope but has no
+        // `ctx.locals` entry — its write-back goes through the i32 slot below.
+        let outer_slot = ctx.locals.get(&outer_id).cloned();
+        let outer_is_canonical_i32 = ctx.local_slot_reps.contains_key(&outer_id);
+        if outer_slot.is_none() && !outer_is_canonical_i32 {
             continue;
-        };
+        }
         // Read the updated capture value from the instance field.
         let field_name = &param.name;
         let key_idx = ctx.strings.intern(field_name);
@@ -99,12 +103,20 @@ pub(crate) fn emit_class_capture_writeback(
         // `outer_id` here is the current-scope id (resolved via new_args or
         // the __perry_cap_ suffix), so boxed_vars / i32_counter_slots lookups
         // correctly resolve to the current context's tracking structures.
-        if ctx.boxed_vars.contains(&outer_id) {
+        if outer_is_canonical_i32 {
+            // Repsel Phase 1: canonical-i32 outer local — the class ctor's
+            // write-back enters the (only) i32 slot through the NaN-safe
+            // ToInt32 conversion. Observably identical to the pre-phase
+            // model, whose readers preferred the i32 mirror written below.
+            crate::expr::store_canonical_local_from_double(ctx, outer_id, &val, None);
+        } else if ctx.boxed_vars.contains(&outer_id) {
+            let outer_slot = outer_slot.expect("non-canonical write-back has a slot");
             let box_dbl = ctx.block().load(DOUBLE, &outer_slot);
             let box_ptr = ctx.block().bitcast_double_to_i64(&box_dbl);
             ctx.block()
                 .call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &val)]);
         } else {
+            let outer_slot = outer_slot.expect("non-canonical write-back has a slot");
             ctx.block().store(DOUBLE, &val, &outer_slot);
             // If this local also has an i32 fast-path slot (counter / integer
             // local), keep it in sync. Use fptosi→i64→trunc→i32 to handle

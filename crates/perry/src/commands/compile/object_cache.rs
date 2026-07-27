@@ -958,6 +958,18 @@ fn compute_object_cache_key_with_env(
         "env_int_valued_locals",
         env_var("PERRY_INT_VALUED_LOCALS").as_deref().unwrap_or(""),
     );
+    // Representation-selection Phase 1 — canonical unboxed i32 locals:
+    // `=0`/`off`/`false` reverts eligible integer locals from canonical-i32
+    // storage (single i32 slot, no double slot, no shadow binding) back to
+    // the parallel-shadow model (double slot + mirrored i32 writes), which
+    // changes the emitted IR / .o bytes — a warm cache must not serve an
+    // object built under the other setting.
+    h.field(
+        "env_canonical_i32_locals",
+        env_var("PERRY_CANONICAL_I32_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
 
     h.finish()
 }

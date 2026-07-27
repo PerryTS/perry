@@ -45,7 +45,10 @@ pub(crate) fn expr_has_numeric_pointer_free_array_layout(ctx: &FnCtx<'_>, expr: 
 
 fn local_get_produces_non_pointer_bits_by_dataflow(ctx: &FnCtx<'_>, id: u32) -> bool {
     (ctx.i32_counter_slots.contains_key(&id) || ctx.integer_locals.contains(&id))
-        && ctx.locals.contains_key(&id)
+        // Repsel Phase 1: a canonical-i32 local has no `ctx.locals` entry —
+        // its rep-map membership proves plain (non-boxed, non-captured)
+        // numeric storage just as well.
+        && (ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id))
         && !ctx.boxed_vars.contains(&id)
         && !ctx.closure_captures.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)

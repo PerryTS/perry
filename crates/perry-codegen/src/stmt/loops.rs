@@ -355,7 +355,10 @@ fn match_numeric_range_add_loop(
         } => *id,
         _ => return None,
     };
-    if !ctx.locals.contains_key(&counter_id)
+    // Repsel Phase 1: a canonical-i32 counter has no `ctx.locals` entry but
+    // is fully readable/writable storage (the lowering routes its reads
+    // through `LocalGet` and stores its final value into the i32 slot).
+    if !(ctx.locals.contains_key(&counter_id) || ctx.local_slot_reps.contains_key(&counter_id))
         || ctx.boxed_vars.contains(&counter_id)
         || !matches!(
             update,
@@ -428,6 +431,7 @@ fn match_numeric_range_add_loop(
         Expr::LocalGet(bound_id)
             if *bound_id != counter_id
                 && (ctx.locals.contains_key(bound_id)
+                    || ctx.local_slot_reps.contains_key(bound_id)
                     || ctx.module_globals.contains_key(bound_id))
                 && !(ctx.boxed_vars.contains(bound_id)
                     && !ctx.module_globals.contains_key(bound_id))
@@ -732,7 +736,12 @@ fn match_packed_f64_range_loop(
             if ctx.boxed_vars.contains(bound_id) {
                 return None;
             }
-            if !ctx.locals.contains_key(bound_id) && !ctx.module_globals.contains_key(bound_id) {
+            // Repsel Phase 1: canonical-i32 bounds read through `LocalGet`
+            // (materialized from the i32 slot) — accessible storage.
+            if !ctx.locals.contains_key(bound_id)
+                && !ctx.local_slot_reps.contains_key(bound_id)
+                && !ctx.module_globals.contains_key(bound_id)
+            {
                 return None;
             }
             if !local_bound_is_loop_invariant(condition?, update, body, *bound_id) {
@@ -752,7 +761,10 @@ fn match_packed_f64_range_loop(
     ) {
         return None;
     }
-    if !ctx.locals.contains_key(&counter_id)
+    // Repsel Phase 1: canonical-i32 counters qualify — they already own the
+    // shared i32 slot the versioned copies read, and the `Update`/`LocalGet`
+    // lowerings maintain it.
+    if !(ctx.locals.contains_key(&counter_id) || ctx.local_slot_reps.contains_key(&counter_id))
         || ctx.boxed_vars.contains(&counter_id)
         || !ctx.integer_locals.contains(&counter_id)
         || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
@@ -4093,8 +4105,23 @@ fn emit_guarded_i32_bound(
     label_prefix: &str,
 ) -> Option<DynamicI32Bound> {
     let bound_slot = ctx.locals.get(&bound_id).cloned()?;
-    let counter_slot = ctx.locals.get(&counter_id).cloned()?;
+    // Repsel Phase 1: a canonical-i32 counter has no double slot — only the
+    // loop-PRIVATE branch below needs one (it seeds from the f64 slot). The
+    // shared-slot branch never touches the counter's double storage, so a
+    // canonical counter (whose shared slot always exists) passes through.
     let shared_counter_i32 = ctx.i32_counter_slots.get(&counter_id).cloned();
+    let counter_slot = match ctx.locals.get(&counter_id).cloned() {
+        Some(slot) => slot,
+        None if shared_counter_i32.is_some()
+            && ctx.local_slot_reps.contains_key(&counter_id) =>
+        {
+            // Unused: the shared branch returns before any counter load. The
+            // sentinel register name makes any future misuse fail the LLVM
+            // parser loudly instead of silently emitting an empty operand.
+            "%repsel_canonical_counter_has_no_f64_slot".to_string()
+        }
+        None => return None,
+    };
     let counter_is_private = shared_counter_i32.is_none();
     if counter_is_private && !dynamic_bound_private_counter_is_safe(ctx, counter_id, update, body) {
         return None;
@@ -4412,6 +4439,9 @@ fn lower_for_after_init_with_i32_bound(
                 && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
         })
     });
+    // Whether THIS site allocated the counter's i32 slot (vs. the Let site or
+    // repsel Phase 1 having done so). Only the inserter removes at loop exit.
+    let mut hoist_counter_i32_was_fresh = false;
     let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
         let arr_box_loaded = lower_expr(
             ctx,
@@ -4451,7 +4481,17 @@ fn lower_for_after_init_with_i32_bound(
         // a parallel i32 slot. The Update lowering will keep it in sync,
         // and IndexGet/IndexSet will load the i32 directly instead of
         // emitting a `fptosi double → i32` on every iteration.
-        if ctx.integer_locals.contains(&hoist.counter_id) {
+        //
+        // Repsel Phase 1: when the counter ALREADY owns a slot — a
+        // canonical-i32 counter (whose i32 slot is its only storage) or a
+        // Let-site parallel shadow — reuse it instead of replacing it, and
+        // track freshness so loop exit only removes what this site inserted.
+        // Removing a canonical counter's slot at loop exit would strand the
+        // local with no storage at all (every write keeps a reused slot in
+        // sync, so keeping it registered is always valid).
+        if ctx.integer_locals.contains(&hoist.counter_id)
+            && !ctx.i32_counter_slots.contains_key(&hoist.counter_id)
+        {
             if let Some(counter_slot) = ctx.locals.get(&hoist.counter_id).cloned() {
                 let i32_slot = ctx.func.alloca_entry(I32);
                 // Initialize from the current double value.
@@ -4459,6 +4499,7 @@ fn lower_for_after_init_with_i32_bound(
                 let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
                 ctx.block().store(I32, &cur_i32, &i32_slot);
                 ctx.i32_counter_slots.insert(hoist.counter_id, i32_slot);
+                hoist_counter_i32_was_fresh = true;
             }
         }
 
@@ -4531,7 +4572,16 @@ fn lower_for_after_init_with_i32_bound(
             // Hoist `fptosi(n)` to a fresh i32 alloca before the cond block
             // so LLVM sees a loop-invariant integer bound — critical for
             // SCEV / LoopVectorizer to recognize the induction variable.
-            if let Some(bound_slot) = ctx.locals.get(&bound_id).cloned() {
+            // Repsel Phase 1: a canonical-i32 bound has no double slot — its
+            // i32 slot already holds the exact value, no conversion needed.
+            if let Some((bound_i32_slot, _rep)) =
+                crate::expr::canonical_local_i32_slot(ctx, bound_id)
+            {
+                let bound_i32 = ctx.block().load(I32, &bound_i32_slot);
+                let slot = ctx.func.alloca_entry(I32);
+                ctx.block().store(I32, &bound_i32, &slot);
+                Some(slot)
+            } else if let Some(bound_slot) = ctx.locals.get(&bound_id).cloned() {
                 let bound_dbl = ctx.block().load(DOUBLE, &bound_slot);
                 let bound_i32 = ctx.block().fptosi(DOUBLE, &bound_dbl, I32);
                 let slot = ctx.func.alloca_entry(I32);
@@ -4812,9 +4862,14 @@ fn lower_for_after_init_with_i32_bound(
     ctx.loop_targets.pop();
 
     // Pop the hoisted-length entry so nested loops or sibling loops
-    // don't see a stale slot.
-    if let Some(hoist) = hoist_classification {
-        ctx.i32_counter_slots.remove(&hoist.counter_id);
+    // don't see a stale slot. Repsel Phase 1: only when THIS site inserted
+    // it — a canonical-i32 counter's slot is its ONLY storage and must
+    // survive the loop (a Let-site parallel shadow is likewise maintained
+    // by every write and stays registered).
+    if hoist_counter_i32_was_fresh {
+        if let Some(hoist) = hoist_classification {
+            ctx.i32_counter_slots.remove(&hoist.counter_id);
+        }
     }
     if let Some(arr_id) = hoisted_length_arr_id {
         ctx.cached_lengths.remove(&arr_id);
@@ -5399,7 +5454,9 @@ pub(crate) fn classify_for_local_bound_dynamic(
 }
 
 fn local_bound_storage_accessible(ctx: &crate::expr::FnCtx<'_>, bound_id: u32) -> bool {
-    ctx.locals.contains_key(&bound_id)
+    // Repsel Phase 1: a canonical-i32 bound has no `ctx.locals` entry; its
+    // i32 slot is directly readable storage (better, even — no conversion).
+    (ctx.locals.contains_key(&bound_id) || ctx.local_slot_reps.contains_key(&bound_id))
         && !ctx.boxed_vars.contains(&bound_id)
         && !ctx.module_globals.contains_key(&bound_id)
 }

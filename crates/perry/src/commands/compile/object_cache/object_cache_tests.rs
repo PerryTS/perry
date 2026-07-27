@@ -615,6 +615,8 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_TA_PARAM_F64_READ",
         // Native-i32 residency for int-typed-array-seeded locals.
         "PERRY_INT_VALUED_LOCALS",
+        // Representation-selection Phase 1: canonical unboxed i32 locals.
+        "PERRY_CANONICAL_I32_LOCALS",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.

@@ -113,6 +113,11 @@ fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<S
             blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
             emit_write_barrier(ctx, &box_ptr, &value_bits);
         }
+    } else if crate::expr::store_canonical_local_from_double(ctx, id, value, None) {
+        // Repsel Phase 1: canonical-i32 local — the prelowered value entered
+        // the (only) i32 slot through the NaN-safe ToInt32 conversion. This
+        // matches the pre-phase observable behavior: the parallel-shadow
+        // mirror below wrote the same slot, and every read preferred it.
     } else if let Some(slot) = ctx.locals.get(&id).cloned() {
         ctx.block().store(DOUBLE, value, &slot);
         if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {

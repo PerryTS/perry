@@ -345,11 +345,22 @@ pub(crate) fn collect_type_facts(
     let (array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
+    // Repsel Phase 1: under `PERRY_CANONICAL_I32_LOCALS` (default on), a
+    // proven in-window const int-typed-array element load counts as a STRICT
+    // i32 write (`let l = P[0]` with a literal-length `Int32Array` view) —
+    // the same judgment that already seeds `integer_locals`. Off, the view
+    // map is empty and the strictness judgment is bit-identical to before.
+    let strict_int_ta_views = if crate::expr::canonical_i32_locals_enabled() {
+        super::integer_locals::collect_const_int_ta_views(stmts)
+    } else {
+        HashMap::new()
+    };
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
         &integer_locals,
         flat_const_ids,
         clamp_fn_ids,
+        strict_int_ta_views,
     );
     let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
     let non_escaping_news = super::escape_news::collect_non_escaping_news(

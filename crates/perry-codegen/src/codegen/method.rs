@@ -376,6 +376,17 @@ pub(super) fn compile_method(
         &cross_module.module_dispatch,
     );
 
+    // Representation-selection Phase 1 context gate (see codegen/function.rs).
+    let repsel_allows = crate::expr::canonical_i32_locals_enabled()
+        && !method.is_async
+        && !method.is_generator
+        && !method.was_plain_async;
+    let repsel_closure_refs = if repsel_allows {
+        crate::expr::collect_closure_referenced_locals(&method.body)
+    } else {
+        std::collections::HashSet::new()
+    };
+
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -475,6 +486,9 @@ pub(super) fn compile_method(
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        local_slot_reps: HashMap::new(),
+        repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_closure_ref_locals: repsel_closure_refs,
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -1375,6 +1389,17 @@ pub(super) fn compile_static_method(
         &cross_module.module_dispatch,
     );
 
+    // Representation-selection Phase 1 context gate (see codegen/function.rs).
+    let repsel_allows = crate::expr::canonical_i32_locals_enabled()
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async;
+    let repsel_closure_refs = if repsel_allows {
+        crate::expr::collect_closure_referenced_locals(&f.body)
+    } else {
+        std::collections::HashSet::new()
+    };
+
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1478,6 +1503,9 @@ pub(super) fn compile_static_method(
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        local_slot_reps: HashMap::new(),
+        repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_closure_ref_locals: repsel_closure_refs,
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

@@ -250,6 +250,7 @@ fn expr_is_number_under(
 /// (`l = r`, which would need the function-wide i32-ranged oracle).
 fn region_i32_bounded_write_locals(stmts: &[Stmt]) -> std::collections::HashSet<u32> {
     let empty = std::collections::HashSet::new();
+    let empty_views = std::collections::HashMap::new();
     let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut disqualified: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for stmt in stmts {
@@ -262,6 +263,7 @@ fn region_i32_bounded_write_locals(stmts: &[Stmt]) -> std::collections::HashSet<
                     &empty,
                     &empty,
                     &empty,
+                    &empty_views,
                     &mut |_| {},
                 );
                 if !strict {

@@ -746,6 +746,20 @@ pub(super) fn compile_closure(
         &cross_module.module_dispatch,
     );
 
+    // Representation-selection Phase 1 context gate (see codegen/function.rs).
+    // Async-step closures (CPS-rewritten `async` closures — the rewrite clears
+    // `is_async`) and generator wrapper funcs route body locals through shared
+    // cells, so canonical-i32 storage is disallowed there.
+    let repsel_allows = crate::expr::canonical_i32_locals_enabled()
+        && !is_async
+        && !cross_module.async_step_closures.contains(&func_id)
+        && !cross_module.local_generator_funcs.contains(&func_id);
+    let repsel_closure_refs = if repsel_allows {
+        crate::expr::collect_closure_referenced_locals(body)
+    } else {
+        std::collections::HashSet::new()
+    };
+
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -849,6 +863,9 @@ pub(super) fn compile_closure(
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        local_slot_reps: HashMap::new(),
+        repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_closure_ref_locals: repsel_closure_refs,
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
