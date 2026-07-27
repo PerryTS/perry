@@ -1878,7 +1878,12 @@ fn object_array_write_number_integer_valued(root: &ObjectArrayWriteNumber) -> bo
         match node {
             ObjectArrayWriteNumber::OuterCounter | ObjectArrayWriteNumber::InnerCounter => {}
             ObjectArrayWriteNumber::Constant(c) => {
-                if !c.is_finite() || c.fract() != 0.0 {
+                // i64-EXACT, not merely integral: a huge double like 1e19
+                // is integral but saturates in the `as i64` lowering, so
+                // `1e19 % 4` would srem to 3 where JS evaluates 0 —
+                // in-table but observably wrong. The round-trip test also
+                // rejects the 2^63 boundary correctly.
+                if !c.is_finite() || c.fract() != 0.0 || (*c as i64) as f64 != *c {
                     return false;
                 }
             }
