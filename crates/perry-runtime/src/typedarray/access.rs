@@ -91,6 +91,39 @@ pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: 
 static KEEP_JS_TYPED_ARRAY_READ_INT32: extern "C" fn(*const TypedArrayHeader, i32) -> i32 =
     js_typed_array_read_int32;
 
+/// Cold fallback for the codegen inline **checked f64** typed-array element read
+/// (a typed-array parameter read in *numeric* context — `bcryptjs`'s
+/// `_encipher` S-box reads `n = S[l >>> 24]; n += S[...]`, where the element
+/// flows into `+`/`+=` rather than `| 0`). The inline path
+/// (`perry-codegen/src/expr/ta_param_f64_read.rs`) serves the common
+/// inline-storage, correct-kind case with a bare native load widened to f64, and
+/// yields the `TAG_UNDEFINED` double directly for a genuine out-of-bounds read —
+/// **bit-exact** with [`js_typed_array_get`] (numeric element in-bounds,
+/// `TAG_UNDEFINED` OOB), so the fast path is a pure call→load swap needing no
+/// consumer-context analysis. It routes here only on a guard miss
+/// (view/detached/resizable backing, kind-cache miss, or a receiver that is not
+/// the statically-expected kind).
+///
+/// Memory safety mirrors [`js_typed_array_read_int32`]: a kind-cache miss can be
+/// entered with a receiver that is not a typed array at all (TS types are
+/// erased), so validate the raw pointer is a registered typed array before any
+/// header deref — a non-typed-array receiver has no element and reads
+/// `undefined` (`TAG_UNDEFINED`). Otherwise defer to the full ECMAScript
+/// `[[Get]]`.
+#[no_mangle]
+pub extern "C" fn js_typed_array_read_f64(ta: *const TypedArrayHeader, index: i32) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    js_typed_array_get(ta, index)
+}
+
+// Codegen-only export (see the i32 sibling above): pin under whole-program LTO.
+#[used]
+static KEEP_JS_TYPED_ARRAY_READ_F64: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
+    js_typed_array_read_f64;
+
 /// #2063 — dynamic / string-key `[[Get]]` on a TypedArray (`ta[key]`).
 ///
 /// The codegen element-read fast path only fires for statically-proven

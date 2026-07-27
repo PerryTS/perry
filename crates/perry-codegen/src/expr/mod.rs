@@ -1403,6 +1403,7 @@ mod env_clones;
 mod fs_await;
 mod index_get;
 mod masked_window;
+mod ta_param_f64_read;
 pub(crate) use index_get::packed_f64_loop_index_parts;
 pub(crate) use masked_window::masked_window_fact_for_index;
 mod index_set;

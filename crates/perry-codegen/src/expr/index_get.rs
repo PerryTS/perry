@@ -1439,6 +1439,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(result);
                 }
 
+                // Numeric-context read of a typed-array PARAM (e.g. bcryptjs
+                // `_encipher`'s `n = S[l >>> 24]; n += S[...]`): an inline checked
+                // f64 load that is bit-exact with `js_typed_array_get` (numeric
+                // element in-bounds, `TAG_UNDEFINED` OOB), replacing the per-read
+                // runtime call. Gated on a proven integer index; guard misses
+                // (view/detached/wrong-kind) defer to the memory-safe helper.
+                if let Some(value) =
+                    super::ta_param_f64_read::try_lower_ta_param_f64_read(ctx, object, index)?
+                {
+                    return Ok(value);
+                }
+
                 // Width-aware typed-array native lowering is only sound for
                 // tracked fresh views with proven/guarded element bounds. All
                 // aliases, reassigned locals, and unknown bounds stay on the

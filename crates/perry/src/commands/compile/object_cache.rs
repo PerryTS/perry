@@ -939,6 +939,15 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Inline checked-f64 typed-array-param read: `=0`/`off`/`false` reverts a
+    // numeric-context typed-array parameter read (`n += S[i]`) from the inline
+    // checked load back to the `js_typed_array_get` runtime call, which changes
+    // the emitted IR / .o bytes — a warm cache must not serve an object built
+    // under the other setting.
+    h.field(
+        "env_ta_param_f64_read",
+        env_var("PERRY_TA_PARAM_F64_READ").as_deref().unwrap_or(""),
+    );
 
     h.finish()
 }
