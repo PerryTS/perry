@@ -1305,25 +1305,6 @@ pub(crate) fn lower_string_self_append(
     Ok(new_box)
 }
 
-/// Representation-selection Phase 3a: `s += rhs` for a canonical-Str
-/// destination (`SlotRep::Str` — the `ctx.locals` slot provably holds
-/// NaN-box string bits at rest). Replaces the two opaque
-/// `js_get_string_pointer_unified` calls per iteration with an inline tag
-/// dispatch on the slot bits:
-///
-/// - **both heap** (`STRING_TAG` on both sides): `and POINTER_MASK` →
-///   `js_string_append(h, h)` → `or STRING_TAG` — the hot accumulator-loop
-///   arm; keeps the refcount==1 in-place append (every alias demote site is
-///   untouched by this phase, so `let b = a` still demotes first).
-/// - **both strings, SSO involved**: `js_string_concat_box(box, box)` —
-///   SSO-aware pairwise concat, assembles ≤5-byte ASCII results inline and
-///   never mutates in place. No per-op heap materialization of SSO bits
-///   (RFC §4 "short-string values stay by-value").
-/// - **anything else** (a lying `string` annotation): the exact pre-phase
-///   sequence — `js_get_string_pointer_unified` ×2 (SSO materialize +
-///   number coercion included) → `js_string_append` — so acceptance
-///   behavior is bit-identical to today's on non-string bits (RFC §5.5:
-///   mismatches route to the legacy path, never a new coercion).
 /// Repsel Phase 3a: is this expression PROVEN to lower to a heap-tagged
 /// (`STRING_TAG`) NaN-box — never SSO bits, never a non-string? String
 /// literals load the interned pool handle (`@.str.N.handle`, always a heap
@@ -1332,7 +1313,7 @@ pub(crate) fn lower_string_self_append(
 /// NOT included: `Binary Add` string results — the pairwise concat lowering
 /// returns `js_string_concat_box`, which assembles ≤5-byte ASCII results as
 /// SSO bits.
-fn proven_heap_string_operand(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+fn proven_heap_string_operand(_ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) | Expr::StringCoerce(_) => true,
         Expr::Conditional {
@@ -1340,7 +1321,8 @@ fn proven_heap_string_operand(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             else_expr,
             ..
         } => {
-            proven_heap_string_operand(ctx, then_expr) && proven_heap_string_operand(ctx, else_expr)
+            proven_heap_string_operand(_ctx, then_expr)
+                && proven_heap_string_operand(_ctx, else_expr)
         }
         _ => false,
     }
@@ -1398,6 +1380,25 @@ fn str_operand_handle_tag_dispatched(ctx: &mut FnCtx<'_>, object: &Expr, recv_bo
         .phi(I64, &[(&h_heap, &heap_pred), (&h_cold, &cold_pred)])
 }
 
+/// Representation-selection Phase 3a: `s += rhs` for a canonical-Str
+/// destination (`SlotRep::Str` — the `ctx.locals` slot provably holds
+/// NaN-box string bits at rest). Replaces the two opaque
+/// `js_get_string_pointer_unified` calls per iteration with an inline tag
+/// dispatch on the slot bits:
+///
+/// - **both heap** (`STRING_TAG` on both sides): `and POINTER_MASK` →
+///   `js_string_append(h, h)` → `or STRING_TAG` — the hot accumulator-loop
+///   arm; keeps the refcount==1 in-place append (every alias demote site is
+///   untouched by this phase, so `let b = a` still demotes first).
+/// - **both strings, SSO involved**: `js_string_concat_box(box, box)` —
+///   SSO-aware pairwise concat, assembles ≤5-byte ASCII results inline and
+///   never mutates in place. No per-op heap materialization of SSO bits
+///   (RFC §4 "short-string values stay by-value").
+/// - **anything else** (a lying `string` annotation): the exact pre-phase
+///   sequence — `js_get_string_pointer_unified` ×2 (SSO materialize +
+///   number coercion included) → `js_string_append` — so acceptance
+///   behavior is bit-identical to today's on non-string bits (RFC §5.5:
+///   mismatches route to the legacy path, never a new coercion).
 fn lower_canonical_str_self_append(
     ctx: &mut FnCtx<'_>,
     _local_id: u32,

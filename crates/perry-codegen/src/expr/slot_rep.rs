@@ -385,15 +385,15 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                 Expr::Update { id, .. } => {
                     self.out.insert(*id);
                 }
-                Expr::Compare { op, left, right }
-                    if matches!(
-                        op,
+                Expr::Compare {
+                    op:
                         perry_hir::CompareOp::Eq
-                            | perry_hir::CompareOp::Ne
-                            | perry_hir::CompareOp::LooseEq
-                            | perry_hir::CompareOp::LooseNe
-                    ) =>
-                {
+                        | perry_hir::CompareOp::Ne
+                        | perry_hir::CompareOp::LooseEq
+                        | perry_hir::CompareOp::LooseNe,
+                    left,
+                    right,
+                } => {
                     if let Expr::LocalGet(id) = left.as_ref() {
                         if !syntactic_str(right, self.declared) {
                             self.out.insert(*id);
