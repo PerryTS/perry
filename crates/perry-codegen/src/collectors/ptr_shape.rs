@@ -650,8 +650,7 @@ impl<'a> UseWalk<'a> {
                 }
             }
             Stmt::Labeled { body, .. } => self.walk_stmt(body.as_ref()),
-            Stmt::Return(None)
-            | Stmt::Break
+            Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
@@ -874,152 +873,6 @@ impl<'a> UseWalk<'a> {
     }
 }
 
-/// Does `e` reference local `id` anywhere — including id-keyed variants and
-/// closure bodies?
-fn expr_references_local(e: &Expr, id: u32) -> bool {
-    let mut found = false;
-    fn visit(e: &Expr, id: u32, found: &mut bool) {
-        if *found {
-            return;
-        }
-        match e {
-            Expr::LocalGet(x) | Expr::LocalSet(x, _) | Expr::Update { id: x, .. } => {
-                if *x == id {
-                    *found = true;
-                }
-            }
-            Expr::ArrayPush { array_id: x, .. }
-            | Expr::ArrayPushSpread { array_id: x, .. }
-            | Expr::ArrayUnshift { array_id: x, .. }
-            | Expr::ArraySplice { array_id: x, .. }
-            | Expr::ArrayCopyWithin { array_id: x, .. }
-            | Expr::SetAdd { set_id: x, .. } => {
-                if *x == id {
-                    *found = true;
-                }
-            }
-            Expr::ArrayPop(x) | Expr::ArrayShift(x) => {
-                if *x == id {
-                    *found = true;
-                }
-            }
-            Expr::Closure {
-                body,
-                captures,
-                mutable_captures,
-                ..
-            } => {
-                if captures.contains(&id) || mutable_captures.contains(&id) {
-                    *found = true;
-                    return;
-                }
-                for s in body {
-                    stmt_visit(s, id, found);
-                }
-            }
-            _ => {}
-        }
-        if *found {
-            return;
-        }
-        perry_hir::walker::walk_expr_children(e, &mut |c| visit(c, id, found));
-    }
-    fn stmt_visit(s: &Stmt, id: u32, found: &mut bool) {
-        if *found {
-            return;
-        }
-        match s {
-            Stmt::Let { id: lid, init, .. } => {
-                if *lid == id {
-                    *found = true;
-                    return;
-                }
-                if let Some(e) = init {
-                    visit(e, id, found);
-                }
-            }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => visit(e, id, found),
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                visit(condition, id, found);
-                for s in then_branch {
-                    stmt_visit(s, id, found);
-                }
-                if let Some(eb) = else_branch {
-                    for s in eb {
-                        stmt_visit(s, id, found);
-                    }
-                }
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                visit(condition, id, found);
-                for s in body {
-                    stmt_visit(s, id, found);
-                }
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                if let Some(i) = init {
-                    stmt_visit(i, id, found);
-                }
-                if let Some(c) = condition {
-                    visit(c, id, found);
-                }
-                if let Some(u) = update {
-                    visit(u, id, found);
-                }
-                for s in body {
-                    stmt_visit(s, id, found);
-                }
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                for s in body {
-                    stmt_visit(s, id, found);
-                }
-                if let Some(c) = catch {
-                    for s in &c.body {
-                        stmt_visit(s, id, found);
-                    }
-                }
-                if let Some(f) = finally {
-                    for s in f {
-                        stmt_visit(s, id, found);
-                    }
-                }
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } => {
-                visit(discriminant, id, found);
-                for case in cases {
-                    if let Some(t) = &case.test {
-                        visit(t, id, found);
-                    }
-                    for s in &case.body {
-                        stmt_visit(s, id, found);
-                    }
-                }
-            }
-            Stmt::Labeled { body, .. } => stmt_visit(body.as_ref(), id, found),
-            _ => {}
-        }
-    }
-    visit(e, id, &mut found);
-    found
-}
-
 // ── Pass 3: `this`-flow safety of constructors and called methods ──────────
 
 /// A `this.field = value` store observed inside a constructor, a field
@@ -1190,8 +1043,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                     })
             }
             Stmt::Labeled { body, .. } => self.stmt_this_safe(body.as_ref(), ctx),
-            Stmt::Return(None)
-            | Stmt::Break
+            Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
