@@ -17,6 +17,7 @@ mod hot_callees;
 mod i32_locals;
 mod i64_emit;
 mod index_uses;
+mod int_valued_ta_locals;
 mod integer_locals;
 mod local_refs;
 mod mutation;

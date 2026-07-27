@@ -238,6 +238,21 @@ pub(crate) fn lower_let(
     // `let x: Object = ...` deliberately.
     let refined_ty = if matches!(ty, perry_hir::types::Type::Any) {
         init.and_then(|e| crate::type_analysis::refine_type_from_init(ctx, e))
+            // A local proven integer-valued (a loop counter, or an
+            // `int_valued_ta` Feistel accumulator whose init `lr[off]` the
+            // structural refiner can't type) is still definitely a clean
+            // Number — never a heap pointer. When the structural refiner can't
+            // pin it down, fall back to Number so the numeric Let/LocalSet
+            // lowering (i32 shadow slot, no conservative Any boxing, no GC
+            // shadow-slot pointer tracking) fires — matching a source `| 0`.
+            // Without this the accumulator stays `Any`, its f64 mirror is kept
+            // live across the loop, and `-O3` cannot collapse the residual
+            // `sitofp`/`fptosi` round-trips.
+            .or_else(|| {
+                ctx.integer_locals
+                    .contains(&id)
+                    .then_some(perry_hir::types::Type::Number)
+            })
             .unwrap_or_else(|| ty.clone())
     } else if matches!(ty, perry_hir::types::Type::Array(ref elem) if matches!(**elem, perry_hir::types::Type::Any))
     {
@@ -1501,8 +1516,23 @@ pub(crate) fn lower_let(
             // UB for such values; going through i64 then truncating gives
             // the correct bit pattern.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(&id).cloned() {
-                let v_i64 = ctx.block().fptosi(DOUBLE, &v, crate::types::I64);
-                let v_i32 = ctx.block().trunc(crate::types::I64, &v_i64, I32);
+                // A possibly-non-finite init (`let l = lr[off]` — an int
+                // typed-array read that yields `undefined` = a NaN-boxed double
+                // on an out-of-bounds/fractional index) must seed the slot with
+                // spec ToInt32, which is `0` for NaN/±Infinity. A raw
+                // `fptosi(NaN)` is LLVM poison — 0 on aarch64 but a garbage
+                // sentinel on x86-64 — so it is NOT portable. `int_valued_ta`
+                // locals (and any other i32-shadow local with a non-known-finite
+                // init) are only ever observed through ToInt32, so seeding with
+                // the exact ToInt32 keeps every arm identical. Known-finite
+                // inits keep the cheaper `fptosi→i64→trunc` (bit-identical for
+                // finite values), so existing i32-shadow locals are unchanged.
+                let v_i32 = if crate::expr::is_known_finite(ctx, init_expr) {
+                    let v_i64 = ctx.block().fptosi(DOUBLE, &v, crate::types::I64);
+                    ctx.block().trunc(crate::types::I64, &v_i64, I32)
+                } else {
+                    ctx.block().toint32_wrap(&v)
+                };
                 ctx.block().store(I32, &v_i32, &i32_slot);
             }
         }

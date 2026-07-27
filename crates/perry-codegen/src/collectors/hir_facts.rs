@@ -317,12 +317,28 @@ pub(crate) fn collect_type_facts(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
 ) -> TypeFacts {
-    let integer_locals = super::integer_locals::collect_integer_locals(
+    let mut integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
         flat_const_ids,
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
     );
+    // Native-i32 residency for integer-valued locals whose init/writes include a
+    // possibly-out-of-bounds INT typed-array element read (bcryptjs `_encipher`
+    // Feistel accumulators `l`/`r`). Sound only under a whole-function
+    // observation constraint — see `int_valued_ta_locals`. Gated by
+    // `PERRY_INT_VALUED_LOCALS` (keyed into the object cache). Boxed / module-
+    // global locals are excluded (they never take the i32 shadow slot and would
+    // only pollute the fact for other consumers).
+    if super::int_valued_ta_locals::enabled() {
+        let extra =
+            super::int_valued_ta_locals::collect_int_valued_ta_locals(stmts, params, binding_types);
+        for id in extra {
+            if !boxed_vars.contains(&id) && !module_globals.contains_key(&id) {
+                integer_locals.insert(id);
+            }
+        }
+    }
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
     let not_bigint_locals =
         super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);

@@ -948,6 +948,16 @@ fn compute_object_cache_key_with_env(
         "env_ta_param_f64_read",
         env_var("PERRY_TA_PARAM_F64_READ").as_deref().unwrap_or(""),
     );
+    // Native-i32 residency for integer-valued locals seeded by possibly-OOB int
+    // typed-array reads (bcryptjs `_encipher` Feistel accumulators): `=0`/`off`/
+    // `false` reverts `l`/`r`-shaped locals from an i32 shadow slot back to the
+    // f64 slot + per-access ToInt32 round-trip, which changes the emitted IR /
+    // .o bytes — a warm cache must not serve an object built under the other
+    // setting.
+    h.field(
+        "env_int_valued_locals",
+        env_var("PERRY_INT_VALUED_LOCALS").as_deref().unwrap_or(""),
+    );
 
     h.finish()
 }
