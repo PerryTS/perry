@@ -1,13 +1,11 @@
 import * as net from "node:net";
 
 const sockets = new Set<net.Socket>();
-const received: string[] = [];
 const server = net.createServer({ pauseOnConnect: true }, (socket) => {
   sockets.add(socket);
   console.log("accepted paused:", socket.isPaused());
-  socket.on("data", (data) => received.push(data.toString()));
   socket.on("close", () => sockets.delete(socket));
-  socket.resume();
+  socket.destroy();
 });
 
 let client: net.Socket | undefined;
@@ -18,9 +16,8 @@ try {
   });
   client = net.connect((server.address() as any).port, "127.0.0.1");
   client.on("error", () => {});
-  client.end("hello");
+  client.end();
   await new Promise<void>((resolve) => client!.once("close", resolve));
-  console.log("received:", received.join(""));
 } finally {
   client?.destroy();
   client?.removeAllListeners();

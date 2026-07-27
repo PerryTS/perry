@@ -81,7 +81,7 @@ runtime difference. Every row completed three identical runs.
 | `server/get-connections.ts`                   | `lib/net.js` (`Server.getConnections`)                                                                      | same | same | same |
 | `server/initial-state-and-refs.ts`            | `test/parallel/test-net-server-unref.js`; `test-net-server-address.js`                                      | same | same | same |
 | `server/listen-overloads.ts`                  | `lib/net.js`; `test/parallel/test-net-normalize-args.js`                                                    | same | same | same |
-| `server/pause-on-connect.ts`                  | `test/parallel/test-net-server-pause-on-connect.js`                                                         | same | same | diff |
+| `server/pause-on-connect.ts`                  | `test/parallel/test-net-server-pause-on-connect.js`                                                         | same | same | same |
 | `socket/chainable-controls.ts`                | `lib/net.js` (`Socket` control methods)                                                                     | same | same | same |
 | `socket/destroy-and-reset.ts`                 | `lib/net.js`; `test/parallel/test-net-connect-reset-after-destroy.js`                                       | same | same | same |
 | `socket/initial-state.ts`                     | `test/parallel/test-net-socket-connecting.js`                                                               | same | same | diff |
@@ -105,7 +105,7 @@ All 47 fixtures ran three times per runtime with no unstable output or timeout:
 | -------------- | --------------------: | -----------------: | -------------: | -------: |
 | Node.js 26.5.0 |                    47 |                  0 |              0 |        0 |
 | Deno 2.9.3     |                    42 |                  5 |              0 |        0 |
-| Bun 1.2.18     |                    27 |                 20 |              0 |        0 |
+| Bun 1.2.18     |                    28 |                 19 |              0 |        0 |
 
 Stable differences include Bun's missing `BlockList.toJSON()`/`fromJSON()`, Deno
 and Bun's missing `BoundSocket`, class/default differences, validation gaps, and
@@ -161,4 +161,5 @@ and data round trips.
 
 The review stopped after every remaining Node/Deno/Bun net case either mapped to
 a fixture above, repeated an existing contract, crossed into a neighboring
-suite, or required excluded host, kernel, process, timing, or stress behavior.
+suite, or required exclusion of host, kernel, process, timing, or stress
+behavior.

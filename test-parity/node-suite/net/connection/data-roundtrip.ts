@@ -3,7 +3,11 @@ import * as net from "node:net";
 let accepted: net.Socket | undefined;
 const server = net.createServer((socket) => {
   accepted = socket;
-  socket.once("data", (data) => socket.end(data.toString().toUpperCase()));
+  const chunks: Buffer[] = [];
+  socket.on("data", (data) => chunks.push(data));
+  socket.once("end", () => {
+    socket.end(Buffer.concat(chunks).toString().toUpperCase());
+  });
 });
 let client: net.Socket | undefined;
 let response = "";
