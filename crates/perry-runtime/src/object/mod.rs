@@ -91,13 +91,11 @@ mod reflect_support;
 mod regex_proto_thunks;
 // #6812 object-owned overflow storage + the legacy thread-local side table.
 // Split out of this file to stay under the 2000-line CI cap; the sibling
-// `object::*` modules reach these through `use super::*`, so re-export them.
+// `object::*` modules reach these through `use super::*`, so re-export the
+// names they use (the rest stay internal to `spill`).
 mod spill;
 pub(crate) use spill::learned_inline_field_count;
-pub(crate) use spill::{
-    object_spill_enabled, overflow_get, overflow_set, spill_capable_owner, spill_get, spill_set,
-    SPILL_MAX_FIELD_INDEX,
-};
+pub(crate) use spill::{overflow_get, overflow_set};
 mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
