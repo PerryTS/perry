@@ -551,6 +551,7 @@ mod tests {
         ModuleDispatchFacts {
             prototype_touched_classes: HashSet::new(),
             opaque_prototype_mutation: false,
+            shape_barrier_sites: false,
         }
     }
 
