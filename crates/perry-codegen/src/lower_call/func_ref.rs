@@ -220,8 +220,7 @@ fn try_emit_spec_guarded_call(
     }
 
     ctx.current_block = fast_idx;
-    let mut raw_storage: Vec<(crate::types::LlvmType, String)> =
-        Vec::with_capacity(lowered.len());
+    let mut raw_storage: Vec<(crate::types::LlvmType, String)> = Vec::with_capacity(lowered.len());
     for (value, rep) in lowered.iter().zip(plan.reps.iter()) {
         match rep {
             SpecParamRep::I32 => {

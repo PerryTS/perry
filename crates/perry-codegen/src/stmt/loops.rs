@@ -895,7 +895,7 @@ fn record_packed_f64_range_access(
     entry.written |= written;
 }
 
-fn record_packed_f64_range_static_access(
+pub(super) fn record_packed_f64_range_static_access(
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
     array_id: u32,
     lo: i64,

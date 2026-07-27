@@ -57,7 +57,11 @@ fn module_with_init(init: Vec<Stmt>) -> Module {
 fn literal_length_binding_and_dominated_site() {
     // const P = new Int32Array(4); f(P, 0, 1.5);
     let m = module_with_init(vec![
-        let_stmt(10, false, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4)))),
+        let_stmt(
+            10,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4))),
+        ),
         Stmt::Expr(call(
             7,
             vec![Expr::LocalGet(10), Expr::Integer(0), Expr::Number(1.5)],
@@ -90,7 +94,11 @@ fn array_literal_source_counts_elements() {
             true,
             Expr::Array(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]),
         ),
-        let_stmt(2, false, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1)))),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1))),
+        ),
         Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
     ]);
     let facts = collect_spec_abi_facts(&m);
@@ -106,7 +114,11 @@ fn unproven_ctor_arg_rejects_binding() {
     // unknown (could be an ArrayBuffer) — must NOT prove.
     let m = module_with_init(vec![
         let_stmt(1, false, Expr::Undefined),
-        let_stmt(2, false, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1)))),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1))),
+        ),
         Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
     ]);
     let facts = collect_spec_abi_facts(&m);
@@ -121,7 +133,11 @@ fn unproven_ctor_arg_rejects_binding() {
 fn reassignment_rejects_binding() {
     // let P = new Int32Array(4); P = undefined; f(P)
     let m = module_with_init(vec![
-        let_stmt(3, true, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4)))),
+        let_stmt(
+            3,
+            true,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4))),
+        ),
         Stmt::Expr(Expr::LocalSet(3, Box::new(Expr::Undefined))),
         Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
     ]);
@@ -134,7 +150,11 @@ fn reassignment_in_another_function_rejects_binding() {
     // The write scan is module-wide: a reassignment hiding in a different
     // function body must disqualify the init-scope binding.
     let mut m = module_with_init(vec![
-        let_stmt(3, true, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4)))),
+        let_stmt(
+            3,
+            true,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4))),
+        ),
         Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
     ]);
     m.functions.push(func(
@@ -163,7 +183,11 @@ fn closure_reference_rejects_binding() {
         is_strict: false,
     };
     let m = module_with_init(vec![
-        let_stmt(3, false, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4)))),
+        let_stmt(
+            3,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4))),
+        ),
         let_stmt(4, false, closure),
         Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
     ]);
@@ -176,7 +200,11 @@ fn call_before_binding_is_not_dominated() {
     // f(P) textually BEFORE the Let: the sequential judgment must not prove.
     let m = module_with_init(vec![
         Stmt::Expr(call(7, vec![Expr::LocalGet(10)])),
-        let_stmt(10, false, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4)))),
+        let_stmt(
+            10,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4))),
+        ),
         Stmt::Expr(call(7, vec![Expr::LocalGet(10)])),
     ]);
     let facts = collect_spec_abi_facts(&m);
@@ -189,7 +217,11 @@ fn call_before_binding_is_not_dominated() {
 fn site_nested_in_loop_after_toplevel_let_is_proven() {
     // The enc_real shape: Lets, then `for (...) f(lr, 0, P, S)`.
     let m = module_with_init(vec![
-        let_stmt(10, false, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(2)))),
+        let_stmt(
+            10,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(2))),
+        ),
         Stmt::While {
             condition: Expr::Bool(true),
             body: vec![Stmt::Expr(call(
@@ -232,9 +264,17 @@ fn length_unsafe_source_use_demotes_const_len_only() {
     // plain array (never reassigned) so P is still non-view, but its length
     // is no longer a compile-time constant.
     let m = module_with_init(vec![
-        let_stmt(1, true, Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)])),
+        let_stmt(
+            1,
+            true,
+            Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)]),
+        ),
         Stmt::Expr(call(8, vec![Expr::LocalGet(1)])),
-        let_stmt(2, false, ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1)))),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1))),
+        ),
         Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
     ]);
     let facts = collect_spec_abi_facts(&m);

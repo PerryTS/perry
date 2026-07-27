@@ -200,9 +200,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         // not an ArrayBuffer when the binding proof later demands it), so the
         // ctor-arg position cannot change `src`'s length afterwards. Length
         // reads are also safe.
-        Expr::TypedArrayNew {
-            arg: Some(arg), ..
-        } => {
+        Expr::TypedArrayNew { arg: Some(arg), .. } => {
             if let Expr::LocalGet(id) = arg.as_ref() {
                 if depth > 0 {
                     scan.closure_refs.insert(*id);
@@ -211,9 +209,19 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
                 record_expr_use(arg, depth, scan);
             }
         }
-        Expr::Closure { body, captures, .. } => {
+        Expr::Closure {
+            body,
+            captures,
+            params,
+            ..
+        } => {
             for c in captures {
                 scan.closure_refs.insert(*c);
+            }
+            for p in params {
+                if let Some(default) = &p.default {
+                    record_expr_use(default, depth + 1, scan);
+                }
             }
             walk_stmts(body, depth + 1, scan);
             // Defaults/keys hidden in the closure expr's other children.
@@ -557,8 +565,7 @@ fn judge_expr(
 ) {
     if let Expr::Call { callee, args, .. } = e {
         if let Expr::FuncRef(fid) = callee.as_ref() {
-            let judged: Vec<SpecParamRep> =
-                args.iter().map(|a| judge_arg(a, ta, ready)).collect();
+            let judged: Vec<SpecParamRep> = args.iter().map(|a| judge_arg(a, ta, ready)).collect();
             out.entry(*fid).or_default().push(judged);
         }
     }
@@ -623,9 +630,7 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
                 {
                     continue;
                 }
-                if let Some(const_len) =
-                    judge_ctor_arg(arg.as_deref(), &array_literal_locals)
-                {
+                if let Some(const_len) = judge_ctor_arg(arg.as_deref(), &array_literal_locals) {
                     ta_bindings.insert(
                         *id,
                         SpecTaBinding {

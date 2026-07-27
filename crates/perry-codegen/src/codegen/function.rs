@@ -530,8 +530,7 @@ pub(super) fn compile_function(
                 }
                 crate::collectors::SpecParamRep::TaPtr { kind, .. } => {
                     if let Some(class) = spec_ta_kind_class_name(*kind) {
-                        local_types
-                            .insert(p.id, perry_hir::types::Type::Named(class.to_string()));
+                        local_types.insert(p.id, perry_hir::types::Type::Named(class.to_string()));
                     }
                 }
                 crate::collectors::SpecParamRep::Boxed | crate::collectors::SpecParamRep::F64 => {}
@@ -569,6 +568,20 @@ pub(super) fn compile_function(
         &cross_module.module_dispatch,
     );
 
+    if let Some(plan) = spec_entry {
+        if std::env::var("PERRY_REPSEL_DEBUG").as_deref() == Ok("1") {
+            eprintln!(
+                "repsel: spec entry '{}' tuple=[{}] [{}]",
+                f.name,
+                plan.reps
+                    .iter()
+                    .map(|r| r.label())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                strings.module_prefix()
+            );
+        }
+    }
     // Representation-selection Phase 1: canonical-i32 locals are allowed in
     // plain synchronous function bodies only. Async / generator /
     // `was_plain_async` bodies route locals through shared cells (the

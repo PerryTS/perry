@@ -44,7 +44,8 @@ use perry_hir::{Expr, Stmt};
 
 use super::loops::{
     local_is_number_array, local_is_untyped_candidate, packed_f64_range_loop_pure_expr_collect,
-    packed_loop_array_binding_storage_is_addressable, PackedF64RangeArrayAccess,
+    packed_loop_array_binding_storage_is_addressable, record_packed_f64_range_static_access,
+    PackedF64RangeArrayAccess,
 };
 use super::{emit_shadow_clears_after_stmt, lower_stmt};
 use crate::expr::{
@@ -68,6 +69,13 @@ pub(super) struct MaskedWindowRegionArray {
     /// Merged static window over every tracked read of this array.
     pub lo: i64,
     pub hi: i64,
+    /// Representation-selection Phase 2: the binding carries a
+    /// `storage_inline_proven` I32 `BufferViewSlot` whose CONSTANT length
+    /// covers the merged window — the ta_i32 classification is a compile-time
+    /// fact, so no runtime probe is needed for this array. When EVERY region
+    /// array is proven, the region lowers as a single guard-free fast copy
+    /// (no probes, no plain/slow copies, no branches).
+    pub proven_ta_i32: bool,
 }
 
 /// One scheduled fast-copy type refinement: after lowering the statement at
@@ -280,6 +288,105 @@ fn region_i32_bounded_write_locals(stmts: &[Stmt]) -> std::collections::HashSet<
     written
 }
 
+/// Phase 2: decompose a region-admissible proven-view element store —
+/// `IndexSet`/`PutValueSet` on a `storage_inline_proven` integer-element view
+/// receiver with an exact-i32 index shape. Element writes cannot rebind the
+/// receiver, resize it, or move its storage (non-view typed arrays are
+/// non-movable and non-detachable), and the checked-store lowering emits no
+/// calls, so the statement is safe inside every region copy.
+fn proven_view_store_parts<'e>(
+    ctx: &FnCtx<'_>,
+    expr: &'e Expr,
+) -> Option<(u32, &'e Expr, &'e Expr)> {
+    let (object, index, value) = match expr {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => (object, index, value),
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            let (Expr::LocalGet(t), Expr::LocalGet(r)) = (target.as_ref(), receiver.as_ref())
+            else {
+                return None;
+            };
+            if t != r {
+                return None;
+            }
+            (target, key, value)
+        }
+        _ => return None,
+    };
+    let Expr::LocalGet(id) = object.as_ref() else {
+        return None;
+    };
+    if !crate::expr::local_is_proven_int_store_view(ctx, *id) {
+        return None;
+    }
+    if !crate::expr::index_is_exact_i32_shape(ctx, index) {
+        return None;
+    }
+    Some((*id, index, value))
+}
+
+/// Ctx-aware operand collect for admitted proven-view stores: the same pure
+/// shapes as `packed_f64_range_loop_pure_expr_collect`, plus two ctx-backed
+/// index forms the ctx-free walk cannot see — a compile-time-constant index
+/// (`P[BLOWFISH_NUM_ROUNDS + 1]`, resolved through module-const folding) is a
+/// tracked single-element window, and an exact-i32 dynamic index on a proven
+/// inline view (`lr[off]`) is a pure UNTRACKED read (it lowers per-access
+/// through the checked tier in every copy).
+fn region_store_operand_collect(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+    accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+) -> bool {
+    match expr {
+        Expr::IndexGet { object, index } => {
+            let Expr::LocalGet(arr_id) = object.as_ref() else {
+                return false;
+            };
+            let window = crate::collectors::static_index_window(index).or_else(|| {
+                crate::expr::int_range_expr(ctx, index)
+                    .filter(|range| range.min == range.max)
+                    .map(|range| (range.min, range.max))
+            });
+            if let Some((lo, hi)) = window {
+                if lo < 0 || hi >= i64::from(i32::MAX) {
+                    return false;
+                }
+                if !region_store_operand_collect(ctx, index, accesses) {
+                    return false;
+                }
+                record_packed_f64_range_static_access(accesses, *arr_id, lo, hi);
+                return true;
+            }
+            crate::expr::local_is_proven_int_store_view(ctx, *arr_id)
+                && crate::expr::index_is_exact_i32_shape(ctx, index)
+                && region_store_operand_collect(ctx, index, accesses)
+        }
+        Expr::LocalGet(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            region_store_operand_collect(ctx, left, accesses)
+                && region_store_operand_collect(ctx, right, accesses)
+        }
+        Expr::Unary { operand, .. } | Expr::NumberCoerce(operand) => {
+            region_store_operand_collect(ctx, operand, accesses)
+        }
+        _ => false,
+    }
+}
+
 /// Match a masked-window region starting at `stmts[0]`. Returns `None` when
 /// the run is too short, tracks no eligible array, or carries fewer than
 /// [`REGION_MIN_TRACKED_READS`] tracked reads.
@@ -293,6 +400,11 @@ pub(super) fn try_match_masked_window_region(
     let mut accesses: std::collections::BTreeMap<u32, PackedF64RangeArrayAccess> =
         std::collections::BTreeMap::new();
     let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Phase 2: receivers of admitted proven-view element STORES. An element
+    // write never rebinds/resizes/moves a proven inline typed array, so such
+    // statements are region-safe — but a stored-to array must never be in the
+    // masked-READ eligible set (kept read-only).
+    let mut store_receivers: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut len = 0usize;
     for stmt in stmts {
         let ok = match stmt {
@@ -316,6 +428,23 @@ pub(super) fn try_match_masked_window_region(
                 true
             }
             Stmt::Expr(expr) => {
+                if let Some((receiver_id, index, value)) = proven_view_store_parts(ctx, expr) {
+                    // Admit the store: its index/value sub-expressions are held
+                    // to the ctx-aware collect rule (their masked reads join
+                    // the tracked set — `lr[off] = r ^ P[K + 1]` tracks the
+                    // `P[...]` read, resolving `K` through compile-time
+                    // constants).
+                    let mut trial = accesses.clone();
+                    if region_store_operand_collect(ctx, index, &mut trial)
+                        && region_store_operand_collect(ctx, value, &mut trial)
+                    {
+                        accesses = trial;
+                        store_receivers.insert(receiver_id);
+                        len += 1;
+                        continue;
+                    }
+                    break;
+                }
                 let mut trial = accesses.clone();
                 if packed_f64_range_loop_pure_expr_collect(
                     expr,
@@ -344,8 +473,13 @@ pub(super) fn try_match_masked_window_region(
     for access in accesses.values() {
         // A binding written anywhere in the region (`S = T` rebinding, or a
         // tracked store) is dropped from the eligible set — its reads keep
-        // the ordinary per-access lowering in every copy.
-        if access.written || written.contains(&access.array_id) {
+        // the ordinary per-access lowering in every copy. Element-STORE
+        // receivers (admitted proven-view stores) are likewise kept out: the
+        // eligible read set stays read-only.
+        if access.written
+            || written.contains(&access.array_id)
+            || store_receivers.contains(&access.array_id)
+        {
             continue;
         }
         if access.counter.is_some() {
@@ -372,7 +506,25 @@ pub(super) fn try_match_masked_window_region(
         {
             continue;
         }
-        if !local_is_number_array(ctx, access.array_id)
+        // Phase 2 proven class: an inline-storage-proven Int32 view whose
+        // constant length covers the window classifies as ta_i32 at COMPILE
+        // time (kind fixed at construction, length immutable, storage
+        // non-movable, in-window reads in-bounds by arithmetic).
+        let proven_ta_i32 = ctx
+            .buffer_view_slots
+            .get(&access.array_id)
+            .is_some_and(|view| {
+                view.storage_inline_proven
+                    && view.native_owned.is_none()
+                    && view.index_unit == crate::native_value::BufferIndexUnit::Element
+                    && matches!(view.elem, crate::native_value::BufferElem::I32)
+                    && matches!(
+                        view.length_source,
+                        Some(crate::native_value::LengthSource::Constant(len)) if hi < len
+                    )
+            });
+        if !proven_ta_i32
+            && !local_is_number_array(ctx, access.array_id)
             && !local_is_untyped_candidate(ctx, access.array_id)
         {
             continue;
@@ -381,12 +533,25 @@ pub(super) fn try_match_masked_window_region(
             array_id: access.array_id,
             lo,
             hi,
+            proven_ta_i32,
         });
     }
     if arrays.is_empty() {
         return None;
     }
 
+    if std::env::var("PERRY_REPSEL_DEBUG").as_deref() == Ok("1") {
+        eprintln!(
+            "masked-region match in {}: len={} arrays={:?} stores={:?}",
+            ctx.source_function,
+            len,
+            arrays
+                .iter()
+                .map(|a| (a.array_id, a.lo, a.hi, a.proven_ta_i32))
+                .collect::<Vec<_>>(),
+            store_receivers
+        );
+    }
     let eligible: std::collections::HashSet<u32> =
         arrays.iter().map(|array| array.array_id).collect();
     let mut reads = 0usize;
@@ -672,6 +837,47 @@ pub(super) fn lower_masked_window_region(
     emit_shadow_clears: bool,
     region: &MaskedWindowRegion,
 ) -> Result<()> {
+    // Phase 2: when EVERY region array is compile-time-proven ta_i32 (spec-ABI
+    // `TaPtr` params, literal-length local views), the runtime classification
+    // is a foregone conclusion — emit ONE fast copy straight-line: no probe
+    // calls, no plain/slow copies, no branches, no merge. The data pointer
+    // comes from the entry-hoisted view slot (stable: typed-array storage
+    // never moves and the region admits no reassignment of the binding).
+    if region.arrays.iter().all(|array| array.proven_ta_i32) {
+        let ta_scope_id = ctx.next_loop_proof_scope_id();
+        for array in &region.arrays {
+            let view = ctx
+                .buffer_view_slots
+                .get(&array.array_id)
+                .cloned()
+                .expect("proven region array must have a view slot");
+            let data_ptr_val = ctx.block().load(crate::types::PTR, &view.data_slot);
+            let data_i64 = ctx.block().ptrtoint(&data_ptr_val, I64);
+            ctx.masked_window_array_facts.push(MaskedWindowArrayFact {
+                array_local_id: array.array_id,
+                scope_id: ta_scope_id,
+                guard_id: "masked_region_ta_i32_proven".to_string(),
+                min_idx: array.lo,
+                max_idx_exclusive: array.hi + 1,
+                values_i32: true,
+                elem: MaskedWindowElem::TaI32 { data_ptr: data_i64 },
+            });
+        }
+        let privatize = ctx.try_depth == 0;
+        let result = lower_region_copy(
+            ctx,
+            region_stmts,
+            base_idx,
+            emit_shadow_clears,
+            &region.refinements,
+            privatize,
+            true,
+        );
+        ctx.masked_window_array_facts
+            .retain(|fact| fact.scope_id != ta_scope_id);
+        return result;
+    }
+
     let ta_pre_idx = ctx.new_block("masked_region.ta_i32.preheader");
     let try_plain_idx = ctx.new_block("masked_region.try_plain");
     let plain_pre_idx = ctx.new_block("masked_region.plain_f64.preheader");

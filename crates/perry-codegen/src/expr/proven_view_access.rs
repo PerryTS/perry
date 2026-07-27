@@ -52,7 +52,7 @@ const MAX_ADDEND: i64 = 1 << 20;
 /// `true` when `index`'s runtime value is provably an exact signed-i32 (or
 /// safely-wrapping, see `MAX_ADDEND`) integer, so `lower_expr_as_i32` +
 /// unsigned bounds compare reproduces JS semantics exactly.
-fn index_is_exact_i32_shape(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+pub(crate) fn index_is_exact_i32_shape(ctx: &FnCtx<'_>, index: &Expr) -> bool {
     if let Some((lo, hi)) = crate::collectors::static_index_window(index) {
         if lo >= 0 && hi <= i64::from(i32::MAX) {
             return true;
@@ -82,6 +82,28 @@ fn index_is_exact_i32_shape(ctx: &FnCtx<'_>, index: &Expr) -> bool {
     }
 }
 
+/// `true` when `id` is a proven-inline-storage integer-element view eligible
+/// as a checked-store receiver (`expr/proven_view_access` store tier and the
+/// masked-window region's proven store suffix).
+pub(crate) fn local_is_proven_int_store_view(ctx: &FnCtx<'_>, id: u32) -> bool {
+    ctx.buffer_view_slots.get(&id).is_some_and(|view| {
+        view.storage_inline_proven
+            && view.native_owned.is_none()
+            && view.index_unit == BufferIndexUnit::Element
+            && view.alias.allows_noalias()
+            && view.scope_idx.is_some()
+            && matches!(
+                view.elem,
+                BufferElem::I8
+                    | BufferElem::U8
+                    | BufferElem::I16
+                    | BufferElem::U16
+                    | BufferElem::I32
+                    | BufferElem::U32
+            )
+    })
+}
+
 /// The proven view for `object`, when every gate for the checked tier holds.
 fn proven_view_for(
     ctx: &FnCtx<'_>,
@@ -99,6 +121,13 @@ fn proven_view_for(
         || view.native_owned.is_some()
         || view.index_unit != BufferIndexUnit::Element
     {
+        return None;
+    }
+    // Downgrade marker: hazard paths clear `scope_idx` / demote `alias` when
+    // the tracked data pointer can no longer be trusted (reassignment
+    // refresh, aliasing, escapes). Mirror `lower_typed_array_load`'s gates so
+    // this tier can never read through a stale slot.
+    if !view.alias.allows_noalias() || view.scope_idx.is_none() {
         return None;
     }
     // A closure-captured receiver can be reassigned between proof and access.
@@ -274,7 +303,15 @@ pub(crate) fn try_lower_proven_view_checked_store(
     if matches!(view.elem, BufferElem::U8Clamped) {
         return Ok(None);
     }
-    if int_kind && !super::can_lower_integer_typed_array_store_value(ctx, value) {
+    // The ctx-free store gate misses proven typed-array-read operands
+    // (`r ^ P[17]`); the region-aware predicate is the crate's established
+    // "lowerable as exact i32 with ToInt32 semantics" contract and covers
+    // them (its IndexGet arm requires the same bounds proofs the unchecked
+    // load emitter does).
+    if int_kind
+        && !super::can_lower_integer_typed_array_store_value(ctx, value)
+        && !super::can_lower_expr_as_i32_in_current_region(ctx, value)
+    {
         return Ok(None);
     }
     if matches!(view.elem, BufferElem::F32 | BufferElem::F64)

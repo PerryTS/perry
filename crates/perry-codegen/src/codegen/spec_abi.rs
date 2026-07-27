@@ -120,9 +120,7 @@ pub(crate) fn spec_ta_kind_class_name(kind: u8) -> Option<&'static str> {
 
 /// Element kind → (`BufferElem`, width in bytes) for the entry-bound view
 /// slot. Mirrors `stmt/let_stmt.rs`'s private table.
-pub(crate) fn spec_ta_kind_elem_width(
-    kind: u8,
-) -> Option<(crate::native_value::BufferElem, u32)> {
+pub(crate) fn spec_ta_kind_elem_width(kind: u8) -> Option<(crate::native_value::BufferElem, u32)> {
     use crate::native_value::BufferElem;
     use perry_hir::*;
     Some(match kind {
@@ -231,15 +229,10 @@ mod tests {
             SpecParamRep::F64,
         ];
         let name = spec_function_name("perry_fn_m___encipher", &reps);
-        assert_eq!(
-            name,
-            "perry_fn_m___encipher__spec_ta4x2_i32_ta4_b_f64"
-        );
+        assert_eq!(name, "perry_fn_m___encipher__spec_ta4x2_i32_ta4_b_f64");
         // Every char is symbol-safe: sanitize/sanitize_member must return the
         // name byte-identical (no `$`, no unicode).
-        assert!(name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
     }
 
     #[test]
@@ -276,13 +269,18 @@ mod tests {
     fn spec_abi_symbol_reachability() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let allowed: [&str; 4] = [
-            "codegen/spec_abi.rs",     // naming + this test
-            "codegen/function.rs",     // entry emission
-            "codegen/mod.rs",          // eligibility/budget loop
-            "lower_call/func_ref.rs",  // direct-call dispatch
+            "codegen/spec_abi.rs",    // naming + this test
+            "codegen/function.rs",    // entry emission
+            "codegen/mod.rs",         // eligibility/budget loop
+            "lower_call/func_ref.rs", // direct-call dispatch
         ];
         let mut offenders: Vec<String> = Vec::new();
-        fn visit(dir: &std::path::Path, root: &std::path::Path, allowed: &[&str], out: &mut Vec<String>) {
+        fn visit(
+            dir: &std::path::Path,
+            root: &std::path::Path,
+            allowed: &[&str],
+            out: &mut Vec<String>,
+        ) {
             for entry in std::fs::read_dir(dir).expect("read src dir") {
                 let path = entry.expect("dir entry").path();
                 if path.is_dir() {

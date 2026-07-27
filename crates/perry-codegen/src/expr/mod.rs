@@ -56,9 +56,9 @@ mod write_barrier;
 pub(crate) use crate::native_value::{materialize_js_value, materialize_js_value_without_record};
 pub(crate) use array_literal::lower_array_literal;
 pub(crate) use buffer_access::{
-    access_facts_for_spec, can_lower_integer_typed_array_store_value,
-    emit_buffer_access_pointer, lower_buffer_access_proof, lower_buffer_load, lower_buffer_store,
-    lower_typed_array_load, lower_typed_array_store, BufferAccessSpec,
+    access_facts_for_spec, can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
+    lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
+    lower_typed_array_store, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_native_owned_view_fact, buffer_access_materialization_reason,
@@ -84,9 +84,6 @@ pub(crate) use i32_fast_path::{
     try_flat_const_2d_int, try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
-pub(crate) use proven_view_access::{
-    try_lower_proven_view_checked_f64_load, try_lower_proven_view_checked_store,
-};
 pub(crate) use nanbox_inline::{
     i32_bool_to_nanbox, i32_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline,
@@ -96,6 +93,10 @@ pub(crate) use object_literal::lower_object_literal;
 pub(crate) use pod_record::{
     lower_and_store_initial_pod_field, lower_pod_local_reassignment, materialize_pod_local,
     try_lower_pod_field_get, try_lower_pod_field_set,
+};
+pub(crate) use proven_view_access::{
+    index_is_exact_i32_shape, local_is_proven_int_store_view,
+    try_lower_proven_view_checked_f64_load, try_lower_proven_view_checked_store,
 };
 pub(crate) use range_facts::{
     bounds_for_buffer_access_width, effective_alias_state_for_access,

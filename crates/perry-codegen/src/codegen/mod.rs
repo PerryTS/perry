@@ -1092,6 +1092,45 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         }
     }
+    // Representation-selection Phase 2: top-level `const <name> = <numeric
+    // literal>` module bindings are compile-time constants by ECMAScript
+    // semantics (a `const` reassignment is a parse-time error), so their
+    // reads constant-fold — this is what proves `P[BLOWFISH_NUM_ROUNDS + 1]`
+    // in-bounds against a constant-length view. Excluded: any id carried by a
+    // `PreallocateBoxes`/`PreallocateTdzBoxes` statement — a box-backed slot
+    // holds a box pointer, and a TDZ-flagged binding must keep its
+    // ReferenceError on pre-declaration reads instead of folding to a value.
+    {
+        let mut prealloc_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for s in &hir.init {
+            if let perry_hir::Stmt::PreallocateBoxes(ids)
+            | perry_hir::Stmt::PreallocateTdzBoxes(ids) = s
+            {
+                prealloc_ids.extend(ids.iter().copied());
+            }
+        }
+        for s in &hir.init {
+            if let perry_hir::Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(init),
+                ..
+            } = s
+            {
+                if prealloc_ids.contains(id) {
+                    continue;
+                }
+                let value = match init {
+                    perry_hir::Expr::Integer(n) => Some(*n as f64),
+                    perry_hir::Expr::Number(n) if n.is_finite() => Some(*n),
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    compile_time_constants.entry(*id).or_insert(value);
+                }
+            }
+        }
+    }
 
     // Issue #235: per-method explicit-param-count map covering BOTH local
     // classes (from `hir.classes`) AND imported classes (from
@@ -2098,20 +2137,21 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let Some(sites) = spec_facts.call_sites.get(&f.id) else {
                 continue;
             };
-            let mut reject = |reason: typed_abi::TypedCloneRejectionReason,
-                              records: &mut Vec<crate::native_value::NativeRepRecord>| {
-                record_typed_clone_rejection(
-                    records,
-                    f.name.clone(),
-                    "spec_abi_entry_decision",
-                    reason,
-                    vec![
-                        "typed_clone_kind=spec_abi_entry".to_string(),
-                        format!("function_id={}", f.id),
-                        format!("symbol={}", f.name),
-                    ],
-                );
-            };
+            let mut reject =
+                |reason: typed_abi::TypedCloneRejectionReason,
+                 records: &mut Vec<crate::native_value::NativeRepRecord>| {
+                    record_typed_clone_rejection(
+                        records,
+                        f.name.clone(),
+                        "spec_abi_entry_decision",
+                        reason,
+                        vec![
+                            "typed_clone_kind=spec_abi_entry".to_string(),
+                            format!("function_id={}", f.id),
+                            format!("symbol={}", f.name),
+                        ],
+                    );
+                };
             if f.is_async || f.is_generator || f.was_plain_async {
                 reject(
                     typed_abi::TypedCloneRejectionReason::AsyncOrGenerator,
