@@ -395,10 +395,7 @@ fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
 /// The chain (self first) when every link is a modeled, accessor-free,
 /// computed-free, statically-extended user class; `None`-equivalent (empty)
 /// otherwise.
-fn chain_classes<'a>(
-    classes: &HashMap<String, &'a Class>,
-    class_name: &str,
-) -> Vec<&'a Class> {
+fn chain_classes<'a>(classes: &HashMap<String, &'a Class>, class_name: &str) -> Vec<&'a Class> {
     let mut out = Vec::new();
     let mut current = Some(class_name.to_string());
     let mut seen = HashSet::new();
@@ -524,7 +521,6 @@ impl<'a> UseWalk<'a> {
             .any(|c| c.fields.iter().any(|f| f.name == property))
     }
 
-
     fn walk_stmts(&mut self, stmts: &'a [Stmt]) {
         for s in stmts {
             self.walk_stmt(s);
@@ -577,9 +573,7 @@ impl<'a> UseWalk<'a> {
                     // an alias id disqualifies the root (re-declared alias).
                     *self.let_counts.entry(*id).or_insert(0) += 1;
                     match init.as_ref() {
-                        Some(Expr::LocalGet(src))
-                            if self.tracked_root(*src) == Some(root) =>
-                        {
+                        Some(Expr::LocalGet(src)) if self.tracked_root(*src) == Some(root) => {
                             return;
                         }
                         _ => self.disqualified.insert(root),
@@ -666,7 +660,9 @@ impl<'a> UseWalk<'a> {
     fn walk_expr(&mut self, e: &'a Expr) {
         match e {
             // Safe: declared-chain field read on a tracked member.
-            Expr::PropertyGet { object, property, .. } => {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
                         if !self.candidate_chain_has_field(root, property) {
@@ -1199,11 +1195,9 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
 
     fn expr_this_safe(&mut self, e: &'a Expr, ctx: &(String, String, Vec<u32>)) -> bool {
         match e {
-            Expr::PropertyGet { object, property, .. }
-                if matches!(object.as_ref(), Expr::This) =>
-            {
-                self.fields.contains(property)
-            }
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::This) => self.fields.contains(property),
             Expr::PropertySet {
                 object,
                 property,
@@ -1306,9 +1300,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             // Any other appearance of `this` — including inside closures —
             // is a potential leak.
             Expr::This => false,
-            Expr::Closure {
-                body, ..
-            } => {
+            Expr::Closure { body, .. } => {
                 // A closure that touches `this` (captures_this or body use)
                 // leaks it; a `this`-free closure is fine but its body may
                 // reference nothing we track here (locals are the outer
@@ -1495,8 +1487,10 @@ fn prove_numeric_fields(
 
     loop {
         let before = numeric.len();
-        let is_store_numeric = |field: &str, value: Option<&Expr>, context: Option<&(String, String, Vec<u32>)>,
-                                 numeric: &HashSet<String>|
+        let is_store_numeric = |field: &str,
+                                value: Option<&Expr>,
+                                context: Option<&(String, String, Vec<u32>)>,
+                                numeric: &HashSet<String>|
          -> bool {
             let _ = field;
             let Some(value) = value else {
@@ -1513,8 +1507,7 @@ fn prove_numeric_fields(
                         // provenance `new` args; parent ctor params are fed
                         // by `super(...)` args we do not track — treat their
                         // param-mediated stores as unproven.
-                        let is_root =
-                            chain.first().map(|c| c.name == *owner).unwrap_or(false);
+                        let is_root = chain.first().map(|c| c.name == *owner).unwrap_or(false);
                         if is_root && ctor_params.as_deref() == Some(param_ids.as_slice()) {
                             Some((param_ids.as_slice(), vec![new_args]))
                         } else {
@@ -1660,12 +1653,13 @@ fn expr_numeric_by_construction(
         // inside the candidate's ctor/method contexts (param_args Some), or a
         // tracked member local in function scope. A same-named field of a
         // DIFFERENT object proves nothing.
-        Expr::PropertyGet { object, property, .. }
-            if match object.as_ref() {
-                Expr::This => param_args.is_some(),
-                Expr::LocalGet(id) => members.contains(id),
-                _ => false,
-            } =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if match object.as_ref() {
+            Expr::This => param_args.is_some(),
+            Expr::LocalGet(id) => members.contains(id),
+            _ => false,
+        } =>
         {
             numeric_fields.contains(property)
         }

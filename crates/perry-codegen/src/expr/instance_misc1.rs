@@ -1411,11 +1411,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let fact = ctx.native_facts.shape_proven_ptr_local(*recv_id).cloned();
                     if let Some(fact) = fact {
                         if fact.numeric_fields.contains(property.as_str()) {
-                            if let Some(field_index) = crate::type_analysis::class_field_global_index(
-                                ctx,
-                                &fact.class_name,
-                                property,
-                            ) {
+                            if let Some(field_index) =
+                                crate::type_analysis::class_field_global_index(
+                                    ctx,
+                                    &fact.class_name,
+                                    property,
+                                )
+                            {
                                 let recv_box = lower_expr(ctx, object)?;
                                 let field_idx_str = field_index.to_string();
                                 let header_skip = crate::target_layout::object_header_size_bytes(
@@ -1427,8 +1429,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     let obj_bits = blk.bitcast_double_to_i64(&recv_box);
                                     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                                     let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                                    let fields_base =
-                                        blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                                     let field_ptr =
                                         blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
                                     let old = blk.load(DOUBLE, &field_ptr);
@@ -1468,11 +1469,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
                                     blk.call_void(
                                         "js_object_set_field_by_name",
-                                        &[
-                                            (I64, &obj_handle),
-                                            (I64, &key_handle),
-                                            (DOUBLE, &new),
-                                        ],
+                                        &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
                                     );
                                     blk.br(&merge_label);
                                 }
