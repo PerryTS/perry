@@ -952,7 +952,7 @@ fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
     }
     let heap_arm_start = block_def_offset(fn_ir, "strapp.heap");
     let heap_arm_end =
-        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.strs") + 1;
+        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rcold") + 1;
     let heap_arm = &fn_ir[heap_arm_start..heap_arm_end];
     assert!(
         heap_arm.contains("call i64 @js_string_append"),
