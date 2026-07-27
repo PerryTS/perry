@@ -312,3 +312,99 @@ fn collect_writes_expr<'a>(
         collect_writes_expr(child, writes, candidates)
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::BinaryOp;
+
+    fn let_stmt(id: u32, init: Option<Expr>) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("v{id}"),
+            ty: HirType::Any,
+            mutable: true,
+            init,
+        }
+    }
+
+    fn set(id: u32, rhs: Expr) -> Stmt {
+        Stmt::Expr(Expr::LocalSet(id, Box::new(rhs)))
+    }
+
+    fn xor(l: Expr, r: Expr) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::BitXor,
+            left: Box::new(l),
+            right: Box::new(r),
+        }
+    }
+
+    fn run(stmts: &[Stmt]) -> HashSet<u32> {
+        collect_not_bigint_locals(stmts, &[], &HashMap::new())
+    }
+
+    #[test]
+    fn self_referential_bitwise_accumulator_stays_non_bigint() {
+        // let l = 0; l = l ^ 5;  — the self-reference short-circuits on the
+        // non-`l` operand, so `l` is proven never-BigInt.
+        let stmts = vec![
+            let_stmt(1, Some(Expr::Integer(0))),
+            set(1, xor(Expr::LocalGet(1), Expr::Integer(5))),
+        ];
+        let got = run(&stmts);
+        assert!(got.contains(&1), "self-ref accumulator missing: {got:?}");
+    }
+
+    #[test]
+    fn mutually_referencing_numeric_locals_stay_non_bigint() {
+        // let a = 0; let b = 0; a = b ^ 1; b = a ^ 1;
+        let stmts = vec![
+            let_stmt(1, Some(Expr::Integer(0))),
+            let_stmt(2, Some(Expr::Integer(0))),
+            set(1, xor(Expr::LocalGet(2), Expr::Integer(1))),
+            set(2, xor(Expr::LocalGet(1), Expr::Integer(1))),
+        ];
+        let got = run(&stmts);
+        assert!(
+            got.contains(&1) && got.contains(&2),
+            "mutually-referencing locals missing: {got:?}"
+        );
+    }
+
+    #[test]
+    fn uninitialized_let_is_non_bigint() {
+        // `let x;` — undefined, never written → non-BigInt.
+        let got = run(&[let_stmt(1, None)]);
+        assert!(got.contains(&1), "uninitialized local missing: {got:?}");
+    }
+
+    #[test]
+    fn bigint_literal_write_invalidates_local() {
+        // let y = 0; y = 5n;  — a BigInt write means `y` CAN be a BigInt.
+        let stmts = vec![
+            let_stmt(1, Some(Expr::Integer(0))),
+            set(1, Expr::BigInt("5".to_string())),
+        ];
+        let got = run(&stmts);
+        assert!(
+            !got.contains(&1),
+            "bigint-written local not excluded: {got:?}"
+        );
+    }
+
+    #[test]
+    fn bigint_init_and_copy_taint_propagate() {
+        // let y = 5n; let w = y;  — `y` is a BigInt, and `w` copies it, so the
+        // taint must propagate across the fixpoint and exclude BOTH.
+        let stmts = vec![
+            let_stmt(1, Some(Expr::BigInt("5".to_string()))),
+            let_stmt(2, Some(Expr::LocalGet(1))),
+        ];
+        let got = run(&stmts);
+        assert!(
+            !got.contains(&1) && !got.contains(&2),
+            "bigint taint did not propagate through copy: {got:?}"
+        );
+    }
+}

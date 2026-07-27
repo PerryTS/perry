@@ -115,7 +115,23 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             right,
         } => is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right),
         Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
-        Expr::Update { .. } => true,
+        // `x++`/`x--`/`++x`/`--x` evaluates to `ToNumeric(x) ± 1`, a Number —
+        // EXCEPT when `x` is a BigInt, where it stays a BigInt (`5n++` → `6n`).
+        // So this is NOT unconditionally numeric: mirror the `LocalGet` arm's
+        // type check, and additionally honor the integer-range collectors so an
+        // `Any`-typed loop counter proven to hold an i32 stays on the numeric
+        // fast path. An `Any` local NOT proven integer could hold a BigInt and
+        // is excluded — otherwise `(bigintLocal++) & x` would take the
+        // all-numeric operand path (which `toint32`s the BigInt to 0) instead
+        // of throwing the spec-mandated TypeError, and `(bigintLocal++) * 2`
+        // would silently produce NaN.
+        Expr::Update { id, .. } => {
+            matches!(
+                ctx.local_types.get(id),
+                Some(HirType::Number) | Some(HirType::Int32)
+            ) || ctx.integer_locals.contains(id)
+                || ctx.unsigned_i32_locals.contains(id)
+        }
         Expr::DateNow => true,
         // Math.* builtins always evaluate to a real numeric double: every
         // lowering coerces its operands internally (ToNumber via
@@ -365,6 +381,18 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 UnaryOp::Not | UnaryOp::Pos => true,
                 UnaryOp::Neg | UnaryOp::BitNot => is_provably_not_bigint(ctx, operand),
             };
+        }
+        // `x++` / `x--` / `++x` / `--x` PRESERVE the target's numeric kind
+        // (`bigint++` stays BigInt, `number++` stays Number), so the update's
+        // not-BigInt-ness IS the target local's — mirror the `LocalGet(id)` arm
+        // below. This MUST run before the `is_numeric_expr` shortcut, which
+        // treats every `Update` as numeric unconditionally and would otherwise
+        // misclassify a BigInt local's `x++` as non-BigInt (`is_bigint_expr`
+        // does not see through `Update`, so the guard above misses it too).
+        Expr::Update { id, .. } => {
+            return ctx.not_bigint_locals.contains(id)
+                || ctx.integer_locals.contains(id)
+                || ctx.unsigned_i32_locals.contains(id);
         }
         _ => {}
     }

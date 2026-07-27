@@ -75,3 +75,17 @@ try {
   nestedThrew = e instanceof TypeError;
 }
 console.log("nested_bigint:", nestedThrew, "rr=" + (rr | 0));
+
+// (d'') a BigInt local mutated with `++`/`--` used in a MIXED bitwise expr:
+//     `(b++) & num` is `bigint & number` and MUST throw. `x++`/`x--` preserve
+//     the target's BigInt kind, so the pre/post-update value is still a BigInt
+//     — the bail must be preserved (an `Update` must not be treated as a
+//     guaranteed Number by the inline fast path).
+let b1: any = 5n;
+mustThrow("binc_and:", () => (b1++) & num);
+mustThrow("bdec_or:", () => (b1--) | num);
+mustThrow("binc_shr:", () => (b1++) >> 1);
+// but `bigint++ ^ bigint` is bigint^bigint → still computes a BigInt.
+let b2: any = 10n;
+const b3: any = 3n;
+console.log("binc_xor:", (b2++) ^ b3);
