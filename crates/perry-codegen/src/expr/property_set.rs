@@ -517,6 +517,132 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 return Ok(val_double);
                             }
                         }
+                        // Representation-selection Phase 3b: shape-proven
+                        // Ptr<Shape> receiver (collectors/ptr_shape.rs) — no
+                        // guard call, no shape diamond. Raw-f64 slots keep the
+                        // inline plain-finite value check with a cold
+                        // `js_class_field_set_fallback` arm (a NaN/Inf/boxed
+                        // value must never be stored raw into a scalar-masked
+                        // slot — the runtime setter performs the layout
+                        // downgrade the GC scan relies on). Boxed slots store
+                        // inline with the existing generational write barrier
+                        // for possibly-pointer values.
+                        let ptr_shape_proven = match object.as_ref() {
+                            Expr::LocalGet(recv_id) if ctx.repsel_context_allows_canonical_i32 => {
+                                ctx.native_facts
+                                    .shape_proven_ptr_local(*recv_id)
+                                    .map(|fact| fact.class_name == class_name)
+                                    .unwrap_or(false)
+                            }
+                            _ => false,
+                        };
+                        if ptr_shape_proven {
+                            let header_skip =
+                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
+                                    .to_string();
+                            let field_set_barrier_needed =
+                                !expr_produces_non_pointer_bits_by_construction(ctx, value);
+                            let (obj_bits, obj_handle, field_ptr, val_bits) = {
+                                let blk = ctx.block();
+                                let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                                let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                                let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                                let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                                let field_ptr =
+                                    blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                                let val_bits = blk.bitcast_double_to_i64(&val_double);
+                                (obj_bits, obj_handle, field_ptr, val_bits)
+                            };
+                            if requires_raw_f64 {
+                                let store_idx = ctx.new_block("ptr_shape_set.raw_store");
+                                let cold_idx = ctx.new_block("ptr_shape_set.downgrade");
+                                let merge_idx = ctx.new_block("ptr_shape_set.merge");
+                                let store_label = ctx.block_label(store_idx);
+                                let cold_label = ctx.block_label(cold_idx);
+                                let merge_label = ctx.block_label(merge_idx);
+                                {
+                                    let blk = ctx.block();
+                                    let finite = crate::expr::class_field_inline_guard::
+                                        emit_plain_finite_number_check(blk, &val_bits);
+                                    blk.cond_br(&finite, &store_label, &cold_label);
+                                }
+                                ctx.current_block = store_idx;
+                                {
+                                    // The finite check proved a genuine
+                                    // unboxed double (INT32-boxed and every
+                                    // NaN-box tag share the all-ones
+                                    // exponent) — no canonicalization call,
+                                    // no barrier (pointer-free by proof).
+                                    let blk = ctx.block();
+                                    blk.store(DOUBLE, &val_double, &field_ptr);
+                                    blk.br(&merge_label);
+                                }
+                                ctx.current_block = cold_idx;
+                                {
+                                    let blk = ctx.block();
+                                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                    blk.call_void(
+                                        "js_class_field_set_fallback",
+                                        &[
+                                            (I64, &site_id),
+                                            (I64, &obj_bits),
+                                            (I64, &key_raw),
+                                            (DOUBLE, &val_double),
+                                        ],
+                                    );
+                                    blk.br(&merge_label);
+                                }
+                                ctx.current_block = merge_idx;
+                            } else {
+                                let blk = ctx.block();
+                                let field_addr = blk.ptrtoint(&field_ptr, I64);
+                                emit_jsvalue_slot_store_on_block(
+                                    blk,
+                                    &field_ptr,
+                                    &val_double,
+                                    &obj_handle,
+                                    &field_idx_str,
+                                    true,
+                                    &obj_bits,
+                                    &field_addr,
+                                    field_set_barrier_needed,
+                                );
+                            }
+                            let stored = LoweredValue {
+                                semantic: SemanticKind::JsValue,
+                                rep: NativeRep::JsValue,
+                                llvm_ty: DOUBLE,
+                                value: val_double.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode_and_facts(
+                                "ClassFieldSet",
+                                None,
+                                "class_field_set.shape_proven_store",
+                                &stored,
+                                Some(BoundsState::Guarded {
+                                    guard_id: "ptr_shape_static_proof".to_string(),
+                                }),
+                                None,
+                                Some(BufferAccessMode::CheckedNative),
+                                None,
+                                None,
+                                None,
+                                Vec::new(),
+                                Vec::new(),
+                                false,
+                                false,
+                                vec![
+                                    format!("class={}", class_name),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                    "receiver_proof=ptr_shape_local".to_string(),
+                                    format!("field_layout_raw_f64={}", requires_raw_f64),
+                                ],
+                            );
+                            return Ok(val_double);
+                        }
                         // #5334 lever B: oversized modules full-outline the entire
                         // class-field-SET IC diamond (guard + fast store +
                         // fallback) to a single `js_class_field_set_ic(...)` call.

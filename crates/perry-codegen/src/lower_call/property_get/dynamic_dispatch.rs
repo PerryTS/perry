@@ -848,6 +848,27 @@ pub(crate) fn try_lower_instance_method_call(
                         .cloned()
                         .map(|reps| (name.as_str(), reps))
                 });
+                // Representation-selection Phase 3b: shape-proven Ptr<Shape>
+                // receiver (collectors/ptr_shape.rs) — direct call with NO
+                // shape guard and NO own-override probe. Provenance proves
+                // the receiver's dynamic class is exactly `class_name`
+                // (subclass overrides cannot apply), the eligibility walk
+                // vetted every method called on the local (chain-resolvable,
+                // `this`-flow safe), no own-property write can shadow the
+                // method (non-declared-field writes disqualify), and
+                // `prototype_is_stable` held for the chain.
+                let ptr_shape_receiver = match object {
+                    Expr::LocalGet(recv_id) if ctx.repsel_context_allows_canonical_i32 => ctx
+                        .native_facts
+                        .shape_proven_ptr_local(*recv_id)
+                        .map(|fact| fact.class_name == class_name)
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
+                    let direct = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                    return Ok(Some(direct));
+                }
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,

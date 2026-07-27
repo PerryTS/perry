@@ -200,15 +200,47 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         return HashMap::new();
     }
 
+    // Alias pre-pass: `const alias = candidate` (the exact-receiver inliner
+    // materializes compound-assign receivers this way — `__cmpd_base_N`).
+    // A non-mutable Let whose init is a bare LocalGet of a candidate (or of
+    // another alias) tracks the SAME object; its uses follow the same rules
+    // and attribute to the root. Mutable, boxed, or module-global aliases
+    // stay untracked — a bare reference to the candidate through them then
+    // disqualifies via the use walk, which is the sound default.
+    let mut alias_edges: Vec<(u32, u32)> = Vec::new();
+    collect_alias_edges(stmts, &mut alias_edges);
+    let mut roots: HashMap<u32, u32> = candidates.keys().map(|id| (*id, *id)).collect();
+    loop {
+        let mut changed = false;
+        for (alias, src) in &alias_edges {
+            if candidates.contains_key(alias)
+                || boxed_vars.contains(alias)
+                || module_globals.contains_key(alias)
+                || roots.contains_key(alias)
+            {
+                continue;
+            }
+            if let Some(&root) = roots.get(src) {
+                roots.insert(*alias, root);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
     // Pass 2: strict use walk.
     let mut walk = UseWalk {
         candidates: &candidates,
+        roots: &roots,
         classes,
         disqualified: HashSet::new(),
         let_counts: HashMap::new(),
         field_stores: HashMap::new(),
         method_calls: HashMap::new(),
         new_args: HashMap::new(),
+        const_local_inits: HashMap::new(),
     };
     walk.walk_stmts(stmts);
     let UseWalk {
@@ -217,11 +249,20 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         field_stores,
         method_calls,
         new_args,
+        const_local_inits,
         ..
     } = walk;
     let mut out = HashMap::new();
     'cand: for (id, class_name) in &candidates {
         if disqualified.contains(id) || let_counts.get(id).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        // Every alias of this root must itself be single-Let (a re-declared
+        // alias id would leave a second binding the proof does not cover).
+        if roots
+            .iter()
+            .any(|(m, r)| r == id && m != id && let_counts.get(m).copied().unwrap_or(0) != 1)
+        {
             continue;
         }
         let chain = chain_classes(classes, class_name);
@@ -260,22 +301,93 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             }
         }
         let store_records = std::mem::take(&mut analysis.store_records);
+        let members: HashSet<u32> = roots
+            .iter()
+            .filter(|(_, r)| *r == id)
+            .map(|(m, _)| *m)
+            .collect();
         let numeric_fields = prove_numeric_fields(
             &chain,
+            &members,
             &store_records,
             field_stores.get(id).map(Vec::as_slice).unwrap_or(&[]),
             new_args.get(id).copied().unwrap_or(&[]),
             called,
             not_bigint_locals,
+            &const_local_inits,
         );
         let fact = PtrShapeLocal {
             class_name: class_name.clone(),
             numeric_fields,
         };
         note_ptr_shape_local(*id, &fact);
+        // Aliases carry the same fact: they hold the same object, their slots
+        // are equally shadow-bound, and access sites key on the local they
+        // actually reference.
+        for (member, root) in &roots {
+            if root == id && member != id {
+                out.insert(*member, fact.clone());
+            }
+        }
         out.insert(*id, fact);
     }
     out
+}
+
+/// Collect `Let { mutable: false, init: Some(LocalGet(src)) }` edges — the
+/// alias shape the exact-receiver inliner emits for compound assigns.
+fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
+    for s in stmts {
+        match s {
+            Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(Expr::LocalGet(src)),
+                ..
+            } => out.push((*id, *src)),
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_alias_edges(then_branch, out);
+                if let Some(eb) = else_branch {
+                    collect_alias_edges(eb, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_alias_edges(body, out);
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init) = init {
+                    collect_alias_edges(std::slice::from_ref(init.as_ref()), out);
+                }
+                collect_alias_edges(body, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_alias_edges(body, out);
+                if let Some(c) = catch {
+                    collect_alias_edges(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_alias_edges(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_alias_edges(&case.body, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_alias_edges(std::slice::from_ref(body.as_ref()), out);
+            }
+            _ => {}
+        }
+    }
 }
 
 // ── Class-level admission ──────────────────────────────────────────────────
@@ -373,24 +485,37 @@ enum StoreValue<'a> {
 
 struct UseWalk<'a> {
     candidates: &'a HashMap<u32, String>,
+    /// Tracked member id (candidate or const alias) -> root candidate id.
+    roots: &'a HashMap<u32, u32>,
     classes: &'a HashMap<String, &'a Class>,
     disqualified: HashSet<u32>,
     let_counts: HashMap<u32, u32>,
-    /// candidate -> (field name, store value) for in-function stores.
+    /// root candidate -> (field name, store value) for in-function stores.
     field_stores: HashMap<u32, Vec<(String, StoreValue<'a>)>>,
-    /// candidate -> method name -> per-call-site argument lists.
+    /// root candidate -> method name -> per-call-site argument lists.
     method_calls: HashMap<u32, HashMap<String, Vec<&'a [Expr]>>>,
-    /// candidate -> the provenance `new C(...)` argument list.
+    /// root candidate -> the provenance `new C(...)` argument list.
     new_args: HashMap<u32, &'a [Expr]>,
+    /// Non-tracked `const` locals' init expressions (single-Let only; a
+    /// re-declared id is poisoned to `None`). Lets the numeric-field proof
+    /// chase one level through `const v = i * 0.5`-style temps.
+    const_local_inits: HashMap<u32, Option<&'a Expr>>,
 }
 
 impl<'a> UseWalk<'a> {
-    fn disq(&mut self, id: u32) {
-        self.disqualified.insert(id);
+    /// Root candidate for a tracked member id (candidate or alias).
+    fn tracked_root(&self, id: u32) -> Option<u32> {
+        self.roots.get(&id).copied()
     }
 
-    fn candidate_chain_has_field(&self, id: u32, property: &str) -> bool {
-        let Some(class_name) = self.candidates.get(&id) else {
+    fn disq(&mut self, id: u32) {
+        if let Some(root) = self.tracked_root(id) {
+            self.disqualified.insert(root);
+        }
+    }
+
+    fn candidate_chain_has_field(&self, root: u32, property: &str) -> bool {
+        let Some(class_name) = self.candidates.get(&root) else {
             return false;
         };
         let chain = chain_classes(self.classes, class_name);
@@ -398,6 +523,7 @@ impl<'a> UseWalk<'a> {
             .iter()
             .any(|c| c.fields.iter().any(|f| f.name == property))
     }
+
 
     fn walk_stmts(&mut self, stmts: &'a [Stmt]) {
         for s in stmts {
@@ -420,6 +546,44 @@ impl<'a> UseWalk<'a> {
                     // A candidate whose Let init is not the New (var-redecl
                     // seed) is not provenance-stable.
                     self.disq(*id);
+                } else if !self.roots.contains_key(id) {
+                    // Plain local: remember single-Let const inits for the
+                    // numeric proof; poison re-declared ids.
+                    if let Stmt::Let {
+                        mutable: false,
+                        init: Some(init),
+                        ..
+                    } = s
+                    {
+                        match self.const_local_inits.entry(*id) {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(Some(init));
+                            }
+                            std::collections::hash_map::Entry::Occupied(mut e) => {
+                                e.insert(None);
+                            }
+                        }
+                    } else {
+                        self.const_local_inits.insert(*id, None);
+                    }
+                    if let Some(e) = init {
+                        self.walk_expr(e);
+                    }
+                    return;
+                } else if let Some(root) = self.tracked_root(*id) {
+                    // Alias binding: `const alias = <member of same root>` is
+                    // the tracked edge itself — count it, don't treat the
+                    // init's LocalGet as an escape. Any other init shape for
+                    // an alias id disqualifies the root (re-declared alias).
+                    *self.let_counts.entry(*id).or_insert(0) += 1;
+                    match init.as_ref() {
+                        Some(Expr::LocalGet(src))
+                            if self.tracked_root(*src) == Some(root) =>
+                        {
+                            return;
+                        }
+                        _ => self.disqualified.insert(root),
+                    };
                 }
                 if let Some(e) = init {
                     self.walk_expr(e);
@@ -501,37 +665,39 @@ impl<'a> UseWalk<'a> {
 
     fn walk_expr(&mut self, e: &'a Expr) {
         match e {
-            // Safe: declared-chain field read on a candidate.
+            // Safe: declared-chain field read on a tracked member.
             Expr::PropertyGet { object, property, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
-                    if self.candidates.contains_key(id) {
-                        if !self.candidate_chain_has_field(*id, property) {
-                            self.disq(*id);
+                    if let Some(root) = self.tracked_root(*id) {
+                        if !self.candidate_chain_has_field(root, property) {
+                            self.disqualified.insert(root);
                         }
                         return;
                     }
                 }
                 self.walk_expr(object);
             }
-            // Safe: declared-chain field write on a candidate (value must not
-            // self-reference — that would embed an untracked alias).
+            // Safe: declared-chain field write on a tracked member (value must
+            // not reference the same object — that would embed an untracked
+            // alias reachable through a field read).
             Expr::PropertySet {
                 object,
                 property,
                 value,
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
-                    if self.candidates.contains_key(id) {
-                        if !self.candidate_chain_has_field(*id, property)
-                            || expr_references_local(value, *id)
-                        {
-                            self.disq(*id);
+                    if let Some(root) = self.tracked_root(*id) {
+                        if !self.candidate_chain_has_field(root, property) {
+                            self.disqualified.insert(root);
                         } else {
                             self.field_stores
-                                .entry(*id)
+                                .entry(root)
                                 .or_default()
                                 .push((property.clone(), StoreValue::Direct(value)));
                         }
+                        // The value walk is position-aware: a field read of the
+                        // same object is safe; a BARE reference to it (e.g.
+                        // `o.self = o`) hits the LocalGet arm and escapes.
                         self.walk_expr(value);
                         return;
                     }
@@ -543,12 +709,12 @@ impl<'a> UseWalk<'a> {
                 object, property, ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
-                    if self.candidates.contains_key(id) {
-                        if !self.candidate_chain_has_field(*id, property) {
-                            self.disq(*id);
+                    if let Some(root) = self.tracked_root(*id) {
+                        if !self.candidate_chain_has_field(root, property) {
+                            self.disqualified.insert(root);
                         } else {
                             self.field_stores
-                                .entry(*id)
+                                .entry(root)
                                 .or_default()
                                 .push((property.clone(), StoreValue::Update));
                         }
@@ -567,19 +733,19 @@ impl<'a> UseWalk<'a> {
                 if let (Expr::LocalGet(id), Expr::LocalGet(rid), Expr::String(property)) =
                     (target.as_ref(), receiver.as_ref(), key.as_ref())
                 {
-                    if id == rid && self.candidates.contains_key(id) {
-                        if !self.candidate_chain_has_field(*id, property)
-                            || expr_references_local(value, *id)
-                        {
-                            self.disq(*id);
-                        } else {
-                            self.field_stores
-                                .entry(*id)
-                                .or_default()
-                                .push((property.clone(), StoreValue::Direct(value)));
+                    if id == rid {
+                        if let Some(root) = self.tracked_root(*id) {
+                            if !self.candidate_chain_has_field(root, property) {
+                                self.disqualified.insert(root);
+                            } else {
+                                self.field_stores
+                                    .entry(root)
+                                    .or_default()
+                                    .push((property.clone(), StoreValue::Direct(value)));
+                            }
+                            self.walk_expr(value);
+                            return;
                         }
-                        self.walk_expr(value);
-                        return;
                     }
                 }
                 self.walk_expr(target);
@@ -587,33 +753,32 @@ impl<'a> UseWalk<'a> {
                 self.walk_expr(value);
                 self.walk_expr(receiver);
             }
-            // Method call on a candidate: receiver-position use is safe when
-            // the method is chain-resolvable; `this`-flow safety is vetted in
-            // pass 3. Candidate references in ARGS still escape.
+            // Method call on a tracked member: receiver-position use is safe
+            // when the method is chain-resolvable; `this`-flow safety is
+            // vetted in pass 3. Tracked references in ARGS still escape.
             Expr::Call { callee, args, .. } => {
                 if let Expr::PropertyGet {
                     object, property, ..
                 } = callee.as_ref()
                 {
                     if let Expr::LocalGet(id) = object.as_ref() {
-                        if self.candidates.contains_key(id) {
-                            let class_name = &self.candidates[id];
+                        if let Some(root) = self.tracked_root(*id) {
+                            let class_name = &self.candidates[&root];
                             let chain = chain_classes(self.classes, class_name);
                             let resolvable = chain_method_map(&chain).contains_key(property);
                             if !resolvable {
-                                self.disq(*id);
+                                self.disqualified.insert(root);
                             } else {
                                 self.method_calls
-                                    .entry(*id)
+                                    .entry(root)
                                     .or_default()
                                     .entry(property.clone())
                                     .or_default()
                                     .push(args.as_slice());
                             }
                             for a in args {
-                                if expr_references_local(a, *id) {
-                                    self.disq(*id);
-                                }
+                                // Position-aware: `o.m(o.field)` is safe,
+                                // `o.m(o)` escapes via the LocalGet arm.
                                 self.walk_expr(a);
                             }
                             return;
@@ -625,12 +790,12 @@ impl<'a> UseWalk<'a> {
                     self.walk_expr(a);
                 }
             }
-            // Barriers / hard escapes on the candidate itself.
+            // Barriers / hard escapes on a tracked member itself.
             Expr::Delete(inner) => {
                 match inner.as_ref() {
                     Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
                         if let Expr::LocalGet(id) = object.as_ref() {
-                            if self.candidates.contains_key(id) {
+                            if self.tracked_root(*id).is_some() {
                                 self.disq(*id);
                                 return;
                             }
@@ -642,7 +807,7 @@ impl<'a> UseWalk<'a> {
             }
             Expr::ObjectFreeze(t) | Expr::ObjectSeal(t) | Expr::ObjectPreventExtensions(t) => {
                 if let Expr::LocalGet(id) = t.as_ref() {
-                    if self.candidates.contains_key(id) {
+                    if self.tracked_root(*id).is_some() {
                         self.disq(*id);
                         return;
                     }
@@ -651,20 +816,14 @@ impl<'a> UseWalk<'a> {
             }
             // Reassignment / bare reference / numeric update = escape.
             Expr::LocalSet(id, v) => {
-                if self.candidates.contains_key(id) {
-                    self.disq(*id);
-                }
+                self.disq(*id);
                 self.walk_expr(v);
             }
             Expr::LocalGet(id) => {
-                if self.candidates.contains_key(id) {
-                    self.disq(*id);
-                }
+                self.disq(*id);
             }
             Expr::Update { id, .. } => {
-                if self.candidates.contains_key(id) {
-                    self.disq(*id);
-                }
+                self.disq(*id);
             }
             // Id-keyed variants the child walker cannot see.
             Expr::ArrayPush { array_id, .. }
@@ -672,38 +831,28 @@ impl<'a> UseWalk<'a> {
             | Expr::ArrayUnshift { array_id, .. }
             | Expr::ArraySplice { array_id, .. }
             | Expr::ArrayCopyWithin { array_id, .. } => {
-                let array_id = *array_id;
-                if self.candidates.contains_key(&array_id) {
-                    self.disq(array_id);
-                }
+                self.disq(*array_id);
                 perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
             }
             Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
-                if self.candidates.contains_key(id) {
-                    self.disq(*id);
-                }
+                self.disq(*id);
             }
             Expr::SetAdd { set_id, .. } => {
-                let set_id = *set_id;
-                if self.candidates.contains_key(&set_id) {
-                    self.disq(set_id);
-                }
+                self.disq(*set_id);
                 perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
             }
             Expr::WithSet { fallback, .. } => {
                 match fallback {
                     perry_hir::WithSetFallback::Local(id)
                     | perry_hir::WithSetFallback::SloppyImplicit(id) => {
-                        if self.candidates.contains_key(id) {
-                            self.disq(*id);
-                        }
+                        self.disq(*id);
                     }
                     _ => {}
                 }
                 perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
             }
-            // Closures: captured or body-referenced candidates escape (capture
-            // machinery + frame lifetime).
+            // Closures: captured or body-referenced tracked members escape
+            // (capture machinery + frame lifetime).
             Expr::Closure {
                 body,
                 captures,
@@ -711,9 +860,7 @@ impl<'a> UseWalk<'a> {
                 ..
             } => {
                 for c in captures.iter().chain(mutable_captures.iter()) {
-                    if self.candidates.contains_key(c) {
-                        self.disq(*c);
-                    }
+                    self.disq(*c);
                 }
                 self.walk_stmts(body);
             }
@@ -963,10 +1110,19 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 .map(|e| self.expr_this_safe(e, ctx))
                 .unwrap_or(true),
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr_this_safe(e, ctx),
-            Stmt::Return(opt) => opt
-                .as_ref()
-                .map(|e| self.expr_this_safe(e, ctx))
-                .unwrap_or(true),
+            Stmt::Return(opt) => {
+                // A constructor `return <expr>` can OVERRIDE the `new` result
+                // (`js_ctor_return_override`): the provenance proof "the local
+                // holds exactly a C instance" would be wrong. Disqualify any
+                // value-returning chain constructor (conservative — even
+                // primitive returns, which JS ignores).
+                if ctx.1 == "constructor" && opt.is_some() {
+                    return false;
+                }
+                opt.as_ref()
+                    .map(|e| self.expr_this_safe(e, ctx))
+                    .unwrap_or(true)
+            }
             Stmt::If {
                 condition,
                 then_branch,
@@ -1309,11 +1465,13 @@ fn expr_mentions_this(e: &Expr) -> bool {
 /// at every recorded call site (methods).
 fn prove_numeric_fields(
     chain: &[&Class],
+    members: &HashSet<u32>,
     this_stores: &[ThisStoreRecord<'_>],
     local_stores: &[(String, StoreValue<'_>)],
     new_args: &[Expr],
     method_calls: Option<&HashMap<String, Vec<&[Expr]>>>,
     not_bigint_locals: &HashSet<u32>,
+    const_local_inits: &HashMap<u32, Option<&Expr>>,
 ) -> HashSet<String> {
     let mut numeric: HashSet<String> = HashSet::new();
     for class in chain {
@@ -1375,7 +1533,15 @@ fn prove_numeric_fields(
                     }
                 }
             };
-            expr_numeric_by_construction(value, &param_args, numeric, not_bigint_locals, 0)
+            expr_numeric_by_construction(
+                value,
+                &param_args,
+                members,
+                numeric,
+                not_bigint_locals,
+                const_local_inits,
+                0,
+            )
         };
         // Field initializers + ctor/method stores.
         let mut retained: HashSet<String> = numeric.clone();
@@ -1390,9 +1556,15 @@ fn prove_numeric_fields(
             if retained.contains(field) {
                 let ok = match sv {
                     StoreValue::Update => true,
-                    StoreValue::Direct(v) => {
-                        expr_numeric_by_construction(v, &None, &numeric, not_bigint_locals, 0)
-                    }
+                    StoreValue::Direct(v) => expr_numeric_by_construction(
+                        v,
+                        &None,
+                        members,
+                        &numeric,
+                        not_bigint_locals,
+                        const_local_inits,
+                        0,
+                    ),
                 };
                 if !ok {
                     retained.remove(field);
@@ -1412,8 +1584,10 @@ fn prove_numeric_fields(
 fn expr_numeric_by_construction(
     e: &Expr,
     param_args: &Option<(&[u32], Vec<&[Expr]>)>,
+    members: &HashSet<u32>,
     numeric_fields: &HashSet<String>,
     not_bigint_locals: &HashSet<u32>,
+    const_local_inits: &HashMap<u32, Option<&Expr>>,
     depth: usize,
 ) -> bool {
     if depth > 16 {
@@ -1421,7 +1595,15 @@ fn expr_numeric_by_construction(
     }
     use perry_hir::BinaryOp;
     let rec = |x: &Expr| {
-        expr_numeric_by_construction(x, param_args, numeric_fields, not_bigint_locals, depth + 1)
+        expr_numeric_by_construction(
+            x,
+            param_args,
+            members,
+            numeric_fields,
+            not_bigint_locals,
+            const_local_inits,
+            depth + 1,
+        )
     };
     match e {
         Expr::Number(_) | Expr::Integer(_) => true,
@@ -1474,9 +1656,16 @@ fn expr_numeric_by_construction(
         | Expr::MathMaxSpread(_)
         | Expr::DateNow
         | Expr::PerformanceNow => true,
-        // A proven-numeric field of `this`/the candidate (fixpoint edge).
+        // A proven-numeric field of the SAME object (fixpoint edge): `this`
+        // inside the candidate's ctor/method contexts (param_args Some), or a
+        // tracked member local in function scope. A same-named field of a
+        // DIFFERENT object proves nothing.
         Expr::PropertyGet { object, property, .. }
-            if matches!(object.as_ref(), Expr::This | Expr::LocalGet(_)) =>
+            if match object.as_ref() {
+                Expr::This => param_args.is_some(),
+                Expr::LocalGet(id) => members.contains(id),
+                _ => false,
+            } =>
         {
             numeric_fields.contains(property)
         }
@@ -1498,12 +1687,29 @@ fn expr_numeric_by_construction(
                                 expr_numeric_by_construction(
                                     a,
                                     &None,
+                                    members,
                                     numeric_fields,
                                     not_bigint_locals,
+                                    const_local_inits,
                                     depth + 1,
                                 )
                             }) == Some(true)
                         });
+                }
+            }
+            // A single-Let const temp: chase its init (function scope, so no
+            // parameter mapping applies to it).
+            if param_args.is_none() {
+                if let Some(Some(init)) = const_local_inits.get(id) {
+                    return expr_numeric_by_construction(
+                        init,
+                        &None,
+                        members,
+                        numeric_fields,
+                        not_bigint_locals,
+                        const_local_inits,
+                        depth + 1,
+                    );
                 }
             }
             false

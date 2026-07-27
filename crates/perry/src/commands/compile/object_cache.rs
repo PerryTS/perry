@@ -997,6 +997,15 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Representation-selection Phase 3b — shape-proven Ptr<Shape> locals:
+    // `=0`/`off`/`false` reverts proven object locals from bare fixed-offset
+    // access (no guard diamond, unguarded direct method calls) back to the
+    // guarded class-field path, which changes the emitted IR / .o bytes — a
+    // warm cache must not serve an object built under the other setting.
+    h.field(
+        "env_ptr_shape_locals",
+        env_var("PERRY_PTR_SHAPE_LOCALS").as_deref().unwrap_or(""),
+    );
     // FEAT_JSCVT ToInt32 (`fjcvtzs` on apple-arm64): flipping it changes
     // every `toint32_wrap` emission site's IR, so it must key the cache.
     h.field("env_jscvt", env_var("PERRY_JSCVT").as_deref().unwrap_or(""));

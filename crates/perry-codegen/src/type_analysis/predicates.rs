@@ -249,6 +249,23 @@ pub(crate) fn receiver_is_error_type(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// pick the right `perry_method_<class>_<name>` function.
 pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
     match e {
+        // Representation-selection Phase 3b: a shape-proven Ptr<Shape> local
+        // (or one of its const aliases — the exact-receiver inliner's
+        // `__cmpd_base_N` receivers are typed `Any`) has a provenance-exact
+        // class the declared type may not name. The proof is stronger than a
+        // declaration: the local holds exactly one `new <class>` for its
+        // whole lifetime (collectors/ptr_shape.rs), so class-keyed dispatch
+        // (field offsets, method resolution) is authoritative for it.
+        Expr::LocalGet(id)
+            if !matches!(
+                ctx.local_types.get(id),
+                Some(HirType::Named(_)) | Some(HirType::Generic { .. })
+            ) && ctx.native_facts.shape_proven_ptr_local(*id).is_some() =>
+        {
+            ctx.native_facts
+                .shape_proven_ptr_local(*id)
+                .map(|fact| fact.class_name.clone())
+        }
         Expr::LocalGet(id) => match ctx.local_types.get(id)? {
             HirType::Named(name) => Some(name.clone()),
             // Generic instantiation `SimpleContainer<number>`: prefer the

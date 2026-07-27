@@ -622,6 +622,8 @@ fn key_changes_with_codegen_env_vars() {
         // Representation-selection Phase 2: specialized calling convention.
         "PERRY_SPECIALIZED_ABI",
         "PERRY_SPECIALIZED_ABI_MAX",
+        // Representation-selection Phase 3b: shape-proven Ptr<Shape> locals.
+        "PERRY_PTR_SHAPE_LOCALS",
         // FEAT_JSCVT single-instruction ToInt32 (apple-arm64).
         "PERRY_JSCVT",
     ] {
