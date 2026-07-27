@@ -413,8 +413,11 @@ pub extern "C" fn js_put_value_set_dyn_ic(
         let hit = unsafe {
             let c = &*cache;
             let token = c[0] as u64;
-            if token != 0 {
-                let key_bits = key.to_bits() as i64;
+            let key_bits = key.to_bits() as i64;
+            // `0` is the empty-way sentinel — and also the NaN-box bits of
+            // the JS number 0, so a dynamic numeric-0 key must never reach
+            // the way compares (it would false-hit an unfilled way).
+            if token != 0 && key_bits != 0 {
                 let mut found = None;
                 for way in 0..DYN_IC_WAYS {
                     if c[1 + way * 2] == key_bits {
@@ -601,6 +604,12 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         };
         let c = &mut *cache;
         let key_bits = key.to_bits() as i64;
+        // Preserve the empty-way sentinel invariant: never prime bits 0
+        // (only the JS number 0 has them, and numeric keys cannot prime
+        // anyway — the byte resolver above only accepts strings).
+        if key_bits == 0 {
+            return result;
+        }
         if c[0] as u64 != shape_token {
             // New shape at this site: restart the way set.
             *c = [0; 8];

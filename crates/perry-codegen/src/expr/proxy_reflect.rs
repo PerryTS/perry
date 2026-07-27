@@ -376,10 +376,12 @@ fn lower_put_value_static_write_ic(
     let field_count_ptr = ctx.block().inttoptr(I64, &field_count_addr);
     let field_count = ctx.block().load(I32, &field_count_ptr);
     let field_count64 = ctx.block().zext(I32, &field_count, I64);
-    let below_floor = ctx.block().icmp_ult(I64, &field_count64, "4");
-    let inline_limit = ctx
+    let below_floor = ctx
         .block()
-        .select(I1, &below_floor, I64, "4", &field_count64);
+        .icmp_ult(I64, &field_count64, INLINE_SLOT_FLOOR_LIT);
+    let inline_limit =
+        ctx.block()
+            .select(I1, &below_floor, I64, INLINE_SLOT_FLOOR_LIT, &field_count64);
     let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &inline_limit);
 
     let mut hit = ctx.block().and(I1, &heap_candidate, &gc_object);
@@ -626,10 +628,14 @@ fn lower_put_value_dyn_ic_inline(
     let v_not_obj = ctx.block().icmp_ne(I64, &v_tag, "32765");
     let v_not_str = ctx.block().icmp_ne(I64, &v_tag, "32767");
     let v_not_big = ctx.block().icmp_ne(I64, &v_tag, "32762");
+    // Zero key bits are the empty-way sentinel (and the JS number 0):
+    // they must never reach the way compares.
+    let k_nonzero = ctx.block().icmp_ne(I64, &k_bits, "0");
     let mut entry_ok = ctx.block().and(I1, &is_ptr, &above);
     entry_ok = ctx.block().and(I1, &entry_ok, &v_not_obj);
     entry_ok = ctx.block().and(I1, &entry_ok, &v_not_str);
     entry_ok = ctx.block().and(I1, &entry_ok, &v_not_big);
+    entry_ok = ctx.block().and(I1, &entry_ok, &k_nonzero);
 
     let guard_idx = ctx.new_block("put.dynic.guard");
     let ways_idx = ctx.new_block("put.dynic.ways");
@@ -729,10 +735,12 @@ fn lower_put_value_dyn_ic_inline(
     let field_count_ptr = ctx.block().inttoptr(I64, &field_count_addr);
     let field_count = ctx.block().load(I32, &field_count_ptr);
     let field_count64 = ctx.block().zext(I32, &field_count, I64);
-    let below_floor = ctx.block().icmp_ult(I64, &field_count64, "4");
-    let inline_limit = ctx
+    let below_floor = ctx
         .block()
-        .select(I1, &below_floor, I64, "4", &field_count64);
+        .icmp_ult(I64, &field_count64, INLINE_SLOT_FLOOR_LIT);
+    let inline_limit =
+        ctx.block()
+            .select(I1, &below_floor, I64, INLINE_SLOT_FLOOR_LIT, &field_count64);
     let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &inline_limit);
     ctx.block()
         .cond_br(&slot_in_bounds, &store_label, &slow_label);
@@ -770,6 +778,12 @@ fn lower_put_value_dyn_ic_inline(
         .phi(DOUBLE, &[(v, &store_label), (&slow_result, &slow_label)]);
     Ok(result)
 }
+
+/// Inline-slot floor for emitted bounds checks — MUST match
+/// perry-runtime `object::INLINE_SLOT_FLOOR` (the runtime pads every object
+/// to at least this many physical slots; a codegen value larger than the
+/// runtime's would widen inline stores into unallocated memory).
+const INLINE_SLOT_FLOOR_LIT: &str = "4";
 
 fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
     match key {
