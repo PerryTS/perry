@@ -19,6 +19,7 @@ const output = {
 };
 const server = start({ input, output, terminal: false, useGlobal: false });
 console.log(typeof server.context.require);
-console.log(typeof server.context.module, server.context.module.id);
+const contextModule = server.context.module;
+console.log(typeof contextModule, contextModule?.id);
 console.log(typeof server.context.Buffer, typeof server.context.process);
 console.log(typeof server.context.fs, typeof server.context.path);

@@ -6,7 +6,12 @@ import { start } from "node:repl";
 const directory = mkdtempSync(join(tmpdir(), "perry-repl-"));
 const historyPath = join(directory, "history");
 writeFileSync(historyPath, "3\n2\n1\n");
-const cleanup = () => rmSync(directory, { recursive: true, force: true });
+const cleanup = () => {
+  process.removeListener("beforeExit", cleanup);
+  process.removeListener("exit", cleanup);
+  rmSync(directory, { recursive: true, force: true });
+};
+process.once("beforeExit", cleanup);
 process.once("exit", cleanup);
 const input = {
   on() {},
@@ -37,8 +42,6 @@ const result = server.setupHistory({
     console.log(server.historySize);
   } finally {
     if (typeof server.close === "function") server.close();
-    process.removeListener("exit", cleanup);
-    cleanup();
   }
 });
 console.log(result);

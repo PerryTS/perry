@@ -20,5 +20,6 @@ const output = {
 const server = start({ input, output, terminal: false });
 function action() {}
 console.log(server.defineCommand("hello", action));
-console.log(server.commands.hello.action === action);
-console.log(Object.keys(server.commands.hello).join(","));
+const helloCommand = server.commands?.hello;
+console.log(helloCommand?.action === action);
+console.log(Object.keys(helloCommand ?? {}).join(","));

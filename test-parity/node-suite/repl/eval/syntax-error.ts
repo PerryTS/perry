@@ -20,5 +20,5 @@ const output = {
 const server = start({ input, output, terminal: false });
 server.eval("const = 1\n", server.context, "fixture", (error: any) => {
   console.log(error instanceof SyntaxError, error instanceof Recoverable);
-  console.log(error.name);
+  console.log(error?.name);
 });

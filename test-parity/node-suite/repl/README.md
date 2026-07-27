@@ -1,8 +1,8 @@
 # `node:repl` parity evidence
 
-This suite contains 68 deterministic, single-contract fixtures for the public
-programmatic `node:repl` API. It uses controlled in-memory streams, disables
-colors, and never reads from a terminal or user input.
+This suite contains 68 deterministic, single-contract fixtures for programmatic
+`node:repl` behavior. It uses controlled in-memory streams, disables colors, and
+never reads from a terminal or user input.
 
 ## Fixed sources
 
@@ -17,6 +17,10 @@ The runnable comparison used Node 26.5.0, Deno 2.9.3, and Bun 1.2.18. Bun's
 pinned source has since ported Node's REPL implementation, but the installed
 1.2.18 runtime does not yet expose that surface. Source and runtime results are
 therefore recorded separately rather than treated as the same claim.
+
+Node 26.5.0 implements and tests `allowBlockingCompletions`, but its REPL API
+documentation does not list the option. The property fixtures record it as an
+implementation contract rather than a public API claim.
 
 ## Coverage
 
@@ -34,7 +38,7 @@ therefore recorded separately rather than treated as the same claim.
 
 The top-level-await fixture settles through the REPL eval callback. It uses no
 timer or sleep. History fixtures create one private temporary directory and
-remove it in `finally` after the setup callback.
+remove it at process shutdown, after REPL close and history-handle work settle.
 
 ## Measured results
 

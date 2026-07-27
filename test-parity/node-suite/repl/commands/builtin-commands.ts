@@ -18,11 +18,12 @@ const output = {
   isTTY: false,
 };
 const server = start({ input, output, terminal: false });
-console.log(Object.keys(server.commands).sort().join(","));
+const commands = server.commands ?? {};
+console.log(Object.keys(commands).sort().join(","));
 for (const name of ["break", "clear", "exit", "help", "load", "save"]) {
   console.log(
     name,
-    typeof server.commands[name].action,
-    typeof server.commands[name].help,
+    typeof commands[name]?.action,
+    typeof commands[name]?.help,
   );
 }
