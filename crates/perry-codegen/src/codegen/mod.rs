@@ -2221,13 +2221,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // boxed protocol (reassigned params would stale the entry-bound
             // proofs; closure-referenced params feed the capture machinery).
             let closure_refs = crate::expr::collect_closure_referenced_locals(&f.body);
+            let reassigned = crate::collectors::reassigned_locals(&f.body);
             let demoted: Vec<bool> = f
                 .params
                 .iter()
-                .map(|p| {
-                    crate::collectors::local_is_reassigned(&f.body, p.id)
-                        || closure_refs.contains(&p.id)
-                })
+                .map(|p| reassigned.contains(&p.id) || closure_refs.contains(&p.id))
                 .collect();
             let plan = match spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted) {
                 Some((reps, _matching_sites)) => SpecFnPlan {

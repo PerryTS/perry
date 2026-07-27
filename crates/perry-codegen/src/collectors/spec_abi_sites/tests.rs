@@ -283,6 +283,46 @@ fn length_unsafe_source_use_demotes_const_len_only() {
 }
 
 #[test]
+fn bigint_kind_binding_is_rejected() {
+    // BigInt64Array elements are BigInt, not Number — never a `TaPtr` binding.
+    let m = module_with_init(vec![
+        let_stmt(
+            3,
+            false,
+            ta_new(perry_hir::TYPED_ARRAY_KIND_BIGINT64, Some(Expr::Integer(4))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert!(!facts.ta_bindings.contains_key(&3));
+    assert_eq!(
+        facts.call_sites.get(&7).unwrap()[0],
+        vec![SpecParamRep::Boxed]
+    );
+}
+
+#[test]
+fn boxed_prealloc_binding_is_rejected() {
+    // A TDZ/prealloc-flagged id's slot holds a BOX pointer, not the value —
+    // masking it would yield the box address, so it can never prove `TaPtr`.
+    let m = module_with_init(vec![
+        Stmt::PreallocateTdzBoxes(vec![3]),
+        let_stmt(
+            3,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::Integer(4))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert!(!facts.ta_bindings.contains_key(&3));
+    assert_eq!(
+        facts.call_sites.get(&7).unwrap()[0],
+        vec![SpecParamRep::Boxed]
+    );
+}
+
+#[test]
 fn local_is_reassigned_sees_closure_writes() {
     let closure = Expr::Closure {
         func_id: 99,

@@ -242,6 +242,267 @@ fn additive_write_admissible(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Wrap-i32 flow leg: additive operands must be provably NUMBER-valued at the
+// write site. Pool membership alone is NOT enough — a pool member seeded by a
+// possibly-OOB int-TA read keeps the invariant `image == ToInt32(true)` (true
+// `undefined` → image 0), but that invariant does not survive an ADDITIVE
+// step: JS computes `undefined + 1 == NaN` (→ every later ToInt32 is 0) while
+// the image path computes `wrap(0 + 1) == 1`. So an additive `LocalGet`
+// operand is only admissible when, at that program point, every path since
+// the local's last write established a genuine Number (never `undefined`).
+// ---------------------------------------------------------------------------
+
+/// Does this RHS provably leave a NUMBER (never `undefined`) in the target?
+/// `numberish` is the flow set at the write site (for `LocalGet` copies and
+/// additive sub-trees).
+fn write_establishes_number(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    numberish: &HashSet<u32>,
+) -> bool {
+    match e {
+        Expr::Integer(_) | Expr::Number(_) => true,
+        // Byte reads return `0` OOB — always a number.
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // Bitwise / `~` / `Math.imul` are number-or-throw (a throw means the
+        // write never completes).
+        Expr::Binary { op, .. } if is_bitwise_binop(*op) => true,
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            ..
+        } => true,
+        Expr::MathImul(_, _) => true,
+        // In-bounds-PROVEN int-kind typed-array read: never `undefined`.
+        Expr::IndexGet { object, index } => {
+            receiver_is_int_kind_ta(object, types)
+                && matches!(object.as_ref(), Expr::LocalGet(arr)
+                if matches!(
+                    (ta_lens.get(arr), super::integer_locals::static_index_window(index)),
+                    (Some(len), Some((lo, hi))) if lo >= 0 && hi < *len
+                ))
+        }
+        Expr::LocalGet(id) => numberish.contains(id),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            write_establishes_number(left, types, ta_lens, numberish)
+                && write_establishes_number(right, types, ta_lens, numberish)
+        }
+        _ => false,
+    }
+}
+
+/// `LocalGet` leaves on the Add/Sub SPINE of an additive write (the positions
+/// whose true value feeds a float add). Leaves inside bitwise sub-trees or
+/// index expressions are NOT spine leaves — a bitwise sub-result is a number
+/// regardless of what it coerced.
+fn additive_spine_locals_numberish(e: &Expr, numberish: &HashSet<u32>) -> bool {
+    match e {
+        Expr::LocalGet(id) => numberish.contains(id),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            additive_spine_locals_numberish(left, numberish)
+                && additive_spine_locals_numberish(right, numberish)
+        }
+        // Every other admissible leaf (in-bounds read, literal, bitwise,
+        // imul, byte read) is a number by construction.
+        _ => true,
+    }
+}
+
+/// One flow walk over the whole body: maintains the `numberish` set and flags
+/// every target of an additive-SHAPED write whose spine `LocalGet` operands
+/// were not all provably numbers at that point. Control-flow meets are plain
+/// intersections (claiming *less* numberish is always sound); a statement
+/// carrying multiple writes to one target only keeps it numberish when every
+/// such write establishes a number (robust to sub-expression evaluation
+/// order).
+fn additive_flow_invalid_targets(
+    stmts: &[Stmt],
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+) -> HashSet<u32> {
+    let mut invalid = HashSet::new();
+    let mut numberish = HashSet::new();
+    additive_flow_stmts(stmts, types, ta_lens, &mut numberish, &mut invalid);
+    invalid
+}
+
+fn additive_flow_stmts(
+    stmts: &[Stmt],
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    numberish: &mut HashSet<u32>,
+    invalid: &mut HashSet<u32>,
+) {
+    for s in stmts {
+        additive_flow_stmt(s, types, ta_lens, numberish, invalid);
+    }
+}
+
+fn additive_flow_stmt(
+    s: &Stmt,
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    numberish: &mut HashSet<u32>,
+    invalid: &mut HashSet<u32>,
+) {
+    match s {
+        Stmt::Let { id, init, .. } => match init {
+            Some(e) => additive_flow_expr_write(*id, e, types, ta_lens, numberish, invalid),
+            // `let x;` — undefined.
+            None => {
+                numberish.remove(id);
+            }
+        },
+        Stmt::Expr(e) | Stmt::Throw(e) => additive_flow_expr(e, types, ta_lens, numberish, invalid),
+        Stmt::Return(Some(e)) => additive_flow_expr(e, types, ta_lens, numberish, invalid),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            additive_flow_expr(condition, types, ta_lens, numberish, invalid);
+            let mut then_set = numberish.clone();
+            additive_flow_stmts(then_branch, types, ta_lens, &mut then_set, invalid);
+            let mut else_set = numberish.clone();
+            if let Some(eb) = else_branch {
+                additive_flow_stmts(eb, types, ta_lens, &mut else_set, invalid);
+            }
+            *numberish = then_set.intersection(&else_set).copied().collect();
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            // Zero-or-more (resp. one-or-more) executions: meet the pre-state
+            // with the post-body state. Walking the body with the PRE-state is
+            // conservative for later iterations too, since the walk can only
+            // remove entries the body would remove on any iteration.
+            let mut body_set = numberish.clone();
+            additive_flow_expr(condition, types, ta_lens, &mut body_set, invalid);
+            additive_flow_stmts(body, types, ta_lens, &mut body_set, invalid);
+            numberish.retain(|id| body_set.contains(id));
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                additive_flow_stmt(i, types, ta_lens, numberish, invalid);
+            }
+            let mut body_set = numberish.clone();
+            if let Some(c) = condition {
+                additive_flow_expr(c, types, ta_lens, &mut body_set, invalid);
+            }
+            if let Some(u) = update {
+                additive_flow_expr(u, types, ta_lens, &mut body_set, invalid);
+            }
+            additive_flow_stmts(body, types, ta_lens, &mut body_set, invalid);
+            numberish.retain(|id| body_set.contains(id));
+        }
+        Stmt::Labeled { body, .. } => additive_flow_stmt(body, types, ta_lens, numberish, invalid),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            // The try body may partially execute; the catch entry state is
+            // unknown. Meet everything.
+            let mut body_set = numberish.clone();
+            additive_flow_stmts(body, types, ta_lens, &mut body_set, invalid);
+            numberish.retain(|id| body_set.contains(id));
+            if let Some(c) = catch {
+                let mut catch_set = numberish.clone();
+                additive_flow_stmts(&c.body, types, ta_lens, &mut catch_set, invalid);
+                numberish.retain(|id| catch_set.contains(id));
+            }
+            if let Some(f) = finally {
+                let mut fin_set = numberish.clone();
+                additive_flow_stmts(f, types, ta_lens, &mut fin_set, invalid);
+                numberish.retain(|id| fin_set.contains(id));
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            additive_flow_expr(discriminant, types, ta_lens, numberish, invalid);
+            let pre = numberish.clone();
+            for case in cases {
+                if let Some(t) = &case.test {
+                    additive_flow_expr(t, types, ta_lens, numberish, invalid);
+                }
+                let mut case_set = pre.clone();
+                additive_flow_stmts(&case.body, types, ta_lens, &mut case_set, invalid);
+                numberish.retain(|id| case_set.contains(id));
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::Return(None)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => {}
+    }
+}
+
+/// Process one WRITE (Let init or LocalSet rhs): validate an additive-shaped
+/// RHS's spine operands against the current `numberish` set, then update the
+/// target's numberish status from the RHS.
+fn additive_flow_expr_write(
+    target: u32,
+    rhs: &Expr,
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    numberish: &mut HashSet<u32>,
+    invalid: &mut HashSet<u32>,
+) {
+    // Walk nested writes inside the RHS first (their effects precede the
+    // outer store; any imprecision here only removes numberish entries).
+    additive_flow_expr(rhs, types, ta_lens, numberish, invalid);
+    if matches!(rhs, Expr::Binary { op, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub))
+        && !additive_spine_locals_numberish(rhs, numberish)
+    {
+        invalid.insert(target);
+    }
+    if write_establishes_number(rhs, types, ta_lens, numberish) {
+        numberish.insert(target);
+    } else {
+        numberish.remove(&target);
+    }
+}
+
+fn additive_flow_expr(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    numberish: &mut HashSet<u32>,
+    invalid: &mut HashSet<u32>,
+) {
+    match e {
+        Expr::LocalSet(id, rhs) => {
+            additive_flow_expr_write(*id, rhs, types, ta_lens, numberish, invalid);
+        }
+        // `x++` may produce a BigInt (ToNumeric preserves kind) — drop.
+        Expr::Update { id, .. } => {
+            numberish.remove(id);
+        }
+        // A closure body can run at any time and write anything — drop every
+        // local it references (candidates referencing closures are excluded
+        // anyway; this keeps NON-candidate operand bookkeeping honest).
+        Expr::Closure { .. } => {
+            let mut refs = HashSet::new();
+            collect_closure_refs(e, &mut refs);
+            numberish.retain(|id| !refs.contains(id));
+        }
+        _ => {
+            perry_hir::walker::walk_expr_children(e, &mut |c| {
+                additive_flow_expr(c, types, ta_lens, numberish, invalid)
+            });
+        }
+    }
+}
+
 pub fn collect_int_valued_ta_locals(
     stmts: &[Stmt],
     params: &[Param],
@@ -264,6 +525,11 @@ pub fn collect_int_valued_ta_locals(
 
     let mut facts = Facts::default();
     collect_facts(stmts, &types, false, &mut facts);
+    // Flow leg of the wrap-i32 additive extension: targets of additive-shaped
+    // writes whose spine operands were not provably NUMBERS at the write site
+    // (an `undefined`-able operand breaks `image == ToInt32(true)` through a
+    // float add — `undefined + 1` is NaN→0, the image path would say 1).
+    let additive_invalid = additive_flow_invalid_targets(stmts, &types, &ta_lens);
 
     // Rule (1) admission. A candidate is a `let`-declared local with ≥1
     // int-TA-read write, whose EVERY write is i32-producing-safe (or, in the
@@ -289,7 +555,9 @@ pub fn collect_int_valued_ta_locals(
         pool.retain(|id| {
             facts.writes[id].iter().all(|(w, in_loop)| {
                 write_is_i32_producing_safe(w, &types)
-                    || (!in_loop && additive_write_admissible(w, &types, &ta_lens, &snapshot))
+                    || (!in_loop
+                        && !additive_invalid.contains(id)
+                        && additive_write_admissible(w, &types, &ta_lens, &snapshot))
             })
         });
         if pool.len() == before {
@@ -326,7 +594,9 @@ pub fn collect_int_valued_ta_locals(
             candidates.retain(|id| {
                 facts.writes[id].iter().all(|(w, in_loop)| {
                     write_is_i32_producing_safe(w, &types)
-                        || (!in_loop && additive_write_admissible(w, &types, &ta_lens, &snapshot))
+                        || (!in_loop
+                            && !additive_invalid.contains(id)
+                            && additive_write_admissible(w, &types, &ta_lens, &snapshot))
                 })
             });
             changed = candidates.len() != before;

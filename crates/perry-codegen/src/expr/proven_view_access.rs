@@ -84,12 +84,19 @@ pub(crate) fn index_is_exact_i32_shape(ctx: &FnCtx<'_>, index: &Expr) -> bool {
         }
         // A canonical-i32 local IS a true signed i32 by construction (Phase 1
         // slot rep) — including `U32`, whose bit pattern compares correctly
-        // under the unsigned bounds check.
+        // under the unsigned bounds check when read BARE.
         Expr::LocalGet(id) => ctx.local_slot_reps.contains_key(id),
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add) => {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(id), Expr::Integer(c)) | (Expr::Integer(c), Expr::LocalGet(id)) => {
-                    ctx.local_slot_reps.contains_key(id) && (0..=MAX_ADDEND).contains(c)
+                    // SIGNED reps only: a `U32` local's value near 2^32 is a
+                    // NEGATIVE i32 bit pattern, and `+ c` can wrap it UP
+                    // through zero into a valid index (`bits(-1) + 2 == 1`)
+                    // while the true JS index (4294967297) must read
+                    // `undefined`. The signed wrap argument (`i32::MAX + c` →
+                    // negative → rejected by `icmp ult`) holds only for `I32`.
+                    matches!(ctx.local_slot_reps.get(id), Some(crate::expr::SlotRep::I32))
+                        && (0..=MAX_ADDEND).contains(c)
                 }
                 _ => false,
             }
@@ -102,6 +109,12 @@ pub(crate) fn index_is_exact_i32_shape(ctx: &FnCtx<'_>, index: &Expr) -> bool {
 /// as a checked-store receiver (`expr/proven_view_access` store tier and the
 /// masked-window region's proven store suffix).
 pub(crate) fn local_is_proven_int_store_view(ctx: &FnCtx<'_>, id: u32) -> bool {
+    // Mirror `proven_view_for`'s closure gate: a captured receiver could be
+    // reassigned between proof and access (also independently caught by the
+    // alias/scope downgrade, kept here for consistency).
+    if ctx.closure_captures.contains_key(&id) {
+        return false;
+    }
     ctx.buffer_view_slots.get(&id).is_some_and(|view| {
         view.storage_inline_proven
             && view.native_owned.is_none()

@@ -114,14 +114,20 @@ pub(crate) fn spec_ta_kind_is_numeric(kind: u8) -> bool {
     )
 }
 
-/// True when `id` is reassigned (`LocalSet`/`GlobalSet`/`Update`) anywhere in
+/// Every local reassigned (`LocalSet`/`GlobalSet`/`Update`) anywhere in
 /// `stmts`, including inside nested closure bodies. Element writes
 /// (`x[i] = v`) and method calls are NOT reassignments — they cannot change
 /// which typed array the binding refers to, its kind, or its length.
-pub(crate) fn local_is_reassigned(stmts: &[Stmt], id: u32) -> bool {
+/// Scan once and probe the set when checking several ids against one body.
+pub(crate) fn reassigned_locals(stmts: &[Stmt]) -> HashSet<u32> {
     let mut scan = ModuleScan::default();
     walk_stmts(stmts, 0, &mut scan);
-    scan.writes.contains(&id)
+    scan.writes
+}
+
+/// Single-id convenience over [`reassigned_locals`].
+pub(crate) fn local_is_reassigned(stmts: &[Stmt], id: u32) -> bool {
+    reassigned_locals(stmts).contains(&id)
 }
 
 /// Module-wide structural facts gathered in one walk.

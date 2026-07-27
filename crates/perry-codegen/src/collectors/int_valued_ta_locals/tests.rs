@@ -340,6 +340,76 @@ fn wrap_i32_candidate_as_bare_index_is_rejected() {
 }
 
 #[test]
+fn wrap_i32_additive_operand_with_possibly_undefined_value_is_rejected() {
+    // The operand's LAST write before the additive step is a possibly-OOB
+    // read (dynamic index): its true value can be `undefined`, and
+    // `undefined + 1` is NaN (→ ToInt32 0) while the wrapped image would be
+    // `0 + 1 == 1` — the flow leg must reject the additive write even though
+    // the operand IS a pool member.
+    let params = [int32_array_param(0), number_param(1)];
+    let mut lens = HashMap::new();
+    lens.insert(0u32, 1024i64);
+    let stmts = vec![
+        // let m = S[off];        (possibly OOB — seeds m, but NOT numberish)
+        let_stmt(9, HirType::Any, Some(idx_get(0, Expr::LocalGet(1)))),
+        // let n = m + S[0 >>> 24];  (additive with non-numberish operand m)
+        let_stmt(
+            10,
+            HirType::Any,
+            Some(bin(
+                BinaryOp::Add,
+                Expr::LocalGet(9),
+                masked_read(0, Expr::Integer(0), 24),
+            )),
+        ),
+        set(10, xor(Expr::LocalGet(10), Expr::Integer(1))),
+        set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
+    ];
+    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens);
+    assert!(
+        !got.contains(&10),
+        "additive over possibly-undefined operand wrongly admitted: {got:?}"
+    );
+    // m is disqualified too: once n's additive write is inadmissible, n is no
+    // longer a candidate, so m's read inside `m + S[...]` is an ordinary
+    // NON-coercing observation (rule 2) — its true `undefined` would be
+    // distinguishable there.
+    assert!(
+        !got.contains(&9),
+        "operand read in a non-candidate additive position must disqualify: {got:?}"
+    );
+}
+
+#[test]
+fn wrap_i32_additive_operand_reset_in_bounds_is_admitted() {
+    // Same shape, but the operand is RESET by an in-bounds-proven read before
+    // the additive step (the enc_real `n = S[l >>> 24]; n += S[...]` flow) —
+    // the flow leg must keep it.
+    let params = [int32_array_param(0), number_param(1)];
+    let mut lens = HashMap::new();
+    lens.insert(0u32, 1024i64);
+    let stmts = vec![
+        let_stmt(9, HirType::Any, Some(Expr::Undefined)),
+        // reset: in-bounds-proven (window [0,255] < 1024)
+        set(9, masked_read(0, Expr::LocalGet(1), 24)),
+        set(
+            9,
+            bin(
+                BinaryOp::Add,
+                Expr::LocalGet(9),
+                masked_read(0, Expr::LocalGet(1), 24),
+            ),
+        ),
+        set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
+    ];
+    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens);
+    assert!(
+        got.contains(&9),
+        "in-bounds-reset additive accumulator wrongly rejected: {got:?}"
+    );
+}
+
+#[test]
 fn wrap_i32_additive_without_length_proof_is_rejected() {
     // No known constant length for the receiver → the TA-read ADD operand
     // could be an OOB `undefined` (true value NaN-poisons the chain, wrapped

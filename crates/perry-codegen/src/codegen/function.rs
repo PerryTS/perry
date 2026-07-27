@@ -452,9 +452,11 @@ pub(super) fn compile_function(
     //    Plan selection guarantees the param is never reassigned and never
     //    closure-referenced, so the canonical slot is trivially sound.
     //  - `TaPtr` → NaN-box the raw header pointer ONCE into the ordinary
-    //    boxed double slot (all generic body paths stay correct) and keep the
-    //    shadow-slot GC root binding — the header must stay live (typed-array
-    //    storage never MOVES, but an unrooted header could still be swept).
+    //    boxed double slot (all generic body paths stay correct). No callee
+    //    shadow binding is emitted — see the arm below: every route into this
+    //    entry is a Tier-A call whose argument is the caller's proven,
+    //    never-reassigned ROOTED binding, which keeps the header live for the
+    //    whole call.
     //  - `Boxed`/`F64` → exactly today's binding (a raw f64 IS its box).
     let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let mut bound_param_slots: HashSet<u32> = HashSet::new();
@@ -881,8 +883,10 @@ pub(super) fn compile_function(
     // (`ta_int_elem_load_is_i32_provable`, `lower_typed_array_load`, the
     // proven-view checked tier) with bounds checks against the entry length —
     // and NEVER through the per-site guarded fast paths (`ta_param_f64_read`
-    // skips receivers with a registered view slot). GC note: the header is
-    // rooted via the boxed param slot's shadow binding above; the hoisted
+    // skips receivers with a registered view slot). GC note: the header stays
+    // live through the CALLER's proven never-reassigned rooted binding (a
+    // module-global root or the caller's own frame slot — the only routes into
+    // this entry are Tier-A calls whose args carry that proof); the hoisted
     // data pointer stays valid because typed-array storage is non-movable
     // (`gc/types.rs`: `GC_TYPE_TYPED_ARRAY`/`GC_TYPE_BUFFER` `movable: false`)
     // and a non-view typed array cannot be detached or resized.

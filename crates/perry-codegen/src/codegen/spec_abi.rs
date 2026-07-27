@@ -175,15 +175,18 @@ pub(crate) fn select_dominant_tuple(
         }
         *entry += 1;
     }
-    // Dominant = most frequent; ties break by first appearance (deterministic
-    // walk order), keeping the object-cache input stable.
-    order
-        .into_iter()
-        .max_by_key(|tuple| counts.get(tuple).copied().unwrap_or(0))
-        .map(|tuple| {
-            let n = counts.get(&tuple).copied().unwrap_or(0);
-            (tuple, n)
-        })
+    // Dominant = most frequent; ties break by FIRST appearance in the
+    // deterministic walk order, keeping the object-cache input stable
+    // (`max_by_key` would return the LAST maximal element, so the strictly-
+    // greater comparison below is what pins the first appearance).
+    let mut best: Option<(Vec<SpecParamRep>, usize)> = None;
+    for tuple in order {
+        let n = counts.get(&tuple).copied().unwrap_or(0);
+        if best.as_ref().is_none_or(|(_, best_n)| n > *best_n) {
+            best = Some((tuple, n));
+        }
+    }
+    best
 }
 
 /// Declaration-derived tuple for the guarded (Tier B) dispatch: `Int32`-typed

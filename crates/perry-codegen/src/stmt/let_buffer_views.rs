@@ -36,7 +36,13 @@ pub(super) fn register_noalias_buffer_view(
     let handle = crate::expr::unbox_to_i64(blk, value);
     let handle_ptr = blk.inttoptr(I64, &handle);
     let data_ptr = if init.native_owner_local_id.is_some() {
-        let data_field = blk.gep(I8, &handle_ptr, &[(I32, "24")]);
+        // Arena views store a POINTER at `data_offset_bytes` (24) rather than
+        // inline data — load through it instead of gep-ing past it.
+        let data_field = blk.gep(
+            I8,
+            &handle_ptr,
+            &[(I32, &init.data_offset_bytes.to_string())],
+        );
         blk.load(PTR, &data_field)
     } else {
         blk.gep(

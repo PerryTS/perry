@@ -63,7 +63,7 @@ fn typed_i32_signature_note(arg_count: usize) -> String {
 /// - `F64` — numeric literal (bit-identical raw double).
 /// - `TaPtr` — `LocalGet` of a pre-pass-proven, never-reassigned,
 ///   non-closure-referenced typed-array binding whose kind/const-len match
-///   the slot, whose top-level `Stmt::Let`已 has lowered in THIS body
+///   the slot, whose top-level `Stmt::Let` has lowered in THIS body
 ///   (`spec_ta_ready` — the dominance mirror), and which is not box-backed.
 ///   All `TaPtr` args must be DISTINCT locals: distinct proven bindings are
 ///   distinct fresh allocations, which is what justifies the entry's
@@ -530,8 +530,10 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
-    let typed_f64_call_param_reps = if spec_result.is_none()
-        && !resets_this
+    // No `spec_result.is_none()` gate on the typed-clone candidate arms: plan
+    // selection makes the spec and typed-clone sets mutually exclusive, and
+    // the `if let` chain below consumes `spec_result` first anyway.
+    let typed_f64_call_param_reps = if !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_f64_functions.contains(fid)
