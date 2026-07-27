@@ -617,6 +617,9 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_INT_VALUED_LOCALS",
         // Representation-selection Phase 1: canonical unboxed i32 locals.
         "PERRY_CANONICAL_I32_LOCALS",
+        // Representation-selection Phase 2: specialized calling convention.
+        "PERRY_SPECIALIZED_ABI",
+        "PERRY_SPECIALIZED_ABI_MAX",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.

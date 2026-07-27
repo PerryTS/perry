@@ -1411,6 +1411,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         MaterializationReason::RuntimeApi,
                     ));
                 }
+                // Phase 2: storage-proven view with a dynamic (bounds-unproven)
+                // exact-i32 index — inline checked load, no kind guard, no
+                // runtime call. Bit-exact with `js_typed_array_get`.
+                if let Some(value) =
+                    super::try_lower_proven_view_checked_f64_load(ctx, object, index)?
+                {
+                    return Ok(value);
+                }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     let arr_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;

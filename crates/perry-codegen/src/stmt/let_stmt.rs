@@ -1721,6 +1721,9 @@ struct BufferViewInit {
     native_owner_local_id: Option<u32>,
     native_byte_offset: Option<i64>,
     native_byte_length: Option<i64>,
+    /// See `BufferViewSlot::storage_inline_proven` — true only when the
+    /// construction form proves fresh inline (non-view) storage.
+    storage_inline_proven: bool,
 }
 
 fn register_noalias_buffer_view(
@@ -1787,8 +1790,21 @@ fn register_noalias_buffer_view(
             alias: AliasState::NoAliasProven,
             length_source: Some(init.length_source),
             native_owned,
+            storage_inline_proven: init.storage_inline_proven,
         },
     );
+}
+
+/// A constructor argument that is a literal element count (or absent) proves
+/// fresh inline storage: the view form (`new TA(arrayBuffer)`) requires a
+/// pointer-valued argument, which a numeric literal can never be.
+fn ctor_arg_is_literal_length(arg: Option<&perry_hir::Expr>) -> bool {
+    match arg {
+        None => true,
+        Some(perry_hir::Expr::Integer(_)) => true,
+        Some(perry_hir::Expr::Number(n)) => n.is_finite() && n.fract() == 0.0,
+        _ => false,
+    }
 }
 
 fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<BufferViewInit> {
@@ -1808,10 +1824,25 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
+            // copyBytesFrom always allocates a fresh inline buffer.
+            storage_inline_proven: true,
         }),
-        perry_hir::Expr::BufferAlloc { .. }
-        | perry_hir::Expr::BufferAllocUnsafe(_)
-        | perry_hir::Expr::Uint8ArrayNew(_) => Some(BufferViewInit {
+        perry_hir::Expr::BufferAlloc { .. } | perry_hir::Expr::BufferAllocUnsafe(_) => {
+            Some(BufferViewInit {
+                elem: BufferElem::U8,
+                element_width_bytes: 1,
+                index_unit: BufferIndexUnit::Byte,
+                data_offset_bytes: 8,
+                length_offset_from_data: -8,
+                length_source: buffer_alloc_length_source(ctx, expr),
+                native_owner_local_id: None,
+                native_byte_offset: None,
+                native_byte_length: None,
+                // Buffer.alloc/allocUnsafe always allocate fresh inline bytes.
+                storage_inline_proven: true,
+            })
+        }
+        perry_hir::Expr::Uint8ArrayNew(arg) => Some(BufferViewInit {
             elem: BufferElem::U8,
             element_width_bytes: 1,
             index_unit: BufferIndexUnit::Byte,
@@ -1821,8 +1852,11 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
+            // `new Uint8Array(buffer)` is the VIEW form — only a literal
+            // length (or no argument) proves inline storage.
+            storage_inline_proven: ctor_arg_is_literal_length(arg.as_deref()),
         }),
-        perry_hir::Expr::TypedArrayNew { kind, .. } => {
+        perry_hir::Expr::TypedArrayNew { kind, arg } => {
             let (elem, width) = typed_array_elem_width_for_kind(*kind)?;
             Some(BufferViewInit {
                 elem,
@@ -1834,6 +1868,10 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
                 native_owner_local_id: None,
                 native_byte_offset: None,
                 native_byte_length: None,
+                // Same view-form hazard as Uint8ArrayNew: only a literal
+                // length proves the non-view construction here (the pre-pass
+                // proves the plain-array-source form separately for params).
+                storage_inline_proven: ctor_arg_is_literal_length(arg.as_deref()),
             })
         }
         perry_hir::Expr::NativeArenaView {
@@ -1861,6 +1899,9 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
                 native_owner_local_id: Some(owner_local_id),
                 native_byte_offset: byte_offset_const,
                 native_byte_length,
+                // Arena views have their own owner/dispose lifecycle — never
+                // eligible for the proven checked tier.
+                storage_inline_proven: false,
             })
         }
         _ => None,

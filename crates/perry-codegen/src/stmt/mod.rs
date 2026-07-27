@@ -203,6 +203,19 @@ fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bo
             continue;
         }
         lower_stmt(ctx, &stmts[i])?;
+        // Representation-selection Phase 2: a TOP-LEVEL `Stmt::Let` of a
+        // pre-pass-proven typed-array binding makes the binding "ready" — the
+        // dominance mirror of the collector's sequential judgment. Later call
+        // sites (at any nesting below later top-level statements, but never
+        // inside closures, which get their own empty set) may then match the
+        // binding against a `TaPtr` slot. Nested Lets never insert.
+        if emit_shadow_clears {
+            if let Stmt::Let { id, .. } = &stmts[i] {
+                if ctx.spec_ta_bindings.contains_key(id) {
+                    ctx.spec_ta_ready.insert(*id);
+                }
+            }
+        }
         // If an earlier statement already terminated the current block
         // (e.g. return in a straight-line sequence), any following statement
         // would emit dead code. Anvil silently drops these at the block

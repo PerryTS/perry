@@ -55,6 +55,7 @@ mod method;
 mod method_registry;
 mod module_globals_emit;
 mod opts;
+mod spec_abi;
 mod string_pool;
 mod typed_abi;
 
@@ -68,6 +69,7 @@ pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
+pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
     generic_function_body_name, generic_method_body_name, typed_f64_closure_name,
@@ -1577,6 +1579,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .filter(|f| crate::collectors::returns_i32_identity_arg(f))
             .map(|f| f.id)
             .collect(),
+        // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
+        // pass (mutual exclusion), below; start empty here.
+        spec_abi_functions: std::collections::HashMap::new(),
+        spec_ta_bindings: std::collections::HashMap::new(),
         typed_f64_functions,
         typed_i32_functions,
         typed_i1_functions,
@@ -2079,6 +2085,143 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .typed_i1_function_param_reps
         .retain(|id, _| !i64_specialized.contains(id));
 
+    // ---- Representation-selection Phase 2: specialized-ABI plan selection.
+    // Runs AFTER the i64-specialization pass and the typed_abi clone sets so
+    // mutual exclusion is decidable; the entries themselves are emitted below
+    // in the pre-public loop. Bounded: one entry per function (the dominant
+    // tuple), `PERRY_SPECIALIZED_ABI_MAX` per module.
+    if spec_abi::spec_abi_enabled() {
+        let spec_facts = crate::collectors::collect_spec_abi_facts(hir);
+        let spec_budget = spec_abi::spec_abi_max();
+        let mut spec_emitted = 0usize;
+        for f in &hir.functions {
+            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
+                continue;
+            };
+            let mut reject = |reason: typed_abi::TypedCloneRejectionReason,
+                              records: &mut Vec<crate::native_value::NativeRepRecord>| {
+                record_typed_clone_rejection(
+                    records,
+                    f.name.clone(),
+                    "spec_abi_entry_decision",
+                    reason,
+                    vec![
+                        "typed_clone_kind=spec_abi_entry".to_string(),
+                        format!("function_id={}", f.id),
+                        format!("symbol={}", f.name),
+                    ],
+                );
+            };
+            if f.is_async || f.is_generator || f.was_plain_async {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::AsyncOrGenerator,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if !f.captures.is_empty() {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::Captures,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if f.params.iter().any(|p| p.default.is_some()) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::ParamDefault,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if f.params.iter().any(|p| p.is_rest) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::RestParam,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if f.params.iter().any(|p| p.arguments_object.is_some())
+                || func_synthetic_arguments.contains(&f.id)
+            {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::ArgumentsObject,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if cross_module.funcs_reading_dynamic_this.contains(&f.id) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecReadsDynamicThis,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if i64_specialized.contains(&f.id) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::I64Specialized,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if cross_module.typed_f64_functions.contains(&f.id)
+                || cross_module.typed_i32_functions.contains(&f.id)
+                || cross_module.typed_i1_functions.contains(&f.id)
+                || cross_module.typed_string_functions.contains(&f.id)
+            {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecTypedCloneOverlap,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            // Callee-side demotion: params the raw ABI cannot accept keep the
+            // boxed protocol (reassigned params would stale the entry-bound
+            // proofs; closure-referenced params feed the capture machinery).
+            let closure_refs = crate::expr::collect_closure_referenced_locals(&f.body);
+            let demoted: Vec<bool> = f
+                .params
+                .iter()
+                .map(|p| {
+                    crate::collectors::local_is_reassigned(&f.body, p.id)
+                        || closure_refs.contains(&p.id)
+                })
+                .collect();
+            let plan = match spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted) {
+                Some((reps, _matching_sites)) => SpecFnPlan {
+                    reps,
+                    dispatch: SpecDispatch::Static,
+                },
+                None => {
+                    // Tier B: declaration-derived tuple, runtime-guarded
+                    // dispatch. Only viable with ≥1 declared-Int32 param.
+                    let reps = spec_abi::declaration_tuple(&f.params, &demoted);
+                    if spec_abi::spec_tuple_is_viable(&reps) {
+                        SpecFnPlan {
+                            reps,
+                            dispatch: SpecDispatch::Guarded,
+                        }
+                    } else {
+                        reject(
+                            typed_abi::TypedCloneRejectionReason::SpecTupleUnproven,
+                            &mut typed_clone_rejection_records,
+                        );
+                        continue;
+                    }
+                }
+            };
+            if spec_emitted >= spec_budget {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecBudgetExceeded,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            spec_emitted += 1;
+            cross_module.spec_abi_functions.insert(f.id, plan);
+        }
+        cross_module.spec_ta_bindings = spec_facts.ta_bindings;
+    }
+
     // Emit internal typed-f64 clones before their public/generic wrappers. The
     // public wrapper keeps the JSValue ABI; it and direct proven numeric call
     // sites can call the internal clone.
@@ -2123,6 +2266,37 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .with_context(|| format!("lowering typed-string clone for function '{}'", f.name))?;
     }
 
+    // Representation-selection Phase 2: emit full-body specialized entries
+    // (`{public}__spec_...`, internal linkage) before the public bodies. Same
+    // real `compile_function`, parameterized on the plan's rep tuple.
+    for f in &hir.functions {
+        let Some(plan) = cross_module.spec_abi_functions.get(&f.id).cloned() else {
+            continue;
+        };
+        compile_function(
+            &mut llmod,
+            f,
+            &func_names,
+            &mut strings,
+            &class_table,
+            &method_names,
+            &module_globals,
+            &module_global_types,
+            &opts.import_function_prefixes,
+            &enum_table,
+            &static_field_globals,
+            &class_ids,
+            &func_signatures,
+            &func_synthetic_arguments,
+            &module_boxed_vars,
+            &closure_rest_params,
+            &cross_module,
+            None,
+            Some(&plan),
+        )
+        .with_context(|| format!("lowering specialized entry for function '{}'", f.name))?;
+    }
+
     // Lower each user function into the module (skip i64-specialized ones).
     for f in &hir.functions {
         if i64_specialized.contains(&f.id) {
@@ -2158,6 +2332,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &closure_rest_params,
             &cross_module,
             typed_public_trampoline,
+            None,
         )
         .with_context(|| format!("lowering function '{}'", f.name))?;
     }

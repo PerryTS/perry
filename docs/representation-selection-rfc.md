@@ -136,9 +136,13 @@ Functions are specialized on the **representation tuple** of (params, return):
 - **Specialization key** = the representation tuple. Entries are **cached/deduplicated per key** —
   all call sites proving the same tuple share one specialized body.
 - **Budgets:** per-function specialization count cap (start: 2 — boxed + one dominant tuple) and a
-  module-wide code-size budget; monitored by the existing `binary-size` CI check. When a budget is
-  exceeded, additional call sites route to the **boxed entry** (always present, always correct).
-  Cold/polymorphic callers never specialize.
+  module-wide entry cap (`PERRY_SPECIALIZED_ABI_MAX`, default 64). When a budget is exceeded,
+  additional call sites route to the **boxed entry** (always present, always correct).
+  Cold/polymorphic callers never specialize. Anti-bloat is proven **empirically**: the
+  `binary-size` CI job measures the COMPILER binary, not user output, so it cannot see
+  monomorphization bloat — instead, a large real corpus is compiled with the flag on vs. off
+  (`PERRY_SPECIALIZED_ABI=0`, object cache cleared between arms) and the emitted binaries must be
+  within ~1% of each other.
 - The boxed entry is the permanent fallback ABI; specialization is purely additive.
 
 ### 5.5 Boundary transitions
@@ -244,7 +248,8 @@ is not load-luck.
   acceptance contracts (§5.5) must throw/route, never coerce. The central correctness burden —
   §5.2's barrier list is the checklist.
 - **Compile-time cost** of interprocedural inference (summaries, caching, on-demand analysis).
-- **Code size** from monomorphization (bounded by §5.4 budgets + `binary-size` CI).
+- **Code size** from monomorphization (bounded by §5.4 budgets; proven by the flag-on/off
+  emitted-binary corpus measurement — the `binary-size` CI job only sees the compiler itself).
 - **GC complexity:** pointer reps under a moving collector (§5.6) — the rebase-after-safepoint
   contract must be enforced mechanically (a lint/verifier pass over region-local derived pointers).
 - **Scope:** Perry's single largest architectural line — HIR, type system, codegen, ABI, GC, object

@@ -749,6 +749,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         MaterializationReason::FunctionAbi,
                     ));
                 }
+                // Phase 2: storage-proven view with a dynamic (bounds-unproven)
+                // exact-i32 index — inline checked store (OOB = silent no-op),
+                // no kind guard, no runtime call.
+                if let Some(stored) =
+                    super::try_lower_proven_view_checked_store(ctx, object, index, value)?
+                {
+                    if ctx.discard_expr_value {
+                        return Ok(double_literal(0.0));
+                    }
+                    return Ok(materialize_js_value(
+                        ctx,
+                        stored,
+                        MaterializationReason::FunctionAbi,
+                    ));
+                }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     let arr_box = lower_expr(ctx, object)?;
                     let idx_double = lower_expr(ctx, index)?;

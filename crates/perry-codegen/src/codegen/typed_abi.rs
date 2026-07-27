@@ -232,6 +232,17 @@ pub(crate) enum TypedCloneRejectionReason {
     ReceiverFieldNotOwn,
     ReceiverFieldNotF64,
     ThisEscape,
+    /// Spec-ABI (Phase 2): no call site proved a viable representation tuple.
+    SpecTupleUnproven,
+    /// Spec-ABI: the function already carries a typed_abi clone family —
+    /// mutually exclusive with a specialized entry in this phase.
+    SpecTypedCloneOverlap,
+    /// Spec-ABI: the module-wide `PERRY_SPECIALIZED_ABI_MAX` budget was
+    /// exhausted before this function's turn.
+    SpecBudgetExceeded,
+    /// Spec-ABI: the callee reads dynamic `this`, so direct call sites must
+    /// juggle the implicit-this slot and never take the raw-ABI route.
+    SpecReadsDynamicThis,
 }
 
 impl TypedCloneRejectionReason {
@@ -268,6 +279,10 @@ impl TypedCloneRejectionReason {
             Self::ReceiverFieldNotOwn => "receiver_field_not_own",
             Self::ReceiverFieldNotF64 => "receiver_field_not_f64",
             Self::ThisEscape => "this_escape",
+            Self::SpecTupleUnproven => "spec_tuple_unproven",
+            Self::SpecTypedCloneOverlap => "spec_typed_clone_overlap",
+            Self::SpecBudgetExceeded => "spec_budget_exceeded",
+            Self::SpecReadsDynamicThis => "spec_reads_dynamic_this",
         }
     }
 }

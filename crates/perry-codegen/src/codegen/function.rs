@@ -17,6 +17,10 @@ use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
 use super::helpers::shadow_stack_enabled;
 use super::helpers::{inline_hot_small_enabled, inline_hot_small_size_cap, INLINE_HOT_SMALL_MIN};
 use super::opts::CrossModuleCtx;
+use super::spec_abi::{
+    spec_function_name, spec_rep_llvm_ty, spec_ta_kind_class_name, spec_ta_kind_elem_width,
+    SpecFnPlan,
+};
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_function_body_name, lower_typed_f64_body,
     lower_typed_i1_body, lower_typed_i32_body, lower_typed_string_body, typed_f64_function_name,
@@ -337,12 +341,20 @@ pub(super) fn compile_function(
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
     typed_public_trampoline: Option<TypedFunctionTrampolineKind>,
+    spec_entry: Option<&SpecFnPlan>,
 ) -> Result<()> {
     let public_llvm_name = func_names
         .get(&f.id)
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
-    let llvm_name = if typed_public_trampoline.is_some() {
+    let llvm_name = if let Some(plan) = spec_entry {
+        // Spec entries are an ADDITIONAL internal symbol next to the ordinary
+        // public body — never combined with the typed_abi trampoline scheme
+        // (mutual exclusion is enforced at plan selection).
+        debug_assert!(typed_public_trampoline.is_none());
+        debug_assert_eq!(plan.reps.len(), f.params.len());
+        spec_function_name(&public_llvm_name, &plan.reps)
+    } else if typed_public_trampoline.is_some() {
         generic_function_body_name(&public_llvm_name)
     } else {
         public_llvm_name.clone()
@@ -350,17 +362,27 @@ pub(super) fn compile_function(
 
     // Phase A assumes all user-function params are `double`. Parameter
     // registers are named `%arg{LocalId}` so the body can store them into
-    // alloca slots keyed by the same HIR LocalId.
-    let params: Vec<(LlvmType, String)> = f
-        .params
-        .iter()
-        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
-        .collect();
+    // alloca slots keyed by the same HIR LocalId. Specialized entries
+    // (representation-selection Phase 2) instead type each parameter register
+    // by its rep — raw i32, raw f64, or raw typed-array header pointer (i64).
+    let params: Vec<(LlvmType, String)> = match spec_entry {
+        Some(plan) => f
+            .params
+            .iter()
+            .zip(plan.reps.iter())
+            .map(|(p, rep)| (spec_rep_llvm_ty(*rep), format!("%arg{}", p.id)))
+            .collect(),
+        None => f
+            .params
+            .iter()
+            .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+            .collect(),
+    };
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
-    if typed_public_trampoline.is_some() {
+    if typed_public_trampoline.is_some() || spec_entry.is_some() {
         lf.linkage = "internal".to_string();
     }
 
@@ -422,11 +444,55 @@ pub(super) fn compile_function(
     // Store each param into an alloca slot, collecting LocalId → slot
     // mappings. We release the &mut LlBlock at scope end before handing
     // the function over to the FnCtx lowering pass.
+    //
+    // Specialized entries bind per-rep:
+    //  - `I32` → straight into a canonical i32 slot (Phase 1 `SlotRep`
+    //    mechanism; the raw `%arg` i32 stores with ZERO conversions and no
+    //    double slot / no shadow binding — a number is never a GC root).
+    //    Plan selection guarantees the param is never reassigned and never
+    //    closure-referenced, so the canonical slot is trivially sound.
+    //  - `TaPtr` → NaN-box the raw header pointer ONCE into the ordinary
+    //    boxed double slot (all generic body paths stay correct) and keep the
+    //    shadow-slot GC root binding — the header must stay live (typed-array
+    //    storage never MOVES, but an unrooted header could still be swept).
+    //  - `Boxed`/`F64` → exactly today's binding (a raw f64 IS its box).
+    let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let locals: HashMap<u32, String> = {
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
-        for p in &f.params {
+        for (idx, p) in f.params.iter().enumerate() {
             let arg_name = format!("%arg{}", p.id);
+            match spec_entry.map(|plan| plan.reps[idx]) {
+                Some(crate::collectors::SpecParamRep::I32) => {
+                    if crate::expr::canonical_i32_locals_enabled() {
+                        let slot = blk.alloca(I32);
+                        blk.store(I32, &arg_name, &slot);
+                        spec_i32_param_slots.insert(p.id, slot);
+                    } else {
+                        // Phase-1 kill switch: keep the boxed protocol; one
+                        // conversion at entry instead of one per call site.
+                        let as_f64 = blk.sitofp(I32, &arg_name, DOUBLE);
+                        let slot = blk.alloca(DOUBLE);
+                        blk.store(DOUBLE, &as_f64, &slot);
+                        map.insert(p.id, slot);
+                    }
+                    continue;
+                }
+                Some(crate::collectors::SpecParamRep::TaPtr { .. }) => {
+                    let boxed = crate::expr::nanbox_pointer_inline(blk, &arg_name);
+                    let slot = blk.alloca(DOUBLE);
+                    blk.store(DOUBLE, &boxed, &slot);
+                    if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                        blk.call_void(
+                            "js_shadow_slot_bind",
+                            &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                        );
+                    }
+                    map.insert(p.id, slot);
+                    continue;
+                }
+                _ => {}
+            }
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
                 blk.call_void(
@@ -449,6 +515,28 @@ pub(super) fn compile_function(
         .collect();
     for p in &f.params {
         local_types.insert(p.id, p.ty.clone());
+    }
+    // Specialized entry: stamp the proven reps over the (usually `Any`)
+    // declared types BEFORE the native-fact collectors run, so every type
+    // predicate (int-valued locals, typed-array receiver classification,
+    // integer index proofs) sees the by-construction proof. Sound because
+    // plan selection demoted any reassigned/closure-referenced param to
+    // `Boxed` — a stamped param provably holds this rep for the whole body.
+    if let Some(plan) = spec_entry {
+        for (p, rep) in f.params.iter().zip(plan.reps.iter()) {
+            match rep {
+                crate::collectors::SpecParamRep::I32 => {
+                    local_types.insert(p.id, perry_hir::types::Type::Int32);
+                }
+                crate::collectors::SpecParamRep::TaPtr { kind, .. } => {
+                    if let Some(class) = spec_ta_kind_class_name(*kind) {
+                        local_types
+                            .insert(p.id, perry_hir::types::Type::Named(class.to_string()));
+                    }
+                }
+                crate::collectors::SpecParamRep::Boxed | crate::collectors::SpecParamRep::F64 => {}
+            }
+        }
     }
 
     // Pre-walk: which locals need to be boxed? A local is boxed when
@@ -590,10 +678,18 @@ pub(super) fn compile_function(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
-        i32_counter_slots: HashMap::new(),
-        local_slot_reps: HashMap::new(),
+        // Specialized entries seed the canonical-i32 registry with their raw
+        // i32 params (empty otherwise — identical to the pre-phase behavior).
+        local_slot_reps: spec_i32_param_slots
+            .keys()
+            .map(|id| (*id, crate::expr::SlotRep::I32))
+            .collect(),
+        i32_counter_slots: spec_i32_param_slots,
         repsel_context_allows_canonical_i32: repsel_allows,
         repsel_closure_ref_locals: repsel_closure_refs,
+        spec_abi_functions: &cross_module.spec_abi_functions,
+        spec_ta_bindings: &cross_module.spec_ta_bindings,
+        spec_ta_ready: std::collections::HashSet::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -735,8 +831,72 @@ pub(super) fn compile_function(
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,
+                // Declared-type hoist only — the construction form is unknown,
+                // so no inline-storage proof.
+                storage_inline_proven: false,
             },
         );
+    }
+
+    // Representation-selection Phase 2: bind each `TaPtr` param as a PROVEN
+    // BufferViewSlot with the data pointer hoisted ONCE at entry (modeled on
+    // the Buffer-param hoist above). The call-site pre-pass proved a fresh
+    // non-view construction, so kind/data/length are fixed for the array's
+    // lifetime: element accesses lower through the strong bare-load machinery
+    // (`ta_int_elem_load_is_i32_provable`, `lower_typed_array_load`, the
+    // proven-view checked tier) with bounds checks against the entry length —
+    // and NEVER through the per-site guarded fast paths (`ta_param_f64_read`
+    // skips receivers with a registered view slot). GC note: the header is
+    // rooted via the boxed param slot's shadow binding above; the hoisted
+    // data pointer stays valid because typed-array storage is non-movable
+    // (`gc/types.rs`: `GC_TYPE_TYPED_ARRAY`/`GC_TYPE_BUFFER` `movable: false`)
+    // and a non-view typed array cannot be detached or resized.
+    if let Some(plan) = spec_entry {
+        for (p, rep) in f.params.iter().zip(plan.reps.iter()) {
+            let crate::collectors::SpecParamRep::TaPtr { kind, const_len } = rep else {
+                continue;
+            };
+            let Some((elem, width)) = spec_ta_kind_elem_width(*kind) else {
+                continue;
+            };
+            let Some(param_slot) = ctx.locals.get(&p.id).cloned() else {
+                continue;
+            };
+            let blk = ctx.block();
+            let arg_val = blk.load(DOUBLE, &param_slot);
+            let handle = crate::expr::unbox_to_i64(blk, &arg_val);
+            let handle_ptr = blk.inttoptr(I64, &handle);
+            // TypedArrayHeader layout: length at +0, data at +16.
+            let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "16")]);
+            let data_slot = ctx.func.alloca_entry(PTR);
+            ctx.block().store(PTR, &data_ptr, &data_slot);
+            let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+            ctx.buffer_data_slots
+                .insert(p.id, (data_slot.clone(), scope_idx));
+            ctx.buffer_view_slots.insert(
+                p.id,
+                BufferViewSlot {
+                    data_slot,
+                    length_slot: None,
+                    scope_idx: Some(scope_idx),
+                    elem,
+                    element_width_bytes: width,
+                    index_unit: BufferIndexUnit::Element,
+                    view_byte_offset: Some(0),
+                    length_offset_from_data: -16,
+                    // Distinct `TaPtr` args are distinct fresh allocations
+                    // (the Tier A call-site match rejects duplicate locals),
+                    // so pairwise noalias holds by construction.
+                    alias: AliasState::NoAliasProven,
+                    length_source: Some(match const_len {
+                        Some(len) => LengthSource::Constant(*len),
+                        None => LengthSource::Unknown,
+                    }),
+                    native_owned: None,
+                    storage_inline_proven: true,
+                },
+            );
+        }
     }
 
     if f.is_async {
