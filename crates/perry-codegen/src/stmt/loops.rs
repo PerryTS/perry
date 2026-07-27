@@ -1844,6 +1844,9 @@ const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
 
 #[derive(Clone)]
 enum ObjectArrayWriteNumber {
+    /// #6812 (w12 key-table): `a % b` — admitted for INDEX expressions
+    /// (integer-valued, non-negative dividend, constant positive divisor).
+    Mod(Box<Self>, Box<Self>),
     OuterCounter,
     InnerCounter,
     Constant(f64),
@@ -1865,6 +1868,32 @@ const MAX_OBJECT_ARRAY_WRITE_FIELDS: usize = 4;
 const MAX_OBJECT_ARRAY_WRITE_TEMPS: usize = 8;
 const MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES: usize = 64;
 
+/// #6812 (w12): integer-valuedness for INDEX expressions — counters are
+/// integers, integer constants stay integers, and Add/Sub/Mul/Mod preserve
+/// integrality over them, so a proven tree can drive a table lookup through
+/// `fptosi` without truncation changing semantics.
+fn object_array_write_number_integer_valued(root: &ObjectArrayWriteNumber) -> bool {
+    let mut work = vec![root];
+    while let Some(node) = work.pop() {
+        match node {
+            ObjectArrayWriteNumber::OuterCounter | ObjectArrayWriteNumber::InnerCounter => {}
+            ObjectArrayWriteNumber::Constant(c) => {
+                if !c.is_finite() || c.fract() != 0.0 {
+                    return false;
+                }
+            }
+            ObjectArrayWriteNumber::Add(left, right)
+            | ObjectArrayWriteNumber::Sub(left, right)
+            | ObjectArrayWriteNumber::Mul(left, right)
+            | ObjectArrayWriteNumber::Mod(left, right) => {
+                work.push(left);
+                work.push(right);
+            }
+        }
+    }
+    true
+}
+
 /// Iterative (explicit-worklist) node count with early exit past the cap, so
 /// counting an oversized tree never recurses either.
 fn object_array_write_number_node_count(root: &ObjectArrayWriteNumber) -> usize {
@@ -1878,7 +1907,8 @@ fn object_array_write_number_node_count(root: &ObjectArrayWriteNumber) -> usize 
         match node {
             ObjectArrayWriteNumber::Add(left, right)
             | ObjectArrayWriteNumber::Sub(left, right)
-            | ObjectArrayWriteNumber::Mul(left, right) => {
+            | ObjectArrayWriteNumber::Mul(left, right)
+            | ObjectArrayWriteNumber::Mod(left, right) => {
                 work.push(left);
                 work.push(right);
             }
@@ -1900,6 +1930,20 @@ struct ObjectArrayWriteGroup {
 }
 
 const MAX_OBJECT_ARRAY_WRITE_GROUPS: usize = 2;
+
+/// #6812 (w12): a table-driven write lane — `o[K[idx]] = v` where `K` is a
+/// loop-invariant local holding an array of strings and `idx` is an
+/// integer-valued, range-proven index expression. The preflight guard
+/// resolves EVERY table entry to a slot up front (reusing the numeric
+/// guard's receiver validation); the nest indexes the resolved slot table.
+struct KeyTableLane {
+    table_id: u32,
+    index: ObjectArrayWriteNumber,
+    /// hi+1 of the proven index range: the guard requires the table to hold
+    /// at least this many string entries (capped at 4 — the shared guard's
+    /// lane width).
+    required_len: u32,
+}
 
 struct ObjectArrayWriteLoop {
     outer_counter_id: u32,
@@ -1924,6 +1968,10 @@ struct ObjectArrayWriteLoop {
     /// gets its own preflight guard call; the fast nest interleaves the
     /// groups' stores. Empty for the classic single-array body.
     extra_groups: Vec<ObjectArrayWriteGroup>,
+    /// #6812 (w12): when set, the (single-group) body is exactly ONE
+    /// table-driven write; `properties` is empty and `values[0]` holds the
+    /// stored value expression.
+    key_table: Option<KeyTableLane>,
 }
 
 fn match_nonnegative_constant_i32(expr: &perry_hir::Expr) -> Option<i32> {
@@ -1960,18 +2008,20 @@ fn match_object_array_write_number(
         }
         Expr::Number(n) if n.is_finite() => Some(ObjectArrayWriteNumber::Constant(*n)),
         Expr::Binary { op, left, right }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
+            if matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod
+            ) =>
         {
             let left =
                 match_object_array_write_number(left, outer_counter_id, inner_counter_id, temps)?;
             let right =
                 match_object_array_write_number(right, outer_counter_id, inner_counter_id, temps)?;
-            Some(if matches!(op, BinaryOp::Mul) {
-                ObjectArrayWriteNumber::Mul(Box::new(left), Box::new(right))
-            } else if matches!(op, BinaryOp::Add) {
-                ObjectArrayWriteNumber::Add(Box::new(left), Box::new(right))
-            } else {
-                ObjectArrayWriteNumber::Sub(Box::new(left), Box::new(right))
+            Some(match op {
+                BinaryOp::Mul => ObjectArrayWriteNumber::Mul(Box::new(left), Box::new(right)),
+                BinaryOp::Add => ObjectArrayWriteNumber::Add(Box::new(left), Box::new(right)),
+                BinaryOp::Mod => ObjectArrayWriteNumber::Mod(Box::new(left), Box::new(right)),
+                _ => ObjectArrayWriteNumber::Sub(Box::new(left), Box::new(right)),
             })
         }
         _ => None,
@@ -2050,6 +2100,28 @@ fn object_array_write_number_finite_range(
                 inner_bound,
             )?;
             finite_range(left_lo - right_hi, left_hi - right_lo)
+        }
+        // #6812 (w12 key-table): `a % b` with a proven-nonnegative dividend
+        // and a constant positive divisor — the only form the matcher
+        // admits for index expressions. Result range [0, c-1] is exact for
+        // integer operands and conservative otherwise.
+        ObjectArrayWriteNumber::Mod(left, right) => {
+            let (left_lo, _left_hi) = object_array_write_number_finite_range(
+                left,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            let (right_lo, right_hi) = object_array_write_number_finite_range(
+                right,
+                outer_start,
+                outer_bound,
+                inner_bound,
+            )?;
+            if left_lo < 0.0 || right_lo != right_hi || right_lo < 1.0 || right_lo.fract() != 0.0 {
+                return None;
+            }
+            finite_range(0.0, right_lo - 1.0)
         }
     }
 }
@@ -2281,6 +2353,7 @@ fn match_object_array_write_loop(
     }
 
     let mut temps = std::collections::HashMap::new();
+    let mut key_table: Option<KeyTableLane> = None;
     let mut groups: Vec<ParsedGroup> = Vec::new();
     let mut alias_ids: Vec<u32> = Vec::new();
     let mut array_ids: Vec<u32> = Vec::new();
@@ -2375,6 +2448,89 @@ fn match_object_array_write_loop(
             ) {
                 return None;
             }
+            // #6812 (w12): `o[K[idx]] = v` — a table-driven lane. Only as
+            // the SOLE store of the sole group (v1); recognized before the
+            // static key forms and finalized after the loop.
+            if let Expr::IndexGet {
+                object: table_obj,
+                index: table_idx,
+            } = key.as_ref()
+            {
+                if let Expr::LocalGet(table_id) = table_obj.as_ref() {
+                    if properties.is_empty()
+                        && values.is_empty()
+                        && groups.is_empty()
+                        && key_table.is_none()
+                        && t2.is_empty()
+                        && dyn_len_source.is_none()
+                        && *table_id != outer_counter_id
+                        && *table_id != inner_counter_id
+                        && *table_id != alias_id
+                        && *table_id != array_id
+                        && !ctx.boxed_vars.contains(table_id)
+                        && !ctx.module_globals.contains_key(table_id)
+                        && ctx.locals.contains_key(table_id)
+                        && !ctx.scalar_replaced.contains_key(table_id)
+                        && !ctx.pod_records.contains_key(table_id)
+                    {
+                        let idx = match_object_array_write_number(
+                            table_idx,
+                            outer_counter_id,
+                            inner_counter_id,
+                            &temps,
+                        );
+                        if let Some(idx) = idx {
+                            if object_array_write_number_node_count(&idx)
+                                <= MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES
+                                && object_array_write_number_integer_valued(&idx)
+                            {
+                                if let Some((idx_lo, idx_hi)) =
+                                    object_array_write_number_finite_range(
+                                        &idx,
+                                        outer_start,
+                                        outer_bound,
+                                        inner_bound,
+                                    )
+                                {
+                                    if idx_lo >= 0.0 && idx_hi <= 3.0 {
+                                        let value = match_object_array_write_number(
+                                            value,
+                                            outer_counter_id,
+                                            inner_counter_id,
+                                            &temps,
+                                        )?;
+                                        if object_array_write_number_node_count(&value)
+                                            > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES
+                                        {
+                                            return None;
+                                        }
+                                        object_array_write_number_finite_range(
+                                            &value,
+                                            outer_start,
+                                            outer_bound,
+                                            inner_bound,
+                                        )?;
+                                        key_table = Some(KeyTableLane {
+                                            table_id: *table_id,
+                                            index: idx,
+                                            required_len: idx_hi as u32 + 1,
+                                        });
+                                        values.push(value);
+                                        cursor = t2;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        return None;
+                    }
+                }
+                return None;
+            }
+            if key_table.is_some() {
+                // v1: a table-driven lane must be the group's only store.
+                return None;
+            }
             let property = match key.as_ref() {
                 Expr::String(property) => property.clone(),
                 Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
@@ -2403,7 +2559,7 @@ fn match_object_array_write_loop(
             }
             cursor = t2;
         }
-        if properties.is_empty() {
+        if properties.is_empty() && key_table.is_none() {
             return None;
         }
         groups.push(ParsedGroup {
@@ -2426,6 +2582,10 @@ fn match_object_array_write_loop(
         }
     }
 
+    // v1: a key-table lane is exclusive — single group, sole store.
+    if key_table.is_some() && (groups.len() != 1 || !groups[0].properties.is_empty()) {
+        return None;
+    }
     let first = groups.remove(0);
     Some(ObjectArrayWriteLoop {
         outer_counter_id,
@@ -2437,6 +2597,7 @@ fn match_object_array_write_loop(
         array_id: first.array_id,
         properties: first.properties,
         values: first.values,
+        key_table,
         extra_groups: groups
             .into_iter()
             .map(|g| ObjectArrayWriteGroup {
@@ -2472,6 +2633,13 @@ fn emit_object_array_write_number(
             let left = emit_object_array_write_number(ctx, left, outer, inner);
             let right = emit_object_array_write_number(ctx, right, outer, inner);
             ctx.block().fmul(&left, &right)
+        }
+        ObjectArrayWriteNumber::Mod(left, right) => {
+            let left = emit_object_array_write_number(ctx, left, outer, inner);
+            let right = emit_object_array_write_number(ctx, right, outer, inner);
+            // `frem` matches JS `%` for the finite, nonnegative-dividend,
+            // positive-divisor domain the range proof admits.
+            ctx.block().frem(&left, &right)
         }
     }
 }
@@ -2571,7 +2739,34 @@ fn lower_object_array_write_versioned_for(
     } else {
         matched.inner_bound.to_string()
     };
-    let packed_slots = {
+    // #6812 (w12): the table-driven lane resolves its slots through the
+    // key-table wrapper into a stack table; the classic form keeps the
+    // packed-lane guard. Either result funnels into the same nonzero
+    // guard-ok test (the wrapper's i32 is zext'd).
+    let mut keytable_state: Option<(String, String)> = None; // (out_alloca, required_len)
+    let packed_slots = if let Some(kt) = &matched.key_table {
+        let table_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(kt.table_id))?;
+        let out_alloca = ctx.func.alloca_entry_array(I64, 4);
+        let required_len = kt.required_len.to_string();
+        ctx.pending_declares.push((
+            "js_object_array_keytable_write_guard".to_string(),
+            I32,
+            vec![DOUBLE, DOUBLE, I32, I32, crate::types::PTR],
+        ));
+        let ret = ctx.block().call(
+            I32,
+            "js_object_array_keytable_write_guard",
+            &[
+                (DOUBLE, &array_box),
+                (DOUBLE, &table_box),
+                (I32, &required_len),
+                (I32, &inner_bound),
+                (crate::types::PTR, &out_alloca),
+            ],
+        );
+        keytable_state = Some((out_alloca, required_len));
+        ctx.block().zext(I32, &ret, I64)
+    } else {
         let blk = ctx.block();
         blk.call(
             I64,
@@ -2668,7 +2863,12 @@ fn lower_object_array_write_versioned_for(
             .block_mut(preheader_idx)
             .expect("object-array preheader block must exist");
         let mut slots = Vec::with_capacity(matched.values.len());
-        for index in 0..matched.values.len() {
+        let decode_lanes = if matched.key_table.is_some() {
+            0
+        } else {
+            matched.values.len()
+        };
+        for index in 0..decode_lanes {
             let shifted = if index == 0 {
                 packed_slots.clone()
             } else {
@@ -2794,6 +2994,79 @@ fn lower_object_array_write_versioned_for(
     };
     let meta_byte_off = (object_header_size - meta_ptr_size).to_string();
     let meta_load_ty = if meta_ptr_size == 4 { I32 } else { I64 };
+    // #6812 (w12): the table-driven lane loads its slot from the guard's
+    // resolved table (index expression is range-proven < required_len, so
+    // no bounds check), then reuses the same inline/spill store shape as a
+    // compile-time lane — with runtime slot/flag registers.
+    if let (Some(kt), Some((out_alloca, _))) = (&matched.key_table, &keytable_state) {
+        let object_ptr = {
+            let blk = ctx.block();
+            let inner_i64 = blk.sext(I32, &inner, I64);
+            let element_word = blk.add(I64, &inner_i64, "1");
+            let element_ptr = blk.gep_inbounds(I64, &array_ptr, &[(I64, &element_word)]);
+            let object_box = blk.load(DOUBLE, &element_ptr);
+            let object_bits = blk.bitcast_double_to_i64(&object_box);
+            let object_handle = blk.and(I64, &object_bits, crate::nanbox::POINTER_MASK_I64);
+            blk.inttoptr(I64, &object_handle)
+        };
+        let value =
+            emit_object_array_write_number(ctx, &matched.values[0], &outer_double, &inner_double);
+        let idx_double =
+            emit_object_array_write_number(ctx, &kt.index, &outer_double, &inner_double);
+        let (lane, spill_flag, slot) = {
+            let blk = ctx.block();
+            let idx_i64 = blk.fptosi(DOUBLE, &idx_double, I64);
+            let lane_ptr = blk.gep(I64, out_alloca, &[(I64, &idx_i64)]);
+            let lane = blk.load(I64, &lane_ptr);
+            let spill_flag = blk.and(I64, &lane, "32768");
+            let low = blk.and(I64, &lane, "32767");
+            let slot = blk.sub(I64, &low, "1");
+            (lane, spill_flag, slot)
+        };
+        let _ = lane;
+        let spill_idx = ctx.new_block("object_array_write.loop.fast.store.keytable.spill");
+        let inline_idx = ctx.new_block("object_array_write.loop.fast.store.keytable.inline");
+        let done_idx = ctx.new_block("object_array_write.loop.fast.store.keytable.done");
+        let spill_label = ctx.block_label(spill_idx);
+        let inline_label = ctx.block_label(inline_idx);
+        let done_label = ctx.block_label(done_idx);
+        let is_spill = ctx.block().icmp_ne(I64, &spill_flag, "0");
+        ctx.block().cond_br(&is_spill, &spill_label, &inline_label);
+
+        ctx.current_block = inline_idx;
+        let field_ptr = {
+            let blk = ctx.block();
+            let field_word = blk.add(I64, &slot, &header_words);
+            blk.gep_inbounds(I64, &object_ptr, &[(I64, &field_word)])
+        };
+        // GC_STORE_AUDIT(POINTER_FREE): finite numeric values only, proven
+        // by the entry guard's range analysis.
+        ctx.block().store(DOUBLE, &value, &field_ptr);
+        ctx.block().br(&done_label);
+
+        ctx.current_block = spill_idx;
+        {
+            let blk = ctx.block();
+            let meta_slot_ptr = blk.gep(I8, &object_ptr, &[(I64, &meta_byte_off)]);
+            let meta_loaded = blk.load(meta_load_ty, &meta_slot_ptr);
+            let meta_i64 = if meta_ptr_size == 4 {
+                blk.zext(I32, &meta_loaded, I64)
+            } else {
+                meta_loaded
+            };
+            let meta_ptr = blk.inttoptr(I64, &meta_i64);
+            let spill_slot_ptr = blk.gep_inbounds(I64, &meta_ptr, &[(I64, "4")]);
+            let spill_i64 = blk.load(I64, &spill_slot_ptr);
+            let spill_ptr = blk.inttoptr(I64, &spill_i64);
+            let elem_word = blk.add(I64, &slot, "1");
+            let elem_ptr = blk.gep_inbounds(I64, &spill_ptr, &[(I64, &elem_word)]);
+            // GC_STORE_AUDIT(POINTER_FREE): as above — numeric bits into a
+            // guard-proven live spill slot.
+            blk.store(DOUBLE, &value, &elem_ptr);
+        }
+        ctx.block().br(&done_label);
+        ctx.current_block = done_idx;
+    }
     for (group_index, (g_slots, g_array_ptr, g_values)) in group_plans.iter().enumerate() {
         let object_ptr = {
             let blk = ctx.block();
