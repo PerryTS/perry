@@ -157,3 +157,32 @@ function boundary(): void {
   console.log(arr.join(","));
 }
 boundary();
+
+// 10. Extends chain (target-1 widening): parent field offsets are chain-
+//     global; the straight-line method earns a typed-receiver clone.
+class BasePos {
+  offset: number;
+  constructor(offset: number) {
+    this.offset = offset;
+  }
+}
+class Scaler extends BasePos {
+  factor: number;
+  constructor(offset: number, factor: number) {
+    super(offset);
+    this.factor = factor;
+  }
+  apply(x: number): number {
+    return x * this.factor + this.offset;
+  }
+}
+function chainRun(n: number): string {
+  const s = new Scaler(3, 1.5);
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += s.apply(i);
+  }
+  s.offset = acc / n;
+  return acc + ":" + s.offset + ":" + s.factor + ":" + s.apply(2);
+}
+console.log(chainRun(1000));
