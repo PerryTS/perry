@@ -1,4 +1,4 @@
-import * as zlib from "node:zlib";
+import zlib from "node:zlib";
 
 function assignmentResult(target: any, key: string, value: any) {
   try {

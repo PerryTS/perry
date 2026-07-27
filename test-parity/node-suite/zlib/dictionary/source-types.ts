@@ -24,6 +24,12 @@ const sources = [
 
 for (const [name, source] of sources) {
   const compressed = zlib.deflateSync(input, { dictionary: source as any });
+  try {
+    zlib.inflateSync(compressed);
+    console.log(name, "without dictionary: ok");
+  } catch (error: any) {
+    console.log(name, "without dictionary:", error.name, error.code);
+  }
   const output = zlib.inflateSync(compressed, { dictionary: source as any });
   console.log(name, output.toString());
 }

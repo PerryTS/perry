@@ -20,26 +20,26 @@ backend-specific compressed bytes.
 
 The audit grew the suite from 58 to 92 fixtures. Three independent Node runs
 produced 92 clean exits and the same ordered stdout SHA-256:
-`20e40e51e5edc045cc61980f1bcc7a1c404d2dc2af096527c0dea925c536da76`.
+`9fca491aaffd2caea529f91f2e41b13b76dd773e049e25c39ac4fad6aa430658`.
 
 | Runtime     |               Result | Stable differences                        |
 | ----------- | -------------------: | ----------------------------------------- |
 | Node 26.5.0 |   92/92 oracle exits | none                                      |
-| Perry       | 63 matches, 29 diffs | no compile failures, crashes, or timeouts |
+| Perry       | 62 matches, 30 diffs | no compile failures, crashes, or timeouts |
 | Bun 1.2.18  |  86 matches, 6 diffs | no errors, crashes, or timeouts           |
-| Deno 2.9.3  |  84 matches, 8 diffs | no errors, crashes, or timeouts           |
+| Deno 2.9.3  |  83 matches, 9 diffs | no errors, crashes, or timeouts           |
 
-Perry's 29 diffs cover callback context, immutable exports, constructor and
+Perry's 30 diffs cover callback context, immutable exports, constructor and
 prototype identity, `info`, CRC seed validation, dictionary application,
 trailing input, option validation and getter order, exact stream state,
 `bytesWritten`, multi-codec stream behavior, flush order, and truncated input.
-Five new contracts already match: dictionary source types, `SharedArrayBuffer`
-input, semantic Brotli params, level/strategy defaults and ranges, and
-reset/params before the first write.
+Four new contracts already match: `SharedArrayBuffer` input, semantic Brotli
+params, level/strategy defaults and ranges, and reset/params before the first
+write.
 
 Bun differs on Brotli and Zstd dictionary application, option getter order, the
 legacy `bytesRead` alias, `crc32(ArrayBuffer)`, and `rejectGarbageAfterEnd`.
-Deno differs on all four dictionary application fixtures, invalid Brotli input,
+Deno differs on all five dictionary application fixtures, invalid Brotli input,
 legacy alias enumerability, getter order, and `rejectGarbageAfterEnd`.
 
 Run the focused Perry comparison with:
@@ -60,7 +60,7 @@ suite.
 | `async/options-overload-and-callback.ts` | [`test-zlib-convenience-methods.js`][node-convenience]                                                               | The three-argument options overload preserves callback arity, receiver, result type, and async order. |
 | `constants/immutability.ts`              | [`test-zlib-const.js`][node-const]                                                                                   | `codes`, its values, and `constants` values reject writes and keep their values.                      |
 | `convenience/constructors.ts`            | [`test-zlib-deflate-constructors.js`][node-constructors], [`zlib.test.js`][bun-zlib-main]                            | Public constructors work with and without `new`, keep their names, and create matching instances.     |
-| `convenience/factory-instances.ts`       | [`lib/zlib.js`][node-lib], [`zlib.test.js`][bun-zlib-main]                                                           | Every `create*` factory returns its matching public class.                                            |
+| `convenience/factory-instances.ts`       | [`lib/zlib.js`][node-lib], [`zlib.test.js`][bun-zlib-main]                                                           | Deflate, Inflate, Gzip, Unzip, and Brotli factories return their matching public classes.             |
 | `convenience/info-result.ts`             | [`test-zlib-convenience-methods.js`][node-convenience]                                                               | Sync compression and decompression with `info: true` return `{ buffer, engine }`.                     |
 | `convenience/prototype-chains.ts`        | [`lib/zlib.js`][node-lib], [`zlib.test.js`][bun-zlib-main]                                                           | Constructor descriptors and Zlib/Brotli prototype parents match Node.                                 |
 | `crc32/seed-validation.ts`               | [`test-zlib-crc32.js`][node-crc], [`test-zlib-negative-zero.js`][node-negative-zero]                                 | CRC seeds accept uint32 bounds, coerce `-0`, and reject wrong types and ranges.                       |
