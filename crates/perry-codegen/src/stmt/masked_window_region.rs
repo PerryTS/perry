@@ -509,13 +509,19 @@ pub(super) fn try_match_masked_window_region(
         // Phase 2 proven class: an inline-storage-proven Int32 view whose
         // constant length covers the window classifies as ta_i32 at COMPILE
         // time (kind fixed at construction, length immutable, storage
-        // non-movable, in-window reads in-bounds by arithmetic).
+        // non-movable, in-window reads in-bounds by arithmetic). Requires an
+        // undowngraded view (`allows_noalias` + `scope_idx`) exactly like the
+        // sibling proven tiers — hazard paths (closure capture, unknown-call
+        // escape, aliasing) clear those markers when the tracked data slot can
+        // no longer be trusted, and this tier emits NO runtime re-validation.
         let proven_ta_i32 = ctx
             .buffer_view_slots
             .get(&access.array_id)
             .is_some_and(|view| {
                 view.storage_inline_proven
                     && view.native_owned.is_none()
+                    && view.alias.allows_noalias()
+                    && view.scope_idx.is_some()
                     && view.index_unit == crate::native_value::BufferIndexUnit::Element
                     && matches!(view.elem, crate::native_value::BufferElem::I32)
                     && matches!(
