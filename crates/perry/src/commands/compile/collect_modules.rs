@@ -18,7 +18,7 @@ use perry_transform::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
@@ -507,7 +507,11 @@ fn collect_module_one(
     // delta to the prefix so the wrapped-line → original-line subtraction is
     // computed against the FINAL parsed source.
     let lines_before_transform = source.bytes().filter(|&b| b == b'\n').count();
-    let source = transform_static_literal_requires(&source, &ctx.compile_packages);
+    let source = transform_static_literal_requires(
+        &source,
+        &ctx.compile_packages,
+        canonical.parent().unwrap_or_else(|| Path::new(".")),
+    );
     if was_cjs_wrapped && ctx.debug_symbols {
         if let Some(prefix_lines) = cjs_wrap_body_prefix_lines {
             let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
