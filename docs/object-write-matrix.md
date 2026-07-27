@@ -55,12 +55,12 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 
 ### Reading of the triage pass
 
-- **Beating node (11 of 18 rows as of #6812 w8/w13):** everything the
-  whole-loop clone covers — including, since #6830/#6833/#6812-w8, `Mul`
-  RHS, dynamic bounds, `while` form, `let` aliases, builder-pattern arrays,
-  inlined-helper bodies, and peeled first-write appends — plus class
-  instances through the PIC. The #6811/#6823 architecture wins when it
-  applies.
+- **Beating node (14 of 18 rows as of #6868):** everything the whole-loop
+  clone covers — `Mul` RHS, dynamic bounds, `while` form, `let` aliases,
+  builder-pattern arrays, inlined-helper bodies, peeled first-write
+  appends, spill lanes (append past capacity), multi-group parallel-array
+  bodies, and inlined RHS calls — plus class instances through the PIC.
+  The #6811/#6823 architecture wins when it applies.
 - **Two catastrophic rows (~180×), both ubiquitous in real code:**
   the builder pattern (fresh `{}` + property assigns — every API response,
   parser, ORM row) and wide-object overflow-slot writes. These dominate the
