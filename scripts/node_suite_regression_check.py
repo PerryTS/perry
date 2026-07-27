@@ -2,9 +2,10 @@
 """Regression guard for the print-and-diff node-suite.
 
 Runs `scripts/node_suite_run.py` (pre-warm + fast/slow lanes) and compares the
-per-module pass counts against a committed floor baseline. FAILS (exit 1) if any
-baselined module drops below its floor. Improvements are always accepted and are
-reported as `+N` so the baseline can be ratcheted up over time.
+per-module pass and fixture counts against a committed floor baseline. FAILS
+(exit 1) if any baselined module drops below either floor. Improvements are
+always accepted and are reported as `+N` so the baseline can be ratcheted up
+over time.
 
 This exists because the node-suite is NOT part of the per-PR CI gate (the parity
 job is opt-in and runs node 22, while the real oracle is node 26), so a module
@@ -71,7 +72,10 @@ def main():
         if cur["pass"] < floor["pass"]:
             regressions.append(
                 f"{mod}: {cur['pass']}/{cur['total']} < floor {floor['pass']}/{floor['total']}  (-{floor['pass'] - cur['pass']})")
-        elif cur["pass"] > floor["pass"]:
+        if cur["total"] < floor["total"]:
+            regressions.append(
+                f"{mod}: {cur['total']} fixtures < floor {floor['total']}  (-{floor['total'] - cur['total']})")
+        if cur["pass"] > floor["pass"]:
             improvements.append(f"{mod}: {cur['pass']}/{cur['total']}  (+{cur['pass'] - floor['pass']})")
 
     # Overall is derived, not stored (avoids cross-PR merge conflicts on a

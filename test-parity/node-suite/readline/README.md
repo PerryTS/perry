@@ -67,7 +67,7 @@ Each category traces to primary implementation or tests:
 
 Three Node 26.5.0 runs completed **95/95** with byte-identical output. Their
 fixture/output digest was
-`24fa2032d200f2a44726f2e0203f073ae7a2cc4661cd10b4d1215e19fa6d2c85`.
+`77baed4cf8bd64c1e6131716a93205610b35b7f3955da526596c5d27ba31bc53`.
 
 Three focused Perry runs were identical: **20 pass, 75 output differences, zero
 compile failures, zero crashes, and zero timeouts**. The baseline records that

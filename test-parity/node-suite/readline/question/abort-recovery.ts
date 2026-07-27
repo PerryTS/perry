@@ -10,8 +10,8 @@ const output = new Writable({
 const rl = createInterface({ input, output, terminal: false });
 const controller = new AbortController();
 const events: string[] = [];
-rl.on("line", (line) => events.push(`line:${line}`));
 if (typeof (rl as any).on === "function") {
+  rl.on("line", (line) => events.push(`line:${line}`));
   rl.question(
     "q> ",
     { signal: controller.signal },

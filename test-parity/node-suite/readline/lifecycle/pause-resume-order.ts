@@ -8,8 +8,12 @@ for (const event of ["pause", "resume", "close"]) {
   rl.on(event, () => events.push(event));
 }
 rl.on("line", (line) => events.push(`line:${line}`));
-console.log(rl.pause() === rl, rl.pause());
-console.log(rl.resume() === rl, rl.resume());
+const firstPause = rl.pause();
+const secondPause = rl.pause();
+console.log(firstPause === rl, secondPause === rl);
+const firstResume = rl.resume();
+const secondResume = rl.resume();
+console.log(firstResume === rl, secondResume === rl);
 input.end("x\n");
 await new Promise<void>((resolve) => setImmediate(resolve));
 console.log(events.join("|"));
