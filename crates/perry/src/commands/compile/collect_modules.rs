@@ -51,7 +51,7 @@ use import_helpers::{
 // Re-exported at `pub(super)` because `compile.rs` (the parent module) calls
 // `collect_modules::known_node_submodule_key` directly.
 pub(super) use import_helpers::known_node_submodule_key;
-use native_addon::refuse_compile_package_native_addon;
+use native_addon::{refuse_compile_package_native_addon, refuse_node_addon_binary};
 use parse_error::annotate_parse_error;
 use static_require_transform::transform_static_literal_requires;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
@@ -311,6 +311,7 @@ fn collect_module_one(
             });
         }
 
+        refuse_node_addon_binary(&canonical)?;
         let source = fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
         progress.record(ProgressSnapshot {
@@ -420,6 +421,7 @@ fn collect_module_one(
         stub.source
     } else {
         // It's a TypeScript (or synthetic JSON/text) file to compile natively.
+        refuse_node_addon_binary(&canonical)?;
         fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
     };

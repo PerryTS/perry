@@ -7,13 +7,9 @@ use crate::OutputFormat;
 
 use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
 
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    ENV_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("env lock poisoned")
-}
+// The env guard now lives at crate root so tests OUTSIDE this module — which
+// read `PATH` while these tests swap it — can take the same lock.
+use crate::test_env_lock::env_lock;
 
 fn set_env_var(key: &str, value: Option<&str>) {
     match value {

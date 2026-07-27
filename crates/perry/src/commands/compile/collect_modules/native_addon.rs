@@ -127,6 +127,37 @@ fn package_json_dependency_uses_native_addon_loader(
         })
 }
 
+/// A `.node` file is a compiled N-API addon — a Mach-O/ELF/PE shared object,
+/// not source. Both module-read paths in `collect_modules` call
+/// `fs::read_to_string`, so reaching one with a `.node` file reports
+/// "stream did not contain valid UTF-8", which names neither the real
+/// constraint nor the package responsible.
+///
+/// `refuse_compile_package_native_addon` already covers the case where the
+/// addon sits in a package that resolved to a `compilePackages` root, but a
+/// platform-specific sidecar package (the napi-rs layout: `@napi-rs/keyring`
+/// depends on `@napi-rs/keyring-darwin-arm64`, which contains nothing but the
+/// `.node` file and a package.json) can be reached without its root ever being
+/// classified. Guard the read itself so the diagnostic is the same either way.
+pub(super) fn refuse_node_addon_binary(canonical: &std::path::Path) -> Result<()> {
+    if canonical.extension().and_then(|ext| ext.to_str()) != Some("node") {
+        return Ok(());
+    }
+    let package_name = nearest_package_root(canonical)
+        .and_then(|root| package_name_from_package_json(&root))
+        .unwrap_or_else(|| canonical.display().to_string());
+    anyhow::bail!(
+        "`{}` is a Node native addon (`{}`).\n\
+         Perry cannot load Node `.node` / N-API addons inside a native Perry binary. \
+         Remove `{}` from `perry.compilePackages`, choose a pure JS/TS package, \
+         or replace the native boundary with a Perry native binding \
+         (`perry.nativeLibrary` / perry-ffi).",
+        package_name,
+        canonical.display(),
+        package_name,
+    );
+}
+
 pub(super) fn refuse_compile_package_native_addon(
     ctx: &mut CompilationContext,
     canonical: &std::path::Path,
