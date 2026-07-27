@@ -590,6 +590,187 @@ fn lower_put_value_static_write_ic(
     Ok(Some(result))
 }
 
+/// #6812 (w12): inline hit path for the 3-way dynamic-key write IC.
+/// Registers arrive in k → v → t evaluation order (see the call site); from
+/// the target register onward the path is call-free until the store or the
+/// outlined slow call. Guards are byte-for-byte the static write PIC's
+/// (GcHeader -8/-7/-6 with BLOCKING 0x1907 incl. typed-intact, ObjectHeader
+/// regular/class/token via the #6804 discriminated shape-token select).
+/// The raw store fires only for non-reference VALUE tags (not pointer/
+/// string/bigint), so it needs no barrier and no layout note; every other
+/// case — and every miss — takes the outlined helper, which bottoms out at
+/// full `[[Set]]` + re-prime.
+fn lower_put_value_dyn_ic_inline(
+    ctx: &mut FnCtx<'_>,
+    t: &str,
+    k: &str,
+    v: &str,
+    strict_i32: &str,
+) -> Result<String> {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let cache_name = format!("perry_ic_{}", site_id);
+    ctx.ic_globals.push(cache_name.clone());
+    let cache_ref = format!("@{}", cache_name);
+
+    let k_bits = ctx.block().bitcast_double_to_i64(k);
+    let v_bits = ctx.block().bitcast_double_to_i64(v);
+    let t_bits = ctx.block().bitcast_double_to_i64(t);
+    let t_handle = ctx.block().and(I64, &t_bits, POINTER_MASK_I64);
+    let t_tag = ctx.block().lshr(I64, &t_bits, "48");
+    let is_ptr = ctx.block().icmp_eq(I64, &t_tag, "32765");
+    let above = ctx.block().icmp_ugt(I64, &t_handle, "1048575");
+    // Value tag: reference-creating stores (pointer 0x7FFD, string 0x7FFF,
+    // bigint 0x7FFA) leave the inline path before any store.
+    let v_tag = ctx.block().lshr(I64, &v_bits, "48");
+    let v_not_obj = ctx.block().icmp_ne(I64, &v_tag, "32765");
+    let v_not_str = ctx.block().icmp_ne(I64, &v_tag, "32767");
+    let v_not_big = ctx.block().icmp_ne(I64, &v_tag, "32762");
+    let mut entry_ok = ctx.block().and(I1, &is_ptr, &above);
+    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_obj);
+    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_str);
+    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_big);
+
+    let guard_idx = ctx.new_block("put.dynic.guard");
+    let ways_idx = ctx.new_block("put.dynic.ways");
+    let way1_idx = ctx.new_block("put.dynic.way1");
+    let way2_idx = ctx.new_block("put.dynic.way2");
+    let bounds_idx = ctx.new_block("put.dynic.bounds");
+    let store_idx = ctx.new_block("put.dynic.store");
+    let slow_idx = ctx.new_block("put.dynic.slow");
+    let merge_idx = ctx.new_block("put.dynic.merge");
+    let guard_label = ctx.block_label(guard_idx);
+    let ways_label = ctx.block_label(ways_idx);
+    let way1_label = ctx.block_label(way1_idx);
+    let way2_label = ctx.block_label(way2_idx);
+    let bounds_label = ctx.block_label(bounds_idx);
+    let store_label = ctx.block_label(store_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&entry_ok, &guard_label, &slow_label);
+
+    ctx.current_block = guard_idx;
+    let gc_type_addr = ctx.block().sub(I64, &t_handle, "8");
+    let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
+    let gc_type = ctx.block().load(I8, &gc_type_ptr);
+    let gc_object = ctx.block().icmp_eq(I8, &gc_type, "2");
+    let gc_flags_addr = ctx.block().sub(I64, &t_handle, "7");
+    let gc_flags_ptr = ctx.block().inttoptr(I64, &gc_flags_addr);
+    let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
+    let forwarded = ctx.block().and(I8, &gc_flags, "128");
+    let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
+    let reserved_addr = ctx.block().sub(I64, &t_handle, "6");
+    let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
+    let reserved = ctx.block().load(I16, &reserved_ptr);
+    let blocked = ctx.block().and(I16, &reserved, "6407"); // 0x1907
+    let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
+    let object_type_ptr = ctx.block().inttoptr(I64, &t_handle);
+    let object_type = ctx.block().load(I32, &object_type_ptr);
+    let regular = ctx.block().icmp_eq(I32, &object_type, "1");
+    let class_addr = ctx.block().add(I64, &t_handle, "4");
+    let class_ptr = ctx.block().inttoptr(I64, &class_addr);
+    let class_id = ctx.block().load(I32, &class_ptr);
+    let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
+    let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
+    let keys_addr = ctx.block().add(I64, &t_handle, "16");
+    let keys_ptr = ctx.block().inttoptr(I64, &keys_addr);
+    let keys = ctx.block().load(I64, &keys_ptr);
+    let parent_class_addr = ctx.block().add(I64, &t_handle, "8");
+    let parent_class_ptr = ctx.block().inttoptr(I64, &parent_class_addr);
+    let parent_class_id = ctx.block().load(I32, &parent_class_ptr);
+    let shape_id_rel = ctx.block().add(I32, &parent_class_id, "-2147483648");
+    let has_shape_id = ctx.block().icmp_ult(I32, &shape_id_rel, "1073741824");
+    let shape_id64 = ctx.block().zext(I32, &parent_class_id, I64);
+    let shape_id_token = ctx.block().or(I64, &shape_id64, "4611686018427387904");
+    let shape_token = ctx
+        .block()
+        .select(I1, &has_shape_id, I64, &shape_id_token, &keys);
+    let cached_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
+    let cached_token = ctx.block().load(I64, &cached_token_ptr);
+    let token_match = ctx.block().icmp_eq(I64, &shape_token, &cached_token);
+    let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
+    let mut ok = ctx.block().and(I1, &gc_object, &not_forwarded);
+    ok = ctx.block().and(I1, &ok, &flags_clear);
+    ok = ctx.block().and(I1, &ok, &regular);
+    ok = ctx.block().and(I1, &ok, &class_nonzero);
+    ok = ctx.block().and(I1, &ok, &not_native_module);
+    ok = ctx.block().and(I1, &ok, &token_match);
+    ok = ctx.block().and(I1, &ok, &token_nonzero);
+    ctx.block().cond_br(&ok, &ways_label, &slow_label);
+
+    ctx.current_block = ways_idx;
+    let k0_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let k0 = ctx.block().load(I64, &k0_ptr);
+    let s0_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
+    let s0 = ctx.block().load(I64, &s0_ptr);
+    let hit0 = ctx.block().icmp_eq(I64, &k_bits, &k0);
+    ctx.block().cond_br(&hit0, &bounds_label, &way1_label);
+    ctx.current_block = way1_idx;
+    let k1_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
+    let k1 = ctx.block().load(I64, &k1_ptr);
+    let s1_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "4")]);
+    let s1 = ctx.block().load(I64, &s1_ptr);
+    let hit1 = ctx.block().icmp_eq(I64, &k_bits, &k1);
+    ctx.block().cond_br(&hit1, &bounds_label, &way2_label);
+    ctx.current_block = way2_idx;
+    let k2_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "5")]);
+    let k2 = ctx.block().load(I64, &k2_ptr);
+    let s2_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "6")]);
+    let s2 = ctx.block().load(I64, &s2_ptr);
+    let hit2 = ctx.block().icmp_eq(I64, &k_bits, &k2);
+    ctx.block().cond_br(&hit2, &bounds_label, &slow_label);
+
+    ctx.current_block = bounds_idx;
+    let slot = ctx.block().phi(
+        I64,
+        &[(&s0, &ways_label), (&s1, &way1_label), (&s2, &way2_label)],
+    );
+    let field_count_addr = ctx.block().add(I64, &t_handle, "12");
+    let field_count_ptr = ctx.block().inttoptr(I64, &field_count_addr);
+    let field_count = ctx.block().load(I32, &field_count_ptr);
+    let field_count64 = ctx.block().zext(I32, &field_count, I64);
+    let below_floor = ctx.block().icmp_ult(I64, &field_count64, "4");
+    let inline_limit = ctx
+        .block()
+        .select(I1, &below_floor, I64, "4", &field_count64);
+    let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &inline_limit);
+    ctx.block()
+        .cond_br(&slot_in_bounds, &store_label, &slow_label);
+
+    ctx.current_block = store_idx;
+    let header_words =
+        (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
+    let slot_word = ctx.block().add(I64, &slot, &header_words);
+    let obj_ptr = ctx.block().inttoptr(I64, &t_handle);
+    let slot_ptr = ctx
+        .block()
+        .gep_inbounds(I64, &obj_ptr, &[(I64, &slot_word)]);
+    // GC_STORE_AUDIT(POINTER_FREE): the entry tag test proved the value is
+    // not pointer/string/bigint — non-reference bits need no barrier.
+    ctx.block().store(DOUBLE, v, &slot_ptr);
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = slow_idx;
+    let slow_result = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set_dyn_ic",
+        &[
+            (crate::types::PTR, &cache_ref),
+            (DOUBLE, t),
+            (DOUBLE, k),
+            (DOUBLE, v),
+            (I32, strict_i32),
+        ],
+    );
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let result = ctx
+        .block()
+        .phi(DOUBLE, &[(v, &store_label), (&slow_result, &slow_label)]);
+    Ok(result)
+}
+
 fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
     match key {
         Expr::String(property) => Some(property.clone()),
@@ -1044,181 +1225,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, key);
             downgrade_unknown_call_expr(ctx, value);
             downgrade_unknown_call_expr(ctx, receiver);
+            let strict_i32 = if *strict { "1" } else { "0" };
+            // #6812 (w12) inline path: evaluation order k → v → t. The
+            // target is a pure local read, so hoisting key/value evaluation
+            // above its REGISTER materialization is unobservable — and it
+            // makes the path GC-clean with NO compile-time value gate: a GC
+            // during key/value evaluation happens before the target pointer
+            // exists; a moved key merely misses by stale bits (identity
+            // compare — false negatives only); the store re-checks the
+            // VALUE's tag at runtime and routes reference-creating values
+            // (pointer/string/bigint) to the outlined path.
+            let dyn_inline = same_put_value_receiver_expr(target, receiver)
+                && matches!(target.as_ref(), Expr::LocalGet(_) | Expr::This);
+            if dyn_inline {
+                let k = lower_expr(ctx, key)?;
+                let v = lower_expr(ctx, value)?;
+                let t = lower_expr(ctx, target)?;
+                return lower_put_value_dyn_ic_inline(ctx, &t, &k, &v, strict_i32);
+            }
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
             let v = lower_expr(ctx, value)?;
-            let strict_i32 = if *strict { "1" } else { "0" };
-            // #6812 (w12): same-receiver dynamic-key stores route through the
-            // 3-way dynamic-key IC — per-site cache in the same `perry_ic_N`
-            // global family as the static write PIC, layout
-            // `[token, k0, s0, k1, s1, k2, s2, _]`. When the receiver is a
-            // plain local and the VALUE is compile-proven numeric, the hit
-            // path is emitted INLINE (guards copied from the static PIC;
-            // a numeric raw store needs no barrier or layout note — numeric
-            // bits never create references, and hardware NaNs sit below the
-            // 0x7FFA tag space). Every miss — and every site that fails the
-            // inline gate — takes the outlined helper, which is itself at
-            // worst the generic path.
+            // #6812 (w12): same-receiver dynamic-key stores that failed the
+            // inline gate (computed target expressions) still take the
+            // outlined 3-way IC helper.
             if same_put_value_receiver_expr(target, receiver) {
                 let site_id = ctx.ic_site_counter;
                 ctx.ic_site_counter += 1;
                 let cache_name = format!("perry_ic_{}", site_id);
                 ctx.ic_globals.push(cache_name.clone());
                 let cache_ref = format!("@{}", cache_name);
-                let inline_ok = matches!(target.as_ref(), Expr::LocalGet(_) | Expr::This)
-                    && is_numeric_expr(ctx, value);
-                if !inline_ok {
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_put_value_set_dyn_ic",
-                        &[
-                            (crate::types::PTR, &cache_ref),
-                            (DOUBLE, &t),
-                            (DOUBLE, &k),
-                            (DOUBLE, &v),
-                            (I32, strict_i32),
-                        ],
-                    ));
-                }
-                let k_bits = ctx.block().bitcast_double_to_i64(&k);
-                let t_bits = ctx.block().bitcast_double_to_i64(&t);
-                let t_handle = ctx.block().and(I64, &t_bits, POINTER_MASK_I64);
-                let t_tag = ctx.block().lshr(I64, &t_bits, "48");
-                let is_ptr = ctx.block().icmp_eq(I64, &t_tag, "32765");
-                let above = ctx.block().icmp_ugt(I64, &t_handle, "1048575");
-                let heap_candidate = ctx.block().and(I1, &is_ptr, &above);
-
-                let guard_idx = ctx.new_block("put.dynic.guard");
-                let ways_idx = ctx.new_block("put.dynic.ways");
-                let way1_idx = ctx.new_block("put.dynic.way1");
-                let way2_idx = ctx.new_block("put.dynic.way2");
-                let bounds_idx = ctx.new_block("put.dynic.bounds");
-                let store_idx = ctx.new_block("put.dynic.store");
-                let slow_idx = ctx.new_block("put.dynic.slow");
-                let merge_idx = ctx.new_block("put.dynic.merge");
-                let guard_label = ctx.block_label(guard_idx);
-                let ways_label = ctx.block_label(ways_idx);
-                let way1_label = ctx.block_label(way1_idx);
-                let way2_label = ctx.block_label(way2_idx);
-                let bounds_label = ctx.block_label(bounds_idx);
-                let store_label = ctx.block_label(store_idx);
-                let slow_label = ctx.block_label(slow_idx);
-                let merge_label = ctx.block_label(merge_idx);
-                ctx.block()
-                    .cond_br(&heap_candidate, &guard_label, &slow_label);
-
-                // Header + object guards: byte-for-byte the static write
-                // PIC's emitted checks (offsets -8/-7/-6 GcHeader, +0/+4/+8/
-                // +12/+16 ObjectHeader; BLOCKING 0x1907 incl. typed-intact).
-                ctx.current_block = guard_idx;
-                let gc_type_addr = ctx.block().sub(I64, &t_handle, "8");
-                let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
-                let gc_type = ctx.block().load(I8, &gc_type_ptr);
-                let gc_object = ctx.block().icmp_eq(I8, &gc_type, "2");
-                let gc_flags_addr = ctx.block().sub(I64, &t_handle, "7");
-                let gc_flags_ptr = ctx.block().inttoptr(I64, &gc_flags_addr);
-                let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
-                let forwarded = ctx.block().and(I8, &gc_flags, "128");
-                let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
-                let reserved_addr = ctx.block().sub(I64, &t_handle, "6");
-                let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
-                let reserved = ctx.block().load(I16, &reserved_ptr);
-                let blocked = ctx.block().and(I16, &reserved, "6407"); // 0x1907
-                let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
-                let object_type_ptr = ctx.block().inttoptr(I64, &t_handle);
-                let object_type = ctx.block().load(I32, &object_type_ptr);
-                let regular = ctx.block().icmp_eq(I32, &object_type, "1");
-                let class_addr = ctx.block().add(I64, &t_handle, "4");
-                let class_ptr = ctx.block().inttoptr(I64, &class_addr);
-                let class_id = ctx.block().load(I32, &class_ptr);
-                let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
-                let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
-                let keys_addr = ctx.block().add(I64, &t_handle, "16");
-                let keys_ptr = ctx.block().inttoptr(I64, &keys_addr);
-                let keys = ctx.block().load(I64, &keys_ptr);
-                let parent_class_addr = ctx.block().add(I64, &t_handle, "8");
-                let parent_class_ptr = ctx.block().inttoptr(I64, &parent_class_addr);
-                let parent_class_id = ctx.block().load(I32, &parent_class_ptr);
-                let shape_id_rel = ctx.block().add(I32, &parent_class_id, "-2147483648");
-                let has_shape_id = ctx.block().icmp_ult(I32, &shape_id_rel, "1073741824");
-                let shape_id64 = ctx.block().zext(I32, &parent_class_id, I64);
-                let shape_id_token = ctx.block().or(I64, &shape_id64, "4611686018427387904");
-                let shape_token =
-                    ctx.block()
-                        .select(I1, &has_shape_id, I64, &shape_id_token, &keys);
-                let cached_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
-                let cached_token = ctx.block().load(I64, &cached_token_ptr);
-                let token_match = ctx.block().icmp_eq(I64, &shape_token, &cached_token);
-                let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
-                let mut ok = ctx.block().and(I1, &gc_object, &not_forwarded);
-                ok = ctx.block().and(I1, &ok, &flags_clear);
-                ok = ctx.block().and(I1, &ok, &regular);
-                ok = ctx.block().and(I1, &ok, &class_nonzero);
-                ok = ctx.block().and(I1, &ok, &not_native_module);
-                ok = ctx.block().and(I1, &ok, &token_match);
-                ok = ctx.block().and(I1, &ok, &token_nonzero);
-                ctx.block().cond_br(&ok, &ways_label, &slow_label);
-
-                // 3-way key compare on the NaN-boxed key bits.
-                ctx.current_block = ways_idx;
-                let k0_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
-                let k0 = ctx.block().load(I64, &k0_ptr);
-                let s0_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
-                let s0 = ctx.block().load(I64, &s0_ptr);
-                let hit0 = ctx.block().icmp_eq(I64, &k_bits, &k0);
-                ctx.block().cond_br(&hit0, &bounds_label, &way1_label);
-                ctx.current_block = way1_idx;
-                let k1_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
-                let k1 = ctx.block().load(I64, &k1_ptr);
-                let s1_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "4")]);
-                let s1 = ctx.block().load(I64, &s1_ptr);
-                let hit1 = ctx.block().icmp_eq(I64, &k_bits, &k1);
-                ctx.block().cond_br(&hit1, &bounds_label, &way2_label);
-                ctx.current_block = way2_idx;
-                let k2_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "5")]);
-                let k2 = ctx.block().load(I64, &k2_ptr);
-                let s2_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "6")]);
-                let s2 = ctx.block().load(I64, &s2_ptr);
-                let hit2 = ctx.block().icmp_eq(I64, &k_bits, &k2);
-                ctx.block().cond_br(&hit2, &bounds_label, &slow_label);
-
-                // Bounds: slot < max(field_count, floor 4), slot phi'd by way.
-                ctx.current_block = bounds_idx;
-                let slot = ctx.block().phi(
-                    I64,
-                    &[(&s0, &ways_label), (&s1, &way1_label), (&s2, &way2_label)],
-                );
-                let field_count_addr = ctx.block().add(I64, &t_handle, "12");
-                let field_count_ptr = ctx.block().inttoptr(I64, &field_count_addr);
-                let field_count = ctx.block().load(I32, &field_count_ptr);
-                let field_count64 = ctx.block().zext(I32, &field_count, I64);
-                let below_floor = ctx.block().icmp_ult(I64, &field_count64, "4");
-                let inline_limit = ctx
-                    .block()
-                    .select(I1, &below_floor, I64, "4", &field_count64);
-                let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &inline_limit);
-                ctx.block()
-                    .cond_br(&slot_in_bounds, &store_label, &slow_label);
-
-                // Numeric raw store: no barrier, no layout note (numeric bits
-                // never create references; a stale pointer bit in the mask is
-                // a conservative visit, never a missed one).
-                ctx.current_block = store_idx;
-                // Field slots start at the header's end on every target
-                // (24-byte ILP32 and 32-byte LP64 are both 8-byte multiples).
-                let header_words =
-                    (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8)
-                        .to_string();
-                let slot_word = ctx.block().add(I64, &slot, &header_words);
-                let obj_ptr = ctx.block().inttoptr(I64, &t_handle);
-                let slot_ptr = ctx
-                    .block()
-                    .gep_inbounds(I64, &obj_ptr, &[(I64, &slot_word)]);
-                ctx.block().store(DOUBLE, &v, &slot_ptr);
-                ctx.block().br(&merge_label);
-
-                ctx.current_block = slow_idx;
-                let slow_result = ctx.block().call(
+                return Ok(ctx.block().call(
                     DOUBLE,
                     "js_put_value_set_dyn_ic",
                     &[
@@ -1228,14 +1265,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &v),
                         (I32, strict_i32),
                     ],
-                );
-                ctx.block().br(&merge_label);
-
-                ctx.current_block = merge_idx;
-                let result = ctx
-                    .block()
-                    .phi(DOUBLE, &[(&v, &store_label), (&slow_result, &slow_label)]);
-                return Ok(result);
+                ));
             }
             let r = lower_expr(ctx, receiver)?;
             Ok(ctx.block().call(
