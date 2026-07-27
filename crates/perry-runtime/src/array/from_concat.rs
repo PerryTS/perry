@@ -81,6 +81,19 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     if bits == TAG_NULL {
         throw_not_iterable("object null");
     }
+    // An inline SHORT_STRING_TAG (SSO) value's payload is the characters
+    // themselves, not an address, but it passes the `>= 0x7FF8` test below and
+    // the mask then yields a bogus pointer — `Array.from("ab" + "c")`
+    // segfaulted. Materialize to a heap StringHeader so every pointer
+    // extraction downstream is valid; the per-codepoint path in
+    // `js_array_clone` then behaves exactly as it does for a literal.
+    let jsval = crate::value::JSValue::from_bits(bits);
+    if jsval.is_short_string() {
+        let hdr = crate::string::js_string_materialize_to_heap(boxed);
+        if !hdr.is_null() {
+            return js_array_from_value(crate::value::js_nanbox_string(hdr as i64));
+        }
+    }
     // #6454: `Array.from(SomeClass)` where the class DECLARATION (an
     // INT32-tagged ClassRef) carries a — possibly inherited, #36/#321 —
     // `[Symbol.iterator]`: drive it. A class WITHOUT one falls through to the

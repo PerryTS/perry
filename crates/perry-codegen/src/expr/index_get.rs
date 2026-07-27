@@ -1596,17 +1596,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let s_box = lower_expr(ctx, object)?;
                 let idx_d = lower_expr(ctx, index)?;
                 let blk = ctx.block();
-                let s_handle = unbox_to_i64(blk, &s_box);
                 // #3987: route through the canonical-index runtime helper (it
                 // takes the raw NaN-boxed key, not an `fptosi`'d i32) so a valid
                 // array index returns its char and every non-canonical key
                 // (`NaN`, `1.5`, negatives, OOB, `"01"`, non-numeric strings)
                 // returns `undefined` — matching ECMAScript / Node — instead of
                 // truncating the index and returning `""` for OOB.
+                // Pass the receiver STILL BOXED. Unboxing here masked off the
+                // low 48 bits, which is only a pointer for a heap STRING_TAG
+                // value — an inline SHORT_STRING_TAG (SSO) value's payload is
+                // the characters themselves, so the mask produced a garbage
+                // pointer and `(a + b)[0]` segfaulted on any short
+                // concatenation. The boxed entry point decides by tag.
                 return Ok(blk.call(
                     DOUBLE,
-                    "js_string_index_get",
-                    &[(I64, &s_handle), (DOUBLE, &idx_d)],
+                    "js_string_index_get_boxed",
+                    &[(DOUBLE, &s_box), (DOUBLE, &idx_d)],
                 ));
             }
             // #6750 follow-up: a masked-window fact (dense range-loop or
