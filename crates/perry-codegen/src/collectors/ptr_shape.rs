@@ -277,6 +277,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             methods: &methods,
             visited: HashSet::new(),
             store_records: Vec::new(),
+            super_call_args: HashMap::new(),
         };
         if !analysis.ctor_chain_safe() {
             continue;
@@ -301,6 +302,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             }
         }
         let store_records = std::mem::take(&mut analysis.store_records);
+        let super_call_args = std::mem::take(&mut analysis.super_call_args);
         let members: HashSet<u32> = roots
             .iter()
             .filter(|(_, r)| *r == id)
@@ -313,6 +315,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             field_stores.get(id).map(Vec::as_slice).unwrap_or(&[]),
             new_args.get(id).copied().unwrap_or(&[]),
             called,
+            &super_call_args,
             not_bigint_locals,
             &const_local_inits,
         );
@@ -1037,6 +1040,10 @@ struct ThisFlowAnalysis<'a, 'b> {
     methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
     visited: HashSet<(String, String)>,
     store_records: Vec<ThisStoreRecord<'a>>,
+    /// `super(...)` argument lists observed in chain constructors, keyed by
+    /// the PARENT (callee) class name. Feeds the parent-ctor parameter
+    /// resolution of the numeric-field proof.
+    super_call_args: HashMap<String, Vec<&'a [Expr]>>,
 }
 
 impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
@@ -1271,10 +1278,23 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                     .all(|a| !expr_mentions_this(a) && self.expr_this_safe(a, ctx))
             }
             // `super(...)`: the parent constructor body was already vetted by
-            // `ctor_chain_safe` (whole chain). Args must not leak `this`.
-            Expr::SuperCall(args) => args
-                .iter()
-                .all(|a| !expr_mentions_this(a) && self.expr_this_safe(a, ctx)),
+            // `ctor_chain_safe` (whole chain). Args must not leak `this`; in
+            // constructor context, record them for parent-ctor parameter
+            // resolution in the numeric-field proof.
+            Expr::SuperCall(args) => {
+                if ctx.1 == "constructor" {
+                    if let Some(pos) = self.chain.iter().position(|c| c.name == ctx.0) {
+                        if let Some(parent) = self.chain.get(pos + 1) {
+                            self.super_call_args
+                                .entry(parent.name.clone())
+                                .or_default()
+                                .push(args.as_slice());
+                        }
+                    }
+                }
+                args.iter()
+                    .all(|a| !expr_mentions_this(a) && self.expr_this_safe(a, ctx))
+            }
             // `super.m(...)` resolves on the parent chain with the same `this`.
             Expr::SuperMethodCall { method, args, .. } => {
                 let Some((owner, func)) = self.methods.get(method).cloned() else {
@@ -1455,6 +1475,22 @@ fn expr_mentions_this(e: &Expr) -> bool {
 /// chain field is number-producing. Parameter-mediated stores resolve through
 /// the actual argument expressions at the provenance `new` (constructor) or
 /// at every recorded call site (methods).
+/// Parameter environment for [`expr_numeric_by_construction`].
+enum ParamEnv<'x> {
+    /// Function scope: no parameters; const-local chasing applies.
+    None,
+    /// Method scope: params resolve through recorded call-site argument
+    /// lists (each argument evaluated in function scope).
+    Sites {
+        param_ids: &'x [u32],
+        sites: Vec<&'x [Expr]>,
+    },
+    /// Constructor scope: params pre-resolved to a numeric verdict through
+    /// the provenance `new` / `super(...)` argument chain.
+    Resolved(&'x HashMap<u32, bool>),
+}
+
+#[allow(clippy::too_many_arguments)]
 fn prove_numeric_fields(
     chain: &[&Class],
     members: &HashSet<u32>,
@@ -1462,6 +1498,7 @@ fn prove_numeric_fields(
     local_stores: &[(String, StoreValue<'_>)],
     new_args: &[Expr],
     method_calls: Option<&HashMap<String, Vec<&[Expr]>>>,
+    super_call_args: &HashMap<String, Vec<&[Expr]>>,
     not_bigint_locals: &HashSet<u32>,
     const_local_inits: &HashMap<u32, Option<&Expr>>,
 ) -> HashSet<String> {
@@ -1477,13 +1514,71 @@ fn prove_numeric_fields(
         return numeric;
     }
     // Resolve the argument expressions that can flow into a given
-    // (context, param position): the provenance `new` args for the
-    // constructor chain, the union of recorded call-site args for methods.
-    // A store context we cannot resolve keeps the field out of the set.
-    let ctor_params: Option<Vec<u32>> = chain
-        .first()
-        .and_then(|c| c.constructor.as_ref())
-        .map(|ctor| ctor.params.iter().map(|p| p.id).collect());
+    // (context, param position): the provenance `new` args feed the root
+    // constructor; each parent constructor's params resolve through the
+    // recorded `super(...)` argument lists, evaluated under the CALLING
+    // constructor's (already-resolved) parameter environment. Derived-first
+    // chain order makes this a single top-down pass. The environment is
+    // computed against an EMPTY numeric-field set (strictly conservative —
+    // `super(this.x)` cannot occur, `this` is banned in super args).
+    let mut ctor_param_env: HashMap<String, HashMap<u32, bool>> = HashMap::new();
+    {
+        let empty_numeric: HashSet<String> = HashSet::new();
+        for (pos, class) in chain.iter().enumerate() {
+            let Some(ctor) = class.constructor.as_ref() else {
+                continue;
+            };
+            let mut env: HashMap<u32, bool> = HashMap::new();
+            if pos == 0 {
+                for (i, param) in ctor.params.iter().enumerate() {
+                    let ok = new_args
+                        .get(i)
+                        .map(|a| {
+                            expr_numeric_by_construction(
+                                a,
+                                &ParamEnv::None,
+                                members,
+                                &empty_numeric,
+                                not_bigint_locals,
+                                const_local_inits,
+                                0,
+                            )
+                        })
+                        .unwrap_or(false);
+                    env.insert(param.id, ok);
+                }
+            } else {
+                let caller_env = chain
+                    .get(pos - 1)
+                    .and_then(|caller| ctor_param_env.get(caller.name.as_str()));
+                let lists = super_call_args.get(class.name.as_str());
+                for (i, param) in ctor.params.iter().enumerate() {
+                    let ok = match (lists, caller_env) {
+                        (Some(lists), Some(caller_env)) if !lists.is_empty() => {
+                            lists.iter().all(|args| {
+                                args.get(i)
+                                    .map(|a| {
+                                        expr_numeric_by_construction(
+                                            a,
+                                            &ParamEnv::Resolved(caller_env),
+                                            members,
+                                            &empty_numeric,
+                                            not_bigint_locals,
+                                            const_local_inits,
+                                            0,
+                                        )
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        }
+                        _ => false,
+                    };
+                    env.insert(param.id, ok);
+                }
+            }
+            ctor_param_env.insert(class.name.clone(), env);
+        }
+    }
 
     loop {
         let before = numeric.len();
@@ -1499,20 +1594,16 @@ fn prove_numeric_fields(
                 // update preserves it.
                 return true;
             };
-            let param_args: Option<(&[u32], Vec<&[Expr]>)> = match context {
-                None => None,
+            let param_env: ParamEnv<'_> = match context {
+                None => ParamEnv::None,
                 Some((owner, name, param_ids)) => {
                     if name == "constructor" {
-                        // Only the most-derived ctor's params map to the
-                        // provenance `new` args; parent ctor params are fed
-                        // by `super(...)` args we do not track — treat their
-                        // param-mediated stores as unproven.
-                        let is_root = chain.first().map(|c| c.name == *owner).unwrap_or(false);
-                        if is_root && ctor_params.as_deref() == Some(param_ids.as_slice()) {
-                            Some((param_ids.as_slice(), vec![new_args]))
-                        } else {
-                            // Non-root ctor or mismatch: no param mapping.
-                            Some((param_ids.as_slice(), Vec::new()))
+                        match ctor_param_env.get(owner.as_str()) {
+                            Some(env) => ParamEnv::Resolved(env),
+                            None => ParamEnv::Sites {
+                                param_ids: param_ids.as_slice(),
+                                sites: Vec::new(),
+                            },
                         }
                     } else {
                         let sites: Vec<&[Expr]> = method_calls
@@ -1522,13 +1613,16 @@ fn prove_numeric_fields(
                         // A method reached transitively (via this.m()) has no
                         // recorded external call sites; param-mediated stores
                         // there are unproven (empty site list).
-                        Some((param_ids.as_slice(), sites))
+                        ParamEnv::Sites {
+                            param_ids: param_ids.as_slice(),
+                            sites,
+                        }
                     }
                 }
             };
             expr_numeric_by_construction(
                 value,
-                &param_args,
+                &param_env,
                 members,
                 numeric,
                 not_bigint_locals,
@@ -1551,7 +1645,7 @@ fn prove_numeric_fields(
                     StoreValue::Update => true,
                     StoreValue::Direct(v) => expr_numeric_by_construction(
                         v,
-                        &None,
+                        &ParamEnv::None,
                         members,
                         &numeric,
                         not_bigint_locals,
@@ -1576,7 +1670,7 @@ fn prove_numeric_fields(
 /// every input, per spec — never a string/BigInt/bool/undefined/pointer.
 fn expr_numeric_by_construction(
     e: &Expr,
-    param_args: &Option<(&[u32], Vec<&[Expr]>)>,
+    param_env: &ParamEnv<'_>,
     members: &HashSet<u32>,
     numeric_fields: &HashSet<String>,
     not_bigint_locals: &HashSet<u32>,
@@ -1590,7 +1684,7 @@ fn expr_numeric_by_construction(
     let rec = |x: &Expr| {
         expr_numeric_by_construction(
             x,
-            param_args,
+            param_env,
             members,
             numeric_fields,
             not_bigint_locals,
@@ -1650,13 +1744,13 @@ fn expr_numeric_by_construction(
         | Expr::DateNow
         | Expr::PerformanceNow => true,
         // A proven-numeric field of the SAME object (fixpoint edge): `this`
-        // inside the candidate's ctor/method contexts (param_args Some), or a
-        // tracked member local in function scope. A same-named field of a
-        // DIFFERENT object proves nothing.
+        // inside the candidate's ctor/method contexts (a non-None param env),
+        // or a tracked member local in function scope. A same-named field of
+        // a DIFFERENT object proves nothing.
         Expr::PropertyGet {
             object, property, ..
         } if match object.as_ref() {
-            Expr::This => param_args.is_some(),
+            Expr::This => !matches!(param_env, ParamEnv::None),
             Expr::LocalGet(id) => members.contains(id),
             _ => false,
         } =>
@@ -1673,37 +1767,44 @@ fn expr_numeric_by_construction(
         // argument at that position (missing argument = `undefined`, not
         // numeric). No recorded sites = unproven.
         Expr::LocalGet(id) => {
-            if let Some((param_ids, sites)) = param_args {
-                if let Some(pos) = param_ids.iter().position(|p| p == id) {
-                    return !sites.is_empty()
-                        && sites.iter().all(|args| {
-                            args.get(pos).map(|a| {
-                                expr_numeric_by_construction(
-                                    a,
-                                    &None,
-                                    members,
-                                    numeric_fields,
-                                    not_bigint_locals,
-                                    const_local_inits,
-                                    depth + 1,
-                                )
-                            }) == Some(true)
-                        });
+            match param_env {
+                ParamEnv::Sites { param_ids, sites } => {
+                    if let Some(pos) = param_ids.iter().position(|p| p == id) {
+                        return !sites.is_empty()
+                            && sites.iter().all(|args| {
+                                args.get(pos).map(|a| {
+                                    expr_numeric_by_construction(
+                                        a,
+                                        &ParamEnv::None,
+                                        members,
+                                        numeric_fields,
+                                        not_bigint_locals,
+                                        const_local_inits,
+                                        depth + 1,
+                                    )
+                                }) == Some(true)
+                            });
+                    }
                 }
-            }
-            // A single-Let const temp: chase its init (function scope, so no
-            // parameter mapping applies to it).
-            if param_args.is_none() {
-                if let Some(Some(init)) = const_local_inits.get(id) {
-                    return expr_numeric_by_construction(
-                        init,
-                        &None,
-                        members,
-                        numeric_fields,
-                        not_bigint_locals,
-                        const_local_inits,
-                        depth + 1,
-                    );
+                ParamEnv::Resolved(env) => {
+                    if let Some(&ok) = env.get(id) {
+                        return ok;
+                    }
+                }
+                ParamEnv::None => {
+                    // A single-Let const temp: chase its init (function
+                    // scope, so no parameter mapping applies to it).
+                    if let Some(Some(init)) = const_local_inits.get(id) {
+                        return expr_numeric_by_construction(
+                            init,
+                            &ParamEnv::None,
+                            members,
+                            numeric_fields,
+                            not_bigint_locals,
+                            const_local_inits,
+                            depth + 1,
+                        );
+                    }
                 }
             }
             false

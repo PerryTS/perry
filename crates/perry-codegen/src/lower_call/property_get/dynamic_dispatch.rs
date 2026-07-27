@@ -736,7 +736,11 @@ pub(crate) fn try_lower_instance_method_call(
                         .iter()
                         .find(|method| method.name.as_str() == property)
                         .and_then(|method| {
-                            crate::codegen::typed_f64_receiver_method_info(class, method)
+                            crate::codegen::typed_f64_receiver_method_info(
+                                class,
+                                method,
+                                ctx.classes,
+                            )
                         })
                 });
                 let typed_receiver_direct_name = if typed_receiver_info.is_some()
@@ -866,6 +870,69 @@ pub(crate) fn try_lower_instance_method_call(
                     _ => false,
                 };
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
+                    // Prefer the typed-receiver clone (bare gep+load field
+                    // access inside the body) when one exists: the receiver
+                    // is proven, so only the ARGUMENT value classes need
+                    // vetting — an inline plain-finite check per argument (no
+                    // calls, no header loads). Any non-plain-double argument
+                    // (NaN-box tag, INT32-boxed, NaN/Inf) falls to the
+                    // generic direct call — still guard-free.
+                    if let Some((typed_fn, typed_formal_count, _info)) = typed_receiver_direct {
+                        let arg_values: Vec<String> = arg_slices
+                            .iter()
+                            .skip(1)
+                            .take(typed_formal_count)
+                            .map(|(_, v)| (*v).to_string())
+                            .collect();
+                        let obj_handle = {
+                            let blk = ctx.block();
+                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                            blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64)
+                        };
+                        let mut all_plain: Option<String> = None;
+                        for v in &arg_values {
+                            let blk = ctx.block();
+                            let bits = blk.bitcast_double_to_i64(v);
+                            let ok = crate::expr::class_field_inline_guard::
+                                emit_plain_finite_number_check(blk, &bits);
+                            all_plain = Some(match all_plain {
+                                Some(prev) => ctx.block().and(crate::types::I1, &prev, &ok),
+                                None => ok,
+                            });
+                        }
+                        let typed_idx = ctx.new_block("ptr_shape_method.typed");
+                        let generic_idx = ctx.new_block("ptr_shape_method.generic");
+                        let merge_idx = ctx.new_block("ptr_shape_method.merge");
+                        let typed_label = ctx.block_label(typed_idx);
+                        let generic_label = ctx.block_label(generic_idx);
+                        let merge_label = ctx.block_label(merge_idx);
+                        match all_plain {
+                            Some(cond) => ctx.block().cond_br(&cond, &typed_label, &generic_label),
+                            None => ctx.block().br(&typed_label),
+                        }
+                        ctx.current_block = typed_idx;
+                        let mut typed_args: Vec<(crate::types::LlvmType, &str)> =
+                            vec![(I64, obj_handle.as_str())];
+                        for v in &arg_values {
+                            typed_args.push((DOUBLE, v.as_str()));
+                        }
+                        let v_typed = ctx.block().call(DOUBLE, typed_fn, &typed_args);
+                        let typed_end = ctx.block().label.clone();
+                        ctx.block().br(&merge_label);
+                        ctx.current_block = generic_idx;
+                        let v_generic = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                        let generic_end = ctx.block().label.clone();
+                        ctx.block().br(&merge_label);
+                        ctx.current_block = merge_idx;
+                        let merged = ctx.block().phi(
+                            DOUBLE,
+                            &[
+                                (v_typed.as_str(), &typed_end),
+                                (v_generic.as_str(), &generic_end),
+                            ],
+                        );
+                        return Ok(Some(merged));
+                    }
                     let direct = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
                     return Ok(Some(direct));
                 }
