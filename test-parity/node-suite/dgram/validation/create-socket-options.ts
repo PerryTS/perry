@@ -24,13 +24,17 @@ const invalidTypes: unknown[] = [
 
 console.log(
   "invalid types:",
-  invalidTypes.map((type) => errorOf(() => dgram.createSocket(type as never))).join(","),
+  invalidTypes.map((type) => errorOf(() => dgram.createSocket(type as never)))
+    .join(","),
 );
 
 const udp4 = dgram.createSocket({ type: "udp4" });
 const udp6 = dgram.createSocket({ type: "udp6" });
-console.log("valid option types:", typeof udp4.send, typeof udp6.send);
-await Promise.all([
-  new Promise<void>((resolve) => udp4.close(() => resolve())),
-  new Promise<void>((resolve) => udp6.close(() => resolve())),
-]);
+try {
+  console.log("valid option types:", typeof udp4.send, typeof udp6.send);
+} finally {
+  await Promise.all([
+    new Promise<void>((resolve) => udp4.close(resolve)),
+    new Promise<void>((resolve) => udp6.close(resolve)),
+  ]);
+}
