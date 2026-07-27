@@ -33,6 +33,7 @@ try {
         method: "POST",
         headers: { Expect: expectation },
       }, (res) => {
+        res.once("error", reject);
         res.resume();
         res.on("end", resolve);
       });
