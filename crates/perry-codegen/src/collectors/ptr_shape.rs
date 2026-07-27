@@ -1705,21 +1705,24 @@ fn expr_numeric_by_construction(
             BinaryOp::Add => rec(left) && rec(right),
             // `- * / %` produce BigInt only for BigInt⊗BigInt; a provably
             // non-BigInt operand forces the Number path.
+            // `- * / %` produce a BigInt only for BigInt⊗BigInt; mixing a
+            // BigInt with anything else THROWS (no value is stored). ONE
+            // provably-non-BigInt operand therefore forces the completed
+            // result onto the Number path.
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
                 (rec(left) && rec(right))
-                    || (expr_provably_not_bigint(left, not_bigint_locals)
-                        && expr_provably_not_bigint(right, not_bigint_locals)
-                        && !expr_maybe_non_numeric_poison(left)
-                        && !expr_maybe_non_numeric_poison(right))
+                    || expr_provably_not_bigint(left, not_bigint_locals)
+                    || expr_provably_not_bigint(right, not_bigint_locals)
             }
+            // Same either-side argument for the BigInt-capable bitwise ops.
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
             | BinaryOp::Shr => {
                 (rec(left) && rec(right))
-                    || (expr_provably_not_bigint(left, not_bigint_locals)
-                        && expr_provably_not_bigint(right, not_bigint_locals))
+                    || expr_provably_not_bigint(left, not_bigint_locals)
+                    || expr_provably_not_bigint(right, not_bigint_locals)
             }
             // `>>>` throws for BigInt operands; result is always a Number.
             BinaryOp::UShr => true,
@@ -1830,14 +1833,7 @@ fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool 
     }
 }
 
-/// Could evaluate to a value whose ToNumber is spec-invalid to fold (Symbol
-/// throws — but ToNumber(Symbol) throwing is *preserved* by the runtime
-/// arithmetic either way) or, more importantly, whose result would NOT be a
-/// number. For the non-BigInt `- * / %` path the spec coerces every
-/// non-BigInt operand with ToNumber, so the RESULT is always a number; the
-/// only residual concern is a Symbol operand, whose ToNumber throws — a
-/// behavior the guarded and bare paths share (the value never reaches the
-/// slot). Kept as an explicit hook; currently nothing extra to reject.
-fn expr_maybe_non_numeric_poison(_e: &Expr) -> bool {
-    false
-}
+// Note on Symbol operands in the either-side non-BigInt arithmetic argument:
+// ToNumber(Symbol) THROWS, so the store never completes — throw behavior is
+// identical on the guarded and bare paths, and no non-number value can reach
+// the slot through these operators.
