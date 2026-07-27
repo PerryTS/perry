@@ -12,6 +12,7 @@ use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
 mod if_stmt;
+mod let_buffer_views;
 mod let_stmt;
 mod loops;
 mod masked_window_region;

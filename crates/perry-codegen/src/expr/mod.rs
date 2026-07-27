@@ -638,6 +638,13 @@ pub(crate) struct FnCtx<'a> {
     /// cleared after lowering that statement. Built once per user function
     /// from HIR local-reference last-use information.
     pub shadow_slot_clears_after_stmt: std::collections::HashMap<usize, Vec<u32>>,
+    /// Slot indices that have had at least one `js_shadow_slot_bind` (or
+    /// value-set) emitted so far. Slots start zeroed and are only ever
+    /// written through the bind/set helpers, so a scheduled CLEAR of a
+    /// never-bound slot is a provable no-op (`js_shadow_slot_set(idx, 0)` on
+    /// a slot that already holds 0) — `emit_shadow_slot_clear` skips it.
+    /// Seeded at construction with the entry-bound parameter slots.
+    pub shadow_slots_bound: std::collections::HashSet<u32>,
 
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses

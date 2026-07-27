@@ -43,6 +43,22 @@ use crate::native_value::{
 };
 use crate::types::{DOUBLE, F32, I16, I32, I64, I8, PTR};
 
+/// `x & <mask>` with a compile-time non-negative i32 mask literal on either
+/// side: the result is a non-negative integer array index for ANY `x`.
+/// (Hosted here from `index_get.rs` for the file-size gate.)
+pub(crate) fn bitand_has_nonnegative_i32_mask(left: &Expr, right: &Expr) -> bool {
+    fn mask(expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Integer(i) => Some(*i),
+            Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
+            _ => None,
+        }
+    }
+    mask(left)
+        .or_else(|| mask(right))
+        .is_some_and(|mask| (0..=i32::MAX as i64).contains(&mask))
+}
+
 /// Small additive offsets keep the wrap analysis trivial: `local + c` with
 /// `0 <= c <= 2^20` can only wrap PAST `i32::MAX`, landing negative, which the
 /// unsigned bounds compare rejects — indistinguishable from the true

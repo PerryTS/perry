@@ -985,6 +985,9 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // FEAT_JSCVT ToInt32 (`fjcvtzs` on apple-arm64): flipping it changes
+    // every `toint32_wrap` emission site's IR, so it must key the cache.
+    h.field("env_jscvt", env_var("PERRY_JSCVT").as_deref().unwrap_or(""));
 
     h.finish()
 }

@@ -159,6 +159,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // afresh for every module — including the `false` case, to clear any prior
     // module's decision on this thread.
     set_full_outline_ic(decide_full_outline_ic(module_callable_count(hir)));
+    // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
+    // set-per-module discipline as the outline gate above.
+    helpers::set_jscvt_for_target(&triple);
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target

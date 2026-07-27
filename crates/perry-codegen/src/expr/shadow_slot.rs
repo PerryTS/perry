@@ -60,6 +60,12 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
         return;
     }
+    // Never-bound slot: it provably still holds its initial 0 (slots are only
+    // written through bind/set, and every value-set site binds first), so the
+    // clear would be a redundant `js_shadow_slot_set(idx, 0)` TLS hit.
+    if !ctx.shadow_slots_bound.contains(&slot_idx) {
+        return;
+    }
     // #6794 follow-up (b): the slot was already cleared to 0 for a currently
     // shadow-suppressed masked-window-region local, and suppression blocks every
     // subsequent write to it (`emit_shadow_slot_update_for_expr`), so it provably
@@ -103,6 +109,7 @@ pub(crate) fn enable_persistent_shadow_slot_for_array_alias(
     if !ctx.persistent_shadow_slots.insert(slot_idx) {
         return;
     }
+    ctx.shadow_slots_bound.insert(slot_idx);
     let slot_idx_string = slot_idx.to_string();
     ctx.func.entry_setup_call_void(
         "js_shadow_slot_bind",
@@ -120,6 +127,7 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
     let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
         return;
     };
+    ctx.shadow_slots_bound.insert(slot_idx);
     ctx.block().call_void(
         "js_shadow_slot_bind",
         &[(I32, &slot_idx.to_string()), (PTR, &local_slot)],

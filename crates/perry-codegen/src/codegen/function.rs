@@ -457,6 +457,7 @@ pub(super) fn compile_function(
     //    storage never MOVES, but an unrooted header could still be swept).
     //  - `Boxed`/`F64` → exactly today's binding (a raw f64 IS its box).
     let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
+    let mut bound_param_slots: HashSet<u32> = HashSet::new();
     let locals: HashMap<u32, String> = {
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
@@ -482,12 +483,12 @@ pub(super) fn compile_function(
                     let boxed = crate::expr::nanbox_pointer_inline(blk, &arg_name);
                     let slot = blk.alloca(DOUBLE);
                     blk.store(DOUBLE, &boxed, &slot);
-                    if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
-                        blk.call_void(
-                            "js_shadow_slot_bind",
-                            &[(I32, &slot_idx.to_string()), (PTR, &slot)],
-                        );
-                    }
+                    // No callee-side shadow binding: every route into this
+                    // entry is a Tier-A call whose argument is a proven
+                    // never-reassigned rooted binding (module-global root or
+                    // caller-frame slot) that stays live for the whole call,
+                    // and typed-array storage is non-movable — the callee
+                    // root would be redundant TLS traffic on the hot path.
                     map.insert(p.id, slot);
                     continue;
                 }
@@ -495,6 +496,7 @@ pub(super) fn compile_function(
             }
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                bound_param_slots.insert(slot_idx);
                 blk.call_void(
                     "js_shadow_slot_bind",
                     &[(I32, &slot_idx.to_string()), (PTR, &slot)],
@@ -553,7 +555,25 @@ pub(super) fn compile_function(
         .collect();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
-    let native_facts = crate::collectors::collect_native_region_fact_graph(
+    // Spec-entry TaPtr params carry pre-pass-proven constant element counts —
+    // feed them to the fact collectors (in-bounds proofs for the wrap-i32
+    // additive admission).
+    let spec_ta_lens: HashMap<u32, i64> = spec_entry
+        .map(|plan| {
+            f.params
+                .iter()
+                .zip(plan.reps.iter())
+                .filter_map(|(p, rep)| match rep {
+                    crate::collectors::SpecParamRep::TaPtr {
+                        const_len: Some(len),
+                        ..
+                    } => Some((p.id, *len)),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_lens(
         &f.body,
         &f.params,
         &flat_const_ids,
@@ -566,6 +586,7 @@ pub(super) fn compile_function(
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
+        &spec_ta_lens,
     );
 
     if let Some(plan) = spec_entry {
@@ -682,6 +703,7 @@ pub(super) fn compile_function(
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
+        shadow_slots_bound: bound_param_slots,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),

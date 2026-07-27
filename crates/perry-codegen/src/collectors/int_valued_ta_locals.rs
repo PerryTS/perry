@@ -37,10 +37,17 @@
 //! 1. **Every write** produces an i32-representable value OR is an int-kind
 //!    typed-array element read (`Int8/Uint8/Uint8Clamped/Int16/Uint16/Int32` —
 //!    NOT `Uint32`, NOT the float / bigint kinds, NOT a plain-array `[]`):
-//!    a bitwise op (`& | ^ << >> >>>`), `~`, `Math.imul`, an i32 literal, or a
-//!    `Uint8ArrayGet`/`BufferIndexGet`. NOT additive `+`/`-`/`*` (can overflow
-//!    i32 — this is why `n` in `_encipher` stays f64), NOT a copy/call/anything
-//!    else.
+//!    a bitwise op (`& | ^ << >> >>>`), `~`, `Math.imul`, an i32 literal,
+//!    `undefined` (the hoisted-`var` seed — `ToInt32(undefined) == 0`, the
+//!    slot's seed value), or a `Uint8ArrayGet`/`BufferIndexGet`. NOT `*`
+//!    (a single product can exceed 2^53 and round). Additive `+`/`-` is
+//!    admitted ONLY under the wrap-i32 extension (`additive_write_admissible`,
+//!    representation-selection Phase 2): a STRAIGHT-LINE (never in-loop)
+//!    Add/Sub tree over exact-i32 operands (in-bounds-PROVEN int-TA reads,
+//!    literals, bitwise results, other candidates), where the slot carries the
+//!    ToInt32 image of the true value — sound because rule (2) makes the image
+//!    the only thing ever observed, and bounded straight-line chains keep the
+//!    true f64 intermediates exactly representable.
 //! 2. **Every observation** is in an integer-coercing context — the direct
 //!    operand of a bitwise binary/unary op, or the value stored into an
 //!    int-kind typed-array / `Uint8Array` / `Buffer` element. NEVER a context
@@ -62,9 +69,10 @@
 //! beats an unsound 1.42×). It requires the local to be `let`-declared (params
 //! excluded — their incoming argument is an unmodeled write), rejects `++`/`--`
 //! targets, rejects any local referenced inside a closure body, and does NOT
-//! chase copy chains (`m = l`). Anything unproven is simply left as f64. No
-//! fixpoint is required: rule (1) is judged per write structurally (no reliance
-//! on other candidates) and rule (2) is a single context-aware walk.
+//! chase copy chains (`m = l`). Anything unproven is simply left as f64.
+//! Rule (1)'s strict arm is judged per write structurally; the wrap-i32
+//! additive arm references other candidates, so admission and the rule-(2)
+//! walk run to a (small, monotone-shrinking) fixpoint.
 //!
 //! Gated by `PERRY_INT_VALUED_LOCALS` (default on; `=0`/`off`/`false` disables
 //! for A/B bisection — keyed into the object cache in `object_cache.rs`).
@@ -135,6 +143,12 @@ fn is_bitwise_binop(op: BinaryOp) -> bool {
 fn write_is_i32_producing_safe(e: &Expr, types: &HashMap<u32, HirType>) -> bool {
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
+        // Hoisted-`var` seed (`var n, l = lr[off]` lowers as `Let{l,
+        // Undefined}` + `Let{l, lr[off]}`): `ToInt32(undefined) == 0`, which
+        // is exactly the value the i32 slot is seeded with, and rule (2)
+        // already guarantees every observation is ToInt32-coercing — so an
+        // `undefined` write is indistinguishable from the 0 it becomes.
+        Expr::Undefined => true,
         // Byte reads: `0` OOB, always integer.
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         // Int-kind typed-array element read (possibly OOB → `undefined`).
@@ -154,8 +168,10 @@ fn write_is_i32_producing_safe(e: &Expr, types: &HashMap<u32, HirType>) -> bool 
 /// One-pass structural facts gathered before eligibility is decided.
 #[derive(Default)]
 struct Facts<'a> {
-    /// Every write (Let init + `LocalSet` rhs) per local.
-    writes: HashMap<u32, Vec<&'a Expr>>,
+    /// Every write (Let init + `LocalSet` rhs) per local, with a flag for
+    /// "this write sits inside a loop" (additive writes must be straight-line
+    /// — see the wrap-i32 extension below).
+    writes: HashMap<u32, Vec<(&'a Expr, bool)>>,
     /// Locals introduced by a `Stmt::Let` (candidates must be `let`-declared —
     /// params carry an unmodeled incoming-argument write).
     let_declared: HashSet<u32>,
@@ -171,10 +187,66 @@ struct Facts<'a> {
     closure_refs: HashSet<u32>,
 }
 
+/// Wrap-i32 extension (representation-selection Phase 2): a write that is an
+/// `Add`/`Sub` tree over EXACT-i32 operands. `ToInt32(a + b) ==
+/// wrap32(ToInt32(a) + ToInt32(b))` whenever the true f64 intermediates stay
+/// exactly representable, so a local whose every observation is
+/// ToInt32-coercing may carry the WRAPPED image of an additive chain — the
+/// bcryptjs `n += S[...]` Feistel accumulator. Soundness needs three extra
+/// legs, all enforced by the caller:
+/// - operands must be undefined-free EXACT int32 values — an in-bounds-PROVEN
+///   int-TA read (static window < known constant length), an i32 literal, a
+///   bitwise/`~`/`Math.imul` result, a byte read, or another wrap-i32/strict
+///   candidate (whose slot holds the ToInt32 image by induction);
+/// - the additive write must be STRAIGHT-LINE (not inside any loop): a
+///   loop-carried additive chain grows the true float unboundedly until f64
+///   addition rounds (≥ 2^53) and the wrapped image diverges. Straight-line
+///   chains are bounded by the body's statement count (≪ 2^20 additions), so
+///   every true intermediate stays < 2^52 — exact;
+/// - candidate reads at additive-operand positions are blessed by the
+///   observation walk (`observe_additive_rhs`), everything else keeps the
+///   strict coercing rule (in particular an INDEX position is still
+///   disqualifying — a wrapped image used as an index could alias a
+///   different element than the true out-of-range value).
+fn additive_write_admissible(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    pool: &HashSet<u32>,
+) -> bool {
+    match e {
+        Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
+        Expr::LocalGet(id) => pool.contains(id),
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // In-bounds-proven int-kind typed-array read: never `undefined`.
+        Expr::IndexGet { object, index } => {
+            receiver_is_int_kind_ta(object, types)
+                && matches!(object.as_ref(), Expr::LocalGet(arr)
+                if matches!(
+                    (ta_lens.get(arr), super::integer_locals::static_index_window(index)),
+                    (Some(len), Some((lo, hi))) if lo >= 0 && hi < *len
+                ))
+        }
+        // Exact ToInt32/ToUint32 producers regardless of operand shape.
+        Expr::Binary { op, .. } if is_bitwise_binop(*op) => true,
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            ..
+        } => true,
+        Expr::MathImul(_, _) => true,
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            additive_write_admissible(left, types, ta_lens, pool)
+                && additive_write_admissible(right, types, ta_lens, pool)
+        }
+        _ => false,
+    }
+}
+
 pub fn collect_int_valued_ta_locals(
     stmts: &[Stmt],
     params: &[Param],
     binding_types: &HashMap<u32, HirType>,
+    extra_ta_lens: &HashMap<u32, i64>,
 ) -> HashSet<u32> {
     // Declared-type map (params + let bindings), used to classify typed-array
     // receivers. Params are included so `lr: Int32Array` resolves.
@@ -182,57 +254,119 @@ pub fn collect_int_valued_ta_locals(
     for p in params {
         types.entry(p.id).or_insert_with(|| p.ty.clone());
     }
+    // Constant typed-array lengths for the wrap-i32 in-bounds proof: in-body
+    // literal-length const views plus caller-supplied lengths (spec-ABI
+    // `TaPtr` params carry theirs from the call-site pre-pass).
+    let mut ta_lens = super::integer_locals::collect_const_int_ta_views(stmts);
+    for (id, len) in extra_ta_lens {
+        ta_lens.entry(*id).or_insert(*len);
+    }
 
     let mut facts = Facts::default();
-    collect_facts(stmts, &types, &mut facts);
+    collect_facts(stmts, &types, false, &mut facts);
 
     // Rule (1) admission. A candidate is a `let`-declared local with ≥1
-    // int-TA-read write, whose EVERY write is i32-producing-safe, that is not a
-    // `++`/`--` target and not referenced in a closure.
-    let mut candidates: HashSet<u32> = HashSet::new();
-    for (&id, ws) in &facts.writes {
-        if !facts.let_declared.contains(&id)
-            || !facts.seeded.contains(&id)
-            || facts.update_targets.contains(&id)
-            || facts.closure_refs.contains(&id)
-        {
-            continue;
-        }
-        if ws.iter().all(|w| write_is_i32_producing_safe(w, &types)) {
-            candidates.insert(id);
+    // int-TA-read write, whose EVERY write is i32-producing-safe (or, in the
+    // wrap-i32 extension, a straight-line additive tree over exact operands),
+    // that is not a `++`/`--` target and not referenced in a closure.
+    // Additive operands may reference OTHER candidates, so admission runs to a
+    // fixpoint from an optimistic pool.
+    let base_ok = |id: u32, facts: &Facts<'_>| {
+        facts.let_declared.contains(&id)
+            && facts.seeded.contains(&id)
+            && !facts.update_targets.contains(&id)
+            && !facts.closure_refs.contains(&id)
+    };
+    let mut pool: HashSet<u32> = facts
+        .writes
+        .keys()
+        .copied()
+        .filter(|id| base_ok(*id, &facts))
+        .collect();
+    loop {
+        let before = pool.len();
+        let snapshot = pool.clone();
+        pool.retain(|id| {
+            facts.writes[id].iter().all(|(w, in_loop)| {
+                write_is_i32_producing_safe(w, &types)
+                    || (!in_loop && additive_write_admissible(w, &types, &ta_lens, &snapshot))
+            })
+        });
+        if pool.len() == before {
+            break;
         }
     }
+    let mut candidates = pool;
     if candidates.is_empty() {
         return candidates;
     }
 
     // Rule (2) observation check: disqualify any candidate read in a
-    // non-`ToInt32`-coercing position.
-    let mut disqualified: HashSet<u32> = HashSet::new();
-    observe_stmts(stmts, &candidates, &types, &mut disqualified);
-
-    candidates.retain(|id| !disqualified.contains(id));
+    // non-`ToInt32`-coercing position (additive-operand positions inside a
+    // candidate's own admissible additive write are blessed). Disqualifying a
+    // candidate can invalidate another candidate's additive operand, so this
+    // also runs to a fixpoint.
+    loop {
+        let mut disqualified: HashSet<u32> = HashSet::new();
+        let additive_ctx = AdditiveCtx {
+            ta_lens: &ta_lens,
+            pool: &candidates,
+        };
+        observe_stmts(stmts, &candidates, &types, &additive_ctx, &mut disqualified);
+        if disqualified.is_empty() {
+            break;
+        }
+        candidates.retain(|id| !disqualified.contains(id));
+        // A shrunken pool can turn a previously-admissible additive write
+        // inadmissible — re-run rule (1) against the new pool.
+        let mut changed = true;
+        while changed {
+            let before = candidates.len();
+            let snapshot = candidates.clone();
+            candidates.retain(|id| {
+                facts.writes[id].iter().all(|(w, in_loop)| {
+                    write_is_i32_producing_safe(w, &types)
+                        || (!in_loop && additive_write_admissible(w, &types, &ta_lens, &snapshot))
+                })
+            });
+            changed = candidates.len() != before;
+        }
+        if candidates.is_empty() {
+            return candidates;
+        }
+    }
     candidates
+}
+
+/// Context for the additive-operand blessing in the observation walk.
+struct AdditiveCtx<'a> {
+    ta_lens: &'a HashMap<u32, i64>,
+    pool: &'a HashSet<u32>,
 }
 
 // ---------------------------------------------------------------------------
 // Fact collection (writes / seeds / update targets / closure refs).
 // ---------------------------------------------------------------------------
 
-fn collect_facts<'a>(stmts: &'a [Stmt], types: &HashMap<u32, HirType>, facts: &mut Facts<'a>) {
+fn collect_facts<'a>(
+    stmts: &'a [Stmt],
+    types: &HashMap<u32, HirType>,
+    in_loop: bool,
+    facts: &mut Facts<'a>,
+) {
     for s in stmts {
         match s {
             Stmt::Let { id, init, .. } => {
                 facts.let_declared.insert(*id);
                 if let Some(e) = init {
-                    record_write(*id, e, types, facts);
-                    collect_facts_expr(e, types, facts);
+                    record_write(*id, e, types, in_loop, facts);
+                    collect_facts_expr(e, types, in_loop, facts);
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) => collect_facts_expr(e, types, facts),
+            Stmt::Expr(e) | Stmt::Throw(e) => collect_facts_expr(e, types, in_loop, facts),
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
-                    collect_facts_expr(e, types, facts);
+                    collect_facts_expr(e, types, in_loop, facts);
                 }
             }
             Stmt::If {
@@ -240,19 +374,19 @@ fn collect_facts<'a>(stmts: &'a [Stmt], types: &HashMap<u32, HirType>, facts: &m
                 then_branch,
                 else_branch,
             } => {
-                collect_facts_expr(condition, types, facts);
-                collect_facts(then_branch, types, facts);
+                collect_facts_expr(condition, types, in_loop, facts);
+                collect_facts(then_branch, types, in_loop, facts);
                 if let Some(eb) = else_branch {
-                    collect_facts(eb, types, facts);
+                    collect_facts(eb, types, in_loop, facts);
                 }
             }
             Stmt::While { condition, body } => {
-                collect_facts_expr(condition, types, facts);
-                collect_facts(body, types, facts);
+                collect_facts_expr(condition, types, true, facts);
+                collect_facts(body, types, true, facts);
             }
             Stmt::DoWhile { body, condition } => {
-                collect_facts(body, types, facts);
-                collect_facts_expr(condition, types, facts);
+                collect_facts(body, types, true, facts);
+                collect_facts_expr(condition, types, true, facts);
             }
             Stmt::For {
                 init,
@@ -261,42 +395,42 @@ fn collect_facts<'a>(stmts: &'a [Stmt], types: &HashMap<u32, HirType>, facts: &m
                 body,
             } => {
                 if let Some(i) = init {
-                    collect_facts(std::slice::from_ref(i.as_ref()), types, facts);
+                    collect_facts(std::slice::from_ref(i.as_ref()), types, in_loop, facts);
                 }
                 if let Some(c) = condition {
-                    collect_facts_expr(c, types, facts);
+                    collect_facts_expr(c, types, true, facts);
                 }
                 if let Some(u) = update {
-                    collect_facts_expr(u, types, facts);
+                    collect_facts_expr(u, types, true, facts);
                 }
-                collect_facts(body, types, facts);
+                collect_facts(body, types, true, facts);
             }
             Stmt::Labeled { body, .. } => {
-                collect_facts(std::slice::from_ref(body.as_ref()), types, facts);
+                collect_facts(std::slice::from_ref(body.as_ref()), types, in_loop, facts);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                collect_facts(body, types, facts);
+                collect_facts(body, types, in_loop, facts);
                 if let Some(c) = catch {
-                    collect_facts(&c.body, types, facts);
+                    collect_facts(&c.body, types, in_loop, facts);
                 }
                 if let Some(f) = finally {
-                    collect_facts(f, types, facts);
+                    collect_facts(f, types, in_loop, facts);
                 }
             }
             Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                collect_facts_expr(discriminant, types, facts);
+                collect_facts_expr(discriminant, types, in_loop, facts);
                 for case in cases {
                     if let Some(t) = &case.test {
-                        collect_facts_expr(t, types, facts);
+                        collect_facts_expr(t, types, in_loop, facts);
                     }
-                    collect_facts(&case.body, types, facts);
+                    collect_facts(&case.body, types, in_loop, facts);
                 }
             }
             Stmt::Break
@@ -309,17 +443,28 @@ fn collect_facts<'a>(stmts: &'a [Stmt], types: &HashMap<u32, HirType>, facts: &m
     }
 }
 
-fn record_write<'a>(id: u32, rhs: &'a Expr, types: &HashMap<u32, HirType>, facts: &mut Facts<'a>) {
-    facts.writes.entry(id).or_default().push(rhs);
+fn record_write<'a>(
+    id: u32,
+    rhs: &'a Expr,
+    types: &HashMap<u32, HirType>,
+    in_loop: bool,
+    facts: &mut Facts<'a>,
+) {
+    facts.writes.entry(id).or_default().push((rhs, in_loop));
     if is_int_kind_ta_read(rhs, types) {
         facts.seeded.insert(id);
     }
 }
 
-fn collect_facts_expr<'a>(e: &'a Expr, types: &HashMap<u32, HirType>, facts: &mut Facts<'a>) {
+fn collect_facts_expr<'a>(
+    e: &'a Expr,
+    types: &HashMap<u32, HirType>,
+    in_loop: bool,
+    facts: &mut Facts<'a>,
+) {
     match e {
         Expr::LocalSet(id, rhs) => {
-            record_write(*id, rhs, types, facts);
+            record_write(*id, rhs, types, in_loop, facts);
         }
         Expr::Update { id, .. } => {
             facts.update_targets.insert(*id);
@@ -329,12 +474,14 @@ fn collect_facts_expr<'a>(e: &'a Expr, types: &HashMap<u32, HirType>, facts: &mu
             collect_closure_refs(e, &mut facts.closure_refs);
             // Still descend to record nested `Update` targets on ENCLOSING
             // locals (defensive; those ids are already in `closure_refs`).
-            perry_hir::walker::walk_expr_children(e, &mut |c| collect_facts_expr(c, types, facts));
+            perry_hir::walker::walk_expr_children(e, &mut |c| {
+                collect_facts_expr(c, types, in_loop, facts)
+            });
             return;
         }
         _ => {}
     }
-    perry_hir::walker::walk_expr_children(e, &mut |c| collect_facts_expr(c, types, facts));
+    perry_hir::walker::walk_expr_children(e, &mut |c| collect_facts_expr(c, types, in_loop, facts));
 }
 
 /// Collect every local id read or written anywhere inside `e` (used to exclude
@@ -467,19 +614,28 @@ fn observe_stmts(
     stmts: &[Stmt],
     cands: &HashSet<u32>,
     types: &HashMap<u32, HirType>,
+    additive: &AdditiveCtx<'_>,
     disq: &mut HashSet<u32>,
 ) {
     for s in stmts {
         match s {
-            Stmt::Let { init, .. } => {
+            Stmt::Let { id, init, .. } => {
                 if let Some(e) = init {
-                    observe(e, false, cands, types, disq);
+                    // Same additive blessing as the `LocalSet` arm — a
+                    // candidate's Let-init may be an admissible additive tree.
+                    if cands.contains(id)
+                        && additive_write_admissible(e, types, additive.ta_lens, additive.pool)
+                    {
+                        observe_additive_rhs(e, cands, types, additive, disq);
+                    } else {
+                        observe(e, false, cands, types, additive, disq);
+                    }
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) => observe(e, false, cands, types, disq),
+            Stmt::Expr(e) | Stmt::Throw(e) => observe(e, false, cands, types, additive, disq),
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
-                    observe(e, false, cands, types, disq);
+                    observe(e, false, cands, types, additive, disq);
                 }
             }
             Stmt::If {
@@ -487,19 +643,19 @@ fn observe_stmts(
                 then_branch,
                 else_branch,
             } => {
-                observe(condition, false, cands, types, disq);
-                observe_stmts(then_branch, cands, types, disq);
+                observe(condition, false, cands, types, additive, disq);
+                observe_stmts(then_branch, cands, types, additive, disq);
                 if let Some(eb) = else_branch {
-                    observe_stmts(eb, cands, types, disq);
+                    observe_stmts(eb, cands, types, additive, disq);
                 }
             }
             Stmt::While { condition, body } => {
-                observe(condition, false, cands, types, disq);
-                observe_stmts(body, cands, types, disq);
+                observe(condition, false, cands, types, additive, disq);
+                observe_stmts(body, cands, types, additive, disq);
             }
             Stmt::DoWhile { body, condition } => {
-                observe_stmts(body, cands, types, disq);
-                observe(condition, false, cands, types, disq);
+                observe_stmts(body, cands, types, additive, disq);
+                observe(condition, false, cands, types, additive, disq);
             }
             Stmt::For {
                 init,
@@ -508,42 +664,54 @@ fn observe_stmts(
                 body,
             } => {
                 if let Some(i) = init {
-                    observe_stmts(std::slice::from_ref(i.as_ref()), cands, types, disq);
+                    observe_stmts(
+                        std::slice::from_ref(i.as_ref()),
+                        cands,
+                        types,
+                        additive,
+                        disq,
+                    );
                 }
                 if let Some(c) = condition {
-                    observe(c, false, cands, types, disq);
+                    observe(c, false, cands, types, additive, disq);
                 }
                 if let Some(u) = update {
-                    observe(u, false, cands, types, disq);
+                    observe(u, false, cands, types, additive, disq);
                 }
-                observe_stmts(body, cands, types, disq);
+                observe_stmts(body, cands, types, additive, disq);
             }
             Stmt::Labeled { body, .. } => {
-                observe_stmts(std::slice::from_ref(body.as_ref()), cands, types, disq);
+                observe_stmts(
+                    std::slice::from_ref(body.as_ref()),
+                    cands,
+                    types,
+                    additive,
+                    disq,
+                );
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                observe_stmts(body, cands, types, disq);
+                observe_stmts(body, cands, types, additive, disq);
                 if let Some(c) = catch {
-                    observe_stmts(&c.body, cands, types, disq);
+                    observe_stmts(&c.body, cands, types, additive, disq);
                 }
                 if let Some(f) = finally {
-                    observe_stmts(f, cands, types, disq);
+                    observe_stmts(f, cands, types, additive, disq);
                 }
             }
             Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                observe(discriminant, false, cands, types, disq);
+                observe(discriminant, false, cands, types, additive, disq);
                 for case in cases {
                     if let Some(t) = &case.test {
-                        observe(t, false, cands, types, disq);
+                        observe(t, false, cands, types, additive, disq);
                     }
-                    observe_stmts(&case.body, cands, types, disq);
+                    observe_stmts(&case.body, cands, types, additive, disq);
                 }
             }
             _ => {}
@@ -556,6 +724,7 @@ fn observe(
     coercing: bool,
     cands: &HashSet<u32>,
     types: &HashMap<u32, HirType>,
+    additive: &AdditiveCtx<'_>,
     disq: &mut HashSet<u32>,
 ) {
     match e {
@@ -574,13 +743,20 @@ fn observe(
         // Bitwise binary: both operands are `ToInt32`-coerced.
         Expr::Binary { op, left, right } => {
             let c = is_bitwise_binop(*op);
-            observe(left, c, cands, types, disq);
-            observe(right, c, cands, types, disq);
+            observe(left, c, cands, types, additive, disq);
+            observe(right, c, cands, types, additive, disq);
         }
         // `~x` coerces its operand via `ToInt32`; `-x`/`+x`/`!x` do NOT make an
         // `undefined`-vs-integer distinction disappear.
         Expr::Unary { op, operand } => {
-            observe(operand, matches!(op, UnaryOp::BitNot), cands, types, disq);
+            observe(
+                operand,
+                matches!(op, UnaryOp::BitNot),
+                cands,
+                types,
+                additive,
+                disq,
+            );
         }
         // Store into a typed-array element: the value is coerced (`ToInt32` /
         // `ToUint8` / …) iff the receiver is an int-kind typed array. The index
@@ -593,25 +769,26 @@ fn observe(
             receiver,
             ..
         } => {
-            observe(target, false, cands, types, disq);
-            observe(key, false, cands, types, disq);
-            observe(receiver, false, cands, types, disq);
+            observe(target, false, cands, types, additive, disq);
+            observe(key, false, cands, types, additive, disq);
+            observe(receiver, false, cands, types, additive, disq);
             let store_coercing =
                 receiver_is_int_kind_ta(receiver, types) || receiver_is_int_kind_ta(target, types);
-            observe(value, store_coercing, cands, types, disq);
+            observe(value, store_coercing, cands, types, additive, disq);
         }
         Expr::IndexSet {
             object,
             index,
             value,
         } => {
-            observe(object, false, cands, types, disq);
-            observe(index, false, cands, types, disq);
+            observe(object, false, cands, types, additive, disq);
+            observe(index, false, cands, types, additive, disq);
             observe(
                 value,
                 receiver_is_int_kind_ta(object, types),
                 cands,
                 types,
+                additive,
                 disq,
             );
         }
@@ -622,24 +799,32 @@ fn observe(
             index,
             value,
         } => {
-            observe(array, false, cands, types, disq);
-            observe(index, false, cands, types, disq);
-            observe(value, true, cands, types, disq);
+            observe(array, false, cands, types, additive, disq);
+            observe(index, false, cands, types, additive, disq);
+            observe(value, true, cands, types, additive, disq);
         }
         Expr::BufferIndexSet {
             buffer,
             index,
             value,
         } => {
-            observe(buffer, false, cands, types, disq);
-            observe(index, false, cands, types, disq);
-            observe(value, true, cands, types, disq);
+            observe(buffer, false, cands, types, additive, disq);
+            observe(index, false, cands, types, additive, disq);
+            observe(value, true, cands, types, additive, disq);
         }
         // Assignment rhs: a bare `LocalGet(cand)` here is a copy (not modeled),
         // so it is non-coercing. Nested bitwise sub-expressions re-establish
-        // coercing-ness for their own operands.
-        Expr::LocalSet(_, value) => {
-            observe(value, false, cands, types, disq);
+        // coercing-ness for their own operands. EXCEPTION (wrap-i32): a
+        // candidate's own admissible additive write blesses candidate reads
+        // at its Add/Sub-operand positions.
+        Expr::LocalSet(target, value) => {
+            if cands.contains(target)
+                && additive_write_admissible(value, types, additive.ta_lens, additive.pool)
+            {
+                observe_additive_rhs(value, cands, types, additive, disq);
+            } else {
+                observe(value, false, cands, types, additive, disq);
+            }
         }
         // Closure-touched candidates are already excluded; do not descend.
         Expr::Closure { .. } => {}
@@ -647,9 +832,60 @@ fn observe(
         // so any candidate read there disqualifies it.
         _ => {
             perry_hir::walker::walk_expr_children(e, &mut |c| {
-                observe(c, false, cands, types, disq)
+                observe(c, false, cands, types, additive, disq)
             });
         }
+    }
+}
+
+/// Observation walk for an ADMISSIBLE additive write's RHS: candidate reads at
+/// Add/Sub-operand chain positions are blessed (the slot's ToInt32 image is
+/// exact there — see `additive_write_admissible`); every other nested position
+/// (typed-array INDEX expressions, unmodeled shapes) keeps the strict rule.
+fn observe_additive_rhs(
+    e: &Expr,
+    cands: &HashSet<u32>,
+    types: &HashMap<u32, HirType>,
+    additive: &AdditiveCtx<'_>,
+    disq: &mut HashSet<u32>,
+) {
+    match e {
+        // Blessed operand read of a candidate (or a plain non-candidate read
+        // — no constraint either way).
+        Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) => {}
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            observe_additive_rhs(left, cands, types, additive, disq);
+            observe_additive_rhs(right, cands, types, additive, disq);
+        }
+        // Bitwise/`~`/`imul` operands are ToInt32/ToUint32-coerced — the
+        // strict walk already treats those positions as coercing.
+        Expr::Binary { op, left, right } if is_bitwise_binop(*op) => {
+            observe(left, true, cands, types, additive, disq);
+            observe(right, true, cands, types, additive, disq);
+        }
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            operand,
+        } => {
+            observe(operand, true, cands, types, additive, disq);
+        }
+        Expr::MathImul(left, right) => {
+            observe(left, true, cands, types, additive, disq);
+            observe(right, true, cands, types, additive, disq);
+        }
+        // In-bounds-proven typed-array read operand: its INDEX is walked with
+        // the strict (non-coercing) rule — a wrapped image used as an index
+        // would be disqualifying, exactly as in ordinary code.
+        Expr::IndexGet { object, index } => {
+            observe(object, false, cands, types, additive, disq);
+            observe(index, false, cands, types, additive, disq);
+        }
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
+            observe(e, false, cands, types, additive, disq);
+        }
+        // Anything else in an "admissible" tree would be a grammar bug —
+        // fall back to the strict walk (disqualifying, never unsound).
+        _ => observe(e, false, cands, types, additive, disq),
     }
 }
 

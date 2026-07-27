@@ -328,6 +328,7 @@ pub(crate) fn collect_type_facts(
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
+    spec_ta_lens: &HashMap<u32, i64>,
 ) -> TypeFacts {
     let mut integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
@@ -344,8 +345,12 @@ pub(crate) fn collect_type_facts(
     // only pollute the fact for other consumers).
     let mut int_valued_ta_locals: HashSet<u32> = HashSet::new();
     if super::int_valued_ta_locals::enabled() {
-        let extra =
-            super::int_valued_ta_locals::collect_int_valued_ta_locals(stmts, params, binding_types);
+        let extra = super::int_valued_ta_locals::collect_int_valued_ta_locals(
+            stmts,
+            params,
+            binding_types,
+            spec_ta_lens,
+        );
         for id in extra {
             if !boxed_vars.contains(&id) && !module_globals.contains_key(&id) {
                 integer_locals.insert(id);
@@ -481,6 +486,41 @@ pub(crate) fn collect_native_region_fact_graph(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
 ) -> NativeRegionFactGraph {
+    collect_native_region_fact_graph_with_spec_lens(
+        stmts,
+        params,
+        flat_const_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+        boxed_vars,
+        module_globals,
+        binding_types,
+        classes,
+        compile_time_constants,
+        module_dispatch,
+        &HashMap::new(),
+    )
+}
+
+/// Variant carrying spec-ABI `TaPtr` parameter lengths (representation-
+/// selection Phase 2): the call-site pre-pass proved these params hold
+/// non-view typed arrays with these constant element counts, which unlocks
+/// the wrap-i32 additive admission's in-bounds operand proof.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_native_region_fact_graph_with_spec_lens(
+    stmts: &[Stmt],
+    params: &[perry_hir::Param],
+    flat_const_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    binding_types: &HashMap<u32, perry_hir::types::Type>,
+    classes: &HashMap<String, &perry_hir::Class>,
+    compile_time_constants: &HashMap<u32, f64>,
+    module_dispatch: &super::ModuleDispatchFacts,
+    spec_ta_lens: &HashMap<u32, i64>,
+) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
         params,
@@ -493,6 +533,7 @@ pub(crate) fn collect_native_region_fact_graph(
         classes,
         compile_time_constants,
         module_dispatch,
+        spec_ta_lens,
     )
 }
 
@@ -518,6 +559,7 @@ pub(crate) fn collect_hir_facts(
         // No class table here, so no scalar-method summary can apply; the
         // conservative default keeps it that way if one ever could.
         &super::ModuleDispatchFacts::default(),
+        &HashMap::new(),
     )
 }
 

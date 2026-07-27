@@ -74,18 +74,7 @@ pub(crate) fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index
     }
 }
 
-fn bitand_has_nonnegative_i32_mask(left: &Expr, right: &Expr) -> bool {
-    fn mask(expr: &Expr) -> Option<i64> {
-        match expr {
-            Expr::Integer(i) => Some(*i),
-            Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
-            _ => None,
-        }
-    }
-    mask(left)
-        .or_else(|| mask(right))
-        .is_some_and(|mask| (0..=i32::MAX as i64).contains(&mask))
-}
+use super::proven_view_access::bitand_has_nonnegative_i32_mask;
 
 /// #6011: decompose a packed-loop index expression into `(counter_local_id,
 /// constant_offset)`. Matches `i`, `i + c`, `c + i`, and `i - c` with a small
@@ -1411,13 +1400,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         MaterializationReason::RuntimeApi,
                     ));
                 }
-                // Phase 2: storage-proven view with a dynamic (bounds-unproven)
-                // exact-i32 index — inline checked load, no kind guard, no
-                // runtime call. Bit-exact with `js_typed_array_get`.
-                if let Some(value) =
-                    super::try_lower_proven_view_checked_f64_load(ctx, object, index)?
+                // Phase 2 checked tier: see expr/proven_view_access.rs.
+                if let Some(v) = super::try_lower_proven_view_checked_f64_load(ctx, object, index)?
                 {
-                    return Ok(value);
+                    return Ok(v);
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     let arr_box = lower_expr(ctx, object)?;

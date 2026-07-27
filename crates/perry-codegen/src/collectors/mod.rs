@@ -45,7 +45,10 @@ pub(crate) use closures::collect_closures_in_stmts;
 pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
 pub(crate) use escape_check::{check_escapes_in_stmts, find_new_candidates};
 pub(crate) use escape_news::MAX_SCALAR_ARRAY_LEN;
-pub(crate) use hir_facts::{collect_native_region_fact_graph, NativeRegionFactGraph};
+pub(crate) use hir_facts::{
+    collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_lens,
+    NativeRegionFactGraph,
+};
 pub(crate) use hot_callees::collect_hot_loop_callees;
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,
@@ -68,7 +71,7 @@ pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
 pub(crate) use spec_abi_sites::{
-    collect_spec_abi_facts, local_is_reassigned, SpecAbiModuleFacts, SpecParamRep, SpecTaBinding,
+    collect_spec_abi_facts, local_is_reassigned, SpecParamRep, SpecTaBinding,
 };
 pub(crate) use this_as_value::{
     class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,

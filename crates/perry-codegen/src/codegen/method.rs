@@ -473,6 +473,9 @@ pub(super) fn compile_method(
         integer_locals: native_facts.integer_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
+        // Conservative: treat every slot as possibly-bound (param binds are
+        // emitted before FnCtx exists here), so clears never get skipped.
+        shadow_slots_bound: shadow_slot_map.values().copied().collect(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
@@ -1493,6 +1496,9 @@ pub(super) fn compile_static_method(
         integer_locals: native_facts.integer_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
+        // Conservative: treat every slot as possibly-bound (param binds are
+        // emitted before FnCtx exists here), so clears never get skipped.
+        shadow_slots_bound: shadow_slot_map.values().copied().collect(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
