@@ -101,6 +101,17 @@ function churnAndCollect(): void {
   }
   if (sink !== 20000) throw new Error("churn miscounted");
   (globalThis as any).gc?.();
+  // Allocate AGAIN after the collection. Evacuation leaves the vacated nursery
+  // region intact-but-dead, so a stale pointer read immediately after a copy
+  // usually still finds the original bytes and silently returns the right
+  // answer. Re-filling the nursery here is what gives the vacated region a
+  // chance to be handed out and overwritten before the *second* operand
+  // coercion dereferences it.
+  for (let i = 0; i < 20000; i++) {
+    const tmp2 = { a: i, b: "fill" + i, c: [i, i + 1] };
+    sink += tmp2.c[0] >= 0 ? 1 : 0;
+  }
+  if (sink !== 40000) throw new Error("refill miscounted");
 }
 
 // Keeps operands reachable from a real GC root. This matters: an object that
