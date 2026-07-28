@@ -10,6 +10,7 @@ import {
   checkDependabotCooldown,
   checkExcludeAnnotations,
   checkNpmrc,
+  checkNpmrcExcludes,
   checkTazeConfig,
   checkToolchainSoak,
   checkWorkspaceYaml,
@@ -51,6 +52,30 @@ test('npmrc: window must match SOAK_DAYS and fix writes it', () => {
   assert.equal(checkNpmrc('# nothing\n', 'n').length, 1)
   assert.match(fixNpmrc('# nothing\n'), /min-release-age=7/)
   assert.match(fixNpmrc('min-release-age=3\n'), /min-release-age=7/)
+})
+
+test('npmrc excludes: version pins need dated annotations, globs do not', () => {
+  // The shape a fleet repo actually uses: trusted scopes and bare names
+  // are standing trust and need no annotation.
+  const trusted = [
+    'min-release-age=7',
+    'min-release-age-exclude[]=@socketsecurity/*',
+    'min-release-age-exclude[]=sfw',
+  ].join('\n')
+  assert.deepEqual(checkNpmrcExcludes(trusted, 'n'), [])
+
+  // A VERSION-PINNED exclude is a dated bypass — unannotated is a finding.
+  const unannotated = 'min-release-age-exclude[]=lodash@4.17.21\n'
+  assert.match(checkNpmrcExcludes(unannotated, 'n')[0]!.what, /lodash@4\.17\.21/)
+
+  // Correctly annotated passes; wrong arithmetic is a finding.
+  const pub = addDaysIso(todayIso(), -1)
+  const ok = `# published: ${pub} | removable: ${addDaysIso(pub, SOAK_DAYS)}\nmin-release-age-exclude[]=lodash@4.17.21\n`
+  assert.deepEqual(checkNpmrcExcludes(ok, 'n'), [])
+  const wrongMath = `# published: ${pub} | removable: ${addDaysIso(pub, 3)}\nmin-release-age-exclude[]=lodash@4.17.21\n`
+  assert.match(checkNpmrcExcludes(wrongMath, 'n')[0]!.what, /removable date/)
+  const badDates = `# published: 2026-13-45 | removable: 2026-13-52\nmin-release-age-exclude[]=lodash@4.17.21\n`
+  assert.match(checkNpmrcExcludes(badDates, 'n')[0]!.what, /annotation dates/)
 })
 
 test('workspace yaml: clean fixture passes', () => {

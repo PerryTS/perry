@@ -70,20 +70,79 @@ export function checkCargoConfig(body: string, file: string): Finding[] {
   return out
 }
 
-export function checkNpmrc(body: string, file: string): Finding[] {
-  const days = /^min-release-age=(\d+)\s*$/m.exec(body)?.[1]
-  if (Number(days) === SOAK_DAYS) {
-    return []
+/**
+ * npm has its OWN exclude surface — `min-release-age-exclude[]=<spec>`
+ * (npm >= 11.17) — parallel to pnpm's `minimumReleaseAgeExclude` block.
+ * The same rule applies: a bare name or `@scope/*` glob expresses standing
+ * trust, but a VERSION-PINNED entry is a dated bypass and needs the
+ * `# published: | removable:` annotation on the line above. Without this
+ * check, `min-release-age-exclude[]=lodash@1.2.3` was an unvalidated,
+ * never-expiring hole in exactly the gate the yaml side closes (found by
+ * auditing a fleet repo that uses this syntax heavily for trusted scopes).
+ */
+export function checkNpmrcExcludes(body: string, file: string): Finding[] {
+  const out: Finding[] = []
+  const lines = body.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^min-release-age-exclude\[\]\s*=\s*(\S+)\s*$/.exec(lines[i]!)
+    if (!m) {
+      continue
+    }
+    const spec = m[1]!
+    if (!VERSION_PIN_RE.test(spec)) {
+      // Bare name / scope glob: standing trust, no annotation needed.
+      continue
+    }
+    const ann = ANNOTATION_RE.exec(lines[i - 1]?.trim() ?? '')
+    if (!ann) {
+      out.push({
+        file,
+        what: `npm soak exclude '${spec}' annotation`,
+        saw: '(no annotation on the line above)',
+        wanted: `# published: YYYY-MM-DD | removable: <published + ${SOAK_DAYS}d>`,
+        fix: 'annotate the pin with its real registry publish date, or exclude the bare name for standing trust',
+      })
+      continue
+    }
+    const [, published, removable] = ann as unknown as [string, string, string]
+    if (!isValidIsoDate(published) || !isValidIsoDate(removable)) {
+      out.push({
+        file,
+        what: `npm soak exclude '${spec}' annotation dates`,
+        saw: `${published} | ${removable}`,
+        wanted: 'real YYYY-MM-DD calendar dates',
+        fix: 'correct the annotation to the real registry publish date',
+      })
+      continue
+    }
+    const expected = addDaysIso(published, SOAK_DAYS)
+    if (removable !== expected) {
+      out.push({
+        file,
+        what: `npm soak exclude '${spec}' removable date`,
+        saw: removable,
+        wanted: `${expected} (published ${published} + ${SOAK_DAYS} days)`,
+        fix: 'correct the removable date',
+      })
+    }
   }
-  return [
-    {
+  return out
+}
+
+export function checkNpmrc(body: string, file: string): Finding[] {
+  const out: Finding[] = []
+  const days = /^min-release-age=(\d+)\s*$/m.exec(body)?.[1]
+  if (Number(days) !== SOAK_DAYS) {
+    out.push({
       file,
       what: 'npm min-release-age window',
       saw: days ?? '(missing)',
       wanted: String(SOAK_DAYS),
       fix: `set min-release-age=${SOAK_DAYS} (or run --fix)`,
-    },
-  ]
+    })
+  }
+  out.push(...checkNpmrcExcludes(body, file))
+  return out
 }
 
 export function checkWorkspaceYaml(body: string, file: string): Finding[] {
