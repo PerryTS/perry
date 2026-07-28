@@ -18,6 +18,7 @@ use crate::OutputFormat;
 
 pub mod allowlist;
 pub mod detect;
+pub mod firewall;
 pub mod lifecycle;
 pub mod runner;
 pub mod scanner;
@@ -51,6 +52,14 @@ pub struct InstallArgs {
     /// hand. Lifecycle scripts still don't run.
     #[arg(long)]
     pub skip_scan: bool,
+
+    /// Don't route the installer through Socket Firewall (sfw) even when
+    /// it is available. Without this flag, sfw is auto-detected (perry's
+    /// dev-tools rack first, then PATH) and the install's network traffic
+    /// is scanned in-flight; when sfw is absent the install proceeds
+    /// unfirewalled with a one-line stderr note.
+    #[arg(long)]
+    pub no_firewall: bool,
 
     /// Bypass the scan for a single package (repeat to bypass multiple).
     #[arg(long = "allow-risky", value_name = "PKG")]
