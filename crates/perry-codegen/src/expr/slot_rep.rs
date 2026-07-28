@@ -143,9 +143,10 @@ fn repsel_debug_enabled() -> bool {
     *CACHED.get_or_init(|| std::env::var("PERRY_REPSEL_DEBUG").as_deref() == Ok("1"))
 }
 
-/// Compile-time visibility: one stderr line per local that went canonical-i32,
+/// Compile-time visibility: one stderr line per local that selected a
+/// canonical representation (i32/u32/Str),
 /// plus a process-wide running count. Only under `PERRY_REPSEL_DEBUG=1`.
-pub(crate) fn note_canonical_i32_local(ctx: &FnCtx<'_>, id: u32, name: &str, rep: SlotRep) {
+pub(crate) fn note_canonical_local(ctx: &FnCtx<'_>, id: u32, name: &str, rep: SlotRep) {
     if !repsel_debug_enabled() {
         return;
     }
@@ -340,7 +341,16 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
     scan_declared(stmts, &mut declared_str);
 
     // Ctx-free mirror of `is_definitely_string_expr` for the write / compare
-    // scans. Under-approximates: anything unrecognized is "not a string".
+    // scans. Method calls whose NAME also exists on Array/Object (`slice`,
+    // `concat`, `replace`, …) additionally require a syntactically-string
+    // RECEIVER — name-only matching would classify `arr.slice()` as a
+    // string write and skip the exclusion. Only the number-formatting /
+    // universal-ToString family (`toString`/`toFixed`/`toPrecision`/
+    // `toExponential`) stays name-only, mirroring
+    // `is_definitely_string_expr`. A misclassification here is a missed
+    // exclusion, not a correctness break (every specialized lowering
+    // re-checks the runtime tag and falls back) — but keeping the scan
+    // honest keeps ineligible locals off the canonical rep.
     fn syntactic_str(e: &Expr, declared: &HashSet<u32>) -> bool {
         match e {
             Expr::String(_) | Expr::WtfString(_) | Expr::StringCoerce(_) | Expr::TypeOf(_) => true,
@@ -355,17 +365,20 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                 else_expr,
                 ..
             } => syntactic_str(then_expr, declared) && syntactic_str(else_expr, declared),
-            Expr::Call { callee, .. } => matches!(
-                callee.as_ref(),
-                Expr::PropertyGet { property, .. } if matches!(
-                    property.as_str(),
-                    "toString" | "toLowerCase" | "toUpperCase" | "trim"
-                        | "trimStart" | "trimEnd" | "slice" | "substring"
-                        | "substr" | "charAt" | "repeat" | "replace"
-                        | "replaceAll" | "padStart" | "padEnd" | "concat"
-                        | "normalize" | "toFixed" | "toPrecision" | "toExponential"
-                )
-            ),
+            Expr::Call { callee, .. } => match callee.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => match property.as_str() {
+                    "toString" | "toFixed" | "toPrecision" | "toExponential" => true,
+                    "toLowerCase" | "toUpperCase" | "trim" | "trimStart" | "trimEnd" | "slice"
+                    | "substring" | "substr" | "charAt" | "repeat" | "replace" | "replaceAll"
+                    | "padStart" | "padEnd" | "concat" | "normalize" => {
+                        syntactic_str(object, declared)
+                    }
+                    _ => false,
+                },
+                _ => false,
+            },
             _ => false,
         }
     }

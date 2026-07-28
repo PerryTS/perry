@@ -17,6 +17,59 @@ use crate::types::{DOUBLE, I32, I64};
 
 use super::{lower_expr, unbox_str_handle, unbox_to_i64, FnCtx};
 
+/// Repsel Phase 3a shared dispatch for the canonical-Str compare arms:
+/// lower both operands' bits, branch on "both heap `STRING_TAG`", call
+/// `heap_fn(handle, handle)` on the hot arm and `boxed_fn(box, box)` on the
+/// mixed/SSO/lie arm, and phi the i32 result. The caller applies its own
+/// predicate tail (`!= 0` select for equality, signed compare for
+/// relational).
+fn canonical_str_cmp_dispatch(
+    ctx: &mut FnCtx<'_>,
+    l: &str,
+    r: &str,
+    heap_fn: &str,
+    boxed_fn: &str,
+    prefix: &str,
+) -> String {
+    let l_bits = ctx.block().bitcast_double_to_i64(l);
+    let r_bits = ctx.block().bitcast_double_to_i64(r);
+    let l_tag = ctx.block().lshr(I64, &l_bits, "48");
+    let r_tag = ctx.block().lshr(I64, &r_bits, "48");
+    let l_heap = ctx
+        .block()
+        .icmp_eq(I64, &l_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let r_heap = ctx
+        .block()
+        .icmp_eq(I64, &r_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let both_heap = ctx.block().and(crate::types::I1, &l_heap, &r_heap);
+
+    let heap_idx = ctx.new_block(&format!("{prefix}.heap"));
+    let boxed_idx = ctx.new_block(&format!("{prefix}.boxed"));
+    let merge_idx = ctx.new_block(&format!("{prefix}.merge"));
+    let heap_label = ctx.block_label(heap_idx);
+    let boxed_label = ctx.block_label(boxed_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&both_heap, &heap_label, &boxed_label);
+
+    ctx.current_block = heap_idx;
+    let l_handle = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
+    let r_handle = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
+    let res_heap = ctx
+        .block()
+        .call(I32, heap_fn, &[(I64, &l_handle), (I64, &r_handle)]);
+    let heap_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = boxed_idx;
+    let res_boxed = ctx.block().call(I32, boxed_fn, &[(DOUBLE, l), (DOUBLE, r)]);
+    let boxed_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(I32, &[(&res_heap, &heap_pred), (&res_boxed, &boxed_pred)])
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Compare { op, left, right } => {
@@ -315,44 +368,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
-                let l_bits = ctx.block().bitcast_double_to_i64(&l);
-                let r_bits = ctx.block().bitcast_double_to_i64(&r);
-                let l_tag = ctx.block().lshr(I64, &l_bits, "48");
-                let r_tag = ctx.block().lshr(I64, &r_bits, "48");
-                let l_heap = ctx.block().icmp_eq(I64, &l_tag, "32767"); // 0x7FFF
-                let r_heap = ctx.block().icmp_eq(I64, &r_tag, "32767");
-                let both_heap = ctx.block().and(crate::types::I1, &l_heap, &r_heap);
-
-                let heap_idx = ctx.new_block("streq.heap");
-                let boxed_idx = ctx.new_block("streq.boxed");
-                let merge_idx = ctx.new_block("streq.merge");
-                let heap_label = ctx.block_label(heap_idx);
-                let boxed_label = ctx.block_label(boxed_idx);
-                let merge_label = ctx.block_label(merge_idx);
-                ctx.block().cond_br(&both_heap, &heap_label, &boxed_label);
-
-                ctx.current_block = heap_idx;
-                let l_handle = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
-                let r_handle = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
-                let eq_heap = ctx.block().call(
-                    I32,
+                let i32_eq = canonical_str_cmp_dispatch(
+                    ctx,
+                    &l,
+                    &r,
                     "js_string_equals",
-                    &[(I64, &l_handle), (I64, &r_handle)],
+                    "js_jsvalue_equals",
+                    "streq",
                 );
-                let heap_pred = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-
-                ctx.current_block = boxed_idx;
-                let eq_boxed =
-                    ctx.block()
-                        .call(I32, "js_jsvalue_equals", &[(DOUBLE, &l), (DOUBLE, &r)]);
-                let boxed_pred = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-
-                ctx.current_block = merge_idx;
-                let i32_eq = ctx
-                    .block()
-                    .phi(I32, &[(&eq_heap, &heap_pred), (&eq_boxed, &boxed_pred)]);
                 let blk = ctx.block();
                 let bit = blk.icmp_ne(I32, &i32_eq, "0");
                 let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
@@ -424,46 +447,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
-                let l_bits = ctx.block().bitcast_double_to_i64(&l);
-                let r_bits = ctx.block().bitcast_double_to_i64(&r);
-                let l_tag = ctx.block().lshr(I64, &l_bits, "48");
-                let r_tag = ctx.block().lshr(I64, &r_bits, "48");
-                let l_heap = ctx.block().icmp_eq(I64, &l_tag, "32767"); // 0x7FFF
-                let r_heap = ctx.block().icmp_eq(I64, &r_tag, "32767");
-                let both_heap = ctx.block().and(crate::types::I1, &l_heap, &r_heap);
-
-                let heap_idx = ctx.new_block("strcmp.heap");
-                let boxed_idx = ctx.new_block("strcmp.boxed");
-                let merge_idx = ctx.new_block("strcmp.merge");
-                let heap_label = ctx.block_label(heap_idx);
-                let boxed_label = ctx.block_label(boxed_idx);
-                let merge_label = ctx.block_label(merge_idx);
-                ctx.block().cond_br(&both_heap, &heap_label, &boxed_label);
-
-                ctx.current_block = heap_idx;
-                let l_handle = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
-                let r_handle = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
-                let cmp_heap = ctx.block().call(
-                    I32,
+                let cmp_i32 = canonical_str_cmp_dispatch(
+                    ctx,
+                    &l,
+                    &r,
                     "js_string_compare",
-                    &[(I64, &l_handle), (I64, &r_handle)],
-                );
-                let heap_pred = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-
-                ctx.current_block = boxed_idx;
-                let cmp_boxed = ctx.block().call(
-                    I32,
                     "js_string_compare_value",
-                    &[(DOUBLE, &l), (DOUBLE, &r)],
+                    "strcmp",
                 );
-                let boxed_pred = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-
-                ctx.current_block = merge_idx;
-                let cmp_i32 = ctx
-                    .block()
-                    .phi(I32, &[(&cmp_heap, &heap_pred), (&cmp_boxed, &boxed_pred)]);
                 let blk = ctx.block();
                 let bit = match op {
                     CompareOp::Lt => blk.icmp_slt(I32, &cmp_i32, "0"),

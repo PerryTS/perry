@@ -507,10 +507,19 @@ fn string_compare_value_heap_and_sso_mixes() {
         -1
     );
     // number operand coerces via its decimal string form (legacy unified
-    // behavior this helper's arm replaces)
+    // behavior this helper's arm replaces) — both orders and both string
+    // representations, exercising the "allocating coercions complete before
+    // any heap-payload view is taken" phase split (the number path calls
+    // js_number_to_string, which allocates and may move the other operand's
+    // heap string under evacuation).
     assert_eq!(js_string_compare_value(42.0, heap("42")), 0);
+    assert_eq!(js_string_compare_value(heap("42"), 42.0), 0);
     assert_eq!(js_string_compare_value(42.0, heap("5")), -1);
-    // non-string, non-number operands rank as invalid
+    assert_eq!(js_string_compare_value(heap("5"), 42.0), 1);
+    assert_eq!(js_string_compare_value(42.0, sso("42")), 0);
+    assert_eq!(js_string_compare_value(sso("41"), 42.0), -1);
+    assert_eq!(js_string_compare_value(1.5, 2.5), -1); // both numbers coerce
+                                                       // non-string, non-number operands rank as invalid
     let undef = f64::from_bits(crate::value::JSValue::undefined().bits());
     assert_eq!(js_string_compare_value(undef, heap("x")), -1);
     assert_eq!(js_string_compare_value(heap("x"), undef), 1);

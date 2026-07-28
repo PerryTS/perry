@@ -136,7 +136,7 @@ pub(crate) use slot_rep::{
     canonical_i32_locals_enabled, canonical_local_i32_slot, canonical_str_locals_enabled,
     collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,
     load_canonical_local_boxed, local_is_canonical_str, local_rep_is_canonical_i32,
-    note_canonical_i32_local, store_canonical_local_from_double, SlotRep,
+    note_canonical_local, store_canonical_local_from_double, SlotRep,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
@@ -779,7 +779,7 @@ pub(crate) struct FnCtx<'a> {
     /// permits canonical-Str selection. Mirrors
     /// `repsel_context_allows_canonical_i32` (sync bodies only, no module
     /// init) but gated on `PERRY_CANONICAL_STR_LOCALS` instead, so the two
-    /// phases A/B independently.
+    /// phases can be A/B-tested independently.
     pub repsel_context_allows_canonical_str: bool,
 
     /// Phase 3a eligibility pre-pass result

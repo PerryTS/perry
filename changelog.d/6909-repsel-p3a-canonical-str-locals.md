@@ -9,9 +9,10 @@ consume to tag-dispatch inline instead of routing operands through
 `js_get_string_pointer_unified` (which heap-materializes SSO and
 number-coerces):
 
-- `s += rhs` self-append: both-heap → raw `js_string_append(h,h)` (keeps the
-  refcount==1 in-place path), both-string-SSO → `js_string_concat_box`, else
-  the exact legacy sequence (annotation lies degrade to today's behavior).
+- `s += rhs` self-append: both-heap → raw `js_string_append(lhs_h, rhs_h)`
+  (keeps the refcount==1 in-place path), SSO-dest with string rhs →
+  `js_string_concat_box`, else the exact legacy sequence (annotation lies
+  degrade to today's behavior).
 - `.length` on statically-string receivers: SSO inline length-byte extract /
   heap bare `load i32` of `utf16_len` / `js_value_length_f64` cold arm,
   replacing the ~18-op GC-type-byte tower.

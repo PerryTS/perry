@@ -52,6 +52,11 @@ pub const POINTER_MASK_I64: &str = "281474976710655";
 pub const INT32_TAG_I64: &str = "9222809086901354496";
 pub const STRING_TAG_I64: &str = "9223090561878065152";
 pub const BIGINT_TAG_I64: &str = "9221683186994511872";
+/// Top-16-bit comparands for `lshr 48`-style tag dispatch (repsel Phase 3a
+/// canonical-Str lowerings): `STRING_TAG >> 48` and `SHORT_STRING_TAG >> 48`.
+/// Asserted against the u64 tags in `tag_strings_match_u64_values`.
+pub const STRING_TAG_TOP16_I64: &str = "32767";
+pub const SHORT_STRING_TAG_TOP16_I64: &str = "32761";
 
 /// Format a `u64` as a signed LLVM i64 literal (LLVM IR integer literals are signed).
 pub fn i64_literal(v: u64) -> String {
@@ -107,6 +112,11 @@ mod tests {
         assert_eq!(i64_literal(STRING_TAG), STRING_TAG_I64);
         assert_eq!(i64_literal(BIGINT_TAG), BIGINT_TAG_I64);
         assert_eq!(i64_literal(STATIC_DISPATCH_TAG), "9221120237041090560");
+        assert_eq!(i64_literal(STRING_TAG >> 48), STRING_TAG_TOP16_I64);
+        assert_eq!(
+            i64_literal(SHORT_STRING_TAG >> 48),
+            SHORT_STRING_TAG_TOP16_I64
+        );
     }
 
     #[test]

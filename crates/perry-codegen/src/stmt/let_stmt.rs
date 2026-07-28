@@ -1231,7 +1231,7 @@ pub(crate) fn lower_let(
         ctx.i32_counter_slots.insert(id, i32_slot.clone());
         ctx.local_slot_reps.insert(id, rep);
         ctx.local_types.insert(id, refined_ty.clone());
-        crate::expr::note_canonical_i32_local(ctx, id, name, rep);
+        crate::expr::note_canonical_local(ctx, id, name, rep);
         if let Some(init_expr) = init {
             let i32_slots = ctx.i32_counter_slots.clone();
             let flat_ca = ctx.flat_const_arrays.clone();
@@ -1293,7 +1293,7 @@ pub(crate) fn lower_let(
         && !ctx.i32_counter_slots.contains_key(&id);
     if canonical_str {
         ctx.local_slot_reps.insert(id, crate::expr::SlotRep::Str);
-        crate::expr::note_canonical_i32_local(ctx, id, name, crate::expr::SlotRep::Str);
+        crate::expr::note_canonical_local(ctx, id, name, crate::expr::SlotRep::Str);
         // Fall through: storage, init lowering, aliasing demotes, and GC
         // binding are exactly the plain path's.
     }

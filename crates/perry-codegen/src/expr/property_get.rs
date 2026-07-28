@@ -292,7 +292,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let recv_box = lower_expr(ctx, object)?;
                     let bits = ctx.block().bitcast_double_to_i64(&recv_box);
                     let tag = ctx.block().lshr(I64, &bits, "48");
-                    let is_sso = ctx.block().icmp_eq(I64, &tag, "32761"); // 0x7FF9
+                    let is_sso =
+                        ctx.block()
+                            .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
                     let sso_idx = ctx.new_block("strlen.sso");
                     let chk_idx = ctx.new_block("strlen.chk");
                     let heap_idx = ctx.new_block("strlen.heap");
@@ -313,7 +315,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.block().br(&merge_label);
 
                     ctx.current_block = chk_idx;
-                    let is_heap = ctx.block().icmp_eq(I64, &tag, "32767"); // 0x7FFF
+                    let is_heap =
+                        ctx.block()
+                            .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
                     ctx.block().cond_br(&is_heap, &heap_label, &slow_label);
 
                     ctx.current_block = heap_idx;

@@ -101,37 +101,46 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
 /// Returns -1 / 0 / 1.
 #[no_mangle]
 pub extern "C" fn js_string_compare_value(a: f64, b: f64) -> i32 {
-    fn bytes_of<'s>(
+    // Phase 1 — ALLOCATING coercions only. `js_number_to_string` allocates,
+    // and an allocation can run a GC cycle that MOVES the other operand's
+    // heap string (evacuation); the decimal bytes are therefore copied into
+    // an owned `Vec` immediately, and no raw heap-string pointer may exist
+    // yet. Both operands' coercions complete before phase 2 takes any view.
+    fn number_bytes(v: f64) -> Option<Vec<u8>> {
+        if !crate::JSValue::from_bits(v.to_bits()).is_number() {
+            return None;
+        }
+        // Mirror the unified helper's number → decimal-string coercion.
+        let s = crate::string::js_number_to_string(v);
+        if !crate::string::is_valid_string_ptr(s) {
+            return None;
+        }
+        unsafe {
+            let len = (*s).byte_len;
+            let data = crate::string::string_data(s);
+            Some(std::slice::from_raw_parts(data, len as usize).to_vec())
+        }
+    }
+    let a_num = number_bytes(a);
+    let b_num = number_bytes(b);
+
+    // Phase 2 — NON-allocating views only (heap payload pointers, SSO
+    // scratch decode, or the owned number buffers). Nothing below allocates,
+    // so the raw `from_raw_parts` reads cannot observe a moved string.
+    fn view_of<'s>(
         v: f64,
         scratch: &'s mut [u8; crate::value::SHORT_STRING_MAX_LEN],
-        num_buf: &'s mut Option<Vec<u8>>,
+        num_buf: &'s Option<Vec<u8>>,
     ) -> Option<(*const u8, u32)> {
         if let Some(view) = crate::string::str_bytes_from_jsvalue(v, scratch) {
             return Some(view);
         }
-        let jsval = crate::JSValue::from_bits(v.to_bits());
-        if jsval.is_number() {
-            // Mirror the unified helper's number → decimal-string coercion.
-            let s = crate::string::js_number_to_string(v);
-            if crate::string::is_valid_string_ptr(s) {
-                unsafe {
-                    let len = (*s).byte_len;
-                    let data = crate::string::string_data(s);
-                    let owned = std::slice::from_raw_parts(data, len as usize).to_vec();
-                    *num_buf = Some(owned);
-                    let buf = num_buf.as_ref().unwrap();
-                    return Some((buf.as_ptr(), buf.len() as u32));
-                }
-            }
-        }
-        None
+        num_buf.as_ref().map(|buf| (buf.as_ptr(), buf.len() as u32))
     }
     let mut a_scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut b_scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let mut a_num = None;
-    let mut b_num = None;
-    let a_view = bytes_of(a, &mut a_scratch, &mut a_num);
-    let b_view = bytes_of(b, &mut b_scratch, &mut b_num);
+    let a_view = view_of(a, &mut a_scratch, &a_num);
+    let b_view = view_of(b, &mut b_scratch, &b_num);
     match (a_view, b_view) {
         (None, None) => 0,
         (None, Some(_)) => -1,

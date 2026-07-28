@@ -1355,7 +1355,9 @@ fn str_operand_handle_tag_dispatched(ctx: &mut FnCtx<'_>, object: &Expr, recv_bo
     }
     let bits = ctx.block().bitcast_double_to_i64(recv_box);
     let tag = ctx.block().lshr(I64, &bits, "48");
-    let is_heap = ctx.block().icmp_eq(I64, &tag, "32767"); // 0x7FFF
+    let is_heap = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
 
     let heap_idx = ctx.new_block("strrecv.heap");
     let cold_idx = ctx.new_block("strrecv.cold");
@@ -1405,9 +1407,10 @@ fn lower_canonical_str_self_append(
     rhs: &Expr,
     slot: &str,
 ) -> Result<String> {
-    use crate::nanbox::POINTER_MASK_I64;
-    const TAG_HEAP_STR: &str = "32767"; // 0x7FFF (STRING_TAG >> 48)
-    const TAG_SSO_STR: &str = "32761"; // 0x7FF9 (SHORT_STRING_TAG >> 48)
+    use crate::nanbox::{
+        POINTER_MASK_I64, SHORT_STRING_TAG_TOP16_I64 as TAG_SSO_STR,
+        STRING_TAG_TOP16_I64 as TAG_HEAP_STR,
+    };
 
     if !is_string_expr(ctx, rhs) {
         // Non-string rhs: mirror the legacy fallback's evaluation order
