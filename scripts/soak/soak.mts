@@ -180,6 +180,11 @@ export function staleExcludes(body: string): string[] {
         e.annotation &&
         isValidIsoDate(e.annotation.published) &&
         isValidIsoDate(e.annotation.removable) &&
+        // Wrong-arithmetic annotations are NOT stale — they are a hard
+        // checkExcludeAnnotations failure a human must correct. Treating
+        // a too-early removable as "cleared" would prune a bypass whose
+        // real window may still be open.
+        e.annotation.removable === addDaysIso(e.annotation.published, SOAK_DAYS) &&
         e.annotation.removable < today,
     )
     .map(e => e.name)
@@ -451,7 +456,15 @@ export function fixWorkspaceYaml(body: string): string {
   const lines = out.split('\n')
   const drop = new Set<number>()
   for (const entry of parseExcludeEntries(out)) {
-    if (entry.annotation && entry.annotation.removable < today) {
+    // Prune only WELL-FORMED cleared annotations (same rule as
+    // staleExcludes): a wrong-arithmetic removable already in the past
+    // must surface as a check failure, not vanish silently.
+    if (
+      entry.annotation &&
+      isValidIsoDate(entry.annotation.published) &&
+      entry.annotation.removable === addDaysIso(entry.annotation.published, SOAK_DAYS) &&
+      entry.annotation.removable < today
+    ) {
       drop.add(entry.line - 1)
       if (ANNOTATION_RE.test(lines[entry.line - 2]?.trim() ?? '')) {
         drop.add(entry.line - 2)

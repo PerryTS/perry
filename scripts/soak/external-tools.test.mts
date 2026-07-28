@@ -83,7 +83,16 @@ test('pruneExpiredSoakBypasses prunes only valid, expired annotations', () => {
       unannotated: { version: '1.0.0', integrity: GOOD_SRI },
     },
   }
+  // Wrong-arithmetic + already-past removable: hard failure territory,
+  // never pruned or stale.
+  ;(doc.tools as Record<string, unknown>)['wrongmath'] = {
+    version: '1.0.0',
+    integrity: GOOD_SRI,
+    soakBypass: { version: '1.0.0', published: todayIso(), removable: '2020-01-02' },
+  }
   assert.deepEqual(pruneExpiredSoakBypasses(doc), ['expired'])
+  assert.ok('soakBypass' in (doc.tools as Record<string, { soakBypass?: object }>)['wrongmath']!)
+  assert.deepEqual(staleBypasses(doc.tools), [])
   assert.ok(doc.tools.fresh.soakBypass)
   assert.ok(!('soakBypass' in doc.tools.expired))
   assert.ok(doc.tools.malformed.soakBypass)

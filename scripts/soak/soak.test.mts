@@ -103,6 +103,16 @@ test('excludes: entries with trailing comments still parse', () => {
   assert.equal(checkExcludeAnnotations(yaml, 'y').length, 0)
 })
 
+test('fix and stale-list skip a wrong-arithmetic expired annotation', () => {
+  // published + SOAK_DAYS != removable and removable is already past:
+  // this must stay a check failure for a human, not silently prune —
+  // the real window may still be open.
+  const yaml = `minimumReleaseAge: 10080\nminimumReleaseAgeExclude:\n  # published: ${todayIso()} | removable: 2020-01-02\n  - 'wrongmath@1.0.0'\n`
+  assert.deepEqual(staleExcludes(yaml), [])
+  assert.ok(fixWorkspaceYaml(yaml).includes('wrongmath@1.0.0'))
+  assert.ok(checkExcludeAnnotations(yaml, 'y').length >= 1)
+})
+
 test('fix prunes expired pins together with their annotations', () => {
   const yaml = `minimumReleaseAge: 10080\nminimumReleaseAgeExclude:\n  # published: 2020-01-01 | removable: 2020-01-08\n  - 'old@1.0.0'\n  # published: ${FRESH_PUB} | removable: ${FRESH_REM}\n  - 'fresh@1.0.0'\n`
   const fixed = fixWorkspaceYaml(yaml)

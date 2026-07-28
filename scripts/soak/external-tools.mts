@@ -149,6 +149,11 @@ export function staleBypasses(tools: Record<string, ToolPin>): string[] {
     if (!isValidIsoDate(bypass.published) || !isValidIsoDate(bypass.removable)) {
       continue
     }
+    // Wrong-arithmetic annotations are a hard checkPins failure, never
+    // stale/prunable — a too-early removable must not read as "cleared".
+    if (bypass.removable !== addDaysIso(bypass.published, SOAK_DAYS)) {
+      continue
+    }
     if (bypass.removable < today) {
       out.push(name)
     }
@@ -174,6 +179,11 @@ export function pruneExpiredSoakBypasses(doc: {
       continue
     }
     if (!isValidIsoDate(bypass.published) || !isValidIsoDate(bypass.removable)) {
+      continue
+    }
+    // Wrong-arithmetic annotations are a hard checkPins failure, never
+    // stale/prunable — a too-early removable must not read as "cleared".
+    if (bypass.removable !== addDaysIso(bypass.published, SOAK_DAYS)) {
       continue
     }
     if (bypass.removable < today) {
