@@ -440,15 +440,19 @@ export function fixCargoConfig(body: string): string {
 }
 
 export function fixNpmrc(body: string): string {
-  if (/^min-release-age=\d+\s*$/m.test(body)) {
-    return body.replace(/^min-release-age=\d+\s*$/m, `min-release-age=${SOAK_DAYS}`)
+  // [ \t] not \s: `\s` matches newlines, so `\s*$` under /m swallowed the
+  // blank lines that follow the key (silent reformatting of the file).
+  if (/^min-release-age=\d+[ \t]*$/m.test(body)) {
+    return body.replace(/^min-release-age=\d+[ \t]*$/m, `min-release-age=${SOAK_DAYS}`)
   }
   return `${body.trimEnd()}\nmin-release-age=${SOAK_DAYS}\n`
 }
 
 export function fixWorkspaceYaml(body: string): string {
+  // [ \t] not \s on the trailing match: `\s*$` under /m consumes the
+  // newlines after the value, deleting following blank lines.
   let out = body.replace(
-    /^(minimumReleaseAge:\s*)\d+\s*$/m,
+    /^(minimumReleaseAge:[ \t]*)\d+[ \t]*$/m,
     `$1${SOAK_MINUTES}`,
   )
   // Prune expired pins together with their annotation line.
