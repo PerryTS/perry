@@ -112,6 +112,19 @@ fn root_walk_rewrites(kind: ProbeSlot, bits: u64, valid_ptrs: &ValidPointerSet) 
 fn mutable_root_mark_and_rewrite_accept_the_same_word_forms() {
     let _guard = GcTestIsolationGuard::new();
     let _scan = ConservativeScanDisabledGuard::new();
+    // This test hand-builds its own collector state: a `ValidPointerSet`
+    // snapshot and a hand-set forwarding address, then drives the mark and
+    // rewrite walks directly. A collection firing between any two lines below
+    // would invalidate all of that — and the three arena allocations are each
+    // a GC point, with the targets held as raw addresses across them.
+    //
+    // Note that rooting the targets would NOT be sufficient here, which is why
+    // this is trigger suppression rather than a `RuntimeHandleScope`: keeping
+    // the objects alive does not keep the pre-built `valid_ptrs` snapshot
+    // accurate, nor protect the forwarding bit this test sets by hand. The
+    // hazard is the collection itself, so the fix is to make the region
+    // collection-free.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_marks();
     clear_mark_seeds();
 
@@ -119,8 +132,10 @@ fn mutable_root_mark_and_rewrite_accept_the_same_word_forms() {
     // while the rewrite probe needs a forwarded one.
     let mark_target = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let rewrite_target = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let valid_ptrs = build_valid_pointer_set();
     let moved = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    // Snapshot AFTER every allocation, so the set describes the heap the walks
+    // below actually run against.
+    let valid_ptrs = build_valid_pointer_set();
     unsafe {
         set_forwarding_address(
             header_from_user_ptr(rewrite_target as *const u8),
@@ -223,14 +238,24 @@ fn bare_address_in_shadow_slot_survives_a_real_collection() {
         0,
         "the sweep must actually have run for this test to mean anything"
     );
+    // Read the survivor back out of the ROOT rather than reusing the raw
+    // pointer captured before the cycle. `live` is `gc_malloc`-backed and the
+    // collector marks malloc objects in place (`CopyingPointerKind::Malloc`
+    // returns the address unchanged), so the two agree today — but depending
+    // on that makes the test quietly wrong the day malloc objects become
+    // relocatable, and reloading is the stronger assertion anyway: it also
+    // proves the slot itself was maintained across the collection.
+    let survivor = js_shadow_slot_get(0);
+    assert_ne!(survivor, 0, "the shadow slot must still hold the survivor");
+    let survivor = survivor as *mut u8;
     assert!(
-        malloc_user_ptr_tracked(live),
+        malloc_user_ptr_tracked(survivor),
         "an object reachable only through a bare address in a shadow-stack \
          slot must be marked, not swept (#6910)"
     );
     unsafe {
         assert_eq!(
-            (*(live as *mut crate::closure::ClosureHeader)).type_tag,
+            (*(survivor as *mut crate::closure::ClosureHeader)).type_tag,
             crate::closure::CLOSURE_MAGIC,
             "surviving object must still be intact"
         );
@@ -270,14 +295,29 @@ fn bare_address_in_global_root_survives_a_real_collection() {
         0,
         "the sweep must actually have run for this test to mean anything"
     );
+    // Same discipline as the shadow-slot case: the root slot, not the raw
+    // pointer captured before the cycle, is the authority on where the object
+    // is now.
+    assert_ne!(
+        global_slot, 0,
+        "the global root must still hold the survivor"
+    );
     assert!(
-        malloc_user_ptr_tracked(live),
+        malloc_user_ptr_tracked(global_slot as *mut u8),
         "a bare address in a registered global root must still be marked"
     );
     assert_eq!(
         global_slot, live as u64,
-        "an unmoved target must leave the bare global slot untouched"
+        "a malloc-backed target is never relocated, so the bare global slot \
+         must come back byte-identical"
     );
+    unsafe {
+        assert_eq!(
+            (*(global_slot as *mut crate::closure::ClosureHeader)).type_tag,
+            crate::closure::CLOSURE_MAGIC,
+            "surviving object must still be intact"
+        );
+    }
 }
 
 /// The decoder is the single place that knows the word forms; assert the two
