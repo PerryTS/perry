@@ -24,6 +24,34 @@
 //! a heap object whose fields are read back **after a further collection**, so
 //! a stale store shows up as a wrong field value rather than passing by luck.
 //!
+//! ## What this suite does and does not prove
+//!
+//! Be precise about this, because the suite passes on the PRE-fix runtime too.
+//! No in-language configuration currently reaches the state the bug needs — a
+//! *minor* cycle that evacuates while the raw runtime locals are unpinned:
+//!
+//! * The `gc()` hook these programs call runs a **full mark-sweep**. Evacuation
+//!   is minor-only, so nothing moves (`PERRY_GC_DIAG=1` prints no
+//!   `[gc-evac-policy]`/`[gc-copy-minor]` line for any cycle here), and a stale
+//!   pointer is trivially still valid.
+//! * `perry/gc`'s `minor()` does evacuate (diag shows `reason=force`,
+//!   `moved_objects` in the thousands) but engages
+//!   `ManualGcScanGuard::force_full_scan()` (#4977). The conservative stack scan
+//!   then **pins exactly the raw receiver/value locals this bug is about**, so
+//!   it is masked by construction.
+//! * `minor()` with `PERRY_CONSERVATIVE_STACK_SCAN=off` does evacuate them, but
+//!   that combination is independently unsound on this build — a plain method's
+//!   `this` (and even a `console.log` string literal) is lost across the
+//!   collection, with or without the fix — so any failure it produces is
+//!   uninterpretable.
+//!
+//! So these tests are a **behavioral guard**: they pin the observable semantics
+//! of every rooted path (right value stored, right value read back, right key)
+//! under the strongest GC stress the language surface can express today, and
+//! they will start failing the day a minor-evacuating configuration becomes
+//! reachable from compiled code. They are not evidence that the pre-fix runtime
+//! was reproducibly wrong; the audit in #6935 is.
+//!
 //! Coverage: `js_object_{set,get}_property_key`,
 //! `js_object_set_property_key_method`, `js_object_literal_set_computed`,
 //! `js_object_define_accessor`, `js_dyn_index_{get,set}`,
@@ -236,11 +264,20 @@ check("array-elements-intact", arr[2], 2);
 churnAndCollect();
 checkPayload("array-noncanonical-index", (arr as any)[4294967295], 5);
 
-// --- prototype / class-ref receivers take the class-ref write arm ---
-class C { m(): number { return 1; } }
-(C.prototype as any)[heavyKey("protoKey")] = payload(6);
+// --- class-ref receiver takes the INT32-tagged class-ref write arm, where
+// the stored value (not the receiver) is the operand at risk.
+class C { static s(): number { return 1; } }
+(C as any)[heavyKey("statKey")] = payload(6);
 churnAndCollect();
-checkPayload("class-proto-computed", (new C() as any).protoKey, 6);
+checkPayload("class-static-computed", (C as any).statKey, 6);
+
+// --- a write onto a prototype object, read back down the chain ---
+const proto: any = receiver();
+const child: any = Object.create(proto);
+keepalive.push(child);
+proto[heavyKey("inherited")] = payload(7);
+churnAndCollect();
+checkPayload("prototype-chain-computed", child.inherited, 7);
 
 console.log("failures:", failures);
 "#
@@ -324,8 +361,12 @@ check(
   probe.propertyIsEnumerable(heavyKey("here")),
   true
 );
-check("in-operator", (heavyKey("here") as any) in probe, true);
-// `in` with a NUMBER key coerces (and allocates) with the receiver raw.
+// NOTE: `objectKey in obj` is deliberately NOT asserted here — Perry's
+// `js_object_has_property` only runs ToPropertyKey for NUMBER keys, so an
+// object key never reaches the coercion at all. That is a pre-existing spec
+// gap (Node returns true), tracked separately; it is not a rooting bug.
+// `in` with a NUMBER key does coerce (and allocates) with the receiver raw,
+// which is the arm this suite covers.
 const numKeyed: any = receiver();
 numKeyed[307] = payload(26);
 churnAndCollect();
