@@ -263,20 +263,33 @@ export function checkDockerPrebake(
 }
 
 export async function download(url: string, expectedSri: string): Promise<Buffer> {
-  const headers: Record<string, string> = {}
   // Only GitHub gets the token (private release assets); sending it to any
   // other host (e.g. the npm registry for purl tools) would leak the
   // credential. Cross-origin redirects strip the header automatically.
-  if (process.env.GITHUB_TOKEN && new URL(url).hostname === 'github.com') {
-    headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`
-  }
+  const token =
+    process.env.GITHUB_TOKEN && new URL(url).hostname === 'github.com'
+      ? process.env.GITHUB_TOKEN
+      : ''
   // Fail fast on a stalled release/registry response instead of hanging
   // CI; 120s is generous for the largest pinned binary on a slow runner.
-  const res = await fetch(url, {
-    headers,
-    redirect: 'follow',
-    signal: AbortSignal.timeout(120_000),
-  })
+  const attempt = (withAuth: boolean) =>
+    fetch(url, {
+      headers: withAuth && token ? { authorization: `Bearer ${token}` } : {},
+      redirect: 'follow',
+      signal: AbortSignal.timeout(120_000),
+    })
+  let res = await attempt(Boolean(token))
+  // A token that a PUBLIC cross-repo asset endpoint rejects (or a
+  // transient GitHub 5xx — observed: a 500 on the first authed fetch of a
+  // public sfw asset) must not fail the install outright: retry once
+  // WITHOUT auth before giving up. Public assets need no credential.
+  if (!res.ok && token) {
+    res = await attempt(false)
+  }
+  if (!res.ok && res.status >= 500) {
+    await new Promise(r => setTimeout(r, 2_000))
+    res = await attempt(false)
+  }
   if (!res.ok) {
     throw new Error(`download failed ${res.status} ${url}`)
   }

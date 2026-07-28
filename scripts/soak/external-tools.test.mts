@@ -191,6 +191,25 @@ test('download sends the GitHub token to github.com only', async t => {
   assert.equal(seen[1]!.auth, undefined)
 })
 
+test('download falls back to unauthenticated when the authed fetch fails', async t => {
+  const payload = Buffer.from('public-bytes')
+  const seen: Array<string | undefined> = []
+  t.mock.method(globalThis, 'fetch', async (_url: string | URL, init?: RequestInit) => {
+    const auth = (init?.headers as Record<string, string> | undefined)?.authorization
+    seen.push(auth)
+    // Authed fetch is rejected (as a public cross-repo asset endpoint
+    // can); the unauthenticated retry succeeds.
+    return auth ? new Response('nope', { status: 500 }) : new Response(payload)
+  })
+  await withEnv('GITHUB_TOKEN', 'ghs_test_token', async () => {
+    const got = await download('https://github.com/o/r/releases/download/v1/a', sriOf(payload))
+    assert.deepEqual(got, payload)
+  })
+  assert.equal(seen.length, 2)
+  assert.ok(seen[0])
+  assert.equal(seen[1], undefined)
+})
+
 test('download rejects http errors and integrity mismatches', async t => {
   const payload = Buffer.from('served-bytes')
   let status = 503
