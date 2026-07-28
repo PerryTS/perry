@@ -774,10 +774,17 @@ pub(super) fn emit_guarded_direct_method_call(
             // needs no such guard because it never claims `JsNumber` — its
             // bare loads carry generic `JsValue` semantics (see
             // `collectors/proven_this.rs`).
-            let pshape_target = ctx
-                .pshape_methods
-                .contains_key(&(receiver_class_name.to_string(), property.to_string()))
-                .then(|| crate::collectors::pshape_method_name(direct_fn));
+            // The `perry_static_` exclusion is carried forward from the
+            // guard-free site (the #1787 static-receiver bug): those targets
+            // need `js_class_static_method_call`, not a plain `call double`,
+            // and no proven-`this` clone is ever emitted for them. Belt and
+            // braces — a static's registry key is distinct from an instance
+            // method's, so the two maps cannot currently disagree.
+            let pshape_target = (!direct_fn.starts_with("perry_static_")
+                && ctx
+                    .pshape_methods
+                    .contains_key(&(receiver_class_name.to_string(), property.to_string())))
+            .then(|| crate::collectors::pshape_method_name(direct_fn));
             let target = pshape_target.as_deref().unwrap_or(direct_fn);
             ctx.block().call(DOUBLE, target, direct_arg_slices)
         }
