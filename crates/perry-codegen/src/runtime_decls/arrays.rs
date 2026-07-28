@@ -73,6 +73,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_is_numeric_f64_layout", I32, &[I64]);
     module.declare_function("js_array_clear_numeric_layout", VOID, &[I64]);
     module.declare_function("js_array_numeric_value_to_raw_f64", DOUBLE, &[DOUBLE]);
+    // Repsel 4a.2 (#6904): cold-arm self-heal — follows the growth/GC
+    // forwarding chain of a POINTER-tagged array head and returns the
+    // re-boxed live head (identity for everything else).
+    module.declare_function("js_array_refresh_local_head", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_note_numeric_write", VOID, &[I64, I64]);
     module.declare_function("js_array_length", I32, &[I64]);
     // Array.isArray runtime dispatch for values with indeterminate

@@ -1168,6 +1168,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             }
 
                             ctx.current_block = fast_idx;
+                            let value_is_canonical_raw_f64 =
+                                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
                             {
                                 let blk = ctx.block();
                                 let arr_bits = blk.bitcast_double_to_i64(&arr_box);
@@ -1183,12 +1185,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let with_header = blk.add(I64, &byte_offset, "8");
                                 let element_addr = blk.add(I64, &arr_handle, &with_header);
                                 let element_ptr = blk.inttoptr(I64, &element_addr);
-                                let numeric_value =
-                                    canonicalize_raw_f64_numeric_store_value(blk, &val_double);
                                 // GC_STORE_AUDIT(POINTER_FREE): guarded raw-f64
-                                // numeric store — the canonicalized value is a
+                                // numeric store — the (canonical) value is a
                                 // plain f64, never a GC pointer, so no barrier.
-                                blk.store(DOUBLE, &numeric_value, &element_ptr);
+                                if value_is_canonical_raw_f64 {
+                                    // Repsel 4a.0: canonical by construction —
+                                    // skip js_array_numeric_value_to_raw_f64.
+                                    blk.store(DOUBLE, &val_double, &element_ptr);
+                                } else {
+                                    let numeric_value =
+                                        canonicalize_raw_f64_numeric_store_value(blk, &val_double);
+                                    blk.store(DOUBLE, &numeric_value, &element_ptr);
+                                }
                                 blk.br(&merge_label);
                             }
                             let stored = LoweredValue {
@@ -1291,6 +1299,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // and the implicit length update vanishing.
                 if let Some(id) = local_id {
                     if ctx.locals.contains_key(&id) {
+                        let value_is_canonical_raw_f64 =
+                            crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
                         lower_index_set_fast(
                             ctx,
                             &arr_box,
@@ -1301,6 +1311,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             write_barrier_needed,
                             value_is_numeric,
                             require_numeric_layout,
+                            value_is_canonical_raw_f64,
                             &feedback_site_id,
                         )?;
                     } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
