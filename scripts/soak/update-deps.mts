@@ -67,7 +67,41 @@ function updateCargo(dryRun: boolean): number {
     console.error('[update-deps] rustup cargo shim not found — refusing a cargo that cannot follow the repo toolchain')
     return 1
   }
-  return run(RUSTUP_CARGO, dryRun ? ['update', '--dry-run'] : ['update'], REPO_ROOT)
+  const args = dryRun ? ['update', '--dry-run'] : ['update']
+  // Report honestly when the cargo-side window did not apply. perry rides
+  // stable, where `[unstable] min-publish-age` is a warning-only unused
+  // key — so this path is expected to say "no soak applied" today, and the
+  // automated window rides dependabot's cooldown instead. It stops being a
+  // silent no-op the day the repo moves to a nightly that implements it.
+  console.log(`[update-deps] ${RUSTUP_CARGO} ${args.join(' ')} (in .)`)
+  const res = spawnSync(RUSTUP_CARGO, args, {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    stdio: ['inherit', 'inherit', 'pipe'],
+  })
+  const stderr = res.stderr ?? ''
+  process.stderr.write(stderr)
+  if (res.error) {
+    console.error(`[update-deps] ${RUSTUP_CARGO}: ${res.error.message}`)
+    return 1
+  }
+  if (isMinPublishAgeUnsupported(stderr)) {
+    console.warn(
+      '[update-deps] note: cargo ignored [unstable] min-publish-age (stable toolchain),\n' +
+        '  so crate versions were NOT soak-gated here — dependabot cooldown is the\n' +
+        '  enforcing surface for cargo deps in this repo.',
+    )
+  }
+  return res.status ?? 1
+}
+
+/**
+ * cargo emits `unused config key ...` (a warning, exit 0) for an
+ * `[unstable]` key it does not implement, so the ONLY signal that the soak
+ * silently did not apply is this line on stderr. Exported for the tests.
+ */
+export function isMinPublishAgeUnsupported(stderr: string): boolean {
+  return /unused config key `unstable\.min-publish-age`/.test(stderr)
 }
 
 // No flag = both; naming both explicitly also means both — a naive
