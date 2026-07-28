@@ -15,6 +15,7 @@ import {
   extractArchive,
   installTool,
   main,
+  pruneExpiredSoakBypasses,
 } from './external-tools.mts'
 import { DOCKER_PREBAKE, EXTERNAL_TOOLS_JSON, REPO_ROOT, SURFACES } from './paths.mts'
 
@@ -51,6 +52,37 @@ test('checkPins validates soakBypass dates, arithmetic, and expiry', () => {
   const impossible = structuredClone(good)
   impossible.a.soakBypass = { version: '1.0.0', published: '2026-13-45', removable: '2026-13-52' }
   assert.match(checkPins(impossible)[0]!, /calendar/)
+})
+
+test('pruneExpiredSoakBypasses prunes only valid, expired annotations', () => {
+  const pub = addDaysIso(todayIso(), -1)
+  const doc = {
+    tools: {
+      fresh: {
+        version: '1.0.0',
+        integrity: GOOD_SRI,
+        soakBypass: { version: '1.0.0', published: pub, removable: addDaysIso(pub, SOAK_DAYS) },
+      },
+      expired: {
+        version: '1.0.0',
+        integrity: GOOD_SRI,
+        soakBypass: { version: '1.0.0', published: '2020-01-01', removable: '2020-01-08' },
+      },
+      // Malformed dates stay findings for a human — never silently pruned.
+      malformed: {
+        version: '1.0.0',
+        integrity: GOOD_SRI,
+        soakBypass: { version: '1.0.0', published: '2026-13-45', removable: '2026-13-52' },
+      },
+      unannotated: { version: '1.0.0', integrity: GOOD_SRI },
+    },
+  }
+  assert.deepEqual(pruneExpiredSoakBypasses(doc), ['expired'])
+  assert.ok(doc.tools.fresh.soakBypass)
+  assert.ok(!('soakBypass' in doc.tools.expired))
+  assert.ok(doc.tools.malformed.soakBypass)
+  // Idempotent: a second pass finds nothing left to prune.
+  assert.deepEqual(pruneExpiredSoakBypasses(doc), [])
 })
 
 test('the repo Dockerfile prebake (when present) matches the tracked pins', t => {

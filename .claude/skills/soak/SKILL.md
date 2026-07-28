@@ -27,10 +27,15 @@ against it:
   in security-audit.yml, always-run)
 - `npm run soak:fix` — rewrite drifted windows, prune expired exclusions
 - `npm run deps:update` — bump npm (taze) + cargo deps through the window
-- `npm run tools:check` / `tools:install` — validate / install the
-  SRI-pinned external tools (`external-tools.json`); `tools:install` also
-  writes the sfw firewall shims into the dev-tools bin dir
+- `npm run tools:check` / `tools:fix` / `tools:install` — validate /
+  prune-expired-bypasses / install the SRI-pinned external tools
+  (`external-tools.json`); `tools:install` also writes the sfw firewall
+  shims into the dev-tools bin dir
 - `npm run test:scripts` — the scripts' own unit tests
+
+The gates fail closed when a bypass window clears, but nobody has to
+watch for that: the scheduled `soak-autofix` workflow runs `soak:fix` +
+`tools:fix` daily and commits the pruning as a bot PR.
 
 A soak change is done when `npm run soak` and `npm run test:scripts`
 both exit 0 — the same gates CI runs. Re-run them after every fix.

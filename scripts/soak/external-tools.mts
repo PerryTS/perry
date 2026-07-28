@@ -7,6 +7,10 @@
  *
  *   - `--check`            validate every pin (shape, SRI prefix, soak
  *                          annotations on any soakBypass) — CI gate, no network
+ *   - `--fix`              prune soakBypass annotations whose window has
+ *                          cleared, then run the same checks (the scheduled
+ *                          soak-autofix workflow commits the result so the
+ *                          gate never sits red waiting for a human)
  *   - `--install <name>`   download + SRI-verify + install into the local
  *                          tool rack (see paths.mts RACK_DIR) with a PATH
  *                          handle in BIN_DIR
@@ -121,6 +125,34 @@ export function checkPins(tools: Record<string, ToolPin>): string[] {
     }
   }
   return out
+}
+
+/**
+ * Prune expired soakBypass annotations in place and return the pruned tool
+ * names. Once `removable` is in the past the version has soaked and the
+ * annotation is dead weight — checkPins turns it into a red gate. Only
+ * valid, expired dates are pruned; malformed annotations stay findings for
+ * a human (never silently rewritten).
+ */
+export function pruneExpiredSoakBypasses(doc: {
+  tools: Record<string, ToolPin>
+}): string[] {
+  const pruned: string[] = []
+  const today = todayIso()
+  for (const [name, pin] of Object.entries(doc.tools)) {
+    const bypass = pin.soakBypass
+    if (!bypass) {
+      continue
+    }
+    if (!isValidIsoDate(bypass.published) || !isValidIsoDate(bypass.removable)) {
+      continue
+    }
+    if (bypass.removable < today) {
+      delete pin.soakBypass
+      pruned.push(name)
+    }
+  }
+  return pruned
 }
 
 function sriToHex(sri: string): string {
@@ -502,8 +534,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     console.log(BIN_DIR)
     return 0
   }
+  if (argv.includes('--fix')) {
+    const doc = JSON.parse(readFileSync(EXTERNAL_TOOLS_JSON, 'utf8'))
+    const pruned = pruneExpiredSoakBypasses(doc)
+    if (pruned.length > 0) {
+      writeFileSync(EXTERNAL_TOOLS_JSON, `${JSON.stringify(doc, null, 2)}\n`)
+      console.log(`[external-tools] pruned expired soakBypass: ${pruned.join(', ')}`)
+    }
+  }
   const tools = loadTools()
-  if (argv.includes('--check') || argv.length === 0) {
+  if (argv.includes('--check') || argv.includes('--fix') || argv.length === 0) {
     const problems = checkPins(tools)
     if (DOCKER_PREBAKE) {
       const dockerAbs = path.join(REPO_ROOT, DOCKER_PREBAKE)

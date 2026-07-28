@@ -5,6 +5,7 @@
     "soak:fix": "node scripts/soak/soak.mts --fix",
     "deps:update": "node scripts/soak/update-deps.mts",
     "tools:check": "node scripts/soak/external-tools.mts --check",
+    "tools:fix": "node scripts/soak/external-tools.mts --fix",
     "tools:install": "node scripts/soak/external-tools.mts --install-all --shims",
     "test:scripts": "node --test scripts/soak/*.test.mts"
   },
