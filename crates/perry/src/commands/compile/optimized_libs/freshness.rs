@@ -204,6 +204,12 @@ pub(crate) fn auto_optimized_cross_features(
             cross_features.push("perry-runtime/regex-engine".to_string());
         }
     }
+    // mimalloc global allocator (#62): keep the default-fast behavior on the
+    // normal auto-optimize path; only an explicit size-optimized rebuild
+    // (`PERRY_SIZE_OPT=z|s`) trades it for the system allocator (~140 KB).
+    if size_opt_level().is_none() {
+        cross_features.push("perry-runtime/alloc-mimalloc".to_string());
+    }
     // The `#[used]` keep-alive anchors exist for the whole-program bitcode
     // LTO path only (see perry-runtime's `keepalive-anchors` feature docs).
     // The classic link keeps every reachable symbol via real undefined

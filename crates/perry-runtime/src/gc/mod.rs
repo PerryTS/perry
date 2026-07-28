@@ -566,7 +566,11 @@ pub extern "C" fn js_gc_init() {
     // mapped before this call (early Rust startup) keep tag 100; the bulk
     // of the heap (arena blocks, GC metadata) maps afterwards. Idempotent,
     // like the rest of this function.
-    #[cfg(all(target_pointer_width = "64", target_vendor = "apple"))]
+    #[cfg(all(
+        target_pointer_width = "64",
+        target_vendor = "apple",
+        feature = "alloc-mimalloc"
+    ))]
     if std::env::var_os("MIMALLOC_OS_TAG").is_none() {
         unsafe { libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_os_tag, 240) };
     }

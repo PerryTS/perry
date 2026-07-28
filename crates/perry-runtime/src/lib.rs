@@ -23,10 +23,12 @@
 // arm64_32: mimalloc on a 32-bit-pointer (ILP32) tier-3 target is unproven and
 // a corruption suspect; use the system allocator (libsystem_malloc, solid on
 // watchOS) on 32-bit. Keep mimalloc's speed on 64-bit.
-#[cfg(target_pointer_width = "64")]
+// `alloc-mimalloc` (default-on) can be dropped by a size-optimized rebuild
+// (`PERRY_SIZE_OPT`), trading the faster allocator for ~140 KB of binary.
+#[cfg(all(target_pointer_width = "64", feature = "alloc-mimalloc"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-#[cfg(not(target_pointer_width = "64"))]
+#[cfg(not(all(target_pointer_width = "64", feature = "alloc-mimalloc")))]
 #[global_allocator]
 static GLOBAL: std::alloc::System = std::alloc::System;
 

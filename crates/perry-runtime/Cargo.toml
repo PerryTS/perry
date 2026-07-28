@@ -22,7 +22,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points as dead-strip roots. They exist for the whole-program bitcode-LTO
@@ -37,6 +37,13 @@ default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize",
 # prebuilt/full archives and `cargo test` are unchanged; the auto-optimize
 # rebuild omits it unless the bitcode link was requested.
 keepalive-anchors = []
+# Route every Rust heap allocation through mimalloc (#62) — ~3-5× faster
+# per-alloc than macOS `malloc` on hot paths, at ~140 KB of binary. In
+# `default` (and force-added by the auto-optimize rebuild) so behavior is
+# unchanged everywhere; a size-optimized rebuild (`PERRY_SIZE_OPT=z|s`)
+# leaves it off and falls back to the system allocator. The #6882 VM-tag
+# retag rides the same gate (it only exists to label mimalloc's mappings).
+alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
@@ -257,7 +264,7 @@ socket2 = { version = "0.6", features = ["all"] }
 # a corruption suspect, so lib.rs falls back to std::alloc::System there and we
 # avoid compiling mimalloc's C on that target entirely.
 [target.'cfg(target_pointer_width = "64")'.dependencies]
-mimalloc = { version = "0.1", default-features = false }
+mimalloc = { version = "0.1", default-features = false, optional = true }
 
 # #6882: mimalloc tags its OS mappings with VM tag 100, which macOS tooling
 # (vmmap, Instruments' VM Tracker, `footprint`) decodes as `IOAccelerator` —
@@ -266,7 +273,7 @@ mimalloc = { version = "0.1", default-features = false }
 # which lives behind libmimalloc-sys's `extended` API. Apple-only: the tag is
 # only consulted by Apple kernels, and mimalloc itself is 64-bit-only (above).
 [target.'cfg(all(target_pointer_width = "64", target_vendor = "apple"))'.dependencies]
-libmimalloc-sys = { version = "0.1", features = ["extended"] }
+libmimalloc-sys = { version = "0.1", features = ["extended"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
