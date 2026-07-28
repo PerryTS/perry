@@ -398,7 +398,8 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         Expr::Update { .. } => is_numeric_expr(ctx, e),
         Expr::NumberCoerce(_) => true,
         Expr::Logical { left, right, .. } => {
-            expr_produces_canonical_raw_f64(ctx, left) && expr_produces_canonical_raw_f64(ctx, right)
+            expr_produces_canonical_raw_f64(ctx, left)
+                && expr_produces_canonical_raw_f64(ctx, right)
         }
         Expr::MathFloor(..)
         | Expr::MathCeil(..)

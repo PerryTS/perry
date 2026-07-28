@@ -810,7 +810,8 @@ mod tests {
             "declare i32 @js_typed_feedback_numeric_array_index_get_guard(i64, double, i32, i32) #4"
         ));
         assert_eq!(
-            ir.matches("attributes #4 = { nounwind willreturn }").count(),
+            ir.matches("attributes #4 = { nounwind willreturn }")
+                .count(),
             1
         );
         // No setjmp declared → the setjmp-only groups stay out.
