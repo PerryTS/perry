@@ -162,12 +162,12 @@ pub(crate) fn array_store_needs_write_barrier(ctx: &FnCtx<'_>, value: &Expr) -> 
 /// **Deliberately NOT elided: a pointer-valued store into a pointer-masked
 /// slot.** That would be a no-op under an intact descriptor, but the receiver
 /// is not guaranteed to have one — `lower_new_impl` has an exit
-/// (`lower_call/new.rs`, the `force_ctor_call` branch where
+/// (`lower_call/new.rs`, the standalone-ctor-symbol branch where
 /// `call_local_constructor_symbol` yields `None`) that returns a freshly
 /// allocated instance *without* emitting `js_gc_init_typed_shape_layout`. Such
 /// an object sits at `GC_LAYOUT_POINTER_FREE`, where the note is the only thing
-/// that ever sets the pointer-mask bit the collector reads. Closing that exit is
-/// the prerequisite for the stronger elision.
+/// that ever sets the pointer-mask bit the collector reads. Closing that exit
+/// (#6921) is the prerequisite for the stronger elision.
 pub(crate) fn class_field_store_needs_layout_note(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     !expr_produces_non_pointer_bits_by_construction(ctx, value)
 }

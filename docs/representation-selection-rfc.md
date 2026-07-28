@@ -269,11 +269,11 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
 
     Two scope notes. **A pointer-valued store into a pointer-masked slot is deliberately not
     elided**, even though it is a no-op under an intact descriptor: `lower_new_impl` has an exit
-    (the `force_ctor_call` branch where `call_local_constructor_symbol` yields `None`) that
+    (the standalone-ctor-symbol branch where `call_local_constructor_symbol` yields `None`) that
     returns a freshly allocated instance *without* emitting `js_gc_init_typed_shape_layout`, and
     such an object sits at `POINTER_FREE` where the note is the only thing that ever sets the
-    pointer-mask bit the collector reads. Closing that exit is the prerequisite for the stronger
-    elision. Likewise the **guarded (non-`Ptr<Shape>`) class-field store keeps both calls** — its
+    pointer-mask bit the collector reads. Closing that exit (#6921) is the prerequisite for the
+    stronger elision. Likewise the **guarded (non-`Ptr<Shape>`) class-field store keeps both calls** — its
     receiver can be a runtime-constructed object that never had a descriptor installed.
   - **4b.2** — `runtime_store_jsvalue_slot` canonicalizes an INT32-boxed numeric store into a
     raw-f64-masked slot (the object twin of `canonicalize_array_numeric_store_bits`), instead
