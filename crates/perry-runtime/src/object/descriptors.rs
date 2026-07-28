@@ -729,62 +729,14 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         }
 
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
-            if let (Some(module_name), Some(key_name)) =
-                (read_native_module_name(obj), key_rust.as_deref())
-            {
-                if native_module_has_enumerable_key(&module_name, key_name) {
-                    if module_name == "fs" {
-                        match key_name {
-                            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream"
-                            | "Utf8Stream" => {
-                                let get =
-                                    super::native_module::fs_namespace_descriptor_getter_value(
-                                        key_name,
-                                    );
-                                let set = if key_name == "Utf8Stream" {
-                                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                                } else {
-                                    super::native_module::fs_namespace_descriptor_setter_value(
-                                        key_name,
-                                    )
-                                };
-                                return build_accessor_descriptor(get, set, true, true);
-                            }
-                            "promises" => {
-                                let get =
-                                    super::native_module::fs_namespace_descriptor_getter_value(
-                                        key_name,
-                                    );
-                                return build_accessor_descriptor(
-                                    get,
-                                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                                    true,
-                                    true,
-                                );
-                            }
-                            "constants" => {
-                                let value = js_object_get_field_by_name(obj, key_str);
-                                return build_data_descriptor(
-                                    f64::from_bits(value.bits()),
-                                    false,
-                                    true,
-                                    false,
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                    let value = js_object_get_field_by_name(obj, key_str);
-                    if matches!(
-                        module_name.as_str(),
-                        "process" | "process.namespace" | "process.default"
-                    ) && key_name == "permission"
-                    {
-                        let value = crate::process::process_metadata_property("permission")
-                            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                        return build_data_descriptor(value, false, true, false);
-                    }
-                    return build_data_descriptor(f64::from_bits(value.bits()), true, true, true);
+            // Namespace-object descriptors route through the armed ops table
+            // (see `nm_namespace_hooks`) so binaries without module imports
+            // don't statically link the namespace/exports web. Unarmed +
+            // matching class_id is unreachable: only the bootstrap that arms
+            // the table ever assigns NATIVE_MODULE_CLASS_ID.
+            if let Some(ops) = super::nm_namespace_ops() {
+                if let Some(desc) = (ops.get_own_descriptor)(obj, key_str, key_rust.as_deref()) {
+                    return desc;
                 }
             }
         }
@@ -1077,7 +1029,11 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         if obj_jv.is_pointer() {
             let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as *const ObjectHeader;
             if !obj_ptr.is_null() {
-                if let Some(arr) = super::native_module::vt_own_keys_array(obj_ptr) {
+                // Armed ops table (see `nm_namespace_hooks`): namespace key
+                // enumeration links only when a namespace can exist.
+                if let Some(arr) = super::nm_namespace_ops()
+                    .and_then(|ops| unsafe { (ops.own_keys_array)(obj_ptr) })
+                {
                     return f64::from_bits((arr as u64) | 0x7FFD_0000_0000_0000);
                 }
             }
@@ -1488,3 +1444,69 @@ pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64
 
 #[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_OBJECT_CREATE_WITH_PROPS: extern "C" fn(f64, f64) -> f64 = js_object_create_with_props;
+
+/// `Object.getOwnPropertyDescriptor` handling for native-module namespace
+/// objects (extracted verbatim from the former inline branch). Reached ONLY
+/// through `NmNamespaceOps::get_own_descriptor` — the sole reference lives in
+/// the ops static on the native-module side, so binaries without module
+/// imports link neither this nor the fs/exports machinery it references.
+/// Returns `None` to fall through to the generic own-property handling.
+pub(crate) unsafe fn nm_get_own_descriptor(
+    obj: *mut ObjectHeader,
+    key_str: *const crate::string::StringHeader,
+    key_name: Option<&str>,
+) -> Option<f64> {
+    let module_name = read_native_module_name(obj)?;
+    let key_name = key_name?;
+    if !native_module_has_enumerable_key(&module_name, key_name) {
+        return None;
+    }
+    if module_name == "fs" {
+        match key_name {
+            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream" | "Utf8Stream" => {
+                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
+                let set = if key_name == "Utf8Stream" {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                } else {
+                    super::native_module::fs_namespace_descriptor_setter_value(key_name)
+                };
+                return Some(build_accessor_descriptor(get, set, true, true));
+            }
+            "promises" => {
+                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
+                return Some(build_accessor_descriptor(
+                    get,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                    true,
+                    true,
+                ));
+            }
+            "constants" => {
+                let value = js_object_get_field_by_name(obj, key_str);
+                return Some(build_data_descriptor(
+                    f64::from_bits(value.bits()),
+                    false,
+                    true,
+                    false,
+                ));
+            }
+            _ => {}
+        }
+    }
+    let value = js_object_get_field_by_name(obj, key_str);
+    if matches!(
+        module_name.as_str(),
+        "process" | "process.namespace" | "process.default"
+    ) && key_name == "permission"
+    {
+        let value = crate::process::process_metadata_property("permission")
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        return Some(build_data_descriptor(value, false, true, false));
+    }
+    Some(build_data_descriptor(
+        f64::from_bits(value.bits()),
+        true,
+        true,
+        true,
+    ))
+}

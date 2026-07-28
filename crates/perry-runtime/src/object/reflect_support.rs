@@ -97,11 +97,12 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // defaults instead of collapsing to the new-property `false`s (which
         // made the SECOND patch throw `Cannot redefine property`).
         if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
-            if let (Some(module_name), Some(key_name)) = (
-                super::native_module::read_native_module_name(obj),
-                key_to_rust_string(key),
-            ) {
-                if super::native_module::native_module_has_enumerable_key(&module_name, &key_name) {
+            // Armed ops table (see `nm_namespace_hooks`): keeps the virtual
+            // key tables out of binaries with no module imports. Unarmed +
+            // matching class_id is unreachable (only the arming bootstrap
+            // assigns the class id).
+            if let Some(ops) = super::nm_namespace_ops() {
+                if (ops.reflect_has_enumerable)(obj, key) {
                     return true;
                 }
             }
@@ -190,4 +191,19 @@ pub(crate) unsafe fn key_to_rust_string(value: f64) -> Option<String> {
     std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
         .ok()
         .map(|s| s.to_string())
+}
+
+/// "Existing own key" probe for native-module namespace objects (extracted
+/// verbatim from the former inline branch). Reached ONLY through
+/// `NmNamespaceOps::reflect_has_enumerable`.
+pub(crate) unsafe fn nm_reflect_has_enumerable(obj: *mut super::ObjectHeader, key: f64) -> bool {
+    if let (Some(module_name), Some(key_name)) = (
+        super::native_module::read_native_module_name(obj),
+        key_to_rust_string(key),
+    ) {
+        if super::native_module::native_module_has_enumerable_key(&module_name, &key_name) {
+            return true;
+        }
+    }
+    false
 }
