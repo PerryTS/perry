@@ -338,100 +338,7 @@ pub(crate) unsafe fn get_native_module_constant(
     // POSIX-standard (identical on Linux/macOS). The O_* flags are OS-specific,
     // so use `libc::` on Unix for host-accurate parity with Node; the literal
     // fallbacks mirror macOS values (where Perry's primary target runs).
-    let fs_const_tail = |prop: &str| -> Option<f64> {
-        let v: Option<i64> = match prop {
-            // libuv dirent types (uv.h `uv_dirent_type_t`).
-            "UV_DIRENT_UNKNOWN" => Some(0),
-            "UV_DIRENT_FILE" => Some(1),
-            "UV_DIRENT_DIR" => Some(2),
-            "UV_DIRENT_LINK" => Some(3),
-            "UV_DIRENT_FIFO" => Some(4),
-            "UV_DIRENT_SOCKET" => Some(5),
-            "UV_DIRENT_CHAR" => Some(6),
-            "UV_DIRENT_BLOCK" => Some(7),
-            // libuv symlink flags.
-            "UV_FS_SYMLINK_DIR" => Some(1),
-            "UV_FS_SYMLINK_JUNCTION" => Some(2),
-            // libuv copyfile flags (Node mirrors these onto fs.constants
-            // COPYFILE_* too).
-            "UV_FS_COPYFILE_EXCL" => Some(1),
-            "UV_FS_COPYFILE_FICLONE" => Some(2),
-            "UV_FS_COPYFILE_FICLONE_FORCE" => Some(4),
-            // libuv filemap open flag (Windows-only; 0 elsewhere, matching Node).
-            #[cfg(windows)]
-            "UV_FS_O_FILEMAP" => Some(0x2000_0000),
-            #[cfg(not(windows))]
-            "UV_FS_O_FILEMAP" => Some(0),
-            // POSIX combined rwx permission masks (stable across platforms).
-            "S_IRWXU" => Some(0o700),
-            "S_IRWXG" => Some(0o070),
-            "S_IRWXO" => Some(0o007),
-            // POSIX file-type masks (S_IFMT family) — stable across Linux/macOS.
-            #[cfg(unix)]
-            "S_IFMT" => Some(libc::S_IFMT as i64),
-            #[cfg(unix)]
-            "S_IFREG" => Some(libc::S_IFREG as i64),
-            #[cfg(unix)]
-            "S_IFDIR" => Some(libc::S_IFDIR as i64),
-            #[cfg(unix)]
-            "S_IFCHR" => Some(libc::S_IFCHR as i64),
-            #[cfg(unix)]
-            "S_IFBLK" => Some(libc::S_IFBLK as i64),
-            #[cfg(unix)]
-            "S_IFIFO" => Some(libc::S_IFIFO as i64),
-            #[cfg(unix)]
-            "S_IFLNK" => Some(libc::S_IFLNK as i64),
-            #[cfg(unix)]
-            "S_IFSOCK" => Some(libc::S_IFSOCK as i64),
-            #[cfg(not(unix))]
-            "S_IFMT" => Some(0xF000),
-            #[cfg(not(unix))]
-            "S_IFREG" => Some(0x8000),
-            #[cfg(not(unix))]
-            "S_IFDIR" => Some(0x4000),
-            #[cfg(not(unix))]
-            "S_IFCHR" => Some(0x2000),
-            #[cfg(not(unix))]
-            "S_IFBLK" => Some(0x6000),
-            #[cfg(not(unix))]
-            "S_IFIFO" => Some(0x1000),
-            #[cfg(not(unix))]
-            "S_IFLNK" => Some(0xA000),
-            #[cfg(not(unix))]
-            "S_IFSOCK" => Some(0xC000),
-            // OS-specific open() flags.
-            #[cfg(unix)]
-            "O_DIRECTORY" => Some(libc::O_DIRECTORY as i64),
-            #[cfg(unix)]
-            "O_NOCTTY" => Some(libc::O_NOCTTY as i64),
-            #[cfg(unix)]
-            "O_NONBLOCK" => Some(libc::O_NONBLOCK as i64),
-            #[cfg(unix)]
-            "O_SYNC" => Some(libc::O_SYNC as i64),
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            "O_DSYNC" => Some(0x400000),
-            #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
-            "O_DSYNC" => Some(libc::O_DSYNC as i64),
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            "O_SYMLINK" => Some(0x200000),
-            // Linux-only open() flags (Node returns undefined for these on
-            // platforms that lack them).
-            #[cfg(target_os = "linux")]
-            "O_DIRECT" => Some(libc::O_DIRECT as i64),
-            #[cfg(target_os = "linux")]
-            "O_NOATIME" => Some(libc::O_NOATIME as i64),
-            #[cfg(not(unix))]
-            "O_DIRECTORY" => Some(0x10000),
-            #[cfg(not(unix))]
-            "O_NOCTTY" => Some(0),
-            #[cfg(not(unix))]
-            "O_NONBLOCK" => Some(0x800),
-            #[cfg(not(unix))]
-            "O_SYNC" => Some(0x101000),
-            _ => None,
-        };
-        v.map(|n| n as f64)
-    };
+    let fs_const_tail = fs_const_tail_lookup;
 
     // #3683: `constants.defaultCoreCipherList` — OpenSSL's built-in default
     // TLS cipher list string Node exposes (informational metadata, not a
@@ -442,185 +349,9 @@ pub(crate) unsafe fn get_native_module_constant(
     // `os.constants.priority.PRIORITY_NORMAL`, `os.constants.dlopen.RTLD_LAZY`
     // are ubiquitous in Node ecosystem code. Pre-fix every read returned
     // undefined. Use `libc::*` on Unix for byte-identical parity with Node.
-    let os_signal_const = |prop: &str| -> Option<f64> {
-        #[cfg(unix)]
-        {
-            let v: Option<i32> = match prop {
-                "SIGHUP" => Some(libc::SIGHUP),
-                "SIGINT" => Some(libc::SIGINT),
-                "SIGQUIT" => Some(libc::SIGQUIT),
-                "SIGILL" => Some(libc::SIGILL),
-                "SIGTRAP" => Some(libc::SIGTRAP),
-                "SIGABRT" => Some(libc::SIGABRT),
-                "SIGIOT" => Some(libc::SIGABRT),
-                "SIGBUS" => Some(libc::SIGBUS),
-                "SIGFPE" => Some(libc::SIGFPE),
-                "SIGKILL" => Some(libc::SIGKILL),
-                "SIGUSR1" => Some(libc::SIGUSR1),
-                "SIGSEGV" => Some(libc::SIGSEGV),
-                "SIGUSR2" => Some(libc::SIGUSR2),
-                "SIGPIPE" => Some(libc::SIGPIPE),
-                "SIGALRM" => Some(libc::SIGALRM),
-                "SIGTERM" => Some(libc::SIGTERM),
-                "SIGCHLD" => Some(libc::SIGCHLD),
-                #[cfg(target_os = "linux")]
-                "SIGSTKFLT" => Some(libc::SIGSTKFLT),
-                "SIGCONT" => Some(libc::SIGCONT),
-                "SIGSTOP" => Some(libc::SIGSTOP),
-                "SIGTSTP" => Some(libc::SIGTSTP),
-                "SIGTTIN" => Some(libc::SIGTTIN),
-                "SIGTTOU" => Some(libc::SIGTTOU),
-                "SIGURG" => Some(libc::SIGURG),
-                "SIGXCPU" => Some(libc::SIGXCPU),
-                "SIGXFSZ" => Some(libc::SIGXFSZ),
-                "SIGVTALRM" => Some(libc::SIGVTALRM),
-                "SIGPROF" => Some(libc::SIGPROF),
-                "SIGWINCH" => Some(libc::SIGWINCH),
-                "SIGIO" => Some(libc::SIGIO),
-                #[cfg(any(target_os = "linux", target_os = "android"))]
-                "SIGPOLL" => Some(libc::SIGPOLL),
-                #[cfg(target_os = "linux")]
-                "SIGPWR" => Some(libc::SIGPWR),
-                "SIGSYS" => Some(libc::SIGSYS),
-                #[cfg(target_os = "macos")]
-                "SIGINFO" => Some(29i32),
-                _ => None,
-            };
-            v.map(|x| x as f64)
-        }
-        #[cfg(not(unix))]
-        {
-            match prop {
-                "SIGHUP" => Some(1.0),
-                "SIGINT" => Some(2.0),
-                "SIGILL" => Some(4.0),
-                "SIGABRT" => Some(22.0),
-                "SIGFPE" => Some(8.0),
-                "SIGKILL" => Some(9.0),
-                "SIGSEGV" => Some(11.0),
-                "SIGTERM" => Some(15.0),
-                "SIGBREAK" => Some(21.0),
-                _ => None,
-            }
-        }
-    };
+    let os_signal_const = os_signal_const_lookup;
 
-    let os_errno_const = |prop: &str| -> Option<f64> {
-        #[cfg(unix)]
-        {
-            let v: Option<i32> = match prop {
-                "E2BIG" => Some(libc::E2BIG),
-                "EACCES" => Some(libc::EACCES),
-                "EADDRINUSE" => Some(libc::EADDRINUSE),
-                "EADDRNOTAVAIL" => Some(libc::EADDRNOTAVAIL),
-                "EAFNOSUPPORT" => Some(libc::EAFNOSUPPORT),
-                "EAGAIN" => Some(libc::EAGAIN),
-                "EALREADY" => Some(libc::EALREADY),
-                "EBADF" => Some(libc::EBADF),
-                "EBADMSG" => Some(libc::EBADMSG),
-                "EBUSY" => Some(libc::EBUSY),
-                "ECANCELED" => Some(libc::ECANCELED),
-                "ECHILD" => Some(libc::ECHILD),
-                "ECONNABORTED" => Some(libc::ECONNABORTED),
-                "ECONNREFUSED" => Some(libc::ECONNREFUSED),
-                "ECONNRESET" => Some(libc::ECONNRESET),
-                "EDEADLK" => Some(libc::EDEADLK),
-                "EDESTADDRREQ" => Some(libc::EDESTADDRREQ),
-                "EDOM" => Some(libc::EDOM),
-                "EDQUOT" => Some(libc::EDQUOT),
-                "EEXIST" => Some(libc::EEXIST),
-                "EFAULT" => Some(libc::EFAULT),
-                "EFBIG" => Some(libc::EFBIG),
-                "EHOSTUNREACH" => Some(libc::EHOSTUNREACH),
-                "EIDRM" => Some(libc::EIDRM),
-                "EILSEQ" => Some(libc::EILSEQ),
-                "EINPROGRESS" => Some(libc::EINPROGRESS),
-                "EINTR" => Some(libc::EINTR),
-                "EINVAL" => Some(libc::EINVAL),
-                "EIO" => Some(libc::EIO),
-                "EISCONN" => Some(libc::EISCONN),
-                "EISDIR" => Some(libc::EISDIR),
-                "ELOOP" => Some(libc::ELOOP),
-                "EMFILE" => Some(libc::EMFILE),
-                "EMLINK" => Some(libc::EMLINK),
-                "EMSGSIZE" => Some(libc::EMSGSIZE),
-                "EMULTIHOP" => Some(libc::EMULTIHOP),
-                "ENAMETOOLONG" => Some(libc::ENAMETOOLONG),
-                "ENETDOWN" => Some(libc::ENETDOWN),
-                "ENETRESET" => Some(libc::ENETRESET),
-                "ENETUNREACH" => Some(libc::ENETUNREACH),
-                "ENFILE" => Some(libc::ENFILE),
-                "ENOBUFS" => Some(libc::ENOBUFS),
-                "ENODATA" => Some(libc::ENODATA),
-                "ENODEV" => Some(libc::ENODEV),
-                "ENOENT" => Some(libc::ENOENT),
-                "ENOEXEC" => Some(libc::ENOEXEC),
-                "ENOLCK" => Some(libc::ENOLCK),
-                "ENOLINK" => Some(libc::ENOLINK),
-                "ENOMEM" => Some(libc::ENOMEM),
-                "ENOMSG" => Some(libc::ENOMSG),
-                "ENOPROTOOPT" => Some(libc::ENOPROTOOPT),
-                "ENOSPC" => Some(libc::ENOSPC),
-                "ENOSR" => Some(libc::ENOSR),
-                "ENOSTR" => Some(libc::ENOSTR),
-                "ENOSYS" => Some(libc::ENOSYS),
-                "ENOTCONN" => Some(libc::ENOTCONN),
-                "ENOTDIR" => Some(libc::ENOTDIR),
-                "ENOTEMPTY" => Some(libc::ENOTEMPTY),
-                "ENOTSOCK" => Some(libc::ENOTSOCK),
-                "ENOTSUP" => Some(libc::ENOTSUP),
-                "ENOTTY" => Some(libc::ENOTTY),
-                "ENXIO" => Some(libc::ENXIO),
-                "EOPNOTSUPP" => Some(libc::EOPNOTSUPP),
-                "EOVERFLOW" => Some(libc::EOVERFLOW),
-                "EPERM" => Some(libc::EPERM),
-                "EPIPE" => Some(libc::EPIPE),
-                "EPROTO" => Some(libc::EPROTO),
-                "EPROTONOSUPPORT" => Some(libc::EPROTONOSUPPORT),
-                "EPROTOTYPE" => Some(libc::EPROTOTYPE),
-                "ERANGE" => Some(libc::ERANGE),
-                "EROFS" => Some(libc::EROFS),
-                "ESPIPE" => Some(libc::ESPIPE),
-                "ESRCH" => Some(libc::ESRCH),
-                "ESTALE" => Some(libc::ESTALE),
-                "ETIME" => Some(libc::ETIME),
-                "ETIMEDOUT" => Some(libc::ETIMEDOUT),
-                "ETXTBSY" => Some(libc::ETXTBSY),
-                "EWOULDBLOCK" => Some(libc::EWOULDBLOCK),
-                "EXDEV" => Some(libc::EXDEV),
-                _ => None,
-            };
-            v.map(|x| x as f64)
-        }
-        #[cfg(not(unix))]
-        {
-            match prop {
-                "EACCES" => Some(13.0),
-                "EAGAIN" => Some(11.0),
-                "EBADF" => Some(9.0),
-                "EBUSY" => Some(16.0),
-                "EEXIST" => Some(17.0),
-                "EFAULT" => Some(14.0),
-                "EINTR" => Some(4.0),
-                "EINVAL" => Some(22.0),
-                "EIO" => Some(5.0),
-                "EISDIR" => Some(21.0),
-                "EMFILE" => Some(24.0),
-                "ENFILE" => Some(23.0),
-                "ENODEV" => Some(19.0),
-                "ENOENT" => Some(2.0),
-                "ENOMEM" => Some(12.0),
-                "ENOSPC" => Some(28.0),
-                "ENOTDIR" => Some(20.0),
-                "ENOTEMPTY" => Some(41.0),
-                "EPERM" => Some(1.0),
-                "EPIPE" => Some(32.0),
-                "ERANGE" => Some(34.0),
-                "EROFS" => Some(30.0),
-                _ => None,
-            }
-        }
-    };
+    let os_errno_const = os_errno_const_lookup;
 
     let os_priority_const = |prop: &str| -> Option<f64> {
         match prop {
@@ -661,65 +392,7 @@ pub(crate) unsafe fn get_native_module_constant(
 
     // Issue #649: `crypto.constants.RSA_PKCS1_PADDING` etc. OpenSSL-defined
     // stable values; hardcoded to match Node 24.x's published table.
-    let crypto_const = |prop: &str| -> Option<f64> {
-        match prop {
-            "OPENSSL_VERSION_NUMBER" => Some(811597840.0),
-            "SSL_OP_ALL" => Some(2147485776.0),
-            "SSL_OP_ALLOW_NO_DHE_KEX" => Some(1024.0),
-            "SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION" => Some(262144.0),
-            "SSL_OP_CIPHER_SERVER_PREFERENCE" => Some(4194304.0),
-            "SSL_OP_CISCO_ANYCONNECT" => Some(32768.0),
-            "SSL_OP_COOKIE_EXCHANGE" => Some(8192.0),
-            "SSL_OP_CRYPTOPRO_TLSEXT_BUG" => Some(2147483648.0),
-            "SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS" => Some(2048.0),
-            "SSL_OP_LEGACY_SERVER_CONNECT" => Some(4.0),
-            "SSL_OP_NO_COMPRESSION" => Some(131072.0),
-            "SSL_OP_NO_ENCRYPT_THEN_MAC" => Some(524288.0),
-            "SSL_OP_NO_QUERY_MTU" => Some(4096.0),
-            "SSL_OP_NO_RENEGOTIATION" => Some(1073741824.0),
-            "SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION" => Some(65536.0),
-            "SSL_OP_NO_SSLv2" => Some(0.0),
-            "SSL_OP_NO_SSLv3" => Some(33554432.0),
-            "SSL_OP_NO_TICKET" => Some(16384.0),
-            "SSL_OP_NO_TLSv1" => Some(67108864.0),
-            "SSL_OP_NO_TLSv1_1" => Some(268435456.0),
-            "SSL_OP_NO_TLSv1_2" => Some(134217728.0),
-            "SSL_OP_NO_TLSv1_3" => Some(536870912.0),
-            "SSL_OP_PRIORITIZE_CHACHA" => Some(2097152.0),
-            "SSL_OP_TLS_ROLLBACK_BUG" => Some(8388608.0),
-            "ENGINE_METHOD_RSA" => Some(1.0),
-            "ENGINE_METHOD_DSA" => Some(2.0),
-            "ENGINE_METHOD_DH" => Some(4.0),
-            "ENGINE_METHOD_RAND" => Some(8.0),
-            "ENGINE_METHOD_EC" => Some(2048.0),
-            "ENGINE_METHOD_CIPHERS" => Some(64.0),
-            "ENGINE_METHOD_DIGESTS" => Some(128.0),
-            "ENGINE_METHOD_PKEY_METHS" => Some(512.0),
-            "ENGINE_METHOD_PKEY_ASN1_METHS" => Some(1024.0),
-            "ENGINE_METHOD_ALL" => Some(65535.0),
-            "ENGINE_METHOD_NONE" => Some(0.0),
-            "DH_CHECK_P_NOT_SAFE_PRIME" => Some(2.0),
-            "DH_CHECK_P_NOT_PRIME" => Some(1.0),
-            "DH_UNABLE_TO_CHECK_GENERATOR" => Some(4.0),
-            "DH_NOT_SUITABLE_GENERATOR" => Some(8.0),
-            "RSA_PKCS1_PADDING" => Some(1.0),
-            "RSA_NO_PADDING" => Some(3.0),
-            "RSA_PKCS1_OAEP_PADDING" => Some(4.0),
-            "RSA_X931_PADDING" => Some(5.0),
-            "RSA_PKCS1_PSS_PADDING" => Some(6.0),
-            "RSA_PSS_SALTLEN_DIGEST" => Some(-1.0),
-            "RSA_PSS_SALTLEN_MAX_SIGN" => Some(-2.0),
-            "RSA_PSS_SALTLEN_AUTO" => Some(-2.0),
-            "TLS1_VERSION" => Some(769.0),
-            "TLS1_1_VERSION" => Some(770.0),
-            "TLS1_2_VERSION" => Some(771.0),
-            "TLS1_3_VERSION" => Some(772.0),
-            "POINT_CONVERSION_COMPRESSED" => Some(2.0),
-            "POINT_CONVERSION_UNCOMPRESSED" => Some(4.0),
-            "POINT_CONVERSION_HYBRID" => Some(6.0),
-            _ => None,
-        }
-    };
+    let crypto_const = crypto_const_lookup;
 
     // `zlib.constants` — the Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
     // table Node exposes on `require('node:zlib').constants`. Match the
@@ -761,56 +434,7 @@ pub(crate) unsafe fn get_native_module_constant(
         })
     };
 
-    let sqlite_const = |prop: &str| -> Option<f64> {
-        Some(match prop {
-            "SQLITE_CHANGESET_DATA" => 1.0,
-            "SQLITE_CHANGESET_NOTFOUND" => 2.0,
-            "SQLITE_CHANGESET_CONFLICT" => 3.0,
-            "SQLITE_CHANGESET_CONSTRAINT" => 4.0,
-            "SQLITE_CHANGESET_FOREIGN_KEY" => 5.0,
-            "SQLITE_CHANGESET_OMIT" => 0.0,
-            "SQLITE_CHANGESET_REPLACE" => 1.0,
-            "SQLITE_CHANGESET_ABORT" => 2.0,
-            "SQLITE_OK" => 0.0,
-            "SQLITE_DENY" => 1.0,
-            "SQLITE_IGNORE" => 2.0,
-            "SQLITE_CREATE_INDEX" => 1.0,
-            "SQLITE_CREATE_TABLE" => 2.0,
-            "SQLITE_CREATE_TEMP_INDEX" => 3.0,
-            "SQLITE_CREATE_TEMP_TABLE" => 4.0,
-            "SQLITE_CREATE_TEMP_TRIGGER" => 5.0,
-            "SQLITE_CREATE_TEMP_VIEW" => 6.0,
-            "SQLITE_CREATE_TRIGGER" => 7.0,
-            "SQLITE_CREATE_VIEW" => 8.0,
-            "SQLITE_DELETE" => 9.0,
-            "SQLITE_DROP_INDEX" => 10.0,
-            "SQLITE_DROP_TABLE" => 11.0,
-            "SQLITE_DROP_TEMP_INDEX" => 12.0,
-            "SQLITE_DROP_TEMP_TABLE" => 13.0,
-            "SQLITE_DROP_TEMP_TRIGGER" => 14.0,
-            "SQLITE_DROP_TEMP_VIEW" => 15.0,
-            "SQLITE_DROP_TRIGGER" => 16.0,
-            "SQLITE_DROP_VIEW" => 17.0,
-            "SQLITE_INSERT" => 18.0,
-            "SQLITE_PRAGMA" => 19.0,
-            "SQLITE_READ" => 20.0,
-            "SQLITE_SELECT" => 21.0,
-            "SQLITE_TRANSACTION" => 22.0,
-            "SQLITE_UPDATE" => 23.0,
-            "SQLITE_ATTACH" => 24.0,
-            "SQLITE_DETACH" => 25.0,
-            "SQLITE_ALTER_TABLE" => 26.0,
-            "SQLITE_REINDEX" => 27.0,
-            "SQLITE_ANALYZE" => 28.0,
-            "SQLITE_CREATE_VTABLE" => 29.0,
-            "SQLITE_DROP_VTABLE" => 30.0,
-            "SQLITE_FUNCTION" => 31.0,
-            "SQLITE_SAVEPOINT" => 32.0,
-            "SQLITE_COPY" => 0.0,
-            "SQLITE_RECURSIVE" => 33.0,
-            _ => return None,
-        })
-    };
+    let sqlite_const = sqlite_const_lookup;
 
     match module_name {
         // node:punycode (deprecated, #2513) — the bundled punycode.js version
@@ -1807,6 +1431,881 @@ mod zlib_const_table_tests {
                 assert_eq!(
                     zlib_const_lookup(lit),
                     zlib_const_reference(lit),
+                    "at {lit}"
+                );
+            }
+            rest = &after[e + 1..];
+        }
+    }
+}
+
+/// Sorted table for `crypto_const` (value exprs + per-arm cfg attrs verbatim;
+/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+static CRYPTO_CONST_TABLE: &[(&str, f64)] = &[
+    ("DH_CHECK_P_NOT_PRIME", 1.0),
+    ("DH_CHECK_P_NOT_SAFE_PRIME", 2.0),
+    ("DH_NOT_SUITABLE_GENERATOR", 8.0),
+    ("DH_UNABLE_TO_CHECK_GENERATOR", 4.0),
+    ("ENGINE_METHOD_ALL", 65535.0),
+    ("ENGINE_METHOD_CIPHERS", 64.0),
+    ("ENGINE_METHOD_DH", 4.0),
+    ("ENGINE_METHOD_DIGESTS", 128.0),
+    ("ENGINE_METHOD_DSA", 2.0),
+    ("ENGINE_METHOD_EC", 2048.0),
+    ("ENGINE_METHOD_NONE", 0.0),
+    ("ENGINE_METHOD_PKEY_ASN1_METHS", 1024.0),
+    ("ENGINE_METHOD_PKEY_METHS", 512.0),
+    ("ENGINE_METHOD_RAND", 8.0),
+    ("ENGINE_METHOD_RSA", 1.0),
+    ("OPENSSL_VERSION_NUMBER", 811597840.0),
+    ("POINT_CONVERSION_COMPRESSED", 2.0),
+    ("POINT_CONVERSION_HYBRID", 6.0),
+    ("POINT_CONVERSION_UNCOMPRESSED", 4.0),
+    ("RSA_NO_PADDING", 3.0),
+    ("RSA_PKCS1_OAEP_PADDING", 4.0),
+    ("RSA_PKCS1_PADDING", 1.0),
+    ("RSA_PKCS1_PSS_PADDING", 6.0),
+    ("RSA_PSS_SALTLEN_AUTO", -2.0),
+    ("RSA_PSS_SALTLEN_DIGEST", -1.0),
+    ("RSA_PSS_SALTLEN_MAX_SIGN", -2.0),
+    ("RSA_X931_PADDING", 5.0),
+    ("SSL_OP_ALL", 2147485776.0),
+    ("SSL_OP_ALLOW_NO_DHE_KEX", 1024.0),
+    ("SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION", 262144.0),
+    ("SSL_OP_CIPHER_SERVER_PREFERENCE", 4194304.0),
+    ("SSL_OP_CISCO_ANYCONNECT", 32768.0),
+    ("SSL_OP_COOKIE_EXCHANGE", 8192.0),
+    ("SSL_OP_CRYPTOPRO_TLSEXT_BUG", 2147483648.0),
+    ("SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS", 2048.0),
+    ("SSL_OP_LEGACY_SERVER_CONNECT", 4.0),
+    ("SSL_OP_NO_COMPRESSION", 131072.0),
+    ("SSL_OP_NO_ENCRYPT_THEN_MAC", 524288.0),
+    ("SSL_OP_NO_QUERY_MTU", 4096.0),
+    ("SSL_OP_NO_RENEGOTIATION", 1073741824.0),
+    ("SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION", 65536.0),
+    ("SSL_OP_NO_SSLv2", 0.0),
+    ("SSL_OP_NO_SSLv3", 33554432.0),
+    ("SSL_OP_NO_TICKET", 16384.0),
+    ("SSL_OP_NO_TLSv1", 67108864.0),
+    ("SSL_OP_NO_TLSv1_1", 268435456.0),
+    ("SSL_OP_NO_TLSv1_2", 134217728.0),
+    ("SSL_OP_NO_TLSv1_3", 536870912.0),
+    ("SSL_OP_PRIORITIZE_CHACHA", 2097152.0),
+    ("SSL_OP_TLS_ROLLBACK_BUG", 8388608.0),
+    ("TLS1_1_VERSION", 770.0),
+    ("TLS1_2_VERSION", 771.0),
+    ("TLS1_3_VERSION", 772.0),
+    ("TLS1_VERSION", 769.0),
+];
+
+#[allow(clippy::unnecessary_cast)]
+fn crypto_const_lookup(prop: &str) -> Option<f64> {
+    let i = CRYPTO_CONST_TABLE
+        .binary_search_by(|(n, _)| (*n).cmp(prop))
+        .ok()?;
+    Some(CRYPTO_CONST_TABLE[i].1 as f64)
+}
+
+#[cfg(test)]
+fn crypto_const_reference(prop: &str) -> Option<f64> {
+    match prop {
+        "OPENSSL_VERSION_NUMBER" => Some(811597840.0),
+        "SSL_OP_ALL" => Some(2147485776.0),
+        "SSL_OP_ALLOW_NO_DHE_KEX" => Some(1024.0),
+        "SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION" => Some(262144.0),
+        "SSL_OP_CIPHER_SERVER_PREFERENCE" => Some(4194304.0),
+        "SSL_OP_CISCO_ANYCONNECT" => Some(32768.0),
+        "SSL_OP_COOKIE_EXCHANGE" => Some(8192.0),
+        "SSL_OP_CRYPTOPRO_TLSEXT_BUG" => Some(2147483648.0),
+        "SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS" => Some(2048.0),
+        "SSL_OP_LEGACY_SERVER_CONNECT" => Some(4.0),
+        "SSL_OP_NO_COMPRESSION" => Some(131072.0),
+        "SSL_OP_NO_ENCRYPT_THEN_MAC" => Some(524288.0),
+        "SSL_OP_NO_QUERY_MTU" => Some(4096.0),
+        "SSL_OP_NO_RENEGOTIATION" => Some(1073741824.0),
+        "SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION" => Some(65536.0),
+        "SSL_OP_NO_SSLv2" => Some(0.0),
+        "SSL_OP_NO_SSLv3" => Some(33554432.0),
+        "SSL_OP_NO_TICKET" => Some(16384.0),
+        "SSL_OP_NO_TLSv1" => Some(67108864.0),
+        "SSL_OP_NO_TLSv1_1" => Some(268435456.0),
+        "SSL_OP_NO_TLSv1_2" => Some(134217728.0),
+        "SSL_OP_NO_TLSv1_3" => Some(536870912.0),
+        "SSL_OP_PRIORITIZE_CHACHA" => Some(2097152.0),
+        "SSL_OP_TLS_ROLLBACK_BUG" => Some(8388608.0),
+        "ENGINE_METHOD_RSA" => Some(1.0),
+        "ENGINE_METHOD_DSA" => Some(2.0),
+        "ENGINE_METHOD_DH" => Some(4.0),
+        "ENGINE_METHOD_RAND" => Some(8.0),
+        "ENGINE_METHOD_EC" => Some(2048.0),
+        "ENGINE_METHOD_CIPHERS" => Some(64.0),
+        "ENGINE_METHOD_DIGESTS" => Some(128.0),
+        "ENGINE_METHOD_PKEY_METHS" => Some(512.0),
+        "ENGINE_METHOD_PKEY_ASN1_METHS" => Some(1024.0),
+        "ENGINE_METHOD_ALL" => Some(65535.0),
+        "ENGINE_METHOD_NONE" => Some(0.0),
+        "DH_CHECK_P_NOT_SAFE_PRIME" => Some(2.0),
+        "DH_CHECK_P_NOT_PRIME" => Some(1.0),
+        "DH_UNABLE_TO_CHECK_GENERATOR" => Some(4.0),
+        "DH_NOT_SUITABLE_GENERATOR" => Some(8.0),
+        "RSA_PKCS1_PADDING" => Some(1.0),
+        "RSA_NO_PADDING" => Some(3.0),
+        "RSA_PKCS1_OAEP_PADDING" => Some(4.0),
+        "RSA_X931_PADDING" => Some(5.0),
+        "RSA_PKCS1_PSS_PADDING" => Some(6.0),
+        "RSA_PSS_SALTLEN_DIGEST" => Some(-1.0),
+        "RSA_PSS_SALTLEN_MAX_SIGN" => Some(-2.0),
+        "RSA_PSS_SALTLEN_AUTO" => Some(-2.0),
+        "TLS1_VERSION" => Some(769.0),
+        "TLS1_1_VERSION" => Some(770.0),
+        "TLS1_2_VERSION" => Some(771.0),
+        "TLS1_3_VERSION" => Some(772.0),
+        "POINT_CONVERSION_COMPRESSED" => Some(2.0),
+        "POINT_CONVERSION_UNCOMPRESSED" => Some(4.0),
+        "POINT_CONVERSION_HYBRID" => Some(6.0),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod crypto_const_table_tests {
+    use super::*;
+    #[test]
+    fn sorted() {
+        for w in CRYPTO_CONST_TABLE.windows(2) {
+            assert!(w[0].0 < w[1].0, "{} vs {}", w[0].0, w[1].0);
+        }
+    }
+    #[test]
+    fn matches_reference_exhaustively() {
+        let source = include_str!("constants.rs");
+        let mut rest = source;
+        while let Some(s) = rest.find('"') {
+            let after = &rest[s + 1..];
+            let Some(e) = after.find('"') else { break };
+            let lit = &after[..e];
+            if !lit.is_empty() && lit.len() < 64 {
+                assert_eq!(
+                    crypto_const_lookup(lit),
+                    crypto_const_reference(lit),
+                    "at {lit}"
+                );
+            }
+            rest = &after[e + 1..];
+        }
+    }
+}
+
+/// Sorted table for `os_errno_const` (value exprs + per-arm cfg attrs verbatim;
+/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+#[cfg(unix)]
+static OS_ERRNO_CONST_TABLE: &[(&str, i32)] = &[
+    ("E2BIG", libc::E2BIG),
+    ("EACCES", libc::EACCES),
+    ("EADDRINUSE", libc::EADDRINUSE),
+    ("EADDRNOTAVAIL", libc::EADDRNOTAVAIL),
+    ("EAFNOSUPPORT", libc::EAFNOSUPPORT),
+    ("EAGAIN", libc::EAGAIN),
+    ("EALREADY", libc::EALREADY),
+    ("EBADF", libc::EBADF),
+    ("EBADMSG", libc::EBADMSG),
+    ("EBUSY", libc::EBUSY),
+    ("ECANCELED", libc::ECANCELED),
+    ("ECHILD", libc::ECHILD),
+    ("ECONNABORTED", libc::ECONNABORTED),
+    ("ECONNREFUSED", libc::ECONNREFUSED),
+    ("ECONNRESET", libc::ECONNRESET),
+    ("EDEADLK", libc::EDEADLK),
+    ("EDESTADDRREQ", libc::EDESTADDRREQ),
+    ("EDOM", libc::EDOM),
+    ("EDQUOT", libc::EDQUOT),
+    ("EEXIST", libc::EEXIST),
+    ("EFAULT", libc::EFAULT),
+    ("EFBIG", libc::EFBIG),
+    ("EHOSTUNREACH", libc::EHOSTUNREACH),
+    ("EIDRM", libc::EIDRM),
+    ("EILSEQ", libc::EILSEQ),
+    ("EINPROGRESS", libc::EINPROGRESS),
+    ("EINTR", libc::EINTR),
+    ("EINVAL", libc::EINVAL),
+    ("EIO", libc::EIO),
+    ("EISCONN", libc::EISCONN),
+    ("EISDIR", libc::EISDIR),
+    ("ELOOP", libc::ELOOP),
+    ("EMFILE", libc::EMFILE),
+    ("EMLINK", libc::EMLINK),
+    ("EMSGSIZE", libc::EMSGSIZE),
+    ("EMULTIHOP", libc::EMULTIHOP),
+    ("ENAMETOOLONG", libc::ENAMETOOLONG),
+    ("ENETDOWN", libc::ENETDOWN),
+    ("ENETRESET", libc::ENETRESET),
+    ("ENETUNREACH", libc::ENETUNREACH),
+    ("ENFILE", libc::ENFILE),
+    ("ENOBUFS", libc::ENOBUFS),
+    ("ENODATA", libc::ENODATA),
+    ("ENODEV", libc::ENODEV),
+    ("ENOENT", libc::ENOENT),
+    ("ENOEXEC", libc::ENOEXEC),
+    ("ENOLCK", libc::ENOLCK),
+    ("ENOLINK", libc::ENOLINK),
+    ("ENOMEM", libc::ENOMEM),
+    ("ENOMSG", libc::ENOMSG),
+    ("ENOPROTOOPT", libc::ENOPROTOOPT),
+    ("ENOSPC", libc::ENOSPC),
+    ("ENOSR", libc::ENOSR),
+    ("ENOSTR", libc::ENOSTR),
+    ("ENOSYS", libc::ENOSYS),
+    ("ENOTCONN", libc::ENOTCONN),
+    ("ENOTDIR", libc::ENOTDIR),
+    ("ENOTEMPTY", libc::ENOTEMPTY),
+    ("ENOTSOCK", libc::ENOTSOCK),
+    ("ENOTSUP", libc::ENOTSUP),
+    ("ENOTTY", libc::ENOTTY),
+    ("ENXIO", libc::ENXIO),
+    ("EOPNOTSUPP", libc::EOPNOTSUPP),
+    ("EOVERFLOW", libc::EOVERFLOW),
+    ("EPERM", libc::EPERM),
+    ("EPIPE", libc::EPIPE),
+    ("EPROTO", libc::EPROTO),
+    ("EPROTONOSUPPORT", libc::EPROTONOSUPPORT),
+    ("EPROTOTYPE", libc::EPROTOTYPE),
+    ("ERANGE", libc::ERANGE),
+    ("EROFS", libc::EROFS),
+    ("ESPIPE", libc::ESPIPE),
+    ("ESRCH", libc::ESRCH),
+    ("ESTALE", libc::ESTALE),
+    ("ETIME", libc::ETIME),
+    ("ETIMEDOUT", libc::ETIMEDOUT),
+    ("ETXTBSY", libc::ETXTBSY),
+    ("EWOULDBLOCK", libc::EWOULDBLOCK),
+    ("EXDEV", libc::EXDEV),
+];
+#[cfg(not(unix))]
+static OS_ERRNO_CONST_TABLE: &[(&str, i32)] = &[];
+
+#[allow(clippy::unnecessary_cast)]
+fn os_errno_const_lookup(prop: &str) -> Option<f64> {
+    let i = OS_ERRNO_CONST_TABLE
+        .binary_search_by(|(n, _)| (*n).cmp(prop))
+        .ok()?;
+    Some(OS_ERRNO_CONST_TABLE[i].1 as f64)
+}
+
+#[cfg(test)]
+fn os_errno_const_reference(prop: &str) -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let v: Option<i32> = match prop {
+            "E2BIG" => Some(libc::E2BIG),
+            "EACCES" => Some(libc::EACCES),
+            "EADDRINUSE" => Some(libc::EADDRINUSE),
+            "EADDRNOTAVAIL" => Some(libc::EADDRNOTAVAIL),
+            "EAFNOSUPPORT" => Some(libc::EAFNOSUPPORT),
+            "EAGAIN" => Some(libc::EAGAIN),
+            "EALREADY" => Some(libc::EALREADY),
+            "EBADF" => Some(libc::EBADF),
+            "EBADMSG" => Some(libc::EBADMSG),
+            "EBUSY" => Some(libc::EBUSY),
+            "ECANCELED" => Some(libc::ECANCELED),
+            "ECHILD" => Some(libc::ECHILD),
+            "ECONNABORTED" => Some(libc::ECONNABORTED),
+            "ECONNREFUSED" => Some(libc::ECONNREFUSED),
+            "ECONNRESET" => Some(libc::ECONNRESET),
+            "EDEADLK" => Some(libc::EDEADLK),
+            "EDESTADDRREQ" => Some(libc::EDESTADDRREQ),
+            "EDOM" => Some(libc::EDOM),
+            "EDQUOT" => Some(libc::EDQUOT),
+            "EEXIST" => Some(libc::EEXIST),
+            "EFAULT" => Some(libc::EFAULT),
+            "EFBIG" => Some(libc::EFBIG),
+            "EHOSTUNREACH" => Some(libc::EHOSTUNREACH),
+            "EIDRM" => Some(libc::EIDRM),
+            "EILSEQ" => Some(libc::EILSEQ),
+            "EINPROGRESS" => Some(libc::EINPROGRESS),
+            "EINTR" => Some(libc::EINTR),
+            "EINVAL" => Some(libc::EINVAL),
+            "EIO" => Some(libc::EIO),
+            "EISCONN" => Some(libc::EISCONN),
+            "EISDIR" => Some(libc::EISDIR),
+            "ELOOP" => Some(libc::ELOOP),
+            "EMFILE" => Some(libc::EMFILE),
+            "EMLINK" => Some(libc::EMLINK),
+            "EMSGSIZE" => Some(libc::EMSGSIZE),
+            "EMULTIHOP" => Some(libc::EMULTIHOP),
+            "ENAMETOOLONG" => Some(libc::ENAMETOOLONG),
+            "ENETDOWN" => Some(libc::ENETDOWN),
+            "ENETRESET" => Some(libc::ENETRESET),
+            "ENETUNREACH" => Some(libc::ENETUNREACH),
+            "ENFILE" => Some(libc::ENFILE),
+            "ENOBUFS" => Some(libc::ENOBUFS),
+            "ENODATA" => Some(libc::ENODATA),
+            "ENODEV" => Some(libc::ENODEV),
+            "ENOENT" => Some(libc::ENOENT),
+            "ENOEXEC" => Some(libc::ENOEXEC),
+            "ENOLCK" => Some(libc::ENOLCK),
+            "ENOLINK" => Some(libc::ENOLINK),
+            "ENOMEM" => Some(libc::ENOMEM),
+            "ENOMSG" => Some(libc::ENOMSG),
+            "ENOPROTOOPT" => Some(libc::ENOPROTOOPT),
+            "ENOSPC" => Some(libc::ENOSPC),
+            "ENOSR" => Some(libc::ENOSR),
+            "ENOSTR" => Some(libc::ENOSTR),
+            "ENOSYS" => Some(libc::ENOSYS),
+            "ENOTCONN" => Some(libc::ENOTCONN),
+            "ENOTDIR" => Some(libc::ENOTDIR),
+            "ENOTEMPTY" => Some(libc::ENOTEMPTY),
+            "ENOTSOCK" => Some(libc::ENOTSOCK),
+            "ENOTSUP" => Some(libc::ENOTSUP),
+            "ENOTTY" => Some(libc::ENOTTY),
+            "ENXIO" => Some(libc::ENXIO),
+            "EOPNOTSUPP" => Some(libc::EOPNOTSUPP),
+            "EOVERFLOW" => Some(libc::EOVERFLOW),
+            "EPERM" => Some(libc::EPERM),
+            "EPIPE" => Some(libc::EPIPE),
+            "EPROTO" => Some(libc::EPROTO),
+            "EPROTONOSUPPORT" => Some(libc::EPROTONOSUPPORT),
+            "EPROTOTYPE" => Some(libc::EPROTOTYPE),
+            "ERANGE" => Some(libc::ERANGE),
+            "EROFS" => Some(libc::EROFS),
+            "ESPIPE" => Some(libc::ESPIPE),
+            "ESRCH" => Some(libc::ESRCH),
+            "ESTALE" => Some(libc::ESTALE),
+            "ETIME" => Some(libc::ETIME),
+            "ETIMEDOUT" => Some(libc::ETIMEDOUT),
+            "ETXTBSY" => Some(libc::ETXTBSY),
+            "EWOULDBLOCK" => Some(libc::EWOULDBLOCK),
+            "EXDEV" => Some(libc::EXDEV),
+            _ => None,
+        };
+        v.map(|x| x as f64)
+    }
+    #[cfg(not(unix))]
+    {
+        match prop {
+            "EACCES" => Some(13.0),
+            "EAGAIN" => Some(11.0),
+            "EBADF" => Some(9.0),
+            "EBUSY" => Some(16.0),
+            "EEXIST" => Some(17.0),
+            "EFAULT" => Some(14.0),
+            "EINTR" => Some(4.0),
+            "EINVAL" => Some(22.0),
+            "EIO" => Some(5.0),
+            "EISDIR" => Some(21.0),
+            "EMFILE" => Some(24.0),
+            "ENFILE" => Some(23.0),
+            "ENODEV" => Some(19.0),
+            "ENOENT" => Some(2.0),
+            "ENOMEM" => Some(12.0),
+            "ENOSPC" => Some(28.0),
+            "ENOTDIR" => Some(20.0),
+            "ENOTEMPTY" => Some(41.0),
+            "EPERM" => Some(1.0),
+            "EPIPE" => Some(32.0),
+            "ERANGE" => Some(34.0),
+            "EROFS" => Some(30.0),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod os_errno_const_table_tests {
+    use super::*;
+    #[test]
+    fn sorted() {
+        for w in OS_ERRNO_CONST_TABLE.windows(2) {
+            assert!(w[0].0 < w[1].0, "{} vs {}", w[0].0, w[1].0);
+        }
+    }
+    #[test]
+    fn matches_reference_exhaustively() {
+        let source = include_str!("constants.rs");
+        let mut rest = source;
+        while let Some(s) = rest.find('"') {
+            let after = &rest[s + 1..];
+            let Some(e) = after.find('"') else { break };
+            let lit = &after[..e];
+            if !lit.is_empty() && lit.len() < 64 {
+                assert_eq!(
+                    os_errno_const_lookup(lit),
+                    os_errno_const_reference(lit),
+                    "at {lit}"
+                );
+            }
+            rest = &after[e + 1..];
+        }
+    }
+}
+
+/// Sorted table for `os_signal_const` (value exprs + per-arm cfg attrs verbatim;
+/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+#[cfg(unix)]
+static OS_SIGNAL_CONST_TABLE: &[(&str, i32)] = &[
+    ("SIGABRT", libc::SIGABRT),
+    ("SIGALRM", libc::SIGALRM),
+    ("SIGBUS", libc::SIGBUS),
+    ("SIGCHLD", libc::SIGCHLD),
+    ("SIGCONT", libc::SIGCONT),
+    ("SIGFPE", libc::SIGFPE),
+    ("SIGHUP", libc::SIGHUP),
+    ("SIGILL", libc::SIGILL),
+    #[cfg(target_os = "macos")]
+    ("SIGINFO", 29i32),
+    ("SIGINT", libc::SIGINT),
+    ("SIGIO", libc::SIGIO),
+    ("SIGIOT", libc::SIGABRT),
+    ("SIGKILL", libc::SIGKILL),
+    ("SIGPIPE", libc::SIGPIPE),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    ("SIGPOLL", libc::SIGPOLL),
+    ("SIGPROF", libc::SIGPROF),
+    #[cfg(target_os = "linux")]
+    ("SIGPWR", libc::SIGPWR),
+    ("SIGQUIT", libc::SIGQUIT),
+    ("SIGSEGV", libc::SIGSEGV),
+    #[cfg(target_os = "linux")]
+    ("SIGSTKFLT", libc::SIGSTKFLT),
+    ("SIGSTOP", libc::SIGSTOP),
+    ("SIGSYS", libc::SIGSYS),
+    ("SIGTERM", libc::SIGTERM),
+    ("SIGTRAP", libc::SIGTRAP),
+    ("SIGTSTP", libc::SIGTSTP),
+    ("SIGTTIN", libc::SIGTTIN),
+    ("SIGTTOU", libc::SIGTTOU),
+    ("SIGURG", libc::SIGURG),
+    ("SIGUSR1", libc::SIGUSR1),
+    ("SIGUSR2", libc::SIGUSR2),
+    ("SIGVTALRM", libc::SIGVTALRM),
+    ("SIGWINCH", libc::SIGWINCH),
+    ("SIGXCPU", libc::SIGXCPU),
+    ("SIGXFSZ", libc::SIGXFSZ),
+];
+#[cfg(not(unix))]
+static OS_SIGNAL_CONST_TABLE: &[(&str, i32)] = &[];
+
+#[allow(clippy::unnecessary_cast)]
+fn os_signal_const_lookup(prop: &str) -> Option<f64> {
+    let i = OS_SIGNAL_CONST_TABLE
+        .binary_search_by(|(n, _)| (*n).cmp(prop))
+        .ok()?;
+    Some(OS_SIGNAL_CONST_TABLE[i].1 as f64)
+}
+
+#[cfg(test)]
+fn os_signal_const_reference(prop: &str) -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let v: Option<i32> = match prop {
+            "SIGHUP" => Some(libc::SIGHUP),
+            "SIGINT" => Some(libc::SIGINT),
+            "SIGQUIT" => Some(libc::SIGQUIT),
+            "SIGILL" => Some(libc::SIGILL),
+            "SIGTRAP" => Some(libc::SIGTRAP),
+            "SIGABRT" => Some(libc::SIGABRT),
+            "SIGIOT" => Some(libc::SIGABRT),
+            "SIGBUS" => Some(libc::SIGBUS),
+            "SIGFPE" => Some(libc::SIGFPE),
+            "SIGKILL" => Some(libc::SIGKILL),
+            "SIGUSR1" => Some(libc::SIGUSR1),
+            "SIGSEGV" => Some(libc::SIGSEGV),
+            "SIGUSR2" => Some(libc::SIGUSR2),
+            "SIGPIPE" => Some(libc::SIGPIPE),
+            "SIGALRM" => Some(libc::SIGALRM),
+            "SIGTERM" => Some(libc::SIGTERM),
+            "SIGCHLD" => Some(libc::SIGCHLD),
+            #[cfg(target_os = "linux")]
+            "SIGSTKFLT" => Some(libc::SIGSTKFLT),
+            "SIGCONT" => Some(libc::SIGCONT),
+            "SIGSTOP" => Some(libc::SIGSTOP),
+            "SIGTSTP" => Some(libc::SIGTSTP),
+            "SIGTTIN" => Some(libc::SIGTTIN),
+            "SIGTTOU" => Some(libc::SIGTTOU),
+            "SIGURG" => Some(libc::SIGURG),
+            "SIGXCPU" => Some(libc::SIGXCPU),
+            "SIGXFSZ" => Some(libc::SIGXFSZ),
+            "SIGVTALRM" => Some(libc::SIGVTALRM),
+            "SIGPROF" => Some(libc::SIGPROF),
+            "SIGWINCH" => Some(libc::SIGWINCH),
+            "SIGIO" => Some(libc::SIGIO),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            "SIGPOLL" => Some(libc::SIGPOLL),
+            #[cfg(target_os = "linux")]
+            "SIGPWR" => Some(libc::SIGPWR),
+            "SIGSYS" => Some(libc::SIGSYS),
+            #[cfg(target_os = "macos")]
+            "SIGINFO" => Some(29i32),
+            _ => None,
+        };
+        v.map(|x| x as f64)
+    }
+    #[cfg(not(unix))]
+    {
+        match prop {
+            "SIGHUP" => Some(1.0),
+            "SIGINT" => Some(2.0),
+            "SIGILL" => Some(4.0),
+            "SIGABRT" => Some(22.0),
+            "SIGFPE" => Some(8.0),
+            "SIGKILL" => Some(9.0),
+            "SIGSEGV" => Some(11.0),
+            "SIGTERM" => Some(15.0),
+            "SIGBREAK" => Some(21.0),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod os_signal_const_table_tests {
+    use super::*;
+    #[test]
+    fn sorted() {
+        for w in OS_SIGNAL_CONST_TABLE.windows(2) {
+            assert!(w[0].0 < w[1].0, "{} vs {}", w[0].0, w[1].0);
+        }
+    }
+    #[test]
+    fn matches_reference_exhaustively() {
+        let source = include_str!("constants.rs");
+        let mut rest = source;
+        while let Some(s) = rest.find('"') {
+            let after = &rest[s + 1..];
+            let Some(e) = after.find('"') else { break };
+            let lit = &after[..e];
+            if !lit.is_empty() && lit.len() < 64 {
+                assert_eq!(
+                    os_signal_const_lookup(lit),
+                    os_signal_const_reference(lit),
+                    "at {lit}"
+                );
+            }
+            rest = &after[e + 1..];
+        }
+    }
+}
+
+/// Sorted table for `fs_const_tail` (value exprs + per-arm cfg attrs verbatim;
+/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+static FS_CONST_TAIL_TABLE: &[(&str, i64)] = &[
+    #[cfg(target_os = "linux")]
+    ("O_DIRECT", libc::O_DIRECT as i64),
+    #[cfg(unix)]
+    ("O_DIRECTORY", libc::O_DIRECTORY as i64),
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    ("O_DSYNC", 0x400000),
+    #[cfg(target_os = "linux")]
+    ("O_NOATIME", libc::O_NOATIME as i64),
+    #[cfg(unix)]
+    ("O_NOCTTY", libc::O_NOCTTY as i64),
+    #[cfg(unix)]
+    ("O_NONBLOCK", libc::O_NONBLOCK as i64),
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    ("O_SYMLINK", 0x200000),
+    #[cfg(unix)]
+    ("O_SYNC", libc::O_SYNC as i64),
+    #[cfg(unix)]
+    ("S_IFBLK", libc::S_IFBLK as i64),
+    #[cfg(unix)]
+    ("S_IFCHR", libc::S_IFCHR as i64),
+    #[cfg(unix)]
+    ("S_IFDIR", libc::S_IFDIR as i64),
+    #[cfg(unix)]
+    ("S_IFIFO", libc::S_IFIFO as i64),
+    #[cfg(unix)]
+    ("S_IFLNK", libc::S_IFLNK as i64),
+    #[cfg(unix)]
+    ("S_IFMT", libc::S_IFMT as i64),
+    #[cfg(unix)]
+    ("S_IFREG", libc::S_IFREG as i64),
+    #[cfg(unix)]
+    ("S_IFSOCK", libc::S_IFSOCK as i64),
+    ("S_IRWXG", 0o070),
+    ("S_IRWXO", 0o007),
+    ("S_IRWXU", 0o700),
+    ("UV_DIRENT_BLOCK", 7),
+    ("UV_DIRENT_CHAR", 6),
+    ("UV_DIRENT_DIR", 2),
+    ("UV_DIRENT_FIFO", 4),
+    ("UV_DIRENT_FILE", 1),
+    ("UV_DIRENT_LINK", 3),
+    ("UV_DIRENT_SOCKET", 5),
+    ("UV_DIRENT_UNKNOWN", 0),
+    ("UV_FS_COPYFILE_EXCL", 1),
+    ("UV_FS_COPYFILE_FICLONE", 2),
+    ("UV_FS_COPYFILE_FICLONE_FORCE", 4),
+    #[cfg(windows)]
+    ("UV_FS_O_FILEMAP", 0x2000_0000),
+    #[cfg(not(windows))]
+    ("UV_FS_O_FILEMAP", 0),
+    ("UV_FS_SYMLINK_DIR", 1),
+    ("UV_FS_SYMLINK_JUNCTION", 2),
+];
+
+#[allow(clippy::unnecessary_cast)]
+fn fs_const_tail_lookup(prop: &str) -> Option<f64> {
+    let i = FS_CONST_TAIL_TABLE
+        .binary_search_by(|(n, _)| (*n).cmp(prop))
+        .ok()?;
+    Some(FS_CONST_TAIL_TABLE[i].1 as f64)
+}
+
+#[cfg(test)]
+fn fs_const_tail_reference(prop: &str) -> Option<f64> {
+    let v: Option<i64> = match prop {
+        // libuv dirent types (uv.h `uv_dirent_type_t`).
+        "UV_DIRENT_UNKNOWN" => Some(0),
+        "UV_DIRENT_FILE" => Some(1),
+        "UV_DIRENT_DIR" => Some(2),
+        "UV_DIRENT_LINK" => Some(3),
+        "UV_DIRENT_FIFO" => Some(4),
+        "UV_DIRENT_SOCKET" => Some(5),
+        "UV_DIRENT_CHAR" => Some(6),
+        "UV_DIRENT_BLOCK" => Some(7),
+        // libuv symlink flags.
+        "UV_FS_SYMLINK_DIR" => Some(1),
+        "UV_FS_SYMLINK_JUNCTION" => Some(2),
+        // libuv copyfile flags (Node mirrors these onto fs.constants
+        // COPYFILE_* too).
+        "UV_FS_COPYFILE_EXCL" => Some(1),
+        "UV_FS_COPYFILE_FICLONE" => Some(2),
+        "UV_FS_COPYFILE_FICLONE_FORCE" => Some(4),
+        // libuv filemap open flag (Windows-only; 0 elsewhere, matching Node).
+        #[cfg(windows)]
+        "UV_FS_O_FILEMAP" => Some(0x2000_0000),
+        #[cfg(not(windows))]
+        "UV_FS_O_FILEMAP" => Some(0),
+        // POSIX combined rwx permission masks (stable across platforms).
+        "S_IRWXU" => Some(0o700),
+        "S_IRWXG" => Some(0o070),
+        "S_IRWXO" => Some(0o007),
+        // POSIX file-type masks (S_IFMT family) — stable across Linux/macOS.
+        #[cfg(unix)]
+        "S_IFMT" => Some(libc::S_IFMT as i64),
+        #[cfg(unix)]
+        "S_IFREG" => Some(libc::S_IFREG as i64),
+        #[cfg(unix)]
+        "S_IFDIR" => Some(libc::S_IFDIR as i64),
+        #[cfg(unix)]
+        "S_IFCHR" => Some(libc::S_IFCHR as i64),
+        #[cfg(unix)]
+        "S_IFBLK" => Some(libc::S_IFBLK as i64),
+        #[cfg(unix)]
+        "S_IFIFO" => Some(libc::S_IFIFO as i64),
+        #[cfg(unix)]
+        "S_IFLNK" => Some(libc::S_IFLNK as i64),
+        #[cfg(unix)]
+        "S_IFSOCK" => Some(libc::S_IFSOCK as i64),
+        #[cfg(not(unix))]
+        "S_IFMT" => Some(0xF000),
+        #[cfg(not(unix))]
+        "S_IFREG" => Some(0x8000),
+        #[cfg(not(unix))]
+        "S_IFDIR" => Some(0x4000),
+        #[cfg(not(unix))]
+        "S_IFCHR" => Some(0x2000),
+        #[cfg(not(unix))]
+        "S_IFBLK" => Some(0x6000),
+        #[cfg(not(unix))]
+        "S_IFIFO" => Some(0x1000),
+        #[cfg(not(unix))]
+        "S_IFLNK" => Some(0xA000),
+        #[cfg(not(unix))]
+        "S_IFSOCK" => Some(0xC000),
+        // OS-specific open() flags.
+        #[cfg(unix)]
+        "O_DIRECTORY" => Some(libc::O_DIRECTORY as i64),
+        #[cfg(unix)]
+        "O_NOCTTY" => Some(libc::O_NOCTTY as i64),
+        #[cfg(unix)]
+        "O_NONBLOCK" => Some(libc::O_NONBLOCK as i64),
+        #[cfg(unix)]
+        "O_SYNC" => Some(libc::O_SYNC as i64),
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        "O_DSYNC" => Some(0x400000),
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+        "O_DSYNC" => Some(libc::O_DSYNC as i64),
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        "O_SYMLINK" => Some(0x200000),
+        // Linux-only open() flags (Node returns undefined for these on
+        // platforms that lack them).
+        #[cfg(target_os = "linux")]
+        "O_DIRECT" => Some(libc::O_DIRECT as i64),
+        #[cfg(target_os = "linux")]
+        "O_NOATIME" => Some(libc::O_NOATIME as i64),
+        #[cfg(not(unix))]
+        "O_DIRECTORY" => Some(0x10000),
+        #[cfg(not(unix))]
+        "O_NOCTTY" => Some(0),
+        #[cfg(not(unix))]
+        "O_NONBLOCK" => Some(0x800),
+        #[cfg(not(unix))]
+        "O_SYNC" => Some(0x101000),
+        _ => None,
+    };
+    v.map(|n| n as f64)
+}
+
+#[cfg(test)]
+mod fs_const_tail_table_tests {
+    use super::*;
+    #[test]
+    fn sorted() {
+        for w in FS_CONST_TAIL_TABLE.windows(2) {
+            assert!(w[0].0 < w[1].0, "{} vs {}", w[0].0, w[1].0);
+        }
+    }
+    #[test]
+    fn matches_reference_exhaustively() {
+        let source = include_str!("constants.rs");
+        let mut rest = source;
+        while let Some(s) = rest.find('"') {
+            let after = &rest[s + 1..];
+            let Some(e) = after.find('"') else { break };
+            let lit = &after[..e];
+            if !lit.is_empty() && lit.len() < 64 {
+                assert_eq!(
+                    fs_const_tail_lookup(lit),
+                    fs_const_tail_reference(lit),
+                    "at {lit}"
+                );
+            }
+            rest = &after[e + 1..];
+        }
+    }
+}
+
+/// Sorted table for `sqlite_const` (value exprs + per-arm cfg attrs verbatim;
+/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+static SQLITE_CONST_TABLE: &[(&str, f64)] = &[
+    ("SQLITE_ALTER_TABLE", 26.0),
+    ("SQLITE_ANALYZE", 28.0),
+    ("SQLITE_ATTACH", 24.0),
+    ("SQLITE_CHANGESET_ABORT", 2.0),
+    ("SQLITE_CHANGESET_CONFLICT", 3.0),
+    ("SQLITE_CHANGESET_CONSTRAINT", 4.0),
+    ("SQLITE_CHANGESET_DATA", 1.0),
+    ("SQLITE_CHANGESET_FOREIGN_KEY", 5.0),
+    ("SQLITE_CHANGESET_NOTFOUND", 2.0),
+    ("SQLITE_CHANGESET_OMIT", 0.0),
+    ("SQLITE_CHANGESET_REPLACE", 1.0),
+    ("SQLITE_COPY", 0.0),
+    ("SQLITE_CREATE_INDEX", 1.0),
+    ("SQLITE_CREATE_TABLE", 2.0),
+    ("SQLITE_CREATE_TEMP_INDEX", 3.0),
+    ("SQLITE_CREATE_TEMP_TABLE", 4.0),
+    ("SQLITE_CREATE_TEMP_TRIGGER", 5.0),
+    ("SQLITE_CREATE_TEMP_VIEW", 6.0),
+    ("SQLITE_CREATE_TRIGGER", 7.0),
+    ("SQLITE_CREATE_VIEW", 8.0),
+    ("SQLITE_CREATE_VTABLE", 29.0),
+    ("SQLITE_DELETE", 9.0),
+    ("SQLITE_DENY", 1.0),
+    ("SQLITE_DETACH", 25.0),
+    ("SQLITE_DROP_INDEX", 10.0),
+    ("SQLITE_DROP_TABLE", 11.0),
+    ("SQLITE_DROP_TEMP_INDEX", 12.0),
+    ("SQLITE_DROP_TEMP_TABLE", 13.0),
+    ("SQLITE_DROP_TEMP_TRIGGER", 14.0),
+    ("SQLITE_DROP_TEMP_VIEW", 15.0),
+    ("SQLITE_DROP_TRIGGER", 16.0),
+    ("SQLITE_DROP_VIEW", 17.0),
+    ("SQLITE_DROP_VTABLE", 30.0),
+    ("SQLITE_FUNCTION", 31.0),
+    ("SQLITE_IGNORE", 2.0),
+    ("SQLITE_INSERT", 18.0),
+    ("SQLITE_OK", 0.0),
+    ("SQLITE_PRAGMA", 19.0),
+    ("SQLITE_READ", 20.0),
+    ("SQLITE_RECURSIVE", 33.0),
+    ("SQLITE_REINDEX", 27.0),
+    ("SQLITE_SAVEPOINT", 32.0),
+    ("SQLITE_SELECT", 21.0),
+    ("SQLITE_TRANSACTION", 22.0),
+    ("SQLITE_UPDATE", 23.0),
+];
+
+#[allow(clippy::unnecessary_cast)]
+fn sqlite_const_lookup(prop: &str) -> Option<f64> {
+    let i = SQLITE_CONST_TABLE
+        .binary_search_by(|(n, _)| (*n).cmp(prop))
+        .ok()?;
+    Some(SQLITE_CONST_TABLE[i].1 as f64)
+}
+
+#[cfg(test)]
+fn sqlite_const_reference(prop: &str) -> Option<f64> {
+    Some(match prop {
+        "SQLITE_CHANGESET_DATA" => 1.0,
+        "SQLITE_CHANGESET_NOTFOUND" => 2.0,
+        "SQLITE_CHANGESET_CONFLICT" => 3.0,
+        "SQLITE_CHANGESET_CONSTRAINT" => 4.0,
+        "SQLITE_CHANGESET_FOREIGN_KEY" => 5.0,
+        "SQLITE_CHANGESET_OMIT" => 0.0,
+        "SQLITE_CHANGESET_REPLACE" => 1.0,
+        "SQLITE_CHANGESET_ABORT" => 2.0,
+        "SQLITE_OK" => 0.0,
+        "SQLITE_DENY" => 1.0,
+        "SQLITE_IGNORE" => 2.0,
+        "SQLITE_CREATE_INDEX" => 1.0,
+        "SQLITE_CREATE_TABLE" => 2.0,
+        "SQLITE_CREATE_TEMP_INDEX" => 3.0,
+        "SQLITE_CREATE_TEMP_TABLE" => 4.0,
+        "SQLITE_CREATE_TEMP_TRIGGER" => 5.0,
+        "SQLITE_CREATE_TEMP_VIEW" => 6.0,
+        "SQLITE_CREATE_TRIGGER" => 7.0,
+        "SQLITE_CREATE_VIEW" => 8.0,
+        "SQLITE_DELETE" => 9.0,
+        "SQLITE_DROP_INDEX" => 10.0,
+        "SQLITE_DROP_TABLE" => 11.0,
+        "SQLITE_DROP_TEMP_INDEX" => 12.0,
+        "SQLITE_DROP_TEMP_TABLE" => 13.0,
+        "SQLITE_DROP_TEMP_TRIGGER" => 14.0,
+        "SQLITE_DROP_TEMP_VIEW" => 15.0,
+        "SQLITE_DROP_TRIGGER" => 16.0,
+        "SQLITE_DROP_VIEW" => 17.0,
+        "SQLITE_INSERT" => 18.0,
+        "SQLITE_PRAGMA" => 19.0,
+        "SQLITE_READ" => 20.0,
+        "SQLITE_SELECT" => 21.0,
+        "SQLITE_TRANSACTION" => 22.0,
+        "SQLITE_UPDATE" => 23.0,
+        "SQLITE_ATTACH" => 24.0,
+        "SQLITE_DETACH" => 25.0,
+        "SQLITE_ALTER_TABLE" => 26.0,
+        "SQLITE_REINDEX" => 27.0,
+        "SQLITE_ANALYZE" => 28.0,
+        "SQLITE_CREATE_VTABLE" => 29.0,
+        "SQLITE_DROP_VTABLE" => 30.0,
+        "SQLITE_FUNCTION" => 31.0,
+        "SQLITE_SAVEPOINT" => 32.0,
+        "SQLITE_COPY" => 0.0,
+        "SQLITE_RECURSIVE" => 33.0,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod sqlite_const_table_tests {
+    use super::*;
+    #[test]
+    fn sorted() {
+        for w in SQLITE_CONST_TABLE.windows(2) {
+            assert!(w[0].0 < w[1].0, "{} vs {}", w[0].0, w[1].0);
+        }
+    }
+    #[test]
+    fn matches_reference_exhaustively() {
+        let source = include_str!("constants.rs");
+        let mut rest = source;
+        while let Some(s) = rest.find('"') {
+            let after = &rest[s + 1..];
+            let Some(e) = after.find('"') else { break };
+            let lit = &after[..e];
+            if !lit.is_empty() && lit.len() < 64 {
+                assert_eq!(
+                    sqlite_const_lookup(lit),
+                    sqlite_const_reference(lit),
                     "at {lit}"
                 );
             }
