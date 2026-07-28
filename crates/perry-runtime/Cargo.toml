@@ -210,7 +210,12 @@ perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 # our code is binding glue per type. `compiled_data` vendors the IANA tz DB
 # hermetically (needed by ZonedDateTime / Now), `sys-local` adds the
 # current-system-zone lookup used by Temporal.Now.*ISO() with no argument.
-temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data", "sys-local"], optional = true }
+# NOTE: NO `sys-local` — that feature resolves the system time zone via
+# `iana_time_zone`, which links CoreFoundation on macOS and (because Temporal's
+# namespace is always registered) forced `-framework CoreFoundation` into every
+# output binary. Perry supplies its own CF-free host system in `temporal::now`
+# (clock via `SystemTime`, zone via `crate::date::host_time_zone_name`).
+temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data"], optional = true }
 
 serde.workspace = true
 serde_json.workspace = true
