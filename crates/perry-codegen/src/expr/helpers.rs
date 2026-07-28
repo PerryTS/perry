@@ -136,6 +136,76 @@ pub(crate) fn array_store_needs_write_barrier(ctx: &FnCtx<'_>, value: &Expr) -> 
     !expr_produces_non_pointer_bits_by_construction(ctx, value)
 }
 
+/// True when class `class_name`'s slot `field_index` is set in the **pointer
+/// mask** of the typed-shape descriptor its instances are given at
+/// construction. Reads the mask from `class_typed_layout_from_chain` over
+/// `class_init_chains` — literally the same call, over the same authoritative
+/// chain, that `compile_module` uses to emit the class's mask globals — so the
+/// answer cannot drift from the descriptor the runtime installs.
+///
+/// The chain is required: absent it, `class_field_global_index` falls back to a
+/// name-keyed walk whose index need not line up with the descriptor's mask bits
+/// (same-named cross-module classes, #26/#321), and a mask bit read at the
+/// wrong index would be worse than no answer.
+fn class_field_slot_is_pointer_masked(ctx: &FnCtx<'_>, class_name: &str, field_index: u32) -> bool {
+    let Some(chain) = ctx.class_init_chains.get(class_name) else {
+        return false;
+    };
+    let layout = crate::typed_shape::class_typed_layout_from_chain(chain);
+    if field_index >= layout.slot_count {
+        return false;
+    }
+    layout
+        .pointer_mask_words
+        .get((field_index / 64) as usize)
+        .is_some_and(|word| word & (1u64 << (field_index % 64)) != 0)
+}
+
+/// Object twin of [`array_store_needs_layout_note`] — Phase 4b.1.
+///
+/// `layout_note_slot` is a **provable no-op** for a class-field store in either
+/// of two cases, and both are decided here:
+///
+/// 1. **The slot is pointer-masked.** Under an intact typed descriptor the note
+///    early-returns for any value stored into a `pointer_mask` slot: a pointer
+///    is already permitted there, and a non-pointer leaves the mask alone
+///    (`gc/layout.rs`, the `typed.pointer_mask.contains_slot` arm).
+/// 2. **The value is a non-pointer by construction.** Then the note can only
+///    ever *clear* mask state, never set it — it cannot be the difference
+///    between a slot being scanned and being missed.
+///
+/// Callers must additionally guarantee the receiver is one whose layout state
+/// is provably `{intact descriptor} ∨ {UNKNOWN}` — see the call site in
+/// `property_set.rs`, which restricts this to `Ptr<Shape>`-proven receivers.
+/// Case 1 is unsound without that: on an object that never had a descriptor
+/// installed, the note is the *only* thing that sets the pointer-mask bit the
+/// GC scan reads, and eliding it would strand a live child.
+pub(crate) fn class_field_store_needs_layout_note(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    field_index: u32,
+    value: &Expr,
+) -> bool {
+    !(class_field_slot_is_pointer_masked(ctx, class_name, field_index)
+        || expr_produces_non_pointer_bits_by_construction(ctx, value))
+}
+
+/// `js_string_addref_if_heap_string` demotes a uniquely-owned (refcount==1)
+/// heap string to shared when it becomes aliased from a heap slot, and is a
+/// no-op for every non-`STRING_TAG` value (`string/alloc.rs`). So it is dead
+/// exactly when the stored value provably cannot be a heap string.
+///
+/// **This is keyed on the value expression, never on the declared field type.**
+/// Perry does not validate declared types at runtime (see CLAUDE.md, "No
+/// runtime type *validation*"): a field declared `boolean` legitimately
+/// receives a string that arrived through an `any`, and skipping the demote
+/// there would leave a refcount==1 string aliased from the heap for a later
+/// in-place `+=` to rewrite underneath the stored slot — silent corruption
+/// with no crash to trace it back from.
+pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    !expr_produces_non_pointer_bits_by_construction(ctx, value)
+}
+
 /// `lower_expr` variant that hands an expected-type hint down to the
 /// object-literal lowerer (so it can pick raw f64 slots when the
 /// destination has a typed shape). All other expression kinds ignore

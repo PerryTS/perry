@@ -234,6 +234,40 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
   fact). Hole-vs-undefined observability (`in`, `Object.keys`, `JSON.stringify`) is
   preserved structurally: those surfaces reference the local as a bare value and
   therefore disqualify it, and bare (non-ToNumber) element reads never lower guard-free.
+- **Unboxed object fields: assessed and REJECTED (Phase 4b).** The "unboxed field layout"
+  bullets at the top of this section were scoped down after recon, and the eligibility
+  machinery they describe was deliberately *not* built. Three findings drove that:
+  1. **`number` fields are already bit-unboxed.** NaN-boxing reserves only `0x7FF9..=0x7FFF`,
+     so a number field slot already holds raw IEEE bits; `raw_f64_mask`
+     (`gc/layout.rs::layout_raw_f64_bits`) is a *proof bit*, not a storage change. Phase 3b
+     already deleted the read-side guard on proven receivers, so no unboxing win remains.
+  2. **Raw string handles at rest would break SSO** — short strings live inline in the NaN
+     box and would have to be heap-materialized just to be stored "unboxed" — and buy nothing.
+  3. **Raw `i1`/`i32` slots would need a third mask *plus* a layout probe at ~25 direct
+     slot-read sites** — `JSON.stringify`, `util.inspect`, `v8` IPC serde and descriptor reads
+     among them. Those are hot paths, not the "rare, already-slow" surfaces the
+     observation-equivalence bullet assumes, so the probe would cost more than the
+     representation saves.
+
+  What Phase 4b ships instead is the bookkeeping the existing boxed layout was paying
+  needlessly:
+  - **4b.1** — a class-field store on a `Ptr<Shape>`-proven receiver retires
+    `js_gc_note_slot_layout` when the slot's mask class is already fixed (the slot is
+    pointer-masked, or the value is a non-pointer by construction), and
+    `js_string_addref_if_heap_string` when the stored value provably cannot be a heap string.
+    Soundness rests on the `Ptr<Shape>` containment proof: the object's layout state is only
+    ever {intact typed descriptor} or {UNKNOWN}, in both of which the note is a no-op. The
+    generational write barrier is untouched. The addref elision is keyed on the **value
+    expression, never the declared field type** — Perry does not validate declared types at
+    runtime, so a `boolean`-declared field can legitimately receive a string through an `any`,
+    and a wrong elision there silently corrupts an aliased string on the next in-place append.
+    Scope note: the guarded (non-`Ptr<Shape>`) class-field store keeps both calls, because its
+    receiver can be a runtime-constructed object that never had a descriptor installed — there
+    the note is the only thing that sets the pointer-mask bit the GC scan reads.
+  - **4b.2** — `runtime_store_jsvalue_slot` canonicalizes an INT32-boxed numeric store into a
+    raw-f64-masked slot (the object twin of `canonicalize_array_numeric_store_bits`), instead
+    of letting one FFI/native-supplied integer evict that object's typed descriptor
+    permanently and one-way.
 
 ## 6. Phasing (one design; each phase sound on its own)
 

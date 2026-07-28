@@ -1542,3 +1542,133 @@ fn test_trace_closure_uses_pointer_layout_mask() {
     clear_marks();
     clear_mark_seeds();
 }
+
+// Repsel Phase 4b.2 — an INT32-boxed numeric value reaching a raw-f64-masked
+// object slot through the runtime store choke point must be canonicalized to
+// raw f64 instead of permanently poisoning the object's typed layout.
+//
+// `layout_note_slot` treats any non-raw-f64 bit pattern landing in a raw-f64
+// slot as a representation change and calls `layout_set_typed_unknown`, which
+// evicts the `TypedLayoutDescriptor` one-way, per object. INT32 boxes genuinely
+// reach object fields from FFI / native modules (sqlite row columns, `v8`
+// deserialization), so one FFI integer used to cost that object its typed fast
+// path forever. Codegen's guarded class-field store already canonicalized
+// inline behind its plain-finite check; `runtime_store_jsvalue_slot` wrote the
+// bits verbatim.
+
+/// Install a two-slot typed descriptor: slot 0 raw-f64, slot 1 pointer.
+unsafe fn typed_two_slot_object() -> (*mut crate::object::ObjectHeader, *mut u64) {
+    let (obj, fields) = alloc_old_test_object(2);
+    *fields = 0.0f64.to_bits();
+    *fields.add(1) = crate::value::TAG_UNDEFINED;
+    let raw_mask = [0b01u64];
+    let ptr_mask = [0b10u64];
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        raw_mask.as_ptr(),
+        raw_mask.len() as u32,
+        ptr_mask.as_ptr(),
+        ptr_mask.len() as u32,
+    );
+    assert!(
+        layout_has_typed_descriptor(obj as usize),
+        "test setup: the typed descriptor must install"
+    );
+    (obj, fields)
+}
+
+#[test]
+fn test_int32_store_into_raw_f64_slot_keeps_typed_descriptor() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, fields) = unsafe { typed_two_slot_object() };
+
+    // An INT32-boxed 42, exactly as an FFI / native module hands one over.
+    let int32_bits = crate::value::INT32_TAG | 42u64;
+    runtime_store_jsvalue_slot(obj as usize, fields as usize, 0, int32_bits);
+
+    assert!(
+        layout_has_typed_descriptor(obj as usize),
+        "an INT32-boxed integer stored into a raw-f64 slot must not evict the typed descriptor"
+    );
+    let stored = unsafe { std::ptr::read(fields as *const u64) };
+    assert_eq!(
+        stored,
+        42.0f64.to_bits(),
+        "the slot holds canonical raw f64 bits, not the INT32 box"
+    );
+    assert_eq!(
+        f64::from_bits(stored),
+        42.0,
+        "and reads back byte-exact as the same number"
+    );
+}
+
+#[test]
+fn test_int32_store_into_pointer_slot_is_left_verbatim() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, fields) = unsafe { typed_two_slot_object() };
+
+    // Slot 1 is pointer-masked, not raw-f64-masked: there is no raw-f64
+    // contract to uphold and the note is already a no-op there, so the stored
+    // bits must survive untouched.
+    let int32_bits = crate::value::INT32_TAG | 7u64;
+    let slot1 = unsafe { fields.add(1) };
+    runtime_store_jsvalue_slot(obj as usize, slot1 as usize, 1, int32_bits);
+
+    assert!(
+        layout_has_typed_descriptor(obj as usize),
+        "a non-pointer value in a pointer-masked slot leaves the descriptor intact"
+    );
+    assert_eq!(
+        unsafe { std::ptr::read(slot1 as *const u64) },
+        int32_bits,
+        "canonicalization is scoped to raw-f64-masked slots"
+    );
+}
+
+#[test]
+fn test_non_numeric_store_into_raw_f64_slot_still_evicts_descriptor() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, fields) = unsafe { typed_two_slot_object() };
+
+    // The negative control for the fix: a string IS a genuine representation
+    // change for a raw-f64 slot and must still downgrade the object — the scan
+    // skips raw-f64 slots, so a mask left claiming "number here" over a live
+    // string pointer would strand it.
+    let payload = crate::string::js_string_from_bytes(b"not-a-number".as_ptr(), 12);
+    let payload_bits = STRING_TAG | (payload as u64 & POINTER_MASK);
+    runtime_store_jsvalue_slot(obj as usize, fields as usize, 0, payload_bits);
+
+    assert!(
+        !layout_has_typed_descriptor(obj as usize),
+        "a non-numeric store into a raw-f64 slot must still evict the typed descriptor"
+    );
+    assert_eq!(
+        unsafe { std::ptr::read(fields as *const u64) },
+        payload_bits,
+        "and the stored value itself is untouched"
+    );
+}
+
+#[test]
+fn test_int32_store_without_typed_descriptor_is_left_verbatim() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe {
+        *fields = 0.0f64.to_bits();
+    }
+    assert!(
+        !layout_has_typed_descriptor(obj as usize),
+        "test setup: no descriptor installed"
+    );
+
+    let int32_bits = crate::value::INT32_TAG | 5u64;
+    runtime_store_jsvalue_slot(obj as usize, fields as usize, 0, int32_bits);
+
+    assert_eq!(
+        unsafe { std::ptr::read(fields as *const u64) },
+        int32_bits,
+        "with no intact descriptor there is no raw-f64 contract to uphold — bits stay verbatim"
+    );
+}

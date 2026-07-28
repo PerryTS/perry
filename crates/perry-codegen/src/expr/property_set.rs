@@ -19,10 +19,11 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
-    emit_jsvalue_slot_store_on_block, emit_typed_feedback_register_site,
-    expr_produces_non_pointer_bits_by_construction, lower_expr, lower_expr_native,
-    raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    class_field_store_needs_layout_note, class_field_store_needs_string_addref,
+    emit_jsvalue_slot_store_on_block, emit_jsvalue_slot_store_with_flags_on_block,
+    emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
+    lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn canonicalize_raw_f64_numeric_store_value(
@@ -596,15 +597,64 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 }
                                 ctx.current_block = merge_idx;
                             } else {
+                                // Repsel Phase 4b.1: retire the two bookkeeping
+                                // calls that are provably dead here.
+                                //
+                                // The receiver being `Ptr<Shape>`-proven is
+                                // what licenses the layout-note elision. Three
+                                // facts close it:
+                                //
+                                // 1. The object HAS a typed-shape descriptor
+                                //    installed at construction. Reaching this
+                                //    arm already required a `class_keys_globals`
+                                //    entry for the class (above), and
+                                //    `emit_typed_shape_layout_init` keys its
+                                //    early-out on that same map — so the
+                                //    `new <class>()` that Ptr<Shape> provenance
+                                //    demands, in this very function under this
+                                //    same `ctx`, necessarily emitted the init.
+                                // 2. Nothing can move the object to a state
+                                //    where the note would matter. Containment
+                                //    forbids aliasing, escape to a callee,
+                                //    dynamic keyed writes, `delete`,
+                                //    freeze/seal and `defineProperty`
+                                //    (`collectors/ptr_shape.rs`), so the layout
+                                //    state is only ever {intact descriptor} or
+                                //    {UNKNOWN} — the one-way downgrade every
+                                //    eviction path lands on, including a failed
+                                //    install. It can never be the
+                                //    POINTER_FREE/SIDE_MASK-without-descriptor
+                                //    state in which the note is the only thing
+                                //    that sets the GC's pointer-mask bit.
+                                // 3. `layout_note_slot` is a no-op in UNKNOWN,
+                                //    and a no-op under an intact descriptor for
+                                //    a pointer-masked slot. `requires_raw_f64`
+                                //    is false on this arm, so the raw-f64-mask
+                                //    arm — the one that *must* downgrade — is
+                                //    unreachable from here.
+                                //
+                                // The addref is gated separately and strictly
+                                // on the value expression — never on the
+                                // declared field type, which Perry does not
+                                // enforce at runtime.
+                                let layout_note_needed = class_field_store_needs_layout_note(
+                                    ctx,
+                                    &class_name,
+                                    field_index,
+                                    value,
+                                );
+                                let string_addref_needed =
+                                    class_field_store_needs_string_addref(ctx, value);
                                 let blk = ctx.block();
                                 let field_addr = blk.ptrtoint(&field_ptr, I64);
-                                emit_jsvalue_slot_store_on_block(
+                                emit_jsvalue_slot_store_with_flags_on_block(
                                     blk,
                                     &field_ptr,
                                     &val_double,
                                     &obj_handle,
                                     &field_idx_str,
-                                    true,
+                                    string_addref_needed,
+                                    layout_note_needed,
                                     &obj_bits,
                                     &field_addr,
                                     field_set_barrier_needed,

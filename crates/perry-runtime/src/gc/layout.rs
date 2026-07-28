@@ -562,6 +562,43 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
     }
 }
 
+/// True when `slot_index` of `parent_user` is a **raw-f64-masked slot of an
+/// intact typed-shape descriptor** — i.e. exactly the case where
+/// [`layout_note_slot`] would call `layout_set_typed_unknown` (permanently
+/// evicting the descriptor) for a stored value whose bits are not raw f64.
+///
+/// Mirrors `layout_note_slot`'s own prologue — forwarding resolution, the
+/// `GC_LAYOUT_UNKNOWN` short-circuit, and the O(1) `GC_OBJ_TYPED_LAYOUT_INTACT`
+/// gate before the thread-local probe — so the two agree on every object.
+pub(crate) fn layout_slot_is_raw_f64_typed(parent_user: usize, slot_index: usize) -> bool {
+    if slot_index > 16_000_000 {
+        return false;
+    }
+    unsafe {
+        let Some(header) = layout_header_for_user(parent_user) else {
+            return false;
+        };
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            let new_user = forwarding_address(header) as usize;
+            if new_user != 0 && new_user != parent_user {
+                return layout_slot_is_raw_f64_typed(new_user, slot_index);
+            }
+            return false;
+        }
+        if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
+            return false;
+        }
+        if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT == 0 {
+            return false;
+        }
+        TYPED_LAYOUTS.with(|m| {
+            m.borrow().get(&parent_user).is_some_and(|typed| {
+                slot_index < typed.slot_count && typed.raw_f64_mask.contains_slot(slot_index)
+            })
+        })
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_gc_note_slot_layout(parent: u64, slot_index: u32, value_bits: u64) {
     let parent_user = strip_nanbox_user_ptr(parent);
