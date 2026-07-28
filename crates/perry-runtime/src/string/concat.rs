@@ -310,6 +310,17 @@ pub extern "C" fn js_string_concat_value(
     prefix: *const StringHeader,
     value: f64,
 ) -> *mut StringHeader {
+    // #6655: `prefix` is a raw movable heap pointer held across two different
+    // GC-capable operations — `string_storage_alloc` on the fast path below,
+    // and `js_jsvalue_to_string(value)` (an arbitrary user `toString`) on the
+    // slow path. Neither is a GC root, so an evacuating collection during
+    // either would leave the subsequent `(*prefix)` reads and `string_data`
+    // copy pointing at a forwarded address. Root it for the whole body and
+    // re-read it through the handle after anything that can allocate.
+    // (`js_string_concat` already roots its own arguments — that is one frame
+    // too late for this one.)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prefix_handle = scope.root_string_ptr(prefix);
     let prefix_blen = if is_valid_string_ptr(prefix) {
         unsafe { (*prefix).byte_len }
     } else {
@@ -370,6 +381,10 @@ pub extern "C" fn js_string_concat_value(
         // Single allocation for prefix + number string
         let total_blen = prefix_blen as usize + num_len;
         let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
+        // `string_storage_alloc` → `arena_alloc_gc` can collect and evacuate, so
+        // the incoming `prefix` may have moved. Re-read it from its handle
+        // before touching the header or copying the payload (#6655).
+        let prefix = prefix_handle.get_raw_const_ptr::<StringHeader>();
 
         unsafe {
             // Both prefix and number digits are ASCII, so utf16_len == byte_len for the number part
@@ -400,9 +415,11 @@ pub extern "C" fn js_string_concat_value(
         return ptr;
     }
 
-    // Slow path: non-number value — fall back to js_jsvalue_to_string + js_string_concat
+    // Slow path: non-number value — fall back to js_jsvalue_to_string + js_string_concat.
+    // `js_jsvalue_to_string` can run a user `toString` and collect, so reload
+    // `prefix` from its handle afterwards (#6655).
     let value_str = crate::value::js_jsvalue_to_string(value);
-    js_string_concat(prefix, value_str)
+    js_string_concat(prefix_handle.get_raw_const_ptr::<StringHeader>(), value_str)
 }
 
 /// N-way string concatenation (v0.5.771).
@@ -629,6 +646,11 @@ pub extern "C" fn js_value_concat_string(
     value: f64,
     suffix: *const StringHeader,
 ) -> *mut StringHeader {
+    // #6655: mirror of `js_string_concat_value` — `suffix` is a raw movable
+    // heap pointer held across `string_storage_alloc` (fast path) and across
+    // `js_jsvalue_to_string(value)`'s user `toString` (slow path).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let suffix_handle = scope.root_string_ptr(suffix);
     let suffix_blen = if is_valid_string_ptr(suffix) {
         unsafe { (*suffix).byte_len }
     } else {
@@ -683,6 +705,8 @@ pub extern "C" fn js_value_concat_string(
 
         let total_blen = num_len + suffix_blen as usize;
         let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
+        // Re-read after the allocation: it can collect and evacuate (#6655).
+        let suffix = suffix_handle.get_raw_const_ptr::<StringHeader>();
 
         unsafe {
             let flags = if is_valid_string_ptr(suffix) {
@@ -712,8 +736,9 @@ pub extern "C" fn js_value_concat_string(
         return ptr;
     }
 
+    // Reload `suffix` after the user `toString` (#6655).
     let value_str = crate::value::js_jsvalue_to_string(value);
-    js_string_concat(value_str, suffix)
+    js_string_concat(value_str, suffix_handle.get_raw_const_ptr::<StringHeader>())
 }
 
 /// Fast integer-to-ASCII formatting into a provided buffer.

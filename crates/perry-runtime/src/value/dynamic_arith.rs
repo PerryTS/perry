@@ -356,13 +356,80 @@ fn numify_arith_operand(v: f64) -> f64 {
     }
 }
 
+/// True when a NaN-boxed operand is a plain IEEE-754 double — its top 16 bits
+/// (sign stripped) sit below the `0x7FF9` Perry tag band, so it is not a
+/// string / pointer / bigint / int32 / singleton.
+///
+/// For such an operand `ToNumeric` is the identity — [`js_number_coerce`]
+/// short-circuits on this exact predicate — and there is no heap pointer to
+/// root, so the binary operators below can skip the [`RuntimeHandleScope`]
+/// entirely. Canonical-NaN (`0x7FF8`), negative-NaN payloads from real
+/// arithmetic, and the infinities all stay on this path. Same predicate and
+/// same reasoning as the #5525 fast path in `js_dynamic_string_or_number_add`.
+///
+/// [`js_number_coerce`]: crate::builtins::js_number_coerce
+/// [`RuntimeHandleScope`]: crate::gc::RuntimeHandleScope
+#[inline]
+fn is_plain_double(v: f64) -> bool {
+    const TAG_BAND_FLOOR: u64 = 0x7FF9_0000_0000_0000;
+    (v.to_bits() & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR
+}
+
+/// `ToNumeric` both operands of a dynamic binary operator while keeping each
+/// one rooted across the *other's* coercion (#6655).
+///
+/// `to_numeric` on an object operand runs a user `Symbol.toPrimitive` /
+/// `valueOf` / `toString`, which can allocate, trigger a GC and *evacuate* live
+/// objects. A raw NaN-boxed `f64` held in a Rust local is not a GC root and not
+/// in a shadow slot, so the pre-fix prelude
+///
+/// ```ignore
+/// let a = to_numeric(a);
+/// let b = to_numeric(b);   // raw `b` was held UNROOTED across the line above
+/// ```
+///
+/// left `b` — and the freshly coerced `a`, when it is a BigInt pointer —
+/// pointing at a forwarded (stale) address. Root both operands *before* the
+/// first coercion and read every subsequent value back through its handle.
+/// Same discipline as `dynamic_bigint_binary_op` and `js_dynamic_ushr` (#6650).
+///
+/// Returns the coerced operands as handles so the caller can hand them
+/// straight to [`dynamic_bigint_binary_op_from_handles`] without re-rooting.
+#[inline]
+unsafe fn to_numeric_pair<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    a: f64,
+    b: f64,
+) -> (
+    crate::gc::RuntimeHandle<'scope>,
+    crate::gc::RuntimeHandle<'scope>,
+) {
+    let a_in = scope.root_nanbox_f64(a);
+    let b_in = scope.root_nanbox_f64(b);
+    let a_num = to_numeric(a_in.get_nanbox_f64());
+    let a_handle = scope.root_nanbox_f64(a_num);
+    let b_num = to_numeric(b_in.get_nanbox_f64());
+    let b_handle = scope.root_nanbox_f64(b_num);
+    (a_handle, b_handle)
+}
+
 /// Dynamic multiply: BigInt * BigInt if either operand is BigInt, else f64 * f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return a * b;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mul);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_mul,
+        );
     }
     numify_arith_operand(a) * numify_arith_operand(b)
 }
@@ -399,16 +466,22 @@ pub unsafe extern "C" fn js_to_numeric(value: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_numeric_step(numeric: f64, is_increment: i32) -> f64 {
     if JSValue::from_bits(numeric.to_bits()).is_bigint() {
+        // `js_bigint_from_i64` ALLOCATES, so it can trigger a GC that evacuates
+        // the BigInt `numeric` points at — and `numeric` is a raw NaN-boxed
+        // local, not a root. Root the incoming operand *before* that allocation
+        // and read it back through its handle afterwards (#6655). The old
+        // comment here only reasoned about `one_ptr` surviving, and missed that
+        // the pre-existing operand is the one at risk.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let numeric_handle = scope.root_nanbox_f64(numeric);
         let one_ptr = crate::bigint::js_bigint_from_i64(1);
-        // `js_nanbox_bigint` is pure and `dynamic_bigint_binary_op` roots both
-        // operands before any further allocation, so `one_ptr` survives.
-        let one_val = js_nanbox_bigint(one_ptr as i64);
+        let one_handle = scope.root_nanbox_f64(js_nanbox_bigint(one_ptr as i64));
         let op = if is_increment != 0 {
             crate::bigint::js_bigint_add
         } else {
             crate::bigint::js_bigint_sub
         };
-        dynamic_bigint_binary_op(numeric, one_val, op)
+        dynamic_bigint_binary_op_from_handles(&scope, &numeric_handle, &one_handle, op)
     } else if is_increment != 0 {
         numeric + 1.0
     } else {
@@ -539,10 +612,20 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
 /// Dynamic subtract: BigInt - BigInt if either operand is BigInt, else f64 - f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return a - b;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_sub);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_sub,
+        );
     }
     numify_arith_operand(a) - numify_arith_operand(b)
 }
@@ -550,10 +633,20 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
 /// Dynamic divide: BigInt / BigInt if either operand is BigInt, else f64 / f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return a / b;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_div);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_div,
+        );
     }
     numify_arith_operand(a) / numify_arith_operand(b)
 }
@@ -561,10 +654,20 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 /// Dynamic modulo: BigInt % BigInt if either operand is BigInt, else f64 % f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return a % b;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mod);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_mod,
+        );
     }
     let a = numify_arith_operand(a);
     let b = numify_arith_operand(b);
@@ -640,10 +743,20 @@ fn dyn_to_uint32(v: f64) -> u32 {
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return (dyn_to_int32(a) >> (dyn_to_uint32(b) & 0x1f)) as f64;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shr);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_shr,
+        );
     }
     // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
     let ai = dyn_to_int32(a);
@@ -654,10 +767,20 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
 /// Dynamic left shift: BigInt << if either operand is BigInt, else i32 << for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return (dyn_to_int32(a) << (dyn_to_uint32(b) & 0x1f)) as f64;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shl);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_shl,
+        );
     }
     // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
     let ai = dyn_to_int32(a);
@@ -668,12 +791,22 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise AND: BigInt & if either operand is BigInt, else i32 & for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
+    if is_plain_double(a) && is_plain_double(b) {
+        return (dyn_to_int32(a) & dyn_to_int32(b)) as f64;
+    }
     // ToNumeric both operands first so a boxed BigInt/Number (`Object(1n)`)
     // resolves to its primitive type before the both-BigInt check.
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_and);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_and,
+        );
     }
     // JS ToInt32 both operands (#6079).
     (dyn_to_int32(a) & dyn_to_int32(b)) as f64
@@ -682,10 +815,20 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise OR: BigInt | if either operand is BigInt, else i32 | for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return (dyn_to_int32(a) | dyn_to_int32(b)) as f64;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_or);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_or,
+        );
     }
     // JS ToInt32 both operands (#6079).
     (dyn_to_int32(a) | dyn_to_int32(b)) as f64
@@ -694,10 +837,20 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise XOR: BigInt ^ if either operand is BigInt, else i32 ^ for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return (dyn_to_int32(a) ^ dyn_to_int32(b)) as f64;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_xor);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_xor,
+        );
     }
     // JS ToInt32 both operands (#6079).
     (dyn_to_int32(a) ^ dyn_to_int32(b)) as f64
@@ -709,10 +862,20 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
 /// `js_bigint_pow`).
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
-    let a = to_numeric(a);
-    let b = to_numeric(b);
+    if is_plain_double(a) && is_plain_double(b) {
+        return crate::math::js_math_pow(a, b);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
+    let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_pow);
+        return dynamic_bigint_binary_op_from_handles(
+            &scope,
+            &a_handle,
+            &b_handle,
+            crate::bigint::js_bigint_pow,
+        );
     }
     crate::math::js_math_pow(a, b)
 }
@@ -726,18 +889,18 @@ pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
 /// ToUint32 `>>>`.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
+    if is_plain_double(a) && is_plain_double(b) {
+        return (dyn_to_uint32(a) >> (dyn_to_uint32(b) & 0x1f)) as f64;
+    }
     // Root both operands across the coercions: to_numeric(a) can invoke a
     // user ToPrimitive (allocate → GC → evacuation), which would leave the
     // raw NaN-boxed `b` — and the freshly coerced `a`, if it is a BigInt
-    // pointer — dangling. Reload through the handles after each GC-capable
-    // call (same discipline as dynamic_bigint_binary_op above).
+    // pointer — dangling. `to_numeric_pair` reloads through the handles after
+    // each GC-capable call (same discipline as dynamic_bigint_binary_op above).
     let scope = crate::gc::RuntimeHandleScope::new();
-    let a_in = scope.root_nanbox_f64(a);
-    let b_in = scope.root_nanbox_f64(b);
-    let a_num = to_numeric(a_in.get_nanbox_f64());
-    let a_handle = scope.root_nanbox_f64(a_num);
-    let b = to_numeric(b_in.get_nanbox_f64());
+    let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
     let a = a_handle.get_nanbox_f64();
+    let b = b_handle.get_nanbox_f64();
     if both_bigint_or_throw(a, b) {
         let msg = b"BigInts have no unsigned right shift, use >> instead";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
