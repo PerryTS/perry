@@ -85,6 +85,27 @@ function updateCargo(dryRun: boolean): number {
     console.error(`[update-deps] ${RUSTUP_CARGO}: ${res.error.message}`)
     return 1
   }
+  // The window can make re-resolution IMPOSSIBLE rather than merely
+  // holding a version back: if a requirement's only matching release is
+  // younger than the window (e.g. `pkg = "^4"` when 4.0.0 shipped 3 days
+  // ago), cargo fails the whole update. That is the soak doing its job,
+  // but cargo's own help line advertises
+  // CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow — a blanket env-var
+  // bypass this design deliberately does not have. Say so before someone
+  // copy-pastes it out of a red terminal.
+  if (isBlockedByPublishAge(stderr)) {
+    console.error(
+      '[update-deps] the cargo soak BLOCKED this re-resolution: a requirement can\n' +
+        '  only be satisfied by a release younger than the window (see the error above).\n' +
+        '  This is the window working, not a bug. Options, in order of preference:\n' +
+        '    1. wait out the remaining days and re-run;\n' +
+        '    2. relax/repin the requirement so an already-soaked version satisfies it;\n' +
+        '    3. if the fresh release is genuinely required, adopt it as a deliberate,\n' +
+        '       reviewable commit — NOT via CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE,\n' +
+        '       which silently disables the window for every crate in the graph.',
+    )
+    return res.status ?? 1
+  }
   if (isMinPublishAgeUnsupported(stderr)) {
     console.warn(
       '[update-deps] note: cargo ignored [unstable] min-publish-age (stable toolchain),\n' +
@@ -102,6 +123,15 @@ function updateCargo(dryRun: boolean): number {
  */
 export function isMinPublishAgeUnsupported(stderr: string): boolean {
   return /unused config key `unstable\.min-publish-age`/.test(stderr)
+}
+
+/**
+ * cargo's resolver failure when a requirement's only candidate is inside
+ * the window: `version X is too new (published N days ago, minimum age M
+ * days)`. Exported for the tests; pins cargo's wording.
+ */
+export function isBlockedByPublishAge(stderr: string): boolean {
+  return /is too new \(published .*minimum age/.test(stderr)
 }
 
 // No flag = both; naming both explicitly also means both — a naive
