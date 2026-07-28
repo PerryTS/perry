@@ -229,6 +229,36 @@ impl Drop for ConservativeScanAutoGuard {
     }
 }
 
+/// Pin this thread's conservative-scan mode to `Disabled` for the guard's
+/// lifetime, restoring the prior override on drop.
+///
+/// `Auto` and `Disabled` both resolve to
+/// `ConservativeStackScanDecision::SkipDisabled`, but `Disabled` says so
+/// unconditionally and cannot be re-interpreted by a future `Auto` policy
+/// change. Tests that assert an object survives *only* because a precise
+/// root marked it (#6910) must use this: under the test build's `Full`
+/// default the native-stack scan accepts bare addresses and would rescue the
+/// object, hiding a missing precise mark.
+pub(super) struct ConservativeScanDisabledGuard {
+    prev: Option<crate::gc::ConservativeStackScanMode>,
+}
+
+impl ConservativeScanDisabledGuard {
+    pub(super) fn new() -> Self {
+        Self {
+            prev: crate::gc::set_conservative_stack_scan_override(Some(
+                crate::gc::ConservativeStackScanMode::Disabled,
+            )),
+        }
+    }
+}
+
+impl Drop for ConservativeScanDisabledGuard {
+    fn drop(&mut self) {
+        crate::gc::set_conservative_stack_scan_override(self.prev);
+    }
+}
+
 pub(super) struct ScopedRootScannerRegistryGuard {
     rust_roots_len: usize,
     /// The thread's mutable scanner registry is taken whole (not just length-

@@ -50,6 +50,11 @@ mod malloc;
 pub use malloc::*;
 mod roots;
 pub use roots::*;
+// The one decoder shared by the mark, rewrite and incremental-barrier paths
+// for words that may hold a heap reference (#6910). Declared before its
+// consumers for readability only — Rust module order is irrelevant.
+mod root_words;
+use root_words::*;
 mod layout;
 pub use layout::*;
 mod trace;

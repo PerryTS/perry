@@ -16,6 +16,7 @@ mod incremental_sweep_reclaim;
 mod layout_trace;
 mod oldgen;
 mod os_tag;
+mod root_words;
 mod roots;
 mod runtime_roots;
 mod smoke;

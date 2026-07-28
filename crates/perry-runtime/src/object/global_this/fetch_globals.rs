@@ -74,8 +74,9 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // already been rekeyed to the moved copy — the reads return `undefined`.
     // Register the cache slot as a mutable global root (mirroring
     // `js_module_top_this`) so the collector rewrites it to the forwarding
-    // address on every move; raw-pointer slots are handled by
-    // `mark_global_root_bits` / `rewrite_value_bits`.
+    // address on every move; bare-pointer slots are handled by
+    // `mark_mutable_root_bits` / `rewrite_value_bits` (both decode through
+    // `gc::root_words::decode_root_word`).
     crate::gc::runtime_write_barrier_root_heap_word(new_ptr as u64);
     let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
     crate::gc::js_gc_register_global_root(cache_slot as i64);

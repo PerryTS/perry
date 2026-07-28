@@ -1442,6 +1442,13 @@ pub(super) fn atomic_store_ordering(
     }
 }
 
+/// Which registry a mutable root slot came from.
+///
+/// The kind selects a *telemetry bucket* only — it must never select a
+/// different pointer decoding. Both kinds are marked by
+/// `mark_mutable_root_bits` and rewritten by `try_rewrite_value`, and both
+/// therefore accept a heap reference either NaN-boxed or bare. That symmetry
+/// is the #6910 invariant; see `gc::root_words`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MutableRootSlotKind {
     ShadowStack,
@@ -1569,7 +1576,7 @@ pub(super) fn mark_mutable_root_slots_step(
                 stats.record_scan(bits);
             }
             if bits != 0 {
-                try_mark_value(bits, valid_ptrs);
+                mark_mutable_root_bits(bits, valid_ptrs);
             }
             seen += 1;
             cursor.shadow_seen = seen;
@@ -1600,7 +1607,7 @@ pub(super) fn mark_mutable_root_slots_step(
             let bits = slot.read();
             record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
             if bits != 0 {
-                mark_global_root_bits(bits, valid_ptrs);
+                mark_mutable_root_bits(bits, valid_ptrs);
             }
             seen += 1;
             cursor.global_seen = seen;
@@ -1677,21 +1684,10 @@ pub(super) fn record_mutable_slot_rewrite_source(
     }
 }
 
-#[inline]
-pub(super) fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
-    // First try NaN-boxed interpretation (exported globals, closures, etc.).
-    if try_mark_value(bits, valid_ptrs) {
-        return;
-    }
-    // Module variable globals store raw I64 pointers (not NaN-boxed).
-    // Preserve the historical direct-object-start behavior: validate
-    // against valid_ptrs and mark the target, without the conservative
-    // interior-pointer fallback used by stack scanning.
-    let raw_ptr = bits as usize;
-    try_mark_raw_root_addr(raw_ptr, valid_ptrs);
-}
-
 /// Mark mutable roots (shadow-stack slots and registered globals).
+///
+/// Both slot kinds go through `mark_mutable_root_bits`, which shares its
+/// decoder with the rewrite path (#6910) — see `gc::root_words`.
 #[allow(dead_code)]
 pub(super) fn mark_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
@@ -1709,12 +1705,7 @@ pub(super) fn mark_mutable_root_slots(
         if bits == 0 {
             return;
         }
-        match slot.kind {
-            MutableRootSlotKind::ShadowStack => {
-                try_mark_value(bits, valid_ptrs);
-            }
-            MutableRootSlotKind::GlobalRoot => mark_global_root_bits(bits, valid_ptrs),
-        }
+        mark_mutable_root_bits(bits, valid_ptrs);
     });
 }
 

@@ -109,11 +109,27 @@ pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
     });
 }
 
-/// Update slot `idx` in the current frame with NaN-boxed `value`.
+/// Update slot `idx` in the current frame with `value`.
 /// Codegen emits this at safepoints for each live pointer-typed
 /// local. Hot path — compiled code calls this directly or inlines
 /// an equivalent sequence; Rust version exists for runtime tests
 /// and debug builds.
+///
+/// # Slot value contract (#6910)
+///
+/// A slot may hold a heap reference either **NaN-boxed** (`POINTER_TAG` /
+/// `STRING_TAG` / `BIGINT_TAG`, what all shipped codegen emits — "tagged at
+/// rest") or **bare** (the untagged user address, what the
+/// representation-selection RFC §5.6 unboxed pointer reps are designed to
+/// store). Both are marked and both are rewritten, because both mark
+/// (`mark_mutable_root_bits`) and rewrite (`try_rewrite_value`) decode
+/// through `gc::root_words::decode_root_word`. If you ever add a third
+/// in-slot representation, teach that decoder — never one path only.
+///
+/// What a slot must NOT hold is an *interior* pointer: root marking resolves
+/// object starts, so a derived address (typed-array data pointer, `arr + 8`)
+/// is only safe region-locally between safepoints and must be recomputed
+/// from the rewritten header after each one.
 #[no_mangle]
 pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
     SHADOW.with(|cell| unsafe {
