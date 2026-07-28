@@ -25,8 +25,7 @@ jobs:
       pull-requests: write
     steps:
       # persist-credentials stays on: this job pushes its own fix branch.
-      # zizmor: ignore[artipacked]
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7 # zizmor: ignore[artipacked]
         with:
           # Optional PAT: PRs opened with the default github.token do NOT
           # trigger CI on the PR (GitHub drops workflow events from
