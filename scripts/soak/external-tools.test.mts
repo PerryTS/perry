@@ -173,6 +173,49 @@ test('checkDockerPrebake flags every drift class (synthetic image)', () => {
   )
 })
 
+// The reason the arg-list parse replaced a substring match: a multi-arg
+// install line must SATISFY an msrv it contains. Only the negative case was
+// covered before, so the fix itself was untested.
+test('checkDockerPrebake accepts an msrv satisfied by a later install arg', () => {
+  const tools = {
+    'sfw-free': {
+      version: '1.0.0',
+      platforms: { 'linux-arm64': { asset: 'sfw-linux-arm64', integrity: GOOD_SRI } },
+    },
+  }
+  const body = [
+    'for cmd in npm yarn pnpm pip pip3 uv cargo; do make_shim "$cmd"; done',
+    'RUN rustup toolchain install 1.91.0 1.93.0 --profile minimal',
+    'RUN curl -o /x https://github.com/SocketDev/sfw-free/releases/download/v1.0.0/sfw-linux-arm64',
+    'COPY rack/sfw-free/1.0.0/sfw /usr/local/bin/sfw',
+    `RUN asset=sfw-linux-arm64; sha=${'0'.repeat(128)} verify`,
+  ].join('\n')
+  // 1.93 is the SECOND argument — a substring match for
+  // "toolchain install 1.93" would miss it and false-fail.
+  const problems = checkDockerPrebake(body, tools, '', '1.93')
+  assert.equal(problems.some(p => /msrv toolchain/.test(p)), false)
+  // And a version the line does NOT install is still reported.
+  assert.ok(checkDockerPrebake(body, tools, '', '1.99').some(p => /msrv toolchain/.test(p)))
+})
+
+// The 5xx branch is the one this retry logic is named for; the auth
+// fallback test above does not reach it.
+test('download retries a 5xx and succeeds on the second attempt', async t => {
+  const payload = Buffer.from('after-5xx')
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls += 1
+    return calls === 1 ? new Response('boom', { status: 503 }) : new Response(payload)
+  })
+  await withEnv('GITHUB_TOKEN', undefined, async () => {
+    assert.deepEqual(
+      await download('https://example.com/a', sriOf(payload)),
+      payload,
+    )
+  })
+  assert.equal(calls, 2)
+})
+
 test('download sends the GitHub token to github.com only', async t => {
   const payload = Buffer.from('pinned-bytes')
   const seen: Array<{ host: string; auth: string | undefined }> = []

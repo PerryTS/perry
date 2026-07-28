@@ -115,6 +115,16 @@ export function checkPins(tools: Record<string, ToolPin>): string[] {
     }
     if (pin.soakBypass) {
       const { published, removable } = pin.soakBypass
+      // A bypass names the version it was granted for. Bump the pin and
+      // leave the annotation behind and it now vouches for a version that
+      // is no longer installed — the ledger says "1.13.1 was adopted early"
+      // while 1.14.0 ships unreviewed. Mismatch is a hard finding, not a
+      // stale-annotation warning.
+      if (pin.soakBypass.version !== pin.version) {
+        out.push(
+          `${name}: soakBypass is for ${pin.soakBypass.version} but the pin is ${pin.version} — re-date the annotation for the version actually pinned, or drop it`,
+        )
+      }
       if (!isValidIsoDate(published) || !isValidIsoDate(removable)) {
         out.push(`${name}: soakBypass dates are not real YYYY-MM-DD calendar dates`)
         continue

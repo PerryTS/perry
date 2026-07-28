@@ -1,11 +1,12 @@
 name: soak-autofix
 
-# The soak gates fail CLOSED by design: an expired soakBypass annotation or
-# a cleared minimumReleaseAgeExclude pin turns tools:check / soak red until
-# someone prunes it. This workflow does the pruning automatically — daily it
-# runs the fixers, and when they change anything it commits to a bot branch
-# and opens (or updates) a PR, so the gate never sits red waiting for a
-# human to delete two lines.
+# An expired soakBypass annotation or a cleared minimumReleaseAgeExclude pin
+# is STALE, not unsafe: the version has soaked, so the gates warn rather than
+# fail. Nobody should have to watch for that warning either — this workflow
+# runs the fixers daily and, when they change anything, commits to a bot
+# branch and opens (or updates) a PR, so the ledger converges to clean on its
+# own. Invalid annotations (missing, malformed, wrong arithmetic) still fail
+# the gate; those need a human.
 
 on:
   schedule:
