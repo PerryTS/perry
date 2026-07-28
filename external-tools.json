@@ -57,68 +57,80 @@
     },
     "sfw-free": {
       "description": "Socket Firewall (free tier) \u2014 malware gate on dep installs.",
-      "version": "1.13.1",
+      "version": "1.14.0",
       "repository": "github:SocketDev/sfw-free",
       "release": "asset",
       "binaryName": "sfw",
       "notes": [
         "Used when SOCKET_SECURITY_KEY is not set",
-        "Shims npm/yarn/pnpm so every install call passes through the firewall"
+        "Shims npm/yarn/pnpm so every install call passes through the firewall",
+        "1.14.0 adopted early via soakBypass: sfw diagnostics moved to stderr (shim-transparent stdout) + NO_PROXY loopback exemption"
       ],
       "platforms": {
         "darwin-arm64": {
           "asset": "sfw-free-macos-arm64",
-          "integrity": "sha512-T6wBOJGdRVSI8577lGqRNzNd6Q+1vqKyaqGgOA8G4M5MU2vcsUnXuJTgP2MMZjUqROSXUlFL0mHguuxXT2QadQ=="
+          "integrity": "sha512-vcD8n2RmW5MpoEzls8rCe2Wk7/Kj5E4xFXOtwPJaezAqCUrBtt3j0X/Hcnd4a3eBJfit7AiqvnWpnECB5Z56vg=="
         },
         "darwin-x64": {
           "asset": "sfw-free-macos-x86_64",
-          "integrity": "sha512-4G/AIY5UGU81wcepDKErY5u0nY85D8UM9nXTEPv8CR2rOV/s4IcmrkxywwZ3ipejHVQB7QmCVt0/SsqWglGikw=="
+          "integrity": "sha512-OACpfFptj5BF+uHAnmL15safe9jj9ErywqIN57A7uaRftnD/Vw+wy8c+OWLNOAkrE4NfAbfa+YG0+cOJem5yUA=="
         },
         "linux-arm64": {
           "asset": "sfw-free-linux-arm64",
-          "integrity": "sha512-FYRYR52SL+KKFldW4ogYOUnTH5OSqvtXwzGFeWi0W2x+75KZcPiGzWBbhMmh0f5QtgYLV+4qdREgmKCBEayNtA=="
+          "integrity": "sha512-CYp5C4KeyghXa0SUtT6Wr+X851hXIX03cjTFK3qAyU/x+HQkW7ZanAfvWhO+zCmv8DBrXHVWo4Nlv6VnP6vXXQ=="
         },
         "linux-x64": {
           "asset": "sfw-free-linux-x86_64",
-          "integrity": "sha512-waLrsPG2a7EOv0XuvXDQZGgCZ4MTtOfZh8TmGbM6gn2B6Nh6HI+15jaoKdAS9wgdTyIqTuqU+O+NtVYd+kuFaA=="
+          "integrity": "sha512-hbEIhCOBuUjFDpNYDYFJ1j/IwIAiaxKHsGaQ4USOiwBK1y1poupGlIRiqtDkVj4P9x+9I0Gki3xoVq6C2nyBbw=="
         },
         "win-x64": {
           "asset": "sfw-free-windows-x86_64.exe",
-          "integrity": "sha512-YYnfwR6M/PHo72LSyKtpY3bAUG4F4ckToJqGx5Fkz4rwg1+48hkxuBaF3hdxHUdHPkfO5grDyoNgXGe7FojGcg=="
+          "integrity": "sha512-JDpo1DAN+YUYSQ8VlVNPWxbOLoxPjnKSFfyAX+BsnHh3UdURWhCj+vy/aPuA3qg46CZQMpWIlzxBw+l86y/zRw=="
         }
+      },
+      "soakBypass": {
+        "version": "1.14.0",
+        "published": "2026-07-23",
+        "removable": "2026-07-30"
       }
     },
     "sfw-enterprise": {
       "description": "Socket Firewall (enterprise tier) \u2014 selected when SOCKET_SECURITY_KEY is set.",
-      "version": "1.13.1",
+      "version": "1.14.0",
       "repository": "github:SocketDev/firewall-release",
       "release": "asset",
       "binaryName": "sfw",
       "notes": [
         "Used when SOCKET_SECURITY_KEY is set (the one env var every Socket product reads)",
-        "Same shims as sfw-free, broader ecosystem support (Ruby, .NET, Go on Linux)"
+        "Same shims as sfw-free, broader ecosystem support (Ruby, .NET, Go on Linux)",
+        "1.14.0 adopted early via soakBypass: sfw diagnostics moved to stderr (shim-transparent stdout) + NO_PROXY loopback exemption"
       ],
       "platforms": {
         "darwin-arm64": {
           "asset": "sfw-macos-arm64",
-          "integrity": "sha512-ZDy2C6leKyTHZFvcZZpG2eQqVzs7buk+Hs92fkaMYME829QzyxdGQVVgwEVaGJpedGdUvhksKKcvT9IynI1kxg=="
+          "integrity": "sha512-MKU4aNBU0EGiSIJiwTnLDJQl6WKO4JPUD1j7c9FihrtizPCtokQxDc+/QAVjc9RFfUIyGZ9OYoVQbTXiysgVJw=="
         },
         "darwin-x64": {
           "asset": "sfw-macos-x86_64",
-          "integrity": "sha512-cm76we0sn7kqPOya/ZGQpPyhjRDyFT5lHigeT5Qso+QaPL6Cmwi0FVs2L7l63j+WR/9eYPU1WjjGOto5NbWsEQ=="
+          "integrity": "sha512-MWkEGX+v04H9Bpy5iC+zHthw9sl9PDAy6vAcoQsJZuy4OGCxWhwJ408egKq19KtEaQxHgwtL/6SoV2j3IHvxmg=="
         },
         "linux-arm64": {
           "asset": "sfw-linux-arm64",
-          "integrity": "sha512-9qPi3mobBfyq1k+pD2GDG0tZkhy16f7FXE9oGiwmwPvy5PXwnlzqEXnYld3qGsKIVwNhunev/If26oROTHbrHA=="
+          "integrity": "sha512-a3FZCp18qNiOPj5tVqlyFtv/N8i1RZ0VcWEqMrgEFfJ4HSMTOraNc4Jh/DVzC1MhRXSUvVcHkM+1bK6lbPE5Gg=="
         },
         "linux-x64": {
           "asset": "sfw-linux-x86_64",
-          "integrity": "sha512-lu9h8UzDZt34gdCEVHBGW6goE1Ayykq413EovV5B4nG7jBK27mI0GQstzVbWXA3wWaweT39PehXGtVpdqIDGSA=="
+          "integrity": "sha512-9SbMTScglJUzlBrrAkJrQlPvSW35LmjZz/VRRIz0VOYCzWuV9tjAxSiXXHTXmnewrDa5ym/pxobYfc1CrnLX0w=="
         },
         "win-x64": {
           "asset": "sfw-windows-x86_64.exe",
-          "integrity": "sha512-URZXauIsdUT12E2KTc4sfsxRmJm7nRJzAgM+IYGX4Xq+X0cl/eAbH5SpYIJKpsnW9csSztW9ceyPhlM+f3neIQ=="
+          "integrity": "sha512-1SnvHJ04sQrRgMAVtGYri5rBysXFXc8PFPXT1kWBF79X6Xa+4uaJb3epJ6HW9HdRvnquDDgP/ZVj7wb6rglADQ=="
         }
+      },
+      "soakBypass": {
+        "version": "1.14.0",
+        "published": "2026-07-23",
+        "removable": "2026-07-30"
       }
     },
     "zizmor": {
