@@ -60,7 +60,7 @@ pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) enum LayoutSlotMask {
     Inline(u64),
     Heap(Vec<u64>),
@@ -275,7 +275,7 @@ impl LayoutSlotMask {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct TypedLayoutDescriptor {
     pub(super) slot_count: usize,
     pub(super) raw_f64_mask: LayoutSlotMask,
@@ -291,6 +291,139 @@ thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
     #[cfg(test)]
     pub(super) static TRACE_SLOT_READS: Cell<usize> = const { Cell::new(0) };
+}
+
+// #6893: SHAPE-keyed canonical typed layout. Replaces the per-OBJECT
+// TYPED_LAYOUTS + LAYOUT_SLOT_MASKS storage for the common case where an
+// object's live layout matches its shape (header `GC_OBJ_TYPED_LAYOUT_INTACT`).
+// Keyed by the shared `keys_array` pointer — all same-shape objects share ONE
+// canonical keys array ("shared keys_array IS a shape"), so this is O(shapes),
+// not O(objects). Measured: object churn stores a per-object descriptor for
+// every one of ~2M `{v,w}` objects (all identical) → ~392 MB; keying by the
+// (single) shared keys_array collapses that to one entry (churn peak RSS
+// 830→262 MB, behaviour-identical).
+//
+// Value `None` = AMBIGUOUS: two live layouts share the same key NAMES but
+// different value TYPES (`{v:1,w:2}` vs `{v:"a",w:"b"}`); those objects fall
+// back to the per-object maps. ACCELERATOR ONLY: a miss, a stale entry
+// (keys_array relocated/recycled by a moving GC), an ambiguous shape, or a
+// field-count mismatch all fall back to the per-object map and then the
+// conservative scan — never a wrong descriptor (mirrors the ShapeTable trust
+// model). Nothing to prune on object death (entries are per-shape, shared).
+thread_local! {
+    static SHAPE_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, Option<TypedLayoutDescriptor>>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+fn shape_layout_keyed_enabled() -> bool {
+    use std::sync::OnceLock;
+    static E: OnceLock<bool> = OnceLock::new();
+    // Default ON; `PERRY_SHAPE_LAYOUT_KEYED=0` restores the per-object maps
+    // (A/B validation).
+    *E.get_or_init(|| {
+        std::env::var("PERRY_SHAPE_LAYOUT_KEYED")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    })
+}
+
+/// keys_array only exists on genuine shaped objects (`ObjectFields`). Arrays,
+/// closures, RegExps etc. also flow through `layout_note_slot` /
+/// `layout_visit_pointer_slots`, and reading `ObjectHeader::keys_array` off one
+/// would interpret unrelated payload bytes as a pointer. Returns 0 for anything
+/// that is not an ObjectFields object (⟹ callers skip the shared shape path).
+#[inline]
+unsafe fn object_keys_array_ptr(user_ptr: usize) -> usize {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    let header = header_from_user_ptr(user_ptr as *const u8);
+    if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
+        return 0;
+    }
+    (*(user_ptr as *const crate::object::ObjectHeader)).keys_array as usize
+}
+
+/// The shared canonical descriptor for `user_ptr`'s shape, if shape-keying is
+/// on, the object carries a keys_array, and the shape is unambiguous (`Some`).
+#[inline]
+unsafe fn shape_shared_descriptor(user_ptr: usize) -> Option<TypedLayoutDescriptor> {
+    if !shape_layout_keyed_enabled() {
+        return None;
+    }
+    let keys = object_keys_array_ptr(user_ptr);
+    if keys == 0 {
+        return None;
+    }
+    let desc = SHAPE_LAYOUTS.with(|m| m.borrow().get(&keys).and_then(|e| e.clone()))?;
+    // Defense-in-depth: the descriptor's `slot_count` is pinned to the owning
+    // object's `field_count` at install (`init_typed_shape_layout` rejects a
+    // mismatch). A differing current field_count means this object's shape is
+    // not the one the descriptor describes — e.g. a keys_array address reused by
+    // a shape with a different field count (moving-GC relocation before the new
+    // address is re-installed). Fall back (per-object → conservative).
+    let field_count = (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize;
+    if desc.slot_count != field_count {
+        return None;
+    }
+    Some(desc)
+}
+
+/// Trace-path helper: pointer mask for a SIDE_MASK object with no per-object
+/// mask entry. Returns the shape's canonical pointer mask iff the object is
+/// still INTACT (⟹ it was registered against the shared shape descriptor, not
+/// a diverged per-object mask).
+#[inline]
+unsafe fn shape_shared_pointer_mask(
+    user_ptr: usize,
+    header: *const GcHeader,
+) -> Option<LayoutSlotMask> {
+    if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT == 0 {
+        return None;
+    }
+    shape_shared_descriptor(user_ptr).map(|d| d.pointer_mask)
+}
+
+/// Install `descriptor` as the canonical layout for `keys` and set the object's
+/// header state (INTACT + POINTER_FREE/SIDE_MASK), WITHOUT any per-object map
+/// entry. Returns `true` if the object now rides the shared shape descriptor;
+/// `false` if the shape is ambiguous (caller falls back to per-object).
+unsafe fn shape_install_shared(
+    keys: usize,
+    header: *mut GcHeader,
+    descriptor: &TypedLayoutDescriptor,
+) -> bool {
+    let mut shared_ok = false;
+    SHAPE_LAYOUTS.with(|m| {
+        let mut m = m.borrow_mut();
+        match m.get(&keys) {
+            None => {
+                m.insert(keys, Some(descriptor.clone()));
+                shared_ok = true;
+            }
+            Some(Some(existing)) if existing == descriptor => {
+                shared_ok = true;
+            }
+            Some(Some(_)) => {
+                // Same keys, different layout ⟹ ambiguous. Poison the entry so
+                // future lookups (and any still-INTACT siblings) fall back.
+                m.insert(keys, None);
+                shared_ok = false;
+            }
+            Some(None) => {
+                shared_ok = false; // already ambiguous
+            }
+        }
+    });
+    if shared_ok {
+        header_set_typed_layout_intact(header);
+        if descriptor.pointer_mask.is_empty() {
+            set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        } else {
+            set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+        }
+    }
+    shared_ok
 }
 
 pub(super) unsafe fn header_from_user_ptr(user_ptr: *const u8) -> *mut GcHeader {
@@ -504,7 +637,13 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         // still tolerates a `None` defensively, so a transiently desynced bit
         // can only cost an extra fall-through, never mis-track a slot.
         if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
-            if let Some(typed) = TYPED_LAYOUTS.with(|m| m.borrow().get(&parent_user).cloned()) {
+            // #6893: per-object descriptor (diverged/ambiguous objects) OR the
+            // shared shape descriptor (the common INTACT case). Exactly one is
+            // present for an INTACT object.
+            let typed = TYPED_LAYOUTS
+                .with(|m| m.borrow().get(&parent_user).cloned())
+                .or_else(|| shape_shared_descriptor(parent_user));
+            if let Some(typed) = typed {
                 if slot_index >= typed.slot_count {
                     layout_set_typed_unknown(header, parent_user);
                     return;
@@ -683,6 +822,22 @@ unsafe fn init_typed_shape_layout(
         raw_f64_mask,
         pointer_mask: pointer_mask.clone(),
     };
+    // #6893: try the O(shapes) shared shape descriptor (keyed by the canonical
+    // keys_array) before per-object storage.
+    let keys = if shape_layout_keyed_enabled() {
+        object_keys_array_ptr(user_ptr)
+    } else {
+        0
+    };
+    if keys != 0 && shape_install_shared(keys, header, &descriptor) {
+        TYPED_LAYOUTS.with(|m| {
+            m.borrow_mut().remove(&user_ptr);
+        });
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().remove(&user_ptr);
+        });
+        return;
+    }
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().insert(user_ptr, descriptor);
     });
@@ -788,6 +943,21 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
             raw_f64_mask,
             pointer_mask: pointer_mask.clone(),
         };
+        // #6893: shared shape descriptor before per-object storage.
+        let keys = if shape_layout_keyed_enabled() {
+            object_keys_array_ptr(user_ptr)
+        } else {
+            0
+        };
+        if keys != 0 && shape_install_shared(keys, header, &descriptor) {
+            TYPED_LAYOUTS.with(|m| {
+                m.borrow_mut().remove(&user_ptr);
+            });
+            LAYOUT_SLOT_MASKS.with(|m| {
+                m.borrow_mut().remove(&user_ptr);
+            });
+            return;
+        }
         TYPED_LAYOUTS.with(|m| {
             m.borrow_mut().insert(user_ptr, descriptor);
         });
@@ -937,7 +1107,9 @@ pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(
                     }
                     return true;
                 }
-                let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
+                let mask = LAYOUT_SLOT_MASKS
+                    .with(|m| m.borrow().get(&user_ptr).cloned())
+                    .or_else(|| shape_shared_pointer_mask(user_ptr, header));
                 let Some(mask) = mask else {
                     set_layout_state(header, GC_LAYOUT_UNKNOWN);
                     return false;
@@ -1245,7 +1417,9 @@ pub(super) unsafe fn heap_payload_slot_selection(
                     raw_numeric_recorded: false,
                 };
             }
-            let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
+            let mask = LAYOUT_SLOT_MASKS
+                .with(|m| m.borrow().get(&user_ptr).cloned())
+                .or_else(|| shape_shared_pointer_mask(user_ptr, header));
             match mask {
                 Some(mask) => HeapPayloadSlotSelection::Masked {
                     mask,

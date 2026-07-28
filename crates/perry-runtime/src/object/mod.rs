@@ -1943,6 +1943,19 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
     {
         (*obj).parent_class_id = 0;
     }
+    // #6893: the object's typed-shape layout descriptor is keyed by its
+    // keys_array (shared per shape via SHAPE_LAYOUTS). A keys_array pointer
+    // change is a shape change (add/delete key), so the exact typed layout no
+    // longer applies to THIS object. Pre-#6893 the per-object store-validation
+    // (`layout_note_slot`, keyed by the object address) caught this implicitly
+    // during the field shuffle; the shared descriptor lookup now misses on the
+    // NEW keys_array, so that trigger is lost — invalidate explicitly here.
+    // Gated: `mark_object_dynamic_shape_unknown` early-returns for objects that
+    // carry no typed layout, so plain/growing objects and initial construction
+    // (INTACT not yet set) pay nothing.
+    if (*obj).keys_array != keys_array {
+        mark_object_dynamic_shape_unknown(obj);
+    }
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;
     crate::gc::runtime_write_barrier_slot(
