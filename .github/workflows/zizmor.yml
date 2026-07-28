@@ -11,22 +11,39 @@ permissions: {}
 jobs:
   zizmor:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0
+      - uses: actions/setup-node@v7
         with:
-          advanced-security: false
-          inputs: .github/
-          # Version rides external-tools.json tools.zizmor (keep in lockstep
-          # so local `npm run tools:install` audits with the same zizmor).
-          version: "1.26.1"
-          # Starting gate: high only. The 34 medium findings (missing
-          # permissions: blocks in test.yml / benchmark.yml /
-          # container-tests.yml / cache-warm.yml / simctl-tests.yml) are a
-          # tracked ratchet — audit each job's real token needs, add the
-          # blocks, then drop this line to gate at medium.
-          min-severity: high
+          node-version-file: .node-version
+      # zizmor rides the same SRI-pinned rack as every other external tool
+      # (external-tools.json tools.zizmor) instead of a marketplace action —
+      # one pin source, and local `npm run tools:install` audits with the
+      # exact same binary CI does.
+      - name: Install pinned zizmor
+        run: |
+          node scripts/soak/external-tools.mts --install zizmor
+          node scripts/soak/external-tools.mts --print-bin >> "$GITHUB_PATH"
+      - name: Audit GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pass the token only when non-empty: zizmor treats an empty
+          # --gh-token as a real token, then fatally errors when its online
+          # impostor-commit check can't authenticate.
+          #
+          # Starting gate: high only (config in .github/zizmor.yml). The 34
+          # medium findings (missing permissions: blocks in test.yml /
+          # benchmark.yml / container-tests.yml / cache-warm.yml /
+          # simctl-tests.yml) are a tracked ratchet — audit each job's real
+          # token needs, add the blocks, then gate at medium.
+          if [ -n "${GH_TOKEN}" ]; then
+            zizmor .github/ --gh-token "${GH_TOKEN}" --min-severity high
+          else
+            zizmor .github/ --min-severity high
+          fi
