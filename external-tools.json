@@ -2,7 +2,7 @@
   "tools": {
     "pnpm": {
       "description": "pnpm \u2014 the fleet's package manager.",
-      "version": "11.8.0",
+      "version": "11.15.1",
       "packageManager": "pnpm",
       "repository": "github:pnpm/pnpm",
       "release": "asset",
@@ -13,35 +13,35 @@
       "platforms": {
         "darwin-arm64": {
           "asset": "pnpm-darwin-arm64.tar.gz",
-          "integrity": "sha512-kgYcLu653+Gx7l7qEtM2zMNLBvb96ABcRSkzOrbfvkndb+veMt6lHJK5r3wTfuRYlDb8Lnk/h0wUD6sP3taJ9g=="
+          "integrity": "sha512-lHYcdK/uTX+hHyXqGrkYZSB9g1RcPMo02rk1d0val5dEGAp8C5omJg45gtiKE72rFtQU8xVGRaBD+9HCnWNrTQ=="
         },
         "darwin-x64": {
-          "asset": "pnpm-11.8.0.tgz",
-          "integrity": "sha512-wfXnxMskHI8XS3Q4UdgvQrgCMkr8iw8Ra5atsVqgZmSUjd42lgo7oQebpbSyndAUATW5S1tfUmNZIknWjlVfJg=="
+          "asset": "pnpm-11.15.1.tgz",
+          "integrity": "sha512-gTULB+U8lTigLx8jA7QpD6LXvgTlbiqXDEzEtBfcdh3hlu2r1J1Vx9yVgNuBAHxEFD5OPX5GKzAA0jwlUSLQZQ=="
         },
         "linux-arm64": {
           "asset": "pnpm-linux-arm64.tar.gz",
-          "integrity": "sha512-p1IcVUlwYf3OJQYmdHGFr08d1BOSatHEmLJSBSdoNPGqOqfslFHjSqiuZ/3yuQxxypqp8OfnM3ci3Jh7ZEBlSw=="
+          "integrity": "sha512-zgPT+13ucXlb/YPP15xI5lsDpFohQY9zzUzr+KIipApmBbvzNBif01a5GXrqEuXHvbUhEAcB+eM4ZuvJ9+LfZg=="
         },
         "linux-arm64-musl": {
           "asset": "pnpm-linux-arm64-musl.tar.gz",
-          "integrity": "sha512-u5Do3diwK7FL5vk+i/x2I4q4ujdZ5gSoLNgmlt1w2C7NOjAZOpDK0CJYM4gDa5BetEwzdNpuN/gaMqzJk6I5NA=="
+          "integrity": "sha512-5ttsFqCHnwPMjfbP7wcD+luX1fH13YeY3Oru/mwVeaQRIgeXbS9+pe6XXzM8R8LFo5RcWjkV/FzCVfLL3iZ3ew=="
         },
         "linux-x64": {
           "asset": "pnpm-linux-x64.tar.gz",
-          "integrity": "sha512-Sn7hG4Xsq6pmi8TE8lpIkwRzAYzf5qtFk8zSsZWkSJFcmv5FlsrO8UP3lLRI+ppcRNYS10FMCTwXe3Nt66A0Pg=="
+          "integrity": "sha512-N6t/VxORcB/i0XTJBGaRjaw986N8c4SswtJejFfLEOgi2lbTSJCRyk7bNbZ1+FPVRVzBE8Wt4470m1Y+LIOACg=="
         },
         "linux-x64-musl": {
           "asset": "pnpm-linux-x64-musl.tar.gz",
-          "integrity": "sha512-5WXlo2yCDmoBIue5iHRK3zNSPVAmzci+5RhuxwUA4hnH9W3TFjDnQHyAzDVnkY878mfTXE35THZeEc1OKYPmag=="
+          "integrity": "sha512-MQ2S67HyPgzj+rk2kvTiC9M62XUxuT5IGQiNsbI8fW+RI9haFjaA/cy+kL84TXi+g/MDok5+plxNUa80Tayjrw=="
         },
         "win-arm64": {
           "asset": "pnpm-win32-arm64.zip",
-          "integrity": "sha512-iv1hJEj9FUiVFae2cmCYjbRK0Xn27Uh+kpglT2LWvQyl4WeIOgs1ouKrptVxk3X3t7DB5vuYKbsmE+9BnoQ4FA=="
+          "integrity": "sha512-PiVRWhoYiNcdBXjPPT9I2XQQN+/BZmrgCTVuX5EuV4/1pcpEQlbHxvaU+XMf1nO+Bt9scV0Qi7kk09eBFfqlAA=="
         },
         "win-x64": {
           "asset": "pnpm-win32-x64.zip",
-          "integrity": "sha512-jyqMgedndbck/xJjXPem5Lw7V0YtDfiUJIB81e/hmnrg3yLKPoyCKO5ILegYkLPIr945IJRcVoJZwjtog8FCqg=="
+          "integrity": "sha512-U1SFdMLlhEgZ6zQpZU+Y0itOBqF7PPb42WScXJ0VY4aPDGmVjYI4r4g3EsOEkcVwMhPI0ISsACgZ9S2ixBHAMw=="
         }
       }
     },
@@ -52,8 +52,8 @@
       ],
       "description": "npm \u2014 pinned, SRI-verified registry tarball; installed without self-update",
       "repository": "npm:npm",
-      "version": "12.0.0",
-      "integrity": "sha512-qzvPQfNSY7louiM6rv7dL0hi5esBGLn1lLwxbdyL5XOIssWzoYMwn8xqvWhYcZL6onTkenYSxrtKxsFrFbUFyw=="
+      "version": "12.0.1",
+      "integrity": "sha512-L5T9i/YAQWQWqTS/xZxJkei/9zcu99hCeE4qi41IyBVV7mRQad3qc2JfuOktwmH+qwGI/V2rbCL+/UYxb1+RQA=="
     },
     "sfw-free": {
       "description": "Socket Firewall (free tier) \u2014 malware gate on dep installs.",
@@ -135,7 +135,7 @@
     },
     "zizmor": {
       "description": "GitHub Actions security linter \u2014 audits .github/ for workflow-injection / credential-leak patterns.",
-      "version": "1.26.1",
+      "version": "1.28.0",
       "repository": "github:zizmorcore/zizmor",
       "release": "asset",
       "notes": [
@@ -145,23 +145,23 @@
       "platforms": {
         "darwin-arm64": {
           "asset": "zizmor-aarch64-apple-darwin.tar.gz",
-          "integrity": "sha512-UfLPPdYejR8fvrFwr9Tos7LKFvqr7YcAHWZlAmeo7imYI/fIucYnCY6HeDyk2cbFUvDpQTdps6WQS1QpqCtTfQ=="
+          "integrity": "sha512-qErEbGBrRH6hwuJDTPio0VUKpV3gKT39eNFwLel7J1RqaucMC5yTilyoo0UdIa9ilxM5P5EocN+wuH8Gw90c7Q=="
         },
         "darwin-x64": {
           "asset": "zizmor-x86_64-apple-darwin.tar.gz",
-          "integrity": "sha512-SCbcEzF/zy2qNuNaocLPIUC4Wuq5GnHt0iUFve3qx6bJyFdzU6pDFZkF64dojGC7M5gAcK/4acXGPx3YnMDy/g=="
+          "integrity": "sha512-hXXbUc6nELKsjUznvTq94dAv4qjeH74Gyj3/1ji+LJf2DWNbk82zc3qM5Y0ik8MkPwrQPC537ETtznTtPKNtQQ=="
         },
         "linux-arm64": {
           "asset": "zizmor-aarch64-unknown-linux-gnu.tar.gz",
-          "integrity": "sha512-TkGvwt0zYdmiJ7LZmy6Bz9CdkqcuEpFKhXUK9m0MhSPxBx2gYBsrw6OxGSttMEQ3bvxdvyG6rqbnMgjyDZB1zA=="
+          "integrity": "sha512-OtTfOoCgBvs05J5fTuo2Kva0y+3j8f7DqlOpbugbd/k/EJRPJjXQpDcEClXn3ClDNXq597kqG3yOAekfidMYUQ=="
         },
         "linux-x64": {
           "asset": "zizmor-x86_64-unknown-linux-gnu.tar.gz",
-          "integrity": "sha512-zTMERMDd3JfaRX12klj2fhZGDyrXeLkVUY1QJkCv8RRmAa9uVuH88gHOnv4CQtC5hXS7FPRJzvCVOnw38gV83g=="
+          "integrity": "sha512-j+SaxjjzZpol8oGl+5yoXPijSLnLaZQd/hjQQfQmxAJpoRJsRITzo52iYOd5E7Gf8YmEt455QjzjPO5eVaC6YQ=="
         },
         "win-x64": {
           "asset": "zizmor-x86_64-pc-windows-msvc.zip",
-          "integrity": "sha512-Pijh/CrrOAkZzLiTr2LTHdI8d6+5Ql6B+suY6fXVmL8UVa+4Q36hHL5K67iRFz03v/V/UcrY6+dfhnmot/xfww=="
+          "integrity": "sha512-YS/j35KOSOO32ZZSCeRgNFQmthYuGBb0hQ2puPimy9c0kSi3eYeINasLBuqEPzfqcoabxePZCG1byBMT4+dDbQ=="
         }
       }
     },
