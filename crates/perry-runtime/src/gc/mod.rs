@@ -129,6 +129,16 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
         restore_minor_in_alloc(prev_in_alloc);
         return outcome;
     }
+    // #6893-followup: major-GC pacing. A non-moving minor can't free array-growth
+    // forwarding stubs, so reallocation-heavy churn grows the arena unbounded —
+    // only a full mark-sweep reclaims stubs. Escalate to a full once the arena's
+    // live bytes exceed K× the last full's live set (belt-and-suspenders for
+    // callers that reach a minor outside the budgeted pressure path).
+    if arena_growth_full_escalation_due() {
+        let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(trigger.kind));
+        restore_minor_in_alloc(prev_in_alloc);
+        return outcome;
+    }
     let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
     let start = Instant::now();
     crate::arena::old_pages_begin_gc_cycle();

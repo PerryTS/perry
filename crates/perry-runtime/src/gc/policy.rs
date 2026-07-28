@@ -533,6 +533,9 @@ thread_local! {
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Total arena in-use bytes measured right after the last FULL mark-sweep —
+    /// the baseline for major-GC pacing (`arena_growth_full_escalation_due`).
+    pub(super) static GC_LAST_FULL_ARENA_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Re-entrancy guard for the #5476 direct old-gen reclaim driven from
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
@@ -868,6 +871,10 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     let old_in_use =
         crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    // Record the TOTAL post-full live set for major-GC pacing (young+old): the
+    // full sweep is the only collection that frees forwarding stubs, so this is
+    // the "clean" size the arena returns to and the base for the K× growth gate.
+    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(crate::arena::arena_in_use_bytes()));
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
 }
 
@@ -1564,6 +1571,42 @@ pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
     cycle.state
 }
 
+/// #6893-followup: major-GC pacing. A non-moving minor sweep cannot free
+/// array-growth forwarding stubs (`Array.prototype.push` reallocations leave a
+/// stub per growth), so churn that grows arrays accumulates stubs that pin every
+/// arena block → unbounded RSS; only a FULL mark-sweep reclaims them. Escalate a
+/// minor to a full once the arena's live bytes exceed K× the clean live set
+/// measured after the last full. Gated by an absolute floor so small heaps never
+/// pay for a full, and by the K× ratio so a workload with a legitimately large
+/// *stable* live set (retain-style) does not over-escalate — its arena hovers
+/// near its own baseline, well under K×.
+pub(super) fn arena_growth_full_escalation_due() -> bool {
+    // Env overrides for tuning/measurement; defaults chosen so churn oscillates
+    // ~baseline..2×baseline and stays below node's peak.
+    const DEFAULT_FLOOR_MB: usize = 32;
+    const DEFAULT_GROWTH_NUM: usize = 2;
+    let floor_bytes = std::env::var("PERRY_GC_MAJOR_PACING_FLOOR_MB")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_FLOOR_MB)
+        .saturating_mul(1024 * 1024);
+    if floor_bytes == 0 {
+        return false; // PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing
+    }
+    let growth_num = std::env::var("PERRY_GC_MAJOR_PACING_GROWTH")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(DEFAULT_GROWTH_NUM);
+    let in_use = crate::arena::arena_in_use_bytes();
+    if in_use < floor_bytes {
+        return false;
+    }
+    let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
+    // No full yet (baseline 0): bound the initial growth once we clear the floor.
+    baseline == 0 || in_use > baseline.saturating_mul(growth_num)
+}
+
 fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option<BudgetedGcCycle> {
     let trigger = gc_budgeted_due_trigger()?;
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
@@ -1580,7 +1623,10 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
             let rebaseline = BudgetedGcRebaseline::ArenaBytes {
                 pre_in_use: crate::arena::arena_in_use_bytes(),
             };
-            if gen_gc_enabled() {
+            // Major-GC pacing: escalate to a full when arena live-bytes grew
+            // past K× the last full's live set — the non-moving minor can't free
+            // array-growth forwarding stubs (see `arena_growth_full_escalation_due`).
+            if gen_gc_enabled() && !arena_growth_full_escalation_due() {
                 gc_start_budgeted_minor_fallback_cycle(
                     GcTriggerKind::ArenaBytes,
                     rebaseline,
@@ -1594,7 +1640,8 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
             let rebaseline = BudgetedGcRebaseline::MallocCount {
                 pre_count: malloc_object_count(),
             };
-            if gen_gc_enabled() {
+            // Major-GC pacing (malloc-count trigger twin of the ArenaBytes branch).
+            if gen_gc_enabled() && !arena_growth_full_escalation_due() {
                 gc_start_budgeted_minor_fallback_cycle(
                     GcTriggerKind::MallocCount,
                     rebaseline,
