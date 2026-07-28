@@ -1,0 +1,169 @@
+{
+  "tools": {
+    "pnpm": {
+      "description": "pnpm \u2014 the fleet's package manager.",
+      "version": "11.8.0",
+      "packageManager": "pnpm",
+      "repository": "github:pnpm/pnpm",
+      "release": "asset",
+      "notes": [
+        "Latest soaked pnpm \u2014 CI downloads + SRI-verifies (sha512) the pinned asset",
+        "darwin-x64 has no SEA asset upstream; its pin is the npm registry tarball"
+      ],
+      "platforms": {
+        "darwin-arm64": {
+          "asset": "pnpm-darwin-arm64.tar.gz",
+          "integrity": "sha512-kgYcLu653+Gx7l7qEtM2zMNLBvb96ABcRSkzOrbfvkndb+veMt6lHJK5r3wTfuRYlDb8Lnk/h0wUD6sP3taJ9g=="
+        },
+        "darwin-x64": {
+          "asset": "pnpm-11.8.0.tgz",
+          "integrity": "sha512-wfXnxMskHI8XS3Q4UdgvQrgCMkr8iw8Ra5atsVqgZmSUjd42lgo7oQebpbSyndAUATW5S1tfUmNZIknWjlVfJg=="
+        },
+        "linux-arm64": {
+          "asset": "pnpm-linux-arm64.tar.gz",
+          "integrity": "sha512-p1IcVUlwYf3OJQYmdHGFr08d1BOSatHEmLJSBSdoNPGqOqfslFHjSqiuZ/3yuQxxypqp8OfnM3ci3Jh7ZEBlSw=="
+        },
+        "linux-arm64-musl": {
+          "asset": "pnpm-linux-arm64-musl.tar.gz",
+          "integrity": "sha512-u5Do3diwK7FL5vk+i/x2I4q4ujdZ5gSoLNgmlt1w2C7NOjAZOpDK0CJYM4gDa5BetEwzdNpuN/gaMqzJk6I5NA=="
+        },
+        "linux-x64": {
+          "asset": "pnpm-linux-x64.tar.gz",
+          "integrity": "sha512-Sn7hG4Xsq6pmi8TE8lpIkwRzAYzf5qtFk8zSsZWkSJFcmv5FlsrO8UP3lLRI+ppcRNYS10FMCTwXe3Nt66A0Pg=="
+        },
+        "linux-x64-musl": {
+          "asset": "pnpm-linux-x64-musl.tar.gz",
+          "integrity": "sha512-5WXlo2yCDmoBIue5iHRK3zNSPVAmzci+5RhuxwUA4hnH9W3TFjDnQHyAzDVnkY878mfTXE35THZeEc1OKYPmag=="
+        },
+        "win-arm64": {
+          "asset": "pnpm-win32-arm64.zip",
+          "integrity": "sha512-iv1hJEj9FUiVFae2cmCYjbRK0Xn27Uh+kpglT2LWvQyl4WeIOgs1ouKrptVxk3X3t7DB5vuYKbsmE+9BnoQ4FA=="
+        },
+        "win-x64": {
+          "asset": "pnpm-win32-x64.zip",
+          "integrity": "sha512-jyqMgedndbck/xJjXPem5Lw7V0YtDfiUJIB81e/hmnrg3yLKPoyCKO5ILegYkLPIr945IJRcVoJZwjtog8FCqg=="
+        }
+      }
+    },
+    "npm": {
+      "notes": [
+        "npm 12 (min-release-age support). ONE platform-agnostic registry tarball, single integrity",
+        "Installed from the pinned tarball only \u2014 never npm install -g npm, no self-update path"
+      ],
+      "description": "npm \u2014 pinned, SRI-verified registry tarball; installed without self-update",
+      "repository": "npm:npm",
+      "version": "12.0.0",
+      "integrity": "sha512-qzvPQfNSY7louiM6rv7dL0hi5esBGLn1lLwxbdyL5XOIssWzoYMwn8xqvWhYcZL6onTkenYSxrtKxsFrFbUFyw=="
+    },
+    "sfw-free": {
+      "description": "Socket Firewall (free tier) \u2014 malware gate on dep installs.",
+      "version": "1.13.1",
+      "repository": "github:SocketDev/sfw-free",
+      "release": "asset",
+      "binaryName": "sfw",
+      "notes": [
+        "Used when SOCKET_SECURITY_KEY is not set",
+        "Shims npm/yarn/pnpm so every install call passes through the firewall"
+      ],
+      "platforms": {
+        "darwin-arm64": {
+          "asset": "sfw-free-macos-arm64",
+          "integrity": "sha512-T6wBOJGdRVSI8577lGqRNzNd6Q+1vqKyaqGgOA8G4M5MU2vcsUnXuJTgP2MMZjUqROSXUlFL0mHguuxXT2QadQ=="
+        },
+        "darwin-x64": {
+          "asset": "sfw-free-macos-x86_64",
+          "integrity": "sha512-4G/AIY5UGU81wcepDKErY5u0nY85D8UM9nXTEPv8CR2rOV/s4IcmrkxywwZ3ipejHVQB7QmCVt0/SsqWglGikw=="
+        },
+        "linux-arm64": {
+          "asset": "sfw-free-linux-arm64",
+          "integrity": "sha512-FYRYR52SL+KKFldW4ogYOUnTH5OSqvtXwzGFeWi0W2x+75KZcPiGzWBbhMmh0f5QtgYLV+4qdREgmKCBEayNtA=="
+        },
+        "linux-x64": {
+          "asset": "sfw-free-linux-x86_64",
+          "integrity": "sha512-waLrsPG2a7EOv0XuvXDQZGgCZ4MTtOfZh8TmGbM6gn2B6Nh6HI+15jaoKdAS9wgdTyIqTuqU+O+NtVYd+kuFaA=="
+        },
+        "win-x64": {
+          "asset": "sfw-free-windows-x86_64.exe",
+          "integrity": "sha512-YYnfwR6M/PHo72LSyKtpY3bAUG4F4ckToJqGx5Fkz4rwg1+48hkxuBaF3hdxHUdHPkfO5grDyoNgXGe7FojGcg=="
+        }
+      }
+    },
+    "sfw-enterprise": {
+      "description": "Socket Firewall (enterprise tier) \u2014 selected when SOCKET_SECURITY_KEY is set.",
+      "version": "1.13.1",
+      "repository": "github:SocketDev/firewall-release",
+      "release": "asset",
+      "binaryName": "sfw",
+      "notes": [
+        "Used when SOCKET_SECURITY_KEY is set (the one env var every Socket product reads)",
+        "Same shims as sfw-free, broader ecosystem support (Ruby, .NET, Go on Linux)"
+      ],
+      "platforms": {
+        "darwin-arm64": {
+          "asset": "sfw-macos-arm64",
+          "integrity": "sha512-ZDy2C6leKyTHZFvcZZpG2eQqVzs7buk+Hs92fkaMYME829QzyxdGQVVgwEVaGJpedGdUvhksKKcvT9IynI1kxg=="
+        },
+        "darwin-x64": {
+          "asset": "sfw-macos-x86_64",
+          "integrity": "sha512-cm76we0sn7kqPOya/ZGQpPyhjRDyFT5lHigeT5Qso+QaPL6Cmwi0FVs2L7l63j+WR/9eYPU1WjjGOto5NbWsEQ=="
+        },
+        "linux-arm64": {
+          "asset": "sfw-linux-arm64",
+          "integrity": "sha512-9qPi3mobBfyq1k+pD2GDG0tZkhy16f7FXE9oGiwmwPvy5PXwnlzqEXnYld3qGsKIVwNhunev/If26oROTHbrHA=="
+        },
+        "linux-x64": {
+          "asset": "sfw-linux-x86_64",
+          "integrity": "sha512-lu9h8UzDZt34gdCEVHBGW6goE1Ayykq413EovV5B4nG7jBK27mI0GQstzVbWXA3wWaweT39PehXGtVpdqIDGSA=="
+        },
+        "win-x64": {
+          "asset": "sfw-windows-x86_64.exe",
+          "integrity": "sha512-URZXauIsdUT12E2KTc4sfsxRmJm7nRJzAgM+IYGX4Xq+X0cl/eAbH5SpYIJKpsnW9csSztW9ceyPhlM+f3neIQ=="
+        }
+      }
+    },
+    "zizmor": {
+      "description": "GitHub Actions security linter \u2014 audits .github/ for workflow-injection / credential-leak patterns.",
+      "version": "1.26.1",
+      "repository": "github:zizmorcore/zizmor",
+      "release": "asset",
+      "notes": [
+        "Required: CI (blocks merges on medium+ findings)",
+        "Installed by the setup-and-install composite; SRI-verified (sha512) per platform"
+      ],
+      "platforms": {
+        "darwin-arm64": {
+          "asset": "zizmor-aarch64-apple-darwin.tar.gz",
+          "integrity": "sha512-UfLPPdYejR8fvrFwr9Tos7LKFvqr7YcAHWZlAmeo7imYI/fIucYnCY6HeDyk2cbFUvDpQTdps6WQS1QpqCtTfQ=="
+        },
+        "darwin-x64": {
+          "asset": "zizmor-x86_64-apple-darwin.tar.gz",
+          "integrity": "sha512-SCbcEzF/zy2qNuNaocLPIUC4Wuq5GnHt0iUFve3qx6bJyFdzU6pDFZkF64dojGC7M5gAcK/4acXGPx3YnMDy/g=="
+        },
+        "linux-arm64": {
+          "asset": "zizmor-aarch64-unknown-linux-gnu.tar.gz",
+          "integrity": "sha512-TkGvwt0zYdmiJ7LZmy6Bz9CdkqcuEpFKhXUK9m0MhSPxBx2gYBsrw6OxGSttMEQ3bvxdvyG6rqbnMgjyDZB1zA=="
+        },
+        "linux-x64": {
+          "asset": "zizmor-x86_64-unknown-linux-gnu.tar.gz",
+          "integrity": "sha512-zTMERMDd3JfaRX12klj2fhZGDyrXeLkVUY1QJkCv8RRmAa9uVuH88gHOnv4CQtC5hXS7FPRJzvCVOnw38gV83g=="
+        },
+        "win-x64": {
+          "asset": "zizmor-x86_64-pc-windows-msvc.zip",
+          "integrity": "sha512-Pijh/CrrOAkZzLiTr2LTHdI8d6+5Ql6B+suY6fXVmL8UVa+4Q36hHL5K67iRFz03v/V/UcrY6+dfhnmot/xfww=="
+        }
+      }
+    },
+    "agentshield": {
+      "description": "Claude AI config security scanner (prompt injection, secrets)",
+      "purl": "pkg:npm/ecc-agentshield@1.4.0",
+      "integrity": "sha512-R98OO1Ujyk2lezDLb+iQmMhF6FwTJCHajy3G4FCB6x7wkSTqR9f8+eAelC5KDzYDsGSbc0sOZvjXOOPRBtMpDg=="
+    },
+    "skillspector": {
+      "description": "NVIDIA's third-party-skill security scanner (LangGraph-based; YARA + AST + OSV.dev CVE lookups + optional LLM analysis). No PyPI release / no GH tags upstream \u2014 pinned to a git SHA on main + installed via a locked uv project (pyproject.toml + uv.lock, `uv sync --locked`; the fleet uv pin + exclude-newer make it reproducible). Sibling to AgentShield: AgentShield audits the operator's .claude/ config; SkillSpector audits untrusted upstream skills before install.",
+      "release": "uv-project",
+      "repository": "github:NVIDIA/skillspector",
+      "version": "2eb84478",
+      "versionDate": "2026-05-18"
+    }
+  }
+}
