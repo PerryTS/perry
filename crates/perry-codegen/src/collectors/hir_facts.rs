@@ -470,6 +470,7 @@ pub(crate) fn collect_type_facts(
         module_globals,
         module_dispatch,
         compile_time_constants,
+        &integer_locals,
     );
     let graph = TypeFacts {
         representation: RepresentationFacts {

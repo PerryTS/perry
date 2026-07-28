@@ -42,13 +42,33 @@
 //!   harmless numeric-string property).
 //! * **Self-heal exemption (the #6915 stale-binding finding)**: guard-free
 //!   consumers have no runtime check that could catch a growth-forwarded
-//!   stub, so the proof must exclude staleness STRUCTURALLY: containment
-//!   means no callee ever receives the array (the specialized-ABI
-//!   caller-allocated growth pattern cannot occur), every in-function growth
-//!   site (push tiers, sparse-extend runtime arm) writes the live head back
-//!   to the local slot, and every consumer re-derives the base from the slot
-//!   (the slot address is shadow-bound, so LLVM cannot cache the load across
-//!   calls; GC evacuation rewrites the slot through the same binding).
+//!   stub — unlike the guarded tiers, a stale head here would be silent
+//!   wrong-value/UAF, not a slow path. The proof must therefore exclude
+//!   staleness STRUCTURALLY, and rests on three separately-checked legs:
+//!
+//!   1. **No out-of-function growth.** Containment rejects every bare
+//!      reference, so the array is never passed to a callee: the Phase 2
+//!      specialized-ABI caller-allocated growth pattern (#6915's root cause)
+//!      cannot arise.
+//!   2. **Every in-function growth site writes the live head back to
+//!      `ctx.locals[id]`.** Audited exhaustively over the growth branches
+//!      reachable for a local this collector admits (`expr/array_push.rs`
+//!      guarded-numeric fast + fallback arms, and untyped-inline forwarded +
+//!      realloc arms — each `js_array_push_f64` /
+//!      `js_array_numeric_push_f64_unboxed` call is immediately followed by
+//!      `store double %new_box, ptr %slot`; the in-capacity arm cannot
+//!      relocate). Element writes reach growth only through
+//!      `lower_index_set_fast`'s realloc arm, which stores back the same way;
+//!      the guard-free store path never grows at all (it requires an
+//!      in-bounds proof). `pop`/`shift`/`splice`/`unshift`/`copyWithin`/
+//!      spread-push are disqualified outright, so no other mutator runs.
+//!      `test_gap_repsel_p4a3_numarray_growth.ts` pins this cross-module
+//!      invariant as a regression test.
+//!   3. **Consumers re-derive the base per access.** Each site reloads the
+//!      NaN-boxed head from the (shadow-bound) slot — the slot address
+//!      escapes to the shadow-stack registry, so LLVM cannot cache the load
+//!      across a call, and GC evacuation rewrites the slot through the same
+//!      binding.
 //! * **In-bounds per site** (checked at lowering time, not here): the index
 //!   has `int_range` proof `[0, max]` with `max < proven_initial_length`
 //!   (length can only grow — `pop`-class shrinkers are disqualified — so
@@ -164,10 +184,22 @@ pub(crate) fn collect_num_array_locals(
     module_globals: &HashMap<u32, String>,
     module_dispatch: &ModuleDispatchFacts,
     compile_time_constants: &HashMap<u32, f64>,
+    integer_locals: &HashSet<u32>,
 ) -> HashMap<u32, NumArrayLocal> {
     if !ptr_numarray_locals_enabled()
         || module_dispatch.has_shape_barrier_sites()
         || module_dispatch.has_numarray_prototype_index_barriers()
+        // An UNATTRIBUTABLE prototype reference anywhere in the module
+        // (`const p = Array.prototype; p[5] = …`, `x.constructor.prototype`,
+        // …). The direct-form kill above only sees a write whose receiver is
+        // syntactically `<expr>.prototype`; once the prototype object is
+        // aliased into a local, the write is an ordinary `IndexSet` on that
+        // local and is invisible to it. `note_prototype_holder` already flags
+        // every such NAMING site as opaque, so consuming that fact closes the
+        // alias hole — without it a polluted `Array.prototype[i]` could make a
+        // HOLE read observable while a guard-free `HolesOK` load (which cannot
+        // consult the runtime pollution byte) still returned the quiet NaN.
+        || module_dispatch.has_opaque_prototype_mutation()
     {
         return HashMap::new();
     }
@@ -176,6 +208,7 @@ pub(crate) fn collect_num_array_locals(
         boxed_vars,
         module_globals,
         compile_time_constants,
+        integer_locals,
         candidates: HashMap::new(),
         let_counts: HashMap::new(),
         let_types: HashMap::new(),
@@ -208,6 +241,12 @@ struct UseWalk<'a> {
     boxed_vars: &'a HashSet<u32>,
     module_globals: &'a HashMap<u32, String>,
     compile_time_constants: &'a HashMap<u32, f64>,
+    /// Locals proven to hold an integer VALUE (loop counters and friends).
+    /// They carry `ty: Any` in HIR — without this the overwhelmingly common
+    /// `arr.push(i * 0.5)` / `arr[i] = …` shapes would never qualify — and an
+    /// integer value is definitionally a JS Number, so admitting them keeps
+    /// the numeric-slot invariant.
+    integer_locals: &'a HashSet<u32>,
     candidates: HashMap<u32, NumArrayLocal>,
     let_counts: HashMap<u32, u32>,
     /// Declared `Let` types in this region (numeric-key / numeric-value
@@ -304,10 +343,13 @@ impl<'a> UseWalk<'a> {
     fn key_is_provably_numeric(&self, key: &Expr) -> bool {
         match key {
             Expr::Integer(_) | Expr::Number(_) => true,
-            Expr::LocalGet(id) => matches!(
-                self.let_types.get(id),
-                Some(HirType::Number) | Some(HirType::Int32)
-            ),
+            Expr::LocalGet(id) => {
+                self.integer_locals.contains(id)
+                    || matches!(
+                        self.let_types.get(id),
+                        Some(HirType::Number) | Some(HirType::Int32)
+                    )
+            }
             _ => self.value_is_numeric(u32::MAX, key),
         }
     }
@@ -323,6 +365,7 @@ impl<'a> UseWalk<'a> {
             Expr::NumberCoerce(_) => true,
             Expr::LocalGet(id) => {
                 self.compile_time_constants.contains_key(id)
+                    || self.integer_locals.contains(id)
                     || matches!(
                         self.let_types.get(id),
                         Some(HirType::Number) | Some(HirType::Int32)
@@ -703,4 +746,351 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut impl FnMut(&Stmt)) {
         }
     }
     go(stmts, f);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ARR: u32 = 1;
+    const OTHER: u32 = 2;
+
+    fn num_array_ty() -> HirType {
+        HirType::Array(Box::new(HirType::Number))
+    }
+
+    fn let_with(id: u32, ty: HirType, init: Expr) -> Stmt {
+        Stmt::Let {
+            id,
+            name: "a".to_string(),
+            ty,
+            mutable: false,
+            init: Some(init),
+        }
+    }
+
+    fn new_array(args: Vec<Expr>) -> Expr {
+        Expr::New {
+            class_name: "Array".to_string(),
+            args,
+            type_args: vec![],
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }
+    }
+
+    /// `const a: number[] = new Array(len);`
+    fn alloc_let(len: i64) -> Stmt {
+        let_with(ARR, num_array_ty(), new_array(vec![Expr::Integer(len)]))
+    }
+
+    fn index_get(id: u32, index: Expr) -> Expr {
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(id)),
+            index: Box::new(index),
+        }
+    }
+
+    fn index_set(id: u32, index: Expr, value: Expr) -> Expr {
+        Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(id)),
+            index: Box::new(index),
+            value: Box::new(value),
+        }
+    }
+
+    fn property_get(object: Expr, property: &str) -> Expr {
+        Expr::PropertyGet {
+            object: Box::new(object),
+            property: property.to_string(),
+            byte_offset: 0,
+        }
+    }
+
+    fn push(id: u32, value: Expr) -> Expr {
+        Expr::ArrayPush {
+            array_id: id,
+            value: Box::new(value),
+        }
+    }
+
+    fn capturing_closure(captures: Vec<u32>) -> Expr {
+        Expr::Closure {
+            func_id: 0,
+            params: vec![],
+            return_type: HirType::Void,
+            body: vec![],
+            captures,
+            mutable_captures: vec![],
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        }
+    }
+
+    fn facts_for(init: Vec<Stmt>) -> ModuleDispatchFacts {
+        let mut module = perry_hir::Module::new("m");
+        module.init = init;
+        super::super::scalar_method_dispatch::collect_module_dispatch_facts(&module)
+    }
+
+    fn collect_with(stmts: &[Stmt], facts: &ModuleDispatchFacts) -> HashMap<u32, NumArrayLocal> {
+        collect_num_array_locals(
+            stmts,
+            &HashSet::new(),
+            &HashMap::new(),
+            facts,
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+    }
+
+    fn collect(stmts: &[Stmt]) -> HashMap<u32, NumArrayLocal> {
+        collect_with(stmts, &facts_for(vec![]))
+    }
+
+    fn is_promoted(stmts: &[Stmt]) -> bool {
+        collect(stmts).contains_key(&ARR)
+    }
+
+    #[test]
+    fn promotes_alloc_and_empty_literal_provenance() {
+        let alloc = collect(&[
+            alloc_let(8),
+            Stmt::Expr(index_set(ARR, Expr::Integer(0), Expr::Number(1.5))),
+        ]);
+        let fact = alloc.get(&ARR).expect("new Array(n) should promote");
+        assert_eq!(fact.density, NumArrayDensity::HolesOk);
+        assert_eq!(fact.proven_initial_length, 8);
+
+        let empty = collect(&[
+            let_with(ARR, num_array_ty(), Expr::Array(vec![])),
+            Stmt::Expr(push(ARR, Expr::Number(2.5))),
+        ]);
+        let fact = empty.get(&ARR).expect("[] should promote");
+        assert_eq!(fact.density, NumArrayDensity::Dense);
+        assert_eq!(fact.proven_initial_length, 0);
+    }
+
+    #[test]
+    fn promotes_contained_uses() {
+        // Element read, numeric-valued element write (including a read of the
+        // same array under `||`-class absorption), `.length`, numeric push,
+        // and a bare end-of-function return are all contained.
+        let uses: Vec<(&str, Stmt)> = vec![
+            ("element read", Stmt::Expr(index_get(ARR, Expr::Integer(1)))),
+            (
+                "literal element write",
+                Stmt::Expr(index_set(ARR, Expr::Integer(1), Expr::Number(3.0))),
+            ),
+            (
+                "read-modify-write",
+                Stmt::Expr(index_set(
+                    ARR,
+                    Expr::Integer(1),
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(index_get(ARR, Expr::Integer(1))),
+                        right: Box::new(Expr::Integer(1)),
+                    },
+                )),
+            ),
+            (
+                ".length read",
+                Stmt::Expr(property_get(Expr::LocalGet(ARR), "length")),
+            ),
+            ("numeric push", Stmt::Expr(push(ARR, Expr::Number(1.0)))),
+            ("bare return", Stmt::Return(Some(Expr::LocalGet(ARR)))),
+        ];
+        for (label, stmt) in uses {
+            assert!(
+                is_promoted(&[alloc_let(4), stmt]),
+                "contained use should stay promoted: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn disqualifies_escapes_and_unsafe_mutators() {
+        // Each row is a single use that must demote the local back to the
+        // Phase 4a.1/4a.2 guarded tiers.
+        let cases: Vec<(&str, Stmt)> = vec![
+            (
+                "bare LocalGet (alias / call arg / JSON.stringify / console.log)",
+                Stmt::Expr(Expr::LocalGet(ARR)),
+            ),
+            (
+                "aliasing Let",
+                let_with(OTHER, num_array_ty(), Expr::LocalGet(ARR)),
+            ),
+            ("pop", Stmt::Expr(Expr::ArrayPop(ARR))),
+            ("shift", Stmt::Expr(Expr::ArrayShift(ARR))),
+            (
+                "splice",
+                Stmt::Expr(Expr::ArraySplice {
+                    array_id: ARR,
+                    start: Box::new(Expr::Integer(0)),
+                    delete_count: None,
+                    items: vec![],
+                }),
+            ),
+            (
+                "unshift",
+                Stmt::Expr(Expr::ArrayUnshift {
+                    array_id: ARR,
+                    value: Box::new(Expr::Number(1.0)),
+                }),
+            ),
+            (
+                "push spread",
+                Stmt::Expr(Expr::ArrayPushSpread {
+                    array_id: ARR,
+                    source: Box::new(Expr::Array(vec![])),
+                }),
+            ),
+            (
+                "length write",
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(ARR)),
+                    property: "length".to_string(),
+                    value: Box::new(Expr::Integer(0)),
+                }),
+            ),
+            (
+                "non-length property read (sort / slice / …)",
+                Stmt::Expr(property_get(Expr::LocalGet(ARR), "sort")),
+            ),
+            (
+                "non-numeric element store",
+                Stmt::Expr(index_set(
+                    ARR,
+                    Expr::Integer(0),
+                    Expr::String("x".to_string()),
+                )),
+            ),
+            (
+                "possibly-non-numeric push value",
+                Stmt::Expr(push(ARR, Expr::String("x".to_string()))),
+            ),
+            (
+                "string-key read",
+                Stmt::Expr(index_get(ARR, Expr::String("length".to_string()))),
+            ),
+            (
+                "string-key write",
+                Stmt::Expr(index_set(
+                    ARR,
+                    Expr::String("length".to_string()),
+                    Expr::Integer(0),
+                )),
+            ),
+            (
+                "reassignment",
+                Stmt::Expr(Expr::LocalSet(ARR, Box::new(Expr::Array(vec![])))),
+            ),
+            (
+                "freeze",
+                Stmt::Expr(Expr::ObjectFreeze(Box::new(Expr::LocalGet(ARR)))),
+            ),
+            (
+                "seal",
+                Stmt::Expr(Expr::ObjectSeal(Box::new(Expr::LocalGet(ARR)))),
+            ),
+            ("closure capture", Stmt::Expr(capturing_closure(vec![ARR]))),
+        ];
+        for (label, stmt) in cases {
+            assert!(
+                !is_promoted(&[alloc_let(4), stmt]),
+                "must NOT promote with: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn disqualifies_unproven_provenance() {
+        // Non-static allocation length.
+        assert!(!is_promoted(&[let_with(
+            ARR,
+            num_array_ty(),
+            new_array(vec![Expr::LocalGet(OTHER)])
+        )]));
+        // Non-empty literal (first-increment scope).
+        assert!(!is_promoted(&[let_with(
+            ARR,
+            num_array_ty(),
+            Expr::Array(vec![Expr::Number(1.0)])
+        )]));
+        // Re-declared binding: provenance is not single-Let.
+        assert!(!is_promoted(&[alloc_let(4), alloc_let(4)]));
+        // Non-numeric element type.
+        assert!(!is_promoted(&[let_with(
+            ARR,
+            HirType::Array(Box::new(HirType::String)),
+            Expr::Array(vec![])
+        )]));
+    }
+
+    #[test]
+    fn disqualifies_boxed_and_module_global_bindings() {
+        let stmts = [alloc_let(4)];
+        let facts = facts_for(vec![]);
+        let boxed: HashSet<u32> = [ARR].into_iter().collect();
+        assert!(collect_num_array_locals(
+            &stmts,
+            &boxed,
+            &HashMap::new(),
+            &facts,
+            &HashMap::new(),
+            &HashSet::new()
+        )
+        .is_empty());
+
+        let globals: HashMap<u32, String> = [(ARR, "g".to_string())].into_iter().collect();
+        assert!(collect_num_array_locals(
+            &stmts,
+            &HashSet::new(),
+            &globals,
+            &facts,
+            &HashMap::new(),
+            &HashSet::new()
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn module_barriers_disable_all_promotion() {
+        let stmts = [alloc_let(4)];
+        let barriers: Vec<(&str, Expr)> = vec![
+            (
+                "direct Array.prototype[i] = v",
+                Expr::IndexSet {
+                    object: Box::new(property_get(
+                        Expr::ClassRef("Array".to_string()),
+                        "prototype",
+                    )),
+                    index: Box::new(Expr::Integer(5)),
+                    value: Box::new(Expr::Number(1.0)),
+                },
+            ),
+            (
+                "aliased prototype naming site (opaque prototype mutation)",
+                property_get(Expr::LocalGet(OTHER), "prototype"),
+            ),
+            (
+                "delete (§5.2 shape barrier)",
+                Expr::Delete(Box::new(index_get(OTHER, Expr::Integer(0)))),
+            ),
+        ];
+        for (label, barrier) in barriers {
+            let facts = facts_for(vec![Stmt::Expr(barrier)]);
+            assert!(
+                collect_with(&stmts, &facts).is_empty(),
+                "barrier must disable promotion: {label}"
+            );
+        }
+    }
 }

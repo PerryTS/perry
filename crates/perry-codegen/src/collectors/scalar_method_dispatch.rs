@@ -123,6 +123,15 @@ impl ModuleDispatchFacts {
     pub(crate) fn has_numarray_prototype_index_barriers(&self) -> bool {
         self.numarray_prototype_index_barriers
     }
+
+    /// Does the module NAME a prototype object it cannot attribute to a
+    /// declared class (`const p = Array.prototype`, `x.constructor.prototype`,
+    /// …)? Such a reference can be aliased into a local and written through
+    /// later, so `Ptr<NumArray>` promotion (whose guard-free reads cannot
+    /// consult the runtime prototype-pollution byte) must stand down.
+    pub(crate) fn has_opaque_prototype_mutation(&self) -> bool {
+        self.opaque_prototype_mutation
+    }
 }
 
 /// Scan a whole module — top-level init, every function, and every class body

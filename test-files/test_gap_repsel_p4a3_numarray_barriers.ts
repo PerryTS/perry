@@ -36,6 +36,27 @@ function definedIndex(): string {
 }
 console.log(definedIndex());
 
+// ALIASED prototype write: the pollution happens through a local holding
+// `Array.prototype`, so the receiver of the indexed write is an ordinary
+// local — invisible to the direct-form `.prototype[i] = …` barrier. The
+// module-wide `opaque_prototype_mutation` fact (set where the prototype is
+// NAMED) is what must stand the promotion down; otherwise a guard-free
+// HolesOK read would return the quiet NaN where JS observes the inherited
+// value.
+function aliasedProtoWrite(): string {
+  const c: number[] = new Array(4);
+  c[0] = 1;
+  const p: any = Array.prototype; // naming site -> opaque prototype mutation
+  p[3] = 555;
+  const viaHole = "" + c[3]; // inherited 555, NOT undefined
+  const viaOr = (c[3] as any) || -1; // 555 is truthy
+  const viaSum = (c[0] || 0) + ((c[3] as any) || 0);
+  delete p[3];
+  const afterDelete = "" + c[3];
+  return viaHole + " " + viaOr + " " + viaSum + " " + afterDelete;
+}
+console.log(aliasedProtoWrite());
+
 // The histogram shape still computes exactly under the module-wide kill.
 function histogram(data: number[], size: number): number[] {
   const counts: number[] = new Array(size);
