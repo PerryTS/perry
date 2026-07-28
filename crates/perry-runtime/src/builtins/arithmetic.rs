@@ -124,13 +124,30 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     // steps 10-11). Object-vs-object was settled above; symbols are primitives
     // (`eq_is_object` excludes them) and correctly fall through to not-equal.
     // Done before the BigInt block so `0n == { valueOf() { return 0n } }` works.
+    // #6655: `rel_to_primitive` runs a user `valueOf`/`toString`, so it can
+    // allocate, collect and evacuate. The *other* operand is a raw NaN-boxed
+    // local here — not a GC root — so it must be rooted across the coercion and
+    // re-read through its handle before the recursive call, or `==` compares
+    // against a forwarded address.
     if eq_is_object(a) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let b_handle = scope.root_nanbox_f64(f64::from_bits(b.bits()));
         let pa = unsafe { rel_to_primitive(f64::from_bits(a.bits())) };
-        return js_loose_eq(JSValue::from_bits(pa.to_bits()), b);
+        let pa_handle = scope.root_nanbox_f64(pa);
+        return js_loose_eq(
+            JSValue::from_bits(pa_handle.get_nanbox_u64()),
+            JSValue::from_bits(b_handle.get_nanbox_u64()),
+        );
     }
     if eq_is_object(b) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a_handle = scope.root_nanbox_f64(f64::from_bits(a.bits()));
         let pb = unsafe { rel_to_primitive(f64::from_bits(b.bits())) };
-        return js_loose_eq(a, JSValue::from_bits(pb.to_bits()));
+        let pb_handle = scope.root_nanbox_f64(pb);
+        return js_loose_eq(
+            JSValue::from_bits(a_handle.get_nanbox_u64()),
+            JSValue::from_bits(pb_handle.get_nanbox_u64()),
+        );
     }
     // BigInt abstract equality (ES2024 §7.2.15). Neither side is
     // null/undefined here and boxed wrappers (incl. `Object(0n)`) have already
@@ -306,11 +323,7 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
 
     // Both String → code-unit (byte) compare; never `undefined`.
     if vx.is_any_string() && vy.is_any_string() {
-        return if rel_string_compare(
-            px_handle.get_nanbox_f64(),
-            py_handle.get_nanbox_f64(),
-        ) < 0
-        {
+        return if rel_string_compare(px_handle.get_nanbox_f64(), py_handle.get_nanbox_f64()) < 0 {
             REL_TRUE
         } else {
             REL_FALSE
@@ -330,7 +343,8 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         return match crate::bigint::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(ny) => {
-                let px_ptr = JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
+                let px_ptr =
+                    JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
                 if crate::bigint::js_bigint_cmp(px_ptr, ny) < 0 {
                     REL_TRUE
                 } else {
@@ -344,7 +358,8 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         return match crate::bigint::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(nx) => {
-                let py_ptr = JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
+                let py_ptr =
+                    JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
                 if crate::bigint::js_bigint_cmp(nx, py_ptr) < 0 {
                     REL_TRUE
                 } else {

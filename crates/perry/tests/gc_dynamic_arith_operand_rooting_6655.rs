@@ -85,24 +85,41 @@ function churnAndCollect(): void {
   (globalThis as any).gc?.();
 }
 
+// Keeps operands reachable from a real GC root. This matters: an object that
+// is only referenced by the (unrooted) raw operand register is *dead* at the
+// collection, so it would merely be swept and the stale read might happen to
+// find intact bytes. Reachable objects are instead EVACUATED — the address
+// genuinely changes and every rooted holder is rewritten, while the raw
+// operand local is not. That is the state that turns the bug into a wrong
+// answer or a crash.
+const keepalive: any[] = [];
+
 // GC-capable operand: its valueOf runs user JS that allocates and collects.
 function heavy(v: any): any {
-  return {
+  const o: any = {
+    v: v,
     valueOf() {
       churnAndCollect();
-      return v;
+      return this.v;
     },
   };
+  keepalive.push(o);
+  return o;
 }
 
 // Plain heap-object operand. It is a movable pointer, so pre-fix it went stale
-// whenever it sat on the far side of the other operand's coercion.
+// whenever it sat on the far side of the other operand's coercion. `valueOf`
+// reads an instance FIELD, so a stale receiver yields a wrong value (or
+// faults) rather than coincidentally returning the right constant.
 function plain(v: any): any {
-  return {
+  const o: any = {
+    v: v,
     valueOf() {
-      return v;
+      return this.v;
     },
   };
+  keepalive.push(o);
+  return o;
 }
 
 let failures = 0;
@@ -235,6 +252,15 @@ check("gt-str", plain("cherry") > heavy("banana"), true);
 // after an allocating StringToBigInt / ToNumber step.
 check("big-lt-str", heavy(5n) < plain("10"), true);
 check("big-gt-num", plain(10n) > heavy(5), true);
+
+// Loose equality takes the same `rel_to_primitive` path: `js_loose_eq` coerces
+// the object side and then recurses with the OTHER operand, which pre-fix was
+// a raw local held across that coercion.
+check("looseeq-num", heavy(5) == 5, true);
+check("looseeq-rev", 5 == heavy(5), true);
+check("looseeq-str", heavy("7") == 7, true);
+check("looseeq-big", heavy(5n) == 5, true);
+check("looseeq-neq", heavy(5) == 6, false);
 
 console.log("failures:", failures);
 "#
