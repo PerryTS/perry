@@ -1,0 +1,7 @@
+**Binary size — small hello-world binaries (5.9 MB → 2.2 MB class):** three independent levers, all default-off or behavior-preserving.
+
+- `PERRY_SIZE_OPT=z|s` rebuilds the auto-optimized runtime/stdlib archives at `-C opt-level=z`/`s` (cache-keyed alongside the existing feature/panic keys), and `PERRY_SIZE_LTO=fat` layers whole-archive fat LTO on top via `CARGO_PROFILE_RELEASE_LTO`. Explicitly opt-in: trades runtime speed for size.
+- The ~490 `#[used]` keep-alive anchor statics in perry-runtime now sit behind a new default-on `keepalive-anchors` feature. They exist for the whole-program bitcode-LTO link (`PERRY_LLVM_BITCODE_LINK=1`), which re-enables them; the classic link keeps every reachable symbol via real undefined references, so the normal auto-optimize rebuild omits them. Measured: one anchored chain (`KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED` → dynamic-import fallback → `js_nm_install_all` → every dispatch bucket) was pinning the entire fs/child_process/node_vm/node_submodules surface into a `console.log` hello world. Differential probe (dynamic `import()`, `createRequire`, `getBuiltinModule`, fs sync/promises, streams, `child_process`) stays byte-identical to Node.
+- The mimalloc global allocator is now the default-on `alloc-mimalloc` feature; the normal auto-optimize path force-adds it (no behavior change), while `PERRY_SIZE_OPT` rebuilds fall back to the system allocator (~140 KB).
+
+Also adds `PERRY_EXTRA_LINK_ARGS` (verbatim extra link args — diagnostic escape hatch, e.g. `-Wl,-why_live,_sym`).
