@@ -1850,6 +1850,16 @@ pub(crate) fn build_and_run_link(
     // line, so the invocation no longer scales with module count. Only the
     // native-Windows host is affected (other hosts have a multi-MB `ARG_MAX`);
     // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path elsewhere for testing.
+    // PERRY_EXTRA_LINK_ARGS — space-separated args appended verbatim to the
+    // final link invocation. Diagnostic escape hatch (e.g.
+    // `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived
+    // dead-strip); not part of any documented stable surface.
+    if let Ok(extra) = std::env::var("PERRY_EXTRA_LINK_ARGS") {
+        for a in extra.split_whitespace() {
+            cmd.arg(a);
+        }
+    }
+
     let mut response_file_to_clean: Option<PathBuf> = None;
     if cfg!(target_os = "windows") || std::env::var_os("PERRY_FORCE_LINK_RESPONSE_FILE").is_some() {
         // MSVC-style quoting for the native-Windows linker (link.exe/lld-link);
