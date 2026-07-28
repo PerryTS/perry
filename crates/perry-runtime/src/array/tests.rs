@@ -1512,3 +1512,130 @@ fn join_accepts_heap_string_tagged_elements() {
         assert_eq!(s, "alpha|beta");
     }
 }
+
+#[test]
+fn refresh_local_head_follows_growth_forwarding() {
+    // Repsel 4a.2 (#6904): a caller-held pre-grow head must refresh to the
+    // live head; live heads and non-pointer values pass through unchanged.
+    unsafe {
+        let arr = js_array_alloc(2);
+        let stale = arr;
+        let mut cur = arr;
+        for i in 0..64 {
+            cur = js_array_push_f64(cur, i as f64);
+        }
+        // Growth happened: the original head is a forwarded stub.
+        let hdr = (stale as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        assert_ne!(
+            (*hdr).gc_flags & crate::gc::GC_FLAG_FORWARDED,
+            0,
+            "expected the pre-grow head to be forwarded"
+        );
+        let stale_box =
+            f64::from_bits(crate::value::POINTER_TAG | (stale as u64 & crate::value::POINTER_MASK));
+        let fresh = crate::array::header::js_array_refresh_local_head(stale_box);
+        let fresh_addr = (fresh.to_bits() & crate::value::POINTER_MASK) as usize;
+        assert_eq!(
+            fresh_addr, cur as usize,
+            "refresh must land on the live head"
+        );
+        // Idempotent on the live head.
+        let live_box =
+            f64::from_bits(crate::value::POINTER_TAG | (cur as u64 & crate::value::POINTER_MASK));
+        assert_eq!(
+            crate::array::header::js_array_refresh_local_head(live_box).to_bits(),
+            live_box.to_bits()
+        );
+        // Non-pointer values pass through untouched.
+        for bits in [
+            42.5f64.to_bits(),
+            crate::value::TAG_UNDEFINED,
+            crate::value::TAG_NULL,
+        ] {
+            assert_eq!(
+                crate::array::header::js_array_refresh_local_head(f64::from_bits(bits)).to_bits(),
+                bits
+            );
+        }
+    }
+}
+
+#[test]
+fn sparse_extend_keeps_raw_f64_holes_invariant() {
+    // Repsel 4a.2 (#6904): a sparse extend on a raw-f64 array must transition
+    // dense -> holes (not clear both flags into the permanent O(n) walk).
+    unsafe {
+        let mut arr = js_array_alloc(2);
+        arr = js_array_push_f64(arr, 1.5);
+        arr = js_array_push_f64(arr, 2.5);
+        assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+        arr = js_array_set_f64_extend(arr, 9, 7.5);
+        let hdr = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let reserved = (*hdr)._reserved;
+        assert_eq!(
+            reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT,
+            0,
+            "dense flag must drop once holes exist (reserved={reserved:#x})"
+        );
+        assert_ne!(
+            reserved & crate::gc::GC_ARRAY_RAW_F64_HOLES,
+            0,
+            "holes flag must record the raw-f64-or-holes invariant (reserved={reserved:#x})"
+        );
+        // Values and hole observability are intact.
+        assert_eq!(js_array_get_f64(arr, 0), 1.5);
+        assert_eq!(js_array_get_f64(arr, 9), 7.5);
+        assert_eq!(
+            js_array_get_f64(arr, 5).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        // A non-numeric sparse extend must NOT claim the invariant.
+        let mut other = js_array_alloc(2);
+        other = js_array_push_f64(other, 1.0);
+        assert_eq!(js_array_is_numeric_f64_layout(other), 1);
+        let s = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+        let s_box =
+            f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK));
+        other = js_array_set_f64_extend(other, 6, s_box);
+        let ohdr = (other as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        assert_eq!(
+            (*ohdr)._reserved
+                & (crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES),
+            0,
+            "non-numeric store must clear both raw-f64 flags"
+        );
+    }
+}
+
+#[test]
+fn push_built_array_gets_and_keeps_dense_raw_f64_flag() {
+    unsafe {
+        let mut arr = js_array_alloc(0);
+        let mut seed: f64 = 7.0;
+        for _ in 0..1000 {
+            seed = (seed * 48271.0) % 2147483647.0;
+            arr = js_array_push_f64(arr, seed);
+        }
+        let probe = js_array_is_numeric_f64_layout(arr);
+        let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let reserved = (*header)._reserved;
+        assert_eq!(
+            probe, 1,
+            "push-built numeric array should verify raw-f64 (reserved={reserved:#x})"
+        );
+        assert_ne!(
+            reserved & (crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES),
+            0,
+            "raw-f64 flag should be set after the probe (reserved={reserved:#x})"
+        );
+        // The inner guard the codegen cold arm consults.
+        assert!(
+            crate::typed_feedback::numeric_array_index_guard_for_tests(
+                arr as *const ArrayHeader,
+                3,
+                true
+            ),
+            "numeric index guard should admit the push-built array"
+        );
+    }
+}

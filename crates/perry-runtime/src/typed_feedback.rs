@@ -1206,6 +1206,15 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
     }
 }
 
+#[cfg(test)]
+pub(crate) fn numeric_array_index_guard_for_tests(
+    arr: *const ArrayHeader,
+    index: u32,
+    require_in_bounds: bool,
+) -> bool {
+    numeric_array_index_guard(arr, index, require_in_bounds)
+}
+
 fn numeric_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bounds: bool) -> bool {
     if !plain_array_index_guard(arr, index, require_in_bounds) {
         return false;
