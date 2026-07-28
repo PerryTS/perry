@@ -902,6 +902,41 @@ fn lower_new_impl(
             ctx.block()
                 .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
         }
+        // #6921: `call_local_constructor_symbol` returned `None` — this module
+        // has no `<Class>_constructor` entry, so no constructor ran and the
+        // instance leaves here exactly as `js_object_alloc_class_*` produced
+        // it. Every OTHER `new` exit initializes the typed-shape layout; this
+        // one used to return the instance at `GC_LAYOUT_POINTER_FREE` with no
+        // `TypedLayoutDescriptor`, the one state in which the per-store
+        // `layout_note_slot` call is load-bearing for GC correctness rather
+        // than a precision hint — so eliding that note (Phase 4b.1) could
+        // strand a live child on an object the collector scans zero slots of.
+        //
+        // Initialize it here too, so the invariant "a user-class instance
+        // reaching a class-field store carries a typed descriptor, or is
+        // explicitly `GC_LAYOUT_UNKNOWN`" is total. This is safe by
+        // construction rather than by reasoning about this path: the fields
+        // are still `TAG_UNDEFINED` (no ctor ran), and `init_typed_shape_layout`
+        // validates every live field word before promoting — a raw-f64 slot
+        // holding `undefined` fails `layout_raw_f64_bits` and the object lands
+        // in `GC_LAYOUT_UNKNOWN`, the conservative state, instead of a wrong
+        // mask. `emit_typed_shape_layout_init` is itself a no-op for a class
+        // with no `class_keys_globals` entry.
+        //
+        // Reachability, measured (not assumed): this arm is currently DEAD.
+        // `call_local_constructor_symbol` returns `None` only when
+        // `ctx.methods` lacks `(class.name, "<Class>_constructor")`, but
+        // `lower_new_impl` resolves `class` exclusively from `ctx.classes`
+        // (the `class_table`), and `build_method_names` iterates
+        // `class_table.values()` inserting that key unconditionally for every
+        // entry — local and imported alike. So no class reaching here can miss
+        // it. An instrumented compiler over the whole `test_gap_*` corpus plus
+        // hand-written recursive-construction shapes never hit this arm.
+        // The emitter stays anyway: the invariant must hold by construction at
+        // this exit, not by an accident of the registry that a future change
+        // to `build_method_names` (or a new `ctx.classes` population path)
+        // could silently revoke.
+        emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
         return Ok(obj_box);
     }
 
