@@ -425,14 +425,13 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     // licenses handing the raw load to a number context without the
     // fallback's `js_number_coerce`; non-numeric-proven fields fall through
     // to the guarded path below.
-    let ptr_shape_numeric = match object.as_ref() {
-        Expr::LocalGet(recv_id) if ctx.repsel_context_allows_canonical_i32 => ctx
-            .native_facts
-            .shape_proven_ptr_local(*recv_id)
-            .map(|fact| fact.class_name == class_name && fact.numeric_fields.contains(property))
-            .unwrap_or(false),
-        _ => false,
-    };
+    // Phase 5a: a proven `this` never claims `numeric_fields` (see
+    // collectors/proven_this.rs), so this site stays Phase-3b-local-only in
+    // practice — the shared accessor keeps the two phases in one place.
+    let ptr_shape_numeric = ctx
+        .ptr_shape_receiver_fact(object.as_ref())
+        .map(|fact| fact.class_name == class_name && fact.numeric_fields.contains(property))
+        .unwrap_or(false);
     if ptr_shape_numeric {
         let recv_box = lower_expr(ctx, object)?;
         let field_idx_str = field_index.to_string();

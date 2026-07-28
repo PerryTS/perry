@@ -261,6 +261,7 @@ pub(super) fn compile_method(
     cross_module: &CrossModuleCtx,
     typed_public_trampoline: Option<TypedFunctionTrampolineKind>,
     force_generic_body: bool,
+    proven_this: Option<crate::collectors::PtrShapeLocal>,
 ) -> Result<()> {
     let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -272,7 +273,15 @@ pub(super) fn compile_method(
                 method.name
             )
         })?;
-    let llvm_name = if typed_public_trampoline.is_some() || force_generic_body {
+    // Representation-selection Phase 5a: the proven-`this` clone is a SECOND,
+    // additive body compiled from the same HIR through the same statement
+    // lowerer. It never replaces the public symbol and never participates in
+    // the typed-trampoline / generic-body split — those are emitted by the
+    // primary (`proven_this: None`) invocation for this same method.
+    let is_pshape_clone = proven_this.is_some();
+    let llvm_name = if is_pshape_clone {
+        super::pshape_method_name(&public_llvm_name)
+    } else if typed_public_trampoline.is_some() || force_generic_body {
         generic_method_body_name(&public_llvm_name)
     } else {
         public_llvm_name.clone()
@@ -288,7 +297,7 @@ pub(super) fn compile_method(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
-    if typed_public_trampoline.is_some() || force_generic_body {
+    if is_pshape_clone || typed_public_trampoline.is_some() || force_generic_body {
         lf.linkage = "internal".to_string();
     }
 
@@ -551,6 +560,8 @@ pub(super) fn compile_method(
         typed_i1_functions: &cross_module.typed_i1_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
+        pshape_methods: &cross_module.pshape_methods,
+        proven_this,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
         typed_string_methods: &cross_module.typed_string_methods,
@@ -1025,10 +1036,15 @@ pub(super) fn compile_method(
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
     }
-    if let Some(kind) = typed_public_trampoline {
-        emit_public_typed_method_trampoline(llmod, method, &public_llvm_name, &llvm_name, kind);
-    } else if force_generic_body {
-        emit_public_generic_method_forwarder(llmod, method, &public_llvm_name, &llvm_name);
+    // The Phase 5a clone is purely additive: the public symbol (and its
+    // trampoline/forwarder, if any) belongs to the primary invocation. Emitting
+    // it again here would define the same symbol twice.
+    if !is_pshape_clone {
+        if let Some(kind) = typed_public_trampoline {
+            emit_public_typed_method_trampoline(llmod, method, &public_llvm_name, &llvm_name, kind);
+        } else if force_generic_body {
+            emit_public_generic_method_forwarder(llmod, method, &public_llvm_name, &llvm_name);
+        }
     }
     Ok(())
 }
@@ -1586,6 +1602,8 @@ pub(super) fn compile_static_method(
         typed_i1_functions: &cross_module.typed_i1_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
+        pshape_methods: &cross_module.pshape_methods,
+        proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
         typed_string_methods: &cross_module.typed_string_methods,

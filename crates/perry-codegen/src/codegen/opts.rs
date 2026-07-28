@@ -797,6 +797,14 @@ pub(crate) struct CrossModuleCtx {
     /// calling the clone.
     pub typed_f64_receiver_methods:
         std::collections::HashMap<(String, String), super::typed_abi::TypedReceiverMethodInfo>,
+    /// Representation-selection Phase 5a: `(class, method)` pairs that have a
+    /// generated `internal` `{public}__pshape` clone whose `this` is proven
+    /// (`collectors/proven_this.rs`). Keys are OWN declarations of
+    /// module-local classes only, which is precisely the condition the two
+    /// routing sites rely on: a hit means the receiver's proven exact class is
+    /// the class the clone was compiled for, so `this` cannot be a subclass
+    /// instance with a different chain.
+    pub pshape_methods: std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
     /// Inline closure bodies that have a generated internal typed-f64 clone.
     /// Only statically-known local closure calls may select these clones after
     /// closure identity/arity and numeric argument guards pass.

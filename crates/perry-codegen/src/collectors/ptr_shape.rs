@@ -401,7 +401,7 @@ fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
 /// The chain (self first) when every link is a modeled, accessor-free,
 /// computed-free, statically-extended user class; `None`-equivalent (empty)
 /// otherwise.
-fn chain_classes<'a>(classes: &HashMap<String, &'a Class>, class_name: &str) -> Vec<&'a Class> {
+pub(super) fn chain_classes<'a>(classes: &HashMap<String, &'a Class>, class_name: &str) -> Vec<&'a Class> {
     let mut out = Vec::new();
     let mut current = Some(class_name.to_string());
     let mut seen = HashSet::new();
@@ -418,7 +418,7 @@ fn chain_classes<'a>(classes: &HashMap<String, &'a Class>, class_name: &str) -> 
     out
 }
 
-fn chain_admissible(classes: &HashMap<String, &Class>, class_name: &str) -> bool {
+pub(super) fn chain_admissible(classes: &HashMap<String, &Class>, class_name: &str) -> bool {
     let chain = chain_classes(classes, class_name);
     if chain.is_empty() {
         return false;
@@ -452,7 +452,7 @@ fn chain_admissible(classes: &HashMap<String, &Class>, class_name: &str) -> bool
     true
 }
 
-fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
+pub(super) fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
     let mut out = HashSet::new();
     for class in chain {
         out.extend(class.fields.iter().map(|f| f.name.clone()));
@@ -462,7 +462,7 @@ fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
 
 /// name -> (owning class name, method function), first (most-derived) wins —
 /// matching JS prototype-chain resolution for an exact-class instance.
-fn chain_method_map<'a>(chain: &[&'a Class]) -> HashMap<String, (String, &'a perry_hir::Function)> {
+pub(super) fn chain_method_map<'a>(chain: &[&'a Class]) -> HashMap<String, (String, &'a perry_hir::Function)> {
     let mut out: HashMap<String, (String, &perry_hir::Function)> = HashMap::new();
     for class in chain {
         for method in &class.methods {
@@ -890,7 +890,7 @@ struct ThisStoreRecord<'a> {
     context: Option<(String, String, Vec<u32>)>,
 }
 
-struct ThisFlowAnalysis<'a, 'b> {
+pub(super) struct ThisFlowAnalysis<'a, 'b> {
     chain: &'b [&'a Class],
     fields: &'b HashSet<String>,
     methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
@@ -910,6 +910,34 @@ struct ThisFlowAnalysis<'a, 'b> {
 }
 
 impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
+    /// A fresh analysis over one class chain. Phase 5a
+    /// (`collectors/proven_this.rs`) reuses the walk for a method's `this`
+    /// without the constructor-chain obligations: the receiver of a proven
+    /// `this` already exists, and its shape is established by the CALL SITE
+    /// guard (class id + keys token) rather than by in-function provenance.
+    pub(super) fn new(
+        chain: &'b [&'a Class],
+        fields: &'b HashSet<String>,
+        methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
+    ) -> Self {
+        Self {
+            chain,
+            fields,
+            methods,
+            visited: HashSet::new(),
+            store_records: Vec::new(),
+            super_call_args: HashMap::new(),
+            internally_invoked: HashSet::new(),
+        }
+    }
+
+    /// Did the vetted walk observe any `this.<field> = …` store (in this
+    /// method or anything it transitively invokes on the same `this`)?
+    /// Phase 5a gates the freeze-family kill on this.
+    pub(super) fn has_this_store_records(&self) -> bool {
+        self.store_records.iter().any(|r| r.context.is_some())
+    }
+
     /// Walk the constructor chain (self-first `super(...)` order) and every
     /// chain field initializer under the strict `this` discipline.
     fn ctor_chain_safe(&mut self) -> bool {
@@ -937,7 +965,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         true
     }
 
-    fn method_safe(&mut self, owner: &str, func: &'a perry_hir::Function) -> bool {
+    pub(super) fn method_safe(&mut self, owner: &str, func: &'a perry_hir::Function) -> bool {
         self.function_this_safe(owner, &func.name, func)
     }
 

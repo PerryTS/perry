@@ -319,6 +319,18 @@ pub(crate) fn generic_method_body_name(generic_name: &str) -> String {
     format!("{generic_name}__generic")
 }
 
+/// Representation-selection Phase 5a: the `internal` proven-`this` clone of a
+/// method (`collectors/proven_this.rs`). Same `(double this, double args…)`
+/// ABI as the public symbol — only the body's `this.field` lowering differs.
+///
+/// This symbol is NEVER registered into a runtime vtable
+/// (`js_register_class_method` keeps the public name) and is reachable only
+/// from the two proven call sites. `pshape_symbol_reachability` in
+/// `collectors/proven_this.rs` ratchets that.
+pub(crate) fn pshape_method_name(generic_name: &str) -> String {
+    format!("{generic_name}__pshape")
+}
+
 pub(crate) fn generic_closure_body_name(generic_name: &str) -> String {
     format!("{generic_name}__generic")
 }

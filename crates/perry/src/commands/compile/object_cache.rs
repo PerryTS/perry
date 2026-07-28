@@ -1006,6 +1006,13 @@ fn compute_object_cache_key_with_env(
         "env_ptr_shape_locals",
         env_var("PERRY_PTR_SHAPE_LOCALS").as_deref().unwrap_or(""),
     );
+    // Representation-selection Phase 5a — proven-`this` method clones. Off
+    // removes the `__pshape` bodies and routes both proven call sites back to
+    // the public guarded body, changing the emitted IR / .o bytes.
+    h.field(
+        "env_ptr_shape_this",
+        env_var("PERRY_PTR_SHAPE_THIS").as_deref().unwrap_or(""),
+    );
     // Representation-selection Phase 4a.3 — Ptr<NumArray> locals:
     // `=0`/`off`/`false` reverts proven numeric-array locals from guard-free
     // element access back to the Phase 4a.1/4a.2 guarded tiers, which changes

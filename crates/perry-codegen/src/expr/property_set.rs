@@ -528,15 +528,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // downgrade the GC scan relies on). Boxed slots store
                         // inline with the existing generational write barrier
                         // for possibly-pointer values.
-                        let ptr_shape_proven = match object.as_ref() {
-                            Expr::LocalGet(recv_id) if ctx.repsel_context_allows_canonical_i32 => {
-                                ctx.native_facts
-                                    .shape_proven_ptr_local(*recv_id)
-                                    .map(|fact| fact.class_name == class_name)
-                                    .unwrap_or(false)
-                            }
-                            _ => false,
-                        };
+                        // Phase 5a routes `this` here too. The freeze-family
+                        // module-wide kill (collectors/proven_this.rs) is what
+                        // makes a guard-free STORE through a proven `this`
+                        // sound: unlike a Phase 3b local the receiver is
+                        // caller-owned and therefore aliased, so a frozen or
+                        // sealed target would otherwise silently accept a raw
+                        // store where the spec requires a strict TypeError.
+                        let ptr_shape_proven = ctx
+                            .ptr_shape_receiver_fact(object.as_ref())
+                            .map(|fact| fact.class_name == class_name)
+                            .unwrap_or(false);
                         if ptr_shape_proven {
                             let header_skip =
                                 crate::target_layout::object_header_size_bytes(ctx.target_triple)

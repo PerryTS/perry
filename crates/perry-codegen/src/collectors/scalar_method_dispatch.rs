@@ -64,6 +64,21 @@ pub struct ModuleDispatchFacts {
     /// runtime pollution byte — any such site disables all `Ptr<NumArray>`
     /// promotion in the module. See `collectors/ptr_numarray.rs`.
     numarray_prototype_index_barriers: bool,
+    /// Representation-selection Phase 5a: the module contains at least one
+    /// `Object.freeze` / `Object.seal` / `Object.preventExtensions` site.
+    ///
+    /// This is deliberately NOT part of `shape_barrier_sites`. For a Phase 3b
+    /// `Ptr<Shape>` LOCAL the freeze family needs no module-wide kill: the
+    /// containment walk proves no alias to the object exists at all, and a
+    /// freeze of the local itself disqualifies it directly
+    /// (`ptr_shape.rs`'s `Expr::ObjectFreeze` arm). A proven `this` has no
+    /// such containment — the receiver is owned by the CALLER and is
+    /// therefore aliased by construction, so `Object.freeze(c)` followed by
+    /// `c.m()` would let a guard-free raw store silently succeed where the
+    /// spec requires a strict-mode `TypeError`. Any freeze-family site in the
+    /// module therefore disables proven-`this` clones **that contain a
+    /// `this.field` write**; read-only clones are unaffected.
+    freeze_barrier_sites: bool,
 }
 
 impl Default for ModuleDispatchFacts {
@@ -75,6 +90,7 @@ impl Default for ModuleDispatchFacts {
             opaque_prototype_mutation: true,
             shape_barrier_sites: true,
             numarray_prototype_index_barriers: true,
+            freeze_barrier_sites: true,
         }
     }
 }
@@ -124,6 +140,13 @@ impl ModuleDispatchFacts {
         self.numarray_prototype_index_barriers
     }
 
+    /// Representation-selection Phase 5a: does the module contain any
+    /// `Object.freeze`/`seal`/`preventExtensions` site? Gates guard-free
+    /// STORES through a proven `this` (see the field's doc comment).
+    pub(crate) fn has_freeze_barrier_sites(&self) -> bool {
+        self.freeze_barrier_sites
+    }
+
     /// Does the module NAME a prototype object it cannot attribute to a
     /// declared class (`const p = Array.prototype`, `x.constructor.prototype`,
     /// …)? Such a reference can be aliased into a local and written through
@@ -143,6 +166,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         opaque_prototype_mutation: false,
         shape_barrier_sites: false,
         numarray_prototype_index_barriers: false,
+        freeze_barrier_sites: false,
     };
 
     note_stmts(&hir.init, &mut facts);
@@ -188,6 +212,9 @@ fn note_stmts(stmts: &[Stmt], facts: &mut ModuleDispatchFacts) {
         if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(expr) {
             facts.numarray_prototype_index_barriers = true;
         }
+        if super::proven_this::expr_is_freeze_barrier(expr) {
+            facts.freeze_barrier_sites = true;
+        }
     });
 }
 
@@ -199,6 +226,9 @@ fn note_expr_tree(expr: &Expr, facts: &mut ModuleDispatchFacts) {
         }
         if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(node) {
             facts.numarray_prototype_index_barriers = true;
+        }
+        if super::proven_this::expr_is_freeze_barrier(node) {
+            facts.freeze_barrier_sites = true;
         }
     });
 }
@@ -378,7 +408,7 @@ fn for_each_expr(expr: &Expr, f: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
+pub(super) fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
     for stmt in stmts {
         for_each_expr_in_stmt(stmt, f);
     }

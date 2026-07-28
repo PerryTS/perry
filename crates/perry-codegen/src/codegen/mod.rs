@@ -72,7 +72,8 @@ pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    generic_function_body_name, generic_method_body_name, typed_f64_closure_name,
+    generic_function_body_name, generic_method_body_name, pshape_method_name,
+    typed_f64_closure_name,
     typed_f64_function_name, typed_f64_method_name, typed_f64_receiver_method_info,
     typed_f64_receiver_method_name, typed_i1_closure_name, typed_i1_function_name,
     typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name, typed_i32_method_name,
@@ -1340,6 +1341,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
+    // eligibility loop because representation-selection Phase 5a's
+    // proven-`this` admission consults them (§5.2 shape barriers, the
+    // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
+    // below — computed exactly once per module either way.
+    let module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    // Representation-selection Phase 5a: proven-`this` method clones.
+    let mut pshape_methods: std::collections::HashMap<
+        (String, String),
+        crate::collectors::PtrShapeLocal,
+    > = std::collections::HashMap::new();
     // Phase 3b typed-receiver widening: chain-global field indexes need the
     // full class table — and it must be the SAME table dynamic dispatch's
     // call-site gating consults (`class_table`, incl. class-expression
@@ -1350,6 +1362,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     for class in &hir.classes {
         for method in &class.methods {
             let source_function = format!("{}::{}", class.name, method.name);
+            // Representation-selection Phase 5a: does this method admit a
+            // proven-`this` clone? Uses the SAME class table as the
+            // typed-receiver decision below, for the same reason — the two
+            // routing sites gate on this map, and a chain resolvable only
+            // through an alias would gate a call to a symbol the emission
+            // loop never produced.
+            if let Some(fact) = crate::collectors::method_proven_this(
+                class,
+                method,
+                receiver_class_table,
+                &module_dispatch_facts,
+            ) {
+                pshape_methods.insert((class.name.clone(), method.name.clone()), fact);
+            }
             match typed_abi::typed_f64_method_rejection_reason(method) {
                 None => {
                     let key = (class.name.clone(), method.name.clone());
@@ -1599,7 +1625,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         compile_time_constants,
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
-        module_dispatch: crate::collectors::collect_module_dispatch_facts(hir),
+        module_dispatch: module_dispatch_facts,
         // Inline-hot-small pre-pass (#6850 follow-up): FuncIds with an in-loop
         // call site AND few total call sites, so small hot callees can earn
         // `inlinehint` while the call-site cap bounds duplication.
@@ -1645,6 +1671,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_string_methods,
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
+        pshape_methods,
         typed_f64_closures: std::collections::HashSet::new(),
         typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),

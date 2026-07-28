@@ -770,6 +770,23 @@ pub(crate) struct FnCtx<'a> {
     /// `PERRY_CANONICAL_I32_LOCALS` env gate.
     pub repsel_context_allows_canonical_i32: bool,
 
+    /// Representation-selection Phase 5a (`collectors/proven_this.rs`): when
+    /// this body is a `{public}__pshape` method clone, the `Ptr<Shape>` proof
+    /// carried by `this`. Consumed by [`FnCtx::ptr_shape_receiver_fact`], which
+    /// is what makes every `this.field` in the clone lower to the bare
+    /// fixed-offset form instead of the per-access guard diamond.
+    ///
+    /// `None` in every ordinary body — including the PUBLIC method body, which
+    /// keeps today's guarded lowering because its receiver is unproven.
+    pub proven_this: Option<crate::collectors::PtrShapeLocal>,
+
+    /// Phase 5a: `(class, method)` pairs with an emitted `__pshape` clone.
+    /// The two proven call sites consult this before routing; a hit also
+    /// proves the receiver's exact class DECLARES the method (own
+    /// declarations only), which is what rules out a subclass `this`.
+    pub pshape_methods:
+        &'a std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
+
     /// Locals referenced anywhere inside a nested closure body (including
     /// explicit capture lists). Excluded from canonical-i32 selection — the
     /// capture machinery stays on the boxed protocol. Empty when
@@ -1406,6 +1423,32 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 }
 
 impl<'a> FnCtx<'a> {
+    /// The `Ptr<Shape>` proof for a receiver expression, if any — the single
+    /// entry point every representation-selection object site consults.
+    ///
+    /// * `Expr::LocalGet` — Phase 3b: a shape-proven local
+    ///   (`collectors/ptr_shape.rs`), proven by provenance + containment.
+    /// * `Expr::This` — Phase 5a: the proven receiver of a `__pshape` method
+    ///   clone (`collectors/proven_this.rs`), proven by the routing call
+    ///   site's class-id + keys-token guard.
+    ///
+    /// Both carry the identical storage contract (a shadow-bound,
+    /// tagged-at-rest NaN-boxed slot), so consumers need no case analysis:
+    /// re-derive the raw pointer from the slot at every access.
+    pub(crate) fn ptr_shape_receiver_fact(
+        &self,
+        e: &perry_hir::Expr,
+    ) -> Option<&crate::collectors::PtrShapeLocal> {
+        if !self.repsel_context_allows_canonical_i32 {
+            return None;
+        }
+        match e {
+            perry_hir::Expr::LocalGet(id) => self.native_facts.shape_proven_ptr_local(*id),
+            perry_hir::Expr::This => self.proven_this.as_ref(),
+            _ => None,
+        }
+    }
+
     pub fn next_loop_proof_scope_id(&mut self) -> u32 {
         let id = self.next_loop_proof_scope_id;
         self.next_loop_proof_scope_id = self
