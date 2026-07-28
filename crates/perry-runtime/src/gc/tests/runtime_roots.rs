@@ -106,14 +106,8 @@ fn assert_moved_closure_ptr(bits: u64, original: usize) -> usize {
     rewritten
 }
 
-fn register_runtime_handle_root_scanner_for_tests() {
-    gc_register_budgeted_mutable_root_scanner_with_source(
-        scan_runtime_handle_roots_mut,
-        scan_runtime_handle_roots_mut_step,
-        new_runtime_handle_root_scan_state,
-        MutableRootScannerSource::RuntimeHandles,
-    );
-}
+// `register_runtime_handle_root_scanner_for_tests` moved to `super::support`
+// so the layout/tracing tests can root handles the same way (#6930 review).
 
 #[test]
 fn test_scoped_root_scanner_registry_guard_restores_counts() {

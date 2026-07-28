@@ -229,6 +229,26 @@ impl Drop for ConservativeScanAutoGuard {
     }
 }
 
+/// Put the runtime-handle mutable-root scanner back into this thread's
+/// registry.
+///
+/// REQUIRED before a `RuntimeHandleScope` roots anything inside
+/// `ScopedRootScannerRegistryGuard` / `GcTestIsolationGuard` /
+/// `CopyingNurseryTestGuard`: those guards `mem::take` the thread's
+/// `MUTABLE_ROOT_SCANNERS` so a collection sees exactly the roots the test
+/// installs, and the runtime-handle scanner goes with it. Without this call a
+/// `RuntimeHandleScope` inside such a test is decorative — its handles are
+/// neither marked nor rewritten, so a raw pointer held across a GC-capable
+/// call is silently unrooted and the test can pass for the wrong reason.
+pub(super) fn register_runtime_handle_root_scanner_for_tests() {
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        scan_runtime_handle_roots_mut_step,
+        new_runtime_handle_root_scan_state,
+        MutableRootScannerSource::RuntimeHandles,
+    );
+}
+
 /// Pin this thread's conservative-scan mode to `Disabled` for the guard's
 /// lifetime, restoring the prior override on drop.
 ///
