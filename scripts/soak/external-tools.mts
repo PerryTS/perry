@@ -359,9 +359,19 @@ export function linkHandle(target: string, name: string): void {
 }
 
 async function installAssetTool(name: string, pin: ToolPin): Promise<void> {
-  const plat = pin.platforms?.[platformKey()]
+  const key = platformKey()
+  const plat = pin.platforms?.[key]
   if (!plat) {
-    throw new Error(`${name}: no pinned asset for ${platformKey()}`)
+    const available = Object.keys(pin.platforms ?? {}).join(', ') || '(none)'
+    // Name the musl case explicitly: several upstreams (sfw today) ship no
+    // musl asset, and the failure is otherwise a puzzle on an alpine
+    // runner. Failing loud beats installing a glibc binary that cannot
+    // run, but the message has to say what to do about it.
+    const muslHint = key.endsWith('-musl')
+      ? `\n  ${name} publishes no musl asset. Either run this on a glibc host, ` +
+        `or add a ${key} entry to external-tools.json once upstream ships one.`
+      : ''
+    throw new Error(`${name}: no pinned asset for ${key} (pinned: ${available})${muslHint}`)
   }
   // A platform pinned to a registry .tgz (pnpm has no darwin-x64 SEA
   // upstream) routes through the npm-tarball path instead.
