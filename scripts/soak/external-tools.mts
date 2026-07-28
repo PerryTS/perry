@@ -551,6 +551,10 @@ if [ -n "\${${sentinel}:-}" ] || [ -z "$REAL" ] || ! command -v sfw >/dev/null 2
   echo "${cmd}: not found" >&2; exit 127
 fi
 export ${sentinel}=1
+# Enterprise sfw defaults to BLOCK for non-registry hosts, which breaks
+# ordinary dev flows the day a Socket key lands; free tier hardcodes
+# ignore and disregards the var, so setting it is always safe.
+export SFW_UNKNOWN_HOST_ACTION=ignore
 exec sfw '${cmd}' "$@"
 `
     // Remove the handle before writing: writeFileSync FOLLOWS a symlink, so
