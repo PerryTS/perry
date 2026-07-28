@@ -40,6 +40,10 @@ pub(crate) struct NmNamespaceOps {
     /// Own-key enumeration (`Object.keys` / `getOwnPropertyNames` clone
     /// paths). `None` when the value is not a namespace object.
     pub own_keys_array: unsafe fn(*const ObjectHeader) -> Option<*mut crate::array::ArrayHeader>,
+    /// Bound-method materialization for a dynamic property get on a
+    /// namespace object (`const fn = fs.lstatSync`): NaN-boxed namespace
+    /// value + property-name bytes → bound callable (or undefined).
+    pub bind_method: unsafe fn(f64, *const u8, usize) -> f64,
 }
 
 static NM_NAMESPACE_OPS: AtomicPtr<NmNamespaceOps> = AtomicPtr::new(std::ptr::null_mut());

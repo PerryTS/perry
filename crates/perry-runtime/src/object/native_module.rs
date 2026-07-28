@@ -334,7 +334,12 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
     field_set_override: super::field_set_by_name::nm_field_set_override,
     reflect_has_enumerable: super::reflect_support::nm_reflect_has_enumerable,
     own_keys_array: nm_own_keys_array_opt,
+    bind_method: nm_bind_method_ops,
 };
+
+unsafe fn nm_bind_method_ops(obj_value: f64, name_ptr: *const u8, name_len: usize) -> f64 {
+    js_native_module_bind_method(obj_value, name_ptr, name_len)
+}
 
 unsafe fn nm_own_keys_array_opt(
     obj: *const super::ObjectHeader,
