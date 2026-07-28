@@ -57,6 +57,13 @@ pub struct ModuleDispatchFacts {
     /// ALL `Ptr<Shape>` promotion in the module. See
     /// `collectors/ptr_shape.rs` for the rule's soundness discussion.
     shape_barrier_sites: bool,
+    /// Representation-selection Phase 4a.3: the module contains an indexed
+    /// write through a `.prototype` object (`Array.prototype[0] = …`). A
+    /// polluted prototype changes what a HOLE read observes through the
+    /// chain, and the guard-free `Ptr<NumArray>` read cannot consult the
+    /// runtime pollution byte — any such site disables all `Ptr<NumArray>`
+    /// promotion in the module. See `collectors/ptr_numarray.rs`.
+    numarray_prototype_index_barriers: bool,
 }
 
 impl Default for ModuleDispatchFacts {
@@ -67,6 +74,7 @@ impl Default for ModuleDispatchFacts {
             prototype_touched_classes: HashSet::new(),
             opaque_prototype_mutation: true,
             shape_barrier_sites: true,
+            numarray_prototype_index_barriers: true,
         }
     }
 }
@@ -109,6 +117,12 @@ impl ModuleDispatchFacts {
     pub(crate) fn has_shape_barrier_sites(&self) -> bool {
         self.shape_barrier_sites
     }
+
+    /// Representation-selection Phase 4a.3: does the module contain an
+    /// indexed write through any `.prototype` object?
+    pub(crate) fn has_numarray_prototype_index_barriers(&self) -> bool {
+        self.numarray_prototype_index_barriers
+    }
 }
 
 /// Scan a whole module — top-level init, every function, and every class body
@@ -119,6 +133,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         prototype_touched_classes: HashSet::new(),
         opaque_prototype_mutation: false,
         shape_barrier_sites: false,
+        numarray_prototype_index_barriers: false,
     };
 
     note_stmts(&hir.init, &mut facts);
@@ -161,6 +176,9 @@ fn note_stmts(stmts: &[Stmt], facts: &mut ModuleDispatchFacts) {
         if super::ptr_shape::expr_is_shape_barrier(expr) {
             facts.shape_barrier_sites = true;
         }
+        if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(expr) {
+            facts.numarray_prototype_index_barriers = true;
+        }
     });
 }
 
@@ -169,6 +187,9 @@ fn note_expr_tree(expr: &Expr, facts: &mut ModuleDispatchFacts) {
         note_prototype_effect(node, facts);
         if super::ptr_shape::expr_is_shape_barrier(node) {
             facts.shape_barrier_sites = true;
+        }
+        if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(node) {
+            facts.numarray_prototype_index_barriers = true;
         }
     });
 }

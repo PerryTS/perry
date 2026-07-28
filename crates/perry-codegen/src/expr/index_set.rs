@@ -1024,6 +1024,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // string key on dynamic receiver → object field set, otherwise
             // bail with a clear error.
             if is_array_expr(ctx, object) {
+                // Repsel Phase 4a.3: guard-free `Ptr<NumArray>` store — the
+                // local proof (raw-f64-or-hole slots forever, length never
+                // shrinks, binding never stale) + a per-site in-bounds proof
+                // + a canonical-raw-f64 RHS lower `a[i] = v` to slot reload →
+                // mask → gep → `store double`, with no guard tier, no bounds
+                // arms, no barrier, no note, no length bump (in-bounds ⇒
+                // length unchanged). Anything unproven falls to the guarded
+                // tiers below, which maintain the same invariants.
+                if let Some(value) = super::ptr_numarray_access::try_lower_num_array_guard_free_set(
+                    ctx,
+                    object.as_ref(),
+                    index,
+                    value,
+                )? {
+                    return Ok(value);
+                }
                 // Bounded-index fast-fast path: when the surrounding
                 // for-loop has registered `(counter_id, arr_id)` as a
                 // bounded pair (via `lower_for`'s

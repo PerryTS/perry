@@ -1006,6 +1006,17 @@ fn compute_object_cache_key_with_env(
         "env_ptr_shape_locals",
         env_var("PERRY_PTR_SHAPE_LOCALS").as_deref().unwrap_or(""),
     );
+    // Representation-selection Phase 4a.3 — Ptr<NumArray> locals:
+    // `=0`/`off`/`false` reverts proven numeric-array locals from guard-free
+    // element access back to the Phase 4a.1/4a.2 guarded tiers, which changes
+    // the emitted IR / .o bytes — a warm cache must not serve an object built
+    // under the other setting.
+    h.field(
+        "env_ptr_numarray_locals",
+        env_var("PERRY_PTR_NUMARRAY_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
     // FEAT_JSCVT ToInt32 (`fjcvtzs` on apple-arm64): flipping it changes
     // every `toint32_wrap` emission site's IR, so it must key the cache.
     h.field("env_jscvt", env_var("PERRY_JSCVT").as_deref().unwrap_or(""));

@@ -1154,6 +1154,17 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         }
     }
 
+    // Repsel Phase 4a.3: guard-free `Ptr<NumArray>` load — supersedes the
+    // packed/bounded/guarded tiers when the local proof + a per-site
+    // in-bounds proof both hold.
+    if let Some(value) = super::ptr_numarray_access::try_lower_num_array_guard_free_get(
+        ctx,
+        object.as_ref(),
+        index.as_ref(),
+    )? {
+        return Ok(Some(value));
+    }
+
     if let Expr::LocalGet(arr_id) = object.as_ref() {
         if let Some((fact, idx_id, offset)) =
             packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())

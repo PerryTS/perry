@@ -41,7 +41,7 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // a coerced hole (NaN) is indistinguishable from a stored NaN, but
     // `NaN ?? x` is NaN while `undefined ?? x` is `x`.
     if let Expr::Logical { op, left, right } = expr {
-        if crate::type_analysis::is_numeric_expr(ctx, expr) {
+        if is_numeric_expr(ctx, expr) {
             let value = lower_numeric_logical_for_number_context(ctx, *op, left, right)?;
             return Ok((value, true));
         }
@@ -79,7 +79,7 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
 /// or can surface a boxed value through a raw-f64 read's cold fallback.
 fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced: bool) -> bool {
     !fallback_coerced
-        && (!crate::type_analysis::is_numeric_expr(ctx, expr)
+        && (!is_numeric_expr(ctx, expr)
             || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr))
 }
 
