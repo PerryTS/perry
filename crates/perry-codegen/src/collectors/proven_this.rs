@@ -89,6 +89,48 @@ pub(crate) fn pshape_method_name(public_name: &str) -> String {
     format!("{public_name}__pshape")
 }
 
+/// Drop any proven-`this` clone whose composed symbol would collide with a
+/// symbol the module already defines for a real, user-declared member.
+///
+/// `pshape_method_name` builds the clone symbol by appending a suffix to the
+/// public one, so a class with methods `foo` and `foo__pshape` would have
+/// `foo`'s clone and `foo__pshape`'s PUBLIC entry resolve to the same LLVM
+/// symbol — two definitions of one name. (Cross-class shapes collide the same
+/// way, e.g. a class literally named `C__foo` with a method `pshape`, because
+/// the `__` separators are not escaped either — which is why this compares
+/// composed SYMBOLS from the registry rather than member names.)
+///
+/// This is a **local mitigation for this phase's suffix only**. The hazard is
+/// pre-existing and shared by the whole generated-clone family (`__generic`,
+/// `__typed_f64`, `__typed_i32`, `__typed_i1`, `__typed_string`,
+/// `__typed_f64_recv`, the Phase 2 specialized-ABI suffix, `__pshape`) —
+/// `foo` + `foo__generic`
+/// already collides today. The family-wide fix (a reserved escape in
+/// `sanitize_member`, content-addressed mangling, or a uniquifier) is tracked
+/// in **issue #6927**; it is deliberately not attempted here because it would
+/// touch every clone kind plus Phase 2's specialized-ABI reachability ratchet
+/// (whose allowlist must stay exactly as tight as it is — this comment
+/// deliberately avoids naming that suffix literally, because the ratchet
+/// scans for it).
+///
+/// Standing down is always sound: without a clone, both routing sites fall
+/// through to today's guarded lowering, which is correct for any receiver.
+pub(crate) fn prune_colliding_clones(
+    pshape_methods: &mut HashMap<(String, String), PtrShapeLocal>,
+    method_names: &HashMap<(String, String), String>,
+) {
+    if pshape_methods.is_empty() {
+        return;
+    }
+    let taken: HashSet<&str> = method_names.values().map(String::as_str).collect();
+    pshape_methods.retain(|key, _| match method_names.get(key) {
+        // Keep only when the clone symbol is not already a defined symbol.
+        Some(public) => !taken.contains(pshape_method_name(public).as_str()),
+        // Not in the registry at all: it could never have been emitted.
+        None => false,
+    });
+}
+
 /// The `Object.freeze` / `Object.seal` / `Object.preventExtensions` family.
 ///
 /// Deliberately NOT part of [`super::ptr_shape::expr_is_shape_barrier`] — see
@@ -221,6 +263,64 @@ mod tests {
         // Not a freeze barrier: the Phase 3b §5.2 family is tracked separately.
         assert!(!expr_is_freeze_barrier(&Expr::Delete(Box::new(Expr::This))));
         assert!(!expr_is_freeze_barrier(&Expr::This));
+    }
+
+    /// Issue #6927: a class with methods `foo` and `foo__pshape` would give
+    /// `foo`'s clone the same LLVM symbol as `foo__pshape`'s PUBLIC entry.
+    /// The colliding clone must stand down (falling back to the always-correct
+    /// guarded lowering); the innocent one alongside it must survive.
+    #[test]
+    fn colliding_clone_symbols_are_pruned() {
+        let fact = || PtrShapeLocal {
+            class_name: "C".to_string(),
+            numeric_fields: HashSet::new(),
+        };
+        let k = |m: &str| ("C".to_string(), m.to_string());
+        let mut method_names = HashMap::new();
+        method_names.insert(k("foo"), "perry_method_m__C__foo".to_string());
+        // A real user member whose symbol IS `foo`'s clone symbol.
+        method_names.insert(
+            k("foo__pshape"),
+            "perry_method_m__C__foo__pshape".to_string(),
+        );
+        method_names.insert(k("safe"), "perry_method_m__C__safe".to_string());
+
+        let mut pshape = HashMap::new();
+        pshape.insert(k("foo"), fact());
+        pshape.insert(k("safe"), fact());
+        prune_colliding_clones(&mut pshape, &method_names);
+
+        assert!(
+            !pshape.contains_key(&k("foo")),
+            "`foo`'s clone collides with `foo__pshape`'s public symbol and must be dropped"
+        );
+        assert!(
+            pshape.contains_key(&k("safe")),
+            "a non-colliding clone must survive the prune"
+        );
+
+        // Cross-CLASS collision: class `C__foo` + method `pshape` composes the
+        // exact same symbol, because `__` separators are not escaped either.
+        let mut method_names = HashMap::new();
+        method_names.insert(k("foo"), "perry_method_m__C__foo".to_string());
+        method_names.insert(
+            ("C__foo".to_string(), "pshape".to_string()),
+            "perry_method_m__C__foo__pshape".to_string(),
+        );
+        let mut pshape = HashMap::new();
+        pshape.insert(k("foo"), fact());
+        prune_colliding_clones(&mut pshape, &method_names);
+        assert!(
+            pshape.is_empty(),
+            "cross-class symbol collisions must be caught too — the check \
+             compares composed SYMBOLS, not member names"
+        );
+
+        // A pair not present in the registry can never have been emitted.
+        let mut pshape = HashMap::new();
+        pshape.insert(k("ghost"), fact());
+        prune_colliding_clones(&mut pshape, &HashMap::new());
+        assert!(pshape.is_empty());
     }
 
     /// The proven-`this` clone suffix must never be registered into a runtime

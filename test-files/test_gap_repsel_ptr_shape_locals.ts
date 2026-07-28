@@ -433,3 +433,38 @@ function inherited(): string {
   return base.readA() + ":" + d.readA() + ":" + d.sum() + ":" + d.a + ":" + d.b;
 }
 console.log("p5a-inherit:" + inherited());
+
+// 20. Clone-symbol collision (issue #6927). `tick`'s proven-`this` clone
+//     symbol is byte-identical to the PUBLIC symbol of a user method literally
+//     named `tick__pshape`. The colliding clone must stand down to the guarded
+//     lowering rather than emit a second definition of one LLVM symbol; the
+//     non-colliding sibling keeps its clone. Both must behave normally.
+class Collide5a {
+  n: number;
+  constructor(n: number) {
+    this.n = n;
+  }
+  tick(): number {
+    this.n = this.n + 1;
+    return this.n;
+  }
+  // Deliberately named to collide with `tick`'s generated clone symbol.
+  tick__pshape(): number {
+    this.n = this.n + 100;
+    return this.n;
+  }
+  other(): number {
+    this.n = this.n + 1000;
+    return this.n;
+  }
+}
+function collide(): string {
+  const c = new Collide5a(1);
+  const a = c.tick();
+  const b = c.tick__pshape();
+  const d = c.other();
+  let acc = 0;
+  for (let i = 0; i < 50; i++) acc += c.tick();
+  return a + ":" + b + ":" + d + ":" + acc + ":" + c.n;
+}
+console.log("p5a-collide:" + collide());

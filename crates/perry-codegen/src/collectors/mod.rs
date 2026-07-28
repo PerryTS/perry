@@ -63,7 +63,7 @@ pub(crate) use integer_locals::{
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
 pub(crate) use mutation::has_any_mutation;
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
-pub(crate) use proven_this::{method_proven_this, pshape_method_name};
+pub(crate) use proven_this::{method_proven_this, prune_colliding_clones, pshape_method_name};
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
 pub(crate) use ptr_shape::PtrShapeLocal;
 pub(crate) use refs::{

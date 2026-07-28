@@ -1852,6 +1852,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &module_prefix,
     );
 
+    // Representation-selection Phase 5a: now that the method registry exists,
+    // drop any proven-`this` clone whose composed symbol would collide with a
+    // symbol a real user member already owns (issue #6927 tracks the
+    // family-wide fix for every generated-clone suffix). Pruning HERE — before
+    // `emit_module_artifacts` reads `cross_module.pshape_methods` for both
+    // emission and call-site routing — keeps the two in lockstep, so a call
+    // site can never route to a clone the emission loop declined to produce.
+    crate::collectors::prune_colliding_clones(&mut cross_module.pshape_methods, &method_names);
+
     // Resolve user function names + signatures up front. See
     // `func_registry::build_func_registry`.
     let func_registry::FuncRegistry {
