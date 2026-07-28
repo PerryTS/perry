@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+use crate::commands::install::firewall::FirewallStatus;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -48,6 +50,14 @@ pub struct ScanReport {
     pub package_count: usize,
     pub findings: Vec<Finding>,
     pub verdict: Verdict,
+    /// What happened to the network-time layer for this install.
+    ///
+    /// In the report, not just on stderr, because `--json` is the CI path:
+    /// before this existed an unfirewalled CI install produced no record of
+    /// having been unfirewalled. Defaults to `Unavailable` so a path that
+    /// fails to set it under-claims rather than over-claims.
+    #[serde(default)]
+    pub firewall: FirewallStatus,
 }
 
 impl ScanReport {
@@ -92,9 +102,34 @@ mod tests {
             package_count: 0,
             findings: vec![],
             verdict: Verdict::Clean,
+            firewall: FirewallStatus::Active {
+                sfw: "/usr/bin/sfw".into(),
+            },
         };
         report.write_to(td.path()).unwrap();
         let content = fs::read_to_string(td.path().join(".perry/install-report.json")).unwrap();
         assert!(content.contains("\"verdict\": \"clean\""));
+        assert!(content.contains("\"state\": \"active\""));
+    }
+
+    #[test]
+    fn an_unfirewalled_install_is_recorded_in_the_report() {
+        // The --json path is CI. Before this field, an install that fell open
+        // because no sfw was found left no machine-readable trace of it: the
+        // only notice lived behind `if !args.json`.
+        let td = TempDir::new().unwrap();
+        let report = ScanReport {
+            scanned_at: "2026-01-01T00:00:00Z".into(),
+            package_count: 0,
+            findings: vec![],
+            verdict: Verdict::Clean,
+            firewall: FirewallStatus::Unavailable,
+        };
+        report.write_to(td.path()).unwrap();
+        let content = fs::read_to_string(td.path().join(".perry/install-report.json")).unwrap();
+        assert!(
+            content.contains("\"state\": \"unavailable\""),
+            "report must say the install was unfirewalled: {content}"
+        );
     }
 }
