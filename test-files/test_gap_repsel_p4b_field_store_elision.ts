@@ -13,9 +13,8 @@
 // case builds a genuinely non-SSO (> 5 byte), genuinely unique (first append on
 // a shared literal) string, stores it, then grows the source.
 
-// 1. Elided both: a `boolean` field is neither raw-f64 nor pointer-bearing, so
-//    its slot is in neither typed mask; a by-construction non-pointer value
-//    (literal / comparison / `!`) makes both calls dead.
+// 1. Elides both: a by-construction non-pointer value (literal / comparison /
+//    `!`) can be neither a pointer the GC must track nor a heap string.
 class Flags {
   on: boolean;
   hot: boolean;
@@ -39,9 +38,8 @@ function boolStores(n: number): string {
 }
 console.log(boolStores(1000));
 
-// 2. Elided note, kept addref: a `string` field's slot IS pointer-masked, so
-//    the layout note is a no-op — but the stored value can be a unique heap
-//    string, so the demote must survive.
+// 2. The addref boundary: the stored value is a unique heap string, so the
+//    demote must survive. Nothing about the declared type may elide it.
 class Named {
   tag: string;
   constructor() {
@@ -73,9 +71,8 @@ function snapshots(): string {
 }
 console.log(snapshots());
 
-// 4. Union-with-string must NOT elide the demote: `type_is_pointer_bearing`
-//    reports the slot as pointer-masked (so the note goes), but a string can
-//    still land there and must be demoted.
+// 4. Union-with-string must NOT elide the demote: a string can land in the
+//    slot and has to be marked shared like any other.
 class Mixed {
   v: string | number;
   constructor() {
@@ -115,8 +112,8 @@ function declaredTypeIsNotEnforced(): string {
 }
 console.log(declaredTypeIsNotEnforced());
 
-// 6. Object- and array-typed fields: pointer-masked slots, so the note is
-//    elided; values stay exact and the children stay reachable across GC.
+// 6. Object- and array-typed fields: values stay exact and the children stay
+//    reachable across GC (these keep their note — see section 11).
 class Node2 {
   id: number;
   next: Node2 | null;
@@ -270,11 +267,11 @@ function compoundStores(): string {
   const o = new Slot();
   let s = "prefix"; // non-SSO
   s += "_init"; // append on a shared literal -> refcount==1
-  o.tag ||= s; // pointer-masked slot: note elided, addref MUST stay
+  o.tag ||= s; // unproven RHS: note AND addref both stay
   s += "_more"; // must NOT rewrite o.tag
-  o.child ??= new Node2(3); // pointer-masked, pointer RHS
-  o.nums ??= [1, 2]; // pointer-masked, pointer RHS
-  o.flag ||= true; // neither mask + non-pointer RHS -> both elided
+  o.child ??= new Node2(3); // Expr::New is excluded: both stay
+  o.nums ??= [1, 2]; // array literal: addref elided, note stays
+  o.flag ||= true; // non-pointer by construction: both elided
   o.count += 5; // raw-f64 slot: separate inline path, untouched
   return (
     o.tag +
