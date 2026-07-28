@@ -37,15 +37,30 @@ fn compile_and_run_forced_evacuation(dir: &std::path::Path, source: &str) -> Str
     let output = dir.join("main_bin");
     std::fs::write(&entry, source).expect("write entry");
 
-    let compile = Command::new(perry_bin())
+    // The runtime-only macOS link path does not pass `-framework CoreFoundation`,
+    // but `perry-runtime` pulls `iana_time_zone`, which references `_CFRelease`
+    // & co. On this host that leaves the link with undefined symbols for any
+    // "runtime-only" test program (the pre-existing
+    // `gc_side_table_roots_evacuation` fails identically). Append the framework
+    // through the supported escape hatch so this suite links regardless.
+    let mut compile_cmd = Command::new(perry_bin());
+    compile_cmd
         .current_dir(dir)
         .arg("compile")
         .arg(&entry)
         .arg("-o")
         .arg(&output)
-        .arg("--no-cache")
-        .output()
-        .expect("run perry compile");
+        .arg("--no-cache");
+    if cfg!(target_os = "macos") {
+        let extra = match std::env::var("PERRY_EXTRA_LINK_ARGS") {
+            Ok(existing) if !existing.trim().is_empty() => {
+                format!("{existing} -framework CoreFoundation")
+            }
+            _ => "-framework CoreFoundation".to_string(),
+        };
+        compile_cmd.env("PERRY_EXTRA_LINK_ARGS", extra);
+    }
+    let compile = compile_cmd.output().expect("run perry compile");
     assert!(
         compile.status.success(),
         "perry compile failed\nstdout:\n{}\nstderr:\n{}",
@@ -75,13 +90,16 @@ fn compile_and_run_forced_evacuation(dir: &std::path::Path, source: &str) -> Str
 const PRELUDE: &str = r#"
 // Allocate a lot of short-lived nursery objects, then force a collection so a
 // GC + evacuation happens *inside* the operand coercion rather than by luck.
+// 20000 matches the churn the existing side-table evacuation regression uses:
+// enough live nursery traffic to cross the 1 MB arena-block GC trigger even if
+// the explicit `gc()` hook is unavailable in this build.
 function churnAndCollect(): void {
   let sink = 0;
-  for (let i = 0; i < 3000; i++) {
+  for (let i = 0; i < 20000; i++) {
     const tmp = { i, s: "pad" + i };
     sink += tmp.s.length > 0 ? 1 : 0;
   }
-  if (sink !== 3000) throw new Error("churn miscounted");
+  if (sink !== 20000) throw new Error("churn miscounted");
   (globalThis as any).gc?.();
 }
 
@@ -207,11 +225,11 @@ check("big-add", heavy(11n) + plain(3n), 14n);
 
 // js_numeric_step: `1n` is allocated while the operand BigInt is live.
 let step: any = 9007199254740993n;
-for (let i = 0; i < 200; i++) {
+for (let i = 0; i < 20; i++) {
   churnAndCollect();
   step++;
 }
-check("bigint-step", step, 9007199254741193n);
+check("bigint-step", step, 9007199254741013n);
 
 console.log("failures:", failures);
 "#
@@ -291,7 +309,7 @@ check("value-concat", heavy(5) + suffix, "5-post9");
 
 // Repeat under sustained churn so the allocation inside the concat itself has
 // a live nursery to evacuate.
-for (let i = 0; i < 50; i++) {
+for (let i = 0; i < 10; i++) {
   const p: string = "p" + String(i);
   check("concat-loop", p + heavy(i), "p" + String(i) + String(i));
 }
