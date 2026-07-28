@@ -1525,9 +1525,9 @@ fn refresh_local_head_follows_growth_forwarding() {
             cur = js_array_push_f64(cur, i as f64);
         }
         // Growth happened: the original head is a forwarded stub.
-        let hdr = (stale as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let hdr = crate::value::addr_class::try_read_gc_header(stale as usize).unwrap();
         assert_ne!(
-            (*hdr).gc_flags & crate::gc::GC_FLAG_FORWARDED,
+            hdr.gc_flags & crate::gc::GC_FLAG_FORWARDED,
             0,
             "expected the pre-grow head to be forwarded"
         );
@@ -1570,8 +1570,9 @@ fn sparse_extend_keeps_raw_f64_holes_invariant() {
         arr = js_array_push_f64(arr, 2.5);
         assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
         arr = js_array_set_f64_extend(arr, 9, 7.5);
-        let hdr = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        let reserved = (*hdr)._reserved;
+        let reserved = crate::value::addr_class::try_read_gc_header(arr as usize)
+            .unwrap()
+            ._reserved;
         assert_eq!(
             reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT,
             0,
@@ -1597,10 +1598,11 @@ fn sparse_extend_keeps_raw_f64_holes_invariant() {
         let s_box =
             f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK));
         other = js_array_set_f64_extend(other, 6, s_box);
-        let ohdr = (other as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let oreserved = crate::value::addr_class::try_read_gc_header(other as usize)
+            .unwrap()
+            ._reserved;
         assert_eq!(
-            (*ohdr)._reserved
-                & (crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES),
+            oreserved & (crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES),
             0,
             "non-numeric store must clear both raw-f64 flags"
         );
@@ -1617,8 +1619,9 @@ fn push_built_array_gets_and_keeps_dense_raw_f64_flag() {
             arr = js_array_push_f64(arr, seed);
         }
         let probe = js_array_is_numeric_f64_layout(arr);
-        let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        let reserved = (*header)._reserved;
+        let reserved = crate::value::addr_class::try_read_gc_header(arr as usize)
+            .unwrap()
+            ._reserved;
         assert_eq!(
             probe, 1,
             "push-built numeric array should verify raw-f64 (reserved={reserved:#x})"
