@@ -336,7 +336,6 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
     own_keys_array: nm_own_keys_array_opt,
     bind_method: nm_bind_method_ops,
     ee_prototype_install: super::class_registry::prototype_objects::nm_ee_prototype_install,
-    static_buffer_proto_chain: super::class_registry::parent_static::nm_static_buffer_proto_chain,
     ee_dynamic_super: nm_ee_dynamic_super,
 };
 

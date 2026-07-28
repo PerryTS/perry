@@ -1335,16 +1335,14 @@ unsafe fn try_native_static_method_in_proto_chain(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    // Armed ops table (see `nm_namespace_hooks`): the body probes for a
-    // `Buffer` native constructor in the parent chain, which can only exist
-    // once `callable_exports` minted it (arming the table). Keeps the
-    // namespace/dispatch machinery out of binaries with no module imports.
-    let ops = super::super::nm_namespace_ops()?;
-    (ops.static_buffer_proto_chain)(class_id, name, args_ptr, args_len)
+    // NOTE: deliberately NOT routed through `NmNamespaceOps` — a
+    // `class X extends Buffer` registers the parent value before the lazy
+    // callable-exports closure would arm the table (probe-verified: the
+    // hooked form broke `MyBuf.from`), so this probe must stay static.
+    nm_static_buffer_proto_chain(class_id, name, args_ptr, args_len)
 }
 
-/// Extracted body of the Buffer-subclass static-dispatch probe (#1788
-/// family). Reached ONLY through `NmNamespaceOps::static_buffer_proto_chain`.
+/// Body of the Buffer-subclass static-dispatch probe (#1788 family).
 pub(crate) unsafe fn nm_static_buffer_proto_chain(
     class_id: u32,
     name: &str,

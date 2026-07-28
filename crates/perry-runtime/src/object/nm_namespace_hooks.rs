@@ -48,10 +48,6 @@ pub(crate) struct NmNamespaceOps {
     /// prototype of the bound `events.EventEmitter` export. No-op for every
     /// other function value.
     pub ee_prototype_install: unsafe fn(f64, *mut ObjectHeader),
-    /// #1788 family: static-method dispatch for user classes extending the
-    /// native `Buffer` constructor (walks the parent chain, materializes the
-    /// `buffer.Buffer` namespace, dispatches). `None` on miss.
-    pub static_buffer_proto_chain: unsafe fn(u32, &str, *const f64, usize) -> Option<f64>,
     /// Dynamic `super()` for `class X extends <runtime EventEmitter export>`:
     /// installs the EE methods on the fresh instance. `None` when the callee
     /// is not the bound events export (fall through to normal call dispatch).
