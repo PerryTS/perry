@@ -70,7 +70,7 @@ roots — their win is *static dispatch and layout*, not root elimination.
 | `String` | `StringHeader*` | skip untag/retag; **direct** string-helper calls (no `js_jsvalue_to_string` dispatch) | rooted + rewritten | short-string (inline payload) values stay by-value |
 | `Object(shape S)` | `ObjHeader*` + static shape | **direct field offsets** (no hash lookup), **static method dispatch** | rooted + rewritten | the dominant win for real apps (property access ≫ arithmetic in web workloads); eligibility in §4.6 |
 | `TypedArray(kind)` | header ptr (+ hoisted data ptr/len in region) | guard-free element access once kind is proven | rooted + rewritten | data-ptr hoisting invalidated at safepoints if backing can move/detach |
-| `Array<number>` (`Ptr<NumArray>`) | `ArrayHeader*`; elements are raw f64 in place (the NaN-box of a number IS its double bits; `TAG_HOLE` marks holes) | guard-free element load/store + bare `.length` once density is proven; no per-store canonicalization/barrier/note | rooted + rewritten | density lattice `Dense ⊒ HolesOK ⊒ Boxed` (§5.7); a hole-OBSERVING read needs the `TAG_HOLE→undefined` select, hole-DEFAULT consumers (`\|\|0`, `??0`, `\|0`, `>>>0`, numeric `+`) admit the 2-instruction NaN-canonical form under the raw-f64-or-holes proof only; growth re-derives the base after any extend (Phase 4a) |
+| `Array<number>` (`Ptr<NumArray>`) | `ArrayHeader*`; elements are raw f64 in place (the NaN-box of a number IS its double bits; `TAG_HOLE` marks holes) | SHIPPED (Phase 4a.0-4a.2): inline guarded tiers — header-proof tests instead of out-of-line guard calls, zero runtime calls on the fast path. DEFERRED (Phase 4a.3): guard-free element load/store + bare `.length` under a collector proof; no per-access header tests at all | rooted + rewritten | density lattice `Dense ⊒ HolesOK ⊒ Boxed` (§5.7); a hole-OBSERVING read needs the `TAG_HOLE→undefined` select, hole-DEFAULT consumers (`\|\|0`, `??0`, `\|0`, `>>>0`, numeric `+`) admit the 2-instruction NaN-canonical form under the raw-f64-or-holes proof only; growth re-derives the base after any extend |
 | `Closure/Function` | code ptr + env ptr | static call targets (extends existing `FuncRef`) | env rooted | |
 | `SmallBigInt` | `i64` | native 64-bit arithmetic | not a root | overflow → boxed BigInt path, exists today |
 | `Null/Undefined` | singleton tags | fold checks statically | — | |
@@ -204,9 +204,13 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
   fields need none (another structural win).
 - Typed-array element reads stop re-boxing when the consumer is typed (the element is raw in
   memory today; only the access path boxes it).
-- **Plain numeric arrays (`Ptr<NumArray>`, Phase 4a):** a local `number[]` whose storage is
-  raw-f64 in place qualifies for guard-free element access under provenance + containment,
-  exactly like `Ptr<Shape>` locals: single-`Let` provenance (`[]` / all-numeric literal /
+- **Plain numeric arrays (`Ptr<NumArray>`, Phase 4a).** SHIPPED in Phase 4a.0-4a.2: the
+  access path uses inline guarded tiers (per-access header-proof tests on the raw-f64 /
+  raw-f64-or-holes bits instead of out-of-line guard calls; zero runtime calls on the fast
+  path). DEFERRED to Phase 4a.3 — the following collector contract is a design, NOT yet
+  implemented: a local `number[]` whose storage is raw-f64 in place would qualify for
+  fully guard-free element access under provenance + containment, exactly like
+  `Ptr<Shape>` locals: single-`Let` provenance (`[]` / all-numeric literal /
   `new Array(n)`(`.fill(num)`)), every use a numeric element read/write, `.length`, or numeric
   push/pop, and the module-wide §5.2 barrier kill extended with the array-specific barriers
   (indexed writes to `Array.prototype`/`Object.prototype`, `setPrototypeOf` on arrays,
@@ -215,10 +219,11 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
   lattice** `Dense ⊒ HolesOK ⊒ Boxed`: `Dense` (no hole can exist — literal provenance with
   proven in-bounds/append-only writes) drops the hole select entirely; `HolesOK` keeps the
   `TAG_HOLE` select for hole-observing reads while hole-default consumers (`||0`-class) use
-  the proof-gated 2-instruction canonical-NaN form; anything that can store a non-numeric
-  value demotes to `Boxed`. Hole-vs-undefined observability (`in`, `Object.keys`,
-  `JSON.stringify`) is preserved by keeping `TAG_HOLE` in storage and materializing
-  `undefined` only at the read edge.
+  the proof-gated 2-instruction canonical-NaN form (this consumer form DID ship in 4a.2,
+  inside the guarded tiers); anything that can store a non-numeric value demotes to
+  `Boxed`. Hole-vs-undefined observability (`in`, `Object.keys`, `JSON.stringify`) is
+  preserved by keeping `TAG_HOLE` in storage and materializing `undefined` only at the
+  read edge.
 
 ## 6. Phasing (one design; each phase sound on its own)
 

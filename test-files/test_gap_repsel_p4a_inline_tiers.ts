@@ -84,7 +84,46 @@ const big2: number[] = [1e308];
 big2[0] = big2[0] * 10;
 console.log(big2[0]);
 
-// 8) push of non-canonical numeric values keeps the layout sound
+// 8) caller-owned arrays grown by a callee past capacity (the
+// forwarding-pointer path): every growth installs a forwarding stub at the
+// old head, and a specialized-ABI callee's write-backs only update its own
+// param slot — the caller's binding must still observe the full contents,
+// length, and stay writable/pushable after return (the guard tiers'
+// self-heal repairs the binding; the boxed fallback follows the chain).
+function growInto(a: number[], n: number): void {
+  for (let i = 0; i < n; i++) {
+    a.push(i * 0.25);
+  }
+}
+const owned: number[] = [1.5];
+growInto(owned, 200); // initial capacity is tiny -> several growths
+console.log(owned.length, owned[0], owned[1], owned[200], owned[150]);
+let gsum = 0;
+for (let i = 0; i < owned.length; i++) gsum += owned[i] || 0;
+console.log(gsum);
+owned[3] = owned[3] + 1; // caller write after callee growth
+owned.push(999); // caller push after callee growth
+console.log(owned.length, owned[3], owned[201]);
+console.log(JSON.stringify(owned.slice(0, 4)));
+
+// same shape, but the callee ALLOCATES and returns (the specialized-ABI
+// caller-allocated variant observed in the wild)
+function makeSeries(n: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push(i * 0.5);
+  }
+  return out;
+}
+const series = makeSeries(300);
+console.log(series.length, series[0], series[299], series[123]);
+series[5] = series[5] * 2;
+series.push(-1);
+let ssum = 0;
+for (let i = 0; i < series.length; i++) ssum += series[i] || 0;
+console.log(series.length, series[5], ssum);
+
+// 8b) push of non-canonical numeric values keeps the layout sound
 const p: number[] = [];
 for (let i = 0; i < 5; i++) p.push(src[0]); // read passthrough value
 p.push(src[2] as unknown as number); // hole read -> pushes undefined

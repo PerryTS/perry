@@ -73,16 +73,23 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     Ok((lower_expr(ctx, expr)?, false))
 }
 
+/// The shared residual-coercion rule for arithmetic operands: a lowered
+/// operand still needs a `js_number_coerce` when the fallback did not already
+/// coerce it AND it is either not statically numeric (booleans, `null`, …)
+/// or can surface a boxed value through a raw-f64 read's cold fallback.
+fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced: bool) -> bool {
+    !fallback_coerced
+        && (!crate::type_analysis::is_numeric_expr(ctx, expr)
+            || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr))
+}
+
 /// Lower an operand in number context: route through
-/// [`lower_arithmetic_operand`], then apply the same residual-coercion rule
-/// the binary arithmetic path uses — the result is ALWAYS a real (canonical)
-/// numeric double, never a NaN-boxed value.
+/// [`lower_arithmetic_operand`], then apply the shared residual-coercion rule
+/// — the result is ALWAYS a real (canonical) numeric double, never a
+/// NaN-boxed value.
 fn lower_operand_as_number(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let (raw, fallback_coerced) = lower_arithmetic_operand(ctx, expr)?;
-    let numeric = crate::type_analysis::is_numeric_expr(ctx, expr);
-    let needs_coerce = !fallback_coerced
-        && (!numeric || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr));
-    if needs_coerce {
+    if operand_needs_residual_coerce(ctx, expr, fallback_coerced) {
         Ok(ctx
             .block()
             .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &raw)]))
@@ -589,12 +596,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // JS: `true + true = 2`, `null + 1 = 1`, etc. Without
             // this, fadd on NaN-tagged booleans propagates the NaN
             // payload instead of computing 1.0 + 1.0 = 2.0.
-            let l_numeric = is_numeric_expr(ctx, left);
-            let r_numeric = is_numeric_expr(ctx, right);
-            let l_needs_coerce = !l_fallback_coerced
-                && (!l_numeric || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left));
-            let r_needs_coerce = !r_fallback_coerced
-                && (!r_numeric || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right));
+            let l_needs_coerce = operand_needs_residual_coerce(ctx, left, l_fallback_coerced);
+            let r_needs_coerce = operand_needs_residual_coerce(ctx, right, r_fallback_coerced);
             let l = if l_needs_coerce {
                 ctx.block()
                     .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
