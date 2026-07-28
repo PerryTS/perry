@@ -483,6 +483,109 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         return Ok(Some(val));
     }
 
+    // Representation-selection Phase 5a: the receiver's SHAPE is proven but
+    // the field is not numeric-proven (always the case for a proven `this` —
+    // see `collectors/proven_this.rs`: the receiver is caller-owned and
+    // therefore aliased, so no exhaustive-store proof is available).
+    //
+    // The shape proof alone already retires the entire guard diamond: no
+    // volatile gate, no 7-header-load shape check, no
+    // `js_typed_feedback_class_field_get_guard` call, and no by-name
+    // `js_object_get_field_by_name_f64` fallback — the proof says this slot IS
+    // the field, so a bare fixed-offset load always yields the right VALUE.
+    // What is NOT proven is the value's TYPE: an aliased `obj.f = "s"` store
+    // elsewhere downgrades the slot's raw-f64 layout, and a guard-free read
+    // cannot consult that layout. So the number context keeps a 2-instruction
+    // inline plain-finite check on the LOADED BITS (`and` + `icmp`, no call,
+    // no header load) with a cold `js_number_coerce` arm — exactly the
+    // ToNumber the guarded fallback performs, minus the lookup.
+    let ptr_shape_proven_shape = ctx
+        .ptr_shape_receiver_fact(object.as_ref())
+        .map(|fact| fact.class_name == class_name)
+        .unwrap_or(false);
+    if ptr_shape_proven_shape {
+        let recv_box = lower_expr(ctx, object)?;
+        let field_idx_str = field_index.to_string();
+        let header_skip =
+            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let (val_raw, is_plain) = {
+            let blk = ctx.block();
+            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+            let obj_ptr = blk.inttoptr(I64, &obj_handle);
+            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+            let val_raw = blk.load(DOUBLE, &field_ptr);
+            let val_bits = blk.bitcast_double_to_i64(&val_raw);
+            let is_plain = crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
+                blk, &val_bits,
+            );
+            (val_raw, is_plain)
+        };
+        let fast_idx = ctx.new_block("ptr_shape_get_number.plain");
+        let coerce_idx = ctx.new_block("ptr_shape_get_number.coerce");
+        let merge_idx = ctx.new_block("ptr_shape_get_number.merge");
+        let fast_label = ctx.block_label(fast_idx);
+        let coerce_label = ctx.block_label(coerce_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        ctx.block().cond_br(&is_plain, &fast_label, &coerce_label);
+
+        ctx.current_block = fast_idx;
+        let fast_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = coerce_idx;
+        let coerced = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &val_raw)]);
+        let coerce_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = merge_idx;
+        let merged = ctx
+            .block()
+            .phi(DOUBLE, &[(&val_raw, &fast_end), (&coerced, &coerce_end)]);
+        let lowered = LoweredValue {
+            semantic: SemanticKind::JsNumber,
+            rep: NativeRep::F64,
+            llvm_ty: DOUBLE,
+            value: merged.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode_and_facts(
+            "ClassFieldGet",
+            None,
+            "class_field_get_number.shape_proven_checked_load",
+            &lowered,
+            Some(BoundsState::Guarded {
+                guard_id: "ptr_shape_static_proof".to_string(),
+            }),
+            None,
+            Some(BufferAccessMode::CheckedNative),
+            None,
+            None,
+            None,
+            vec![raw_f64_layout_fact(
+                None,
+                "consumed",
+                "ptr_shape_static_proof",
+                None,
+            )],
+            Vec::new(),
+            false,
+            false,
+            vec![
+                format!("class={}", class_name),
+                format!("field={}", property),
+                format!("field_index={}", field_idx_str),
+                "receiver_proof=ptr_shape_static_proof".to_string(),
+                "numeric_proven=false".to_string(),
+                "value_check=inline_plain_finite".to_string(),
+                "number_context=true".to_string(),
+            ],
+        );
+        return Ok(Some(merged));
+    }
+
     let recv_box = lower_expr(ctx, object)?;
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);

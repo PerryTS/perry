@@ -943,7 +943,7 @@ pub(crate) fn try_lower_instance_method_call(
                     let pshape_target = ctx
                         .pshape_methods
                         .contains_key(&(class_name.clone(), property.to_string()))
-                        .then(|| crate::codegen::pshape_method_name(&fallback_fn));
+                        .then(|| crate::collectors::pshape_method_name(&fallback_fn));
                     let target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
                     let direct = ctx.block().call(DOUBLE, target, &arg_slices);
                     return Ok(Some(direct));

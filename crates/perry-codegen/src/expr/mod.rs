@@ -771,7 +771,7 @@ pub(crate) struct FnCtx<'a> {
     pub repsel_context_allows_canonical_i32: bool,
 
     /// Representation-selection Phase 5a (`collectors/proven_this.rs`): when
-    /// this body is a `{public}__pshape` method clone, the `Ptr<Shape>` proof
+    /// this body is a proven-`this` method clone, the `Ptr<Shape>` proof
     /// carried by `this`. Consumed by [`FnCtx::ptr_shape_receiver_fact`], which
     /// is what makes every `this.field` in the clone lower to the bare
     /// fixed-offset form instead of the per-access guard diamond.
@@ -780,7 +780,7 @@ pub(crate) struct FnCtx<'a> {
     /// keeps today's guarded lowering because its receiver is unproven.
     pub proven_this: Option<crate::collectors::PtrShapeLocal>,
 
-    /// Phase 5a: `(class, method)` pairs with an emitted `__pshape` clone.
+    /// Phase 5a: `(class, method)` pairs with an emitted proven-`this` clone.
     /// The two proven call sites consult this before routing; a hit also
     /// proves the receiver's exact class DECLARES the method (own
     /// declarations only), which is what rules out a subclass `this`.
@@ -1428,8 +1428,8 @@ impl<'a> FnCtx<'a> {
     ///
     /// * `Expr::LocalGet` — Phase 3b: a shape-proven local
     ///   (`collectors/ptr_shape.rs`), proven by provenance + containment.
-    /// * `Expr::This` — Phase 5a: the proven receiver of a `__pshape` method
-    ///   clone (`collectors/proven_this.rs`), proven by the routing call
+    /// * `Expr::This` — Phase 5a: the proven receiver of a proven-`this`
+    ///   method clone (`collectors/proven_this.rs`), proven by the routing call
     ///   site's class-id + keys-token guard.
     ///
     /// Both carry the identical storage contract (a shadow-bound,

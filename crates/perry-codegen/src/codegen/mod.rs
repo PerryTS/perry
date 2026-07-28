@@ -72,8 +72,7 @@ pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    generic_function_body_name, generic_method_body_name, pshape_method_name,
-    typed_f64_closure_name,
+    generic_function_body_name, generic_method_body_name, typed_f64_closure_name,
     typed_f64_function_name, typed_f64_method_name, typed_f64_receiver_method_info,
     typed_f64_receiver_method_name, typed_i1_closure_name, typed_i1_function_name,
     typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name, typed_i32_method_name,

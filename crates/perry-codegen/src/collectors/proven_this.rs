@@ -58,7 +58,7 @@ use std::collections::{HashMap, HashSet};
 use perry_hir::{Class, Expr, Function};
 
 use super::ptr_shape::{
-    chain_admissible, chain_field_names, chain_method_map, chain_classes, ptr_shape_locals_enabled,
+    chain_admissible, chain_classes, chain_field_names, chain_method_map, ptr_shape_locals_enabled,
     PtrShapeLocal, ThisFlowAnalysis,
 };
 use super::ModuleDispatchFacts;
@@ -75,6 +75,18 @@ pub fn ptr_shape_this_enabled() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+/// The `internal` proven-`this` clone symbol of a method. Same
+/// `(double this, double args…)` ABI as the public symbol — only the body's
+/// `this.field` lowering differs.
+///
+/// This symbol is NEVER registered into a runtime vtable
+/// (`js_register_class_method` keeps the public name) and is reachable only
+/// from the two proven call sites. [`tests::pshape_symbol_reachability`]
+/// ratchets that.
+pub(crate) fn pshape_method_name(public_name: &str) -> String {
+    format!("{public_name}__pshape")
 }
 
 /// The `Object.freeze` / `Object.seal` / `Object.preventExtensions` family.
@@ -158,8 +170,10 @@ pub(crate) fn method_proven_this(
 
     // The clone must actually remove work: a method that never touches a
     // declared field through `this` lowers identically to the public body and
-    // would be pure code-size bloat.
-    if !method_reads_or_writes_chain_field(method, &fields) {
+    // would be pure code-size bloat. Writes are counted through the store
+    // records (which cover every HIR store form — `PropertySet`,
+    // `PropertyUpdate`, `PutValueSet`), reads through the body walk.
+    if !writes_fields && !method_reads_chain_field(method, &fields) {
         return None;
     }
 
@@ -170,29 +184,18 @@ pub(crate) fn method_proven_this(
     })
 }
 
-/// Does the method body mention `this.<declared chain field>` at all?
-fn method_reads_or_writes_chain_field(method: &Function, fields: &HashSet<String>) -> bool {
+/// Does the method body READ `this.<declared chain field>` anywhere?
+fn method_reads_chain_field(method: &Function, fields: &HashSet<String>) -> bool {
     let mut found = false;
     super::scalar_method_dispatch::for_each_expr_in_stmts(&method.body, &mut |e| {
         if found {
             return;
         }
-        let property = match e {
-            Expr::PropertyGet {
-                object, property, ..
-            } if matches!(object.as_ref(), Expr::This) => {
-                Some(property)
-            }
-            Expr::PropertySet {
-                object, property, ..
-            }
-            | Expr::PropertyUpdate {
-                object, property, ..
-            } if matches!(object.as_ref(), Expr::This) => Some(property),
-            _ => None,
-        };
-        if let Some(property) = property {
-            if fields.contains(property.as_str()) {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = e
+        {
+            if matches!(object.as_ref(), Expr::This) && fields.contains(property.as_str()) {
                 found = true;
             }
         }
@@ -232,11 +235,11 @@ mod tests {
         // (which emits `js_register_class_method`) is deliberately ABSENT:
         // the vtable must only ever hold the public symbol.
         let allowed: [&str; 6] = [
-            "collectors/proven_this.rs", // this test
-            "codegen/typed_abi.rs",      // name helper
-            "codegen/method.rs",         // clone emission
-            "codegen/artifacts.rs",      // emission driver
-            "lower_call/method_override.rs", // guarded fast-arm routing
+            "collectors/proven_this.rs",                   // this test
+            "codegen/typed_abi.rs",                        // name helper
+            "codegen/method.rs",                           // clone emission
+            "codegen/artifacts.rs",                        // emission driver
+            "lower_call/method_override.rs",               // guarded fast-arm routing
             "lower_call/property_get/dynamic_dispatch.rs", // guard-free routing
         ];
         let mut offenders: Vec<String> = Vec::new();

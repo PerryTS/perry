@@ -214,3 +214,222 @@ function internalPoison(): string {
   return acc + ":" + t + ":" + after + ":" + typeof after;
 }
 console.log(internalPoison());
+
+// ─────────────────────────────────────────────────────────────────────────
+// Representation-selection Phase 5a: proven `this` in methods
+// (PERRY_PTR_SHAPE_THIS). Both call sites that already prove a receiver's
+// exact shape route to the internal `__pshape` clone, whose `this.field`
+// accesses lower guard-free. The frozen-receiver case lives in its own file
+// (test_gap_repsel_proven_this_frozen.ts) because the freeze-family kill is
+// module-wide by construction — a single Object.freeze here would disable
+// every write-containing clone in THIS file and hide the cases below.
+// ─────────────────────────────────────────────────────────────────────────
+
+// 12. The 09_method_calls shape: a module-scope receiver (NOT a Phase 3b
+//     local — module globals are excluded), so the call goes through the
+//     guarded `method_direct.fast` arm. That guard proves class id + keys
+//     token, and Phase 5a routes it to the proven-`this` clone.
+class Counter5a {
+  value: number;
+  constructor() {
+    this.value = 0;
+  }
+  increment(): void {
+    this.value = this.value + 1;
+  }
+  bump(by: number): void {
+    this.value = this.value + by;
+  }
+  get(): number {
+    return this.value;
+  }
+}
+const counter5a = new Counter5a();
+for (let i = 0; i < 2000; i++) {
+  counter5a.increment();
+}
+counter5a.bump(1.5);
+console.log("p5a-counter:" + counter5a.get() + ":" + typeof counter5a.get());
+
+// 13. Proven `this` read + write + a `this.m()` method chain, reached from a
+//     Phase 3b local (the guard-free routing site).
+class Vec5a {
+  x: number;
+  y: number;
+  scale: number;
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+    this.scale = 1;
+  }
+  lenSq(): number {
+    return this.x * this.x + this.y * this.y;
+  }
+  // `this.lenSq()` is an internal method chain: vetted transitively.
+  normalizeTo(target: number): number {
+    const l = this.lenSq();
+    this.scale = target / (l === 0 ? 1 : l);
+    this.x = this.x * this.scale;
+    this.y = this.y * this.scale;
+    return this.scale;
+  }
+  describe(): string {
+    return this.x + "," + this.y + "," + this.scale;
+  }
+}
+function provenThisChain(n: number): string {
+  const v = new Vec5a(3, 4);
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += v.lenSq();
+  }
+  const s = v.normalizeTo(2);
+  return acc + "|" + s + "|" + v.describe();
+}
+console.log("p5a-chain:" + provenThisChain(500));
+
+// 14. `this` ESCAPE rejection: a method that hands `this` out as a value can
+//     alias the receiver, so no clone may be emitted and every access must
+//     keep the guarded lowering. Output must be byte-exact either way.
+const escaped5a: any[] = [];
+class Leaky5a {
+  n: number;
+  constructor(n: number) {
+    this.n = n;
+  }
+  leak(): void {
+    escaped5a.push(this); // `this` in value position — disqualifies
+    this.n = this.n + 1;
+  }
+  read(): number {
+    return this.n;
+  }
+}
+function leakRun(): string {
+  const l = new Leaky5a(7);
+  l.leak();
+  l.leak();
+  // The alias observes the same object identity and the same mutations.
+  const same = escaped5a[0] === escaped5a[1] && escaped5a[0] === l;
+  (escaped5a[0] as Leaky5a).n = 99;
+  return l.read() + ":" + same + ":" + escaped5a.length;
+}
+console.log("p5a-leak:" + leakRun());
+
+// 15. Closure-capturing-`this` rejection: an arrow function in the body
+//     captures `this`, which creates an alias the walk cannot follow.
+class Closed5a {
+  v: number;
+  constructor(v: number) {
+    this.v = v;
+  }
+  addAll(xs: number[]): number {
+    xs.forEach((x) => {
+      this.v = this.v + x; // captures_this — disqualifies the clone
+    });
+    return this.v;
+  }
+}
+function closureThis(): string {
+  const c = new Closed5a(10);
+  const r = c.addAll([1, 2, 3, 4]);
+  return r + ":" + c.v;
+}
+console.log("p5a-closure:" + closureThis());
+
+// 16. Static-method exclusion: statics have no receiver at all, and the
+//     `perry_static_` targets must never be routed to a `__pshape` symbol.
+class Stat5a {
+  static base: number = 5;
+  static twice(x: number): number {
+    return x * 2 + Stat5a.base;
+  }
+  inst: number;
+  constructor() {
+    this.inst = Stat5a.twice(3);
+  }
+  read(): number {
+    return this.inst + Stat5a.twice(1);
+  }
+}
+function staticRun(): string {
+  const s = new Stat5a();
+  return Stat5a.twice(10) + ":" + s.read() + ":" + s.inst;
+}
+console.log("p5a-static:" + staticRun());
+
+// 17. Interface-annotated local with `new` provenance (the predicates.rs
+//     narrowing): `const o: Shaped5a = new Impl5a()` must KEEP its Ptr<Shape>
+//     proof — `Shaped5a` names no class, so the declared type carries
+//     strictly less information than the provenance.
+interface Shaped5a {
+  w: number;
+  area(): number;
+}
+class Impl5a implements Shaped5a {
+  w: number;
+  h: number;
+  constructor(w: number, h: number) {
+    this.w = w;
+    this.h = h;
+  }
+  area(): number {
+    return this.w * this.h;
+  }
+}
+function ifaceLocal(n: number): string {
+  const o: Shaped5a = new Impl5a(3, 4);
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += o.area() + o.w;
+  }
+  return acc + ":" + o.w + ":" + o.area();
+}
+console.log("p5a-iface:" + ifaceLocal(250));
+
+// 18. An explicit CLASS annotation still wins over provenance (the half of
+//     the old rule the narrowing preserves).
+class Named5a {
+  k: number;
+  constructor(k: number) {
+    this.k = k;
+  }
+  twice(): number {
+    return this.k * 2;
+  }
+}
+function namedLocal(): string {
+  const o: Named5a = new Named5a(21);
+  return o.twice() + ":" + o.k;
+}
+console.log("p5a-named:" + namedLocal());
+
+// 19. Subclass receiver on an INHERITED method: the clone is compiled for
+//     the declaring class, so an inherited call must NOT route to it. The
+//     subclass adds a field, so chain-global indexes differ from the base's.
+class Base5a {
+  a: number;
+  constructor(a: number) {
+    this.a = a;
+  }
+  readA(): number {
+    return this.a * 10;
+  }
+}
+class Derived5a extends Base5a {
+  b: number;
+  constructor(a: number, b: number) {
+    super(a);
+    this.b = b;
+  }
+  sum(): number {
+    return this.a + this.b;
+  }
+}
+function inherited(): string {
+  const base = new Base5a(1);
+  const d = new Derived5a(2, 3);
+  // `d.readA()` resolves to Base5a::readA through the chain walk.
+  return base.readA() + ":" + d.readA() + ":" + d.sum() + ":" + d.a + ":" + d.b;
+}
+console.log("p5a-inherit:" + inherited());

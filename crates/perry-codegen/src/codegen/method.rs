@@ -280,7 +280,7 @@ pub(super) fn compile_method(
     // primary (`proven_this: None`) invocation for this same method.
     let is_pshape_clone = proven_this.is_some();
     let llvm_name = if is_pshape_clone {
-        super::pshape_method_name(&public_llvm_name)
+        crate::collectors::pshape_method_name(&public_llvm_name)
     } else if typed_public_trampoline.is_some() || force_generic_body {
         generic_method_body_name(&public_llvm_name)
     } else {

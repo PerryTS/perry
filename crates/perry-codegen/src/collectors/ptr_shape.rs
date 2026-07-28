@@ -279,6 +279,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             store_records: Vec::new(),
             super_call_args: HashMap::new(),
             internally_invoked: HashSet::new(),
+            allow_this_in_store_values: false,
         };
         if !analysis.ctor_chain_safe() {
             continue;
@@ -401,7 +402,10 @@ fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
 /// The chain (self first) when every link is a modeled, accessor-free,
 /// computed-free, statically-extended user class; `None`-equivalent (empty)
 /// otherwise.
-pub(super) fn chain_classes<'a>(classes: &HashMap<String, &'a Class>, class_name: &str) -> Vec<&'a Class> {
+pub(super) fn chain_classes<'a>(
+    classes: &HashMap<String, &'a Class>,
+    class_name: &str,
+) -> Vec<&'a Class> {
     let mut out = Vec::new();
     let mut current = Some(class_name.to_string());
     let mut seen = HashSet::new();
@@ -462,7 +466,9 @@ pub(super) fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
 
 /// name -> (owning class name, method function), first (most-derived) wins —
 /// matching JS prototype-chain resolution for an exact-class instance.
-pub(super) fn chain_method_map<'a>(chain: &[&'a Class]) -> HashMap<String, (String, &'a perry_hir::Function)> {
+pub(super) fn chain_method_map<'a>(
+    chain: &[&'a Class],
+) -> HashMap<String, (String, &'a perry_hir::Function)> {
     let mut out: HashMap<String, (String, &perry_hir::Function)> = HashMap::new();
     for class in chain {
         for method in &class.methods {
@@ -907,6 +913,18 @@ pub(super) struct ThisFlowAnalysis<'a, 'b> {
     /// so parameters of internally-invoked methods must stay unproven even
     /// when every EXTERNAL call site passes numeric arguments.
     internally_invoked: HashSet<String>,
+    /// Phase 5a only: permit a `this.f = <expr mentioning this>` store.
+    ///
+    /// Phase 3b rejects those because its numeric-field proof resolves store
+    /// VALUES through constructor/method call-site arguments, and a
+    /// `this`-dependent value cannot be resolved that way — so the store must
+    /// not be recorded as provably-numeric. Phase 5a claims no numeric fields
+    /// at all (`collectors/proven_this.rs`), so the restriction buys it
+    /// nothing while excluding the single most common method shape there is:
+    /// `this.value = this.value + 1`. Safety is unaffected — the value
+    /// expression still goes through `expr_this_safe`, which rejects `this`
+    /// in value position and admits only declared-chain `this.field` reads.
+    allow_this_in_store_values: bool,
 }
 
 impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
@@ -928,6 +946,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             store_records: Vec::new(),
             super_call_args: HashMap::new(),
             internally_invoked: HashSet::new(),
+            allow_this_in_store_values: true,
         }
     }
 
@@ -1100,7 +1119,9 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 property,
                 value,
             } if matches!(object.as_ref(), Expr::This) => {
-                if !self.fields.contains(property) || expr_mentions_this(value) {
+                if !self.fields.contains(property)
+                    || (!self.allow_this_in_store_values && expr_mentions_this(value))
+                {
                     return false;
                 }
                 self.store_records.push(ThisStoreRecord {
@@ -1135,7 +1156,9 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 let Expr::String(property) = key.as_ref() else {
                     return false;
                 };
-                if !self.fields.contains(property) || expr_mentions_this(value) {
+                if !self.fields.contains(property)
+                    || (!self.allow_this_in_store_values && expr_mentions_this(value))
+                {
                     return false;
                 }
                 self.store_records.push(ThisStoreRecord {

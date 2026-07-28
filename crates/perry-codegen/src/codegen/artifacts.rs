@@ -419,7 +419,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
             // Representation-selection Phase 5a: the additive `internal`
-            // `{public}__pshape` clone. Same HIR, same ABI, same shadow-bound
+            // proven-`this` clone. Same HIR, same ABI, same shadow-bound
             // tagged-at-rest receiver slot — only `this.field` lowering
             // differs (bare fixed-offset access instead of the per-access
             // guard diamond). Reached ONLY from the two call sites that

@@ -1310,7 +1310,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // gep header → gep index → load. No volatile gate, no
                         // header checks, no fallback arm, no phi.
                         // Phase 5a extends the same proof to `this` inside a
-                        // `__pshape` method clone (collectors/proven_this.rs).
+                        // proven-`this` method clone (collectors/proven_this.rs).
                         let ptr_shape_fact = ctx
                             .ptr_shape_receiver_fact(object.as_ref())
                             .filter(|fact| fact.class_name == class_name)

@@ -777,7 +777,7 @@ pub(super) fn emit_guarded_direct_method_call(
             let pshape_target = ctx
                 .pshape_methods
                 .contains_key(&(receiver_class_name.to_string(), property.to_string()))
-                .then(|| crate::codegen::pshape_method_name(direct_fn));
+                .then(|| crate::collectors::pshape_method_name(direct_fn));
             let target = pshape_target.as_deref().unwrap_or(direct_fn);
             ctx.block().call(DOUBLE, target, direct_arg_slices)
         }
