@@ -776,6 +776,17 @@ pub(crate) fn build_optimized_libs(
         // duration of this invocation.
         rustflags.push("-C panic=abort".to_string());
     }
+    // PERRY_SIZE_OPT=z|s — rebuild the auto-optimized runtime/stdlib at
+    // `-C opt-level=z`/`s` instead of the profile's `3`. RUSTFLAGS is
+    // appended after cargo's profile-derived flags, and rustc takes the
+    // last `-C opt-level`, so this cleanly overrides the per-package
+    // `opt-level = 3` without a custom profile. Trades some runtime speed
+    // for a substantially smaller binary; keyed into the auto-opt cache
+    // dir hash (see `auto_optimized_cache_key`) so size-optimized and
+    // speed-optimized archives never serve each other's builds.
+    if let Some(level) = size_opt_level() {
+        rustflags.push(format!("-C opt-level={level}"));
+    }
     // #6125: pin the Rust-side CPU baseline to the same PERRY_TARGET_CPU
     // knob codegen's clang invocation honors, so the rebuilt runtime/stdlib
     // (which is what runs before the app's first print — exactly where the

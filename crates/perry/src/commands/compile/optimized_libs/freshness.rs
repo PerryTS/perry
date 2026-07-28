@@ -55,6 +55,19 @@ pub(crate) fn auto_optimized_archives_are_fresh(
     true
 }
 
+/// `PERRY_SIZE_OPT=z|s` — opt-in size-optimized rebuild of the
+/// auto-optimized runtime/stdlib archives (`-C opt-level=z`/`s` instead of
+/// the profile's `3`). Any other value (or unset) means "off". Read in the
+/// rustflags builder AND the cache key so the two can never disagree about
+/// which archive a `target/perry-auto-<hash>` dir contains.
+pub(crate) fn size_opt_level() -> Option<&'static str> {
+    match std::env::var("PERRY_SIZE_OPT").ok().as_deref() {
+        Some("z") => Some("z"),
+        Some("s") => Some("s"),
+        _ => None,
+    }
+}
+
 /// Cache key for the auto-optimize target dir + build stamp. Hashed into the
 /// `target/perry-auto-<hash>` dir name so each (features, panic-mode, target,
 /// runtime-gate, version) combination gets its own incremental cache. Kept in
@@ -67,7 +80,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|http2={}|dyneval={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -88,6 +101,7 @@ pub(crate) fn auto_optimized_cache_key(
         // #6559: dyn-eval presence changes the built archive, so it must
         // key the freshness stamp like every other runtime feature toggle.
         perry_hir::has_deferred_dynamic_code_sites(),
+        size_opt_level().unwrap_or("off"),
         env!("CARGO_PKG_VERSION"),
     )
 }
