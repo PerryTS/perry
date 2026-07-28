@@ -148,6 +148,20 @@ test('toolchain soak: impossible calendar dates are findings, not crashes', () =
   assert.match(checkToolchainSoak(bad, 't')[0]!.what, /soak dates/)
 })
 
+test('parser: a trailing comment on the key line still opens the block', () => {
+  // Without comment tolerance, every entry under a commented key line
+  // silently escaped validation — a blind spot in the bypass gate.
+  const yaml = 'minimumReleaseAgeExclude:  # temporary bypasses\n  - lodash@4.17.21\n'
+  assert.deepEqual(parseExcludeEntries(yaml).map(e => e.name), ['lodash@4.17.21'])
+  assert.equal(checkExcludeAnnotations(yaml, 'y').length, 1)
+})
+
+test('catalog parity: malformed package.json is a finding, not a crash', () => {
+  const findings = checkCatalogParity('catalog:\n  taze: 19.14.1\n', 'not json', 'y')
+  assert.equal(findings.length, 1)
+  assert.match(findings[0]!.what, /parse/)
+})
+
 test('parser: a column-0 line ends the exclude block', () => {
   const yaml = 'minimumReleaseAgeExclude:\n  - react\nonlyBuiltDependencies:\n  - esbuild\n'
   assert.deepEqual(parseExcludeEntries(yaml).map(e => e.name), ['react'])

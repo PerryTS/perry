@@ -63,14 +63,15 @@ annotation on the line above (block list only — flow `[..]` is rejected
 because a comment line can't attach to an inline entry):
 
 ```yaml
-# published: 2026-07-08 | removable: 2026-07-15
+# published: YYYY-MM-DD | removable: YYYY-MM-DD
 - 'name@1.2.3'
 ```
 
-`removable` = `published + SOAK_DAYS` (this example assumes a 7-day
-window). `published` must be the real registry publish date. Once
-`removable` passes, `npm run soak` fails until the pin is pruned
-(`soak:fix` does it). Bare names / `@scope/*` globs are standing trust and
+`removable` = `published + SOAK_DAYS`; `published` must be the real
+registry publish date (the placeholders above are schematic — copying
+them verbatim is rejected). Once `removable` passes, `npm run soak`
+warns until the pin is pruned (`soak:fix` or the soak-autofix workflow
+does it). Bare names / `@scope/*` globs are standing trust and
 need no annotation. External tools use the same shape via a `soakBypass`
 object in `external-tools.json`.
 

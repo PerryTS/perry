@@ -50,7 +50,9 @@ export const NPM_INSTALLERS: string[][] = [['pnpm', 'install']]
 // therefore the only one whose `cargo update` would honor the [unstable]
 // min-publish-age soak (nightly-only; inert on perry's stable toolchain,
 // where the automated window rides dependabot's cooldown instead).
-export const RUSTUP_CARGO = path.join(os.homedir(), '.cargo/bin/cargo')
+// CARGO_HOME-aware: rustup installs its shims under $CARGO_HOME/bin.
+const CARGO_HOME = process.env.CARGO_HOME || path.join(os.homedir(), '.cargo')
+export const RUSTUP_CARGO = path.join(CARGO_HOME, 'bin/cargo')
 
 // Pinned external tool manifest + the local tool rack it installs into:
 // exact versions under rack/<tool>/<version>/, flat PATH handles in bin/.

@@ -18,8 +18,10 @@ minimumReleaseAge: 10080
 # Exclusions: bare names / scope globs express standing trust; version pins
 # are dated soak bypasses and REQUIRE, on the line above:
 #   # published: YYYY-MM-DD | removable: YYYY-MM-DD   (removable = published + 7d)
-# `npm run soak` rejects unannotated or expired pins (and flow-style [..]
-# lists, which the gate can't validate); `soak:fix` prunes expired ones.
+# `npm run soak` rejects unannotated pins (and flow-style [..] lists,
+# which the gate can't validate); expired ones warn until `soak:fix` /
+# the soak-autofix workflow prunes them. Schematic example (use the REAL
+# registry publish date, never these placeholders):
 # minimumReleaseAgeExclude:
-#   # published: 2026-01-01 | removable: 2026-01-08
+#   # published: YYYY-MM-DD | removable: YYYY-MM-DD
 #   - 'example@1.2.3'

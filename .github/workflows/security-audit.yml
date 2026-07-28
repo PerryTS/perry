@@ -100,6 +100,11 @@ jobs:
         with:
           node-version-file: .node-version
       - name: Install pinned agentshield
+        env:
+          # download() attaches this to github.com fetches only (release
+          # assets); without it private assets 404 and public ones ride
+          # unauthenticated rate limits.
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/soak/external-tools.mts --install agentshield
       - name: Scan .claude/ config
         run: |

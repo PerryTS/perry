@@ -198,7 +198,10 @@ export function parseExcludeEntries(body: string): ExcludeEntry[] {
   let blockIndent = 0
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
-    if (/^minimumReleaseAgeExclude:\s*$/.test(line)) {
+    // Tolerate a trailing comment on the key line — without it, a stray
+    // `minimumReleaseAgeExclude:  # note` never opened the block and every
+    // entry beneath silently escaped validation.
+    if (/^minimumReleaseAgeExclude:\s*(?:#.*)?$/.test(line)) {
       inBlock = true
       blockIndent = -1
       continue
@@ -248,7 +251,22 @@ export function checkCatalogParity(
   for (const m of block.matchAll(/^[ \t]+['"]?([^'":\s]+)['"]?:\s*['"]?([^'"\s]+)['"]?\s*$/gm)) {
     catalog[m[1]!] = m[2]!
   }
-  const pkg = JSON.parse(pkgJson)
+  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+  try {
+    pkg = JSON.parse(pkgJson)
+  } catch {
+    // A broken package.json is a finding, not a stack trace — the gate
+    // must report every surface, not die on the first bad parse.
+    return [
+      {
+        file: yamlFile,
+        what: 'catalog package.json parse',
+        saw: '(invalid JSON in the package.json beside the workspace yaml)',
+        wanted: 'parseable JSON so catalog lockstep is checkable',
+        fix: 'repair the package.json, then re-run',
+      },
+    ]
+  }
   const declared: Record<string, string> = {
     ...pkg.dependencies,
     ...pkg.devDependencies,

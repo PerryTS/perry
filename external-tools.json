@@ -1,13 +1,13 @@
 {
   "tools": {
     "pnpm": {
-      "description": "pnpm \u2014 the fleet's package manager.",
+      "description": "pnpm — the fleet's package manager.",
       "version": "11.15.1",
       "packageManager": "pnpm",
       "repository": "github:pnpm/pnpm",
       "release": "asset",
       "notes": [
-        "Latest soaked pnpm \u2014 CI downloads + SRI-verifies (sha512) the pinned asset",
+        "Latest soaked pnpm — CI downloads + SRI-verifies (sha512) the pinned asset",
         "darwin-x64 has no SEA asset upstream; its pin is the npm registry tarball"
       ],
       "platforms": {
@@ -48,15 +48,15 @@
     "npm": {
       "notes": [
         "npm 12 (min-release-age support). ONE platform-agnostic registry tarball, single integrity",
-        "Installed from the pinned tarball only \u2014 never npm install -g npm, no self-update path"
+        "Installed from the pinned tarball only — never npm install -g npm, no self-update path"
       ],
-      "description": "npm \u2014 pinned, SRI-verified registry tarball; installed without self-update",
+      "description": "npm — pinned, SRI-verified registry tarball; installed without self-update",
       "repository": "npm:npm",
       "version": "12.0.1",
       "integrity": "sha512-L5T9i/YAQWQWqTS/xZxJkei/9zcu99hCeE4qi41IyBVV7mRQad3qc2JfuOktwmH+qwGI/V2rbCL+/UYxb1+RQA=="
     },
     "sfw-free": {
-      "description": "Socket Firewall (free tier) \u2014 malware gate on dep installs.",
+      "description": "Socket Firewall (free tier) — malware gate on dep installs.",
       "version": "1.14.0",
       "repository": "github:SocketDev/sfw-free",
       "release": "asset",
@@ -95,7 +95,7 @@
       }
     },
     "sfw-enterprise": {
-      "description": "Socket Firewall (enterprise tier) \u2014 selected when SOCKET_SECURITY_KEY is set.",
+      "description": "Socket Firewall (enterprise tier) — selected when SOCKET_SECURITY_KEY is set.",
       "version": "1.14.0",
       "repository": "github:SocketDev/firewall-release",
       "release": "asset",
@@ -134,7 +134,7 @@
       }
     },
     "zizmor": {
-      "description": "GitHub Actions security linter \u2014 audits .github/ for workflow-injection / credential-leak patterns.",
+      "description": "GitHub Actions security linter — audits .github/ for workflow-injection / credential-leak patterns.",
       "version": "1.28.0",
       "repository": "github:zizmorcore/zizmor",
       "release": "asset",
@@ -171,7 +171,7 @@
       "integrity": "sha512-R98OO1Ujyk2lezDLb+iQmMhF6FwTJCHajy3G4FCB6x7wkSTqR9f8+eAelC5KDzYDsGSbc0sOZvjXOOPRBtMpDg=="
     },
     "skillspector": {
-      "description": "NVIDIA's third-party-skill security scanner (LangGraph-based; YARA + AST + OSV.dev CVE lookups + optional LLM analysis). No PyPI release / no GH tags upstream \u2014 pinned to a git SHA on main + installed via a locked uv project (pyproject.toml + uv.lock, `uv sync --locked`; the fleet uv pin + exclude-newer make it reproducible). Sibling to AgentShield: AgentShield audits the operator's .claude/ config; SkillSpector audits untrusted upstream skills before install.",
+      "description": "NVIDIA's third-party-skill security scanner (LangGraph-based; YARA + AST + OSV.dev CVE lookups + optional LLM analysis). No PyPI release / no GH tags upstream — pinned to a git SHA on main + installed via a locked uv project (pyproject.toml + uv.lock, `uv sync --locked`; the fleet uv pin + exclude-newer make it reproducible). Sibling to AgentShield: AgentShield audits the operator's .claude/ config; SkillSpector audits untrusted upstream skills before install.",
       "release": "uv-project",
       "repository": "github:NVIDIA/skillspector",
       "version": "2eb84478",

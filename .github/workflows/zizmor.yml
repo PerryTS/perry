@@ -26,6 +26,10 @@ jobs:
       # one pin source, and local `npm run tools:install` audits with the
       # exact same binary CI does.
       - name: Install pinned zizmor
+        env:
+          # download() attaches this to github.com fetches only (release
+          # assets) — avoids unauthenticated rate limits.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           node scripts/soak/external-tools.mts --install zizmor
           node scripts/soak/external-tools.mts --print-bin >> "$GITHUB_PATH"

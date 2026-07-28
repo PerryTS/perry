@@ -81,7 +81,14 @@ function platformKey(): string {
   if (!osKey || !archKey) {
     throw new Error(`unsupported platform ${process.platform}-${process.arch}`)
   }
-  return `${osKey}-${archKey}`
+  // musl vs glibc via the loader-presence heuristic. Without this a musl
+  // host silently resolved the glibc pin (the `-musl` pnpm entries were
+  // dead keys) and installed a binary that can't run; tools with no -musl
+  // pin now fail loud with "no pinned asset" instead.
+  const musl =
+    process.platform === 'linux' &&
+    (existsSync('/lib/ld-musl-x86_64.so.1') || existsSync('/lib/ld-musl-aarch64.so.1'))
+  return `${osKey}-${archKey}${musl ? '-musl' : ''}`
 }
 
 function sriSha512(buf: Buffer): string {
@@ -534,6 +541,12 @@ REAL=$(PATH="$CLEAN_PATH" command -v '${cmd}' || true)`
 set -euo pipefail
 ${resolveReal}
 if [ -n "\${${sentinel}:-}" ] || [ -z "$REAL" ] || ! command -v sfw >/dev/null 2>&1; then
+  # Fail-open must not be SILENT-open: say so once on stderr when the
+  # firewall is missing (never on the sentinel re-entry path, where sfw
+  # itself is the caller).
+  if [ -z "\${${sentinel}:-}" ] && [ -n "$REAL" ]; then
+    echo "[sfw-shim] sfw not on PATH — running ${cmd} unfirewalled" >&2
+  fi
   [ -n "$REAL" ] && exec "$REAL" "$@"
   echo "${cmd}: not found" >&2; exit 127
 fi
