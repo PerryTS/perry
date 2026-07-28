@@ -962,6 +962,13 @@ pub(crate) fn build_optimized_libs(
         if panic_abort_safe {
             bc_rustflags.push_str("-C panic=abort ");
         }
+        // Mirror the size-optimized opt level into the bitcode emission so
+        // the merged whole-program module is built from the same tuning as
+        // the staticlib archives (last `-C opt-level` wins over the
+        // profile's, same as the archive rebuild above).
+        if let Some(level) = size_opt_level() {
+            bc_rustflags.push_str(&format!("-C opt-level={level} "));
+        }
         bc_rustflags.push_str("-C codegen-units=1");
         // #6125: the bitcode-LTO path must obey the same CPU baseline as the
         // staticlib build above, or the LTO'd binary re-imports the build
