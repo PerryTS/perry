@@ -25,7 +25,13 @@ pub fn rack_sfw_path(xdg_data_home: Option<&str>, home: Option<&Path>) -> Option
         Some(x) if !x.is_empty() => PathBuf::from(x),
         _ => home?.join(".local").join("share"),
     };
-    Some(data_dir.join("perry").join("dev-tools").join("bin").join("sfw"))
+    Some(
+        data_dir
+            .join("perry")
+            .join("dev-tools")
+            .join("bin")
+            .join("sfw"),
+    )
 }
 
 /// Probe whether a binary at `path` (or a bare name resolved via PATH)
