@@ -337,7 +337,23 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
     bind_method: nm_bind_method_ops,
     ee_prototype_install: super::class_registry::prototype_objects::nm_ee_prototype_install,
     static_buffer_proto_chain: super::class_registry::parent_static::nm_static_buffer_proto_chain,
+    ee_dynamic_super: nm_ee_dynamic_super,
 };
+
+/// Dynamic-`super()` EventEmitter-subclass init (extracted from
+/// `closure::dispatch::value_call`; see `NmNamespaceOps::ee_dynamic_super`).
+unsafe fn nm_ee_dynamic_super(func_value: f64) -> Option<f64> {
+    let (module, method) = bound_native_callable_module_and_method(func_value)?;
+    if module.trim_start_matches("node:") == "events"
+        && (method == "EventEmitter" || method == "EventEmitterAsyncResource")
+    {
+        let this_val = super::js_implicit_this_get();
+        if crate::value::JSValue::from_bits(this_val.to_bits()).is_pointer() {
+            return Some(crate::node_stream::js_event_emitter_subclass_init(this_val));
+        }
+    }
+    None
+}
 
 unsafe fn nm_bind_method_ops(obj_value: f64, name_ptr: *const u8, name_len: usize) -> f64 {
     js_native_module_bind_method(obj_value, name_ptr, name_len)

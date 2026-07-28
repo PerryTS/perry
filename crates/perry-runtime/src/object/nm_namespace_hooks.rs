@@ -52,6 +52,10 @@ pub(crate) struct NmNamespaceOps {
     /// native `Buffer` constructor (walks the parent chain, materializes the
     /// `buffer.Buffer` namespace, dispatches). `None` on miss.
     pub static_buffer_proto_chain: unsafe fn(u32, &str, *const f64, usize) -> Option<f64>,
+    /// Dynamic `super()` for `class X extends <runtime EventEmitter export>`:
+    /// installs the EE methods on the fresh instance. `None` when the callee
+    /// is not the bound events export (fall through to normal call dispatch).
+    pub ee_dynamic_super: unsafe fn(f64) -> Option<f64>,
 }
 
 static NM_NAMESPACE_OPS: AtomicPtr<NmNamespaceOps> = AtomicPtr::new(std::ptr::null_mut());
