@@ -291,11 +291,11 @@ pub unsafe extern "C" fn js_register_class_static_setter(
 
 // These two are only ever called from codegen-emitted module-init IR (no Rust
 // caller), so the auto-optimize whole-program-LLVM build would dead-strip them
-// without an anchor. Pin each via a `#[used]` static (mirrors node_v8.rs).
-#[used]
+// without an anchor. Pin each via a `#[cfg_attr(feature = "keepalive-anchors", used)]` static (mirrors node_v8.rs).
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REGISTER_STATIC_GETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_getter;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_setter;
 
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn js_register_class_method_bind_length(
         .insert((class_id as u32, name), length as u32);
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REGISTER_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_method_bind_length;
 
@@ -361,7 +361,7 @@ pub unsafe extern "C" fn js_register_class_static_method_bind_length(
         .insert((class_id as u32, name), length as u32);
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REGISTER_STATIC_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_method_bind_length;
 

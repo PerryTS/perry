@@ -999,8 +999,8 @@ fn assert_lto_keepalive_anchor(src: &str, static_name: &str, signature: &str, ta
     let end = (static_pos + 512).min(src.len());
     let window = &src[start..end];
     assert!(
-        window.contains("#[used]"),
-        "keepalive static {static_name} for {target} is not #[used]"
+        window.contains("#[cfg_attr(feature = "keepalive-anchors", used)]"),
+        "keepalive static {static_name} for {target} is not #[cfg_attr(feature = "keepalive-anchors", used)]"
     );
     assert!(
         window.contains(signature),

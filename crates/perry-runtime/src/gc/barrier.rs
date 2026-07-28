@@ -1514,11 +1514,11 @@ pub extern "C" fn js_write_barrier_root_nanbox(value_bits: u64) {
 // the runtime through whole-program LLVM bitcode and is free to internalize and
 // dead-strip an unreferenced `#[no_mangle]` symbol — which broke the default
 // `perry file.ts -o out` link with `undefined _js_write_barrier_root_*`. The
-// `#[used]` statics pin retained reference edges so both survive every link mode.
+// `#[cfg_attr(feature = "keepalive-anchors", used)]` statics pin retained reference edges so both survive every link mode.
 // Same pattern as `node_stream_keepalive.rs` / `typedarray.rs`.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_WRITE_BARRIER_ROOT_HEAP_WORD: extern "C" fn(u64) = js_write_barrier_root_heap_word;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_WRITE_BARRIER_ROOT_NANBOX: extern "C" fn(u64) = js_write_barrier_root_nanbox;
 
 #[inline]

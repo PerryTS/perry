@@ -88,7 +88,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -114,6 +114,7 @@ pub(crate) fn auto_optimized_cache_key(
             size_opt_level().unwrap_or("off"),
             if size_lto_fat() { "+fatlto" } else { "" }
         ),
+        std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1"),
         env!("CARGO_PKG_VERSION"),
     )
 }
@@ -202,6 +203,15 @@ pub(crate) fn auto_optimized_cross_features(
         if !ctx.uses_regex {
             cross_features.push("perry-runtime/regex-engine".to_string());
         }
+    }
+    // The `#[used]` keep-alive anchors exist for the whole-program bitcode
+    // LTO path only (see perry-runtime's `keepalive-anchors` feature docs).
+    // The classic link keeps every reachable symbol via real undefined
+    // references, so the anchors are omitted there — that is what lets
+    // `-dead_strip` drop the never-imported node-module surface from small
+    // programs. Re-enable them whenever the bitcode link was requested.
+    if std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1") {
+        cross_features.push("perry-runtime/keepalive-anchors".to_string());
     }
     // Compile OUT perry-runtime's no-op fetch stubs (`js_fetch_with_options` /
     // `js_headers_new` / `js_request_new`, gated `#[cfg(not(feature =

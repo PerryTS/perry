@@ -88,13 +88,13 @@ pub extern "C" fn js_child_process_validate_args(value: f64) -> f64 {
     value
 }
 
-/// `#[used]` keepalive anchors so the auto-optimize whole-program-LLVM rebuild
+/// `#[cfg_attr(feature = "keepalive-anchors", used)]` keepalive anchors so the auto-optimize whole-program-LLVM rebuild
 /// does not dead-strip these codegen-invoked `#[no_mangle]` entry points (see
 /// project_auto_optimize_keepalive_3320). They are referenced only from
 /// generated `.o`, so without an anchor the bitcode internalizer drops them and
 /// the default `perry file.ts -o out` link fails.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_CP_VALIDATE_COMMAND: unsafe extern "C" fn(f64, *const u8, u32) -> f64 =
     js_child_process_validate_command;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_CP_VALIDATE_ARGS: extern "C" fn(f64) -> f64 = js_child_process_validate_args;

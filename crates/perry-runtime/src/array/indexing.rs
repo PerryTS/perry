@@ -440,7 +440,7 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
 /// native-region wrappers (`__perry_wrap_*`) and elsewhere, so it must be a
 /// `#[no_mangle]` C export AND survive dead-stripping even when no Rust caller
 /// keeps it referenced — mirroring the neighbouring `js_array_push`.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_length;
 
 #[no_mangle]
@@ -852,10 +852,10 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
 
 // These raw numeric-array helpers are called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` exports.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32) -> f64 =
     js_array_numeric_get_f64_unboxed;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32, f64) -> i32 =
     js_array_numeric_set_f64_unboxed;
 
@@ -1450,27 +1450,27 @@ pub extern "C" fn js_array_numeric_range_add_len(receiver: f64, start: f64, delt
     array_numeric_range_add_impl(receiver, start, None, delta)
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_CONST_EXTEND: extern "C" fn(
     *mut ArrayHeader,
     u32,
     f64,
 ) -> *mut ArrayHeader = js_array_fill_f64_const_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_IOTA_EXTEND: extern "C" fn(*mut ArrayHeader, u32) -> *mut ArrayHeader =
     js_array_fill_f64_iota_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_CONST_LEN_EXTEND: extern "C" fn(
     *mut ArrayHeader,
     f64,
 ) -> *mut ArrayHeader = js_array_fill_f64_const_len_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_IOTA_LEN_EXTEND: extern "C" fn(*mut ArrayHeader) -> *mut ArrayHeader =
     js_array_fill_f64_iota_len_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD: extern "C" fn(f64, f64, f64, f64) -> i64 =
     js_array_numeric_range_add;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD_LEN: extern "C" fn(f64, f64, f64) -> i64 =
     js_array_numeric_range_add_len;
 

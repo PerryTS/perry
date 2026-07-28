@@ -622,6 +622,6 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROPERTY_IS_ENUMERABLE: extern "C" fn(f64, f64) -> f64 =
     js_object_property_is_enumerable;

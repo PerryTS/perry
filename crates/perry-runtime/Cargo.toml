@@ -22,7 +22,21 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors"]
+# Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
+# `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
+# points as dead-strip roots. They exist for the whole-program bitcode-LTO
+# link (`PERRY_LLVM_BITCODE_LINK=1`), where the merged module could otherwise
+# internalize + drop symbols only referenced from the user's separate `.o`.
+# The CLASSIC link path never needs them: every reachable runtime symbol is
+# kept by a real undefined reference from the program's objects, and the
+# anchors only defeat `-dead_strip` (measured: a hello-world binary carries
+# the entire fs/child_process/vm/node_submodules surface through ONE anchored
+# chain — KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED → dynamic-import fallback →
+# js_nm_install_all → every dispatch bucket). Kept in `default` so the
+# prebuilt/full archives and `cargo test` are unchanged; the auto-optimize
+# rebuild omits it unless the bitcode link was requested.
+keepalive-anchors = []
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only

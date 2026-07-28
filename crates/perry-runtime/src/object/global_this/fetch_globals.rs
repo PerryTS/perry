@@ -43,9 +43,9 @@ pub extern "C" fn js_module_top_this() -> f64 {
 
 /// Keepalive anchor: `js_module_top_this` is referenced only from
 /// codegen-generated `.o` files, so the auto-optimize whole-program LLVM
-/// rebuild would dead-strip it without this `#[used]` pin (see
+/// rebuild would dead-strip it without this `#[cfg_attr(feature = "keepalive-anchors", used)]` pin (see
 /// project_auto_optimize_keepalive_3320).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
 
 /// Issue #611: lazily allocate `globalThis` for computed global access.
@@ -480,10 +480,10 @@ pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64)
 // `Expr::SuperCall` Request/Response arm); pin them so the auto-optimize
 // bitcode rebuild's dead-strip can't drop them (see
 // project_auto_optimize_keepalive_3320).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_REQUEST_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
     js_request_subclass_init;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_RESPONSE_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
     js_response_subclass_init;
 
@@ -828,7 +828,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C" fn(f64, f64, *const f64, usize) -> f64 =
     js_fetch_or_value_super;
 
