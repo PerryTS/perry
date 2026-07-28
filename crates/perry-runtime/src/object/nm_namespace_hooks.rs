@@ -44,6 +44,10 @@ pub(crate) struct NmNamespaceOps {
     /// namespace object (`const fn = fs.lstatSync`): NaN-boxed namespace
     /// value + property-name bytes → bound callable (or undefined).
     pub bind_method: unsafe fn(f64, *const u8, usize) -> f64,
+    /// #5477: install the EventEmitter prototype methods on the synthetic
+    /// prototype of the bound `events.EventEmitter` export. No-op for every
+    /// other function value.
+    pub ee_prototype_install: unsafe fn(f64, *mut ObjectHeader),
 }
 
 static NM_NAMESPACE_OPS: AtomicPtr<NmNamespaceOps> = AtomicPtr::new(std::ptr::null_mut());

@@ -335,6 +335,7 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
     reflect_has_enumerable: super::reflect_support::nm_reflect_has_enumerable,
     own_keys_array: nm_own_keys_array_opt,
     bind_method: nm_bind_method_ops,
+    ee_prototype_install: super::class_registry::prototype_objects::nm_ee_prototype_install,
 };
 
 unsafe fn nm_bind_method_ops(obj_value: f64, name_ptr: *const u8, name_len: usize) -> f64 {
