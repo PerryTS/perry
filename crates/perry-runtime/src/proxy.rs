@@ -804,7 +804,20 @@ pub(crate) fn reflect_ordinary_set_with_receiver(
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
+    // #6935: `js_to_property_key` runs a user `Symbol.toPrimitive` / `toString`
+    // / `valueOf` for an object key (and allocates for every primitive one), so
+    // it can trigger a GC that **evacuates** live objects. Both the `target`
+    // receiver and the `value` being written into it were raw NaN-boxed Rust
+    // locals across the call — a stale target dropped the write onto a
+    // forwarding stub, a stale value stored a dangling pointer in a live
+    // object. `target_get` already roots; this write sibling did not.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_heap_word_u64(target.to_bits());
+    let value_handle = scope.root_nanbox_f64(value);
     let property_key = unsafe { crate::object::js_to_property_key(key) };
+    let property_key = scope.root_nanbox_f64(property_key).get_nanbox_f64();
+    let target = f64::from_bits(target_handle.get_heap_word_u64());
+    let value = value_handle.get_nanbox_f64();
     if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         unsafe {
             crate::symbol::js_object_set_symbol_property(target, property_key, value);

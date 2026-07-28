@@ -1642,19 +1642,34 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
             } else {
                 format!("{:.0}", n)
             };
+            // #6935: `js_string_from_bytes` ALLOCATES, so it can trigger a GC
+            // that evacuates the receiver; `arr` is a bare Rust local.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let arr_handle = scope.root_raw_const_ptr(arr);
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            return array_get_property_by_key(arr, key_ptr);
+            return array_get_property_by_key(
+                arr_handle.get_raw_const_ptr::<ArrayHeader>(),
+                key_ptr,
+            );
         }
     }
 
     if unsafe { crate::symbol::js_is_symbol(idx) } != 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // #6935: read-side sibling of `js_array_set_index_or_string` below —
+    // `js_jsvalue_to_string` on an object key (`a[new Number(1)]`,
+    // `a[{toString(){...}}]`) runs user JS, allocates and can evacuate `arr`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_const_ptr(arr);
     let key = crate::value::js_jsvalue_to_string(idx);
     if key.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    array_get_property_by_key(arr, key as *const crate::StringHeader)
+    array_get_property_by_key(
+        arr_handle.get_raw_const_ptr::<ArrayHeader>(),
+        key as *const crate::StringHeader,
+    )
 }
 
 /// `arr[idx] = value` where idx may be a NaN-boxed string (numeric-string
@@ -1714,10 +1729,20 @@ pub extern "C" fn js_array_set_index_or_string(
         // number ("4294967295", "-1", "1.5", "NaN") rather than a truncated
         // integer — `js_array_set_string_key` then stores it on the expando
         // map without touching `length` or any element slot. (Issue #4543.)
+        // #6935: `js_jsvalue_to_string` allocates the stringified key, so it can
+        // GC and evacuate both the receiver and the value being stored.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        let value_handle = scope.root_nanbox_f64(value);
         let key = crate::value::js_jsvalue_to_string(idx);
         if !key.is_null() {
-            return js_array_set_string_key(arr, key as *const crate::StringHeader, value);
+            return js_array_set_string_key(
+                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                key as *const crate::StringHeader,
+                value_handle.get_nanbox_f64(),
+            );
         }
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
     // Fallback for a NON-numeric key: a primitive (`a[null]`, `a[undefined]`,
     // `a[true]`, `a[10n]`) or a boxed object (`a[new Number(1)]`). Per
@@ -1726,11 +1751,25 @@ pub extern "C" fn js_array_set_index_or_string(
     // Arrays previously DROPPED these writes (plain objects handled them).
     // Restricted to `numeric.is_none()`: numeric keys (including non-integer
     // finite floats) are handled above. Symbols stay symbol-keyed.
+    //
+    // #6935: this is the boxed-object arm the doc comment above names, so
+    // `js_jsvalue_to_string` here runs a USER `toString` / `valueOf` — allocate
+    // → GC → evacuation. Pre-fix `arr` and `value` were both raw Rust locals
+    // across it, so a stale receiver dropped the write and a stale `value`
+    // stored a dangling pointer inside a live array.
     if numeric.is_none() && unsafe { crate::symbol::js_is_symbol(idx) } == 0 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        let value_handle = scope.root_nanbox_f64(value);
         let key = crate::value::js_jsvalue_to_string(idx);
         if !key.is_null() {
-            return js_array_set_string_key(arr, key as *const crate::StringHeader, value);
+            return js_array_set_string_key(
+                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                key as *const crate::StringHeader,
+                value_handle.get_nanbox_f64(),
+            );
         }
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
     arr
 }

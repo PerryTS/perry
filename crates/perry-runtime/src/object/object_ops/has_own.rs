@@ -103,7 +103,25 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // ToPropertyKey(V): fold an object argument (e.g. one whose `toString`
         // returns a Symbol) into its canonical key before the symbol/string
         // split. A no-op for keys that are already primitives.
-        let key_value = super::super::js_to_property_key(key_value);
+        //
+        // #6935: for an object key that fold runs USER JS, which allocates and
+        // can trigger a GC that **evacuates** the receiver. `obj_value` — and
+        // the `obj_js` tag view taken from it above — were raw NaN-boxed Rust
+        // locals across the call, so root the receiver and re-derive both.
+        let (obj_value, obj_js, key_value) =
+            if super::super::property_key_coercion_is_inert(key_value) {
+                (obj_value, obj_js, key_value)
+            } else {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+                let key_value = super::super::js_to_property_key(key_value);
+                let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+                (
+                    obj_value,
+                    crate::JSValue::from_bits(obj_value.to_bits()),
+                    key_value,
+                )
+            };
 
         // A Proxy is a small registered id, not a heap object — route
         // `hasOwnProperty` through `[[GetOwnProperty]]` (a present own property
@@ -428,7 +446,17 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // ToPropertyKey(V): fold an object argument (e.g. one whose `toString`
         // returns a Symbol) into its canonical key before the symbol/string
         // split. A no-op for keys that are already primitives.
-        let key_value = super::super::js_to_property_key(key_value);
+        //
+        // #6935: root the receiver across the (GC-capable) fold — see
+        // `js_object_has_own` above for the full reasoning.
+        let (obj_value, key_value) = if super::super::property_key_coercion_is_inert(key_value) {
+            (obj_value, key_value)
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let key_value = super::super::js_to_property_key(key_value);
+            (f64::from_bits(obj_handle.get_heap_word_u64()), key_value)
+        };
 
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather

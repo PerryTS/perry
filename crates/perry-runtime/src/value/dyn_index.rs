@@ -337,9 +337,15 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             } else {
                 format!("{}", index)
             };
+            // #6935: `js_string_from_bytes` ALLOCATES, so the numeric→string key
+            // conversion can trigger a GC that evacuates the receiver. `raw_ptr`
+            // is a bare Rust local — neither a root nor a shadow slot — so it
+            // must be re-read through a handle after the allocation.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
             let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             let v = crate::object::js_object_get_field_by_name_f64(
-                raw_ptr as *const crate::object::ObjectHeader,
+                recv.get_raw_const_ptr::<crate::object::ObjectHeader>(),
                 key,
             );
             // An indexed property inherited from the canonical
@@ -428,11 +434,26 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     // method as non-writable. (Mirrors the get arm above.)
     if (bits >> 48) == 0x7FFE {
         let idx_top16 = index.to_bits() >> 48;
-        let key_ptr = if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
-            js_get_string_pointer_unified(index) as *const crate::StringHeader
-        } else {
-            crate::builtins::js_string_coerce(index) as *const crate::StringHeader
-        };
+        if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+            let key_ptr = js_get_string_pointer_unified(index) as *const crate::StringHeader;
+            if !key_ptr.is_null() {
+                crate::object::js_object_set_field_by_name(
+                    bits as *mut crate::object::ObjectHeader,
+                    key_ptr,
+                    value,
+                );
+            }
+            return value;
+        }
+        // #6935: `js_string_coerce` on an object index runs a user `toString` /
+        // `valueOf` (and allocates even for primitive indices), so it can GC and
+        // evacuate. The receiver here is an INT32 class-ref — not a heap object,
+        // so it cannot move — but `value` IS the thing being written into the
+        // class's dynamic-prop table, and it was a raw local across the coercion.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_handle = scope.root_nanbox_f64(value);
+        let key_ptr = crate::builtins::js_string_coerce(index) as *const crate::StringHeader;
+        let value = value_handle.get_nanbox_f64();
         if !key_ptr.is_null() {
             crate::object::js_object_set_field_by_name(
                 bits as *mut crate::object::ObjectHeader,
@@ -539,19 +560,41 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     // Non-array object: stringify the index and write via the object setter.
     let bits = index.to_bits();
     let top16 = bits >> 48;
-    let key_ptr: *const crate::StringHeader = if top16 == 0x7FFF {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader
-    } else if top16 == 0x7FF9 {
-        crate::value::js_get_string_pointer_unified(index) as *const crate::StringHeader
-    } else {
-        crate::value::js_jsvalue_to_string(index)
-    };
+    if top16 == 0x7FFF || top16 == 0x7FF9 {
+        let key_ptr: *const crate::StringHeader = if top16 == 0x7FFF {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader
+        } else {
+            crate::value::js_get_string_pointer_unified(index) as *const crate::StringHeader
+        };
+        if key_ptr.is_null() {
+            return value;
+        }
+        crate::object::js_object_set_field_by_name(
+            raw_ptr as *mut crate::object::ObjectHeader,
+            key_ptr,
+            value,
+        );
+        return value;
+    }
+    // #6935: this is the corruption case. `js_jsvalue_to_string(index)` runs a
+    // user `toString` / `valueOf` for an object index (`obj[{toString(){...}}] = v`)
+    // and allocates for every other shape, so it can GC and EVACUATE. Both the
+    // receiver `raw_ptr` and the `value` being stored were raw Rust locals
+    // across it: a stale receiver dropped the write onto a forwarding stub, and
+    // a stale `value` wrote a dangling pointer INTO a live object, where it
+    // outlives the call.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
+    let value_handle = scope.root_nanbox_f64(value);
+    let key_ptr = crate::value::js_jsvalue_to_string(index);
+    let value = value_handle.get_nanbox_f64();
     if key_ptr.is_null() {
         return value;
     }
+    let key_handle = scope.root_string_ptr(key_ptr);
     crate::object::js_object_set_field_by_name(
-        raw_ptr as *mut crate::object::ObjectHeader,
-        key_ptr,
+        recv.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
         value,
     );
     value

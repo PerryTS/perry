@@ -2435,15 +2435,26 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 crate::value::js_nanbox_pointer(new_arr as i64)
             }
             crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
+                // #6935: `js_jsvalue_to_string` on an object index runs a user
+                // `toString` / `valueOf` (and allocates for every primitive
+                // one), so it can trigger a GC that **evacuates**. The receiver
+                // `raw_addr` and the `value` being stored were raw Rust locals
+                // across it — a stale receiver dropped the write onto a
+                // forwarding stub and a stale `value` planted a dangling
+                // pointer inside a live object.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let recv = scope.root_raw_mut_ptr(raw_addr as *mut ObjectHeader);
+                let value_handle = scope.root_nanbox_f64(value);
+                let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
                 let key_ptr = crate::value::js_jsvalue_to_string(index);
                 if !key_ptr.is_null() {
                     crate::object::js_object_set_field_by_name(
-                        raw_addr as *mut ObjectHeader,
+                        recv.get_raw_mut_ptr::<ObjectHeader>(),
                         key_ptr,
-                        value,
+                        value_handle.get_nanbox_f64(),
                     );
                 }
-                receiver
+                f64::from_bits(receiver_handle.get_heap_word_u64())
             }
             _ => receiver,
         }
