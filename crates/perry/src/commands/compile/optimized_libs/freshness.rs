@@ -68,6 +68,14 @@ pub(crate) fn size_opt_level() -> Option<&'static str> {
     }
 }
 
+/// `PERRY_SIZE_LTO=fat` — additionally rebuild the archives with fat LTO +
+/// a single codegen unit. Slower build, smaller/faster archive; only
+/// meaningful together with `size_opt_level`. Keyed into the cache like the
+/// opt level.
+pub(crate) fn size_lto_fat() -> bool {
+    std::env::var("PERRY_SIZE_LTO").ok().as_deref() == Some("fat")
+}
+
 /// Cache key for the auto-optimize target dir + build stamp. Hashed into the
 /// `target/perry-auto-<hash>` dir name so each (features, panic-mode, target,
 /// runtime-gate, version) combination gets its own incremental cache. Kept in
@@ -101,7 +109,11 @@ pub(crate) fn auto_optimized_cache_key(
         // #6559: dyn-eval presence changes the built archive, so it must
         // key the freshness stamp like every other runtime feature toggle.
         perry_hir::has_deferred_dynamic_code_sites(),
-        size_opt_level().unwrap_or("off"),
+        format!(
+            "{}{}",
+            size_opt_level().unwrap_or("off"),
+            if size_lto_fat() { "+fatlto" } else { "" }
+        ),
         env!("CARGO_PKG_VERSION"),
     )
 }

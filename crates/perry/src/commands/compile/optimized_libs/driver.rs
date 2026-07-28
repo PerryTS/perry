@@ -787,6 +787,16 @@ pub(crate) fn build_optimized_libs(
     if let Some(level) = size_opt_level() {
         rustflags.push(format!("-C opt-level={level}"));
     }
+    // PERRY_SIZE_LTO=fat — whole-archive fat LTO + one codegen unit on top
+    // of the size opt level. The workspace profile's `lto = "thin"` already
+    // makes every rlib carry bitcode, so the leaf staticlib crates can be
+    // re-monomorphized as one unit; rustc takes the last `-C lto`/`-C
+    // codegen-units`, letting these override the profile's thin/16.
+    if size_lto_fat() {
+        rustflags.push("-C lto=fat".to_string());
+        rustflags.push("-C codegen-units=1".to_string());
+        rustflags.push("-C embed-bitcode=yes".to_string());
+    }
     // #6125: pin the Rust-side CPU baseline to the same PERRY_TARGET_CPU
     // knob codegen's clang invocation honors, so the rebuilt runtime/stdlib
     // (which is what runs before the app's first print — exactly where the
