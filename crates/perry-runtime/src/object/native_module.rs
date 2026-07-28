@@ -13,7 +13,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 mod callable_export_check;
-mod callable_exports;
+pub(crate) mod callable_exports;
 mod constants;
 mod module_keys;
 mod namespace_builders;

@@ -52,169 +52,15 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     let mut value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
-    if export_module_name == "module" && property_name == "Module" {
-        attach_module_cjs_constructor_statics(closure_addr);
-    }
-    if export_module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
-        attach_tty_stream_prototype(value, property_name);
-    }
-    if export_module_name == "tls" && property_name == "SecureContext" {
-        attach_tls_secure_context_prototype(value);
-    }
-    if export_module_name == "wasi" && property_name == "WASI" {
-        crate::wasi::attach_wasi_constructor_prototype(value);
-    }
-    if export_module_name == "stream" && property_name == "Stream" {
-        attach_stream_legacy_prototype(value);
-    }
-    if export_module_name == "stream"
-        && matches!(
-            property_name,
-            "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
-        )
+    // Per-module prototype/statics decoration, routed through the attach
+    // registry (see `native_module_registry::nm_attach_lookup`): each
+    // module's handler is registered by its `js_nm_install_<module>()`, and
+    // this path is only reachable through that module's namespace — so a
+    // binary links exactly the attach machinery of the modules it imports.
+    if let Some(attach) = super::super::native_module_registry::nm_attach_lookup(export_module_name)
     {
-        attach_stream_constructor_prototype(value, property_name);
-    }
-    // #6692: Node defines `stream.pipeline[util.promisify.custom]` and
-    // `stream.finished[util.promisify.custom]` pointing at the promise-based
-    // `stream/promises` implementations, so `promisify(stream.pipeline)` returns
-    // that impl rather than the generic callback-appending wrapper. Wire the
-    // same hooks so `custom_promisified_value` (util_promisify.rs) honors them.
-    if export_module_name == "stream" && matches!(property_name, "pipeline" | "finished") {
-        // Reassign: the attach helper roots `value` and allocates (which may
-        // evacuate the closure), so it returns the possibly-relocated pointer.
-        value = attach_stream_promisify_custom(value, property_name);
-    }
-    if export_module_name == "sqlite" && property_name == "DatabaseSync" {
-        attach_sqlite_database_sync_prototype(value);
-    }
-    if export_module_name == "sqlite" && property_name == "Session" {
-        attach_sqlite_session_prototype(value);
-    }
-    if export_module_name == "assert" && property_name == "Assert" {
-        attach_assert_prototype(value);
-    }
-    if export_module_name == "crypto" && property_name == "KeyObject" {
-        attach_crypto_key_object_shape(closure_addr, value);
-    }
-    if export_module_name == "crypto" && property_name == "X509Certificate" {
-        attach_crypto_x509_certificate_shape(closure_addr, value);
-    }
-
-    // `PerformanceObserver.supportedEntryTypes` is a static array on the
-    // constructor. `PerformanceObserver` is a function value (a bound-method
-    // closure), so hang the array off it as a dynamic property — keeps
-    // `typeof PerformanceObserver === "function"` while the static read works.
-    if export_module_name == "perf_hooks" && property_name == "PerformanceObserver" {
-        let arr = crate::perf_hooks::js_perf_supported_entry_types();
-        crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
-    }
-
-    if export_module_name == "async_hooks" && property_name == "AsyncLocalStorage" {
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "bind",
-            async_hooks_static_method_value(
-                crate::async_hooks::js_async_local_storage_static_bind_method as *const u8,
-                "bind",
-                1,
-                1,
-            ),
-        );
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "snapshot",
-            async_hooks_static_method_value(
-                crate::async_hooks::js_async_local_storage_static_snapshot_method as *const u8,
-                "snapshot",
-                0,
-                0,
-            ),
-        );
-    }
-
-    if export_module_name == "async_hooks" && property_name == "AsyncResource" {
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "bind",
-            async_hooks_static_method_value(
-                crate::async_hooks::js_async_resource_static_bind_method as *const u8,
-                "bind",
-                3,
-                3,
-            ),
-        );
-    }
-
-    if export_module_name == "events" && property_name == "EventEmitter" {
-        let async_resource_ctor =
-            bound_native_callable_export_value("events", "EventEmitterAsyncResource");
-        for method in [
-            "addAbortListener",
-            "once",
-            "on",
-            "getEventListeners",
-            "getMaxListeners",
-            "listenerCount",
-            "setMaxListeners",
-        ] {
-            let method_value = bound_native_callable_export_value("events", method);
-            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
-        }
-        crate::closure::closure_set_dynamic_prop(closure_addr, "EventEmitter", value);
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "EventEmitterAsyncResource",
-            async_resource_ctor,
-        );
-        crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "usingDomains",
-            f64::from_bits(JSValue::bool(false).bits()),
-        );
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "captureRejections",
-            f64::from_bits(JSValue::bool(false).bits()),
-        );
-        crate::closure::closure_set_dynamic_prop(closure_addr, "captureRejectionSymbol", {
-            let name = "nodejs.rejection";
-            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
-        });
-        crate::closure::closure_set_dynamic_prop(closure_addr, "errorMonitor", {
-            let name = "events.errorMonitor";
-            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
-        });
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "init",
-            bound_native_callable_export_value("events", "init"),
-        );
-    }
-
-    if export_module_name == "util" && property_name == "promisify" {
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "custom",
-            crate::util_promisify::promisify_custom_symbol(),
-        );
-    }
-    if export_module_name == "util" && property_name == "inspect" {
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "custom",
-            util_inspect_custom_symbol(),
-        );
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "defaultOptions",
-            util_inspect_default_options_value(),
-        );
-        crate::closure::closure_set_dynamic_prop(closure_addr, "styles", util_inspect_styles());
-        crate::closure::closure_set_dynamic_prop(closure_addr, "colors", util_inspect_colors());
+        // SAFETY: registry only ever holds the `nm_attach_*` handlers below.
+        value = unsafe { attach(property_name, value, closure_addr) };
     }
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
@@ -1718,4 +1564,278 @@ pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
         return false;
     }
     builtin_closure_is_non_constructable(ptr as usize)
+}
+
+// ---------------------------------------------------------------------------
+// Per-module attach handlers (bodies moved verbatim from the former inline
+// ladder). Referenced ONLY from the attach registry via each module's
+// `js_nm_install_<module>()`, so unimported modules' machinery dead-strips.
+// ---------------------------------------------------------------------------
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_module(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "Module" {
+        attach_module_cjs_constructor_statics(closure_addr);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_tty(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if matches!(property_name, "ReadStream" | "WriteStream") {
+        attach_tty_stream_prototype(value, property_name);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_tls(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "SecureContext" {
+        attach_tls_secure_context_prototype(value);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_wasi(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "WASI" {
+        crate::wasi::attach_wasi_constructor_prototype(value);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_stream(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "Stream" {
+        attach_stream_legacy_prototype(value);
+    }
+    if true
+        && matches!(
+            property_name,
+            "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+        )
+    {
+        attach_stream_constructor_prototype(value, property_name);
+    }
+    // #6692: Node defines `stream.pipeline[util.promisify.custom]` and
+    // `stream.finished[util.promisify.custom]` pointing at the promise-based
+    // `stream/promises` implementations, so `promisify(stream.pipeline)` returns
+    // that impl rather than the generic callback-appending wrapper. Wire the
+    // same hooks so `custom_promisified_value` (util_promisify.rs) honors them.
+    if matches!(property_name, "pipeline" | "finished") {
+        // Reassign: the attach helper roots `value` and allocates (which may
+        // evacuate the closure), so it returns the possibly-relocated pointer.
+        value = attach_stream_promisify_custom(value, property_name);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_sqlite(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "DatabaseSync" {
+        attach_sqlite_database_sync_prototype(value);
+    }
+    if property_name == "Session" {
+        attach_sqlite_session_prototype(value);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_assert(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "Assert" {
+        attach_assert_prototype(value);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_crypto(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "KeyObject" {
+        attach_crypto_key_object_shape(closure_addr, value);
+    }
+    if property_name == "X509Certificate" {
+        attach_crypto_x509_certificate_shape(closure_addr, value);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_perf_hooks(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    // `PerformanceObserver.supportedEntryTypes` is a static array on the
+    // constructor. `PerformanceObserver` is a function value (a bound-method
+    // closure), so hang the array off it as a dynamic property — keeps
+    // `typeof PerformanceObserver === "function"` while the static read works.
+    if property_name == "PerformanceObserver" {
+        let arr = crate::perf_hooks::js_perf_supported_entry_types();
+        crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_async_hooks(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "AsyncLocalStorage" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "bind",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_local_storage_static_bind_method as *const u8,
+                "bind",
+                1,
+                1,
+            ),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "snapshot",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_local_storage_static_snapshot_method as *const u8,
+                "snapshot",
+                0,
+                0,
+            ),
+        );
+    }
+
+    if property_name == "AsyncResource" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "bind",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_resource_static_bind_method as *const u8,
+                "bind",
+                3,
+                3,
+            ),
+        );
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_events(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "EventEmitter" {
+        let async_resource_ctor =
+            bound_native_callable_export_value("events", "EventEmitterAsyncResource");
+        for method in [
+            "addAbortListener",
+            "once",
+            "on",
+            "getEventListeners",
+            "getMaxListeners",
+            "listenerCount",
+            "setMaxListeners",
+        ] {
+            let method_value = bound_native_callable_export_value("events", method);
+            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
+        }
+        crate::closure::closure_set_dynamic_prop(closure_addr, "EventEmitter", value);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "EventEmitterAsyncResource",
+            async_resource_ctor,
+        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "usingDomains",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "captureRejections",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "captureRejectionSymbol", {
+            let name = "nodejs.rejection";
+            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
+        });
+        crate::closure::closure_set_dynamic_prop(closure_addr, "errorMonitor", {
+            let name = "events.errorMonitor";
+            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
+        });
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "init",
+            bound_native_callable_export_value("events", "init"),
+        );
+    }
+    value
+}
+
+#[allow(unused_mut)]
+pub(crate) unsafe fn nm_attach_util(
+    property_name: &str,
+    mut value: f64,
+    closure_addr: usize,
+) -> f64 {
+    if property_name == "promisify" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "custom",
+            crate::util_promisify::promisify_custom_symbol(),
+        );
+    }
+    if property_name == "inspect" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "custom",
+            util_inspect_custom_symbol(),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "defaultOptions",
+            util_inspect_default_options_value(),
+        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "styles", util_inspect_styles());
+        crate::closure::closure_set_dynamic_prop(closure_addr, "colors", util_inspect_colors());
+    }
+    value
 }
