@@ -12584,9 +12584,14 @@ fn scalar_replaced_numeric_method_with_local_temps_inlines_without_dispatch_or_a
 fn scalar_method_local_temp_rejects_mutable_binding() {
     let module = scalar_method_numeric_local_temp_module("mutable", true);
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    // The scalar-method summary must reject the mutable temp (no inline —
+    // asserted on the artifact below). Representation-selection Phase 3b may
+    // still lower the call as a DIRECT dispatch to the resolved method on the
+    // shape-proven heap receiver; either dispatch form is a real method call.
     assert!(
-        ir.contains("call double @js_native_call_method"),
-        "mutable local temp must keep dynamic method dispatch fallback:\n{ir}"
+        ir.contains("call double @js_native_call_method")
+            || ir.contains("call double @perry_method_"),
+        "mutable local temp must dispatch to the real method (dynamic tower or direct):\n{ir}"
     );
     assert!(
         ir.contains("call i64 @js_object_alloc"),
@@ -13146,9 +13151,13 @@ fn scalar_method_int32_bitwise_rejects_unproven_or_unsigned_shapes() {
         ),
     ] {
         let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+        // Same Phase 3b caveat as the mutable-temp test: the scalar Int32
+        // summary must reject (artifact assert below), but the call may
+        // lower as a direct resolved-method dispatch on the heap receiver.
         assert!(
-            ir.contains("call double @js_native_call_method"),
-            "{case} must keep dynamic method dispatch fallback:\n{ir}"
+            ir.contains("call double @js_native_call_method")
+                || ir.contains("call double @perry_method_"),
+            "{case} must dispatch to the real method (dynamic tower or direct):\n{ir}"
         );
         assert!(
             ir.contains("call i64 @js_object_alloc"),
