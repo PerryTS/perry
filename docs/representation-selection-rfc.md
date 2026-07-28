@@ -252,18 +252,29 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
   What Phase 4b ships instead is the bookkeeping the existing boxed layout was paying
   needlessly:
   - **4b.1** — a class-field store on a `Ptr<Shape>`-proven receiver retires
-    `js_gc_note_slot_layout` when the slot's mask class is already fixed (the slot is
-    pointer-masked, or the value is a non-pointer by construction), and
-    `js_string_addref_if_heap_string` when the stored value provably cannot be a heap string.
-    Soundness rests on the `Ptr<Shape>` containment proof: the object's layout state is only
-    ever {intact typed descriptor} or {UNKNOWN}, in both of which the note is a no-op. The
-    generational write barrier is untouched. The addref elision is keyed on the **value
-    expression, never the declared field type** — Perry does not validate declared types at
-    runtime, so a `boolean`-declared field can legitimately receive a string through an `any`,
-    and a wrong elision there silently corrupts an aliased string on the next in-place append.
-    Scope note: the guarded (non-`Ptr<Shape>`) class-field store keeps both calls, because its
-    receiver can be a runtime-constructed object that never had a descriptor installed — there
-    the note is the only thing that sets the pointer-mask bit the GC scan reads.
+    `js_gc_note_slot_layout` when the value is a **non-pointer by construction**, and
+    `js_string_addref_if_heap_string` when the value provably **cannot be a heap string** (the
+    strictly weaker condition, which is why the two are gated independently — an object or
+    array literal retires the addref but keeps the note). The generational write barrier is
+    untouched. The note elision is sound in every layout state the receiver can be in:
+    `UNKNOWN` and `POINTER_FREE` short-circuit inside the note; an intact descriptor falls
+    through the `pointer_mask` arm untouched; and under `SIDE_MASK` the note would only ever
+    *clear* the slot's bit, so skipping it leaves a stale set bit over a non-pointer, which
+    costs one extra visit and nothing else — `mark_field_into_worklist` re-validates every slot
+    word, and the evacuation rewrite path routes through the same function.
+    The addref elision is keyed on the **value expression, never the declared field type**:
+    Perry does not validate declared types at runtime, so a `boolean`-declared field can
+    legitimately receive a string through an `any`, and a wrong elision there silently corrupts
+    an aliased string on the next in-place append.
+
+    Two scope notes. **A pointer-valued store into a pointer-masked slot is deliberately not
+    elided**, even though it is a no-op under an intact descriptor: `lower_new_impl` has an exit
+    (the `force_ctor_call` branch where `call_local_constructor_symbol` yields `None`) that
+    returns a freshly allocated instance *without* emitting `js_gc_init_typed_shape_layout`, and
+    such an object sits at `POINTER_FREE` where the note is the only thing that ever sets the
+    pointer-mask bit the collector reads. Closing that exit is the prerequisite for the stronger
+    elision. Likewise the **guarded (non-`Ptr<Shape>`) class-field store keeps both calls** — its
+    receiver can be a runtime-constructed object that never had a descriptor installed.
   - **4b.2** — `runtime_store_jsvalue_slot` canonicalizes an INT32-boxed numeric store into a
     raw-f64-masked slot (the object twin of `canonicalize_array_numeric_store_bits`), instead
     of letting one FFI/native-supplied integer evict that object's typed descriptor

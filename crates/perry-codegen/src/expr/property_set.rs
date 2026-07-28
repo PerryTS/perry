@@ -604,45 +604,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // what licenses the layout-note elision. Three
                                 // facts close it:
                                 //
-                                // 1. The object HAS a typed-shape descriptor
-                                //    installed at construction. Reaching this
-                                //    arm already required a `class_keys_globals`
-                                //    entry for the class (above), and
-                                //    `emit_typed_shape_layout_init` keys its
-                                //    early-out on that same map — so the
-                                //    `new <class>()` that Ptr<Shape> provenance
-                                //    demands, in this very function under this
-                                //    same `ctx`, necessarily emitted the init.
-                                // 2. Nothing can move the object to a state
-                                //    where the note would matter. Containment
-                                //    forbids aliasing, escape to a callee,
-                                //    dynamic keyed writes, `delete`,
-                                //    freeze/seal and `defineProperty`
-                                //    (`collectors/ptr_shape.rs`), so the layout
-                                //    state is only ever {intact descriptor} or
-                                //    {UNKNOWN} — the one-way downgrade every
-                                //    eviction path lands on, including a failed
-                                //    install. It can never be the
-                                //    POINTER_FREE/SIDE_MASK-without-descriptor
-                                //    state in which the note is the only thing
-                                //    that sets the GC's pointer-mask bit.
-                                // 3. `layout_note_slot` is a no-op in UNKNOWN,
-                                //    and a no-op under an intact descriptor for
-                                //    a pointer-masked slot. `requires_raw_f64`
-                                //    is false on this arm, so the raw-f64-mask
-                                //    arm — the one that *must* downgrade — is
-                                //    unreachable from here.
+                                // Both are decided from the VALUE expression,
+                                // and gated independently because they are dead
+                                // under different conditions: the note needs
+                                // "not a pointer", the addref only "not a heap
+                                // string". Neither is keyed on the declared
+                                // field type — Perry does not enforce declared
+                                // types at runtime, so a `boolean` field can
+                                // legitimately receive a string through an
+                                // `any`, and a wrong addref elision there
+                                // silently corrupts it on the next in-place
+                                // append.
                                 //
-                                // The addref is gated separately and strictly
-                                // on the value expression — never on the
-                                // declared field type, which Perry does not
-                                // enforce at runtime.
-                                let layout_note_needed = class_field_store_needs_layout_note(
-                                    ctx,
-                                    &class_name,
-                                    field_index,
-                                    value,
-                                );
+                                // `requires_raw_f64` is false on this arm, so
+                                // the raw-f64-mask arm of `layout_note_slot` —
+                                // the one that *must* downgrade — is
+                                // unreachable from here. The full per-layout-
+                                // state argument, including why a pointer store
+                                // into a pointer-masked slot is deliberately
+                                // NOT elided, is on
+                                // `class_field_store_needs_layout_note`.
+                                let layout_note_needed =
+                                    class_field_store_needs_layout_note(ctx, value);
                                 let string_addref_needed =
                                     class_field_store_needs_string_addref(ctx, value);
                                 let blk = ctx.block();
