@@ -206,7 +206,16 @@ export function checkDockerPrebake(
   if (shimList && shimList.join(' ') !== SFW_ECOSYSTEMS.join(' ')) {
     out.push(`docker prebake: shim list [${shimList.join(' ')}] != SFW_ECOSYSTEMS [${SFW_ECOSYSTEMS.join(' ')}]`)
   }
-  if (rustVersion && !dockerBody.includes(`toolchain install ${rustVersion}`)) {
+  // Parse the install line's full argument list rather than substring-
+  // matching: `rustup toolchain install 1.91.0 1.93.0` must satisfy an
+  // msrv of 1.93 even though "toolchain install 1.93" never appears.
+  const installedToolchains = [...dockerBody.matchAll(/toolchain install ([^\\\n]+)/g)]
+    .flatMap(m => m[1]!.trim().split(/\s+/))
+    .filter(a => /^\d/.test(a))
+  if (
+    rustVersion &&
+    !installedToolchains.some(t => t === rustVersion || t.startsWith(`${rustVersion}.`))
+  ) {
     out.push(`docker prebake: image does not pre-install the ${rustVersion} msrv toolchain`)
   }
   const sfw = tools['sfw-free']
