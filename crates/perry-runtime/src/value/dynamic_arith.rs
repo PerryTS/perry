@@ -956,4 +956,102 @@ mod tests {
             assert_eq!(js_dynamic_string_or_number_add(int32(2), int32(3)), 5.0);
         }
     }
+
+    // The #6655 rooting fix put a `RuntimeHandleScope` on every dynamic binary
+    // operator, so each one also grew the plain-double fast path that skips the
+    // scope (same predicate `js_number_coerce` already short-circuits on).
+    // Feed each operator the SAME numbers twice — once as plain doubles (fast
+    // path) and once int32-tagged (rooted slow path, since a tagged operand
+    // fails `is_plain_double`) — and require both to agree.
+    #[test]
+    fn plain_double_fast_path_agrees_with_rooted_slow_path() {
+        unsafe {
+            let cases: &[(i32, i32)] = &[
+                (12, 3),
+                (13, 5),
+                (1024, 3),
+                (-16, 1),
+                (0, 7),
+                (-7, 2),
+                (255, 16),
+            ];
+            for &(x, y) in cases {
+                let (xf, yf) = (x as f64, y as f64);
+                assert_eq!(
+                    js_dynamic_mul(xf, yf),
+                    js_dynamic_mul(int32(x), int32(y)),
+                    "mul {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_sub(xf, yf),
+                    js_dynamic_sub(int32(x), int32(y)),
+                    "sub {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_div(xf, yf),
+                    js_dynamic_div(int32(x), int32(y)),
+                    "div {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_pow(xf, yf),
+                    js_dynamic_pow(int32(x), int32(y)),
+                    "pow {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_shr(xf, yf),
+                    js_dynamic_shr(int32(x), int32(y)),
+                    "shr {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_shl(xf, yf),
+                    js_dynamic_shl(int32(x), int32(y)),
+                    "shl {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_bitand(xf, yf),
+                    js_dynamic_bitand(int32(x), int32(y)),
+                    "bitand {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_bitor(xf, yf),
+                    js_dynamic_bitor(int32(x), int32(y)),
+                    "bitor {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_bitxor(xf, yf),
+                    js_dynamic_bitxor(int32(x), int32(y)),
+                    "bitxor {x} {y}"
+                );
+                assert_eq!(
+                    js_dynamic_ushr(xf, yf),
+                    js_dynamic_ushr(int32(x), int32(y)),
+                    "ushr {x} {y}"
+                );
+                // `%` needs a NaN-aware compare: `js_dynamic_mod(0, 7)` and its
+                // int32 twin are both `0`, but a NaN case must match as NaN.
+                let (m_fast, m_slow) = (js_dynamic_mod(xf, yf), js_dynamic_mod(int32(x), int32(y)));
+                assert!(
+                    m_fast == m_slow || (m_fast.is_nan() && m_slow.is_nan()),
+                    "mod {x} {y}: {m_fast} vs {m_slow}"
+                );
+            }
+        }
+    }
+
+    // Non-finite operands must stay on the fast path and keep IEEE semantics
+    // (canonical NaN is 0x7FF8, below the 0x7FF9 tag band floor).
+    #[test]
+    fn plain_double_fast_path_handles_non_finite() {
+        unsafe {
+            assert!(js_dynamic_mul(f64::NAN, 2.0).is_nan());
+            assert!(js_dynamic_div(0.0, 0.0).is_nan());
+            assert_eq!(js_dynamic_div(1.0, 0.0), f64::INFINITY);
+            assert_eq!(js_dynamic_mul(f64::INFINITY, 2.0), f64::INFINITY);
+            // ToInt32/ToUint32 map non-finite to 0.
+            assert_eq!(js_dynamic_bitor(f64::NAN, 5.0), 5.0);
+            assert_eq!(js_dynamic_shl(f64::INFINITY, 1.0), 0.0);
+            // `%` keeps the sign of the dividend: -1 % -1 is -0.
+            assert!(js_dynamic_mod(-1.0, -1.0).is_sign_negative());
+        }
+    }
 }
