@@ -610,9 +610,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     field_set_barrier_needed,
                                 );
                             }
+                            let (semantic, rep) = if requires_raw_f64 {
+                                (SemanticKind::JsNumber, NativeRep::F64)
+                            } else {
+                                (SemanticKind::JsValue, NativeRep::JsValue)
+                            };
                             let stored = LoweredValue {
-                                semantic: SemanticKind::JsValue,
-                                rep: NativeRep::JsValue,
+                                semantic,
+                                rep,
                                 llvm_ty: DOUBLE,
                                 value: val_double.clone(),
                             };
@@ -629,7 +634,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 None,
                                 None,
                                 None,
-                                Vec::new(),
+                                if requires_raw_f64 {
+                                    vec![raw_f64_layout_fact(
+                                        None,
+                                        "consumed",
+                                        "ptr_shape_static_proof",
+                                        None,
+                                    )]
+                                } else {
+                                    Vec::new()
+                                },
                                 Vec::new(),
                                 false,
                                 false,

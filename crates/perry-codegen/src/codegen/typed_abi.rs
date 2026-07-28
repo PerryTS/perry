@@ -229,6 +229,9 @@ pub(crate) enum TypedCloneRejectionReason {
     ReceiverClassHasAccessor,
     ReceiverClassHasComputedMember,
     ReceiverClassHasComputedField,
+    /// A subclass re-declares a parent chain field name: the flattened slot
+    /// layout would be ambiguous (Phase 3b chain widening).
+    ReceiverFieldShadowed,
     ReceiverFieldNotOwn,
     ReceiverFieldNotF64,
     ThisEscape,
@@ -276,6 +279,7 @@ impl TypedCloneRejectionReason {
             Self::ReceiverClassHasAccessor => "receiver_class_has_accessor",
             Self::ReceiverClassHasComputedMember => "receiver_class_has_computed_member",
             Self::ReceiverClassHasComputedField => "receiver_class_has_computed_field",
+            Self::ReceiverFieldShadowed => "receiver_field_shadowed",
             Self::ReceiverFieldNotOwn => "receiver_field_not_own",
             Self::ReceiverFieldNotF64 => "receiver_field_not_f64",
             Self::ThisEscape => "this_escape",
@@ -947,7 +951,7 @@ fn typed_receiver_chain_fields<'a>(
     for link in chain.iter().rev() {
         for field in &link.fields {
             if !names.insert(field.name.as_str()) {
-                return Err(TypedCloneRejectionReason::ReceiverClassHasComputedField);
+                return Err(TypedCloneRejectionReason::ReceiverFieldShadowed);
             }
             fields.push((index, field));
             index += 1;

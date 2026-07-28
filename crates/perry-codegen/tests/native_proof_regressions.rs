@@ -12660,10 +12660,26 @@ fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_pr
     ] {
         let module = scalar_method_boolean_negative_module(case);
         let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
-        assert!(
-            ir.contains("call double @js_native_call_method"),
-            "{case} must keep dynamic method dispatch fallback:\n{ir}"
-        );
+        if case == "mutation" {
+            // Representation-selection Phase 3b: a method that WRITES a
+            // declared `this` field is (correctly) rejected by the
+            // scalar-method summary — this test's original point — but is
+            // legal for a shape-proven Ptr<Shape> receiver, so the call now
+            // lowers to a DIRECT dispatch to the resolved method on the
+            // still-heap-allocated receiver (no dynamic tower, no shape
+            // guard). The receiver must stay heap-allocated either way.
+            assert!(
+                ir.contains(
+                    "call double @perry_method_scalar_method_boolean_reject_mutation_ts__Point__isAbove"
+                ),
+                "mutation must dispatch directly to the resolved method on the heap receiver:\n{ir}"
+            );
+        } else {
+            assert!(
+                ir.contains("call double @js_native_call_method"),
+                "{case} must keep dynamic method dispatch fallback:\n{ir}"
+            );
+        }
         assert!(
             ir.contains("call i64 @js_object_alloc"),
             "{case} must keep heap allocation fallback for the receiver:\n{ir}"

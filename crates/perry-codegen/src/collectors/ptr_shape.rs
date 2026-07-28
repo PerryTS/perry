@@ -278,6 +278,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             visited: HashSet::new(),
             store_records: Vec::new(),
             super_call_args: HashMap::new(),
+            internally_invoked: HashSet::new(),
         };
         if !analysis.ctor_chain_safe() {
             continue;
@@ -303,6 +304,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         }
         let store_records = std::mem::take(&mut analysis.store_records);
         let super_call_args = std::mem::take(&mut analysis.super_call_args);
+        let internally_invoked = std::mem::take(&mut analysis.internally_invoked);
         let members: HashSet<u32> = roots
             .iter()
             .filter(|(_, r)| *r == id)
@@ -316,6 +318,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             new_args.get(id).copied().unwrap_or(&[]),
             called,
             &super_call_args,
+            &internally_invoked,
             not_bigint_locals,
             &const_local_inits,
         );
@@ -897,6 +900,13 @@ struct ThisFlowAnalysis<'a, 'b> {
     /// the PARENT (callee) class name. Feeds the parent-ctor parameter
     /// resolution of the numeric-field proof.
     super_call_args: HashMap<String, Vec<&'a [Expr]>>,
+    /// Method names invoked INTERNALLY — `this.m(...)` from a constructor or
+    /// another method, and `super.m(...)`. Their argument expressions live in
+    /// the CALLING method's scope, which the numeric-field proof's
+    /// `ParamEnv::Sites` (function-scope call-site args) cannot resolve —
+    /// so parameters of internally-invoked methods must stay unproven even
+    /// when every EXTERNAL call site passes numeric arguments.
+    internally_invoked: HashSet<String>,
 }
 
 impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
@@ -1123,6 +1133,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 let Some((owner, func)) = self.methods.get(property).cloned() else {
                     return false;
                 };
+                self.internally_invoked.insert(property.clone());
                 if !self.function_this_safe(&owner, property, func) {
                     return false;
                 }
@@ -1152,6 +1163,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 let Some((owner, func)) = self.methods.get(method).cloned() else {
                     return false;
                 };
+                self.internally_invoked.insert(method.clone());
                 if !self.function_this_safe(&owner, method, func) {
                     return false;
                 }
@@ -1351,6 +1363,7 @@ fn prove_numeric_fields(
     new_args: &[Expr],
     method_calls: Option<&HashMap<String, Vec<&[Expr]>>>,
     super_call_args: &HashMap<String, Vec<&[Expr]>>,
+    internally_invoked: &HashSet<String>,
     not_bigint_locals: &HashSet<u32>,
     const_local_inits: &HashMap<u32, Option<&Expr>>,
 ) -> HashSet<String> {
@@ -1458,13 +1471,24 @@ fn prove_numeric_fields(
                             },
                         }
                     } else {
-                        let sites: Vec<&[Expr]> = method_calls
-                            .and_then(|mc| mc.get(name))
-                            .map(|v| v.clone())
-                            .unwrap_or_default();
-                        // A method reached transitively (via this.m()) has no
-                        // recorded external call sites; param-mediated stores
-                        // there are unproven (empty site list).
+                        // A method that is ALSO invoked internally
+                        // (`this.m(...)` / `super.m(...)`) receives argument
+                        // expressions from method scope that the
+                        // function-scope site resolution below cannot see —
+                        // its parameters stay unproven even when every
+                        // external site is numeric (an internal
+                        // `this.m("s")` would otherwise poison a
+                        // "proven" field). Purely-external methods resolve
+                        // through their recorded call sites; purely-internal
+                        // ones have no sites and stay unproven either way.
+                        let sites: Vec<&[Expr]> = if internally_invoked.contains(name.as_str()) {
+                            Vec::new()
+                        } else {
+                            method_calls
+                                .and_then(|mc| mc.get(name))
+                                .map(|v| v.clone())
+                                .unwrap_or_default()
+                        };
                         ParamEnv::Sites {
                             param_ids: param_ids.as_slice(),
                             sites,

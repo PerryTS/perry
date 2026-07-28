@@ -186,3 +186,31 @@ function chainRun(n: number): string {
   return acc + ":" + s.offset + ":" + s.factor + ":" + s.apply(2);
 }
 console.log(chainRun(1000));
+
+// 11. Internal `this.m(...)` argument sites: `set` is called externally with
+//     a number AND internally (via poke) with a string smuggled through an
+//     `any` param. The callee's params must stay numeric-unproven, so reads
+//     after the internal call observe the string exactly.
+class Cnt {
+  total: number;
+  constructor() {
+    this.total = 0;
+  }
+  set(v: number): void {
+    this.total = v;
+  }
+  poke(x: any): void {
+    this.set(x);
+  }
+}
+function internalPoison(): string {
+  const c = new Cnt();
+  c.set(5);
+  let acc = 0;
+  for (let i = 0; i < 8; i++) acc += c.total;
+  c.poke("12" as any); // numeric STRING: ToNumber("12")=12, raw bits != 12
+  const t = Math.trunc(c.total as any); // spec ToNumber("12") -> 12
+  const after = c.total;
+  return acc + ":" + t + ":" + after + ":" + typeof after;
+}
+console.log(internalPoison());
