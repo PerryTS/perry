@@ -191,15 +191,35 @@ test('download sends the GitHub token to github.com only', async t => {
   assert.equal(seen[1]!.auth, undefined)
 })
 
+test('download keeps auth across a 5xx retry, drops it only on 401/403/404', async t => {
+  const payload = Buffer.from('private-bytes')
+  const seen: Array<string | undefined> = []
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (_url: string | URL, init?: RequestInit) => {
+    seen.push((init?.headers as Record<string, string> | undefined)?.authorization)
+    calls += 1
+    // First attempt: transient 500. Retry must still carry the token, or a
+    // private asset would 404 and never recover.
+    return calls === 1 ? new Response('boom', { status: 500 }) : new Response(payload)
+  })
+  await withEnv('GITHUB_TOKEN', 'ghs_test_token', async () => {
+    const got = await download('https://github.com/o/r/releases/download/v1/a', sriOf(payload))
+    assert.deepEqual(got, payload)
+  })
+  assert.equal(seen.length, 2)
+  assert.ok(seen[0], 'first attempt is authed')
+  assert.ok(seen[1], 'the 5xx retry stays authed')
+})
+
 test('download falls back to unauthenticated when the authed fetch fails', async t => {
   const payload = Buffer.from('public-bytes')
   const seen: Array<string | undefined> = []
   t.mock.method(globalThis, 'fetch', async (_url: string | URL, init?: RequestInit) => {
     const auth = (init?.headers as Record<string, string> | undefined)?.authorization
     seen.push(auth)
-    // Authed fetch is rejected (as a public cross-repo asset endpoint
-    // can); the unauthenticated retry succeeds.
-    return auth ? new Response('nope', { status: 500 }) : new Response(payload)
+    // Authed fetch is rejected 404 (as a public cross-repo asset endpoint
+    // can when handed an Actions token); the unauthenticated retry wins.
+    return auth ? new Response('nope', { status: 404 }) : new Response(payload)
   })
   await withEnv('GITHUB_TOKEN', 'ghs_test_token', async () => {
     const got = await download('https://github.com/o/r/releases/download/v1/a', sriOf(payload))

@@ -522,8 +522,14 @@ export function fixWorkspaceYaml(body: string): string {
     // Prune only WELL-FORMED cleared annotations (same rule as
     // staleExcludes): a wrong-arithmetic removable already in the past
     // must surface as a check failure, not vanish silently.
+    // VERSION_PIN_RE too: the prune set must EQUAL the warn set
+    // (staleExcludes). Without it a bare-name / `@scope/*` standing-trust
+    // entry that merely sits under an expired annotation line was deleted
+    // by --fix — silently re-arming the soak for a whole scope, in a bot
+    // commit whose review story is "only annotation lines are touched".
     if (
       entry.annotation &&
+      VERSION_PIN_RE.test(entry.name) &&
       isValidIsoDate(entry.annotation.published) &&
       entry.annotation.removable === addDaysIso(entry.annotation.published, SOAK_DAYS) &&
       entry.annotation.removable < today

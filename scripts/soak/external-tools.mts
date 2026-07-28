@@ -279,16 +279,22 @@ export async function download(url: string, expectedSri: string): Promise<Buffer
       signal: AbortSignal.timeout(120_000),
     })
   let res = await attempt(Boolean(token))
-  // A token that a PUBLIC cross-repo asset endpoint rejects (or a
-  // transient GitHub 5xx — observed: a 500 on the first authed fetch of a
-  // public sfw asset) must not fail the install outright: retry once
-  // WITHOUT auth before giving up. Public assets need no credential.
-  if (!res.ok && token) {
+  // Retry semantics, split by what the status actually means:
+  //   401/403/404 with a token — the credential is the problem (a PUBLIC
+  //     cross-repo asset endpoint rejecting an Actions token). Retry
+  //     WITHOUT it; public assets need none.
+  //   >=500 — transient. Retry with the SAME auth: dropping it here made a
+  //     private asset (sfw-enterprise) 404 on the retry, reporting a bogus
+  //     "download failed 404" and guaranteeing the retry could never
+  //     succeed.
+  // The URL is fixed and the SRI is verified below either way, so no retry
+  // can substitute a different artifact.
+  if (!res.ok && token && [401, 403, 404].includes(res.status)) {
     res = await attempt(false)
   }
   if (!res.ok && res.status >= 500) {
     await new Promise(r => setTimeout(r, 2_000))
-    res = await attempt(false)
+    res = await attempt(Boolean(token))
   }
   if (!res.ok) {
     throw new Error(`download failed ${res.status} ${url}`)
