@@ -1588,7 +1588,7 @@ pub(crate) unsafe fn nm_attach_module(
 pub(crate) unsafe fn nm_attach_tty(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
     if matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
@@ -1600,7 +1600,7 @@ pub(crate) unsafe fn nm_attach_tty(
 pub(crate) unsafe fn nm_attach_tls(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
     if property_name == "SecureContext" {
         attach_tls_secure_context_prototype(value);
@@ -1612,7 +1612,7 @@ pub(crate) unsafe fn nm_attach_tls(
 pub(crate) unsafe fn nm_attach_wasi(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
     if property_name == "WASI" {
         crate::wasi::attach_wasi_constructor_prototype(value);
@@ -1624,7 +1624,7 @@ pub(crate) unsafe fn nm_attach_wasi(
 pub(crate) unsafe fn nm_attach_stream(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
     if property_name == "Stream" {
         attach_stream_legacy_prototype(value);
@@ -1654,7 +1654,7 @@ pub(crate) unsafe fn nm_attach_stream(
 pub(crate) unsafe fn nm_attach_sqlite(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
     if property_name == "DatabaseSync" {
         attach_sqlite_database_sync_prototype(value);
@@ -1669,7 +1669,7 @@ pub(crate) unsafe fn nm_attach_sqlite(
 pub(crate) unsafe fn nm_attach_assert(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
     if property_name == "Assert" {
         attach_assert_prototype(value);
