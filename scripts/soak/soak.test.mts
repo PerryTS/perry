@@ -20,6 +20,7 @@ import {
   main,
   parseDependabotBlocks,
   parseExcludeEntries,
+  staleExcludes,
 } from './soak.mts'
 
 // A pin published yesterday is inside its window; one published long ago
@@ -75,11 +76,18 @@ test('excludes: unannotated version pin is a finding, bare/glob are not', () => 
   assert.match(findings[0]!.what, /lodash@4\.17\.21/)
 })
 
-test('excludes: wrong removable date and expiry are findings', () => {
+test('excludes: wrong removable date is a finding; expiry is a warning, not a finding', () => {
   const wrong = `minimumReleaseAgeExclude:\n  # published: ${FRESH_PUB} | removable: ${addDaysIso(FRESH_PUB, 3)}\n  - 'a@1.0.0'\n`
   assert.match(checkExcludeAnnotations(wrong, 'y')[0]!.what, /removable date/)
+  // Expired-but-valid is STALE, not unsafe: check exits clean, the stale
+  // list reports it, and --fix / the soak-autofix workflow prunes it.
   const expired = `minimumReleaseAgeExclude:\n  # published: 2020-01-01 | removable: 2020-01-08\n  - 'b@1.0.0'\n`
-  assert.match(checkExcludeAnnotations(expired, 'y')[0]!.what, /expired/)
+  assert.deepEqual(checkExcludeAnnotations(expired, 'y'), [])
+  assert.deepEqual(staleExcludes(expired), ['b@1.0.0'])
+  // Fresh and malformed entries are never "stale".
+  assert.deepEqual(staleExcludes(CLEAN_YAML), [])
+  const malformed = `minimumReleaseAgeExclude:\n  # published: 2026-13-45 | removable: 2026-13-52\n  - 'c@1.0.0'\n`
+  assert.deepEqual(staleExcludes(malformed), [])
 })
 
 test('excludes: impossible calendar dates are findings, not crashes', () => {

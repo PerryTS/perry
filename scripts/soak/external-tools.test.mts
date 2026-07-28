@@ -16,6 +16,7 @@ import {
   installTool,
   main,
   pruneExpiredSoakBypasses,
+  staleBypasses,
 } from './external-tools.mts'
 import { DOCKER_PREBAKE, EXTERNAL_TOOLS_JSON, REPO_ROOT, SURFACES } from './paths.mts'
 
@@ -33,7 +34,7 @@ test('checkPins flags missing pins, bad SRIs, and asset entries with no integrit
   assert.equal(checkPins({ a: { version: '1.0.0', release: 'asset' } }).length, 1)
 })
 
-test('checkPins validates soakBypass dates, arithmetic, and expiry', () => {
+test('checkPins validates soakBypass dates and arithmetic; expiry is a warning, not a failure', () => {
   const pub = addDaysIso(todayIso(), -1)
   const good = {
     a: {
@@ -43,15 +44,20 @@ test('checkPins validates soakBypass dates, arithmetic, and expiry', () => {
     },
   }
   assert.deepEqual(checkPins(good), [])
+  assert.deepEqual(staleBypasses(good), [])
   const wrongMath = structuredClone(good)
   wrongMath.a.soakBypass.removable = addDaysIso(pub, 3)
   assert.match(checkPins(wrongMath)[0]!, /removable/)
+  // Expired-but-valid is STALE, not unsafe: checkPins exits clean, the
+  // stale list reports it, and --fix / soak-autofix prunes it.
   const expired = structuredClone(good)
   expired.a.soakBypass = { version: '1.0.0', published: '2020-01-01', removable: '2020-01-08' }
-  assert.match(checkPins(expired)[0]!, /expired/)
+  assert.deepEqual(checkPins(expired), [])
+  assert.deepEqual(staleBypasses(expired), ['a'])
   const impossible = structuredClone(good)
   impossible.a.soakBypass = { version: '1.0.0', published: '2026-13-45', removable: '2026-13-52' }
   assert.match(checkPins(impossible)[0]!, /calendar/)
+  assert.deepEqual(staleBypasses(impossible), [])
 })
 
 test('pruneExpiredSoakBypasses prunes only valid, expired annotations', () => {

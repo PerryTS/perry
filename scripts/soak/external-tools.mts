@@ -116,12 +116,34 @@ export function checkPins(tools: Record<string, ToolPin>): string[] {
       if (removable !== expected) {
         out.push(`${name}: soakBypass removable ${removable}, wanted ${expected} (published + ${SOAK_DAYS}d)`)
       }
-      // A bypass whose window has passed is dead weight: the version has
-      // soaked, so the annotation must come off (same rule the workspace
-      // yaml excludes live under).
-      if (removable < todayIso()) {
-        out.push(`${name}: soakBypass expired (removable ${removable}) — the pin has soaked, remove the annotation`)
-      }
+    }
+  }
+  return out
+}
+
+/**
+ * Expired soakBypass annotations are STALE, not unsafe: the version has
+ * soaked, the bypass no longer bypasses anything, and the pin stays
+ * SRI-verified. They are reported as WARNINGS (exit 0), never failures —
+ * a date boundary must not redden CI overnight with zero code change.
+ * The soak-autofix workflow prunes them daily via --fix, so the ledger
+ * still converges to clean. Missing/malformed/wrong-arithmetic
+ * annotations stay hard checkPins failures: those are unauditable,
+ * which IS unsafe.
+ */
+export function staleBypasses(tools: Record<string, ToolPin>): string[] {
+  const out: string[] = []
+  const today = todayIso()
+  for (const [name, pin] of Object.entries(tools)) {
+    const bypass = pin.soakBypass
+    if (!bypass) {
+      continue
+    }
+    if (!isValidIsoDate(bypass.published) || !isValidIsoDate(bypass.removable)) {
+      continue
+    }
+    if (bypass.removable < today) {
+      out.push(name)
     }
   }
   return out
@@ -130,9 +152,9 @@ export function checkPins(tools: Record<string, ToolPin>): string[] {
 /**
  * Prune expired soakBypass annotations in place and return the pruned tool
  * names. Once `removable` is in the past the version has soaked and the
- * annotation is dead weight — checkPins turns it into a red gate. Only
- * valid, expired dates are pruned; malformed annotations stay findings for
- * a human (never silently rewritten).
+ * annotation is dead weight — staleBypasses warns about it until this
+ * prunes it. Only valid, expired dates are pruned; malformed annotations
+ * stay findings for a human (never silently rewritten).
  */
 export function pruneExpiredSoakBypasses(doc: {
   tools: Record<string, ToolPin>
@@ -565,6 +587,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     for (const p of problems) {
       console.error(`[external-tools] ${p}`)
+    }
+    for (const name of staleBypasses(tools)) {
+      console.warn(
+        `[external-tools] warn: ${name} soakBypass has cleared — stale annotation, pruned by --fix / the soak-autofix workflow`,
+      )
     }
     if (problems.length === 0) {
       console.log(`[external-tools] ${Object.keys(tools).length} pins valid`)

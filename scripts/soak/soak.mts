@@ -105,13 +105,13 @@ export function checkWorkspaceYaml(body: string, file: string): Finding[] {
 /**
  * Every version-pinned `minimumReleaseAgeExclude` entry must carry, on the
  * line directly above, `# published: YYYY-MM-DD | removable: YYYY-MM-DD`
- * with `removable = published + SOAK_DAYS`, and must be pruned once
- * `removable` is strictly in the past. Bare names and `@scope/*` globs are
- * standing trust, not dated bypasses — no annotation required.
+ * with `removable = published + SOAK_DAYS`. Bare names and `@scope/*`
+ * globs are standing trust, not dated bypasses — no annotation required.
+ * EXPIRED entries are not findings (see staleExcludes): stale is not
+ * unsafe, and a date boundary must not redden CI with zero code change.
  */
 export function checkExcludeAnnotations(body: string, file: string): Finding[] {
   const out: Finding[] = []
-  const today = todayIso()
   // Flow style would be invisible to the block parser below — an
   // unvalidated, never-expiring bypass. One canonical shape only.
   if (/^minimumReleaseAgeExclude:\s*\[/m.test(body)) {
@@ -159,17 +159,30 @@ export function checkExcludeAnnotations(body: string, file: string): Finding[] {
         fix: 'correct the removable date',
       })
     }
-    if (removable < today) {
-      out.push({
-        file,
-        what: `soak exclude '${entry.name}' expired`,
-        saw: `removable ${removable} < today ${today}`,
-        wanted: 'entry pruned once its window has passed',
-        fix: 'delete the pin + its annotation (or run --fix)',
-      })
-    }
   }
   return out
+}
+
+/**
+ * Version-pinned excludes whose window has cleared. Stale, not unsafe —
+ * the soak would admit the version anyway — so main() WARNS about these
+ * (exit 0) instead of failing; `--fix` (and the daily soak-autofix
+ * workflow) prunes them together with their annotation lines. Only valid,
+ * correctly-annotated entries qualify: anything malformed stays a
+ * checkExcludeAnnotations failure.
+ */
+export function staleExcludes(body: string): string[] {
+  const today = todayIso()
+  return parseExcludeEntries(body)
+    .filter(
+      e =>
+        VERSION_PIN_RE.test(e.name) &&
+        e.annotation &&
+        isValidIsoDate(e.annotation.published) &&
+        isValidIsoDate(e.annotation.removable) &&
+        e.annotation.removable < today,
+    )
+    .map(e => e.name)
 }
 
 interface ExcludeEntry {
@@ -493,6 +506,13 @@ export function main(argv: string[] = process.argv.slice(2)): number {
   // Catalog <-> package.json lockstep for the package next to the yaml.
   const yamlAbs = path.join(REPO_ROOT, SURFACES.workspaceYaml)
   const pkgAbs = path.join(path.dirname(yamlAbs), 'package.json')
+  if (existsSync(yamlAbs)) {
+    for (const name of staleExcludes(readFileSync(yamlAbs, 'utf8'))) {
+      console.warn(
+        `[soak] warn: exclude '${name}' has soaked — stale pin, pruned by --fix / the soak-autofix workflow`,
+      )
+    }
+  }
   if (existsSync(yamlAbs) && existsSync(pkgAbs)) {
     findings.push(
       ...checkCatalogParity(
