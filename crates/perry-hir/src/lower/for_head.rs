@@ -7,8 +7,8 @@
 //! the for-of / for-in desugars in `stmt_loops.rs` and
 //! `lower_decl/body_stmt.rs`.
 
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use super::*;

@@ -68,7 +68,7 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub class_ids: &'a HashMap<String, u32>,
     pub enum_table: &'a HashMap<(String, String), perry_hir::EnumValue>,
     pub module_globals: &'a HashMap<u32, String>,
-    pub module_global_types: &'a HashMap<u32, perry_types::Type>,
+    pub module_global_types: &'a HashMap<u32, perry_hir::types::Type>,
     pub static_field_globals: &'a HashMap<(String, String), String>,
     pub method_names: &'a HashMap<(String, String), String>,
     pub func_names: &'a HashMap<u32, String>,
@@ -77,19 +77,19 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub module_boxed_vars: &'a std::collections::HashSet<u32>,
     /// Typed-ABI capture-representation oracle: module-wide `Stmt::Let` types
     /// MINUS boxed ids (#5869). Only the typed closure clones read this.
-    pub module_local_types: &'a HashMap<u32, perry_types::Type>,
+    pub module_local_types: &'a HashMap<u32, perry_hir::types::Type>,
     /// #6369: receiver-type oracle for closure bodies — the same module-wide
     /// `Stmt::Let` types with no representation filtering, mirroring the
     /// `module_global_types` seed that `compile_function` / `compile_method`
     /// already use. Feeds `FnCtx.local_types` only.
-    pub module_receiver_types: &'a HashMap<u32, perry_types::Type>,
+    pub module_receiver_types: &'a HashMap<u32, perry_hir::types::Type>,
     pub closure_rest_params: &'a HashMap<u32, usize>,
     pub closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub closure_rest_and_arguments: &'a std::collections::HashSet<u32>,
     pub closure_arities: &'a HashMap<u32, u32>,
     pub closure_lengths: &'a HashMap<u32, u32>,
     pub closure_arrow_functions: &'a std::collections::HashSet<u32>,
-    pub closures: &'a [(perry_types::FuncId, perry_hir::Expr)],
+    pub closures: &'a [(perry_hir::types::FuncId, perry_hir::Expr)],
     pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>, Vec<u64>)],
     pub imported_class_stubs: &'a [perry_hir::Class],
     pub cross_module: &'a CrossModuleCtx,
@@ -415,8 +415,50 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module
                     .typed_f64_receiver_methods
                     .contains_key(&(class.name.clone(), method.name.clone())),
+                None,
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
+            // Representation-selection Phase 5a: the additive `internal`
+            // proven-`this` clone. Same HIR, same ABI, same shadow-bound
+            // tagged-at-rest receiver slot — only `this.field` lowering
+            // differs (bare fixed-offset access instead of the per-access
+            // guard diamond). Reached ONLY from the two call sites that
+            // already prove the receiver's exact shape; never registered into
+            // a runtime vtable.
+            if let Some(fact) = cross_module
+                .pshape_methods
+                .get(&(class.name.clone(), method.name.clone()))
+            {
+                compile_method(
+                    llmod,
+                    class,
+                    method,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    module_global_types,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                    None,
+                    false,
+                    Some(fact.clone()),
+                )
+                .with_context(|| {
+                    format!(
+                        "lowering proven-`this` clone of method '{}::{}'",
+                        class.name, method.name
+                    )
+                })?;
+            }
         }
         for member in class
             .computed_members
@@ -444,6 +486,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| {
                 format!(
@@ -508,6 +551,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
         }
@@ -560,6 +604,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| format!("lowering setter '{}::{}'", class.name, prop))?;
         }
@@ -606,7 +651,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     .map(|i| perry_hir::Param {
                         id: 0xFFFF_0000 + i as u32,
                         name: format!("__forward_arg{}", i),
-                        ty: perry_types::Type::Any,
+                        ty: perry_hir::types::Type::Any,
                         default: None,
                         decorators: Vec::new(),
                         is_rest: false,
@@ -622,7 +667,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 name: format!("{}_constructor", class.name),
                 type_params: Vec::new(),
                 params: ctor_body.0,
-                return_type: perry_types::Type::Void,
+                return_type: perry_hir::types::Type::Void,
                 body: ctor_body.1,
                 is_async: false,
                 is_generator: false,
@@ -654,6 +699,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
         }
@@ -1747,7 +1793,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // (b) Closures bound to a top-level `let`/`const`. #2076: a named
     // function expression's own name takes precedence over the binding
     // name (`const bar = function namedBar(){}` ⇒ `"namedBar"`).
-    let mut named_inline_closure_ids: std::collections::HashSet<perry_types::FuncId> =
+    let mut named_inline_closure_ids: std::collections::HashSet<perry_hir::types::FuncId> =
         std::collections::HashSet::new();
     for stmt in &hir.init {
         if let perry_hir::Stmt::Let { name, init, .. } = stmt {
@@ -1771,7 +1817,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // captured locals or used `this` and lowered to an inline Closure
     // instead of a FuncRef. Skip ids already covered above and any id
     // that hir.functions already produced a wrapper entry for.
-    let registered_fn_ids: std::collections::HashSet<perry_types::FuncId> =
+    let registered_fn_ids: std::collections::HashSet<perry_hir::types::FuncId> =
         hir.functions.iter().map(|f| f.id).collect();
     // #3527: only register a display name for a `perry_closure_*` symbol when
     // that closure was actually materialized as an LLVM global (i.e. it is in
@@ -1782,7 +1828,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // a name for the stale fid emits a `js_register_function_name` call referencing
     // an undefined `@perry_closure_*` global, which makes `clang -c` fail with
     // "use of undefined value" (regression class of #318/#343).
-    let materialized_closure_ids: std::collections::HashSet<perry_types::FuncId> =
+    let materialized_closure_ids: std::collections::HashSet<perry_hir::types::FuncId> =
         closures.iter().map(|(id, _)| *id).collect();
     for (func_id, display) in &hir.closure_display_names {
         if !materialized_closure_ids.contains(func_id) {

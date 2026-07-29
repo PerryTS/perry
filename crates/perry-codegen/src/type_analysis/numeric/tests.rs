@@ -6,10 +6,10 @@
 //! BigInt-aware `js_dynamic_mul` routing from #5970.
 
 use crate::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{
     BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp,
 };
-use perry_types::Type;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {

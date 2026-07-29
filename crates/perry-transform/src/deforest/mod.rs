@@ -67,8 +67,8 @@
 //! - Consumer's `outer` is modified between `const child = f()` and
 //!   the consume loop in a way that aliases `child`.
 
+use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Expr, Function, Module, Stmt};
-use perry_types::{FuncId, LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
 mod call_sites;

@@ -9,8 +9,8 @@ use anyhow::{anyhow, Result};
 use perry_api_manifest::{
     NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity, NativePodAbi,
 };
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};

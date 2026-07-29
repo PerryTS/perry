@@ -80,7 +80,7 @@ fn module_with_nullish_read() -> Module {
         Stmt::Let {
             id: 1,
             name: "o".to_string(),
-            ty: perry_types::Type::Any,
+            ty: perry_hir::types::Type::Any,
             mutable: false,
             init: Some(Expr::Undefined),
         },

@@ -12,8 +12,8 @@
 //! the former `new_site_args_carry_appended_caps` arg-shape heuristic.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::{Expr, Param};
-use perry_types::Type as HirType;
 
 use super::new_helpers::effective_constructor_param_count;
 use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};

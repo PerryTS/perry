@@ -76,9 +76,9 @@ pub(crate) fn app_with_body(body: Expr) -> Stmt {
 
 pub(crate) fn closure_stub() -> Expr {
     Expr::Closure {
-        func_id: 0 as perry_types::FuncId,
+        func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
-        return_type: perry_types::Type::Any,
+        return_type: perry_hir::types::Type::Any,
         body: vec![],
         captures: vec![],
         mutable_captures: vec![],
@@ -136,7 +136,7 @@ pub(crate) fn let_widget(id: LocalId, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
         id,
         name: name.to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: Some(init),
     }
@@ -161,7 +161,7 @@ pub(crate) fn declare_const(id: LocalId, name: &str) -> Stmt {
     Stmt::Let {
         id,
         name: name.to_string(),
-        ty: perry_types::Type::Any,
+        ty: perry_hir::types::Type::Any,
         mutable: false,
         init: None,
     }

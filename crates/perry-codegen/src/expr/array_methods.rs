@@ -47,7 +47,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(ty) = crate::type_analysis::static_type_of(ctx, o) {
                 if matches!(
                     ty,
-                    perry_types::Type::Array(_) | perry_types::Type::Tuple(_)
+                    perry_hir::types::Type::Array(_) | perry_hir::types::Type::Tuple(_)
                 ) {
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)));
                 }
@@ -56,14 +56,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // object-class instances on the fast path.
                 let definitely_not_array = matches!(
                     ty,
-                    perry_types::Type::Number
-                        | perry_types::Type::Int32
-                        | perry_types::Type::String
-                        | perry_types::Type::Boolean
-                        | perry_types::Type::Null
-                        | perry_types::Type::Void
-                        | perry_types::Type::BigInt
-                        | perry_types::Type::Symbol
+                    perry_hir::types::Type::Number
+                        | perry_hir::types::Type::Int32
+                        | perry_hir::types::Type::String
+                        | perry_hir::types::Type::Boolean
+                        | perry_hir::types::Type::Null
+                        | perry_hir::types::Type::Void
+                        | perry_hir::types::Type::BigInt
+                        | perry_hir::types::Type::Symbol
                 );
                 if definitely_not_array {
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_FALSE)));

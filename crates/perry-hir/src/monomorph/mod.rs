@@ -14,7 +14,7 @@
 //!   function identity_string(x: string): string { return x; }
 
 use crate::ir::*;
-use perry_types::{FuncId, ObjectType, Type};
+use crate::types::{FuncId, ObjectType, Type};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 mod constraints;

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1264
+**Current Version:** 0.5.1265
 
 
 ## TypeScript Parity Status
@@ -84,8 +84,7 @@ TypeScript (.ts) → Parse (SWC) → AST → Lower → HIR → Transform → Cod
 |-------|---------|
 | **perry** | CLI driver (parallel module codegen via rayon) |
 | **perry-parser** | SWC wrapper for TypeScript parsing |
-| **perry-types** | Type system definitions |
-| **perry-hir** | HIR data structures (`ir.rs`) and AST→HIR lowering (`lower.rs`) |
+| **perry-hir** | HIR types and data structures, plus AST→HIR lowering |
 | **perry-transform** | IR passes (closure conversion, async lowering, inlining) |
 | **perry-codegen** | LLVM-based native code generation |
 | **perry-runtime** | Runtime: value.rs, object.rs, array.rs, string.rs, gc.rs, arena.rs, thread.rs |

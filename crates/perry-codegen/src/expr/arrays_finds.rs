@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::{anyhow, bail, Result};
-use perry_hir::{BinaryOp, Expr};
-use perry_types::Type as HirType;
+use perry_hir::types::Type as HirType;
+use perry_hir::Expr;
 
 use crate::nanbox::double_literal;
 use crate::native_value::{
@@ -18,10 +18,18 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{
     buffer_access_materialization_reason, can_lower_expr_as_i32, i32_bool_to_nanbox,
-    int_range_expr, lower_buffer_load, lower_buffer_store, lower_expr, lower_expr_as_i32,
-    materialize_js_value, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64,
-    BufferAccessSpec, FnCtx,
+    lower_buffer_load, lower_buffer_store, lower_expr, lower_expr_as_i32, materialize_js_value,
+    nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, BufferAccessSpec, FnCtx,
 };
+
+// #6996: ONE integer-array-index proof, shared with `expr::index_get`. This
+// was a verbatim copy of that function -- same arms, same thresholds, its
+// `BitAnd` arm being the inlined body of `bitand_has_nonnegative_i32_mask`.
+// The copy had to go: `expr::shadow_slot`'s temp-root gate proves a
+// `Uint8ArrayGet` is non-pointer by asserting that THIS proof routes the read
+// to a byte accessor, so two copies that could drift apart would make the gate
+// unsound the moment one of them was edited.
+use super::index_get::numeric_index_has_integer_array_index_proof;
 
 fn lower_index_i32(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
     if can_lower_expr_as_i32(
@@ -39,41 +47,6 @@ fn lower_index_i32(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
     } else {
         let i = lower_expr(ctx, index)?;
         Ok(ctx.block().fptosi(DOUBLE, &i, I32))
-    }
-}
-
-fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index: &Expr) -> bool {
-    fn range_is_nonnegative_i32(ctx: &FnCtx<'_>, index: &Expr) -> bool {
-        int_range_expr(ctx, index)
-            .is_some_and(|range| range.min >= 0 && range.max <= i32::MAX as i64)
-    }
-
-    match index {
-        Expr::Integer(i) => (0..=i32::MAX as i64).contains(i),
-        Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64,
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::BitAnd) => {
-            fn mask(expr: &Expr) -> Option<i64> {
-                match expr {
-                    Expr::Integer(i) => Some(*i),
-                    Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
-                    _ => None,
-                }
-            }
-            mask(left)
-                .or_else(|| mask(right))
-                .is_some_and(|mask| (0..=i32::MAX as i64).contains(&mask))
-        }
-        Expr::LocalGet(id) => {
-            ctx.integer_locals.contains(id)
-                && ctx.i32_counter_slots.contains_key(id)
-                && (ctx.nonnegative_integer_locals.contains(id)
-                    || ctx
-                        .int_range_facts
-                        .iter()
-                        .any(|fact| fact.local_id == *id && fact.range.min >= 0))
-                || range_is_nonnegative_i32(ctx, index)
-        }
-        _ => range_is_nonnegative_i32(ctx, index),
     }
 }
 

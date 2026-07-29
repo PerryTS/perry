@@ -3,8 +3,8 @@
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
+use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, UnaryOp};
-use perry_types::Type;
 
 use crate::expr::{
     emit_jsvalue_slot_store_on_block, i32_to_nanbox, lower_expr, lower_expr_as_i32,
@@ -775,12 +775,8 @@ fn lower_materialized_receiver_dispatch(
 ) -> Result<String> {
     let recv_box = materialize_scalar_receiver(ctx, receiver_id, class_name)?;
     let key_idx = ctx.strings.intern(property);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-    let method_id = ctx
-        .block()
-        .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+    let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     let (args_ptr, args_len) = if lowered_args.is_empty() {
         ("null".to_string(), "0".to_string())
     } else {

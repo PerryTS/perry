@@ -157,7 +157,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         }
     }
 
-    // ── axios: static method calls (axios.get/post/put/delete/patch) ──
+    // ── axios: static HTTP method calls ──
     // Must be before the receiver guard — these are receiver-less calls.
     if module == "axios" && object.is_none() {
         let url_box = if !args.is_empty() {
@@ -168,8 +168,13 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         let blk = ctx.block();
         let url_handle = unbox_to_i64(blk, &url_box);
         match method {
-            "get" => {
-                let promise = blk.call(I64, "js_axios_get", &[(I64, &url_handle)]);
+            "get" | "head" | "options" => {
+                let rt_fn = match method {
+                    "get" => "js_axios_get",
+                    "head" => "js_axios_head",
+                    _ => "js_axios_options",
+                };
+                let promise = blk.call(I64, rt_fn, &[(I64, &url_handle)]);
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }
             "delete" => {

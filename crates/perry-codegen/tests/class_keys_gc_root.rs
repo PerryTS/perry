@@ -23,8 +23,8 @@
 //! `js_gc_register_global_root`.
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Module, ModuleInitKind};
-use perry_types::Type;
 
 fn entry_opts() -> CompileOptions {
     CompileOptions {
@@ -120,6 +120,7 @@ fn module_with_declared_field_class() -> Module {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            alloc_width_hint: 0,
             aliases: Vec::new(),
         }],
         interfaces: Vec::new(),

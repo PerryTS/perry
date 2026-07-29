@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::{ObjectType, Type};
 use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Stmt};
-use perry_types::{ObjectType, Type};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -91,6 +91,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     }
 }
 

@@ -166,11 +166,11 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_global_update".to_string(),
                         param_types: vec![
-                            perry_types::Type::Any,
-                            perry_types::Type::Any,
-                            perry_types::Type::Any,
+                            crate::types::Type::Any,
+                            crate::types::Type::Any,
+                            crate::types::Type::Any,
                         ],
-                        return_type: perry_types::Type::Any,
+                        return_type: crate::types::Type::Any,
                     }),
                     args: vec![
                         Expr::String(name),
@@ -201,8 +201,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                     Expr::Call {
                         callee: Box::new(Expr::ExternFuncRef {
                             name: "js_to_numeric".to_string(),
-                            param_types: vec![perry_types::Type::Any],
-                            return_type: perry_types::Type::Any,
+                            param_types: vec![crate::types::Type::Any],
+                            return_type: crate::types::Type::Any,
                         }),
                         args: vec![Expr::LocalGet(id)],
                         type_args: vec![],

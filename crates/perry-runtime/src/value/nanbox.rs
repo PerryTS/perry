@@ -351,7 +351,7 @@ pub extern "C" fn js_switch_strict_equals(a: f64, b: f64) -> i32 {
 
 // #1561-style force-keep: only generated IR calls this — see
 // value/dyn_index.rs for the rationale.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SWITCH_STRICT_EQUALS: extern "C" fn(f64, f64) -> i32 = js_switch_strict_equals;
 
 /// Check if a NaN-boxed f64 value represents a string.

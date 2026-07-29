@@ -1,11 +1,11 @@
-//! `SH` impls for the type system (re-exported from `perry-types`).
+//! `SH` implementations for HIR type definitions.
 //! Split out of `stable_hash.rs` (no behavior change).
 
 use super::primitives::{tag, SH};
 use super::StableHasher;
-use perry_types::{FunctionType, ObjectType, PropertyInfo, Type, TypeParam};
+use crate::types::{FunctionType, ObjectType, PropertyInfo, Type, TypeParam};
 
-// --- Type system (from perry-types) ---------------------------------------
+// --- HIR type system -------------------------------------------------------
 
 impl SH for Type {
     fn hash<H: StableHasher>(&self, hh: &mut H) {

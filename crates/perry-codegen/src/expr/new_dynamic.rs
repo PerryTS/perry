@@ -5,8 +5,8 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::lower_call::lower_new;
 use crate::lower_conditional::lower_conditional;

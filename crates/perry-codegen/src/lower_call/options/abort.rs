@@ -7,8 +7,8 @@
 //! `AbortSignal.timeout(ms)`.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;

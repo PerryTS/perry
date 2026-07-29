@@ -10,6 +10,5 @@ workspace = true
 
 [dependencies]
 perry-hir.workspace = true
-perry-types.workspace = true
 perry-dispatch.workspace = true
 anyhow.workspace = true

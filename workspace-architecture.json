@@ -1,0 +1,383 @@
+{
+  "schema_version": 1,
+  "expected_default_members": [
+    "perry"
+  ],
+  "allowed_binding_runtime_dependencies": [
+    "perry-ext-http"
+  ],
+  "ci": {
+    "linux_host_excluded_members": [
+      "perry-ui-android",
+      "perry-ui-gtk4",
+      "perry-ui-ios",
+      "perry-ui-macos",
+      "perry-ui-tvos",
+      "perry-ui-visionos",
+      "perry-ui-watchos",
+      "perry-ui-windows",
+      "perry-ui-windows-winui"
+    ],
+    "linux_test_extra_excluded_members": [
+      "perry-doc-fixture-my-bindings"
+    ]
+  },
+  "baseline": {
+    "workspace_members": 77,
+    "default_dependency_closure": [
+      "perry",
+      "perry-api-manifest",
+      "perry-codegen",
+      "perry-codegen-arkts",
+      "perry-codegen-glance",
+      "perry-codegen-js",
+      "perry-codegen-swiftui",
+      "perry-codegen-wasm",
+      "perry-codegen-wear-tiles",
+      "perry-diagnostics",
+      "perry-dispatch",
+      "perry-hir",
+      "perry-parser",
+      "perry-runtime",
+      "perry-transform",
+      "perry-ui-model",
+      "perry-updater"
+    ],
+    "perry_dependency_closure": [
+      "perry",
+      "perry-api-manifest",
+      "perry-codegen",
+      "perry-codegen-arkts",
+      "perry-codegen-glance",
+      "perry-codegen-js",
+      "perry-codegen-swiftui",
+      "perry-codegen-wasm",
+      "perry-codegen-wear-tiles",
+      "perry-diagnostics",
+      "perry-dispatch",
+      "perry-hir",
+      "perry-parser",
+      "perry-runtime",
+      "perry-transform",
+      "perry-ui-model",
+      "perry-updater"
+    ],
+    "decision_counts": {
+      "externalize": 29,
+      "keep": 42,
+      "merge": 2,
+      "remove": 1,
+      "review": 3
+    }
+  },
+  "crates": {
+    "perry": {
+      "category": "product",
+      "decision": "keep"
+    },
+    "perry-api-manifest": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-audio-miniaudio": {
+      "category": "platform-core",
+      "decision": "keep"
+    },
+    "perry-codegen": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-codegen-arkts": {
+      "category": "codegen-adapter",
+      "decision": "keep"
+    },
+    "perry-codegen-glance": {
+      "category": "codegen-adapter",
+      "decision": "review"
+    },
+    "perry-codegen-js": {
+      "category": "codegen-adapter",
+      "decision": "keep"
+    },
+    "perry-codegen-swiftui": {
+      "category": "codegen-adapter",
+      "decision": "review"
+    },
+    "perry-codegen-wasm": {
+      "category": "codegen-adapter",
+      "decision": "keep"
+    },
+    "perry-codegen-wear-tiles": {
+      "category": "codegen-adapter",
+      "decision": "review"
+    },
+    "perry-container-compose": {
+      "category": "tool",
+      "decision": "keep"
+    },
+    "perry-container-e2e": {
+      "category": "test-support",
+      "decision": "keep"
+    },
+    "perry-diagnostics": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-dispatch": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-doc-fixture-my-bindings": {
+      "category": "fixture",
+      "decision": "keep"
+    },
+    "perry-doc-tests": {
+      "category": "tool",
+      "decision": "keep"
+    },
+    "perry-ext-ads": {
+      "category": "binding",
+      "decision": "remove"
+    },
+    "perry-ext-argon2": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-axios": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-bcrypt": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-better-sqlite3": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-cheerio": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-commander": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-cron": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-dayjs": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-decimal": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-dotenv": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-ethers": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-events": {
+      "category": "binding",
+      "decision": "keep"
+    },
+    "perry-ext-exponential-backoff": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-fastify": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-fetch": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-http": {
+      "category": "binding",
+      "decision": "keep"
+    },
+    "perry-ext-http-server": {
+      "category": "binding",
+      "decision": "merge"
+    },
+    "perry-ext-ioredis": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-jsonwebtoken": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-lru-cache": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-moment": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-mongodb": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-mysql2": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-nanoid": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-net": {
+      "category": "binding",
+      "decision": "keep"
+    },
+    "perry-ext-nodemailer": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-pdf": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-pg": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-ratelimit": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-sharp": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-slugify": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-streams": {
+      "category": "binding",
+      "decision": "keep"
+    },
+    "perry-ext-uuid": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-validator": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-ws": {
+      "category": "binding",
+      "decision": "keep"
+    },
+    "perry-ext-zlib": {
+      "category": "binding",
+      "decision": "keep"
+    },
+    "perry-ffi": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-hir": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-parser": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-runtime": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-runtime-static": {
+      "category": "artifact-wrapper",
+      "decision": "keep"
+    },
+    "perry-stdlib": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-stdlib-static": {
+      "category": "artifact-wrapper",
+      "decision": "keep"
+    },
+    "perry-transform": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-ui": {
+      "category": "platform-core",
+      "decision": "keep"
+    },
+    "perry-ui-android": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-geisterhand": {
+      "category": "test-support",
+      "decision": "keep"
+    },
+    "perry-ui-gtk4": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-ios": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-macos": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-model": {
+      "category": "platform-core",
+      "decision": "keep"
+    },
+    "perry-ui-test": {
+      "category": "test-support",
+      "decision": "keep"
+    },
+    "perry-ui-testkit": {
+      "category": "test-support",
+      "decision": "keep"
+    },
+    "perry-ui-tvos": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-visionos": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-watchos": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-windows": {
+      "category": "platform-adapter",
+      "decision": "keep"
+    },
+    "perry-ui-windows-winui": {
+      "category": "platform-adapter",
+      "decision": "merge"
+    },
+    "perry-updater": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-wasm-host": {
+      "category": "runtime-core",
+      "decision": "keep"
+    }
+  }
+}

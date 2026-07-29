@@ -10,9 +10,9 @@ pub(crate) use crate::type_analysis_facts::{
     hir_inferred_static_type_from_locals, CodegenTypeFacts,
 };
 #[cfg(test)]
-use perry_hir::Expr;
+use perry_hir::types::Type as HirType;
 #[cfg(test)]
-use perry_types::Type as HirType;
+use perry_hir::Expr;
 
 // Class-field layout / declared-type resolution lives in a sibling module
 // (file-size gate). Re-exported here so existing `type_analysis::*` call
@@ -31,7 +31,10 @@ mod predicates;
 mod refine;
 mod strings;
 
-pub(crate) use numeric::{is_bigint_expr, is_bool_expr, is_integer_valued_expr, is_numeric_expr};
+pub(crate) use numeric::{
+    expr_produces_canonical_raw_f64, is_bigint_expr, is_bool_expr, is_integer_valued_expr,
+    is_numeric_expr, is_provably_not_bigint,
+};
 pub(crate) use pod::{
     add_operands_have_pod_materialization_hazard,
     expr_may_return_boxed_value_from_raw_f64_fallback, expression_has_numeric_length,

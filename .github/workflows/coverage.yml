@@ -48,46 +48,22 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Run coverage
-        # Mirrors the `cargo-test` job's exclude list (host-only UI
-        # backends). `--no-fail-fast` keeps the
-        # report comprehensive even if one crate's tests fail —
-        # this is a visibility job, not a gate.
+        # Uses the same centralized Linux test scope as `cargo-test`.
+        # Keep collecting and reporting partial coverage if a test fails —
+        # this is a visibility job, not a test gate.
         run: |
-          cargo llvm-cov --workspace --no-fail-fast \
-            --exclude perry-doc-fixture-my-bindings \
-            --exclude perry-ui-macos \
-            --exclude perry-ui-ios \
-            --exclude perry-ui-visionos \
-            --exclude perry-ui-tvos \
-            --exclude perry-ui-watchos \
-            --exclude perry-ui-gtk4 \
-            --exclude perry-ui-android \
-            --exclude perry-ui-windows \
-            --exclude perry-ui-windows-winui \
+          mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
+            --print-excluded-scope linux-test)
+          exclude_args=()
+          for package in "${excluded[@]}"; do exclude_args+=(--exclude "$package"); done
+          cargo llvm-cov --workspace --no-fail-fast --ignore-run-fail \
+            "${exclude_args[@]}" \
             --html --output-dir target/llvm-cov-html
-          cargo llvm-cov report --no-fail-fast \
-            --exclude perry-doc-fixture-my-bindings \
-            --exclude perry-ui-macos \
-            --exclude perry-ui-ios \
-            --exclude perry-ui-visionos \
-            --exclude perry-ui-tvos \
-            --exclude perry-ui-watchos \
-            --exclude perry-ui-gtk4 \
-            --exclude perry-ui-android \
-            --exclude perry-ui-windows \
-            --exclude perry-ui-windows-winui \
+          cargo llvm-cov report \
+            "${exclude_args[@]}" \
             --lcov --output-path target/lcov.info
-          cargo llvm-cov report --no-fail-fast \
-            --exclude perry-doc-fixture-my-bindings \
-            --exclude perry-ui-macos \
-            --exclude perry-ui-ios \
-            --exclude perry-ui-visionos \
-            --exclude perry-ui-tvos \
-            --exclude perry-ui-watchos \
-            --exclude perry-ui-gtk4 \
-            --exclude perry-ui-android \
-            --exclude perry-ui-windows \
-            --exclude perry-ui-windows-winui \
+          cargo llvm-cov report \
+            "${exclude_args[@]}" \
             --summary-only > target/summary.txt
         # Don't fail the workflow on a non-zero exit — the artifacts
         # below are still useful, and a missing test in one crate

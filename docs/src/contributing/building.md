@@ -8,14 +8,19 @@
 ## Build
 
 ```bash
-git clone https://github.com/skelpo/perry.git
+git clone https://github.com/PerryTS/perry.git
 cd perry
 
-# Build all crates (release mode recommended)
+# Build the default product and its dependency closure
 cargo build --release
 ```
 
 The binary is at `target/release/perry`.
+
+The workspace deliberately defaults to the `perry` CLI. Bindings, platform
+adapters, test support, and release-only archives are selected explicitly by
+their CI/release jobs. Workspace-wide host commands must use the centralized
+platform exclusions described in the [crate policy](crate-policy.md).
 
 ## Build taxonomy (dev / release / dist)
 
@@ -75,12 +80,15 @@ the full feature list (`full-cli`, `publish-cli`, `backend-wasm`, …).
 ## Run Tests
 
 ```bash
-# All tests (exclude iOS crate on non-iOS host)
-cargo test --workspace --exclude perry-ui-ios
+# Product unit targets
+cargo test -p perry --bins
+
+# Inspect the nightly CI test scope (all Linux-compatible test crates)
+python3 scripts/ci_test_scope.py --full </dev/null
 
 # Specific crate
 cargo test -p perry-hir
-cargo test -p perry-codegen-llvm
+cargo test -p perry-codegen
 ```
 
 ## Compile and Run TypeScript
@@ -97,8 +105,8 @@ cargo run --release -- hello.ts --print-hir
 ## Development Workflow
 
 1. Make changes to the relevant crate
-2. `cargo build --release` to build
-3. `cargo test --workspace --exclude perry-ui-ios` to verify
+2. `cargo check -p perry` for fast product feedback
+3. Run tests for the crates affected by the change
 4. Test with a real TypeScript file: `cargo run --release -- test.ts -o test && ./test`
 
 ## Project Structure
@@ -108,10 +116,9 @@ perry/
 ├── crates/
 │   ├── perry/              # CLI driver
 │   ├── perry-parser/       # SWC TypeScript parser
-│   ├── perry-types/        # Type definitions
-│   ├── perry-hir/          # HIR and lowering
+│   ├── perry-hir/          # HIR types, data structures, and lowering
 │   ├── perry-transform/    # IR passes
-│   ├── perry-codegen-llvm/ # LLVM native codegen
+│   ├── perry-codegen/      # LLVM native codegen
 │   ├── perry-codegen-wasm/ # WebAssembly codegen (--target web / --target wasm)
 │   ├── perry-codegen-js/   # JS minifier (formerly the web target's codegen)
 │   ├── perry-codegen-swiftui/ # Widget codegen
@@ -120,7 +127,7 @@ perry/
 │   ├── perry-ui/           # Shared UI types
 │   ├── perry-ui-macos/     # macOS AppKit UI
 │   ├── perry-ui-ios/       # iOS UIKit UI
-│   └── perry-jsruntime/    # QuickJS integration
+│   └── perry-ext-*/        # Selectively linked native bindings
 ├── docs/                   # This documentation (mdBook)
 ├── CLAUDE.md               # Detailed implementation notes
 └── CHANGELOG.md            # Version history

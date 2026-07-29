@@ -1,4 +1,4 @@
-use perry_types::Type;
+use perry_hir::types::Type;
 
 pub(crate) fn type_is_pointer_bearing(ty: &Type) -> bool {
     match ty {

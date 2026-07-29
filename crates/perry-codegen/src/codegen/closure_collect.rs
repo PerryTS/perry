@@ -20,7 +20,7 @@ use super::spec_function_length;
 
 /// Result bundle of the module-wide closure collection pass.
 pub(crate) struct ModuleClosures {
-    pub closures: Vec<(perry_types::FuncId, perry_hir::Expr)>,
+    pub closures: Vec<(perry_hir::types::FuncId, perry_hir::Expr)>,
     pub closure_rest_params: HashMap<u32, usize>,
     pub closure_synthetic_arguments: std::collections::HashSet<u32>,
     pub closure_rest_and_arguments: std::collections::HashSet<u32>,
@@ -43,9 +43,9 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
     // otherwise a closure body in (say) a `get size() { return arr.filter(...).length }`
     // ends up referenced by `js_closure_alloc(@perry_closure_*)` but
     // never defined, and clang errors with "use of undefined value".
-    let mut closures: Vec<(perry_types::FuncId, perry_hir::Expr)> = Vec::new();
+    let mut closures: Vec<(perry_hir::types::FuncId, perry_hir::Expr)> = Vec::new();
     {
-        let mut seen: std::collections::HashSet<perry_types::FuncId> =
+        let mut seen: std::collections::HashSet<perry_hir::types::FuncId> =
             std::collections::HashSet::new();
         for f in &hir.functions {
             collect_closures_in_stmts(&f.body, &mut seen, &mut closures);

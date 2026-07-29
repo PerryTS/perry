@@ -569,6 +569,7 @@ mod shadow_scan_tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            alloc_width_hint: 0,
         }
     }
 
@@ -576,7 +577,7 @@ mod shadow_scan_tests {
         ClassField {
             name: name.to_string(),
             key_expr: None,
-            ty: perry_types::Type::Any,
+            ty: perry_hir::types::Type::Any,
             init: Some(init),
             is_private: false,
             is_readonly: false,

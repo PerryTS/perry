@@ -55,9 +55,9 @@
 //! HarmonyOS: this pass is gated OFF in `collect_modules.rs` so
 //! `perry-codegen-arkts`'s harvest stays the source of truth there.
 
+use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::walker::walk_expr_children_mut;
 use perry_hir::{Expr, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
 // #5293: the max-LocalId / max-FuncId scans were copy-pasted here; route through

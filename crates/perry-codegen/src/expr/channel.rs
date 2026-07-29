@@ -35,10 +35,10 @@ pub(crate) fn variant_name(e: &Expr) -> String {
 /// the outer record is still pre-shaped, and nested values go through
 /// `parse_value_generic` inside `parse_object_shaped`.
 pub(crate) fn extract_array_of_object_shape(
-    ty: &perry_types::Type,
+    ty: &perry_hir::types::Type,
     ordered_keys: Option<&[String]>,
 ) -> Option<(Vec<u8>, u32)> {
-    use perry_types::Type;
+    use perry_hir::types::Type;
     let elem = match ty {
         Type::Array(inner) => &**inner,
         Type::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
@@ -449,17 +449,18 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
     ));
     // Extract per-lane and store back. Mirror writes to both the i32
     // and double slots so downstream readers see consistent values.
+    // Repsel Phase 1: a canonical-i32 accumulator has no double slot —
+    // the i32 store alone is the whole write.
     for (lane, &acc_id) in r.acc_ids.iter().enumerate() {
         let i32_slot = ctx
             .i32_counter_slots
             .get(&acc_id)
             .cloned()
             .ok_or_else(|| anyhow!("acc {} missing i32 slot", acc_id))?;
-        let dbl_slot = ctx
-            .locals
-            .get(&acc_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("acc {} missing double slot", acc_id))?;
+        let dbl_slot = ctx.locals.get(&acc_id).cloned();
+        if dbl_slot.is_none() && !ctx.local_slot_reps.contains_key(&acc_id) {
+            return Err(anyhow!("acc {} missing double slot", acc_id));
+        }
         let blk = ctx.block();
         let lane_val = blk.fresh_reg();
         blk.emit_raw(format!(
@@ -467,8 +468,10 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
             lane_val, new_acc_vec, lane
         ));
         blk.store(I32, &lane_val, &i32_slot);
-        let dbl_val = blk.sitofp(I32, &lane_val, DOUBLE);
-        blk.store(DOUBLE, &dbl_val, &dbl_slot);
+        if let Some(dbl_slot) = dbl_slot {
+            let dbl_val = blk.sitofp(I32, &lane_val, DOUBLE);
+            blk.store(DOUBLE, &dbl_val, &dbl_slot);
+        }
     }
     Ok(())
 }

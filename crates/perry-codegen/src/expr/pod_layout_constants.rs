@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
+use perry_hir::types::Type;
 use perry_hir::Expr;
-use perry_types::Type;
 
 use crate::nanbox::double_literal;
 use crate::native_value::{layout_decision_for_type, PodLayoutDecision, PodLayoutManifest};

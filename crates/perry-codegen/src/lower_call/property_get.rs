@@ -161,7 +161,7 @@ pub fn try_lower_property_get_method_call(
         // go through dispatch_buffer_method via js_native_call_method.
         let is_buffer = matches!(
             crate::type_analysis::static_type_of(ctx, object),
-            Some(perry_types::Type::Named(ref n)) if n == "Uint8Array" || n == "Buffer"
+            Some(perry_hir::types::Type::Named(ref n)) if n == "Uint8Array" || n == "Buffer"
         );
         // #1760: a dynamic native-module sub-namespace receiver
         // (`(path as any)[k]` → `path.win32`) is NOT a string, even though a

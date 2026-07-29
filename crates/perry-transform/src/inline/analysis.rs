@@ -1,6 +1,6 @@
+use perry_hir::types::{FuncId, LocalId};
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{Class, Expr, Function, Module, Stmt};
-use perry_types::{FuncId, LocalId};
 use std::collections::{HashMap, HashSet};
 
 use super::*;

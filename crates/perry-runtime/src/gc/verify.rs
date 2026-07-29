@@ -1,30 +1,16 @@
 use super::*;
 
+/// Follow forwarding pointers for a word that may hold a heap reference,
+/// NaN-boxed or bare, preserving the form it was stored in.
+///
+/// Decoding goes through [`decode_root_word`] so this path and the *mark*
+/// path (`mark_mutable_root_bits`) accept exactly the same bit patterns —
+/// see `gc::root_words` for why relocating a word the mark path would have
+/// skipped is a use-after-free (#6910).
 pub(super) fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
-    let tag = bits & TAG_MASK;
-    let (ptr_addr, is_nanbox) = match tag {
-        t if t == POINTER_TAG || t == STRING_TAG || t == BIGINT_TAG => {
-            ((bits & POINTER_MASK) as usize, true)
-        }
-        _ => {
-            // Reject NaN-tagged non-pointer values (numbers,
-            // booleans, undefined, null, SSO, INT32, handles).
-            if tag >= 0x7FF8_0000_0000_0000 {
-                return None;
-            }
-            // Raw pointer fallback: lower 48 bits valid range.
-            if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
-                return None;
-            }
-            (bits as usize, false)
-        }
-    };
-    let new_user = try_rewrite_raw_addr(ptr_addr, valid_ptrs)?;
-    Some(if is_nanbox {
-        tag | (new_user as u64 & POINTER_MASK)
-    } else {
-        new_user as u64
-    })
+    let word = decode_root_word(bits)?;
+    let new_user = try_rewrite_raw_addr(word.addr(), valid_ptrs)?;
+    Some(word.encode(new_user))
 }
 
 pub(super) fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
@@ -530,8 +516,13 @@ pub(super) fn panic_old_young_edge_verifier_failed(stats: OldYoungEdgeVerifyStat
             child_hist.push_str(&format!(" {}({})={}", type_name(t), t, c));
         }
     }
+    // Decisive split for the missing-edge hunt: was the slot's page EVER dirtied
+    // (edge recorded by a barrier then LOST by a clear/restore gap) or never
+    // (a store path that skips the barrier entirely)?
+    let slot_page_ever_dirty =
+        super::barrier::ever_dirty_old_page(crate::arena::generation_page_for_addr(missing.slot));
     panic!(
-        "old-young-edge-verifier failed: checked_old_objects={} checked_remembered_pages={} checked_old_to_young_edges={} missing_edges={} malloc_parents={} unmarked_parents={}\n  first_missing: parent=0x{:x} type={}({}) old_arena={} marked={} slot=0x{:x} child=0x{:x} child_type={}({})\n  missing_by_parent_type:{}\n  missing_by_child_type:{}",
+        "old-young-edge-verifier failed: checked_old_objects={} checked_remembered_pages={} checked_old_to_young_edges={} missing_edges={} malloc_parents={} unmarked_parents={}\n  first_missing: parent=0x{:x} type={}({}) old_arena={} marked={} slot=0x{:x} child=0x{:x} child_type={}({}) slot_page_ever_dirty={slot_page_ever_dirty}\n  missing_by_parent_type:{}\n  missing_by_child_type:{}",
         stats.checked_old_objects,
         stats.checked_remembered_pages,
         stats.checked_old_to_young_edges,
@@ -882,8 +873,11 @@ pub(super) fn rewrite_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
 }
 
 /// Walk every mutable root slot and rewrite forwarded pointers.
-/// Shadow slots are NaN-boxed JSValues; globals can be NaN-boxed or
-/// raw object-start pointers. `try_rewrite_value` handles both forms.
+///
+/// `try_rewrite_value` accepts a heap reference in either form — NaN-boxed
+/// or bare — for BOTH slot kinds, and `mark_mutable_root_bits` accepts
+/// exactly the same set on the mark side (#6910). Do not narrow one without
+/// the other: a form this pass relocates but marking skips is swept live.
 pub(super) fn rewrite_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
     shadow_stats: Option<&mut ShadowRootTraceStats>,

@@ -2,8 +2,8 @@
 //! Pure code move — no behavior change.
 
 use super::*;
+use crate::types::Type;
 use anyhow::{anyhow, Result};
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr) -> Result<Expr> {

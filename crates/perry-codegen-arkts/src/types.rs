@@ -3,7 +3,7 @@
 use perry_hir::ir::Expr;
 
 // LocalId is `u32` upstream; re-import directly so we don't carry a
-// transitive dep on perry-types just for the type alias.
+// HIR owns the function identifier used by view builders.
 pub(crate) type LocalId = u32;
 
 /// Result of harvesting an `App({body: ...})` call: the emitted ArkUI
@@ -197,7 +197,7 @@ pub(crate) struct VisibilityBinding {
 #[derive(Debug, Clone)]
 pub(crate) struct ViewBuilder {
     /// Function id (matches `Function::id` in the HIR).
-    pub(crate) func_id: perry_types::FuncId,
+    pub(crate) func_id: perry_hir::types::FuncId,
     /// Function name (used for the synth view id when sanitized).
     // #854: stashed on the harvest instance for a future diagnostic pass; the
     // view id is currently derived inline at emit time, not read back here.

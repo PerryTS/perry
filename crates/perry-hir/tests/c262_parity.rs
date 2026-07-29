@@ -32,7 +32,7 @@ fn top_level_init<'a>(module: &'a perry_hir::Module, name: &str) -> &'a Expr {
         .unwrap_or_else(|| panic!("top-level binding `{name}` not found"))
 }
 
-fn top_level_local_id(module: &perry_hir::Module, name: &str) -> perry_types::LocalId {
+fn top_level_local_id(module: &perry_hir::Module, name: &str) -> perry_hir::types::LocalId {
     module
         .init
         .iter()

@@ -10,9 +10,13 @@
 //! normalizes them to the `util/types` / `util.types` module keys.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
+use crate::expr::temp_root::{
+    rooted_array_begin, rooted_array_read, temp_root_get_double, temp_root_push_double,
+    temp_root_truncate, temp_rooted_array_push,
+};
 use crate::expr::{
     emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
@@ -278,18 +282,15 @@ pub fn try_lower_console_call(
                     ctx.block().call_void("js_console_trace", &[(DOUBLE, &val)]);
                 } else {
                     let cap = (args.len() as u32).to_string();
-                    let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    let acc = rooted_array_begin(ctx, &cap);
                     for arg in args.iter() {
                         let v = lower_expr(ctx, arg)?;
-                        let blk = ctx.block();
-                        current_arr = blk.call(
-                            I64,
-                            "js_array_push_f64",
-                            &[(I64, &current_arr), (DOUBLE, &v)],
-                        );
+                        temp_rooted_array_push(ctx, &acc, &v);
                     }
+                    let current_arr = rooted_array_read(ctx, &acc);
                     ctx.block()
                         .call_void("js_console_trace_spread", &[(I64, &current_arr)]);
+                    temp_root_truncate(ctx, &acc);
                 }
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
@@ -323,21 +324,23 @@ pub fn try_lower_console_call(
             {
                 let v = lower_expr(ctx, &args[0])?;
                 if property == "timeLog" && args.len() > 1 {
+                    // `v` (the label) is itself an evaluated temporary held
+                    // across the extra arguments' evaluation, so it needs a
+                    // root of its own alongside the accumulator (#6951).
+                    let label = temp_root_push_double(ctx, &v);
                     let cap = ((args.len() - 1) as u32).to_string();
-                    let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    let acc = rooted_array_begin(ctx, &cap);
                     for arg in args.iter().skip(1) {
                         let extra = lower_expr(ctx, arg)?;
-                        let blk = ctx.block();
-                        current_arr = blk.call(
-                            I64,
-                            "js_array_push_f64",
-                            &[(I64, &current_arr), (DOUBLE, &extra)],
-                        );
+                        temp_rooted_array_push(ctx, &acc, &extra);
                     }
+                    let current_arr = rooted_array_read(ctx, &acc);
+                    let v = temp_root_get_double(ctx, &label);
                     ctx.block().call_void(
                         "js_console_time_log_spread",
                         &[(DOUBLE, &v), (I64, &current_arr)],
                     );
+                    temp_root_truncate(ctx, &label);
                     return Ok(Some(double_literal(f64::from_bits(
                         crate::nanbox::TAG_UNDEFINED,
                     ))));
@@ -403,21 +406,20 @@ pub fn try_lower_console_call(
                 } else {
                     // Multi-arg messages: bundle args[1..] into a heap
                     // array and call the spread variant.
+                    let cond_root = temp_root_push_double(ctx, &cond_v);
                     let cap = ((args.len() - 1) as u32).to_string();
-                    let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    let acc = rooted_array_begin(ctx, &cap);
                     for arg in args.iter().skip(1) {
                         let v = lower_expr(ctx, arg)?;
-                        let blk = ctx.block();
-                        current_arr = blk.call(
-                            I64,
-                            "js_array_push_f64",
-                            &[(I64, &current_arr), (DOUBLE, &v)],
-                        );
+                        temp_rooted_array_push(ctx, &acc, &v);
                     }
+                    let current_arr = rooted_array_read(ctx, &acc);
+                    let cond_v = temp_root_get_double(ctx, &cond_root);
                     ctx.block().call_void(
                         "js_console_assert_spread",
                         &[(DOUBLE, &cond_v), (I64, &current_arr)],
                     );
+                    temp_root_truncate(ctx, &cond_root);
                 }
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
@@ -459,12 +461,14 @@ pub fn try_lower_console_call(
                 } else {
                     lower_expr(ctx, arg)?
                 };
-                let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, "1")]);
-                current_arr = ctx.block().call(
-                    I64,
-                    "js_array_push_f64",
-                    &[(I64, &current_arr), (DOUBLE, &v)],
-                );
+                // The accumulator is allocated AFTER the argument, so
+                // `js_array_alloc` is itself a collection point with `v` live
+                // only in an SSA register. Root `v` across it (#6951).
+                let v_root = temp_root_push_double(ctx, &v);
+                let acc = rooted_array_begin(ctx, "1");
+                let v = temp_root_get_double(ctx, &v_root);
+                temp_rooted_array_push(ctx, &acc, &v);
+                let current_arr = rooted_array_read(ctx, &acc);
                 let runtime_fn = match property.as_str() {
                     "info" => "js_console_info_spread",
                     "debug" => "js_console_debug_spread",
@@ -473,6 +477,9 @@ pub fn try_lower_console_call(
                     _ => "js_console_log_spread",
                 };
                 ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
+                // Drops `v_root` and everything above it, the accumulator
+                // included — a truncate is a stack cut, not a single pop.
+                temp_root_truncate(ctx, &v_root);
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
                 ))));
@@ -483,21 +490,25 @@ pub fn try_lower_console_call(
             // objects/arrays). This is more accurate than
             // js_jsvalue_to_string which only does the JS toString
             // protocol (returns "[object Object]" for plain objects).
+            //
+            // #6951: the accumulator is the only reference to every argument
+            // already pushed, and it lives in an SSA register across the
+            // evaluation of every argument still to come. `console.log("label",
+            // allocatingCall())` therefore lost its label — the array was swept
+            // mid-statement and the following push landed in recycled memory.
+            // Keep it in a temp root and re-read it, so it survives and follows
+            // an evacuating cycle.
             let cap = (args.len() as u32).to_string();
-            let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+            let acc = rooted_array_begin(ctx, &cap);
             for arg in args.iter() {
                 let v = if let Some(v) = lower_util_types_predicate_arg(ctx, arg)? {
                     v
                 } else {
                     lower_expr(ctx, arg)?
                 };
-                let blk = ctx.block();
-                current_arr = blk.call(
-                    I64,
-                    "js_array_push_f64",
-                    &[(I64, &current_arr), (DOUBLE, &v)],
-                );
+                temp_rooted_array_push(ctx, &acc, &v);
             }
+            let current_arr = rooted_array_read(ctx, &acc);
             let runtime_fn = match property.as_str() {
                 "info" => "js_console_info_spread",
                 "debug" => "js_console_debug_spread",
@@ -506,6 +517,7 @@ pub fn try_lower_console_call(
                 _ => "js_console_log_spread",
             };
             ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
+            temp_root_truncate(ctx, &acc);
             return Ok(Some(double_literal(f64::from_bits(
                 crate::nanbox::TAG_UNDEFINED,
             ))));
@@ -845,17 +857,13 @@ pub fn try_lower_native_method_str_dispatch(
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
             }
-            // Intern the method name and pass its heap string handle as the
-            // static-name method id. The typed-feedback wrapper resolves the
-            // id to bytes only at the runtime boundary.
+            // Pass a tagged pointer to the immutable StringPool dispatch
+            // descriptor. A GC-backed string handle belongs to the main
+            // thread's arena and cannot be resolved safely by a
+            // `perry/thread` worker executing this compiled closure.
             let key_idx = ctx.strings.intern(property);
-            let entry = ctx.strings.entry(key_idx);
-            let key_handle_global = format!("@{}", entry.handle_global);
-            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-            let method_id = ctx
-                .block()
-                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+            let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+            let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
             // Stack-allocate the args array if any. The alloca MUST live in
             // the function entry block — emitting it into the current block
             // (which may be a loop body) makes LLVM lower it as a runtime

@@ -137,6 +137,46 @@ pub(crate) fn emit_jsvalue_slot_store_on_block(
         layout_parent_bits,
         slot_index,
         layout_note_needed,
+        layout_note_needed,
+        barrier_parent_bits,
+        slot_addr,
+        write_barrier_needed,
+        false,
+        None,
+    )
+}
+
+/// As [`emit_jsvalue_slot_store_on_block`], but with the string-addref demote
+/// and the GC layout note gated **independently** (Phase 4b.1).
+///
+/// The two calls answer different questions and are provably dead under
+/// different conditions: the addref is a no-op unless the value is a heap
+/// `STRING_TAG` string, while the note is a no-op when the slot's mask class is
+/// already fixed. Class-field stores on a shape-proven receiver can retire one
+/// without the other — e.g. `Foo`-typed field ← `LocalGet` elides the note
+/// (pointer-masked slot) but must keep the addref (the local could hold a
+/// uniquely-owned string that a later `+=` would rewrite in place).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_jsvalue_slot_store_with_flags_on_block(
+    blk: &mut LlBlock,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    string_addref_needed: bool,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+) -> Option<String> {
+    emit_jsvalue_slot_store_on_block_inner(
+        blk,
+        slot_ptr,
+        value_double,
+        layout_parent_bits,
+        slot_index,
+        string_addref_needed,
+        layout_note_needed,
         barrier_parent_bits,
         slot_addr,
         write_barrier_needed,
@@ -163,6 +203,7 @@ pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
         value_double,
         layout_parent_bits,
         slot_index,
+        layout_note_needed,
         layout_note_needed,
         barrier_parent_bits,
         slot_addr,
@@ -200,6 +241,7 @@ pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
         layout_parent_bits,
         slot_index,
         layout_note_needed,
+        layout_note_needed,
         barrier_parent_bits,
         slot_addr,
         write_barrier_needed,
@@ -215,6 +257,7 @@ fn emit_jsvalue_slot_store_on_block_inner(
     value_double: &str,
     layout_parent_bits: &str,
     slot_index: &str,
+    string_addref_needed: bool,
     layout_note_needed: bool,
     barrier_parent_bits: &str,
     slot_addr: &str,
@@ -239,10 +282,13 @@ fn emit_jsvalue_slot_store_on_block_inner(
     // allocates fresh instead of mutating the stored element. This is the inline
     // codegen choke point the runtime store functions (`js_array_push_f64`, …)
     // are bypassed for on the fast paths. Tag-checked at runtime (a no-op for
-    // SSO / non-string), and only emitted when the value can be a heap pointer
-    // (`layout_note_needed`), so numeric stores pay nothing. Mirrors the
+    // SSO / non-string), and only emitted when the value can be a heap string
+    // (`string_addref_needed`), so numeric stores pay nothing. Most callers tie
+    // that to `layout_note_needed`; Phase 4b.1's class-field store gates it
+    // separately, because a pointer-masked slot can retire the note while the
+    // stored value can still be a uniquely-owned string. Mirrors the
     // object-field demote in `runtime_store_jsvalue_slot` (#5533).
-    if layout_note_needed {
+    if string_addref_needed {
         blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
     }
     if !layout_note_needed && !write_barrier_needed {

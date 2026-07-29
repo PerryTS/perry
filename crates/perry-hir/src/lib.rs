@@ -25,6 +25,7 @@ pub(crate) mod lower_patterns;
 pub(crate) mod lower_types;
 pub mod monomorph;
 pub mod stable_hash;
+pub mod types;
 pub mod walker;
 
 pub use analysis::{

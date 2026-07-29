@@ -1,10 +1,10 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{
     monomorphize_module, ArgumentsObjectMeta, BinaryOp, CallArg, Class, ClassComputedMember,
     ClassComputedMemberKind, ClassField, CompareOp, Expr, Function, LogicalOp, Module,
     ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp,
 };
-use perry_types::{ObjectType, PropertyInfo, Type, TypeParam};
 
 static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -258,6 +258,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     }
 }
 
@@ -8472,7 +8473,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
         Stmt::Let {
             id: 10,
             name: "adder".to_string(),
-            ty: Type::Function(perry_types::FunctionType {
+            ty: Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Number, false),
                     ("b".to_string(), Type::Number, false),
@@ -8527,7 +8528,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
     let mut prefix = Vec::new();
     let mut captures = Vec::new();
     let mut mutable_captures = Vec::new();
-    let mut local_ty = Type::Function(perry_types::FunctionType {
+    let mut local_ty = Type::Function(perry_hir::types::FunctionType {
         params: vec![
             ("a".to_string(), Type::Int32, false),
             ("b".to_string(), Type::Int32, false),
@@ -8567,7 +8568,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
         }
         "number_param" => {
             params[0].ty = Type::Number;
-            local_ty = Type::Function(perry_types::FunctionType {
+            local_ty = Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Number, false),
                     ("b".to_string(), Type::Int32, false),
@@ -8579,7 +8580,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
         }
         "number_return" => {
             return_type = Type::Number;
-            local_ty = Type::Function(perry_types::FunctionType {
+            local_ty = Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Int32, false),
                     ("b".to_string(), Type::Int32, false),
@@ -8981,7 +8982,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
     let mut captures = Vec::new();
     let mut mutable_captures = Vec::new();
     let mut call_args = vec![Expr::Bool(true), Expr::Bool(false)];
-    let mut local_ty = Type::Function(perry_types::FunctionType {
+    let mut local_ty = Type::Function(perry_hir::types::FunctionType {
         params: vec![
             ("a".to_string(), Type::Boolean, false),
             ("b".to_string(), Type::Boolean, false),
@@ -9008,7 +9009,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
         }
         "numeric_predicate" => {
             params = vec![param(31, "a", Type::Number), param(32, "b", Type::Number)];
-            local_ty = Type::Function(perry_types::FunctionType {
+            local_ty = Type::Function(perry_hir::types::FunctionType {
                 params: vec![
                     ("a".to_string(), Type::Number, false),
                     ("b".to_string(), Type::Number, false),
@@ -9119,7 +9120,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
     let mut prefix = Vec::new();
     let mut captures = Vec::new();
     let mut mutable_captures = Vec::new();
-    let mut local_ty = Type::Function(perry_types::FunctionType {
+    let mut local_ty = Type::Function(perry_hir::types::FunctionType {
         params: vec![("s".to_string(), Type::String, false)],
         return_type: Box::new(Type::String),
         is_async: false,
@@ -12583,9 +12584,14 @@ fn scalar_replaced_numeric_method_with_local_temps_inlines_without_dispatch_or_a
 fn scalar_method_local_temp_rejects_mutable_binding() {
     let module = scalar_method_numeric_local_temp_module("mutable", true);
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    // The scalar-method summary must reject the mutable temp (no inline —
+    // asserted on the artifact below). Representation-selection Phase 3b may
+    // still lower the call as a DIRECT dispatch to the resolved method on the
+    // shape-proven heap receiver; either dispatch form is a real method call.
     assert!(
-        ir.contains("call double @js_native_call_method"),
-        "mutable local temp must keep dynamic method dispatch fallback:\n{ir}"
+        ir.contains("call double @js_native_call_method")
+            || ir.contains("call double @perry_method_"),
+        "mutable local temp must dispatch to the real method (dynamic tower or direct):\n{ir}"
     );
     assert!(
         ir.contains("call i64 @js_object_alloc"),
@@ -12659,10 +12665,26 @@ fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_pr
     ] {
         let module = scalar_method_boolean_negative_module(case);
         let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
-        assert!(
-            ir.contains("call double @js_native_call_method"),
-            "{case} must keep dynamic method dispatch fallback:\n{ir}"
-        );
+        if case == "mutation" {
+            // Representation-selection Phase 3b: a method that WRITES a
+            // declared `this` field is (correctly) rejected by the
+            // scalar-method summary — this test's original point — but is
+            // legal for a shape-proven Ptr<Shape> receiver, so the call now
+            // lowers to a DIRECT dispatch to the resolved method on the
+            // still-heap-allocated receiver (no dynamic tower, no shape
+            // guard). The receiver must stay heap-allocated either way.
+            assert!(
+                ir.contains(
+                    "call double @perry_method_scalar_method_boolean_reject_mutation_ts__Point__isAbove"
+                ),
+                "mutation must dispatch directly to the resolved method on the heap receiver:\n{ir}"
+            );
+        } else {
+            assert!(
+                ir.contains("call double @js_native_call_method"),
+                "{case} must keep dynamic method dispatch fallback:\n{ir}"
+            );
+        }
         assert!(
             ir.contains("call i64 @js_object_alloc"),
             "{case} must keep heap allocation fallback for the receiver:\n{ir}"
@@ -13129,9 +13151,13 @@ fn scalar_method_int32_bitwise_rejects_unproven_or_unsigned_shapes() {
         ),
     ] {
         let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+        // Same Phase 3b caveat as the mutable-temp test: the scalar Int32
+        // summary must reject (artifact assert below), but the call may
+        // lower as a direct resolved-method dispatch on the heap receiver.
         assert!(
-            ir.contains("call double @js_native_call_method"),
-            "{case} must keep dynamic method dispatch fallback:\n{ir}"
+            ir.contains("call double @js_native_call_method")
+                || ir.contains("call double @perry_method_"),
+            "{case} must dispatch to the real method (dynamic tower or direct):\n{ir}"
         );
         assert!(
             ir.contains("call i64 @js_object_alloc"),
@@ -13183,7 +13209,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
 }
 
 #[test]
-fn static_name_method_fallback_uses_method_id_wrapper() {
+fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
     let module = module_with_classes_and_params(
         "method_id_static_name_fallback.ts",
         Vec::new(),
@@ -13207,6 +13233,14 @@ fn static_name_method_fallback_uses_method_id_wrapper() {
     assert!(
         !ir.contains("call double @js_typed_feedback_native_call_method(i64"),
         "static-name dynamic method fallback should not pass raw name bytes:\n{ir}"
+    );
+    assert!(
+        ir.contains(".dispatch = private unnamed_addr constant { i32, i32, i64, ptr }"),
+        "static method ids should be immutable rodata descriptors:\n{ir}"
+    );
+    assert!(
+        ir.contains(".dispatch to i64"),
+        "method-id lowering should tag the descriptor address, not load a GC string handle:\n{ir}"
     );
 }
 

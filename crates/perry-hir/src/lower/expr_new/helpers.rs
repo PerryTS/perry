@@ -2,8 +2,8 @@
 //! `expr_new.rs` so the trunk stays under the file-size budget. Pure code move
 //! — no behavior change.
 
+use crate::types::Type;
 use anyhow::{anyhow, Result};
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;

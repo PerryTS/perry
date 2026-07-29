@@ -2,9 +2,13 @@
 //! Pure move — no logic changes.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
+use super::temp_root::{
+    any_may_trigger_gc, rooted_handle_begin, rooted_handle_get, rooted_handle_release,
+    temp_root_get_double, temp_root_push_double,
+};
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::POINTER_MASK_I64;
 use crate::type_analysis::{compute_auto_captures, is_numeric_expr};
@@ -127,7 +131,7 @@ fn is_number_type(ty: &HirType) -> bool {
     matches!(ty, HirType::Number)
 }
 
-fn object_type_is_exact_xy_number(ty: &perry_types::ObjectType) -> bool {
+fn object_type_is_exact_xy_number(ty: &perry_hir::types::ObjectType) -> bool {
     ty.index_signature.is_none()
         && ty.properties.len() == 2
         && ty
@@ -308,6 +312,12 @@ pub(crate) fn lower_object_literal(
     props: &[(String, Expr)],
     expected_ty: Option<&HirType>,
 ) -> Result<String> {
+    // #6951: the object handle is allocated BEFORE the property values are
+    // lowered and lives in an SSA register across all of them. `{ a: s, b: f() }`
+    // therefore had its half-built object swept by `f`'s collection, and the
+    // remaining field stores landed in recycled memory. Root the handle when any
+    // initializer can collect; literals of plain locals emit no extra IR.
+    let protect_handle = any_may_trigger_gc(ctx, props.iter().map(|(_, v)| v));
     let field_count = props.len() as u32;
     let zero_str = "0".to_string();
     let n_str = field_count.to_string();
@@ -365,16 +375,21 @@ pub(crate) fn lower_object_literal(
             ],
         );
 
+        let rooted = rooted_handle_begin(ctx, &obj_handle, protect_handle);
         for (i, (_, value_expr)) in props.iter().enumerate() {
             let v = lower_expr(ctx, value_expr)?;
             let idx_str = i.to_string();
+            let obj_handle = rooted_handle_get(ctx, &rooted);
             ctx.block().call_void(
                 "js_object_set_unboxed_f64_field",
                 &[(I64, &obj_handle), (I32, &idx_str), (DOUBLE, &v)],
             );
         }
+        let obj_handle = rooted_handle_get(ctx, &rooted);
         emit_unboxed_object_layout_init(ctx, &obj_handle);
-        return Ok(nanbox_pointer_inline(ctx.block(), &obj_handle));
+        let boxed = nanbox_pointer_inline(ctx.block(), &obj_handle);
+        rooted_handle_release(ctx, rooted);
+        return Ok(boxed);
     }
 
     if !any_method_closure && field_count > 0 {
@@ -416,9 +431,11 @@ pub(crate) fn lower_object_literal(
             ],
         );
 
+        let rooted = rooted_handle_begin(ctx, &obj_handle, protect_handle);
         for (i, (_, value_expr)) in props.iter().enumerate() {
             let v = lower_expr(ctx, value_expr)?;
             let idx_str = i.to_string();
+            let obj_handle = rooted_handle_get(ctx, &rooted);
             // Issue #448: the runtime `js_object_set_field` takes its
             // value as `JSValue` (`#[repr(transparent)] u64`), which the
             // System V / AArch64 / Win64 ABIs all pass in a *general*-
@@ -439,20 +456,29 @@ pub(crate) fn lower_object_literal(
                 &[(I64, &obj_handle), (I32, &idx_str), (I64, &v_bits)],
             );
         }
+        let obj_handle = rooted_handle_get(ctx, &rooted);
         if let Some(layout) = typed_layout.as_ref() {
             emit_object_typed_shape_init(ctx, &obj_handle, layout);
         }
-        return Ok(nanbox_pointer_inline(ctx.block(), &obj_handle));
+        let boxed = nanbox_pointer_inline(ctx.block(), &obj_handle);
+        rooted_handle_release(ctx, rooted);
+        return Ok(boxed);
     }
 
     let obj_handle = ctx
         .block()
         .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
+    let rooted = rooted_handle_begin(ctx, &obj_handle, protect_handle);
 
-    // Track `(closure_value_double, reserved_this_slot_idx)` for each
-    // method closure that needs `this` patched after the object is
+    // Track `(temp_root_slot, closure_value_double, reserved_this_slot_idx)`
+    // for each method closure that needs `this` patched after the object is
     // fully built. Enables `calc.add(n) { this.value = ... }`.
-    let mut this_patches: Vec<(String, u32)> = Vec::new();
+    //
+    // #6951: the closure value is *deferred* — it is reused after every
+    // remaining property has been lowered, so it sits in an SSA register
+    // across all of their allocations. Root it whenever any initializer can
+    // collect, and re-read it before the patch loop.
+    let mut this_patches: Vec<(Option<String>, String, u32)> = Vec::new();
 
     for (key, value_expr) in props {
         let key_idx = ctx.strings.intern(key);
@@ -470,8 +496,18 @@ pub(crate) fn lower_object_literal(
             let this_idx = auto_caps.len() as u32;
 
             let v = lower_expr(ctx, value_expr)?;
-            this_patches.push((v.clone(), this_idx));
+            // No explicit release for these: `js_gc_temp_root_truncate` is a
+            // stack CUT, not a pop, and `rooted` was pushed before the loop —
+            // so the single `rooted_handle_release` at the end of this function
+            // drops the object handle AND every closure root above it. That
+            // depends on the push order, so keep `rooted_handle_begin` ahead of
+            // this loop and the release after the patch loop.
+            // (`gc::tests::temp_roots::truncate_drops_every_slot_above_the_base`
+            // pins the cut semantics.)
+            let closure_root = protect_handle.then(|| temp_root_push_double(ctx, &v));
+            this_patches.push((closure_root, v.clone(), this_idx));
 
+            let obj_handle = rooted_handle_get(ctx, &rooted);
             let blk = ctx.block();
             let key_box = blk.load(DOUBLE, &key_handle_global);
             let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -484,6 +520,7 @@ pub(crate) fn lower_object_literal(
         }
 
         let v = lower_expr(ctx, value_expr)?;
+        let obj_handle = rooted_handle_get(ctx, &rooted);
         let blk = ctx.block();
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -497,6 +534,17 @@ pub(crate) fn lower_object_literal(
     // Patch each method closure's reserved `this` slot with the object
     // pointer (NaN-boxed). Done AFTER all fields are set so every
     // method sees the fully-initialized object.
+    // Refresh every deferred closure value from its root BEFORE taking the
+    // block builder — an evacuating cycle during a later property's
+    // initializer rewrote the slot, and the register queued above is stale.
+    let this_patches: Vec<(String, u32)> = this_patches
+        .into_iter()
+        .map(|(root, value, this_idx)| match root {
+            Some(idx) => (temp_root_get_double(ctx, &idx), this_idx),
+            None => (value, this_idx),
+        })
+        .collect();
+    let obj_handle = rooted_handle_get(ctx, &rooted);
     if !this_patches.is_empty() {
         let blk = ctx.block();
         let obj_tagged = {
@@ -519,5 +567,7 @@ pub(crate) fn lower_object_literal(
         emit_object_typed_shape_init(ctx, &obj_handle, layout);
     }
 
-    Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))
+    let boxed = nanbox_pointer_inline(ctx.block(), &obj_handle);
+    rooted_handle_release(ctx, rooted);
+    Ok(boxed)
 }

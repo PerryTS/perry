@@ -17,7 +17,7 @@
 
 use crate::analysis::{infer_expr_type, HirTypeEnv};
 use crate::ir::*;
-use perry_types::{LocalId, Type};
+use crate::types::{LocalId, Type};
 use std::collections::HashSet;
 
 fn type_is_certainly_object_like(ty: &Type) -> bool {

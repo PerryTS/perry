@@ -381,6 +381,258 @@ pub extern "C" fn js_put_value_set_ic_miss(
     result
 }
 
+// ---------------------------------------------------------------------------
+// #6812 (w12): 3-way dynamic-key write IC.
+//
+// Layout of the per-site `[8 x i64]` cache (same global family as the
+// static write PIC): `[shape_token, k0, s0, k1, s1, k2, s2, _spare]`.
+// A way's key is the NaN-boxed key VALUE's bits: SSO keys (<= 5 bytes)
+// compare by CONTENT — move-immune and hitting across distinct string
+// instances — while heap keys compare by identity (a moved or re-built key
+// simply misses; identity can never false-hit). The shape token mirrors the
+// static PIC (stamped ShapeId lifted with the ID bit, else the shared keys
+// pointer) and, like every Perry IC, is only COMPARED, never dereferenced:
+// stale entries self-heal by missing. That property is what the discarded
+// safepointing-RHS approach lacked — nothing here roots or revalidates
+// across safepoints, so the hot path is pure compares before a store.
+
+const DYN_IC_WAYS: usize = 3;
+
+/// Outlined dynamic-key PutValue with per-site cache. Fast path: shape token
+/// + key-bits match -> validated own-slot overwrite. Everything else falls
+/// through to the full `[[Set]]` semantics and re-primes.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_dyn_ic(
+    cache: *mut [i64; 8],
+    target: f64,
+    key: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    if !cache.is_null() {
+        let hit = unsafe {
+            let c = &*cache;
+            let token = c[0] as u64;
+            let key_bits = key.to_bits() as i64;
+            // `0` is the empty-way sentinel — and also the NaN-box bits of
+            // the JS number 0, so a dynamic numeric-0 key must never reach
+            // the way compares (it would false-hit an unfilled way).
+            if token != 0 && key_bits != 0 {
+                let mut found = None;
+                for way in 0..DYN_IC_WAYS {
+                    if c[1 + way * 2] == key_bits {
+                        found = Some(c[2 + way * 2] as u32);
+                        break;
+                    }
+                }
+                found.and_then(|slot| dyn_ic_try_store(target, token, slot, value))
+            } else {
+                None
+            }
+        };
+        if let Some(ret) = hit {
+            return ret;
+        }
+    }
+    js_put_value_set_dyn_ic_miss(cache, target, key, value, strict)
+}
+
+/// Validated fast store: the receiver must still be an ordinary,
+/// non-forwarded, unblocked, class-tagged heap object whose CURRENT shape
+/// token equals the cached one and whose inline region covers the slot.
+/// Every check reads the receiver's live state — the cached token/slot are
+/// never dereferenced — so a GC between prime and hit at worst causes a
+/// miss, never a wrong store.
+#[inline]
+unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Option<f64> {
+    let target_bits = target.to_bits();
+    if (target_bits & !POINTER_MASK) != POINTER_TAG {
+        return None;
+    }
+    let obj_addr = (target_bits & POINTER_MASK) as usize;
+    let gc_header = crate::value::addr_class::try_read_gc_header(obj_addr)?;
+    const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || gc_header._reserved & BLOCKING_FLAGS != 0
+    {
+        return None;
+    }
+    let obj = obj_addr as *mut crate::ObjectHeader;
+    let class_id = (*obj).class_id;
+    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+        || class_id == 0
+        || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+    {
+        return None;
+    }
+    let current_token = {
+        let parent_class_id = (*obj).parent_class_id;
+        if crate::object::shapes::is_shape_id(parent_class_id) {
+            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
+        } else {
+            (*obj).keys_array as u64
+        }
+    };
+    if current_token != token {
+        return None;
+    }
+    let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+    if slot >= alloc_limit {
+        return None;
+    }
+    crate::object::store_object_field_slot(obj, slot as usize, value.to_bits());
+    Some(value)
+}
+
+// #6088-style keep: codegen emits the only call; a whole-program bitcode
+// link would otherwise dead-strip the IC entry.
+#[cfg_attr(feature = "keepalive-anchors", used)]
+static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(*mut [i64; 8], f64, f64, f64, i32) -> f64 =
+    js_put_value_set_dyn_ic;
+
+/// Full `[[Set]]` semantics + prime. Mirrors the static PIC's prime policy
+/// (only a successful ordinary own-data overwrite on a class-tagged,
+/// unblocked, shape-shared receiver may prime), with the key resolved from
+/// its VALUE (SSO or heap) instead of requiring an interned pointer.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_dyn_ic_miss(
+    cache: *mut [i64; 8],
+    target: f64,
+    key: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let result = js_put_value_set(
+        target_handle.get_nanbox_f64(),
+        key_handle.get_nanbox_f64(),
+        value_handle.get_nanbox_f64(),
+        target_handle.get_nanbox_f64(),
+        strict,
+    );
+    if cache.is_null() {
+        return result;
+    }
+    unsafe {
+        let target = target_handle.get_nanbox_f64();
+        let key = key_handle.get_nanbox_f64();
+        let target_bits = target.to_bits();
+        if (target_bits & !POINTER_MASK) != POINTER_TAG {
+            return result;
+        }
+        let obj_addr = (target_bits & POINTER_MASK) as usize;
+        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
+            return result;
+        };
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc_header._reserved & BLOCKING_FLAGS != 0
+        {
+            return result;
+        }
+        let obj = obj_addr as *mut crate::ObjectHeader;
+        let class_id = (*obj).class_id;
+        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+            || class_id == 0
+            || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+            || crate::array::object_prototype_addr_matches(obj_addr)
+        {
+            return result;
+        }
+        let keys = (*obj).keys_array;
+        if keys.is_null() || (keys as u64) >> 48 != 0 {
+            return result;
+        }
+        let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
+            return result;
+        };
+        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
+                != crate::gc::GC_FLAG_SHAPE_SHARED
+        {
+            return result;
+        }
+        // Resolve the key's own-field index by VALUE (SSO or heap bytes).
+        let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let key_jsval = crate::value::JSValue::from_bits(key.to_bits());
+        let Some(key_bytes) = crate::string::js_string_key_bytes(key_jsval, &mut key_buf) else {
+            return result;
+        };
+        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+        if key_count > 4096 {
+            return result;
+        }
+        let mut own_idx = None;
+        let mut cand_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..key_count {
+            let candidate = crate::array::js_array_get(keys, i as u32);
+            if let Some(cand_bytes) = crate::string::js_string_key_bytes(candidate, &mut cand_buf) {
+                if cand_bytes == key_bytes {
+                    own_idx = Some(i as u32);
+                    break;
+                }
+            }
+        }
+        let Some(idx) = own_idx else {
+            return result;
+        };
+        let alloc_limit =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+        if idx >= alloc_limit {
+            return result;
+        }
+        let parent_class_id = (*obj).parent_class_id;
+        let shape_token = if crate::object::shapes::is_shape_id(parent_class_id) {
+            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
+        } else {
+            keys as u64
+        };
+        let c = &mut *cache;
+        let key_bits = key.to_bits() as i64;
+        // Preserve the empty-way sentinel invariant: never prime bits 0
+        // (only the JS number 0 has them, and numeric keys cannot prime
+        // anyway — the byte resolver above only accepts strings).
+        if key_bits == 0 {
+            return result;
+        }
+        if c[0] as u64 != shape_token {
+            // New shape at this site: restart the way set.
+            *c = [0; 8];
+        }
+        // MRU insert: shift ways down, newest first. A duplicate key way is
+        // moved to the front rather than duplicated.
+        let mut ways: Vec<(i64, i64)> = (0..DYN_IC_WAYS)
+            .map(|w| (c[1 + w * 2], c[2 + w * 2]))
+            .filter(|(k, _)| *k != 0 && *k != key_bits)
+            .collect();
+        ways.insert(0, (key_bits, idx as i64));
+        ways.truncate(DYN_IC_WAYS);
+        for (w, (k, sl)) in ways.iter().enumerate() {
+            c[1 + w * 2] = *k;
+            c[2 + w * 2] = *sl;
+        }
+        // Token last: a zero or stale token cannot hit until it matches the
+        // receiver's current discriminated shape.
+        c[0] = shape_token as i64;
+    }
+    result
+}
+
 #[cold]
 fn trace_object_array_numeric_write_rejection(reason: &'static str) {
     if std::env::var_os("PERRY_TRACE_OBJECT_ARRAY_WRITE_GUARD").is_some() {
@@ -442,6 +694,16 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
 
     let arr = array_addr as *const crate::array::ArrayHeader;
     let (length, capacity) = unsafe { ((*arr).length, (*arr).capacity) };
+    // #6812 dynamic-bound loops (`i < arr.length`): the u32::MAX sentinel
+    // resolves to the VALIDATED array's own length — after the array-kind
+    // checks above, before the 16M cap below, so the emitter's fast nest
+    // (which loads the same header length after guard-ok) can never outrun
+    // the proven prefix. An empty array is not worth the fast path.
+    let count = if count == u32::MAX { length } else { count };
+    if count == 0 {
+        trace_object_array_numeric_write_rejection("empty dynamic-length prefix");
+        return None;
+    }
     if length > 16_000_000 || capacity > 16_000_000 || length > capacity || count > length {
         trace_object_array_numeric_write_rejection("array length/capacity/prefix bound");
         return None;
@@ -559,31 +821,79 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         )?;
     }
 
+    // #6812 spill lanes: classify each lane as INLINE (slot within the
+    // receiver's inline alloc_limit) or SPILL (slot lives in the
+    // object-owned overflow buffer, `meta.spill`). The FIRST receiver fixes
+    // each lane's mode; every later receiver must be on the SAME side of its
+    // own alloc_limit and pass the same coverage proof, so the emitter's
+    // per-lane store sequence (raw inline store vs the meta → spill
+    // indirection) is uniform across the whole proven prefix. A spill lane
+    // sets bit 15 of its result lane; the caller's `+1` packing cannot carry
+    // into it (slot ≤ 4096).
+    unsafe fn spill_lane_covers(obj: *const crate::ObjectHeader, slot: u32) -> bool {
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return false;
+        }
+        let spill = (*meta).spill as *const crate::array::ArrayHeader;
+        if spill.is_null() {
+            return false;
+        }
+        // Mirror the shared-keys validation: a live, non-forwarded plain
+        // array whose length high-water covers the slot (a key present in
+        // the shape implies its value slot was written, so length > slot —
+        // verified rather than assumed).
+        let Some(gc) = crate::value::addr_class::try_read_gc_header(spill as usize) else {
+            return false;
+        };
+        if gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return false;
+        }
+        slot < (*spill).length && slot < (*spill).capacity
+    }
+
     let first_limit = unsafe {
         std::cmp::max(
             (*first).field_count,
             crate::object::INLINE_SLOT_FLOOR as u32,
         )
     };
-    if slots[..keys.len()]
-        .iter()
-        .any(|slot| u32::from(*slot) >= first_limit)
-    {
-        trace_object_array_numeric_write_rejection("first receiver target slot is out of bounds");
-        return None;
+    let mut lane_spill = [false; 4];
+    for index in 0..keys.len() {
+        let slot = u32::from(slots[index]);
+        if slot >= first_limit {
+            if !unsafe { spill_lane_covers(first, slot) } {
+                trace_object_array_numeric_write_rejection(
+                    "first receiver target slot is out of bounds",
+                );
+                return None;
+            }
+            lane_spill[index] = true;
+        }
     }
-    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
-        && slots[..keys.len()].iter().any(|slot| {
+    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+        // Typed-intact receivers keep raw-f64 inline invariants; a spill
+        // lane on one is unexpected — reject conservatively rather than
+        // reason about typed descriptors for out-of-line slots.
+        if lane_spill[..keys.len()].iter().any(|s| *s) {
+            trace_object_array_numeric_write_rejection(
+                "first receiver typed descriptor does not contain every target slot",
+            );
+            return None;
+        }
+        if slots[..keys.len()].iter().any(|slot| {
             !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
                 first as usize,
                 usize::from(*slot),
             )
-        })
-    {
-        trace_object_array_numeric_write_rejection(
-            "first receiver typed descriptor does not contain every target slot",
-        );
-        return None;
+        }) {
+            trace_object_array_numeric_write_rejection(
+                "first receiver typed descriptor does not contain every target slot",
+            );
+            return None;
+        }
     }
 
     for i in 1..count as usize {
@@ -604,31 +914,123 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         }
         let limit =
             unsafe { std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) };
-        if slots[..keys.len()]
-            .iter()
-            .any(|slot| u32::from(*slot) >= limit)
-        {
-            trace_object_array_numeric_write_rejection(
-                "receiver prefix contains an out-of-bounds target slot",
-            );
-            return None;
+        for index in 0..keys.len() {
+            let slot = u32::from(slots[index]);
+            if lane_spill[index] {
+                // Mode uniformity: this receiver must ALSO hold the slot in
+                // its spill buffer (a wider receiver holding it inline would
+                // make the emitter's spill store write the wrong memory).
+                if slot < limit || !unsafe { spill_lane_covers(obj, slot) } {
+                    trace_object_array_numeric_write_rejection(
+                        "receiver prefix contains an out-of-bounds target slot",
+                    );
+                    return None;
+                }
+            } else if slot >= limit {
+                trace_object_array_numeric_write_rejection(
+                    "receiver prefix contains an out-of-bounds target slot",
+                );
+                return None;
+            }
         }
-        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
-            && slots[..keys.len()].iter().any(|slot| {
+        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+            if lane_spill[..keys.len()].iter().any(|s| *s) {
+                trace_object_array_numeric_write_rejection(
+                    "receiver typed descriptor does not contain every target slot",
+                );
+                return None;
+            }
+            if slots[..keys.len()].iter().any(|slot| {
                 !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
                     obj as usize,
                     usize::from(*slot),
                 )
-            })
-        {
-            trace_object_array_numeric_write_rejection(
-                "receiver typed descriptor does not contain every target slot",
-            );
-            return None;
+            }) {
+                trace_object_array_numeric_write_rejection(
+                    "receiver typed descriptor does not contain every target slot",
+                );
+                return None;
+            }
         }
     }
 
+    for index in 0..keys.len() {
+        if lane_spill[index] {
+            slots[index] |= 0x8000;
+        }
+    }
     Some(slots)
+}
+
+/// #6812 (w12): preflight for the TABLE-DRIVEN write lane
+/// (`o[K[idx]] = v`). Validates the key table (live array, length covers
+/// the proven index range, first `required_len` entries are strings),
+/// materializes each entry to a stable heap string (SSO elements allocate,
+/// so the array/table/keys are rooted across materialization), then runs
+/// the SAME receiver-prefix proof as the numeric guard via
+/// `object_array_numeric_write_slots` — spill lanes included. On success,
+/// writes each resolved lane into `out_lanes` in the emitter's encoding
+/// (`(slot + 1) | spill_flag`) and returns 1.
+#[no_mangle]
+pub extern "C" fn js_object_array_keytable_write_guard(
+    array: f64,
+    key_table: f64,
+    required_len: u32,
+    receiver_count: u32,
+    out_lanes: *mut i64,
+) -> i32 {
+    if !(1..=4).contains(&required_len) || out_lanes.is_null() {
+        return 0;
+    }
+    let kt_bits = key_table.to_bits();
+    if (kt_bits & !POINTER_MASK) != POINTER_TAG {
+        return 0;
+    }
+    let kt_addr = (kt_bits & POINTER_MASK) as usize;
+    let Some(kt_gc) = (unsafe { crate::value::addr_class::try_read_gc_header(kt_addr) }) else {
+        return 0;
+    };
+    if kt_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        || kt_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return 0;
+    }
+    if unsafe { (*(kt_addr as *const crate::array::ArrayHeader)).length } < required_len {
+        return 0;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array_handle = scope.root_nanbox_f64(array);
+    let table_handle = scope.root_nanbox_f64(key_table);
+    let mut key_handles = Vec::with_capacity(required_len as usize);
+    for i in 0..required_len {
+        let table_now = table_handle.get_nanbox_f64();
+        let table_ptr = (table_now.to_bits() & POINTER_MASK) as *const crate::array::ArrayHeader;
+        let elem = crate::array::js_array_get(table_ptr, i);
+        let elem_f64 = f64::from_bits(elem.bits());
+        // Stable heap pointer for SSO/heap strings alike; may allocate, so
+        // every prior key stays rooted and the table re-reads per element.
+        let heap_ptr = crate::value::js_get_string_pointer_unified(elem_f64);
+        if heap_ptr == 0 {
+            return 0;
+        }
+        let boxed = f64::from_bits(crate::value::js_nanbox_string(heap_ptr).to_bits());
+        key_handles.push(scope.root_nanbox_f64(boxed));
+    }
+    let keys: Vec<f64> = key_handles.iter().map(|h| h.get_nanbox_f64()).collect();
+    let Some(slots) =
+        object_array_numeric_write_slots(array_handle.get_nanbox_f64(), &keys, receiver_count)
+    else {
+        return 0;
+    };
+    for i in 0..required_len as usize {
+        let lane = slots[i];
+        let low = (lane & 0x7FFF) as i64 + 1;
+        let flag = (lane & 0x8000) as i64;
+        unsafe {
+            *out_lanes.add(i) = low | flag;
+        }
+    }
+    1
 }
 
 /// Preflight for codegen's bounded call-free nested object-write loop.

@@ -23,8 +23,8 @@
 //! variant in our `Type` enum and naive narrowing would either lose
 //! precision or incorrectly drop array methods from `object`-typed unions.
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::Stmt;

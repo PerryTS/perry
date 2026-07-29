@@ -6,7 +6,7 @@ fn empty_env() -> HirTypeEnv {
 }
 
 fn function_type(return_type: Type) -> Type {
-    Type::Function(perry_types::FunctionType {
+    Type::Function(crate::types::FunctionType {
         params: Vec::new(),
         return_type: Box::new(return_type),
         is_async: false,
@@ -622,6 +622,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     });
 
@@ -694,6 +695,7 @@ fn infers_named_class_and_interface_property_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     });
     module.classes.push(Class {
@@ -718,6 +720,7 @@ fn infers_named_class_and_interface_property_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     });
     module.interfaces.push(Interface {
@@ -1661,6 +1664,7 @@ fn resolves_this_and_super_in_class_context() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     });
     module.classes.push(Class {
@@ -1685,6 +1689,7 @@ fn resolves_this_and_super_in_class_context() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     });
 

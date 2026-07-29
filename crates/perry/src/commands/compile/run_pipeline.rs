@@ -561,7 +561,7 @@ pub fn run_with_parse_cache(
     // Collect all non-generic type aliases from all modules.
     // These are passed to each module's compiler so type_to_abi can resolve
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.
-    let mut all_type_aliases: std::collections::BTreeMap<String, perry_types::Type> =
+    let mut all_type_aliases: std::collections::BTreeMap<String, perry_hir::types::Type> =
         std::collections::BTreeMap::new();
     for hir_module in ctx.native_modules.values() {
         for ta in &hir_module.type_aliases {
@@ -705,7 +705,7 @@ pub fn run_with_parse_cache(
     // from a real `...rest`. effect's `pipe`/`dual` are the load-bearing case.
     let mut exported_func_synthetic_arguments: BTreeSet<(String, String)> = BTreeSet::new();
     // Build a map of all exported functions with their return types from all modules
-    let mut exported_func_return_types: BTreeMap<(String, String), perry_types::Type> =
+    let mut exported_func_return_types: BTreeMap<(String, String), perry_hir::types::Type> =
         BTreeMap::new();
     // Set of exported functions that were declared `async` in their source module.
     // We track this separately because users routinely write `async function f() { ... }`
@@ -830,8 +830,24 @@ pub fn run_with_parse_cache(
             .filter(|f| f.is_exported)
             .map(|f| &f.name)
             .collect();
+        // Alias exports bound to DECLARED functions (`export const decodeSync =
+        // decodeUnknownSync` / `export { impl as api }`) land in BOTH
+        // `exported_objects` and `exported_functions` (HIR records the alias
+        // with the origin FuncId, gated on `lookup_func`, so const-closures
+        // never appear here). Their cross-module symbol resolves through
+        // origin-name mapping to the FUNCTION BODY, not a var getter —
+        // classifying them as vars made consumers 0-arg "getter"-call the
+        // symbol, silently EXECUTING the function at import-read time
+        // (Effect's `decodeSync` ran `decodeUnknownSync(undefined)` during
+        // module init → "Cannot read properties of undefined (reading
+        // 'checks')").
+        let function_alias_names: std::collections::HashSet<&String> = hir_module
+            .exported_functions
+            .iter()
+            .map(|(n, _)| n)
+            .collect();
         for obj_name in &hir_module.exported_objects {
-            if is_function_decl.contains(obj_name) {
+            if is_function_decl.contains(obj_name) || function_alias_names.contains(obj_name) {
                 continue;
             }
             let key = (path_str.clone(), obj_name.clone());
@@ -1277,7 +1293,7 @@ pub fn run_with_parse_cache(
     // exported_async_funcs is propagated in the same loop so that re-exported async
     // functions remain marked async at every step in the chain.
     loop {
-        let mut new_func_entries: Vec<((String, String), perry_types::Type)> = Vec::new();
+        let mut new_func_entries: Vec<((String, String), perry_hir::types::Type)> = Vec::new();
         let mut new_async_entries: Vec<(String, String)> = Vec::new();
         for (path, hir_module) in &ctx.native_modules {
             let path_str = path.to_string_lossy().to_string();
@@ -1867,6 +1883,30 @@ pub fn run_with_parse_cache(
                         global.id
                     );
                     perry_codegen::NamespaceEntryKind::LocalVar { global_name: gname }
+                } else if let Some(func) = target_hir
+                    .exported_functions
+                    .iter()
+                    .find(|(n, _)| n == &fe.source_local || n == &fe.name)
+                    .and_then(|(_, fid)| target_hir.functions.iter().find(|f| f.id == *fid))
+                {
+                    // Alias export bound to a declared function
+                    // (`export const decodeEffect = decodeUnknownEffect`).
+                    // The ForeignVar fallback below getter-CALLS
+                    // `perry_fn_<mod>__<alias>` — but for aliases that symbol
+                    // is the #460 forwarding wrapper (the function body), so
+                    // the populator EXECUTED the function with zeroed args at
+                    // module init (Effect SchemaParser: decodeUnknownEffect
+                    // ran during init → "Cannot read properties of undefined
+                    // (reading 'checks')"). Resolve to the ORIGIN function's
+                    // closure singleton instead, matching plain declarations.
+                    let scoped = format!(
+                        "perry_fn_{}__{}",
+                        sanitize_module_name(&target_hir.name),
+                        sanitize_module_name(&func.name)
+                    );
+                    perry_codegen::NamespaceEntryKind::LocalFunction {
+                        wrap_symbol: format!("__perry_wrap_{}", scoped),
+                    }
                 } else {
                     // Best-effort: treat unknown locals as Var sourced
                     // by getter. This covers re-export shapes that the
@@ -1893,6 +1933,22 @@ pub fn run_with_parse_cache(
                         src.classes.iter().find(|c| c.name == fe.source_local)
                     {
                         perry_codegen::NamespaceEntryKind::LocalClass { class_id: class.id }
+                    } else if let Some(func) = src
+                        .exported_functions
+                        .iter()
+                        .find(|(n, _)| n == &fe.source_local || n == &fe.name)
+                        .and_then(|(_, fid)| src.functions.iter().find(|f| f.id == *fid))
+                    {
+                        // Cross-module alias of a declared function — same
+                        // hazard as the local-binding arm above: the
+                        // ForeignVar getter-call would EXECUTE the forwarding
+                        // wrapper. Route to the origin function's closure
+                        // singleton via ForeignFunction under its ORIGIN name.
+                        perry_codegen::NamespaceEntryKind::ForeignFunction {
+                            source_prefix: source_prefix.clone(),
+                            source_local: func.name.clone(),
+                            param_count: func.params.len(),
+                        }
                     } else {
                         perry_codegen::NamespaceEntryKind::ForeignVar {
                             source_prefix: source_prefix.clone(),
@@ -2292,7 +2348,7 @@ pub fn run_with_parse_cache(
                 std::collections::HashSet::new();
             let mut imported_param_counts: std::collections::HashMap<String, usize> =
                 std::collections::HashMap::new();
-            let mut imported_return_types: std::collections::HashMap<String, perry_types::Type> =
+            let mut imported_return_types: std::collections::HashMap<String, perry_hir::types::Type> =
                 std::collections::HashMap::new();
             // Issue #608 — set of imported function names whose source-side
             // signature has a trailing `...rest` parameter. Built alongside
@@ -3662,8 +3718,8 @@ pub fn run_with_parse_cache(
                     && !all_program_type_names.contains(name)
                     && !is_builtin_type_name(name)
             };
-            fn type_has_unresolved<F: Fn(&str) -> bool>(ty: &perry_types::Type, check: &F) -> bool {
-                use perry_types::Type;
+            fn type_has_unresolved<F: Fn(&str) -> bool>(ty: &perry_hir::types::Type, check: &F) -> bool {
+                use perry_hir::types::Type;
                 match ty {
                     Type::Named(name) => check(name),
                     Type::Generic { base, type_args } => {
@@ -3866,8 +3922,8 @@ pub fn run_with_parse_cache(
                 let refs: Vec<(String, bool)> = field_types_clone
                     .iter()
                     .filter_map(|ty| match ty {
-                        perry_types::Type::Named(n) => Some(n.clone()),
-                        perry_types::Type::Generic { base, .. } => Some(base.clone()),
+                        perry_hir::types::Type::Named(n) => Some(n.clone()),
+                        perry_hir::types::Type::Generic { base, .. } => Some(base.clone()),
                         _ => None,
                     })
                     .map(|n| (n, false))
@@ -3958,7 +4014,7 @@ pub fn run_with_parse_cache(
             }
 
             // Type aliases from all modules
-            let type_alias_map: std::collections::HashMap<String, perry_types::Type> =
+            let type_alias_map: std::collections::HashMap<String, perry_hir::types::Type> =
                 all_type_aliases
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))

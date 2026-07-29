@@ -1,5 +1,5 @@
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 fn native_result_class(module: &str, method: &str) -> Option<&'static str> {
     if module.strip_prefix("node:").unwrap_or(module) != "net" {

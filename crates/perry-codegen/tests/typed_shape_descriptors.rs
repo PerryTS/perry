@@ -1,9 +1,9 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::{ObjectType, PropertyInfo, Type};
 use perry_hir::{
     ArrayElement, BinaryOp, CompareOp, Expr, Function, Interface, InterfaceProperty, Module,
     ModuleInitKind, Stmt, UpdateOp,
 };
-use perry_types::{ObjectType, PropertyInfo, Type};
 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

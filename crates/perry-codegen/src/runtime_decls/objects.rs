@@ -453,6 +453,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32],
     );
+    // #6812 (w12): outlined 3-way dynamic-key write IC (per-site cache ptr).
+    module.declare_function(
+        "js_put_value_set_dyn_ic",
+        DOUBLE,
+        &[PTR, DOUBLE, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function(
         "js_put_value_set_ic_miss",
         DOUBLE,

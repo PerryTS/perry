@@ -23,7 +23,7 @@ use super::ImportedClass;
 /// Result bundle of the module-global + static-field emission pass.
 pub(crate) struct ModuleGlobals {
     pub module_globals: HashMap<u32, String>,
-    pub module_global_types: HashMap<u32, perry_types::Type>,
+    pub module_global_types: HashMap<u32, perry_hir::types::Type>,
     pub static_field_globals: HashMap<(String, String), String>,
 }
 
@@ -127,8 +127,8 @@ pub(crate) fn emit_module_globals(
     // stale snapshot. Without this, the closure auto-capture sees
     // `f` is not yet declared and bails with "local not in scope".
     {
-        let mut closures: Vec<(perry_types::FuncId, perry_hir::Expr)> = Vec::new();
-        let mut seen: std::collections::HashSet<perry_types::FuncId> =
+        let mut closures: Vec<(perry_hir::types::FuncId, perry_hir::Expr)> = Vec::new();
+        let mut seen: std::collections::HashSet<perry_hir::types::FuncId> =
             std::collections::HashSet::new();
         for f in &hir.functions {
             collect_closures_in_stmts(&f.body, &mut seen, &mut closures);
@@ -196,7 +196,7 @@ pub(crate) fn emit_module_globals(
     // in render.ts has its type only in the entry function's FnCtx,
     // so method calls in other functions fall through to the generic
     // dispatch instead of the class method registry.
-    let mut module_global_types: HashMap<u32, perry_types::Type> = HashMap::new();
+    let mut module_global_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
     // Collect exported variable names so we can create external
     // globals + getter functions for cross-module access.
     let exported_var_names: std::collections::HashSet<String> =
@@ -243,7 +243,7 @@ pub(crate) fn emit_module_globals(
         if let perry_hir::Stmt::Let { id, name, ty, .. } = s {
             // Always record the declared type for module-level lets
             // so all functions see it (not just the entry function).
-            if !matches!(ty, perry_types::Type::Any) {
+            if !matches!(ty, perry_hir::types::Type::Any) {
                 module_global_types.insert(*id, ty.clone());
             }
             if referenced_from_fn.contains(id) || exported_var_names.contains(name) {

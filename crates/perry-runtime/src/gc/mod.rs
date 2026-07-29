@@ -50,6 +50,11 @@ mod malloc;
 pub use malloc::*;
 mod roots;
 pub use roots::*;
+// The one decoder shared by the mark, rewrite and incremental-barrier paths
+// for words that may hold a heap reference (#6910). Declared before its
+// consumers for readability only — Rust module order is irrelevant.
+mod root_words;
+use root_words::*;
 mod layout;
 pub use layout::*;
 mod trace;
@@ -121,6 +126,17 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
         let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
             GcTriggerKind::SurvivorPromotionBytes,
         ));
+        restore_minor_in_alloc(prev_in_alloc);
+        return outcome;
+    }
+    // #6893-followup: major-GC pacing. A non-moving minor can't free array-growth
+    // forwarding stubs, so reallocation-heavy churn grows the arena unbounded —
+    // only a full mark-sweep reclaims stubs. Escalate to a full once the arena's
+    // live bytes exceed K× the last full's live set (belt-and-suspenders for
+    // callers that reach a minor outside the budgeted pressure path).
+    if arena_growth_full_escalation_due() {
+        let outcome =
+            gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(trigger.kind));
         restore_minor_in_alloc(prev_in_alloc);
         return outcome;
     }
@@ -230,6 +246,29 @@ fn gc_verify_evacuation_enabled() -> bool {
         std::env::var("PERRY_GC_VERIFY_EVACUATION").as_deref(),
         Ok("1") | Ok("on") | Ok("true")
     )
+}
+
+/// Phase-1 de-risking flag (OFF by default). When set, the alloc-point
+/// nursery-churn arm (`gc_check_trigger`) runs its direct minor with the
+/// PRECISE shadow-stack roots instead of forcing the conservative native
+/// scan. The conservative scan makes the copying fast path ineligible
+/// (`CopiedMinorFallbackReason::ConservativeStack`), pinning the minor to the
+/// non-moving in-place sweep that cannot reclaim array-growth stubs; skipping
+/// it lets the evacuating scavenge run and reset the whole young arena in
+/// O(live). NOT sound as a production default yet — the alloc point can be
+/// register-imprecise — so it stays behind this flag for measurement +
+/// `PERRY_GC_VERIFY_EVACUATION` probing only. Pairs with
+/// `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` so the #6939 pacing doesn't escalate the
+/// minor to a full before the copying path is reached.
+pub(super) fn gc_scavenge_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_SCAVENGE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
 }
 
 #[cfg(test)]
@@ -360,6 +399,16 @@ pub fn gc_init() {
         scan_runtime_handle_roots_mut_step,
         new_runtime_handle_root_scan_state,
         MutableRootScannerSource::RuntimeHandles,
+    );
+    // #6951: expression temporaries generated code is holding in SSA registers
+    // across a collection point. Same standing as the shadow stack — a precise
+    // mutable root that is marked AND rewritten — and, like the shadow stack,
+    // load-bearing the moment the conservative native-stack scan is off.
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        scan_temp_roots_mut,
+        scan_temp_roots_mut_step,
+        new_temp_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
     );
     gc_register_mutable_root_scanner(crate::promise::scan_native_async_completion_roots_mut);
     gc_register_budgeted_mutable_root_scanner_with_source(
@@ -555,6 +604,25 @@ pub extern "C" fn js_gc_init() {
     // a second js_gc_init on another thread is harmless.
     #[cfg(windows)]
     crate::win_console::enable_vt_output();
+    // #6882: mimalloc (the global allocator, #62) tags its OS mappings with
+    // VM tag 100, which macOS tooling — vmmap, Instruments' VM Tracker,
+    // `footprint` — decodes as `IOAccelerator`: the entire JS heap renders
+    // as GPU-driver memory (644 MB of "IOAccelerator" on an allocation-heavy
+    // benchmark). Retag to VM_MEMORY_APPLICATION_SPECIFIC_1 (240) so heap
+    // regions show up as a neutral, distinctive "Memory Tag 240" instead.
+    // An explicit `MIMALLOC_OS_TAG` env setting still wins — skip the
+    // override so profilers can keep steering the tag themselves. Regions
+    // mapped before this call (early Rust startup) keep tag 100; the bulk
+    // of the heap (arena blocks, GC metadata) maps afterwards. Idempotent,
+    // like the rest of this function.
+    #[cfg(all(
+        target_pointer_width = "64",
+        target_vendor = "apple",
+        feature = "alloc-mimalloc"
+    ))]
+    if std::env::var_os("MIMALLOC_OS_TAG").is_none() {
+        unsafe { libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_os_tag, 240) };
+    }
     crate::node_submodules::diagnostics_channel_init_main_thread();
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:

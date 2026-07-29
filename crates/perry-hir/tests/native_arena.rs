@@ -1,7 +1,7 @@
 use perry_diagnostics::SourceCache;
+use perry_hir::types::Type;
 use perry_hir::{lower_module, Expr, Function, Module, Stmt};
 use perry_parser::parse_typescript_with_cache;
-use perry_types::Type;
 
 fn lower_src(src: &str) -> Result<Module, String> {
     let src = src.to_string();

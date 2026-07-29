@@ -50,15 +50,47 @@ pub struct ModuleDispatchFacts {
     /// a declared class (`k.prototype`, `x.constructor.prototype`, …). Nothing
     /// in the module can then be trusted to keep a stable method table.
     opaque_prototype_mutation: bool,
+    /// Representation-selection Phase 3b: the module contains at least one
+    /// §5.2 shape-barrier site (`Object.defineProperty` family, `delete`,
+    /// `setPrototypeOf`/`__proto__` write, `Proxy`, mutating `Reflect.*`).
+    /// Under the first-increment conservative policy, any such site disables
+    /// ALL `Ptr<Shape>` promotion in the module. See
+    /// `collectors/ptr_shape.rs` for the rule's soundness discussion.
+    shape_barrier_sites: bool,
+    /// Representation-selection Phase 4a.3: the module contains an indexed
+    /// write through a `.prototype` object (`Array.prototype[0] = …`). A
+    /// polluted prototype changes what a HOLE read observes through the
+    /// chain, and the guard-free `Ptr<NumArray>` read cannot consult the
+    /// runtime pollution byte — any such site disables all `Ptr<NumArray>`
+    /// promotion in the module. See `collectors/ptr_numarray.rs`.
+    numarray_prototype_index_barriers: bool,
+    /// Representation-selection Phase 5a: the module contains at least one
+    /// `Object.freeze` / `Object.seal` / `Object.preventExtensions` site.
+    ///
+    /// This is deliberately NOT part of `shape_barrier_sites`. For a Phase 3b
+    /// `Ptr<Shape>` LOCAL the freeze family needs no module-wide kill: the
+    /// containment walk proves no alias to the object exists at all, and a
+    /// freeze of the local itself disqualifies it directly
+    /// (`ptr_shape.rs`'s `Expr::ObjectFreeze` arm). A proven `this` has no
+    /// such containment — the receiver is owned by the CALLER and is
+    /// therefore aliased by construction, so `Object.freeze(c)` followed by
+    /// `c.m()` would let a guard-free raw store silently succeed where the
+    /// spec requires a strict-mode `TypeError`. Any freeze-family site in the
+    /// module therefore disables proven-`this` clones **that contain a
+    /// `this.field` write**; read-only clones are unaffected.
+    freeze_barrier_sites: bool,
 }
 
 impl Default for ModuleDispatchFacts {
     /// Fail safe: a fact set that was never populated must not license the
-    /// scalar-method summary.
+    /// scalar-method summary (nor any `Ptr<Shape>` promotion).
     fn default() -> Self {
         Self {
             prototype_touched_classes: HashSet::new(),
             opaque_prototype_mutation: true,
+            shape_barrier_sites: true,
+            numarray_prototype_index_barriers: true,
+            freeze_barrier_sites: true,
         }
     }
 }
@@ -95,6 +127,34 @@ impl ModuleDispatchFacts {
         }
         true
     }
+
+    /// Representation-selection Phase 3b: does the module contain any §5.2
+    /// shape-barrier site (first-increment module-wide kill rule)?
+    pub(crate) fn has_shape_barrier_sites(&self) -> bool {
+        self.shape_barrier_sites
+    }
+
+    /// Representation-selection Phase 4a.3: does the module contain an
+    /// indexed write through any `.prototype` object?
+    pub(crate) fn has_numarray_prototype_index_barriers(&self) -> bool {
+        self.numarray_prototype_index_barriers
+    }
+
+    /// Representation-selection Phase 5a: does the module contain any
+    /// `Object.freeze`/`seal`/`preventExtensions` site? Gates guard-free
+    /// STORES through a proven `this` (see the field's doc comment).
+    pub(crate) fn has_freeze_barrier_sites(&self) -> bool {
+        self.freeze_barrier_sites
+    }
+
+    /// Does the module NAME a prototype object it cannot attribute to a
+    /// declared class (`const p = Array.prototype`, `x.constructor.prototype`,
+    /// …)? Such a reference can be aliased into a local and written through
+    /// later, so `Ptr<NumArray>` promotion (whose guard-free reads cannot
+    /// consult the runtime prototype-pollution byte) must stand down.
+    pub(crate) fn has_opaque_prototype_mutation(&self) -> bool {
+        self.opaque_prototype_mutation
+    }
 }
 
 /// Scan a whole module — top-level init, every function, and every class body
@@ -104,6 +164,9 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     let mut facts = ModuleDispatchFacts {
         prototype_touched_classes: HashSet::new(),
         opaque_prototype_mutation: false,
+        shape_barrier_sites: false,
+        numarray_prototype_index_barriers: false,
+        freeze_barrier_sites: false,
     };
 
     note_stmts(&hir.init, &mut facts);
@@ -141,11 +204,33 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
 }
 
 fn note_stmts(stmts: &[Stmt], facts: &mut ModuleDispatchFacts) {
-    for_each_expr_in_stmts(stmts, &mut |expr| note_prototype_effect(expr, facts));
+    for_each_expr_in_stmts(stmts, &mut |expr| {
+        note_prototype_effect(expr, facts);
+        if super::ptr_shape::expr_is_shape_barrier(expr) {
+            facts.shape_barrier_sites = true;
+        }
+        if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(expr) {
+            facts.numarray_prototype_index_barriers = true;
+        }
+        if super::proven_this::expr_is_freeze_barrier(expr) {
+            facts.freeze_barrier_sites = true;
+        }
+    });
 }
 
 fn note_expr_tree(expr: &Expr, facts: &mut ModuleDispatchFacts) {
-    for_each_expr(expr, &mut |node| note_prototype_effect(node, facts));
+    for_each_expr(expr, &mut |node| {
+        note_prototype_effect(node, facts);
+        if super::ptr_shape::expr_is_shape_barrier(node) {
+            facts.shape_barrier_sites = true;
+        }
+        if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(node) {
+            facts.numarray_prototype_index_barriers = true;
+        }
+        if super::proven_this::expr_is_freeze_barrier(node) {
+            facts.freeze_barrier_sites = true;
+        }
+    });
 }
 
 /// Record what a single expression node does to some class's prototype.
@@ -323,7 +408,7 @@ fn for_each_expr(expr: &Expr, f: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
+pub(super) fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
     for stmt in stmts {
         for_each_expr_in_stmt(stmt, f);
     }
@@ -408,8 +493,8 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_hir::types::Type;
     use perry_hir::{ClassField, Function};
-    use perry_types::Type;
 
     const RECEIVER: u32 = 1;
 
@@ -465,6 +550,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            alloc_width_hint: 0,
             aliases: Vec::new(),
         }
     }
@@ -525,6 +611,9 @@ mod tests {
         ModuleDispatchFacts {
             prototype_touched_classes: HashSet::new(),
             opaque_prototype_mutation: false,
+            shape_barrier_sites: false,
+            numarray_prototype_index_barriers: false,
+            freeze_barrier_sites: false,
         }
     }
 

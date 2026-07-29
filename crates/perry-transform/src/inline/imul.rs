@@ -1,5 +1,5 @@
+use perry_hir::types::{FuncId, LocalId};
 use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use perry_types::{FuncId, LocalId};
 use std::collections::HashSet;
 
 pub fn detect_math_imul_polyfill(f: &Function) -> bool {

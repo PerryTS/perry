@@ -408,7 +408,7 @@ fn x509_check_ip_value(cert: &x509_cert::Certificate, ip: &str) -> Option<String
 
     let parsed = ip.parse::<IpAddr>().unwrap_or_else(|_| {
         perry_runtime::fs::validate::throw_type_error_with_code(
-            "Invalid IP",
+            "Invalid name",
             "ERR_INVALID_ARG_VALUE",
         )
     });

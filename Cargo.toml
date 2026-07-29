@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/perry",
     "crates/perry-parser",
-    "crates/perry-types",
     "crates/perry-api-manifest",
     "crates/perry-hir",
     "crates/perry-transform",
@@ -43,6 +42,7 @@ members = [
     "crates/perry-ext-ws",
     "crates/perry-ext-net",
     "crates/perry-ext-http",
+    "crates/perry-ext-http-server",
     "crates/perry-ext-streams",
     "crates/perry-ext-fastify",
     "crates/perry-ext-pdf",
@@ -79,68 +79,11 @@ members = [
     "crates/perry-stdlib-static",
     "docs/examples/_fixtures/native-libraries/my-bindings",
 ]
-# Only build platform-independent crates by default.
-# Platform-specific UI crates (perry-ui-macos, perry-ui-ios, etc.) must be built
-# explicitly with -p on their target platform.
+# Build only the host-independent product set by default.
+# Platform UI manifests keep their source and dependencies behind target cfgs.
+# Build each platform package explicitly for its applicable target.
 default-members = [
     "crates/perry",
-    "crates/perry-parser",
-    "crates/perry-types",
-    "crates/perry-api-manifest",
-    "crates/perry-hir",
-    "crates/perry-transform",
-    "crates/perry-codegen",
-    "crates/perry-dispatch",
-    "crates/perry-runtime",
-    "crates/perry-ffi",
-    "crates/perry-ext-dotenv",
-    "crates/perry-ext-nanoid",
-    "crates/perry-ext-uuid",
-    "crates/perry-ext-slugify",
-    "crates/perry-ext-bcrypt",
-    "crates/perry-ext-argon2",
-    "crates/perry-ext-jsonwebtoken",
-    "crates/perry-ext-validator",
-    "crates/perry-ext-lru-cache",
-    "crates/perry-ext-better-sqlite3",
-    "crates/perry-ext-zlib",
-    "crates/perry-ext-exponential-backoff",
-    "crates/perry-ext-axios",
-    "crates/perry-ext-events",
-    "crates/perry-ext-decimal",
-    "crates/perry-ext-dayjs",
-    "crates/perry-ext-moment",
-    "crates/perry-ext-cheerio",
-    "crates/perry-ext-sharp",
-    "crates/perry-ext-ratelimit",
-    "crates/perry-ext-commander",
-    "crates/perry-ext-ethers",
-    "crates/perry-ext-nodemailer",
-    "crates/perry-ext-cron",
-    "crates/perry-ext-ioredis",
-    "crates/perry-ext-pg",
-    "crates/perry-ext-mysql2",
-    "crates/perry-ext-fetch",
-    "crates/perry-ext-mongodb",
-    "crates/perry-ext-ws",
-    "crates/perry-ext-net",
-    "crates/perry-ext-http",
-    "crates/perry-ext-streams",
-    "crates/perry-ext-fastify",
-    "crates/perry-ext-pdf",
-    "crates/perry-ext-ads",
-    "crates/perry-wasm-host",
-    "crates/perry-stdlib",
-    "crates/perry-diagnostics",
-    "crates/perry-ui",
-    "crates/perry-codegen-js",
-    "crates/perry-codegen-swiftui",
-    "crates/perry-codegen-arkts",
-    "crates/perry-codegen-glance",
-    "crates/perry-codegen-wear-tiles",
-    "crates/perry-codegen-wasm",
-    "crates/perry-updater",
-    "crates/perry-container-compose",
 ]
 
 # Aggressive release optimizations for small, fast binaries
@@ -343,7 +286,7 @@ codegen-units = 16
 codegen-units = 16
 
 [workspace.package]
-version = "0.5.1264"
+version = "0.5.1265"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -446,7 +389,6 @@ zstd = "0.13"
 
 # Internal crates
 perry-parser = { path = "crates/perry-parser" }
-perry-types = { path = "crates/perry-types" }
 perry-api-manifest = { path = "crates/perry-api-manifest" }
 perry-hir = { path = "crates/perry-hir" }
 perry-transform = { path = "crates/perry-transform" }
@@ -505,6 +447,7 @@ perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }
 perry-ext-net = { path = "crates/perry-ext-net" }
 perry-ext-http = { path = "crates/perry-ext-http" }
+perry-ext-http-server = { path = "crates/perry-ext-http-server" }
 perry-ext-streams = { path = "crates/perry-ext-streams" }
 perry-ext-fastify = { path = "crates/perry-ext-fastify" }
 perry-ext-pdf = { path = "crates/perry-ext-pdf" }

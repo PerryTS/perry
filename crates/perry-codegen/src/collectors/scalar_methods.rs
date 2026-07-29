@@ -13,8 +13,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Class, CompareOp, Expr, Function, Stmt, UnaryOp};
-use perry_types::Type;
 
 #[derive(Clone, Copy)]
 enum ScalarMethodReturnKind {

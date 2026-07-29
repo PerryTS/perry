@@ -1,8 +1,8 @@
 //! TypeScript namespace → synthetic-class lowering — extracted from
 //! `lower/module_decl.rs` (pure mechanical split, no logic changes).
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -109,6 +109,7 @@ pub(crate) fn lower_namespace_as_class(
                 is_exported,
                 aliases: Vec::new(),
                 is_nested: false,
+                alloc_width_hint: 0,
             });
         }
     };
@@ -407,5 +408,6 @@ pub(crate) fn lower_namespace_as_class(
         is_exported,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     })
 }
