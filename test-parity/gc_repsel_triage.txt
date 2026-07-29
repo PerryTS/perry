@@ -1,0 +1,11 @@
+# Triaged expected-red cells for scripts/gc_repsel_matrix.sh.
+#
+# Format:  <test basename> | <arm id> | <reason, with an issue number>
+#
+# A cell listed here reports XFAIL instead of FAIL and does not fail the gate.
+# EVERY entry must name an open issue and say why the redness is not a
+# representation defect. Do not add an entry to make a table green: an
+# untriaged red cell is the whole point of this gate.
+
+test_gap_repsel_gc_stress | cons_scan_off       | #6951 -- with the conservative stack scan disabled, console.log argument temporaries are not precise roots and string-literal labels are dropped. Reproduces byte-identically with ALL representation gates off, so it is a runtime rooting gap, not a representation defect. This arm becomes usable (and becomes the highest-value arm in the matrix) once #6951 is fixed.
+test_gap_repsel_gc_stress | cons_scan_off_force | #6951 -- same root cause as the cons_scan_off arm; the evacuation flags add nothing because no automatic collection ever evacuates (#6950).

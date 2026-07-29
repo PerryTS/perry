@@ -1,0 +1,49 @@
+# Corpus for the GC x representation-selection stress matrix
+# (scripts/gc_repsel_matrix.sh).
+#
+# ***IF YOU ARE ADDING A REPRESENTATION, ADD ITS GAP FILE HERE.***
+# The matrix script FAILS if a `test_gap_repsel_*` / `test_gap_specabi_*` file
+# exists in test-files/ that is not registered below. That is the enforcement
+# point behind docs/representation-selection-rfc.md 5.6: a new representation
+# must be exercised against every GC arm, not just verified once by hand in its
+# own PR. Files outside those two prefixes (typed-array param reads, int-valued
+# typed-array locals) are not auto-detected, so register them explicitly.
+#
+# One basename per line, without the .ts extension. `#` starts a comment.
+
+# --- Phase 1: canonical unboxed i32 locals (#6903) --------------------------
+test_gap_repsel_canonical_i32
+test_gap_int_valued_ta_locals
+
+# --- Phase 2: specialized calling convention / spec-ABI raw params (#6905) --
+test_gap_specabi_polymorphic_coexist
+test_gap_specabi_reassign
+test_gap_specabi_recursion_escape
+test_gap_specabi_view_detach
+test_gap_ta_param_numeric_read
+test_gap_typedarray_param_read
+
+# --- Phase 3a: canonical string locals, tagged-at-rest Str (#6909) ----------
+test_gap_repsel_canonical_str_locals
+
+# --- Phase 3b: Ptr<Shape> proven object locals (#6911) ----------------------
+test_gap_repsel_ptr_shape_locals
+test_gap_repsel_ptr_shape_barriers
+
+# --- Phase 4a / 4a.3: Ptr<NumArray> numeric arrays (#6915, #6916) -----------
+test_gap_repsel_p4a_holes_axis
+test_gap_repsel_p4a_inline_tiers
+test_gap_repsel_p4a_logical_numeric
+test_gap_repsel_p4a3_numarray_barriers
+test_gap_repsel_p4a3_numarray_growth
+test_gap_repsel_p4a3_ptr_numarray
+
+# --- Phase 4b: class-field store note/addref elision (#6919) ----------------
+test_gap_repsel_p4b_field_store_elision
+
+# --- The GC-live member ------------------------------------------------------
+# Every file above performs ZERO collections (measured, #6950), which makes the
+# GC arms inert against them. This one holds each representation's local live
+# across escaping allocation churn heavy enough to reach the collector, so the
+# "collect" arms actually bite. Keep it registered and keep it collecting.
+test_gap_repsel_gc_stress
