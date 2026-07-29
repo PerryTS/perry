@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
 use crate::OutputFormat;
 
-use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
+use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env, host_target_triple};
 use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
 
 /// Rebuild perry-runtime + perry-stdlib in a single cargo invocation with
@@ -564,7 +564,19 @@ pub(crate) fn build_optimized_libs(
     }
     let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace_root, hash);
     let cross_features = auto_optimized_cross_features(ctx, &features, cli_features);
-    let release_dir = if let Some(triple) = rust_target_triple(target) {
+    // `-Zbuild-std` (the `PERRY_SIZE_PANIC=abort-immediate` path) requires an
+    // explicit `--target`, and passing one relocates cargo's output into
+    // `target/<triple>/release`. Resolve the effective triple ONCE so the
+    // cargo args and this path can never disagree (they did in development:
+    // the archives built fine and the link then reported them missing).
+    let effective_triple: Option<&str> = rust_target_triple(target).or_else(|| {
+        if size_panic_immediate_abort() {
+            host_target_triple()
+        } else {
+            None
+        }
+    });
+    let release_dir = if let Some(triple) = effective_triple {
         target_dir.join(triple).join("release")
     } else {
         target_dir.join("release")
@@ -685,8 +697,12 @@ pub(crate) fn build_optimized_libs(
         Some("tvos") | Some("tvos-simulator") | Some("watchos") | Some("watchos-simulator")
     );
 
+    // `panic_immediate_abort` needs the standard library rebuilt from source,
+    // which is a nightly-only `-Z` flag (same mechanism the tier-3 Apple
+    // targets already use).
+    let panic_immediate = size_panic_immediate_abort();
     let mut cargo_cmd = Command::new("cargo");
-    if is_tier3 {
+    if is_tier3 || panic_immediate {
         cargo_cmd.arg("+nightly");
     }
     cargo_cmd
@@ -719,6 +735,13 @@ pub(crate) fn build_optimized_libs(
     if is_tier3 {
         cargo_cmd.arg("-Zbuild-std=std,panic_abort");
     }
+    if panic_immediate && !is_tier3 {
+        // Rebuild std with the panic path collapsed to a bare `abort`: drops
+        // the backtrace symbolizer (gimli/addr2line/rustc_demangle) and the
+        // default hook's formatting machinery. `--target` is required for
+        // `-Zbuild-std`, so pin the host triple when the caller didn't cross.
+        cargo_cmd.arg("-Zbuild-std=std,panic_abort");
+    }
     // Both perry-runtime and perry-stdlib accept their own feature lists.
     // Cargo's `--features` takes `crate/feature` syntax for cross-crate
     // selection — we always enable perry-stdlib's stdlib-side bridge so
@@ -727,7 +750,7 @@ pub(crate) fn build_optimized_libs(
     if !cross_features.is_empty() {
         cargo_cmd.arg("--features").arg(cross_features.join(","));
     }
-    if let Some(triple) = rust_target_triple(target) {
+    if let Some(triple) = effective_triple {
         cargo_cmd.arg("--target").arg(triple);
     }
     // HarmonyOS cross-compile needs the OHOS SDK's clang on PATH for C
@@ -773,8 +796,16 @@ pub(crate) fn build_optimized_libs(
     let mut rustflags: Vec<String> = Vec::new();
     if panic_abort_safe {
         // Override the workspace profile's `panic = "unwind"` for the
-        // duration of this invocation.
-        rustflags.push("-C panic=abort".to_string());
+        // duration of this invocation. `immediate-abort` (nightly, opt-in via
+        // `PERRY_SIZE_PANIC`) goes further: the panic path collapses to a bare
+        // `abort` with no message/backtrace formatting, which is what lets the
+        // symbolizer dead-strip. It supersedes plain `abort`.
+        if panic_immediate {
+            rustflags.push("-Zunstable-options".to_string());
+            rustflags.push("-C panic=immediate-abort".to_string());
+        } else {
+            rustflags.push("-C panic=abort".to_string());
+        }
     }
     // PERRY_SIZE_OPT=z|s — rebuild the auto-optimized runtime/stdlib at
     // `-C opt-level=z`/`s` instead of the profile's `3`. RUSTFLAGS is
@@ -795,6 +826,12 @@ pub(crate) fn build_optimized_libs(
     // leaf staticlib runs the fat-LTO pass).
     if size_lto_fat() {
         cargo_cmd.env("CARGO_PROFILE_RELEASE_LTO", "fat");
+    }
+    if panic_immediate {
+        // With panics collapsed to `abort` there is nothing to unwind, so the
+        // per-function unwind tables (`__unwind_info` / `__eh_frame`, ~54 KB
+        // measured) are dead weight too.
+        rustflags.push("-C force-unwind-tables=no".to_string());
     }
     // #6125: pin the Rust-side CPU baseline to the same PERRY_TARGET_CPU
     // knob codegen's clang invocation honors, so the rebuilt runtime/stdlib
