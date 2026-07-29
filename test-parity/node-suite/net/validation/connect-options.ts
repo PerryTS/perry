@@ -10,11 +10,18 @@ const cases: [string, any][] = [
   ["objectMode", { port: 1, objectMode: true }],
 ];
 
+async function destroyAndSettle(socket: net.Socket): Promise<void> {
+  await new Promise<void>((resolve) => {
+    socket.once("error", () => resolve());
+    socket.once("close", () => resolve());
+    socket.destroy();
+  });
+}
+
 for (const [label, options] of cases) {
   try {
     const socket = net.connect(options);
-    socket.on("error", () => {});
-    socket.destroy();
+    await destroyAndSettle(socket);
     console.log(label, "OK");
   } catch (error: any) {
     console.log(label, error.name, error.code);

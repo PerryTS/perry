@@ -44,8 +44,9 @@ carries 153 copied `test-net*` files plus focused net tests.
 
 ## Per-fixture traceability
 
-`same` means byte-for-byte stdout parity with Node 26.5.0. `diff` means a stable
-runtime difference. Every row completed three identical runs.
+`same` means byte-for-byte stdout parity with Node 26.5.0 after normalization.
+`diff` means a stable runtime difference. Every row completed three identical
+runs.
 
 | Fixture                                       | Fixed Node 26.5.0 contract                                                                                  | Node | Deno |  Bun |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---: | ---: | ---: |
