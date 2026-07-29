@@ -71,8 +71,15 @@ def main():
         if cur["pass"] < floor["pass"]:
             regressions.append(
                 f"{mod}: {cur['pass']}/{cur['total']} < floor {floor['pass']}/{floor['total']}  (-{floor['pass'] - cur['pass']})")
-        elif cur["pass"] > floor["pass"]:
-            improvements.append(f"{mod}: {cur['pass']}/{cur['total']}  (+{cur['pass'] - floor['pass']})")
+        if cur["total"] < floor["total"]:
+            regressions.append(
+                f"{mod}: {cur['total']} fixtures < floor {floor['total']}  (-{floor['total'] - cur['total']})")
+        pass_delta = cur["pass"] - floor["pass"]
+        fixture_delta = cur["total"] - floor["total"]
+        if pass_delta > 0 or fixture_delta > 0:
+            improvements.append(
+                f"{mod}: {cur['pass']}/{cur['total']} "
+                f"({pass_delta:+d} passes, {fixture_delta:+d} fixtures)")
 
     # Overall is derived, not stored (avoids cross-PR merge conflicts on a
     # shared aggregate). Compute it from the per-module floors at report time.
