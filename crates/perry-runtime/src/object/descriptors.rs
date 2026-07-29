@@ -1413,14 +1413,22 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
         // handles after every step that can allocate. The two per-entry handles
         // are allocated ONCE and rewritten per iteration (`set_*`) so a
         // 10k-key receiver doesn't push 20k slots onto the handle stack.
+        // `names_arr` is rooted BEFORE the result allocation: `js_object_alloc`
+        // is itself GC-capable, so rooting the key array after it would root an
+        // already-stale pointer.
         let scope = crate::gc::RuntimeHandleScope::new();
-        let result_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
         let names_handle = scope.root_raw_mut_ptr(names_arr as *mut crate::array::ArrayHeader);
+        let result_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
         let key_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
         let desc_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
 
-        if !names_arr.is_null() {
-            let len = crate::array::js_array_length(names_arr) as usize;
+        if !names_handle
+            .get_raw_const_ptr::<crate::array::ArrayHeader>()
+            .is_null()
+        {
+            let len = crate::array::js_array_length(
+                names_handle.get_raw_const_ptr::<crate::array::ArrayHeader>(),
+            ) as usize;
             for i in 0..len {
                 let names_arr = names_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
                 let key_val = crate::array::js_array_get(names_arr, i as u32);
