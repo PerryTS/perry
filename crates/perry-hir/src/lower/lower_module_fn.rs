@@ -1185,5 +1185,17 @@ pub fn lower_module_full(
     // #806 mixin harness (bare-factory section).
     infer_dynamic_extends_names(&mut module);
 
+    // Attach enums declared inside function bodies. They were registered in
+    // `ctx.enums` at their declaration site (so the name resolves) but had no
+    // route to `Module::enums`, which is what codegen consults to resolve
+    // `Expr::EnumMember`. Drained here, after every function body has been
+    // lowered. Module-scope enums are already in `module.enums`, so skip any
+    // name that is present to avoid a duplicate entry.
+    for en in std::mem::take(&mut ctx.pending_body_enums) {
+        if !module.enums.iter().any(|e| e.name == en.name) {
+            module.enums.push(en);
+        }
+    }
+
     Ok((module, ctx.next_class_id))
 }

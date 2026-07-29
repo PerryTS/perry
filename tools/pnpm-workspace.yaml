@@ -1,0 +1,27 @@
+# pnpm-side soak surface + catalog (pnpm reads minimumReleaseAge in MINUTES
+# from a workspace yaml ONLY — .npmrc is ignored for it). Managed by
+# scripts/soak/soak.mts (`npm run soak` / `npm run soak:fix`).
+#
+# This file deliberately lives in tools/, not the repo root: the root is
+# npm-managed (package.json + package-lock.json hold the parity-test
+# fixture deps), and a workspace yaml at the root would mark it as a pnpm
+# workspace. Anchoring the pnpm domain in tools/ keeps the two package
+# managers from seeing each other.
+
+catalog:
+  taze: 19.14.1
+
+# Cooldown (minutes) before newly published packages install — value managed
+# by soak:fix; the window is SOAK_DAYS in scripts/soak/constants.mts.
+minimumReleaseAge: 10080
+
+# Exclusions: bare names / scope globs express standing trust; version pins
+# are dated soak bypasses and REQUIRE, on the line above:
+#   # published: YYYY-MM-DD | removable: YYYY-MM-DD   (removable = published + 7d)
+# `npm run soak` rejects unannotated pins (and flow-style [..] lists,
+# which the gate can't validate); expired ones warn until `soak:fix` /
+# the soak-autofix workflow prunes them. Schematic example (use the REAL
+# registry publish date, never these placeholders):
+# minimumReleaseAgeExclude:
+#   # published: YYYY-MM-DD | removable: YYYY-MM-DD
+#   - 'example@1.2.3'

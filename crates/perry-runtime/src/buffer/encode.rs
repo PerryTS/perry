@@ -221,9 +221,9 @@ pub extern "C" fn js_value_to_string_with_encoding_or_radix(
 
 /// Keepalive anchor: `js_value_to_string_with_encoding_or_radix` is emitted
 /// only from generated `.o`, so the auto-optimize whole-program LLVM rebuild
-/// would internalize + dead-strip it without a `#[used]` reference (see
+/// would internalize + dead-strip it without a `#[cfg_attr(feature = "keepalive-anchors", used)]` reference (see
 /// project_auto_optimize_keepalive_3320).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_VALUE_TO_STRING_ENCODING_OR_RADIX: extern "C" fn(f64, i32, f64) -> *mut StringHeader =
     js_value_to_string_with_encoding_or_radix;
 

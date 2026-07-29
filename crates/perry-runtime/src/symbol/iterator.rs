@@ -151,7 +151,7 @@ pub(crate) fn class_ref_resolves_iterator(val_f64: f64) -> bool {
 /// / guarded `__iter.return()` call in this validator. Returns the result
 /// unchanged when it is an object.
 // #1561-style force-keep: only generated IR calls this.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ITERATOR_RESULT_VALIDATE: extern "C" fn(f64) -> f64 = js_iterator_result_validate;
 
 #[no_mangle]

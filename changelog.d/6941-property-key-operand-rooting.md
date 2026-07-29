@@ -1,0 +1,24 @@
+fix(runtime): root receivers and stored values across GC-capable property-key coercions (#6935)
+
+`ToPropertyKey(key)` runs a user `Symbol.toPrimitive` / `toString` / `valueOf`, and even for a primitive key it allocates the stringified form — either can trigger a GC that **evacuates** live objects. The property-key entry points held the receiver, and on the write paths the *value being stored*, as raw `f64` / raw-pointer Rust locals across that call:
+
+```rust
+let key = js_to_property_key(key_value);        // user JS -> allocate -> GC -> evacuation
+let obj = extract_obj_ptr(obj_value);           // receiver was raw across the coercion
+js_object_set_field_by_name(obj, key_str, value);   // stale receiver AND stale value
+```
+
+A Rust local is neither a GC root nor a shadow slot. This is the `ToPropertyKey` sibling of the operator family fixed in #6934, and strictly worse: there a stale operand produced one wrong answer, whereas here the stale `value` is written **into a live object**, so the dangling pointer outlives the call.
+
+Same idiom as #6934: `crate::gc::RuntimeHandleScope` plus `root_nanbox_f64` / `root_raw_mut_ptr` / `root_string_ptr` / `root_heap_word_u64`, re-reading the receiver and the stored value through their handles after every GC-capable step. Two shared helpers land in `object/property_key.rs`:
+
+- `property_key_coercion_is_inert(key)` — the plain-double-fast-path analogue. Only an already-heap `STRING_TAG` key qualifies (`js_to_primitive` returns any non-`POINTER_TAG` value unchanged, `ordinary_to_primitive_string_key` bails on it, `js_jsvalue_to_string` hands the same pointer back), so the hot `obj[strKey]` / `hasOwnProperty("x")` shapes keep the pre-fix code path verbatim.
+- `to_property_key_rooted(scope, key)` — the coercion inside a caller-owned scope, returning the coerced key as a handle.
+
+Receivers that may arrive NaN-boxed, as a bare heap address (module-level object slots store the untagged pointer), or as an INT32 class-ref are rooted with `root_heap_word_u64`, which rewrites only the real pointers and preserves each encoding. Where the coercion already sat behind an early return (the typed-array / canonical-index fast paths in `js_dyn_index_{get,set}`, `js_object_{get,set}_index_polymorphic`, `js_array_set_index_or_string`) the scope is placed in the cold arm only, so the #5525 hot paths are untouched.
+
+Sites fixed — the seven named in #6935: `object/property_key.rs` (`js_object_set_property_key`, `js_object_get_property_key`, `js_object_set_property_key_method`, plus `js_super_accessor_get` / `js_object_super_call`), `object/object_literal_ops.rs` (`object_literal_key_to_string`, `js_object_literal_set_computed`, `js_object_define_accessor`), `value/dyn_index.rs` (`js_dyn_index_set` object + class-ref arms, `js_dyn_index_get` object numeric-key arm), `object/polymorphic_index.rs` (`js_object_{get,set}_index_polymorphic`, non-canonical-key arms), `object/delete_rest.rs` (`js_object_delete_dynamic`), `array/indexing.rs` (`js_array_{get,set}_index_or_string`), `object/native_call_method.rs` (`js_native_call_method_value`). Five more the sweep turned up in the same family: `object/object_ops/has_own.rs` (`js_object_has_own`, `js_object_property_is_enumerable`), `object/native_call_method/common_methods.rs` (the `hasOwnProperty` / `propertyIsEnumerable` arms, re-read through the caller's existing root handle), `proxy.rs` (`target_set` — `target_get` was already rooted, its write sibling was not), `object/field_get_set/has_property.rs` (`js_object_has_property`, number-key coercion), and `typed_feedback.rs` (the object/closure arm of the typed-feedback index set).
+
+Checked and not affected: `builtins/console.rs`, `object/class_registry/parent_static.rs`, `proxy.rs` `js_proxy_get` / `property_key_to_rust_string`, the `has_own.rs` handle-band arm, and the class-ref / small-handle arms of `js_dyn_index_get`.
+
+New regression suite `crates/perry/tests/gc_property_key_operand_rooting_6935.rs` runs the write paths, the receiver-only paths and the proxy forward-to-target write under `PERRY_GC_FORCE_EVACUATE=1` + `PERRY_GC_VERIFY_EVACUATION=1`. It passes on the pre-fix runtime too, and its module doc says so: no in-language configuration currently reaches a *minor* cycle that evacuates while the raw runtime locals are unpinned. `gc()` runs a full mark-sweep (evacuation is minor-only, so nothing moves); `perry/gc`'s `minor()` does evacuate but engages `ManualGcScanGuard::force_full_scan()` (#4977), whose conservative stack scan pins exactly the raw locals at issue; and `minor()` with `PERRY_CONSERVATIVE_STACK_SCAN=off` is independently unsound on this build (a plain method's `this` is lost across the collection with or without the fix). The suite is therefore a behavioral guard that will start failing the day a minor-evacuating configuration becomes reachable from compiled code.

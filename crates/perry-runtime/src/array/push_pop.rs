@@ -175,6 +175,163 @@ unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
     crate::proxy::js_proxy_set(proxy, key_f64, value);
 }
 
+/// `Get(proxy, <string key>)` through the proxy's `get` trap; fresh key
+/// string per call, same GC rationale as `proxy_set_str_key`.
+unsafe fn proxy_get_str_key(proxy: f64, key_bytes: &[u8]) -> f64 {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    crate::proxy::js_proxy_get(proxy, key_f64)
+}
+
+/// `HasProperty(proxy, <string key>)` through the proxy's `has` trap.
+unsafe fn proxy_has_str_key(proxy: f64, key_bytes: &[u8]) -> bool {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    crate::proxy::js_proxy_has(proxy, key_f64).to_bits() == crate::value::TAG_TRUE
+}
+
+/// Spec `DeletePropertyOrThrow(proxy, <string key>)`: routes the
+/// `deleteProperty` trap and throws the spec TypeError when the trap reports
+/// failure — `pop`/`shift`/`unshift` must abort BEFORE their length write
+/// rather than report a successful mutation.
+unsafe fn proxy_delete_str_key_or_throw(proxy: f64, key_bytes: &[u8]) {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    if crate::proxy::js_proxy_delete(proxy, key_f64).to_bits() != crate::value::TAG_TRUE {
+        let msg = format!(
+            "'deleteProperty' on proxy: trap returned falsish for property '{}'",
+            String::from_utf8_lossy(key_bytes)
+        );
+        crate::collection_iter::throw_type_error(&msg);
+    }
+}
+
+/// `Array.prototype` mutators on a Proxy receiver, spec-routed through the
+/// proxy's `get`/`set`/`deleteProperty` traps (§23.1.3.21 push, §23.1.3.19
+/// pop, §23.1.3.24 shift, §23.1.3.32 unshift — length reads/writes and every
+/// element move go through `[[Get]]`/`[[Set]]`, which is what fires the
+/// traps).
+///
+/// This is the receiver-normalization gap behind the `holder.list.push(3)`
+/// silent no-op: `array_proto_mutator` normalized the receiver with
+/// `as_real_array` (which rightly rejects handle-band proxy ids — deref'ing
+/// one as an ArrayHeader is the #6279 segfault class) and then
+/// `run_object_mutator` (proxy ids are not plain objects), so the whole call
+/// fell through to `undefined` WITHOUT mutating anything. The eager HIR fold
+/// used to hide this by calling `js_array_push_f64` (proxy-aware via
+/// `array_ptr_as_proxy`) directly, until #6397 correctly deferred untyped
+/// receivers to the runtime dispatch.
+///
+/// Returns `None` for mutators not yet routed (reverse/sort/splice/fill/
+/// copyWithin) — callers keep their previous fall-through behavior for those.
+pub(super) fn proxy_array_mutator(
+    proxy: f64,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // Every trap below runs arbitrary user JS, which can allocate and move
+    // heap values. Root the proxy and the incoming args once and reload each
+    // carried value from its handle after any trap/allocating call (same
+    // pattern as `js_native_call_method`'s dispatch prologue). The proxy
+    // value itself is a registry handle id (not a heap pointer), but rooting
+    // it is free and keeps the discipline uniform.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proxy_handle = scope.root_nanbox_f64(proxy);
+    let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
+        unsafe { std::slice::from_raw_parts(args_ptr, args_len).to_vec() }
+    } else {
+        Vec::new()
+    };
+    let arg_handles = scope.root_nanbox_f64_slice(&original_args);
+    let p = || proxy_handle.get_nanbox_f64();
+    let arg = |i: usize| -> f64 {
+        arg_handles
+            .get(i)
+            .map(|h| h.get_nanbox_f64())
+            .unwrap_or(undefined)
+    };
+    unsafe {
+        match method {
+            // §23.1.3.21 Array.prototype.push
+            "push" => {
+                let len = proxy_array_length(p());
+                for i in 0..args_len {
+                    proxy_set_str_key(p(), (len + i as u64).to_string().as_bytes(), arg(i));
+                }
+                let new_len = len + args_len as u64;
+                proxy_set_str_key(p(), b"length", new_len as f64);
+                Some(new_len as f64)
+            }
+            // §23.1.3.19 Array.prototype.pop
+            "pop" => {
+                let len = proxy_array_length(p());
+                if len == 0 {
+                    proxy_set_str_key(p(), b"length", 0.0);
+                    return Some(undefined);
+                }
+                let idx = (len - 1).to_string();
+                let value_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), idx.as_bytes()));
+                proxy_delete_str_key_or_throw(p(), idx.as_bytes());
+                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                Some(value_handle.get_nanbox_f64())
+            }
+            // §23.1.3.24 Array.prototype.shift — HasProperty gates each move:
+            // a hole in the source deletes the destination instead of
+            // materializing an own `undefined`.
+            "shift" => {
+                let len = proxy_array_length(p());
+                if len == 0 {
+                    proxy_set_str_key(p(), b"length", 0.0);
+                    return Some(undefined);
+                }
+                let first_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), b"0"));
+                for k in 1..len {
+                    let from = k.to_string();
+                    let to = (k - 1).to_string();
+                    if proxy_has_str_key(p(), from.as_bytes()) {
+                        let v_handle =
+                            scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
+                        proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                    } else {
+                        proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                    }
+                }
+                proxy_delete_str_key_or_throw(p(), (len - 1).to_string().as_bytes());
+                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                Some(first_handle.get_nanbox_f64())
+            }
+            // §23.1.3.32 Array.prototype.unshift — same HasProperty gating on
+            // the right-shift loop.
+            "unshift" => {
+                let len = proxy_array_length(p());
+                let count = args_len as u64;
+                if count > 0 {
+                    for k in (0..len).rev() {
+                        let from = k.to_string();
+                        let to = (k + count).to_string();
+                        if proxy_has_str_key(p(), from.as_bytes()) {
+                            let v_handle =
+                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
+                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        } else {
+                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                        }
+                    }
+                    for i in 0..args_len {
+                        proxy_set_str_key(p(), i.to_string().as_bytes(), arg(i));
+                    }
+                }
+                let new_len = len + count;
+                proxy_set_str_key(p(), b"length", new_len as f64);
+                Some(new_len as f64)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
@@ -258,7 +415,7 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
 
 // This raw numeric-array helper is called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` export.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern "C" fn(
     *mut ArrayHeader,
     f64,
@@ -663,6 +820,6 @@ pub extern "C" fn js_array_unshift_variadic(
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
     js_array_unshift_variadic;

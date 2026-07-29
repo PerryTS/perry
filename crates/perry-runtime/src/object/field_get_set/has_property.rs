@@ -203,12 +203,21 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // redirect on the happy path) surfaced as a fatal 500 instead of a 307.
     // (Symbols and strings pass through unchanged; a proxy/handle receiver is
     // handled below with the coerced key.)
-    let key = {
+    //
+    // #6935: that coercion ALLOCATES the stringified key, so it can trigger a
+    // GC that evacuates the receiver — and `obj` / `obj_val` are raw locals
+    // captured above. (Only the number arm coerces, so no user JS runs here,
+    // but an allocation-triggered evacuation moves the receiver just the same.)
+    let (obj, obj_val, key) = {
         let kv = JSValue::from_bits(key.to_bits());
         if kv.is_number() {
-            unsafe { crate::object::js_to_property_key(key) }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj.to_bits());
+            let key = unsafe { crate::object::js_to_property_key(key) };
+            let obj = f64::from_bits(obj_handle.get_heap_word_u64());
+            (obj, JSValue::from_bits(obj.to_bits()), key)
         } else {
-            key
+            (obj, obj_val, key)
         }
     };
     let key_val = JSValue::from_bits(key.to_bits());
