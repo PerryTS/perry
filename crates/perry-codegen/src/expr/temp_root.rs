@@ -168,7 +168,21 @@ pub(crate) fn lower_exprs_rooted(
     let mut guard: Option<String> = None;
     for (i, expr) in exprs.iter().enumerate() {
         let value = super::lower_expr(ctx, expr)?;
-        if any_later_ref_may_trigger_gc(exprs, i) {
+        // A value that provably cannot be a heap reference roots nothing, so a
+        // slot for it is pure TLS traffic. This is the gate that keeps
+        // `total + s.length` and other numeric operand pairs at their old IR.
+        //
+        // A string literal is skipped for the opposite reason: it is a load
+        // from a module global that `__perry_init_strings_*` registered with
+        // `js_gc_register_global_root`, so it already has a precise root and
+        // the sweep can never take it. (A register loaded from that global is
+        // still stale after an *evacuating* cycle — but that is true of every
+        // `Expr::String` use in the compiler, not something this site
+        // introduces, and it is not the hazard #6951 is about.) Template
+        // literals are mostly literal parts, so this matters.
+        let needs_root = !super::expr_is_known_non_pointer_shadow_value(ctx, expr)
+            && !matches!(expr, Expr::String(_));
+        if needs_root && any_later_ref_may_trigger_gc(exprs, i) {
             let idx = temp_root_push_double(ctx, &value);
             // The FIRST slot pushed is the guard: truncating it drops every
             // slot above it too, so one call releases the whole group.

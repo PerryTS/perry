@@ -207,21 +207,21 @@ fn non_allocating_element_list_emits_no_rooting_calls() {
     );
 }
 
-/// …and it IS emitted when a later element allocates: the earlier element's
-/// value is in an SSA register across that allocation, which is not a root.
+/// …and it IS emitted when an earlier element is a heap value and a later one
+/// allocates: that value sits in an SSA register across the allocation, which
+/// is not a root.
 #[test]
 fn array_literal_roots_elements_before_an_allocating_element() {
     let ir = ir_for(
         "array_literal_gc.ts",
-        vec![Stmt::Expr(Expr::Array(vec![
-            Expr::String("a".to_string()),
-            allocating(),
-        ]))],
+        // Element 0 is itself a heap value (a literal would be skipped: it
+        // loads from a module global that is already a registered GC root).
+        vec![Stmt::Expr(Expr::Array(vec![allocating(), allocating()]))],
     );
 
     assert!(
         ir.contains("call i32 @js_gc_temp_root_push"),
         "an array literal with an allocating later element must root the \
-         elements already evaluated (#6951):\n{ir}"
+         heap elements already evaluated (#6951):\n{ir}"
     );
 }
