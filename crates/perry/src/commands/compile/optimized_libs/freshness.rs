@@ -88,7 +88,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -100,6 +100,7 @@ pub(crate) fn auto_optimized_cache_key(
         ctx.uses_string_normalize,
         ctx.uses_intl_segmenter,
         ctx.uses_intl_locale,
+        ctx.uses_intl_namespace,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
         // HTTP/2 imports and dynamic builtin resolution pull in
@@ -165,6 +166,12 @@ pub(crate) fn auto_optimized_cross_features(
     }
     if ctx.uses_intl_segmenter {
         cross_features.push("perry-runtime/intl-segmenter".to_string());
+    }
+    // `Intl.*` namespace surface — see perry-runtime's `intl-namespace`.
+    // A deferred dynamic-code site can construct `Intl.…` from a runtime
+    // string, so force it on there too (mirrors the dyn-eval regex rule).
+    if ctx.uses_intl_namespace || perry_hir::has_deferred_dynamic_code_sites() {
+        cross_features.push("perry-runtime/intl-namespace".to_string());
     }
     if ctx.uses_intl_locale {
         cross_features.push("perry-runtime/intl-locale".to_string());

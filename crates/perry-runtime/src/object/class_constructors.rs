@@ -529,6 +529,11 @@ pub unsafe extern "C" fn js_super_construct_apply(
     // value is the Intl constructor closure; run it (new.target set) and re-home
     // the branded instance onto `this`, the spread counterpart of the
     // `js_fetch_or_value_super` Intl branch.
+    // `class X extends Intl.<Ctor>` — behind `intl-namespace` for the same
+    // reason as the instanceof probe: with the feature off no Intl
+    // constructor value exists, so the branch is unreachable, and skipping it
+    // keeps this always-live path from pinning the Intl constructor web.
+    #[cfg(feature = "intl-namespace")]
     {
         let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
         if crate::intl::is_intl_constructor_value(parent_val) {

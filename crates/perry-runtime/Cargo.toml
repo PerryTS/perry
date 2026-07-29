@@ -22,7 +22,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points as dead-strip roots. They exist for the whole-program bitcode-LTO
@@ -109,6 +109,20 @@ string-normalize = ["dep:unicode-normalization"]
 # wrap-ansi@9+ (and thus ink). Only `intl.rs` uses it; a program that never
 # constructs an `Intl.Segmenter` links none of it.
 intl-segmenter = ["dep:unicode-segmentation"]
+# The `Intl.*` NAMESPACE surface (`Intl.NumberFormat`, `DateTimeFormat`,
+# `Collator`, `RelativeTimeFormat`, `ListFormat`, `PluralRules`,
+# `DisplayNames`, `DurationFormat`, `getCanonicalLocales`,
+# `supportedValuesOf`) — ~219 KB of constructor/option/format machinery
+# reached ONLY through `install_intl_namespace`, which `populate_global_this
+# _builtins` calls unconditionally. Gating the install (a no-op stub when
+# off) lets `-dead_strip` drop every part of `intl.rs` not also reachable
+# from a locale-aware method entry point. Programs keep working either way:
+# `Number/Date/String.prototype.toLocale*` and `localeCompare` live outside
+# this gate (their `js_*` entries stay compiled and their helpers stay
+# reachable), so only the `Intl.` namespace members depend on it. The
+# compiler enables it on any `Intl`/locale-formatting token, erring toward
+# enabling (same over-approximation contract as `temporal`).
+intl-namespace = []
 # `Intl.getCanonicalLocales` / `*.supportedLocalesOf` BCP-47 (UTS #35) language-tag
 # canonicalization via `icu_locale_core` (the data-free structural parser — case
 # normalization, variant ordering, extension well-formedness, UTS35 rejection of
