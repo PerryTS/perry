@@ -88,7 +88,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -105,6 +105,11 @@ pub(crate) fn auto_optimized_cache_key(
         ctx.uses_global_json,
         ctx.uses_global_reflect,
         ctx.uses_global_atomics,
+        ctx.uses_global_url,
+        ctx.uses_global_text,
+        ctx.uses_global_websocket,
+        ctx.uses_global_webcrypto,
+        ctx.uses_global_webfetch,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
         // HTTP/2 imports and dynamic builtin resolution pull in
@@ -186,6 +191,11 @@ pub(crate) fn auto_optimized_cross_features(
         (ctx.uses_global_json, "global-json"),
         (ctx.uses_global_reflect, "global-reflect"),
         (ctx.uses_global_atomics, "global-atomics"),
+        (ctx.uses_global_url, "global-url"),
+        (ctx.uses_global_text, "global-text"),
+        (ctx.uses_global_websocket, "global-websocket"),
+        (ctx.uses_global_webcrypto, "global-webcrypto"),
+        (ctx.uses_global_webfetch, "global-webfetch"),
     ] {
         if used || dynamic_code {
             cross_features.push(format!("perry-runtime/{feat}"));

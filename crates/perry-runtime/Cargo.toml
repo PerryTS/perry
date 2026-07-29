@@ -22,7 +22,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points as dead-strip roots. They exist for the whole-program bitcode-LTO
@@ -138,6 +138,23 @@ global-math = []
 global-json = []
 global-reflect = []
 global-atomics = []
+# Per-group `globalThis` web-platform surfaces: the prototype-method and
+# constructor-static tables for `URL`/`URLPattern`/`URLSearchParams`,
+# `Text{Encoder,Decoder}{,Stream}`, `WebSocket`, `Crypto`/`CryptoKey`/
+# `SubtleCrypto`, and the fetch value types (`Headers`/`Request`/`Response`/
+# `Blob`/`File`/`FormData`). `populate_global_this_builtins` installs all of
+# them unconditionally, so every binary carried each group plus everything it
+# references (the URL family alone is ~106 KB). The compiler enables each
+# group on its identifier tokens — and the fetch group additionally whenever
+# the program uses `fetch`, since a `fetch()` result is a `Response` the
+# source may never name. Constructors themselves stay installed either way, so
+# `typeof URL === "function"` and construction are unaffected; only the
+# reflectable member tables move.
+global-url = []
+global-text = []
+global-websocket = []
+global-webcrypto = []
+global-webfetch = []
 # `Intl.getCanonicalLocales` / `*.supportedLocalesOf` BCP-47 (UTS #35) language-tag
 # canonicalization via `icu_locale_core` (the data-free structural parser — case
 # normalization, variant ordering, extension well-formedness, UTS35 rejection of

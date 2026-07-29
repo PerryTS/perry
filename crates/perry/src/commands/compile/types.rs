@@ -693,6 +693,13 @@ pub struct CompilationContext {
     pub uses_global_json: bool,
     pub uses_global_reflect: bool,
     pub uses_global_atomics: bool,
+    /// Per-group `globalThis` web-platform member tables (URL / Text* /
+    /// WebSocket / webcrypto / fetch value types).
+    pub uses_global_url: bool,
+    pub uses_global_text: bool,
+    pub uses_global_websocket: bool,
+    pub uses_global_webcrypto: bool,
+    pub uses_global_webfetch: bool,
     pub uses_intl_locale: bool,
     /// Whether any TS module localizes a date/time — `Intl.DateTimeFormat`, or
     /// `Date.prototype.toLocale{,Date,Time}String`. Gates
@@ -1046,6 +1053,11 @@ impl CompilationContext {
             uses_global_json: false,
             uses_global_reflect: false,
             uses_global_atomics: false,
+            uses_global_url: false,
+            uses_global_text: false,
+            uses_global_websocket: false,
+            uses_global_webcrypto: false,
+            uses_global_webfetch: false,
             uses_intl_locale: false,
             uses_intl_datetime: false,
             uses_diagnostics: false,

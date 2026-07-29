@@ -335,6 +335,34 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("\"Atomics\"") {
             ctx.uses_global_atomics = true;
         }
+        // Web-platform member tables. Identifier tokens cover explicit use
+        // (`new URL(u)`, `new TextDecoder()`, `crypto.subtle`); the fetch
+        // value types additionally ride `uses_fetch`, because a `fetch()`
+        // result is a `Response` whose methods the source may reach without
+        // ever naming the type. Over-approximate by construction.
+        if hir_debug.contains("\"URL") {
+            ctx.uses_global_url = true;
+        }
+        if hir_debug.contains("\"Text") {
+            ctx.uses_global_text = true;
+        }
+        if hir_debug.contains("\"WebSocket\"") {
+            ctx.uses_global_websocket = true;
+        }
+        if hir_debug.contains("rypto") || hir_debug.contains("\"subtle\"") {
+            ctx.uses_global_webcrypto = true;
+        }
+        if ctx.uses_fetch
+            || hir_debug.contains("\"Headers\"")
+            || hir_debug.contains("\"Request\"")
+            || hir_debug.contains("\"Response\"")
+            || hir_debug.contains("\"Blob\"")
+            || hir_debug.contains("\"File\"")
+            || hir_debug.contains("\"FormData\"")
+            || hir_debug.contains("\"fetch\"")
+        {
+            ctx.uses_global_webfetch = true;
+        }
         // `Intl.getCanonicalLocales(...)` / `Intl.*.supportedLocalesOf(...)` gate
         // `perry-runtime/intl-locale` (`icu_locale_core` BCP-47 canonicalization).
         // Both lower with the method name as a `property` token.
