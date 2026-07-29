@@ -452,6 +452,13 @@ pub(crate) fn lower_let(
             };
             let source = lower_expr(ctx, object)?;
             let source_slot = ctx.func.alloca_entry(DOUBLE);
+            // See the array-element slots below: the root bind is hoisted to
+            // function entry, so this alloca is a live root before the store
+            // below runs. Give it a decodable `undefined` first.
+            let source_undef =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.func
+                .entry_allocas_push_store(DOUBLE, &source_undef, &source_slot);
             ctx.block().store(DOUBLE, &source, &source_slot);
             // #6968: the whole point of capturing the receiver here is that the
             // source local may be overwritten afterwards — at which moment this
@@ -599,8 +606,18 @@ pub(crate) fn lower_let(
         if ctx.non_escaping_arrays.contains_key(&id) {
             let n = elements.len();
             let mut slots: Vec<String> = Vec::with_capacity(n);
+            // Initialize to `undefined` in the entry block, like the
+            // object-literal field slots below. `root_scalar_replaced_slot`
+            // binds a pointer-capable element's alloca as a GC root once at
+            // function entry, which makes the collector dereference it from
+            // entry onward — before the element store runs, and on paths where
+            // it never runs at all. An uninitialized alloca would feed the
+            // root-word decoder stack garbage.
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             for _ in 0..n {
-                slots.push(ctx.func.alloca_entry(DOUBLE));
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                slots.push(slot);
             }
             // Evaluate each element expression first; store the
             // result into its slot. Order matches source, so any

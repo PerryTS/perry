@@ -160,6 +160,33 @@ fn bind_calls(ir: &str) -> usize {
     ir.matches("call void @js_shadow_slot_bind(").count()
 }
 
+/// Count of emitted incremental-mark root-shading barriers. This is the
+/// per-store remainder left behind once the bind is hoisted to entry.
+fn root_barriers(ir: &str) -> usize {
+    ir.matches("call void @js_write_barrier_root_nanbox(")
+        .count()
+}
+
+/// The whole `define … { … }` body of the function containing `needle`.
+///
+/// The tiny modules these tests build put everything in module init, but
+/// scoping the assertions to one function keeps ordering claims meaningful if
+/// that ever stops being true.
+fn enclosing_function<'a>(ir: &'a str, needle: &str) -> &'a str {
+    let at = ir
+        .find(needle)
+        .unwrap_or_else(|| panic!("no `{needle}` in:\n{ir}"));
+    let start = ir[..at]
+        .rfind("\ndefine ")
+        .map(|i| i + 1)
+        .unwrap_or_else(|| panic!("`{needle}` is outside any function in:\n{ir}"));
+    let end = ir[start..]
+        .find("\n}")
+        .map(|i| start + i + 2)
+        .unwrap_or(ir.len());
+    &ir[start..end]
+}
+
 /// The slot count baked into this module-init function's frame push.
 fn frame_slot_count(ir: &str) -> u32 {
     let needle = "call i64 @js_shadow_frame_push(i32 ";
@@ -409,5 +436,263 @@ fn later_store_into_a_scalar_replaced_field_is_bound() {
         bind_calls(&ir) > 0,
         "a heap value assigned into a scalar-replaced field after construction \
          must be rooted as well (#6968):\n{ir}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The bind is per SLOT, not per STORE (#7013).
+//
+// #7007 emitted `js_shadow_slot_bind` at every store into a scalar-replacement
+// alloca. That call is loop-invariant apart from its root barrier: the alloca
+// is entry-hoisted, so `slot_ptrs[idx]` never changes, and every reader of a
+// bound slot dereferences `slot_ptrs[idx]` rather than the `stack[idx]` mirror
+// the bind refreshes. In a loop it cost ~4 ns per iteration for nothing.
+// ---------------------------------------------------------------------------
+
+/// Two heap stores into the SAME scalar-replaced field must emit exactly one
+/// bind — hoisted to function entry — not one per store.
+///
+/// Teeth: pre-hoist this IR carried one bind per store site (2), so the
+/// equality fails on the old compiler. It also fails if a future change drops
+/// the bind altogether (0), which would un-root the alloca and reopen #6968.
+#[test]
+fn repeated_stores_into_one_scalar_slot_bind_once() {
+    let ir = ir_for(
+        "scalar_field_two_stores.ts",
+        vec![
+            let_stmt(
+                1,
+                "o",
+                Expr::Object(vec![("a".to_string(), Expr::Number(0.0))]),
+            ),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "a".to_string(),
+                value: Box::new(heap_value()),
+            }),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "a".to_string(),
+                value: Box::new(heap_value()),
+            }),
+            console_log(vec![field_get(1, "a")]),
+        ],
+    );
+
+    assert_eq!(
+        bind_calls(&ir),
+        1,
+        "two heap stores into one scalar-replaced field must share a single \
+         entry-hoisted bind — the alloca address is loop-invariant, so \
+         re-binding is pure per-store cost (#7013):\n{ir}"
+    );
+}
+
+/// Every store still shades its value, so an in-flight incremental mark cannot
+/// miss a pointer written into an already-scanned root.
+///
+/// This is the part of the bind that is genuinely per-store, and dropping it
+/// while hoisting the rest would be a silent incremental-GC miscompile.
+///
+/// Teeth: pre-hoist the scalar-slot path emitted no
+/// `js_write_barrier_root_nanbox` at all (the shading happened inside
+/// `js_shadow_slot_bind`), so the old compiler produces 0 and fails.
+#[test]
+fn every_store_into_a_hoisted_scalar_slot_shades_its_value() {
+    let ir = ir_for(
+        "scalar_field_two_stores_barrier.ts",
+        vec![
+            let_stmt(
+                1,
+                "o",
+                Expr::Object(vec![("a".to_string(), Expr::Number(0.0))]),
+            ),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "a".to_string(),
+                value: Box::new(heap_value()),
+            }),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "a".to_string(),
+                value: Box::new(heap_value()),
+            }),
+            console_log(vec![field_get(1, "a")]),
+        ],
+    );
+
+    assert_eq!(
+        root_barriers(&ir),
+        2,
+        "each of the two heap stores must shade the value it wrote; the \
+         hoisted bind only shades what the alloca held at function entry \
+         (#7013):\n{ir}"
+    );
+
+    // The barrier must be the guarded form, not an unconditional call: the
+    // whole point of hoisting is that the common path (no incremental cycle in
+    // flight) stays a load + compare + not-taken branch.
+    assert!(
+        ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
+        "the per-store shading barrier must be guarded on the incremental-mark \
+         active count, otherwise the hoist just trades one unconditional call \
+         for another (#7013):\n{ir}"
+    );
+}
+
+/// The bind must sit in the ENTRY block, ahead of the loop that stores through
+/// the slot — and after `js_shadow_frame_push`.
+///
+/// This is the property the whole change exists for: a store inside a loop must
+/// not re-bind per iteration. It is also where the one real ordering hazard
+/// lives — `reserve_shadow_slot` can create the frame push lazily, into the very
+/// region the hoisted bind is appended to, and a bind emitted before the push
+/// would write a slot in the CALLER's frame.
+///
+/// Teeth: pre-hoist the bind was emitted at the store site, i.e. inside the
+/// loop body, which is past the entry block's terminator — so the
+/// `bind < first_branch` claim fails on the old compiler.
+#[test]
+fn bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop() {
+    let ir = ir_for(
+        "scalar_field_loop_bind.ts",
+        vec![
+            let_stmt(9, "n", Expr::Number(3.0)),
+            Stmt::While {
+                condition: Expr::Compare {
+                    op: perry_hir::CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(9)),
+                    right: Box::new(Expr::Number(3.0)),
+                },
+                body: vec![
+                    let_stmt(
+                        1,
+                        "o",
+                        Expr::Object(vec![
+                            ("a".to_string(), heap_value()),
+                            ("b".to_string(), Expr::Number(2.0)),
+                        ]),
+                    ),
+                    console_log(vec![field_get(1, "a"), field_get(1, "b")]),
+                ],
+            },
+        ],
+    );
+
+    assert_eq!(
+        bind_calls(&ir),
+        1,
+        "a scalar-replaced field stored once per iteration must be bound once, \
+         not once per iteration (#7013):\n{ir}"
+    );
+
+    let body = enclosing_function(&ir, "call void @js_shadow_slot_bind(");
+    let push = body
+        .find("call i64 @js_shadow_frame_push(")
+        .unwrap_or_else(|| panic!("no frame push in the binding function:\n{body}"));
+    let bind = body
+        .find("call void @js_shadow_slot_bind(")
+        .expect("bind was located by enclosing_function");
+    let first_branch = body
+        .find("\n  br label %")
+        .unwrap_or_else(|| panic!("no entry-block terminator in:\n{body}"));
+
+    assert!(
+        push < bind,
+        "the hoisted bind must follow the frame push — binding before it would \
+         write a slot belonging to the caller's frame (#7013):\n{body}"
+    );
+    assert!(
+        bind < first_branch,
+        "the bind must sit in the entry block, ahead of the loop that stores \
+         through the slot; emitting it at the store site is the per-iteration \
+         cost this change removes (#7013):\n{body}"
+    );
+}
+
+/// A scalar-replaced ARRAY element alloca must be initialized before the
+/// hoisted bind makes it a live root.
+///
+/// Binding at entry makes the collector dereference the alloca from function
+/// entry, i.e. before the element store runs and on paths where it never runs.
+/// The object-literal path already stored `undefined` into its field slots at
+/// entry; the array path did not, because pre-hoist nothing read those allocas
+/// before their store.
+///
+/// Teeth: pre-hoist the array element slots got a bare `alloca` with no entry
+/// store, so the `undef_stores > 0` claim fails on the old compiler.
+#[test]
+fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
+    let ir = ir_for(
+        "scalar_array_element_init.ts",
+        vec![
+            let_stmt(1, "a", Expr::Array(vec![heap_value(), Expr::Number(2.0)])),
+            console_log(vec![
+                Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::Integer(0)),
+                },
+                Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::Integer(1)),
+                },
+            ]),
+        ],
+    );
+
+    let body = enclosing_function(&ir, "call void @js_shadow_slot_bind(");
+    let bind = body
+        .find("call void @js_shadow_slot_bind(")
+        .expect("bind was located by enclosing_function");
+
+    // TAG_UNDEFINED as the double literal codegen emits for it.
+    let undef =
+        perry_codegen::nanbox::double_literal(f64::from_bits(perry_codegen::nanbox::TAG_UNDEFINED));
+    let undef_store = format!("store double {undef}, ptr ");
+    let stores_before_bind = body[..bind].matches(undef_store.as_str()).count();
+
+    assert!(
+        stores_before_bind > 0,
+        "a scalar-replaced array element alloca is a live GC root from the \
+         hoisted bind onward, so it must hold a decodable `undefined` before \
+         that bind rather than uninitialized stack bytes (#7013). Looked for \
+         `{undef_store}` ahead of the bind in:\n{body}"
+    );
+}
+
+/// The gate still holds after hoisting: a numeric-only literal must emit
+/// neither a bind nor a shading barrier.
+///
+/// Hoisting moves work to function entry, where it is easy to stop noticing —
+/// this keeps the #6997 "a proven-numeric field costs nothing" property honest
+/// for the entry region too.
+#[test]
+fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
+    let ir = ir_for(
+        "scalar_numeric_no_entry_rooting.ts",
+        vec![
+            let_stmt(
+                1,
+                "p",
+                Expr::Object(vec![
+                    ("x".to_string(), Expr::Number(1.0)),
+                    ("y".to_string(), Expr::Number(2.0)),
+                ]),
+            ),
+            console_log(vec![field_get(1, "x"), field_get(1, "y")]),
+        ],
+    );
+
+    assert_eq!(
+        bind_calls(&ir),
+        0,
+        "a proven-numeric literal must not acquire an entry-hoisted bind \
+         (#7013):\n{ir}"
+    );
+    assert_eq!(
+        root_barriers(&ir),
+        0,
+        "a proven-numeric literal must not emit a store-site shading barrier \
+         (#7013):\n{ir}"
     );
 }

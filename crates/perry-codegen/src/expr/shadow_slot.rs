@@ -170,7 +170,17 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
     );
 }
 
-fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
+/// Emit the incremental-mark root shading barrier for a value that has just
+/// been written into an already-bound (persistent) root slot.
+///
+/// This is the only part of `js_shadow_slot_bind` that is genuinely per-store:
+/// re-recording `slot_ptrs[idx]` and re-mirroring the value are loop-invariant
+/// for an entry-hoisted alloca, but a pointer stored into a root *after* the
+/// collector scanned roots still has to be shaded. Guarding on
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` inline keeps the common
+/// (no incremental cycle in flight) path down to a load, a compare, and a
+/// not-taken branch instead of a TLS-touching call.
+pub(crate) fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
     let active =
         ctx.block()
             .load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
