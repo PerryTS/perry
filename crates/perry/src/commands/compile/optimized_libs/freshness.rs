@@ -88,7 +88,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -101,6 +101,10 @@ pub(crate) fn auto_optimized_cache_key(
         ctx.uses_intl_segmenter,
         ctx.uses_intl_locale,
         ctx.uses_intl_namespace,
+        ctx.uses_global_math,
+        ctx.uses_global_json,
+        ctx.uses_global_reflect,
+        ctx.uses_global_atomics,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
         // HTTP/2 imports and dynamic builtin resolution pull in
@@ -172,6 +176,20 @@ pub(crate) fn auto_optimized_cross_features(
     // string, so force it on there too (mirrors the dyn-eval regex rule).
     if ctx.uses_intl_namespace || perry_hir::has_deferred_dynamic_code_sites() {
         cross_features.push("perry-runtime/intl-namespace".to_string());
+    }
+    // Per-namespace globalThis member tables — see perry-runtime's `global-*`.
+    // A deferred dynamic-code site can reach any namespace by runtime string,
+    // so force all four on there (mirrors the intl-namespace rule).
+    let dynamic_code = perry_hir::has_deferred_dynamic_code_sites();
+    for (used, feat) in [
+        (ctx.uses_global_math, "global-math"),
+        (ctx.uses_global_json, "global-json"),
+        (ctx.uses_global_reflect, "global-reflect"),
+        (ctx.uses_global_atomics, "global-atomics"),
+    ] {
+        if used || dynamic_code {
+            cross_features.push(format!("perry-runtime/{feat}"));
+        }
     }
     if ctx.uses_intl_locale {
         cross_features.push("perry-runtime/intl-locale".to_string());

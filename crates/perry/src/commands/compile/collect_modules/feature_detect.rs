@@ -315,6 +315,26 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_intl_namespace = true;
         }
+        // Per-namespace `globalThis` member tables (`Math`/`JSON`/`Reflect`/
+        // `Atomics`). Static call sites (`Math.max(x)`, `JSON.stringify(v)`)
+        // lower to codegen intrinsics that never touch these tables, so a
+        // surviving mention of the name means the namespace may be used as a
+        // VALUE (`const m = Math`, `Object.keys(JSON)`) — exactly when the
+        // members must exist. Bare-substring matching keeps this
+        // over-approximate on purpose (a user identifier containing the name
+        // only costs size).
+        if hir_debug.contains("\"Math\"") {
+            ctx.uses_global_math = true;
+        }
+        if hir_debug.contains("\"JSON\"") {
+            ctx.uses_global_json = true;
+        }
+        if hir_debug.contains("\"Reflect\"") {
+            ctx.uses_global_reflect = true;
+        }
+        if hir_debug.contains("\"Atomics\"") {
+            ctx.uses_global_atomics = true;
+        }
         // `Intl.getCanonicalLocales(...)` / `Intl.*.supportedLocalesOf(...)` gate
         // `perry-runtime/intl-locale` (`icu_locale_core` BCP-47 canonicalization).
         // Both lower with the method name as a `property` token.

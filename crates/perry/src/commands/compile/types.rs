@@ -685,6 +685,14 @@ pub struct CompilationContext {
     /// (~219 KB of constructor/option/format machinery). Over-approximates:
     /// a dynamic-code site forces it on.
     pub uses_intl_namespace: bool,
+    /// Per-namespace `globalThis` member tables (`Math`/`JSON`/`Reflect`/
+    /// `Atomics`). Each gates the matching `perry-runtime/global-*` feature;
+    /// set when the program mentions the name at all (call sites lower to
+    /// intrinsics, so a mention means it may be used as a VALUE).
+    pub uses_global_math: bool,
+    pub uses_global_json: bool,
+    pub uses_global_reflect: bool,
+    pub uses_global_atomics: bool,
     pub uses_intl_locale: bool,
     /// Whether any TS module localizes a date/time — `Intl.DateTimeFormat`, or
     /// `Date.prototype.toLocale{,Date,Time}String`. Gates
@@ -1034,6 +1042,10 @@ impl CompilationContext {
             uses_string_normalize: false,
             uses_intl_segmenter: false,
             uses_intl_namespace: false,
+            uses_global_math: false,
+            uses_global_json: false,
+            uses_global_reflect: false,
+            uses_global_atomics: false,
             uses_intl_locale: false,
             uses_intl_datetime: false,
             uses_diagnostics: false,

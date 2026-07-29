@@ -545,18 +545,22 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // richer install that also exposes per-method name/length descriptors.
             match name {
                 "Math" => {
+                    #[cfg(feature = "global-math")]
                     install_math_namespace(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "Math");
                 }
                 "JSON" => {
+                    #[cfg(feature = "global-json")]
                     install_json_namespace_members(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "JSON");
                 }
                 "Reflect" => {
+                    #[cfg(feature = "global-reflect")]
                     install_reflect_namespace_members(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "Reflect");
                 }
                 "Atomics" => {
+                    #[cfg(feature = "global-atomics")]
                     install_atomics_namespace_members(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "Atomics");
                 }

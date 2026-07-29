@@ -22,7 +22,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points as dead-strip roots. They exist for the whole-program bitcode-LTO
@@ -123,6 +123,21 @@ intl-segmenter = ["dep:unicode-segmentation"]
 # compiler enables it on any `Intl`/locale-formatting token, erring toward
 # enabling (same over-approximation contract as `temporal`).
 intl-namespace = []
+# Per-namespace `globalThis` member tables. Each installs the reflectable
+# members of one built-in namespace (`Math.max`, `JSON.stringify`,
+# `Reflect.get`, `Atomics.add`, …) as real properties. Call sites in user code
+# are codegen intrinsics that never read these — they exist for reflection
+# (`Object.keys(Math)`) and for namespace-as-value use (`const m = Math;
+# m.max(…)`). `populate_global_this_builtins` installs them unconditionally,
+# so every binary carried all four tables plus everything they reference. The
+# compiler enables each on its identifier token (deliberately over-approximate:
+# any mention of the name, plus any deferred dynamic-code site, turns it on),
+# so a program that only calls the intrinsics links none of the tables while
+# the namespace object itself still exists (`typeof JSON === "object"`).
+global-math = []
+global-json = []
+global-reflect = []
+global-atomics = []
 # `Intl.getCanonicalLocales` / `*.supportedLocalesOf` BCP-47 (UTS #35) language-tag
 # canonicalization via `icu_locale_core` (the data-free structural parser — case
 # normalization, variant ordering, extension well-formedness, UTS35 rejection of
