@@ -67,6 +67,16 @@ pub extern "C" fn js_axios_delete() -> i64 {
 pub extern "C" fn js_axios_get() -> i64 {
     0
 }
+
+#[no_mangle]
+pub extern "C" fn js_axios_head() -> i64 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn js_axios_options() -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn js_axios_post() -> i64 {
     0

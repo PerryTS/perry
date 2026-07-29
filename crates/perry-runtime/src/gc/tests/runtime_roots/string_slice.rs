@@ -11,6 +11,7 @@ use super::*;
 /// allocation. This mirrors the proven concat / dynamic-add tests in the parent.
 #[test]
 fn test_transient_runtime_handle_string_slice_gc() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();

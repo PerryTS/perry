@@ -66,12 +66,12 @@ fn promote_global_for_units(line: &str) -> String {
 /// call. The two groups below re-enable those optimizations for a small,
 /// individually audited allowlist:
 ///
-/// * `#2` (PURE) = `nounwind willreturn memory(none)`. Invariant: the
+/// * `#2` (PURE) = `nounwind willreturn readnone`. Invariant: the
 ///   helper's Rust body (transitively) performs NaN-box BIT manipulation
 ///   only — no loads, no stores, no allocation, no GC trigger, no
 ///   `js_throw`/longjmp, and it is total over arbitrary input bits (no
 ///   panic, no UB), so LLVM may CSE/hoist/sink/delete it freely.
-/// * `#3` (READONLY) = `nounwind willreturn memory(read)`. Invariant: the
+/// * `#3` (READONLY) = `nounwind willreturn readonly`. Invariant: the
 ///   helper may READ heap memory (string headers, BigInt limbs) but never
 ///   writes, never allocates, never triggers GC, never takes a lock, and
 ///   never throws. LLVM may CSE/LICM it across write-free regions and
@@ -79,10 +79,21 @@ fn promote_global_for_units(line: &str) -> String {
 ///   possibly-writing call — which keeps it correct w.r.t. the moving GC,
 ///   because every GC-capable helper stays maximally clobbering.
 ///
+/// SYNTAX NOTE: the groups are spelled with the LEGACY `readnone` /
+/// `readonly` function attributes, NOT the modern `memory(none)` /
+/// `memory(read)` — old LLVM asm parsers (e.g. the Apple clang 15 shipped
+/// on macos-14 CI runners, and any user clang predating LLVM's `memory`
+/// attribute) reject the modern spelling with "unterminated attribute
+/// group", which killed every `--backend llvm` compile through that clang
+/// (caught by the simctl iOS smoke gating the v0.5.1265 release). New
+/// parsers still accept the legacy spelling and auto-upgrade it to the
+/// equivalent `memory(...)` form, so semantics are identical everywhere.
+///
 /// SOUNDNESS NOTES (read before adding an entry):
-/// * Deliberately `memory(read)`, NOT `memory(argmem: read)`: helper args
-///   are f64 NaN-boxes, not LLVM pointer arguments, so `argmem` would mean
-///   "reads no memory at all" and license CSE/DSE across real heap reads.
+/// * Deliberately reads-any (`readonly`, i.e. `memory(read)`), NOT an
+///   argmem-scoped form: helper args are f64 NaN-boxes, not LLVM pointer
+///   arguments, so `argmem` would mean "reads no memory at all" and
+///   license CSE/DSE across real heap reads.
 /// * Anything that can allocate or trigger GC gets NO group — the moving
 ///   GC's shadow-stack reload discipline depends on those calls staying
 ///   maximally clobbering.
@@ -123,6 +134,24 @@ fn helper_decl_attrs(name: &str) -> &'static str {
         // (js_bigint_is_zero via clean_bigint_ptr, pure bit cleanup). No
         // registry/lock access, no allocation, no throw, no writes.
         "js_is_truthy" => " #3",
+        // NOUNWIND+WILLRETURN only (#4, repsel Phase 4a.0) — each verified
+        // (`typed_feedback.rs` / `array/header.rs`): no `js_throw` (longjmp)
+        // anywhere in the body, every loop bounded by the 16M length/capacity
+        // sanity caps, no allocation, no GC trigger. They are NOT readonly:
+        // the numeric guards' first-touch path REBUILDS unmarked arrays into
+        // raw-f64 layout (slot writes + flag store), feedback mode
+        // (`PERRY_TYPED_FEEDBACK`, a runtime env check) records observations,
+        // and `js_array_numeric_value_to_raw_f64`'s ClassRef probe takes
+        // registry RwLock reads (a lock word write). #6082 trap notes apply:
+        // argmem is unsound for NaN-box args, and `willreturn` is only
+        // admissible because these helpers cannot reach `js_throw` — any
+        // divergence is a Rust panic-abort, which never resumes the program.
+        "js_typed_feedback_plain_array_index_get_guard"
+        | "js_typed_feedback_numeric_array_index_get_guard"
+        | "js_typed_feedback_plain_array_index_set_guard"
+        | "js_typed_feedback_numeric_array_index_set_guard"
+        | "js_typed_feedback_numeric_array_push_guard"
+        | "js_array_numeric_value_to_raw_f64" => " #4",
         _ => "",
     }
 }
@@ -463,18 +492,23 @@ impl LlModule {
         // above). See `helper_decl_attrs` for the audit invariants.
         let mut used_pure = false;
         let mut used_readonly = false;
+        let mut used_nounwind_willreturn = false;
         for name in &self.declared_names {
             match helper_decl_attrs(name) {
                 " #2" => used_pure = true,
                 " #3" => used_readonly = true,
+                " #4" => used_nounwind_willreturn = true,
                 _ => {}
             }
         }
         if used_pure {
-            ir.push_str("\nattributes #2 = { nounwind willreturn memory(none) }\n");
+            ir.push_str("\nattributes #2 = { nounwind willreturn readnone }\n");
         }
         if used_readonly {
-            ir.push_str("\nattributes #3 = { nounwind willreturn memory(read) }\n");
+            ir.push_str("\nattributes #3 = { nounwind willreturn readonly }\n");
+        }
+        if used_nounwind_willreturn {
+            ir.push_str("\nattributes #4 = { nounwind willreturn }\n");
         }
         // Issue #52: `!0 = !{}` referenced by `!invariant.load !0`, plus the
         // buffer alias-scope metadata. LICM/GVN hoist invariant loads out of
@@ -738,6 +772,11 @@ mod tests {
         m.declare_function("js_nanbox_get_pointer", I64, &[DOUBLE]);
         m.declare_function("js_is_truthy", I32, &[DOUBLE]);
         m.declare_function("js_nanbox_string", DOUBLE, &[I64]);
+        m.declare_function(
+            "js_typed_feedback_numeric_array_index_get_guard",
+            I32,
+            &[I64, DOUBLE, I32, I32],
+        );
         let f = m.define_function("main", I32, vec![]);
         f.create_block("entry").ret(I32, "0");
 
@@ -756,12 +795,22 @@ mod tests {
         );
         assert!(!ir.contains("js_nanbox_string(i64) #"));
         assert_eq!(
-            ir.matches("attributes #2 = { nounwind willreturn memory(none) }")
+            ir.matches("attributes #2 = { nounwind willreturn readnone }")
                 .count(),
             1
         );
         assert_eq!(
-            ir.matches("attributes #3 = { nounwind willreturn memory(read) }")
+            ir.matches("attributes #3 = { nounwind willreturn readonly }")
+                .count(),
+            1
+        );
+        // Repsel 4a.0: the array-index guards carry #4 (nounwind willreturn,
+        // no memory attribute — the first-touch path rebuilds raw-f64 layout).
+        assert!(ir.contains(
+            "declare i32 @js_typed_feedback_numeric_array_index_get_guard(i64, double, i32, i32) #4"
+        ));
+        assert_eq!(
+            ir.matches("attributes #4 = { nounwind willreturn }")
                 .count(),
             1
         );
@@ -781,6 +830,7 @@ mod tests {
         let ir = m.to_ir();
         assert!(!ir.contains("attributes #2"));
         assert!(!ir.contains("attributes #3"));
+        assert!(!ir.contains("attributes #4"));
     }
 
     #[test]
@@ -798,7 +848,7 @@ mod tests {
         for u in &units {
             assert!(u.contains("declare i32 @js_is_truthy(double) #3"));
             assert_eq!(
-                u.matches("attributes #3 = { nounwind willreturn memory(read) }")
+                u.matches("attributes #3 = { nounwind willreturn readonly }")
                     .count(),
                 1
             );

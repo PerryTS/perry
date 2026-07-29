@@ -183,6 +183,15 @@ pub(crate) struct BufferViewSlot {
     pub alias: AliasState,
     pub length_source: Option<LengthSource>,
     pub native_owned: Option<NativeOwnedViewSlot>,
+    /// Representation-selection Phase 2: `true` when the receiver is PROVEN to
+    /// be a freshly-constructed inline-storage (non-view) typed array /
+    /// buffer — the construction form was a length or plain-array source,
+    /// never an `ArrayBuffer`. Such storage never moves (GC marks
+    /// `GC_TYPE_TYPED_ARRAY`/`GC_TYPE_BUFFER` non-movable), cannot be
+    /// detached, and its length is immutable, so the checked-native element
+    /// access tier (`expr/proven_view_access.rs`) may derive data/length from
+    /// the header with a plain bounds compare and NO kind/view guard.
+    pub storage_inline_proven: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

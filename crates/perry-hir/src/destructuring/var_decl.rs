@@ -301,6 +301,26 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }
                 other => other,
             };
+            // #6871: `let x;` / `const x;` with no initializer must still
+            // materialize the implicit `undefined`. Executing a lexical
+            // declaration initializes the binding to undefined (ECMA-262
+            // `CreateMutableBinding` + `InitializeBinding`), which matters when
+            // the declaration re-executes: each loop iteration gets a FRESH
+            // binding. Codegen allocates the slot once and emitted no store for
+            // `init: None`, so a value assigned in iteration N was still there
+            // in iteration N+1 — visible whenever the assignment happened
+            // inside a nested loop (a plain `if` in the same body was already
+            // correct). Codegen cannot distinguish the two cases itself:
+            // `Stmt::Let` carries no var/let flag and `var_hoisted_ids` does
+            // not reach it, so make the initializer explicit here, where
+            // `is_var_decl` is known.
+            //
+            // `var` is deliberately excluded: it is function-scoped and
+            // hoisted, so re-executing `var x;` keeps the prior value.
+            let init = match init {
+                None if !is_var_decl => Some(Expr::Undefined),
+                other => other,
+            };
             result.push(Stmt::Let {
                 id,
                 name,

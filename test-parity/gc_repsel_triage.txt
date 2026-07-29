@@ -1,0 +1,17 @@
+# Triaged expected-red cells for scripts/gc_repsel_matrix.sh.
+#
+# Format:  <test basename> | <arm id> | <reason, with an issue number>
+#
+# A cell listed here reports XFAIL instead of FAIL and does not fail the gate.
+# EVERY entry must name an open issue and say why the redness is not a
+# representation defect. Do not add an entry to make a table green: an
+# untriaged red cell is the whole point of this gate.
+
+# #6951 is FIXED: the argument accumulator of a variadic call is now a precise
+# root (`js_gc_temp_root_*`, `gc/roots/temp_roots.rs`), so the two
+# `test_gap_repsel_gc_stress` cells that were triaged here -- `cons_scan_off`
+# and `cons_scan_off_force` -- are green and are now hard gates. `cons_scan_off`
+# is in the PR arm set, so it is the arm that will catch the next unrooted
+# temporary. Do not re-triage it without a new issue number and a reason.
+
+test_gap_repsel_ptr_shape_locals | rep_ptr_shape_off | #6976 -- REGRESSION IN THE REPRESENTATION'S OWN OFF-SWITCH, not a defect in this PR. Bisected: passes at 8327ced52, fails at 1a533a3a8 (#6925, repsel Phase 5a proven `this`). With PERRY_PTR_SHAPE_LOCALS=0 the program dies partway with `TypeError: Cannot read properties of undefined (reading 'area')`, losing its last five output lines. It was invisible until now because #6925 also left test_gap_repsel_proven_this_frozen.ts unregistered, which makes this script exit 3 before it runs anything -- the gate was dark, not green. REMOVE THIS ENTRY when #6976 is fixed; an OFF arm is supposed to be the safest cell in the matrix.

@@ -1,3 +1,6 @@
 status=200
+head.status=200
+options.status=200
 data.ok=true
 data.path=/json
+foreign.status=undefined

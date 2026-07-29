@@ -903,6 +903,15 @@ mod tests {
         unsafe {
             js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
         }
+        // #6430: the async `randomBytes` callback runs on a macrotask
+        // (`setImmediate`), like Node's libuv-threadpool dispatch — never
+        // inline. Assert that, then pump the callback-timer queue to observe
+        // the delivered `(err, buffer)` arguments.
+        assert!(
+            !CB_FIRED.with(|f| f.get()),
+            "randomBytes callback must not fire synchronously"
+        );
+        perry_runtime::timer::js_callback_timer_tick();
         assert!(CB_FIRED.with(|f| f.get()), "randomBytes callback must fire");
         assert!(
             CB_ERR_NULLISH.with(|f| f.get()),

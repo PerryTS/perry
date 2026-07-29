@@ -118,6 +118,22 @@ unchanged modules, leaving the trace dir empty).
 
 Minification strips comments, collapses whitespace, and mangles local variable/parameter/non-exported function names for smaller output.
 
+### Size-optimized builds
+
+For the smallest possible native binaries, two opt-in environment variables
+rebuild the auto-optimized runtime/stdlib archives tuned for size instead of
+speed (they require a Perry workspace checkout, like the rest of
+auto-optimize):
+
+| Variable | Description |
+|----------|-------------|
+| `PERRY_SIZE_OPT=z` (or `s`) | Rebuild the runtime/stdlib at `-C opt-level=z`/`s` instead of `3`. Roughly halves a small program's binary at some runtime-speed cost (compute-heavy inner loops can run ~2-3× slower). Size-optimized and normal archives are cached independently. |
+| `PERRY_SIZE_LTO=fat` | Additionally run whole-archive fat LTO over the rebuilt archives (slower rebuild, smaller binary). Only meaningful together with `PERRY_SIZE_OPT`. |
+
+A `console.log` hello world on macOS arm64: 5.9 MB default → 2.4 MB with
+`PERRY_SIZE_OPT=z PERRY_SIZE_LTO=fat`. Programs that use more of the runtime
+shrink less, proportionally.
+
 ## Testing Flags
 
 | Flag | Description |

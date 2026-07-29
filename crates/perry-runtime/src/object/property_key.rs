@@ -44,6 +44,45 @@ pub unsafe extern "C" fn js_to_property_key(value: f64) -> f64 {
     crate::value::js_nanbox_string(key as i64)
 }
 
+/// True when [`js_to_property_key`] provably neither allocates nor calls back
+/// into user JS for `key`, so a caller may hold a raw receiver / stored value
+/// across it without a [`RuntimeHandleScope`] (#6935).
+///
+/// Only an already-heap `STRING_TAG` key qualifies. Walk the coercion for one:
+/// `js_is_symbol` is a tag/side-table test, `js_to_primitive` returns any
+/// non-`POINTER_TAG` value unchanged, `ordinary_to_primitive_string_key` bails
+/// immediately (`extract_obj_ptr` is null for a tagged string), and
+/// `js_jsvalue_to_string` hands the very same pointer back. Nothing allocates.
+///
+/// Every other key shape does: numbers / booleans / `null` / `undefined` /
+/// BigInt allocate their stringification, SSO short strings materialize onto
+/// the heap, and object keys can invoke a user `Symbol.toPrimitive` /
+/// `toString` / `valueOf`. Any of those can trigger a GC that **evacuates**
+/// live objects — moving the caller's receiver and the value it is about to
+/// store — so the callers below must root across the coercion instead.
+///
+/// [`RuntimeHandleScope`]: crate::gc::RuntimeHandleScope
+#[inline]
+pub(crate) fn property_key_coercion_is_inert(key: f64) -> bool {
+    (key.to_bits() & 0xFFFF_0000_0000_0000) == crate::value::STRING_TAG
+}
+
+/// `ToPropertyKey(key)` performed inside an existing `scope`, with both the
+/// incoming key and the coerced result rooted (#6935).
+///
+/// Callers must root their receiver — and any value they are about to store —
+/// in the SAME scope *before* calling this, then read those back through their
+/// handles: this coercion is the GC-capable step that invalidates raw locals.
+#[inline]
+pub(crate) unsafe fn to_property_key_rooted<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    key: f64,
+) -> crate::gc::RuntimeHandle<'scope> {
+    let key_handle = scope.root_nanbox_f64(key);
+    let coerced = js_to_property_key(key_handle.get_nanbox_f64());
+    scope.root_nanbox_f64(coerced)
+}
+
 /// True when `v` is not a JS Object — i.e. a usable primitive result from
 /// `OrdinaryToPrimitive` (undefined/null/boolean/number/string/bigint and,
 /// crucially, **Symbol**, the one `POINTER_TAG` primitive).
@@ -102,13 +141,43 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
 }
 
 /// `obj[ToPropertyKey(key)] = value` for object-literal computed definitions.
+///
+/// #6935: `ToPropertyKey` can run a user `Symbol.toPrimitive` / `toString` /
+/// `valueOf`, which allocates → GC → **evacuation**. Pre-fix `obj_value` (the
+/// receiver) and `value` (what is about to be written *into* it) were raw
+/// NaN-boxed Rust locals held across that call — neither a GC root nor a
+/// shadow slot. A stale receiver dropped the write onto a forwarding stub, and
+/// a stale `value` planted a dangling pointer inside a live object, so the
+/// corruption outlived the call. Root both before the coercion and read them
+/// back through their handles afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_set_property_key(
     obj_value: f64,
     key_value: f64,
     value: f64,
 ) -> f64 {
-    let key = js_to_property_key(key_value);
+    if property_key_coercion_is_inert(key_value) {
+        return set_property_key_resolved(obj_value, key_value, value);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // `obj_value` may arrive NaN-boxed OR as a bare heap address (module-level
+    // object slots store the untagged pointer) OR as an INT32 class-ref — the
+    // heap-word slot kind covers all three, rewriting only the real pointers
+    // and preserving each encoding.
+    let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+    let value_handle = scope.root_nanbox_f64(value);
+    let key_handle = to_property_key_rooted(&scope, key_value);
+    set_property_key_resolved(
+        f64::from_bits(obj_handle.get_heap_word_u64()),
+        key_handle.get_nanbox_f64(),
+        value_handle.get_nanbox_f64(),
+    )
+}
+
+/// Post-`ToPropertyKey` half of [`js_object_set_property_key`]. `key` is
+/// already a Symbol or a heap string here, so nothing below can run user JS.
+#[inline]
+unsafe fn set_property_key_resolved(obj_value: f64, key: f64, value: f64) -> f64 {
     if crate::symbol::js_is_symbol(key) != 0 {
         return crate::symbol::js_object_set_symbol_property(obj_value, key, value);
     }
@@ -134,9 +203,26 @@ pub unsafe extern "C" fn js_object_set_property_key(
 }
 
 /// `obj[ToPropertyKey(key)]` using Perry's string and symbol property stores.
+///
+/// #6935: the receiver is rooted across the GC-capable key coercion — see
+/// [`js_object_set_property_key`] for the full reasoning.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_property_key(obj_value: f64, key_value: f64) -> f64 {
-    let key = js_to_property_key(key_value);
+    if property_key_coercion_is_inert(key_value) {
+        return get_property_key_resolved(obj_value, key_value);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+    let key_handle = to_property_key_rooted(&scope, key_value);
+    get_property_key_resolved(
+        f64::from_bits(obj_handle.get_heap_word_u64()),
+        key_handle.get_nanbox_f64(),
+    )
+}
+
+/// Post-`ToPropertyKey` half of [`js_object_get_property_key`].
+#[inline]
+unsafe fn get_property_key_resolved(obj_value: f64, key: f64) -> f64 {
     if crate::symbol::js_is_symbol(key) != 0 {
         return crate::symbol::js_object_get_symbol_property(obj_value, key);
     }
@@ -163,13 +249,33 @@ pub unsafe extern "C" fn js_object_get_property_key(obj_value: f64, key_value: f
 
 /// Install an object-literal method under a computed property key and bind the
 /// method's reserved `this` capture slot to the home object.
+///
+/// #6935: the home object AND the closure being installed are both rooted
+/// across the GC-capable key coercion — the closure is the "stored value" here,
+/// so a stale one would be written into the object.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_set_property_key_method(
     obj_value: f64,
     key_value: f64,
     closure: f64,
 ) -> f64 {
-    let key = js_to_property_key(key_value);
+    if property_key_coercion_is_inert(key_value) {
+        return set_property_key_method_resolved(obj_value, key_value, closure);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+    let closure_handle = scope.root_nanbox_f64(closure);
+    let key_handle = to_property_key_rooted(&scope, key_value);
+    set_property_key_method_resolved(
+        f64::from_bits(obj_handle.get_heap_word_u64()),
+        key_handle.get_nanbox_f64(),
+        closure_handle.get_nanbox_f64(),
+    )
+}
+
+/// Post-`ToPropertyKey` half of [`js_object_set_property_key_method`].
+#[inline]
+unsafe fn set_property_key_method_resolved(obj_value: f64, key: f64, closure: f64) -> f64 {
     if crate::symbol::js_is_symbol(key) != 0 {
         return crate::symbol::js_object_set_symbol_method(obj_value, key, closure);
     }
@@ -223,7 +329,16 @@ pub unsafe extern "C" fn js_super_accessor_get(
     key: f64,
     receiver: f64,
 ) -> f64 {
-    let key_hdr = crate::builtins::js_string_coerce(key);
+    // #6935: `js_string_coerce` on an object key runs a user `toString` /
+    // `valueOf` (and allocates even for primitive keys), so it can GC and
+    // evacuate. `receiver` is dereferenced far below (`class_ref_id`, the
+    // getter's `this`) and `key` is re-read at the prototype fallback, so both
+    // must survive the coercion through handles rather than as raw locals.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
+    let key_handle = scope.root_nanbox_f64(key);
+    let key_hdr = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
+    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
     let key_name: Option<String> = if key_hdr.is_null() {
         None
     } else {
@@ -331,7 +446,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
     }
     if !proto.is_null() {
         let target = crate::value::js_nanbox_pointer(proto as i64);
-        return js_object_get_property_key(target, key);
+        return js_object_get_property_key(target, key_handle.get_nanbox_f64());
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -376,13 +491,26 @@ pub unsafe extern "C" fn js_object_super_call(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #6935: `js_object_super_get` performs the GC-capable `ToPropertyKey`, and
+    // `clone_closure_rebind_this` allocates the bound copy. `receiver` — the
+    // `this` the bound method runs with — was raw across both.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
     let callee = js_object_super_get(home, key_value, receiver);
     if callee.to_bits() == crate::value::TAG_UNDEFINED {
         return callee;
     }
-    let bound = crate::closure::clone_closure_rebind_this(callee.to_bits(), receiver);
+    let callee_handle = scope.root_nanbox_f64(callee);
+    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
+    let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
+    let bound_handle = scope.root_nanbox_u64(bound);
+    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
     let prev_this = crate::object::js_implicit_this_set(receiver);
-    let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
+    let result = crate::closure::js_native_call_value(
+        f64::from_bits(bound_handle.get_nanbox_u64()),
+        args_ptr,
+        args_len,
+    );
     crate::object::js_implicit_this_set(prev_this);
     result
 }

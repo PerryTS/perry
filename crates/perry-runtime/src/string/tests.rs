@@ -474,3 +474,54 @@ fn test_string_append_loop() {
         inplace_count
     );
 }
+
+// ── Repsel Phase 3a: js_string_compare_value ───────────────────────────────
+
+#[test]
+fn string_compare_value_heap_and_sso_mixes() {
+    use super::compare::js_string_compare_value;
+    let heap = |s: &str| {
+        let p = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(p).bits())
+    };
+    let sso = |s: &str| {
+        f64::from_bits(
+            crate::value::JSValue::try_short_string(s.as_bytes())
+                .expect("<=5 bytes")
+                .bits(),
+        )
+    };
+    // heap × heap
+    assert_eq!(js_string_compare_value(heap("abc"), heap("abd")), -1);
+    assert_eq!(js_string_compare_value(heap("abc"), heap("abc")), 0);
+    // SSO × SSO
+    assert_eq!(js_string_compare_value(sso("ab"), sso("ac")), -1);
+    assert_eq!(js_string_compare_value(sso("ab"), sso("ab")), 0);
+    assert_eq!(js_string_compare_value(sso("b"), sso("a")), 1);
+    // mixed representations, equal content
+    assert_eq!(js_string_compare_value(sso("ok"), heap("ok")), 0);
+    assert_eq!(js_string_compare_value(heap("ok"), sso("oz")), -1);
+    // astral vs BMP: UTF-16 code-unit order, not code-point order
+    assert_eq!(
+        js_string_compare_value(heap("\u{1F600}"), heap("\u{FFFD}")),
+        -1
+    );
+    // number operand coerces via its decimal string form (legacy unified
+    // behavior this helper's arm replaces) — both orders and both string
+    // representations, exercising the "allocating coercions complete before
+    // any heap-payload view is taken" phase split (the number path calls
+    // js_number_to_string, which allocates and may move the other operand's
+    // heap string under evacuation).
+    assert_eq!(js_string_compare_value(42.0, heap("42")), 0);
+    assert_eq!(js_string_compare_value(heap("42"), 42.0), 0);
+    assert_eq!(js_string_compare_value(42.0, heap("5")), -1);
+    assert_eq!(js_string_compare_value(heap("5"), 42.0), 1);
+    assert_eq!(js_string_compare_value(42.0, sso("42")), 0);
+    assert_eq!(js_string_compare_value(sso("41"), 42.0), -1);
+    assert_eq!(js_string_compare_value(1.5, 2.5), -1); // both numbers coerce
+                                                       // non-string, non-number operands rank as invalid
+    let undef = f64::from_bits(crate::value::JSValue::undefined().bits());
+    assert_eq!(js_string_compare_value(undef, heap("x")), -1);
+    assert_eq!(js_string_compare_value(heap("x"), undef), 1);
+    assert_eq!(js_string_compare_value(undef, undef), 0);
+}
