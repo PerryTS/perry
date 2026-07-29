@@ -214,6 +214,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )?;
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            // `class X extends DOMException` with a synthesized/pass-through
+            // constructor (`super(...args)`) must initialize the same surface
+            // as the fixed-arity super-call path above. Array reads past the
+            // spread argument count produce `undefined`, matching the optional
+            // message/name parameters.
+            let is_dom_exception = ctx
+                .classes
+                .get(&current_class_name)
+                .and_then(|c| c.extends_name.as_deref())
+                .map(|p| p == "DOMException")
+                .unwrap_or(false);
+            if is_dom_exception {
+                let zero_idx = "0".to_string();
+                let one_idx = "1".to_string();
+                let message =
+                    ctx.block()
+                        .call(DOUBLE, "js_array_get_f64", &[(I64, &arr), (I32, &zero_idx)]);
+                let name =
+                    ctx.block()
+                        .call(DOUBLE, "js_array_get_f64", &[(I64, &arr), (I32, &one_idx)]);
+                ctx.block().call(
+                    DOUBLE,
+                    "js_dom_exception_subclass_init",
+                    &[(DOUBLE, &this_box), (DOUBLE, &message), (DOUBLE, &name)],
+                );
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::SelfOnly,
+                )?;
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             if let Some(&child_cid) = ctx.class_ids.get(&current_class_name) {
                 let cid_str = child_cid.to_string();
                 let blk = ctx.block();
