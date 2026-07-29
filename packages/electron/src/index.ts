@@ -17,6 +17,7 @@ import {
   webviewEvaluateJs,
   webviewSetOnMessage,
   webviewSetOnLoaded,
+  webviewSetOnError,
   webviewAddUserScript,
   appRequestLoop,
   appQuit,
@@ -57,6 +58,14 @@ function jsStringLiteral(s: string): string {
   return JSON.stringify(s);
 }
 
+function ipcJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch (err) {
+    throw new TypeError("IPC payload must be JSON-serializable: " + errMessage(err));
+  }
+}
+
 // Build `window.__perryResolve(id, ok, payload)` source. `payload` is the
 // result re-encoded as a JS string literal of its JSON (double-encoded), which
 // the renderer JSON.parses. undefined results pass the bare `undefined` token.
@@ -65,14 +74,20 @@ function resolveJs(id: number, ok: boolean, value: unknown): string {
   if (value === undefined) {
     arg3 = "undefined";
   } else {
-    arg3 = jsStringLiteral(JSON.stringify(value));
+    arg3 = jsStringLiteral(ipcJson(value));
   }
   return "window.__perryResolve(" + id + "," + (ok ? "true" : "false") + "," + arg3 + ")";
 }
 
 function deliverJs(channel: string, args: unknown[]): string {
-  const argsJson = JSON.stringify(args);
+  const argsJson = ipcJson(args);
   return "window.__perryDeliver(" + jsStringLiteral(channel) + "," + jsStringLiteral(argsJson) + ")";
+}
+
+function serializationFailureJs(id: number, err: unknown): string {
+  return resolveJs(id, false, {
+    message: errMessage(err),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +155,13 @@ class IpcMain extends EventEmitter {
       try {
         const result = handler(invokeEvent, ...msg.args);
         Promise.resolve(result).then(
-          (value) => wc._eval(resolveJs(msg.id, true, value)),
+          (value) => {
+            try {
+              wc._eval(resolveJs(msg.id, true, value));
+            } catch (err) {
+              wc._eval(serializationFailureJs(msg.id, err));
+            }
+          },
           (err) => wc._eval(resolveJs(msg.id, false, { message: errMessage(err) }))
         );
       } catch (err) {
@@ -287,9 +308,17 @@ class BrowserWindow extends EventEmitter {
     this._setSize = (w: number, h: number) => win.setSize(w, h);
     this.webContents = new WebContents(nextWebContentsId++);
 
-    // Create the webview that fills the window. Start blank; load via
-    // loadFile/loadURL. Persistent data store (ephemeral=0) so apps keep state.
-    const wv = WebView({ url: "about:blank", width, height });
+    // Servo does not yet implement the document-start preload and renderer IPC
+    // contracts required by BrowserWindow. Explicitly select the system backend
+    // for Electron windows until those APIs exist instead of returning a Servo
+    // handle whose bridge setup would be silently ignored.
+    const previousWebview = process.env.PERRY_WEBVIEW;
+    process.env.PERRY_WEBVIEW = "system";
+    // Start without an initial navigation so a later loadURL/loadFile promise
+    // cannot be resolved by an in-flight about:blank navigation.
+    const wv = WebView({ url: "", width, height });
+    if (previousWebview === undefined) delete process.env.PERRY_WEBVIEW;
+    else process.env.PERRY_WEBVIEW = previousWebview;
     this.webContents._wv = wv;
 
     // Inject the IPC bridge runtime + the app's preload (document-start),
@@ -298,19 +327,33 @@ class BrowserWindow extends EventEmitter {
     webviewAddUserScript(wv, PRELOAD_RUNTIME);
     if (this.preloadPath) {
       const preloadSrc = tryReadFile(this.preloadPath);
-      if (preloadSrc) webviewAddUserScript(wv, preloadSrc);
+      if (preloadSrc) {
+        const preloadAbs = path.isAbsolute(this.preloadPath)
+          ? this.preloadPath
+          : path.join(process.cwd(), this.preloadPath);
+        webviewAddUserScript(
+          wv,
+          "window.__perryRunPreload(" +
+            jsStringLiteral(preloadSrc) +
+            "," +
+            jsStringLiteral("file://" + preloadAbs) +
+            ");"
+        );
+      }
     }
+    // The temporary runner is present only while trusted document-start scripts
+    // execute. Page scripts never receive require/electron/ipcRenderer.
+    webviewAddUserScript(wv, "delete window.__perryRunPreload;");
 
     // Fire webContents 'did-finish-load' / 'dom-ready' when the page loads, so
     // apps that push to the renderer after load (a very common pattern) work.
     const self = this;
-    // NOTE: wires webContents 'did-finish-load'/'dom-ready' from the webview's
-    // onLoaded delegate. The native onLoaded currently doesn't fire for file://
-    // loads (tracked gap) so apps that push to the renderer on load don't yet
-    // get the event; renderer→main and main→renderer IPC otherwise work.
     webviewSetOnLoaded(wv, (_url: string) => {
       self.webContents.emit("did-finish-load");
       self.webContents.emit("dom-ready");
+    });
+    webviewSetOnError(wv, (code: number, message: string) => {
+      self.webContents.emit("did-fail-load", code, message);
     });
 
     // Route inbound IPC from this window's renderer to ipcMain.
@@ -333,15 +376,30 @@ class BrowserWindow extends EventEmitter {
   }
 
   loadURL(url: string): Promise<void> {
-    webviewLoadUrl(this.webContents._wv, url);
-    return Promise.resolve();
+    return this._load(url);
   }
 
   loadFile(filePath: string, _options?: any): Promise<void> {
     // Resolve relative to cwd; Electron resolves relative to the app dir.
     const abs = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
-    webviewLoadUrl(this.webContents._wv, "file://" + abs);
-    return Promise.resolve();
+    return this._load("file://" + abs);
+  }
+
+  private _load(url: string): Promise<void> {
+    const wc = this.webContents;
+    return new Promise((resolve, reject) => {
+      const onLoaded = () => {
+        wc.removeListener("did-fail-load", onFailed);
+        resolve();
+      };
+      const onFailed = (code: number, message: string) => {
+        wc.removeListener("did-finish-load", onLoaded);
+        reject(new Error("Navigation failed (" + code + "): " + message));
+      };
+      wc.once("did-finish-load", onLoaded);
+      wc.once("did-fail-load", onFailed);
+      webviewLoadUrl(wc._wv, url);
+    });
   }
 
   show(): void {

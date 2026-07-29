@@ -154,6 +154,44 @@ fn render_paths_block(paths: &serde_json::Map<String, serde_json::Value>) -> Str
         .join(",\n")
 }
 
+/// Adjust root-relative generated path targets for an existing TypeScript
+/// `baseUrl`. TypeScript resolves every `paths` target from `baseUrl`, so a
+/// config rooted at `src` needs `../node_modules/...` and `../.perry/...`.
+fn paths_for_base_url(
+    paths: &serde_json::Map<String, serde_json::Value>,
+    base_url: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let mut depth = 0usize;
+    for component in Path::new(base_url).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return None,
+        }
+    }
+    if depth == 0 {
+        return Some(paths.clone());
+    }
+
+    let prefix = "../".repeat(depth);
+    let mut adjusted = serde_json::Map::new();
+    for (key, targets) in paths {
+        let targets = targets.as_array()?;
+        let mut values = Vec::with_capacity(targets.len());
+        for target in targets {
+            let target = target.as_str()?;
+            values.push(serde_json::Value::String(format!(
+                "{prefix}{}",
+                target.strip_prefix("./").unwrap_or(target)
+            )));
+        }
+        adjusted.insert(key.clone(), serde_json::Value::Array(values));
+    }
+    Some(adjusted)
+}
+
 /// Merge alias paths into an existing tsconfig.json. Returns the rewritten
 /// contents if a change is needed and the file parses as JSON, `Ok(None)` if
 /// nothing changed, or `Err` with the block to paste if it can't be parsed
@@ -173,14 +211,23 @@ fn merge_paths_into_existing(
     let co = co
         .as_object_mut()
         .ok_or_else(|| render_paths_block(paths))?;
-    co.entry("baseUrl")
-        .or_insert_with(|| serde_json::json!("."));
+    let base_url = match co.get("baseUrl") {
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| render_paths_block(paths))?
+            .to_string(),
+        None => {
+            co.insert("baseUrl".to_string(), serde_json::json!("."));
+            ".".to_string()
+        }
+    };
+    let paths = paths_for_base_url(paths, &base_url).ok_or_else(|| render_paths_block(paths))?;
     let existing_paths = co.entry("paths").or_insert_with(|| serde_json::json!({}));
     let existing_paths = existing_paths
         .as_object_mut()
-        .ok_or_else(|| render_paths_block(paths))?;
+        .ok_or_else(|| render_paths_block(&paths))?;
     let mut changed = false;
-    for (k, v) in paths {
+    for (k, v) in &paths {
         if existing_paths.get(k) != Some(v) {
             existing_paths.insert(k.clone(), v.clone());
             changed = true;
@@ -189,7 +236,7 @@ fn merge_paths_into_existing(
     if !changed {
         return Ok(None);
     }
-    let mut out = serde_json::to_string_pretty(&root).map_err(|_| render_paths_block(paths))?;
+    let mut out = serde_json::to_string_pretty(&root).map_err(|_| render_paths_block(&paths))?;
     out.push('\n');
     Ok(Some(out))
 }
@@ -302,24 +349,20 @@ pub fn run(args: InitArgs, format: OutputFormat, _use_color: bool) -> Result<()>
             }
             OutputFormat::Json => {}
         }
-    } else if aliases.is_empty() {
-        match format {
-            OutputFormat::Text => println!("  Skipped tsconfig.json (already exists)"),
-            OutputFormat::Json => {}
-        }
     } else {
-        // tsconfig exists and there are aliases to sync — merge the paths in.
+        // Always sync the built-in `perry/*` path, even when the project has no
+        // package aliases. Alias entries, when present, are merged alongside it.
         let existing = fs::read_to_string(&tsconfig_path)?;
         match merge_paths_into_existing(&existing, &paths) {
             Ok(Some(updated)) => {
                 fs::write(&tsconfig_path, updated)?;
                 if let OutputFormat::Text = format {
-                    println!("  Updated tsconfig.json (synced packageAliases paths)");
+                    println!("  Updated tsconfig.json (synced Perry paths)");
                 }
             }
             Ok(None) => {
                 if let OutputFormat::Text = format {
-                    println!("  Skipped tsconfig.json (packageAliases paths already in sync)");
+                    println!("  Skipped tsconfig.json (Perry paths already in sync)");
                 }
             }
             Err(block) => {
@@ -354,4 +397,32 @@ pub fn run(args: InitArgs, format: OutputFormat, _use_color: bool) -> Result<()>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_base_url_rebases_generated_paths() {
+        let paths = tsconfig_paths(&[("electron".to_string(), "@perryts/electron".to_string())]);
+        let existing = r#"{"compilerOptions":{"baseUrl":"src","paths":{}}}"#;
+        let updated = merge_paths_into_existing(existing, &paths)
+            .expect("merge")
+            .expect("changed");
+        let value: serde_json::Value = serde_json::from_str(&updated).expect("json");
+        let paths = &value["compilerOptions"]["paths"];
+        assert_eq!(paths["perry/*"][0], "../.perry/types/perry/*/index.d.ts");
+        assert_eq!(paths["electron"][0], "../node_modules/@perryts/electron");
+    }
+
+    #[test]
+    fn built_in_perry_path_is_merged_without_package_aliases() {
+        let paths = tsconfig_paths(&[]);
+        let existing = r#"{"compilerOptions":{"baseUrl":".","paths":{}}}"#;
+        let updated = merge_paths_into_existing(existing, &paths)
+            .expect("merge")
+            .expect("changed");
+        assert!(updated.contains(".perry/types/perry/*/index.d.ts"));
+    }
 }

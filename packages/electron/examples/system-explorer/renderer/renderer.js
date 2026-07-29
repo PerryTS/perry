@@ -20,9 +20,18 @@ async function loadSystem() {
     ["Uptime", Math.round(info.uptimeSec / 60) + " min"],
     ["Release", info.release],
   ];
-  document.getElementById("sysinfo").innerHTML = rows
-    .map((r) => '<div class="kv"><span>' + r[0] + "</span><span>" + r[1] + "</span></div>")
-    .join("");
+  const sysinfo = document.getElementById("sysinfo");
+  sysinfo.replaceChildren();
+  rows.forEach(function (row) {
+    const item = document.createElement("div");
+    item.className = "kv";
+    const key = document.createElement("span");
+    const value = document.createElement("span");
+    key.textContent = row[0];
+    value.textContent = row[1];
+    item.append(key, value);
+    sysinfo.appendChild(item);
+  });
   api.log("system info rendered: " + info.hostname);
 }
 
@@ -32,31 +41,32 @@ async function loadFiles() {
   const res = await api.listDir("");
   lastDir = res.dir;
   document.getElementById("crumbs").textContent = res.dir;
-  const html = res.entries
-    .map(function (e) {
-      const ic = e.isDir ? "📁" : "📄";
-      const sz = e.isDir ? "" : '<span class="sz">' + fmtBytes(e.sizeBytes) + "</span>";
-      return (
-        '<div class="file" data-name="' +
-        e.name +
-        '" data-dir="' +
-        (e.isDir ? "1" : "0") +
-        '"><span class="ic">' +
-        ic +
-        '</span><span>' +
-        e.name +
-        "</span>" +
-        sz +
-        "</div>"
-      );
-    })
-    .join("");
   const filesEl = document.getElementById("files");
-  filesEl.innerHTML = html;
+  filesEl.replaceChildren();
+  res.entries.forEach(function (entry) {
+    const row = document.createElement("div");
+    row.className = "file";
+    row.dataset.name = entry.name;
+    row.dataset.dir = entry.isDir ? "1" : "0";
+
+    const icon = document.createElement("span");
+    icon.className = "ic";
+    icon.textContent = entry.isDir ? "📁" : "📄";
+    const name = document.createElement("span");
+    name.textContent = entry.name;
+    row.append(icon, name);
+    if (!entry.isDir) {
+      const size = document.createElement("span");
+      size.className = "sz";
+      size.textContent = fmtBytes(entry.sizeBytes);
+      row.appendChild(size);
+    }
+    filesEl.appendChild(row);
+  });
   filesEl.querySelectorAll(".file").forEach(function (el) {
     el.addEventListener("click", async function () {
-      if (el.getAttribute("data-dir") === "1") return;
-      const name = el.getAttribute("data-name");
+      if (el.dataset.dir === "1") return;
+      const name = el.dataset.name;
       const fileRes = await api.readFile(lastDir + "/" + name);
       const pre = document.getElementById("preview");
       pre.textContent = fileRes.ok ? fileRes.text : "⚠️ " + fileRes.error;
@@ -71,15 +81,13 @@ async function loadNotes() {
   renderNotes();
 }
 function renderNotes() {
-  document.getElementById("noteList").innerHTML = notes
-    .map(function (n) {
-      return '<div class="note">' + escapeHtml(n) + "</div>";
-    })
-    .join("");
-}
-function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, function (c) {
-    return c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;";
+  const list = document.getElementById("noteList");
+  list.replaceChildren();
+  notes.forEach(function (note) {
+    const item = document.createElement("div");
+    item.className = "note";
+    item.textContent = String(note);
+    list.appendChild(item);
   });
 }
 

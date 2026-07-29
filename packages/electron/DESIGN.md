@@ -71,15 +71,16 @@ Payload codec: JSON for v1. (Perry already has a V8 structured-clone codec in
 
 ## Resolution
 
-The app adds `"perry": { "compilePackages": ["electron"] }` (or we ship the shim with
-`nativeModule:true` and it resolves automatically). `import { app, BrowserWindow } from
-'electron'` then file-resolves to this package's `src/index.ts`, which imports
-`perry/ui` + `events` and is compiled natively. No `electron` binary, no Chromium.
+The app installs `@perryts/electron` and maps `"electron"` to it through
+`perry.packageAliases`. The shim's `nativeModule:true` metadata then compiles
+`src/index.ts` natively. Existing `import { app, BrowserWindow } from 'electron'`
+statements remain unchanged. No `electron` binary, no Chromium.
 
 ## Known limitations (state honestly)
 
-- Single process: a webview hang takes the app down; no `contextIsolation` security
-  boundary (we *emulate* contextBridge but everything shares one process).
+- Single process: a webview hang takes the app down. The trusted preload loader
+  is removed before page scripts run and only contextBridge-selected APIs are
+  exposed, but this is not a Chromium process-isolation boundary.
 - Cross-engine rendering differences (Safari vs Edge vs WebKitGTK), same caveat as Tauri.
 - npm long-tail: deps without TS source / native bindings won't compile.
 - v1 IPC is JSON — no transferables/Buffers/MessagePort yet.

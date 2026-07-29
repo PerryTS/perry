@@ -785,7 +785,7 @@ dependencies = [
  "bitflags 2.12.1",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "regex",
@@ -4414,15 +4414,6 @@ checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
 
 [[package]]
 name = "hybrid-array"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2d35805454dc9f8662a98d6d61886ffe26bd465f5960e0e55345c70d5c0d2a9"
-dependencies = [
- "typenum",
-]
-
-[[package]]
-name = "hybrid-array"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "891d15931895091dea5c47afa5b3c9a01ba634b311919fd4d41388fa0e3d76af"
@@ -5376,15 +5367,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -6245,18 +6227,6 @@ dependencies = [
 
 [[package]]
 name = "ml-kem"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97befee0c869cb56f3118f49d0f9bb68c9e3f380dec23c1100aedc4ec3ba239a"
-dependencies = [
- "hybrid-array 0.2.3",
- "kem",
- "rand_core 0.6.4",
- "sha3 0.10.9",
-]
-
-[[package]]
-name = "ml-kem"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e15f3e5b957493873e396a66914e83e616b6afe335cdef7efe5c6e1216aba66"
@@ -6397,9 +6367,9 @@ dependencies = [
 
 [[package]]
 name = "mozjs"
-version = "0.15.16"
+version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99f453559a827f30c1a60db68d95e0149d141031f2483334682a4ffd47ebf2f1"
+checksum = "226edc79aa3f990a61330d4011471910273f6ee6bbfd0dcb93b18f5a03505f6b"
 dependencies = [
  "bindgen",
  "cc",
@@ -6412,9 +6382,9 @@ dependencies = [
 
 [[package]]
 name = "mozjs_sys"
-version = "140.12.0-1-lts"
+version = "0.140.8-2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ad338ebb43b9faa0d8268d88d662eeda8774812c5401c1a26a50b56ab5f5a9c"
+checksum = "4b50224a02c96e1e703f7d055377431333dfc5cd3a09ccf03f8a2c8a156c7af8"
 dependencies = [
  "bindgen",
  "cc",
@@ -8004,7 +7974,7 @@ dependencies = [
  "libc",
  "lru",
  "md-5 0.11.0",
- "ml-kem 0.3.2",
+ "ml-kem",
  "mongodb",
  "nanoid",
  "once_cell",
@@ -8168,6 +8138,7 @@ dependencies = [
  "perry-ui",
  "perry-ui-testkit",
  "servo",
+ "servo-layout",
  "url",
 ]
 
@@ -10016,9 +9987,9 @@ dependencies = [
 
 [[package]]
 name = "servo"
-version = "0.1.2"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18a0e54898e139dcaa629c9762eaee479f0b52381168241e86a1731828ec3e80"
+checksum = "0070e405abc520d91ff75db643bca36f9d13e99b9b3448c6bcc154769d4a75fe"
 dependencies = [
  "accesskit",
  "arboard",
@@ -10530,9 +10501,9 @@ dependencies = [
 
 [[package]]
 name = "servo-layout"
-version = "0.1.2"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b7159bd1cf6439610bb8cdfe04bcf95e9e16981fe0d611d17166a88dc83726"
+checksum = "be71eb9497abe74c4e2daec8617bfa14e4378f293795231fd96597308ba27ac2"
 dependencies = [
  "app_units",
  "atomic_refcell",
@@ -11043,9 +11014,8 @@ dependencies = [
 
 [[package]]
 name = "servo-script"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d50488dc30ec50f21a53e8d810df2b05a5237c1f6b7bf30c2acc6dac9000cbb6"
+version = "0.1.0"
+source = "git+https://github.com/PerryTS/servo-script-mlkem?rev=e4dc40a54366ac327845c8dd5013a3fb068d19b5#e4dc40a54366ac327845c8dd5013a3fb068d19b5"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -11096,7 +11066,7 @@ dependencies = [
  "mime-multipart-hyper1",
  "mime_guess",
  "ml-dsa",
- "ml-kem 0.2.1",
+ "ml-kem",
  "mozangle",
  "mozjs",
  "nom-rfc8288",
@@ -11180,9 +11150,9 @@ dependencies = [
 
 [[package]]
 name = "servo-script-bindings"
-version = "0.1.2"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2496104e87f3df3e170b49740236bc0c2f197d46f8dd5eee8c3770f206db36"
+checksum = "f1237e5599ea3857a3cd76f0ec6cd6cfafd2acf274966f960ace001b87b2d891"
 dependencies = [
  "bitflags 2.12.1",
  "crossbeam-channel",
@@ -15617,8 +15587,3 @@ dependencies = [
  "syn 2.0.117",
  "winnow 1.0.3",
 ]
-
-[[patch.unused]]
-name = "servo-script"
-version = "0.1.0"
-source = "git+https://github.com/PerryTS/servo-script-mlkem?rev=e4dc40a54366ac327845c8dd5013a3fb068d19b5#e4dc40a54366ac327845c8dd5013a3fb068d19b5"

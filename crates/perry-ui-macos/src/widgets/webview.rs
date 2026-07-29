@@ -621,10 +621,9 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
         //     <script src>, <link href>, images). WKWebView blocks this by
         //     default (separate from loadFileURL's navigation read-access),
         //     which would break `BrowserWindow.loadFile(...)` apps that split
-        //     their renderer across files. These flags are KVC-settable on
-        //     WKPreferences / the configuration (stable since WebKit's early
-        //     WKWebView and what Electron's `webSecurity:false`-style file
-        //     loading relies on under the hood).
+        //     their renderer across files. Do not enable universal file access:
+        //     `loadFileURL:allowingReadAccessToURL:` below grants the narrower
+        //     containing-directory access needed by local applications.
         let nsnumber_cls = AnyClass::get(c"NSNumber").unwrap();
         let yes_num: *mut AnyObject = msg_send![nsnumber_cls, numberWithBool: true];
         let prefs: *mut AnyObject = msg_send![cfg, preferences];
@@ -632,8 +631,6 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
             let k = NSString::from_str("allowFileAccessFromFileURLs");
             let _: () = msg_send![prefs, setValue: yes_num, forKey: &*k];
         }
-        let k2 = NSString::from_str("allowUniversalAccessFromFileURLs");
-        let _: () = msg_send![cfg, setValue: yes_num, forKey: &*k2];
 
         // 3. WKWebView.
         let wv_cls = AnyClass::get(c"WKWebView").expect("WKWebView not found");

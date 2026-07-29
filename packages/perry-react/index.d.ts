@@ -3,9 +3,9 @@
  *
  * Two jobs:
  *
- *  1. **Bundle the React types.** This package depends on `@types/react` and
- *     `@types/react-dom`, so installing `@perryts/react` is enough — you don't
- *     have to remember to add the `@types/*` packages by hand.
+ *  1. **Integrate with the app's React types.** This package accepts React 18
+ *     and React 19 type packages as peers so the app chooses the matching
+ *     major.
  *
  *  2. **Type Perry's `createRoot` extension.** This file augments
  *     `react-dom/client` with the native-window overload

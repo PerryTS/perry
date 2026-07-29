@@ -37,27 +37,15 @@ IPC transport on macOS:
 
 ## Install
 
-This package intentionally keeps the npm name **`electron`** so your app's
-existing `import … from "electron"` resolves to it with zero code changes. npm
-won't let anyone publish a package literally named `electron`, and it doesn't
-support installing a single subdirectory straight from a GitHub repo, so install
-it one of these two ways:
+The package publishes as **`@perryts/electron`** to avoid colliding with the
+official `electron` package. Existing `import … from "electron"` statements
+remain unchanged: Perry's package alias maps that specifier to the scoped shim.
 
-**A. Clone + install by path (works today):**
+Install from npm and add the alias:
 
 ```bash
-git clone https://github.com/PerryTS/perry
-# in your app, install the compat package from the checkout:
-npm install /absolute/path/to/perry/packages/electron
+npm install @perryts/electron
 ```
-
-> `npm install github:PerryTS/perry#feat/electron-compat` installs the whole
-> Perry repo, not just this package — the repo root now carries `name`/`version`
-> so that no longer crashes npm's arborist, but you still want the subdirectory.
-
-**B. Scoped npm package + alias (once published):** the package is also
-published as **`@perryts/electron`**. Because it must keep importing as
-`electron`, point Perry's resolver at the scoped install with a `packageAlias`:
 
 ```jsonc
 // your-app/package.json
@@ -72,17 +60,10 @@ published as **`@perryts/electron`**. Because it must keep importing as
 `perry init` mirrors `packageAliases` into `tsconfig.json` `compilerOptions.paths`,
 so your IDE's tsc resolves `electron` to the compat types too.
 
+For local development, `npm install /absolute/path/to/perry/packages/electron`
+installs the same scoped package; keep the alias above.
+
 ## Use it
-
-If the package resolves under the bare name `electron` (install option A, or a
-plain `node_modules/electron`), your app needs no Perry config at all:
-
-```jsonc
-// your-app/package.json — no code changes to your app
-{
-  "dependencies": { "electron": "*" }   // resolves to this compat package
-}
-```
 
 ```bash
 perry main.ts -o my-app && ./my-app

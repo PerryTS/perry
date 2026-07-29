@@ -127,7 +127,7 @@ pub struct CompileArgs {
     /// built with `--features servo-webview`); the app then defaults to Servo
     /// and can still be overridden at runtime via `PERRY_WEBVIEW`. Ignored on
     /// non-macOS targets.
-    #[arg(long, default_value = "system")]
+    #[arg(long, default_value = "system", value_parser = ["system", "servo"])]
     pub webview: String,
     /// CPU baseline for the generated machine code (#6125). Accepts an LLVM
     /// CPU name (`x86-64-v2`, `x86-64-v3`, `znver2`, `apple-m1`, …), `native`

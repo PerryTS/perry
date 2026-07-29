@@ -53,10 +53,16 @@ fresh `servo-script-0.1.0` from the registry, apply
   to Servo. Build that variant with
   `cargo build --release -p perry-ui-macos --features servo-webview` and place it
   alongside `libperry_ui_macos.a` (cargo emits the same filename regardless of
-  features, so rename/scope it as the `_servo` variant). If it's missing, the
-  compiler warns and falls back to the WKWebView lib.
-- **At runtime:** `PERRY_WEBVIEW=servo` selects Servo for a build that linked the
-  variant; anything else uses the system WKWebView.
+  features, so rename/scope it as the `_servo` variant). The compiler fails an
+  explicit Servo build if that archive is missing.
+- **At runtime:** the Servo-linked variant defaults to Servo.
+  `PERRY_WEBVIEW=system` explicitly selects WKWebView; `PERRY_WEBVIEW=servo`
+  explicitly selects Servo.
+
+Electron-compatible `BrowserWindow` instances currently force the system
+backend because Servo does not yet implement their document-start preload and
+renderer IPC contracts. Ordinary `perry/ui` WebView widgets use the selection
+above.
 
 ## Engine capabilities & limitations
 

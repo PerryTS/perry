@@ -1071,11 +1071,12 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
             return Some(p);
         }
         eprintln!(
-            "warning: --webview servo requested but libperry_ui_macos_servo.a not found; \
-             falling back to the system WKWebView library. Build it with \
+            "error: --webview servo requested but libperry_ui_macos_servo.a was not found. \
+             Build it with \
              `cargo build --release -p perry-ui-macos --features servo-webview` and place it \
              alongside libperry_ui_macos.a (see docs/servo/README.md)."
         );
+        return None;
     }
 
     let lib_name = match target {

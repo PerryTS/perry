@@ -51,9 +51,18 @@ thread_local! {
     static TIMER_INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// `true` when the embedder asked for the Servo backend (`PERRY_WEBVIEW=servo`).
+/// `true` when the embedder asked for the Servo backend.
+///
+/// Linking the `servo-webview` library variant is the baked-in preference used
+/// by `perry compile --webview servo`. The environment remains an explicit
+/// runtime override, primarily so Electron-compat windows can select the
+/// system backend until Servo supports their preload/IPC contract.
 pub fn is_servo_requested() -> bool {
-    matches!(std::env::var("PERRY_WEBVIEW").as_deref(), Ok("servo"))
+    match std::env::var("PERRY_WEBVIEW").as_deref() {
+        Ok("system") => false,
+        Ok("servo") => true,
+        _ => true,
+    }
 }
 
 /// `true` when `handle` is backed by a Servo engine (vs the system WKWebView).
@@ -437,7 +446,21 @@ fn install_driver_timer(_mtm: MainThreadMarker) {
 /// `NSBitmapImageRep` (which allocates its own backing store and we memcpy into)
 /// and setting it as the image-view's image.
 fn blit_rgba_to_image_view(view: &NSImageView, rgba: &[u8], width: u32, height: u32) {
-    if width == 0 || height == 0 || rgba.len() < (width * height * 4) as usize {
+    let Some(byte_len) = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return;
+    };
+    let Some(bytes_per_row) = (width as usize).checked_mul(4) else {
+        return;
+    };
+    if width == 0
+        || height == 0
+        || byte_len > isize::MAX as usize
+        || bytes_per_row > isize::MAX as usize
+        || rgba.len() < byte_len
+    {
         return;
     }
     unsafe {
@@ -456,7 +479,7 @@ fn blit_rgba_to_image_view(view: &NSImageView, rgba: &[u8], width: u32, height: 
             hasAlpha: true,
             isPlanar: false,
             colorSpaceName: &*color_space,
-            bytesPerRow: (width * 4) as isize,
+            bytesPerRow: bytes_per_row as isize,
             bitsPerPixel: 32isize,
         ];
         if rep.is_null() {
@@ -465,7 +488,7 @@ fn blit_rgba_to_image_view(view: &NSImageView, rgba: &[u8], width: u32, height: 
         let rep = Retained::from_raw(rep).expect("rep");
         let dst: *mut u8 = msg_send![&*rep, bitmapData];
         if !dst.is_null() {
-            std::ptr::copy_nonoverlapping(rgba.as_ptr(), dst, (width * height * 4) as usize);
+            std::ptr::copy_nonoverlapping(rgba.as_ptr(), dst, byte_len);
         }
 
         let img_cls = AnyClass::get(c"NSImage").expect("NSImage");

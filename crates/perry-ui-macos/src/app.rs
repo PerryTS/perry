@@ -691,6 +691,16 @@ pub fn app_run_loop(on_ready: f64) {
 
     // Resolve `app.whenReady()`. This only enqueues the `.then` microtask; it
     // runs on the first pump tick once `app.run()` is spinning below.
+    // Reload the registered slot immediately before use: a moving collection
+    // during setup may have rewritten it since `ui_loop_entry` first read it.
+    let on_ready = PENDING_APP_LOOP_ON_READY.with(|slot| {
+        let rooted = f64::from_bits(slot.get());
+        if rooted == 0.0 {
+            on_ready
+        } else {
+            rooted
+        }
+    });
     if on_ready != 0.0 {
         extern "C" {
             fn js_nanbox_get_pointer(value: f64) -> i64;
@@ -712,7 +722,11 @@ pub fn app_run_loop(on_ready: f64) {
 
 thread_local! {
     /// `on_ready` closure for the deferred top-level UI loop (Electron-compat).
-    static PENDING_APP_LOOP_ON_READY: std::cell::Cell<f64> = std::cell::Cell::new(0.0);
+    /// The slot is registered with the runtime GC before it receives a closure,
+    /// so moving collections can both retain and rewrite the stored value.
+    static PENDING_APP_LOOP_ON_READY: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PENDING_APP_LOOP_ROOT_REGISTERED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// Request the Electron-compat UI event loop be entered at the TOP LEVEL after
@@ -724,16 +738,33 @@ thread_local! {
 pub fn request_app_loop(on_ready: f64) {
     extern "C" {
         fn perry_runtime_register_ui_loop(f: extern "C" fn());
+        fn js_gc_register_global_root(ptr: i64);
+        fn js_write_barrier_root_nanbox(value_bits: u64);
     }
-    PENDING_APP_LOOP_ON_READY.with(|c| c.set(on_ready));
+    PENDING_APP_LOOP_ON_READY.with(|slot| {
+        PENDING_APP_LOOP_ROOT_REGISTERED.with(|registered| {
+            if !registered.replace(true) {
+                unsafe {
+                    js_gc_register_global_root(slot.as_ptr() as i64);
+                }
+            }
+        });
+        slot.set(on_ready.to_bits());
+        unsafe {
+            js_write_barrier_root_nanbox(on_ready.to_bits());
+        }
+    });
     unsafe {
         perry_runtime_register_ui_loop(ui_loop_entry);
     }
 }
 
 extern "C" fn ui_loop_entry() {
-    let on_ready = PENDING_APP_LOOP_ON_READY.with(|c| c.get());
+    let on_ready = PENDING_APP_LOOP_ON_READY.with(|c| f64::from_bits(c.get()));
     app_run_loop(on_ready);
+    // `app_run_loop` normally never returns. Clear the permanent root if the
+    // application loop does terminate (for example under UI test mode).
+    PENDING_APP_LOOP_ON_READY.with(|c| c.set(0));
 }
 
 /// `app.quit()` — terminate the application (Electron-compat).

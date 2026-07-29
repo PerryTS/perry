@@ -50,7 +50,7 @@ pub fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
 pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = input {
         if path.is_dir() {
-            if let Some(entry) = resolve_entry_in_dir(path) {
+            if let Some(entry) = resolve_entry_in_dir(path)? {
                 return Ok(entry);
             }
             return Err(anyhow!(
@@ -67,7 +67,7 @@ pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
     }
 
     // No argument: resolve against the current directory.
-    if let Some(entry) = resolve_entry_in_dir(Path::new(".")) {
+    if let Some(entry) = resolve_entry_in_dir(Path::new("."))? {
         return Ok(entry);
     }
 
@@ -81,42 +81,87 @@ pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
 /// Resolve the entry file inside a project directory, honoring `perry.toml`
 /// `entry` first, then the conventional `src/main.ts` / `main.ts` fallbacks.
 /// Returns a path that is guaranteed to exist.
-fn resolve_entry_in_dir(dir: &Path) -> Option<PathBuf> {
+fn resolve_entry_in_dir(dir: &Path) -> Result<Option<PathBuf>> {
     // perry.toml `entry` is relative to the project directory.
-    if let Some(entry) = read_perry_toml_entry_in(dir) {
+    if let Some(entry) = read_perry_toml_entry_in(dir)? {
         let resolved = if entry.is_absolute() {
             entry
         } else {
             dir.join(entry)
         };
         if resolved.is_file() {
-            return Some(resolved);
+            return Ok(Some(resolved));
         }
+        return Err(anyhow!(
+            "perry.toml configures entry '{}', but that file does not exist",
+            resolved.display()
+        ));
     }
 
     for candidate in &["src/main.ts", "main.ts"] {
         let path = dir.join(candidate);
         if path.is_file() {
-            return Some(path);
+            return Ok(Some(path));
         }
     }
 
-    None
+    Ok(None)
 }
 
-/// Read the `entry` key from `<dir>/perry.toml`, if present.
-fn read_perry_toml_entry_in(dir: &Path) -> Option<PathBuf> {
-    let toml_str = std::fs::read_to_string(dir.join("perry.toml")).ok()?;
-    for line in toml_str.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("entry") {
-            if let Some(eq_pos) = trimmed.find('=') {
-                let value = trimmed[eq_pos + 1..].trim().trim_matches('"');
-                return Some(PathBuf::from(value));
-            }
-        }
+/// Read the `entry` key from `<dir>/perry.toml`, if present. A present but
+/// malformed config is an error: silently falling back to `src/main.ts` would
+/// run a different program from the one the project explicitly configured.
+fn read_perry_toml_entry_in(dir: &Path) -> Result<Option<PathBuf>> {
+    let config_path = dir.join("perry.toml");
+    if !config_path.exists() {
+        return Ok(None);
     }
-    None
+    let toml_str = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+    let config: toml::Value =
+        toml::from_str(&toml_str).with_context(|| format!("Invalid {}", config_path.display()))?;
+    let entry = config
+        .get("project")
+        .and_then(|project| project.get("entry"))
+        .or_else(|| config.get("entry"));
+    match entry {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|entry| Some(PathBuf::from(entry)))
+            .ok_or_else(|| anyhow!("{} `entry` must be a string", config_path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_missing_entry_does_not_fall_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("src")).expect("src");
+        std::fs::write(dir.path().join("src/main.ts"), "console.log('fallback')\n").expect("main");
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            "[project]\nentry = \"src/missing.ts\"\n",
+        )
+        .expect("config");
+
+        let err = resolve_entry_file(Some(dir.path())).expect_err("missing entry must fail");
+        assert!(err.to_string().contains("src/missing.ts"));
+    }
+
+    #[test]
+    fn malformed_config_does_not_fall_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("src")).expect("src");
+        std::fs::write(dir.path().join("src/main.ts"), "console.log('fallback')\n").expect("main");
+        std::fs::write(dir.path().join("perry.toml"), "[project\nentry = 1\n").expect("config");
+
+        let err = resolve_entry_file(Some(dir.path())).expect_err("invalid config must fail");
+        assert!(err.to_string().contains("Invalid"));
+    }
 }
 
 /// Resolve the compilation target and optional device UDID

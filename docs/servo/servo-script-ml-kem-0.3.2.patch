@@ -1,5 +1,5 @@
---- /Users/amlug/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/servo-script-0.1.0/Cargo.toml	2006-07-24 03:21:28
-+++ /Users/amlug/projects/perry-worktrees/servo-forks/servo-script/Cargo.toml	2026-06-29 16:42:36
+--- a/Cargo.toml
++++ b/Cargo.toml
 @@ -293,8 +293,8 @@
  version = "0.0.4"
  
@@ -11,8 +11,8 @@
  
  [dependencies.net_traits]
  version = "0.1.0"
---- /Users/amlug/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/servo-script-0.1.0/dom/subtlecrypto/ml_kem_operation.rs	2006-07-24 03:21:28
-+++ /Users/amlug/projects/perry-worktrees/servo-forks/servo-script/dom/subtlecrypto/ml_kem_operation.rs	2026-06-29 16:43:00
+--- a/dom/subtlecrypto/ml_kem_operation.rs
++++ b/dom/subtlecrypto/ml_kem_operation.rs
 @@ -5,11 +5,16 @@
  use der::asn1::{BitString, OctetString};
  use der::{AnyRef, Choice, Decode, Encode, Sequence};
@@ -313,8 +313,8 @@
          },
          _ => {
              return Err(Error::Operation(Some(
---- /Users/amlug/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/servo-script-0.1.0/dom/cryptokey.rs	2006-07-24 03:21:28
-+++ /Users/amlug/projects/perry-worktrees/servo-forks/servo-script/dom/cryptokey.rs	2026-06-29 16:38:59
+--- a/dom/cryptokey.rs
++++ b/dom/cryptokey.rs
 @@ -48,11 +48,9 @@
      MlKem512PrivateKey((ml_kem::B32, ml_kem::B32)),
      MlKem768PrivateKey((ml_kem::B32, ml_kem::B32)),

@@ -10,11 +10,18 @@ crate-type = ["rlib", "staticlib"]
 default = []
 plugins = []
 geisterhand = []
-servo-webview = ["dep:servo", "dep:url", "dep:dpi"]
+servo-webview = ["dep:servo", "dep:servo-layout", "dep:url", "dep:dpi"]
 
 [dependencies]
 perry-ui = { path = "../perry-ui" }
-servo = { version = "0.1", optional = true }
+# Keep this exact while the workspace patch below targets servo-script 0.1.0.
+# A loose 0.1 requirement selects Servo 0.1.2, whose exact servo-script 0.1.2
+# dependency bypasses the ML-KEM compatibility fork and does not compile beside
+# the workspace's newer RustCrypto KEM stack.
+servo = { version = "=0.1.0", optional = true }
+# Servo's published 0.1.0 manifest permits newer 0.1.x layout crates, but
+# servo-layout 0.1.2 pins servo-script 0.1.2 and bypasses the workspace patch.
+servo-layout = { version = "=0.1.0", optional = true }
 url = { version = "2", optional = true }
 dpi = { version = "0.1", optional = true }
 perry-ui-testkit = { workspace = true }
