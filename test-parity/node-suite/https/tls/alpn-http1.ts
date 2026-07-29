@@ -7,7 +7,11 @@ const key = readFileSync(
 const cert = readFileSync(
   "test-parity/node-suite/tls/fixtures/localhost-cert.pem",
 );
-const server = https.createServer({ key, cert }, (req, res) => {
+const server = https.createServer({
+  key,
+  cert,
+  ALPNProtocols: ["http/1.1"],
+}, (req, res) => {
   console.log("server:", req.socket.alpnProtocol, req.httpVersion);
   res.end();
 });
