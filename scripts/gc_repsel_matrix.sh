@@ -130,8 +130,17 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # every one with `[gc-copy-minor] eligible=true fallback=none`.
 #
 # NOTE this is a MEASUREMENT configuration, not the shipped one. It says the
-# collector's evacuating path is exercised and correct; it does not say the
-# shipped default reaches that path. It does not (see #6950's residue).
+# collector's evacuating path is exercised; it does not say the shipped default
+# reaches that path. It does not -- see #6978.
+#
+# ***AND IT IS RED.*** The first `--arms all` run in which anything actually
+# moved failed 14 of the 20 corpus files: 5 crashes and 9 output mismatches
+# (#6981), plus one intermittent SIGSEGV that does not even need precise roots
+# (#6982). The discriminator is NOT relocation -- with the conservative stack
+# scan still on, the same evacuating cycles pass 19/20 while copying thousands
+# of objects. It is precise roots: the values only the conservative scan was
+# keeping alive. That is the finding this gate was built to produce, and the
+# arms stay configured to keep producing it. Do not quiet them down.
 # ---------------------------------------------------------------------------
 ARMS=(
 "default||%P%|collect|as-shipped GC configuration under allocation pressure"
@@ -157,9 +166,28 @@ ARMS=(
 )
 
 # PR-gating subset: the arms with the most detection power per second --
-# as-shipped under pressure, force+verify evacuation, precise-roots-only, and
+# as-shipped under pressure, the evacuation verifier, precise-roots-only, and
 # the untouched shipped configuration as a control.
-PR_ARMS="default,evac_minor,force_verify,cons_scan_off,shipped_default"
+#
+# ***THE EVACUATING ARMS ARE DELIBERATELY NOT IN THIS SUBSET, AND THAT IS A
+# TEMPORARY STATE WITH AN EXPIRY.*** They are not omitted because they are
+# noisy: they are omitted because they are RED, and they are red for a real
+# reason that is filed, reproduced and minimised in #6981 -- a relocating minor
+# with precise roots breaks 14 of the 20 corpus files (5 crashes, 9 output
+# mismatches), while the SAME relocation with the conservative stack scan on
+# passes 19/20. Putting them in the per-PR gate today would paint every
+# unrelated PR red from the first commit, which is how a gate stops being read.
+#
+# They ARE in `--arms all`, which is what push / workflow_dispatch runs, so the
+# failures are visible and measured on every push to main -- not hidden.
+#
+# WHEN #6981 CLOSES, PUT `evac_minor` AND `force_verify` BACK IN THIS LIST.
+# That is the point at which "a representation regressed GC correctness under
+# relocation" becomes a per-PR signal, which is the whole reason this matrix
+# exists. Do not instead add triage entries for those cells:
+# test-parity/gc_repsel_triage.txt is for redness that is provably NOT a
+# representation defect, and #6981's redness may well be exactly that.
+PR_ARMS="default,verify_evac,cons_scan_off,shipped_default"
 
 arm_field() { # $1 = arm record, $2 = 1..5
     printf '%s' "$1" | cut -d'|' -f"$2"
