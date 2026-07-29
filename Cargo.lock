@@ -6169,6 +6169,7 @@ name = "perry-stdlib"
 version = "0.5.1265"
 dependencies = [
  "aes 0.8.4",
+ "aes 0.9.1",
  "aes-gcm",
  "aes-kw",
  "anyhow",
