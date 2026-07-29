@@ -550,21 +550,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let use_string_string_map = is_static_string_string_map(ctx, map)
                 && is_definitely_string_expr(ctx, key)
                 && is_definitely_string_expr(ctx, value);
-            let m_box = lower_expr(ctx, map)?;
-            let k_box = lower_expr(ctx, key)?;
-            // #6970: the receiver and the key are finished, but every branch
-            // below lowers `value` next, and that lowering can collect. Until
-            // the runtime call both live only in SSA registers, so a collection
-            // there sweeps them: `m.set(fresh(k), churn(N))` aborted inside
-            // `js_map_set` on a key whose header had been recycled.
+            // #6970: each operand is finished before the next is lowered, and
+            // both are live in nothing but SSA registers until the runtime
+            // call. `m.set(fresh(k), churn(N))` aborted inside `js_map_set` on
+            // a key whose header had been recycled.
+            //
+            // Root each one BEFORE lowering the next, not after the whole list:
+            // the receiver's exposure starts at `key`'s lowering, not `value`'s,
+            // and rooting a list that is already lowered can publish an
+            // already-dangling pointer into a scanned slot — strictly worse
+            // than not rooting at all.
+            let key_collects = temp_root::expr_may_trigger_gc(ctx, key);
             let value_collects = temp_root::expr_may_trigger_gc(ctx, value);
             let map_key_operands: [&Expr; 2] = [map, key];
-            let roots = temp_root::root_operands(
-                ctx,
-                &map_key_operands,
-                &[&m_box, &k_box],
-                &[value_collects, value_collects],
-            );
+            let mut roots = temp_root::root_operands_begin(2);
+            let m_box = lower_expr(ctx, map)?;
+            roots.push(ctx, map, &m_box, key_collects || value_collects);
+            let k_box = lower_expr(ctx, key)?;
+            roots.push(ctx, key, &k_box, value_collects);
             // Unbox eagerly only on the unprotected path, so its IR — including
             // register numbering — is exactly what it was before this change.
             // On the protected path the handle has to come from the *re-read*

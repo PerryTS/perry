@@ -297,55 +297,6 @@ pub(crate) struct RootedOperands {
     guard: Option<String>,
 }
 
-/// Protect `values` across a collection point the caller knows about.
-///
-/// `collects[i]` says "something between operand `i` and the consuming call can
-/// reach a collection point". The caller supplies it because the hazard is not
-/// visible in an expression list: for `m.set(k, v)` it is `v`'s lowering, for
-/// `new C(a, b)` it is the instance allocation.
-///
-/// From that one flag two decisions follow, and an operand needs exactly one of
-/// them:
-///
-/// - [`operand_needs_root`] → push a temp-root slot, because nothing else keeps
-///   this value alive;
-/// - otherwise [`operand_is_reloadable`] → emit no runtime call, but re-load the
-///   value at the re-read point, because its storage is a registered root that
-///   evacuation *rewrites* while the cached register keeps the old address.
-///
-/// When `collects[i]` is false neither applies: nothing can be swept and nothing
-/// can move, so the register is reused and the IR is exactly what it was.
-pub(crate) fn root_operands(
-    ctx: &mut FnCtx<'_>,
-    operands: &[&Expr],
-    values: &[&str],
-    collects: &[bool],
-) -> RootedOperands {
-    let mut slots = Vec::with_capacity(values.len());
-    let mut reloadable = Vec::with_capacity(values.len());
-    let mut guard: Option<String> = None;
-    for (i, value) in values.iter().enumerate() {
-        let collects_here = collects.get(i).copied().unwrap_or(false);
-        let needs_root = collects_here && operand_needs_root(ctx, operands[i]);
-        if needs_root {
-            let idx = temp_root_push_double(ctx, value);
-            if guard.is_none() {
-                guard = Some(idx.clone());
-            }
-            slots.push(Some(idx));
-        } else {
-            slots.push(None);
-        }
-        reloadable.push(!needs_root && collects_here && operand_is_reloadable(operands[i]));
-    }
-    RootedOperands {
-        slots,
-        values: values.iter().map(|v| (*v).to_string()).collect(),
-        reloadable,
-        guard,
-    }
-}
-
 /// Does this operand read a location the collector *rewrites in place*, so that
 /// re-lowering it after a collection yields the corrected address?
 ///
@@ -366,7 +317,70 @@ pub(crate) fn operand_is_reloadable(expr: &Expr) -> bool {
     )
 }
 
+/// Build the protection **incrementally**, one operand at a time, so each is
+/// rooted before the next one is lowered.
+///
+/// That ordering is the whole point. Lowering every operand first and rooting
+/// the finished list afterwards is not merely late, it is *worse than doing
+/// nothing*: by then an earlier operand may already have been swept, and the
+/// push publishes a dangling pointer into a slot the collector scans. That is
+/// what turned #6969 from a silent wrong answer into a SIGSEGV, and it is why
+/// `m.set(k, v)` roots `map` before `key` is lowered rather than after.
+///
+/// See [`RootedOperands::push`] for the per-operand contract.
+pub(crate) fn root_operands_begin(capacity: usize) -> RootedOperands {
+    RootedOperands {
+        slots: Vec::with_capacity(capacity),
+        values: Vec::with_capacity(capacity),
+        reloadable: Vec::with_capacity(capacity),
+        guard: None,
+    }
+}
+
 impl RootedOperands {
+    /// Record one already-lowered operand.
+    ///
+    /// `collects` says "something between this operand and the consuming call
+    /// can reach a collection point" — the caller supplies it because the
+    /// hazard is not visible in an expression list: for `m.set(k, v)` the
+    /// receiver's window covers both `key`'s lowering and `value`'s, while the
+    /// key's covers only `value`'s.
+    ///
+    /// From that flag two decisions follow, and an operand needs exactly one:
+    ///
+    /// - [`operand_needs_root`] → push a temp-root slot, because nothing else
+    ///   keeps this value alive;
+    /// - otherwise [`operand_is_reloadable`] → emit no runtime call, but
+    ///   re-load the value at the re-read point, because its storage is a
+    ///   registered root that evacuation *rewrites* while the cached register
+    ///   keeps the old address.
+    ///
+    /// When `collects` is false neither applies: nothing can be swept and
+    /// nothing can move, so the register is reused and the IR is unchanged.
+    pub(crate) fn push(
+        &mut self,
+        ctx: &mut FnCtx<'_>,
+        operand: &Expr,
+        value: &str,
+        collects: bool,
+    ) {
+        let needs_root = collects && operand_needs_root(ctx, operand);
+        if needs_root {
+            let idx = temp_root_push_double(ctx, value);
+            // The FIRST slot pushed is the guard: truncating it drops every
+            // slot above it too, so one call releases the whole group.
+            if self.guard.is_none() {
+                self.guard = Some(idx.clone());
+            }
+            self.slots.push(Some(idx));
+        } else {
+            self.slots.push(None);
+        }
+        self.reloadable
+            .push(!needs_root && collects && operand_is_reloadable(operand));
+        self.values.push(value.to_string());
+    }
+
     /// Re-read every operand after the collection point.
     ///
     /// Three cases, and the third is the subtle one:

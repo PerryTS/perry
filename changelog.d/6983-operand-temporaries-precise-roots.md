@@ -1,8 +1,8 @@
 ### Fixed
 
 - **GC: operand temporaries in three more lowering paths are precise roots (#6969, #6970, #6971).**
-  #6972 rooted variadic argument accumulators, concat operand pairs and literal
-  element lists; #6975 closed the coercion hole in the gate. Three sibling paths
+  #6951 (via #6972) rooted variadic argument accumulators, concat operand pairs
+  and literal element lists; #6975 closed the coercion hole in the gate. Three sibling paths
   still kept an evaluated operand in a bare LLVM SSA register across a
   collection point, which under precise-roots-only
   (`PERRY_CONSERVATIVE_STACK_SCAN=off`) is a live use-after-free:
