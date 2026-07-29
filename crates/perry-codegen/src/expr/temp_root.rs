@@ -21,6 +21,7 @@
 //! That is also why this is preferable to widening conservative scanning —
 //! conservative roots have to pin, precise ones can move.
 
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use crate::types::{DOUBLE, I32, I64};
@@ -96,10 +97,12 @@ pub(crate) fn rooted_array_read(ctx: &mut FnCtx<'_>, idx: &str) -> String {
 /// Deliberately one-sided: `false` must mean "provably allocates nothing", and
 /// everything unrecognized answers `true`. A wrong `false` is a
 /// use-after-free; a wrong `true` costs two runtime calls on a cold path.
-pub(crate) fn expr_may_trigger_gc(expr: &Expr) -> bool {
+pub(crate) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         // Immediates and plain slot reads. `LocalGet` reads an alloca,
-        // `GlobalGet` a module global — neither allocates.
+        // `GlobalGet` a module global — neither allocates. (Reading an
+        // object-typed local is still just a load; it is the *operators* below
+        // that can coerce it and run user code.)
         Expr::Undefined
         | Expr::Null
         | Expr::Bool(_)
@@ -111,45 +114,87 @@ pub(crate) fn expr_may_trigger_gc(expr: &Expr) -> bool {
         // `__perry_init_strings_*` and registered as a GC root there; the use
         // site is a load.
         Expr::String(_) => false,
-        Expr::Unary { operand, .. } => expr_may_trigger_gc(operand),
-        Expr::Compare { left, right, .. } => {
-            expr_may_trigger_gc(left) || expr_may_trigger_gc(right)
-        }
-        // `+` on unknown operands can be string concatenation, which allocates;
-        // every other binary operator is numeric or bitwise.
-        Expr::Binary {
-            op, left, right, ..
-        } => {
-            matches!(op, perry_hir::BinaryOp::Add)
-                || expr_may_trigger_gc(left)
-                || expr_may_trigger_gc(right)
+        // Coercing operators. `-o`, `o < x`, `o == x`, `o * 2` all run
+        // ToPrimitive / ToNumber on their operands, and a user-defined
+        // `Symbol.toPrimitive` / `valueOf` / `toString` is arbitrary JS: it
+        // allocates, and it collects. Recursing into the operands is NOT
+        // enough — `a < b` over two plain `LocalGet`s recurses to `false`
+        // while the comparison itself can call into user code. So these are
+        // GC-capable unless every operand is a proven inert primitive.
+        Expr::Unary { .. } | Expr::Compare { .. } | Expr::Binary { .. } => {
+            !expr_is_inert_primitive(ctx, expr)
         }
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => {
-            expr_may_trigger_gc(condition)
-                || expr_may_trigger_gc(then_expr)
-                || expr_may_trigger_gc(else_expr)
+            expr_may_trigger_gc(ctx, condition)
+                || expr_may_trigger_gc(ctx, then_expr)
+                || expr_may_trigger_gc(ctx, else_expr)
         }
-        Expr::Sequence(exprs) => exprs.iter().any(expr_may_trigger_gc),
+        Expr::Sequence(exprs) => exprs.iter().any(|e| expr_may_trigger_gc(ctx, e)),
         _ => true,
+    }
+}
+
+/// Is `expr` a value whose evaluation *and coercion* provably cannot run user
+/// code or allocate?
+///
+/// This is the inner half of [`expr_may_trigger_gc`]'s one-sidedness: only
+/// literals and locals the type analysis proved to be numbers / booleans /
+/// null / undefined qualify, plus operator trees built entirely out of those.
+/// A local carrying an object — or one with a reserved shadow slot, which
+/// means it is pointer-possible regardless of its refined type — is not inert,
+/// because `ToPrimitive` on it dispatches to whatever the object defines.
+fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) => true,
+        // A heap value, but ToPrimitive on a string is the identity: no user
+        // code, no allocation. (`+` is excluded below, since concatenation
+        // does allocate.)
+        Expr::String(_) => true,
+        Expr::LocalGet(id) => {
+            !ctx.shadow_slot_map.contains_key(id)
+                && matches!(
+                    ctx.local_types.get(id),
+                    Some(
+                        HirType::Number
+                            | HirType::Int32
+                            | HirType::Boolean
+                            | HirType::Null
+                            | HirType::Void
+                            | HirType::Never
+                    )
+                )
+        }
+        Expr::Unary { operand, .. } => expr_is_inert_primitive(ctx, operand),
+        Expr::Compare { left, right, .. } => {
+            expr_is_inert_primitive(ctx, left) && expr_is_inert_primitive(ctx, right)
+        }
+        // `+` allocates whenever it is a concatenation, so it is never inert
+        // even over two string literals.
+        Expr::Binary { op, left, right } => {
+            !matches!(op, perry_hir::BinaryOp::Add)
+                && expr_is_inert_primitive(ctx, left)
+                && expr_is_inert_primitive(ctx, right)
+        }
+        _ => false,
     }
 }
 
 /// Does any expression after index `i` reach a collection point?
 ///
-/// This is the gate for protecting argument `i`: a value that nothing
-/// allocating follows cannot be collected before it is consumed, so the
-/// rooting calls would be pure overhead. `"a" + i`, `f(x, y)` on plain locals
-/// and `[1, 2, 3]` therefore emit exactly the IR they emitted before #6951.
-pub(crate) fn any_later_arg_may_trigger_gc(args: &[Expr], i: usize) -> bool {
-    args.iter().skip(i + 1).any(expr_may_trigger_gc)
-}
-
-fn any_later_ref_may_trigger_gc(exprs: &[&Expr], i: usize) -> bool {
-    exprs.iter().skip(i + 1).any(|e| expr_may_trigger_gc(e))
+/// This is the gate for protecting value `i`: a value that nothing allocating
+/// follows cannot be collected before it is consumed, so the rooting calls
+/// would be pure overhead. `i < n`, `x * 2` on proven-numeric locals,
+/// `f(x, y)` on plain locals and `[1, 2, 3]` therefore emit exactly the IR
+/// they emitted before #6951.
+fn any_later_ref_may_trigger_gc(ctx: &FnCtx<'_>, exprs: &[&Expr], i: usize) -> bool {
+    exprs
+        .iter()
+        .skip(i + 1)
+        .any(|e| expr_may_trigger_gc(ctx, e))
 }
 
 /// Lower `exprs` left to right, keeping each already-evaluated value precisely
@@ -182,7 +227,7 @@ pub(crate) fn lower_exprs_rooted(
         // literals are mostly literal parts, so this matters.
         let needs_root = !super::expr_is_known_non_pointer_shadow_value(ctx, expr)
             && !matches!(expr, Expr::String(_));
-        if needs_root && any_later_ref_may_trigger_gc(exprs, i) {
+        if needs_root && any_later_ref_may_trigger_gc(ctx, exprs, i) {
             let idx = temp_root_push_double(ctx, &value);
             // The FIRST slot pushed is the guard: truncating it drops every
             // slot above it too, so one call releases the whole group.
@@ -269,6 +314,9 @@ pub(crate) fn rooted_handle_release(ctx: &mut FnCtx<'_>, handle: RootedHandle) {
 }
 
 /// Do any of an object literal's / call's initializer expressions collect?
-pub(crate) fn any_may_trigger_gc<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> bool {
-    exprs.into_iter().any(expr_may_trigger_gc)
+pub(crate) fn any_may_trigger_gc<'a>(
+    ctx: &FnCtx<'_>,
+    exprs: impl IntoIterator<Item = &'a Expr>,
+) -> bool {
+    exprs.into_iter().any(|e| expr_may_trigger_gc(ctx, e))
 }

@@ -541,12 +541,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         && crate::type_analysis::is_provably_not_bigint(ctx, left)
                         && crate::type_analysis::is_provably_not_bigint(ctx, right);
                     if !inline_bitwise {
+                        // #6951: the dynamic helper runs ToNumeric on both
+                        // operands, so a pointer-bearing left operand must
+                        // survive the right operand's evaluation.
                         let fname = bigint_dynamic_helper(*op);
-                        let l = lower_expr(ctx, left)?;
-                        let r = lower_expr(ctx, right)?;
-                        return Ok(ctx
+                        let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                        let value = ctx
                             .block()
-                            .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                            .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
+                        temp_root_release(ctx, guard);
+                        return Ok(value);
                     }
                 }
             }

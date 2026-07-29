@@ -8,8 +8,8 @@ use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use crate::expr::temp_root::{
-    lower_exprs_rooted, lower_operand_pair_rooted, temp_root_get_i64, temp_root_push_i64,
-    temp_root_release, temp_root_truncate,
+    lower_exprs_rooted, lower_operand_pair_rooted, temp_root_get_double, temp_root_get_i64,
+    temp_root_push_double, temp_root_push_i64, temp_root_release, temp_root_truncate,
 };
 use crate::expr::{
     i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
@@ -1421,10 +1421,21 @@ fn lower_canonical_str_self_append(
         // (lhs slot load, then rhs), coerce the rhs once (heap handle
         // guaranteed), then 2-arm on the destination tag only.
         let lhs_box = ctx.block().load(DOUBLE, slot);
+        // #6951: the load must happen before `rhs` per `s += rhs` evaluation
+        // order (a `rhs` that reassigns `s` must not be observed here), so the
+        // pre-rhs value has to be carried across `rhs`'s evaluation and the
+        // `js_jsvalue_to_string` coercion — both of which allocate. Re-reading
+        // the slot would take the wrong value; re-read the temp root instead.
+        let lhs_root = temp_root_push_double(ctx, &lhs_box);
         let rhs_val = lower_expr(ctx, rhs)?;
         let r_handle = ctx
             .block()
             .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &rhs_val)]);
+        // The coerced rhs is a bare string handle that has to survive the cold
+        // arm's `unbox_str_handle`, which materializes an SSO destination onto
+        // the heap — another allocation. Root it too and re-read it per arm.
+        let r_root = temp_root_push_i64(ctx, &r_handle);
+        let lhs_box = temp_root_get_double(ctx, &lhs_root);
         let bits_d = ctx.block().bitcast_double_to_i64(&lhs_box);
         let tag_d = ctx.block().lshr(I64, &bits_d, "48");
         let is_heap = ctx.block().icmp_eq(I64, &tag_d, TAG_HEAP_STR);
@@ -1439,17 +1450,19 @@ fn lower_canonical_str_self_append(
 
         ctx.current_block = heap_idx;
         let h_d = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
+        let r_heap = temp_root_get_i64(ctx, &r_root);
         let h_heap = ctx
             .block()
-            .call(I64, "js_string_append", &[(I64, &h_d), (I64, &r_handle)]);
+            .call(I64, "js_string_append", &[(I64, &h_d), (I64, &r_heap)]);
         let heap_pred = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
         ctx.current_block = cold_idx;
         let h_d2 = unbox_str_handle(ctx.block(), &lhs_box);
+        let r_cold = temp_root_get_i64(ctx, &r_root);
         let h_cold = ctx
             .block()
-            .call(I64, "js_string_append", &[(I64, &h_d2), (I64, &r_handle)]);
+            .call(I64, "js_string_append", &[(I64, &h_d2), (I64, &r_cold)]);
         let cold_pred = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
@@ -1459,6 +1472,9 @@ fn lower_canonical_str_self_append(
             .phi(I64, &[(&h_heap, &heap_pred), (&h_cold, &cold_pred)]);
         let new_box = nanbox_string_inline(ctx.block(), &handle);
         ctx.block().store(DOUBLE, &new_box, slot);
+        // `lhs_root` is the base of the pair, so one truncate drops both. The
+        // index register is defined in the entry block and dominates the merge.
+        temp_root_truncate(ctx, &lhs_root);
         return Ok(new_box);
     }
 
