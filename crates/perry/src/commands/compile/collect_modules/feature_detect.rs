@@ -29,6 +29,27 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"globSync\"")
 }
 
+/// zlib per-codec cherry-pick (stdlib cherry-pick): a `node:zlib` import
+/// only selects the gzip/deflate base (`compression-gzip`); the Brotli and
+/// zstd backends are linked when a matching API token appears anywhere in
+/// the lowered HIR. Method calls surface as `method: "brotliCompressSync"`
+/// / `NativeMethodCall { … }` tokens, factory calls as
+/// `createBrotliCompress` / `createZstdDecompress`, constants as
+/// `BROTLI_*` / `ZSTD_*` property reads. A bare substring match
+/// over-includes (a user identifier containing "brotli" links the codec —
+/// a size, not a correctness, cost); the rule is zero false negatives for
+/// statically-lowered call sites. Fully dynamic access (`zlib[name]`) is
+/// covered by the deferred-dynamic-code fallback in
+/// `build_optimized_libs`, which enables the full `compression` umbrella.
+fn debug_hir_uses_zlib_brotli(hir_debug: &str) -> bool {
+    hir_debug.contains("rotli") || hir_debug.contains("BROTLI")
+}
+
+/// See [`debug_hir_uses_zlib_brotli`] — same contract for the zstd family.
+fn debug_hir_uses_zlib_zstd(hir_debug: &str) -> bool {
+    hir_debug.contains("zstd") || hir_debug.contains("Zstd") || hir_debug.contains("ZSTD")
+}
+
 fn debug_hir_uses_get_builtin_module(hir_debug: &str) -> bool {
     hir_debug.contains("property: \"getBuiltinModule\"")
         || (hir_debug.contains("module: \"process\"")
@@ -146,6 +167,24 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.needs_stdlib = true;
             ctx.uses_crypto_builtins = true;
+        }
+    }
+
+    // zlib per-codec cherry-pick: flag Brotli / zstd API usage so
+    // `build_optimized_libs` can add `compression-brotli` /
+    // `compression-zstd` on top of the `compression-gzip` base that a
+    // `node:zlib` import selects. Scan classes too — a codec call inside a
+    // static method body must not be stripped from an auto-optimized build.
+    {
+        let hir_debug: String = format!(
+            "{:?}{:?}{:?}",
+            &hir_module.init, &hir_module.functions, &hir_module.classes
+        );
+        if debug_hir_uses_zlib_brotli(&hir_debug) {
+            ctx.uses_zlib_brotli = true;
+        }
+        if debug_hir_uses_zlib_zstd(&hir_debug) {
+            ctx.uses_zlib_zstd = true;
         }
     }
 
@@ -470,7 +509,8 @@ pub(super) fn detect_optional_feature_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_hir_uses_get_builtin_module, debug_hir_uses_regex, imports_fs_promises_glob,
+        debug_hir_uses_get_builtin_module, debug_hir_uses_regex, debug_hir_uses_zlib_brotli,
+        debug_hir_uses_zlib_zstd, imports_fs_promises_glob,
     };
     use perry_hir::{Import, ImportSpecifier, Module, ModuleKind};
 
@@ -482,6 +522,35 @@ mod tests {
         assert!(debug_hir_uses_regex(
             r#"NativeMethodCall { module: String("path.win32"), method: String("matchesGlob"), args: [] }"#
         ));
+    }
+
+    #[test]
+    fn zlib_codec_gates_detect_static_and_dynamic_tokens() {
+        // Direct native-table lowering.
+        assert!(debug_hir_uses_zlib_brotli(
+            r#"NativeMethodCall { module: "zlib", method: "brotliCompressSync", args: [] }"#
+        ));
+        // Factory + constants spellings.
+        assert!(debug_hir_uses_zlib_brotli(
+            r#"NativeMethodCall { module: "zlib", method: "createBrotliDecompress" }"#
+        ));
+        assert!(debug_hir_uses_zlib_brotli(
+            r#"PropertyGet { property: "BROTLI_PARAM_QUALITY" }"#
+        ));
+        assert!(debug_hir_uses_zlib_zstd(
+            r#"NativeMethodCall { module: "zlib", method: "zstdCompressSync" }"#
+        ));
+        assert!(debug_hir_uses_zlib_zstd(
+            r#"NativeMethodCall { module: "zlib", method: "createZstdCompress" }"#
+        ));
+        assert!(debug_hir_uses_zlib_zstd(
+            r#"PropertyGet { property: "ZSTD_c_compressionLevel" }"#
+        ));
+        // A gzip-only program keeps both codec gates off — that's the size win.
+        let gzip_only =
+            r#"NativeMethodCall { module: "zlib", method: "gzipSync" } method: "gunzipSync""#;
+        assert!(!debug_hir_uses_zlib_brotli(gzip_only));
+        assert!(!debug_hir_uses_zlib_zstd(gzip_only));
     }
 
     #[test]

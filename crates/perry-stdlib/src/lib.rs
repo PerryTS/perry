@@ -300,9 +300,13 @@ pub mod crypto_e2e;
 pub use crypto_e2e::*;
 
 // === Compression ===
-#[cfg(feature = "compression")]
+// Gated on `compression-gzip` (the base codec family) rather than the
+// `compression` umbrella so the auto-optimize rebuild can cherry-pick
+// codecs: `compression-brotli` / `compression-zstd` imply
+// `compression-gzip`, and `compression` is the union of all three.
+#[cfg(feature = "compression-gzip")]
 pub mod zlib;
-#[cfg(feature = "compression")]
+#[cfg(feature = "compression-gzip")]
 pub use zlib::*;
 
 // === Email ===

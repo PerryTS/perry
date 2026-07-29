@@ -653,7 +653,7 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
     // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
     // here on the main thread. Bundled path (perry-stdlib's own zlib mod):
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "compression-gzip")]
     {
         count += unsafe { crate::zlib::js_zlib_process_pending() };
     }
@@ -862,7 +862,7 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // 'data'/'end' events are still waiting to be drained, so a purely-
     // synchronous `createGzip().write(x).end()` program doesn't exit before
     // its listeners fire. Bundled path:
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "compression-gzip")]
     {
         if crate::zlib::js_zlib_has_active_handles() != 0 {
             return 1;

@@ -116,7 +116,18 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "perry/updater" => &["crypto"],
 
         // ── Compression (zlib) ────────────────────────────────────────
-        "zlib" => &["compression"],
+        // Per-codec split (stdlib cherry-pick): a `node:zlib` import only
+        // guarantees the gzip/deflate family (`compression-gzip`, which
+        // gates `pub mod zlib` itself). The Brotli / zstd codec backends
+        // (`compression-brotli` / `compression-zstd`, each implying
+        // `compression-gzip`) are added by `build_optimized_libs` when
+        // HIR usage detection saw a Brotli / zstd API token
+        // (`ctx.uses_zlib_brotli` / `ctx.uses_zlib_zstd`, set in
+        // `collect_modules/feature_detect.rs`) — and unconditionally
+        // when deferred dynamic code could name a codec at runtime.
+        // The `compression` umbrella (= all three) stays for
+        // backwards-compat `--features compression` callers.
+        "zlib" => &["compression-gzip"],
 
         // ── Email (lettre) ────────────────────────────────────────────
         // `email` umbrella retained for backwards-compat; per-binding
@@ -260,6 +271,44 @@ pub fn features_to_cargo_arg(features: &BTreeSet<&'static str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zlib_import_maps_to_gzip_base_only() {
+        // Per-codec cherry-pick: `node:zlib` selects the gzip/deflate base;
+        // Brotli / zstd are layered on by `build_optimized_libs` from the
+        // `ctx.uses_zlib_brotli` / `ctx.uses_zlib_zstd` HIR gates. The
+        // legacy `compression` umbrella must NOT be selected here — it
+        // would defeat the split by always pulling all three codecs.
+        assert_eq!(module_to_features("zlib"), &["compression-gzip"]);
+        assert_eq!(module_to_features("node:zlib"), &["compression-gzip"]);
+
+        let mut imports = BTreeSet::new();
+        imports.insert("zlib".to_string());
+        let features = compute_required_features(&imports, false, false);
+        assert!(features.contains("compression-gzip"));
+        assert!(!features.contains("compression"));
+        assert!(!features.contains("compression-brotli"));
+        assert!(!features.contains("compression-zstd"));
+    }
+
+    #[test]
+    fn crypto_features_join_only_on_crypto_usage() {
+        // The stdlib cherry-pick removed the driver's unconditional
+        // `crypto` force — the feature must now come exclusively from the
+        // import mapping or the builtin-usage flag (plus the codegen
+        // `js_crypto_*` prefix net, tested in perry-codegen).
+        let no_imports = BTreeSet::new();
+        let features = compute_required_features(&no_imports, false, false);
+        assert!(!features.contains("crypto"));
+
+        let features = compute_required_features(&no_imports, false, true);
+        assert!(features.contains("crypto"));
+
+        let mut imports = BTreeSet::new();
+        imports.insert("crypto".to_string());
+        let features = compute_required_features(&imports, false, false);
+        assert!(features.contains("crypto"));
+    }
 
     #[test]
     fn stream_web_imports_enable_bundled_streams() {

@@ -626,6 +626,36 @@ pub(crate) fn record_ffi_call(symbol: &str) {
             return;
         }
     }
+
+    // Prefix safety net (stdlib cherry-pick): the auto-optimize driver no
+    // longer force-enables perry-stdlib's `crypto` feature for every build,
+    // so ANY codegen-emitted call into the node:crypto / WebCrypto surface
+    // must flip the feature here — the import mapping and the
+    // `uses_crypto_builtins` HIR gate cover the known shapes, and this rule
+    // covers everything else (compiled-package lowering, future HIR
+    // variants) without maintaining a per-symbol table: every FFI defined
+    // by perry-stdlib's crypto/webcrypto modules carries one of these two
+    // prefixes. `js_webcrypto_illegal_constructor` is excluded — it lives
+    // in perry-runtime (object/global_this/ctor_thunks.rs), so emitting it
+    // needs no stdlib feature. The MODULE_CAPTURE marker is the prefix
+    // itself: replaying it through this function (object-cache manifest,
+    // #6439) re-enters this arm and reproduces the same owner.
+    if symbol.starts_with("js_crypto_")
+        || (symbol.starts_with("js_webcrypto_") && symbol != "js_webcrypto_illegal_constructor")
+    {
+        let owner = OwnerKind::Stdlib {
+            feature: Some("crypto"),
+        };
+        {
+            let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
+            guard.get_or_insert_with(HashSet::new).insert(owner);
+        }
+        MODULE_CAPTURE.with(|cell| {
+            if let Some(set) = cell.borrow_mut().as_mut() {
+                set.insert("js_crypto_");
+            }
+        });
+    }
 }
 
 /// Start capturing this thread's registry-symbol emissions. Call
@@ -870,6 +900,67 @@ mod tests {
             };
             assert_symbol_routes_to(symbol, owner);
         }
+    }
+
+    /// Stdlib cherry-pick: the driver no longer force-enables perry-stdlib's
+    /// `crypto` feature, so every codegen-emitted `js_crypto_*` /
+    /// `js_webcrypto_*` call must flip it through the prefix net — including
+    /// the `"js_crypto_"` marker persisted to (and replayed from) the object
+    /// cache's FFI manifest. `js_webcrypto_illegal_constructor` lives in
+    /// perry-runtime and must NOT flip the feature.
+    #[test]
+    fn emitted_crypto_symbols_route_to_stdlib_crypto_feature() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
+        let crypto_owner = OwnerKind::Stdlib {
+            feature: Some("crypto"),
+        };
+        for symbol in [
+            "js_crypto_sha256",
+            "js_crypto_create_hash",
+            "js_crypto_ed25519_verify",
+            "js_webcrypto_digest",
+            // Object-cache replay marker (see record_ffi_call).
+            "js_crypto_",
+        ] {
+            assert_symbol_routes_to(symbol, crypto_owner);
+        }
+
+        let _ = take_used_providers();
+        record_ffi_call("js_webcrypto_illegal_constructor");
+        let got = take_used_providers();
+        assert!(
+            !got.contains(&crypto_owner),
+            "js_webcrypto_illegal_constructor is a perry-runtime thunk and must \
+             not flip the stdlib crypto feature, got {got:?}"
+        );
+    }
+
+    /// The prefix net must persist a replayable marker in the per-module
+    /// capture so a warm object cache reproduces the same feature flip
+    /// (#6439 shape).
+    #[test]
+    fn crypto_prefix_net_marker_survives_module_capture_replay() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
+        let _ = take_used_providers();
+
+        begin_module_capture();
+        record_ffi_call("js_crypto_pbkdf2");
+        let captured = take_module_capture();
+        assert_eq!(captured, vec!["js_crypto_"]);
+
+        let _ = take_used_providers();
+        replay_ffi_symbols(captured);
+        let got = take_used_providers();
+        assert!(
+            got.contains(&OwnerKind::Stdlib {
+                feature: Some("crypto")
+            }),
+            "replaying the captured marker must reproduce the crypto flip, got {got:?}"
+        );
     }
 
     /// #5140 regression: `new EventEmitter()` / `.on` / `.emit` /

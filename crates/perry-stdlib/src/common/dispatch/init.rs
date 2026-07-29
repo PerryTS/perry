@@ -658,7 +658,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // address inherits the dead key's material).
     #[cfg(feature = "crypto")]
     perry_runtime::buffer::js_set_crypto_key_death_hook(crate::webcrypto::crypto_key_buffer_died);
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "compression-gzip")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,

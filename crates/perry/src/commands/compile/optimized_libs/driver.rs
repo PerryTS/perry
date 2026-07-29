@@ -290,15 +290,28 @@ pub(crate) fn build_optimized_libs(
             if original_features.contains(&"bundled-net") {
                 features.insert("external-net-pump");
             }
-            // #1843 — when the flip strips `compression` and routes
-            // `node:zlib` to perry-ext-zlib, activate `external-zlib-pump`
-            // so perry-stdlib's main-thread pump + active-handles gate drain
-            // perry-ext-zlib's deferred stream-event queue and route
-            // `gz.write()`/`.on()`/`.pipe()` (lost-static-type) calls into its
-            // `js_ext_zlib_dispatch_method`. Without this the events stay
-            // queued forever (`createGzip().on('data')` never fires).
-            if original_features.contains(&"compression") {
+            // #1843 — when the flip strips the compression base feature and
+            // routes `node:zlib` to perry-ext-zlib, activate
+            // `external-zlib-pump` so perry-stdlib's main-thread pump +
+            // active-handles gate drain perry-ext-zlib's deferred
+            // stream-event queue and route `gz.write()`/`.on()`/`.pipe()`
+            // (lost-static-type) calls into its `js_ext_zlib_dispatch_method`.
+            // Without this the events stay queued forever
+            // (`createGzip().on('data')` never fires). `module_to_features`
+            // maps `zlib` to `compression-gzip` since the per-codec split;
+            // keep matching the legacy `compression` umbrella too so a
+            // future mapping change can't silently drop the pump.
+            if original_features.contains(&"compression-gzip")
+                || original_features.contains(&"compression")
+            {
                 features.insert("external-zlib-pump");
+                // The per-codec add-ons imply `compression-gzip` at the Cargo
+                // level, so leaving them enabled would compile the bundled
+                // zlib module back in and duplicate perry-ext-zlib's
+                // `js_zlib_*` symbols at link. The ext crate carries all
+                // codecs, so nothing is lost by dropping them here.
+                features.remove("compression-brotli");
+                features.remove("compression-zstd");
             }
             // Closes #606 — same shape for ws. When the well-known flip
             // strips `bundled-ws` and routes to perry-ext-ws, activate
@@ -387,16 +400,49 @@ pub(crate) fn build_optimized_libs(
     if ctx.needs_ui {
         features.insert("async-runtime");
     }
+    // zlib per-codec cherry-pick: `import 'node:zlib'` only selected the
+    // gzip/deflate base above (`compression-gzip`). Layer the Brotli / zstd
+    // backends on when HIR usage detection saw a matching API token, and
+    // fall back to the full set when a deferred dynamic-code site could
+    // name a codec from a runtime string (`zlib[name](...)` after `eval`).
+    // Gated on the base feature still being present: if the well-known flip
+    // routed `node:zlib` to perry-ext-zlib, the sub-features would imply
+    // `compression-gzip` back on and duplicate the ext crate's `js_zlib_*`
+    // symbols at link.
+    if features.contains("compression-gzip") {
+        if ctx.uses_zlib_brotli || perry_hir::has_deferred_dynamic_code_sites() {
+            features.insert("compression-brotli");
+        }
+        if ctx.uses_zlib_zstd || perry_hir::has_deferred_dynamic_code_sites() {
+            features.insert("compression-zstd");
+        }
+    }
     // perry-stdlib unconditionally re-bundles perry-updater (so user code
     // calling `perry/updater` resolves at link time without extra wiring).
     // perry-updater used to reference the extern `js_crypto_ed25519_verify`
-    // from perry-stdlib's `crypto` feature, which is why `crypto` is forced
-    // on here. The updater now verifies in-crate via ed25519-dalek (the
-    // extern is gone — it broke the Windows CLI link, LNK2019), so this
-    // force is no longer load-bearing for the updater; it is kept
-    // conservatively until the no-crypto auto-optimize path is audited
-    // separately for other stragglers.
-    features.insert("crypto");
+    // from perry-stdlib's `crypto` feature, which is why `crypto` used to be
+    // force-inserted here for EVERY auto-optimized build. The updater now
+    // verifies in-crate via ed25519-dalek, and the remaining crypto entry
+    // points are covered by three detection layers, so the force is gone
+    // (stdlib cherry-pick — non-crypto programs save the whole crypto
+    // surface: RSA/EC/Ed25519/Ed448/ML-KEM/x509/JWT/bcrypt/argon2 + tokio):
+    //   1. `import 'node:crypto'` / bcrypt / jsonwebtoken / … →
+    //      `module_to_features` (compute_required_features above);
+    //   2. bare `crypto.*` builtins and the WebCrypto namespace →
+    //      `ctx.uses_crypto_builtins` (collect_modules/feature_detect.rs);
+    //   3. any OTHER codegen-emitted `js_crypto_*` / `js_webcrypto_*` call
+    //      (compiled-package lowering with no import in the entry module) →
+    //      the prefix rule in `perry_codegen::ext_registry::record_ffi_call`
+    //      feeds `ctx.extra_stdlib_features`, unioned in above.
+    //
+    // `async-runtime` stays force-on: perry-stdlib's ALWAYS-ON modules
+    // (worker_threads' promise bridge, readline's pump) compile against
+    // `common::async_bridge`, which is `async-runtime`-gated — a bare
+    // `--no-default-features` stdlib has never compiled, and the crypto
+    // force used to satisfy the gate transitively. Tokio was therefore in
+    // every stdlib-linking binary before the cherry-pick too; the win here
+    // is dropping the crypto/codec crates, not the runtime bridge.
+    features.insert("async-runtime");
     let feature_arg = features_to_cargo_arg(&features);
 
     // panic = "abort" is safe whenever no `catch_unwind` callers are
