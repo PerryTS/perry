@@ -277,9 +277,10 @@ fn guarded_map_number_key_set(
 fn reread_map_set_receiver_and_key(
     ctx: &mut FnCtx<'_>,
     roots: &temp_root::RootedOperands,
+    operands: &[&Expr; 2],
     m_handle_unrooted: &Option<String>,
-) -> (String, String) {
-    let values = roots.reread(ctx);
+) -> Result<(String, String)> {
+    let values = roots.reread(ctx, operands)?;
     let k_box = values[1].clone();
     let m_handle = match m_handle_unrooted {
         Some(handle) => handle.clone(),
@@ -289,7 +290,7 @@ fn reread_map_set_receiver_and_key(
             unbox_to_i64(blk, &m_box)
         }
     };
-    (m_handle, k_box)
+    Ok((m_handle, k_box))
 }
 
 fn guarded_map_number_key_get(ctx: &mut FnCtx<'_>, map_handle: &str, key_box: &str) -> String {
@@ -557,13 +558,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // there sweeps them: `m.set(fresh(k), churn(N))` aborted inside
             // `js_map_set` on a key whose header had been recycled.
             let value_collects = temp_root::expr_may_trigger_gc(ctx, value);
+            let map_key_operands: [&Expr; 2] = [map, key];
             let roots = temp_root::root_operands(
                 ctx,
+                &map_key_operands,
                 &[&m_box, &k_box],
-                &[
-                    value_collects && temp_root::operand_needs_root(ctx, map),
-                    value_collects && temp_root::operand_needs_root(ctx, key),
-                ],
+                &[value_collects, value_collects],
             );
             // Unbox eagerly only on the unprotected path, so its IR — including
             // register numbering — is exactly what it was before this change.
@@ -576,8 +576,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let new_handle = if use_string_i32_map {
                 let value_i32 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (k_handle, new_handle) = {
                     let blk = ctx.block();
                     let k_handle = unbox_str_handle(blk, &k_box);
@@ -609,8 +613,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else if use_string_u32_map {
                 let value_u32 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (k_handle, new_handle) = {
                     let blk = ctx.block();
                     let k_handle = unbox_str_handle(blk, &k_box);
@@ -642,8 +650,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else if use_string_f32_map {
                 let value_f32 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (k_handle, new_handle) = {
                     let blk = ctx.block();
                     let k_handle = unbox_str_handle(blk, &k_box);
@@ -674,8 +686,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 new_handle
             } else if use_string_number_map {
                 let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (k_handle, new_handle) = {
                     let blk = ctx.block();
                     let k_handle = unbox_str_handle(blk, &k_box);
@@ -698,8 +714,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else if use_string_boolean_map {
                 let value_i1 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (k_handle, new_handle) = {
                     let blk = ctx.block();
                     let k_handle = unbox_str_handle(blk, &k_box);
@@ -731,8 +751,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 new_handle
             } else if use_string_string_map {
                 let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (k_handle, v_handle, new_handle) = {
                     let blk = ctx.block();
                     let k_handle = unbox_str_handle(blk, &k_box);
@@ -765,8 +789,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 new_handle
             } else if has_string_key_map {
                 let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (k_handle, new_handle) = {
                     let blk = ctx.block();
                     let k_handle = unbox_str_handle(blk, &k_box);
@@ -800,8 +828,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 new_handle
             } else if use_number_string_map {
                 let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let (v_handle, v_slot_box) = {
                     let blk = ctx.block();
                     let v_handle = unbox_str_handle(blk, &v_box);
@@ -822,8 +854,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_slot_box)
             } else if use_number_key_map {
                 let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 if static_number_string_map {
                     record_collection_typed_value_fallback(
                         ctx,
@@ -839,8 +875,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_box)
             } else {
                 let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) =
-                    reread_map_set_receiver_and_key(ctx, &roots, &m_handle_unrooted);
+                let (m_handle, k_box) = reread_map_set_receiver_and_key(
+                    ctx,
+                    &roots,
+                    &map_key_operands,
+                    &m_handle_unrooted,
+                )?;
                 let new_handle = {
                     let blk = ctx.block();
                     blk.call(

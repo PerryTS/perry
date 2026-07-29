@@ -807,10 +807,21 @@ fn lower_new_impl_inner(
     // Mandatory rather than defensive — the slots are *mutable* roots, so an
     // evacuating cycle rewrote them and the registers pushed earlier are stale.
     // Every `lowered_args` consumer below this point sees the re-read values.
-    for (value, slot) in lowered_args.iter_mut().zip(arg_roots.iter()) {
-        if let Some(idx) = slot {
-            let idx = idx.clone();
-            *value = temp_root::temp_root_get_double(ctx, &idx);
+    for (i, (value, slot)) in lowered_args.iter_mut().zip(arg_roots.iter()).enumerate() {
+        match slot {
+            Some(idx) => {
+                let idx = idx.clone();
+                *value = temp_root::temp_root_get_double(ctx, &idx);
+            }
+            // Not rooted because it reads a registered root (a shadow-slotted
+            // local, a module global, a string literal). Those are never swept
+            // — but an evacuating cycle REWROTE their storage, so the register
+            // loaded before the allocation points at the pre-move address.
+            // Re-lowering emits the load again and costs no runtime call.
+            None if temp_root::operand_is_reloadable(&args[i]) => {
+                *value = lower_constructor_arg(ctx, &args[i])?;
+            }
+            None => {}
         }
     }
 

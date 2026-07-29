@@ -366,11 +366,13 @@ fn constructor_arguments_are_rooted_across_the_instance_allocation() {
     );
 }
 
-/// The gate: `new Pair(a, b)` on plain locals must emit no rooting.
+/// The gate: `new Pair(a, b)` on immediates must emit no rooting.
 ///
-/// A `LocalGet` is already a precise root — codegen binds every pointer-typed
-/// local to a shadow-stack slot — so paying for a temp root there would be a
-/// cost on a shape that was never broken.
+/// A number roots nothing at all, and a string literal is already a registered
+/// root, so neither needs a temp-root slot. (The literal is still *re-loaded*
+/// after the allocation — see
+/// `registered_root_operands_are_reloaded_rather_than_rooted` — but that is a
+/// plain load, not a runtime call.)
 #[test]
 fn constructor_arguments_on_plain_locals_emit_no_rooting_calls() {
     let ir = ir_for_new(
@@ -382,5 +384,50 @@ fn constructor_arguments_on_plain_locals_emit_no_rooting_calls() {
         !ir.contains("call i32 @js_gc_temp_root_push"),
         "a number and a string literal need no root — the literal is a load \
          from a module global already registered with js_gc_register_global_root:\n{ir}"
+    );
+}
+
+/// An operand that reads a *registered root* is not rooted again — but it must
+/// be **re-loaded**, not reused from its pre-collection register.
+///
+/// A string literal, a module global and a shadow-slotted local are all marked
+/// by the collector, so they are never swept. But an evacuating cycle
+/// **rewrites their storage**, and the register loaded before the collection
+/// still holds the pre-move address. Emitting the load again is correct and
+/// costs no runtime call — the same staleness #6981 reports one layer in, for a
+/// raw typed-array pointer under the specialized ABI.
+#[test]
+fn registered_root_operands_are_reloaded_rather_than_rooted() {
+    let ir = ir_for_new(
+        "ctor_args_reload.ts",
+        vec![Expr::String("lit".to_string()), allocating()],
+    );
+
+    let handle_load = "load double, ptr @ctor_args_reload_ts_.str.";
+    let loads: Vec<usize> = ir.match_indices(handle_load).map(|(i, _)| i).collect();
+    assert!(
+        loads.len() >= 2,
+        "the literal operand must be loaded a SECOND time after the instance \
+         allocation — reusing the first register leaves it pointing at where \
+         the string used to be once evacuation moves it:\n{ir}"
+    );
+
+    let alloc = ir
+        .find("call i64 @js_object_alloc_class_inline_keys")
+        .expect("the instance allocation");
+    assert!(
+        loads[0] < alloc && loads.iter().any(|&l| l > alloc),
+        "one load before the allocation (the original lowering) and one after \
+         it (the re-load):\n{ir}"
+    );
+
+    // And it must be a re-LOAD, not a temp root: a registered root needs no
+    // second liveness mechanism, so this must cost zero runtime calls for it.
+    // (The allocating operand still gets a real root — hence >= 1 push.)
+    let pushes = ir.matches("call i32 @js_gc_temp_root_push").count();
+    assert!(
+        pushes <= 2,
+        "expected at most the scope marker plus the allocating operand's root; \
+         the literal must not get a slot of its own, got {pushes}:\n{ir}"
     );
 }
