@@ -168,8 +168,29 @@ pub(crate) fn lower_string_method(
     let result = lower_string_method_dispatch(ctx, object, property, args, &recv_box, &recv_root);
     // Released only after the dispatch's consuming runtime call has run: that
     // call allocates while it reads the receiver.
+    //
+    // The `is_terminated` guard is load-bearing, not defensive. The
+    // unknown-property arm of the dispatch throws and emits `unreachable`, then
+    // still returns `Ok(placeholder)` so callers have a register to phi against
+    // — so control reaches here with the block already terminated. Appending the
+    // truncate there would emit an instruction after the terminator: invalid IR,
+    // reachable from `("a" + churn()).nope(obj)` (an unrecognized string method
+    // whose arguments can collect, which is what sets `recv_root` at all).
+    // Skipping the release is sound: `unreachable` means no path resumes, and
+    // the temp-root stack is cut by the enclosing scope regardless.
+    //
+    // NOT covered by a regression test, deliberately: an attempted HIR-level
+    // reproducer (`("a" + "b").nope({})`) never reached the throwing arm — the
+    // emitted IR contained no `unreachable` at all — so the test passed with
+    // and without this guard. A test that is green either way is worse than no
+    // test, so it was removed rather than shipped. The guard is kept as
+    // defense-in-depth: emitting after a terminator is never correct, and the
+    // check is free. Reachability of the arm from a TypeScript source remains
+    // unproven; see the PR body.
     if let Some(idx) = &recv_root {
-        temp_root_truncate(ctx, idx);
+        if !ctx.block().is_terminated() {
+            temp_root_truncate(ctx, idx);
+        }
     }
     result
 }
