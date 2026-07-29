@@ -9,9 +9,9 @@
 use super::dispatch::{self, ok_or_throw, raw_arg, string};
 use super::{alloc_temporal_cell, TemporalValue};
 use temporal_rs::host::{HostClock, HostHooks, HostTimeZone};
+use temporal_rs::now::Now;
 use temporal_rs::provider::TimeZoneProvider;
 use temporal_rs::unix_time::EpochNanoseconds;
-use temporal_rs::now::Now;
 use temporal_rs::{TemporalError, TemporalResult, TimeZone};
 
 /// Perry's own `Temporal.Now` host system, replacing temporal_rs's
@@ -42,7 +42,10 @@ impl HostTimeZone for PerryHostSystem {
         &self,
         provider: &(impl TimeZoneProvider + ?Sized),
     ) -> TemporalResult<TimeZone> {
-        TimeZone::try_from_identifier_str_with_provider(crate::date::host_time_zone_name(), provider)
+        TimeZone::try_from_identifier_str_with_provider(
+            crate::date::host_time_zone_name(),
+            provider,
+        )
     }
 }
 
@@ -70,9 +73,7 @@ fn tz_arg(v: f64) -> Option<TimeZone> {
 }
 
 pub fn instant(_args: &[f64]) -> f64 {
-    alloc_temporal_cell(TemporalValue::Instant(ok_or_throw(
-        perry_now().instant(),
-    )))
+    alloc_temporal_cell(TemporalValue::Instant(ok_or_throw(perry_now().instant())))
 }
 
 pub fn time_zone_id(_args: &[f64]) -> f64 {
