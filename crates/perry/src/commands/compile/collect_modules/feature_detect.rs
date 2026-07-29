@@ -363,6 +363,18 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_global_webfetch = true;
         }
+        // `process` IPC channel properties. Bare-token matching on purpose:
+        // the property name reaches the runtime as a string, so any `send` /
+        // `disconnect` / `connected` / `channel` mention enables the path. A
+        // miss would make `process.send` undefined at runtime, so this errs
+        // heavily toward enabling.
+        if hir_debug.contains("\"send\"")
+            || hir_debug.contains("\"disconnect\"")
+            || hir_debug.contains("\"connected\"")
+            || hir_debug.contains("\"channel\"")
+        {
+            ctx.uses_proc_ipc = true;
+        }
         // `Intl.getCanonicalLocales(...)` / `Intl.*.supportedLocalesOf(...)` gate
         // `perry-runtime/intl-locale` (`icu_locale_core` BCP-47 canonicalization).
         // Both lower with the method name as a `property` token.

@@ -88,7 +88,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -110,6 +110,7 @@ pub(crate) fn auto_optimized_cache_key(
         ctx.uses_global_websocket,
         ctx.uses_global_webcrypto,
         ctx.uses_global_webfetch,
+        ctx.uses_proc_ipc,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
         // HTTP/2 imports and dynamic builtin resolution pull in
@@ -196,6 +197,7 @@ pub(crate) fn auto_optimized_cross_features(
         (ctx.uses_global_websocket, "global-websocket"),
         (ctx.uses_global_webcrypto, "global-webcrypto"),
         (ctx.uses_global_webfetch, "global-webfetch"),
+        (ctx.uses_proc_ipc, "proc-ipc"),
     ] {
         if used || dynamic_code {
             cross_features.push(format!("perry-runtime/{feat}"));
