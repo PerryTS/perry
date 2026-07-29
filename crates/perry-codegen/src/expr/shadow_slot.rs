@@ -55,17 +55,25 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
         // load-bearing -- and it isn't, because both runtime accessors answer
         // `undefined` for a receiver that is not a Uint8Array/Buffer.
         //
-        // The two lowerings of this node that CAN yield a heap value are
-        // excluded by construction:
+        // The three lowerings of this node that CAN yield a heap value are
+        // excluded by construction, one condition each:
         //   * a symbol key (`u8[Symbol.iterator]`) goes to
         //     `js_object_get_symbol_property`, which returns the accessor;
-        //   * a key without the integer-array-index proof goes to
-        //     `js_typed_array_index_get_dynamic`, which falls through to
-        //     string-keyed property lookup (an expando can hold anything).
-        // `BufferIndexGet` has neither path -- every arm coerces the key to
-        // i32 and reads a byte -- so it needs no condition.
+        //   * in JS-value context, a key without the integer-array-index proof
+        //     goes to `js_typed_array_index_get_dynamic`, which falls through
+        //     to string-keyed property lookup (an expando holds anything);
+        //   * in i32 context (`lower_uint8array_get_i32`), a key that is not
+        //     numeric-proven goes to `js_object_get_index_polymorphic`, which
+        //     dispatches a string key to that same property path. That arm is
+        //     gated on `is_numeric_expr`, NOT on the index proof, so testing
+        //     the proof alone would not cover it -- both conditions are
+        //     required. `is_numeric_expr` is used here only to NARROW: a wrong
+        //     `true` from it still leaves a byte read on every arm it admits.
+        // `BufferIndexGet` has none of these paths -- every arm coerces the key
+        // to i32 and reads a byte -- so it needs no condition.
         Expr::Uint8ArrayGet { index, .. } => {
             !matches!(index.as_ref(), Expr::SymbolFor(_))
+                && crate::type_analysis::is_numeric_expr(ctx, index)
                 && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index)
         }
         Expr::BufferIndexGet { .. } => true,

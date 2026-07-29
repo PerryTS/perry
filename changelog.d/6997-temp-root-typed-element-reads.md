@@ -28,12 +28,14 @@ type (annotations are unenforced, so `buf: Buffer` holding something else must
 not be load-bearing — and it isn't: `js_uint8array_index_get_value` and
 `js_buffer_index_get_value` answer `undefined` for a receiver that is not a
 Uint8Array/Buffer, and `lower_buffer_load`'s inline arm reads a raw byte). The
-two lowerings of `Uint8ArrayGet` that CAN yield a heap value stay rooted and
+three lowerings of `Uint8ArrayGet` that CAN yield a heap value stay rooted and
 have tests holding them from the other side: a symbol key
-(`js_object_get_symbol_property` returns a prototype accessor) and a key
-without the integer-array-index proof (`js_typed_array_index_get_dynamic`
-falls through to string-keyed property lookup). `BufferIndexGet` has neither
-path.
+(`js_object_get_symbol_property` returns a prototype accessor), and — in
+JS-value and in i32 context respectively — an unproven key
+(`js_typed_array_index_get_dynamic`) or a key that is not numeric-proven
+(`js_object_get_index_polymorphic`), both of which fall through to string-keyed
+property lookup. Those last two are gated on different predicates in the
+lowering, so the skip tests both. `BufferIndexGet` has none of these paths.
 
 Since that argument depends on the gate testing the *same* index proof that
 routes the read to a byte accessor, the verbatim copy of
