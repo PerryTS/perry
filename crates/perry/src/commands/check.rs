@@ -194,6 +194,7 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         ) {
             Ok(result) => result,
             Err(e) => {
+                checked_files += 1;
                 // A file that does not parse is a check FAILURE, not a file to
                 // skip. Before this, the error was printed only under `-v` and
                 // the file was dropped without touching `all_diagnostics`, so

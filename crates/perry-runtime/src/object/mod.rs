@@ -94,8 +94,9 @@ mod regex_proto_thunks;
 // `object::*` modules reach these through `use super::*`, so re-export the
 // names they use (the rest stay internal to `spill`).
 mod spill;
-pub(crate) use spill::learned_inline_field_count;
-pub(crate) use spill::{overflow_get, overflow_set};
+pub(crate) use spill::{learned_inline_field_count, overflow_get, overflow_set};
+#[cfg(test)]
+use spill::{object_spill_enabled, spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
 mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;

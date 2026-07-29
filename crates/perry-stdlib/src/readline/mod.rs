@@ -1319,9 +1319,16 @@ pub extern "C" fn js_readline_on(
 /// `Interface.close()` semantics) and mark the interface as EOF.
 #[no_mangle]
 pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
-    if with_interface(_handle, |state| state.uses_custom_stream).unwrap_or(false) {
-        close_custom_interface(_handle);
-        return undefined();
+    match with_interface(_handle, |state| state.uses_custom_stream) {
+        Some(true) => {
+            close_custom_interface(_handle);
+            return undefined();
+        }
+        // Custom-interface handles are never reused. A missing non-stdin slot
+        // therefore means this interface was already closed and released;
+        // do not fall through and mutate the unrelated stdin singleton.
+        None if _handle != STDIN_READLINE_HANDLE => return undefined(),
+        _ => {}
     }
     EOF_REACHED.store(true, Ordering::Release);
     // Node stops emitting 'line' after close(). Without clearing these, the
@@ -1776,6 +1783,27 @@ mod tests {
         js_readline_close(h);
         assert_eq!(js_readline_process_pending(), 0);
         assert_eq!(js_readline_process_pending(), 0);
+    }
+
+    #[test]
+    fn repeated_custom_close_does_not_mutate_stdin_state() {
+        let _g = reset();
+        let handle = allocate_interface(ReadlineInterfaceState::new(
+            undefined(),
+            undefined(),
+            String::new(),
+            false,
+            true,
+        ));
+        QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = Some(123));
+
+        js_readline_close(handle);
+        assert!(!EOF_REACHED.load(Ordering::Acquire));
+        QUESTION_CALLBACK.with(|cb| assert_eq!(*cb.borrow(), Some(123)));
+
+        js_readline_close(handle);
+        assert!(!EOF_REACHED.load(Ordering::Acquire));
+        QUESTION_CALLBACK.with(|cb| assert_eq!(*cb.borrow(), Some(123)));
     }
 
     #[test]

@@ -13578,8 +13578,8 @@ fn mutable_string_key_rejects_static_write_pic() {
         "a mutable key must retain dynamic PropertyKey semantics:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set("),
-        "a mutable key must use the complete generic PutValue path:\n{ir}"
+        ir.contains("call double @js_put_value_set_dyn_ic("),
+        "a mutable key must use the dynamic-key PutValue path:\n{ir}"
     );
 }
 
@@ -13606,8 +13606,9 @@ fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
         "an allocating RHS must stay on the rooted generic PutValue path"
     );
     assert!(
-        ir.contains("call double @js_put_value_set("),
-        "the rejected PIC case must retain the complete strict/sloppy runtime semantics:\n{ir}"
+        ir.contains("call double @js_put_value_set_dyn_ic("),
+        "the rejected static PIC case must retain complete strict/sloppy semantics through the \
+         dynamic-key fallback:\n{ir}"
     );
 }
 
