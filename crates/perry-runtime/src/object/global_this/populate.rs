@@ -105,6 +105,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
             | "BigInt64Array" | "BigUint64Array" => typed_array_constructor_call_thunk as *const u8,
             // #4569: collection constructors throw when called without `new`.
+            "RegExp" => regexp_constructor_call_thunk as *const u8,
             "Map" => map_constructor_call_thunk as *const u8,
             "Set" => set_constructor_call_thunk as *const u8,
             "WeakMap" => weak_map_constructor_call_thunk as *const u8,
@@ -144,6 +145,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 crate::closure::js_register_closure_arity(func_ptr, 0);
             }
             "URLPattern" => {
+                crate::closure::js_register_closure_arity(func_ptr, 2);
+            }
+            // RegExp(pattern, flags) — the call form constructs (22.2.4).
+            "RegExp" => {
                 crate::closure::js_register_closure_arity(func_ptr, 2);
             }
             "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
