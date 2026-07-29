@@ -1,6 +1,6 @@
 use super::*;
 use ml_kem::kem::Decapsulate;
-use rand::RngCore;
+use rand_core_06::RngCore;
 
 unsafe fn reject_type_error_with_code(message: &str, code: &'static str) -> *mut Promise {
     let msg = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -43,7 +43,7 @@ unsafe fn nth_arg(args_ptr: *const f64, args_len: usize, index: usize) -> f64 {
 fn ml_kem_encapsulate(algo: KeyAlgo, public_der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let public_bytes = ml_kem_public_bytes_from_der(algo, public_der)?;
     let mut random = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut random);
+    rand_core_06::OsRng.fill_bytes(&mut random);
     let m = ml_kem::B32::try_from(random.as_slice()).ok()?;
     match algo {
         KeyAlgo::MlKem512 => {

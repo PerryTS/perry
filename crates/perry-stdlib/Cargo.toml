@@ -353,6 +353,7 @@ once_cell.workspace = true
 lazy_static.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 rand = "0.10"  # Required by lodash (core module)
+rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 
 # === OPTIONAL DEPENDENCIES ===
 

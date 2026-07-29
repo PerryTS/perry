@@ -21,7 +21,8 @@ pub(super) use perry_runtime::{
     js_object_alloc, js_object_get_field_by_name, js_object_set_field_by_name,
     js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
 };
-pub(super) use rand::{Rng, RngCore};
+pub(super) use rand::{Rng, RngExt};
+pub(super) use rand_core_06::RngCore;
 pub(super) use rsa::pkcs1v15::{
     Pkcs1v15Sign, Signature as RsaPkcs1v15Signature, SigningKey, VerifyingKey,
 };
@@ -816,7 +817,7 @@ pub(super) fn sign_rsa_pss_data(
     data: &[u8],
     salt_len: usize,
 ) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_core_06::OsRng;
     match alg {
         RsaDigestKind::Sha256 => {
             RsaPssSigningKey::<RsaSha256>::new_with_salt_len(private_key, salt_len)
