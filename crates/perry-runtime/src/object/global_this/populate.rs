@@ -11,18 +11,46 @@ use super::*;
 /// pointer instead of undefined, which is what unblocks lodash's
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
-pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
-    if singleton.is_null() {
+pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
+    if singleton_at_entry.is_null() {
         return;
     }
+    // #6982: this function installs several hundred builtins, and nearly every
+    // step allocates (name strings, constructor closures, prototype objects).
+    // Any of those allocations can trigger a collection, and an *evacuating*
+    // minor relocates the globalThis singleton itself — it is an ordinary
+    // nursery object at this point, not pinned.
+    //
+    // `js_get_global_this` registers the two slots that cache the singleton
+    // (`THREAD_GLOBAL_THIS` and `GLOBAL_THIS_PTR`) as mutable roots precisely so
+    // the collector rewrites them on a move, but the raw pointer handed to this
+    // function is a plain by-value argument that nothing rewrites. After a move
+    // every later `js_object_set_field_by_name(singleton, ..)` /
+    // `set_builtin_property_attrs(singleton as usize, ..)` addressed the dead
+    // from-space copy, whose bytes had already been recycled for freshly
+    // relocated objects — the observed crashes read string payload where an
+    // ArrayHeader/descriptor was expected (faulting addresses whose high half
+    // was ASCII: 0x434c4f53_00000010 = "CLOS", 0x004e614e_00000008 = "NaN").
+    //
+    // Root the singleton in a `RuntimeHandleScope` and re-read it through the
+    // handle at every use, so each use observes the post-move address. Binding
+    // `singleton` as a closure rather than a value makes this exhaustive by
+    // construction: any use that was not converted fails to compile.
+    //
+    // Only reachable when the conservative native-stack scan is off, which is
+    // production's `Auto -> SkipDisabled` resolution; the scan was masking this
+    // by pinning the argument register.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
+    let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
     let proto_key_bytes = b"prototype";
     let proto_key =
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
     {
         let name = b"globalThis";
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let value = crate::value::js_nanbox_pointer(singleton as i64);
-        js_object_set_field_by_name(singleton, key, value);
+        let value = crate::value::js_nanbox_pointer(singleton() as i64);
+        js_object_set_field_by_name(singleton(), key, value);
     }
     {
         // #4511: Node exposes the global object as `global` too
@@ -31,10 +59,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         // instead of the unknown-identifier sentinel.
         let name = b"global";
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let value = crate::value::js_nanbox_pointer(singleton as i64);
-        js_object_set_field_by_name(singleton, key, value);
+        let value = crate::value::js_nanbox_pointer(singleton() as i64);
+        js_object_set_field_by_name(singleton(), key, value);
         super::super::set_builtin_property_attrs(
-            singleton as usize,
+            singleton() as usize,
             "global".to_string(),
             super::super::PropertyAttrs::new(true, true, true),
         );
@@ -60,9 +88,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             let name_key =
                 crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
             let ctor_value = super::super::native_module::buffer_constructor_value();
-            js_object_set_field_by_name(singleton, name_key, ctor_value);
+            js_object_set_field_by_name(singleton(), name_key, ctor_value);
             super::super::set_builtin_property_attrs(
-                singleton as usize,
+                singleton() as usize,
                 name.to_string(),
                 super::super::PropertyAttrs::new(true, false, true),
             );
@@ -282,7 +310,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             if name == "Storage" {
                 crate::web_storage::install_storage_globals(
-                    singleton,
+                    singleton(),
                     closure_ptr,
                     proto_obj,
                     ctor_value,
@@ -391,9 +419,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
-        js_object_set_field_by_name(singleton, name_key, ctor_value);
+        js_object_set_field_by_name(singleton(), name_key, ctor_value);
         super::super::set_builtin_property_attrs(
-            singleton as usize,
+            singleton() as usize,
             name.to_string(),
             super::super::PropertyAttrs::new(true, false, true),
         );
@@ -494,9 +522,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
-        js_object_set_field_by_name(singleton, name_key, fn_value);
+        js_object_set_field_by_name(singleton(), name_key, fn_value);
         super::super::set_builtin_property_attrs(
-            singleton as usize,
+            singleton() as usize,
             name.to_string(),
             super::super::PropertyAttrs::new(true, enumerable, true),
         );
@@ -509,8 +537,8 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // singleton. A value-read of `Number.parseFloat` resolves to the Number
     // constructor's own `parseFloat` field (see expr_member.rs reroute-undo),
     // which now holds the identical closure the bare `parseFloat` resolves to.
-    alias_number_static_to_global_function(singleton, "parseFloat");
-    alias_number_static_to_global_function(singleton, "parseInt");
+    alias_number_static_to_global_function(singleton(), "parseFloat");
+    alias_number_static_to_global_function(singleton(), "parseInt");
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
         let name_bytes = name.as_bytes();
@@ -574,9 +602,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
-        js_object_set_field_by_name(singleton, name_key, ns_value);
+        js_object_set_field_by_name(singleton(), name_key, ns_value);
         super::super::set_builtin_property_attrs(
-            singleton as usize,
+            singleton() as usize,
             name.to_string(),
             super::super::PropertyAttrs::new(true, false, true),
         );
@@ -588,7 +616,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let pname = b"performance";
         let pkey = crate::string::js_string_from_bytes(pname.as_ptr(), pname.len() as u32);
         let pval = crate::perf_hooks::performance_namespace();
-        js_object_set_field_by_name(singleton, pkey, pval);
+        js_object_set_field_by_name(singleton(), pkey, pval);
     }
     // Perf_hooks constructors are globals identical to the module exports.
     for name in [
@@ -603,9 +631,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let value =
             super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
-        js_object_set_field_by_name(singleton, key, value);
+        js_object_set_field_by_name(singleton(), key, value);
     }
-    super::super::native_module::install_global_webcrypto(singleton);
+    super::super::native_module::install_global_webcrypto(singleton());
     let func_ptr = global_this_crypto_getter_thunk as *const u8;
     crate::closure::js_register_closure_arity(func_ptr, 0);
     let getter = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -615,7 +643,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         crate::value::js_nanbox_pointer(getter as i64).to_bits()
     };
     super::super::set_builtin_accessor_descriptor(
-        singleton as usize,
+        singleton() as usize,
         "crypto".to_string(),
         super::super::AccessorDescriptor {
             get: getter_bits,
@@ -635,10 +663,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         // re-enter this very lazy-init (GLOBAL_THIS_READY is still false until we
         // return) and recurse/spin forever.
         let nav_ctor_key = crate::string::js_string_from_bytes(b"Navigator".as_ptr(), 9);
-        let nav_ctor = js_object_get_field_by_name(singleton, nav_ctor_key);
+        let nav_ctor = js_object_get_field_by_name(singleton(), nav_ctor_key);
         let nval =
             crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
-        js_object_set_field_by_name(singleton, nkey, nval);
+        js_object_set_field_by_name(singleton(), nkey, nval);
     }
     // ECMA-262 19.1/19.2/19.3: NaN, Infinity, and undefined are own data
     // properties of the global object with {writable:false, enumerable:false,
@@ -650,18 +678,18 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let non_writable = super::super::PropertyAttrs::new(false, false, false);
         for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            js_object_set_field_by_name(singleton, key, value);
+            js_object_set_field_by_name(singleton(), key, value);
             super::super::set_builtin_property_attrs(
-                singleton as usize,
+                singleton() as usize,
                 name.to_string(),
                 non_writable,
             );
         }
         let undef_key = crate::string::js_string_from_bytes(b"undefined".as_ptr(), 9);
         let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
-        js_object_set_field_by_name(singleton, undef_key, undef_val);
+        js_object_set_field_by_name(singleton(), undef_key, undef_val);
         super::super::set_builtin_property_attrs(
-            singleton as usize,
+            singleton() as usize,
             "undefined".to_string(),
             super::super::PropertyAttrs::new(false, false, false),
         );
@@ -669,20 +697,28 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // ECMA-262 §23.2.3.33: `%TypedArray%.prototype.toString` must be the
     // same function object as `Array.prototype.toString`. Alias it now that
     // both the Array constructor and the TypedArray intrinsic are set up.
-    alias_typed_array_proto_to_string(singleton);
+    alias_typed_array_proto_to_string(singleton());
 }
 
 /// Install `%TypedArray%.prototype.toString` as the same closure object as
 /// `Array.prototype.toString` (ECMA-262 §23.2.3.33).
-fn alias_typed_array_proto_to_string(singleton: *mut ObjectHeader) {
+fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
     let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
     if ta_proto_addr == 0 {
         return;
     }
-    let ta_proto = ta_proto_addr as *mut ObjectHeader;
+    // #6982: `js_string_from_bytes` allocates, so every pointer held across the
+    // lookups below can be relocated by an evacuating minor. Root them and read
+    // back through the handles. `TYPED_ARRAY_INTRINSIC_PROTO_PTR` is itself a
+    // scanned root, but the local copy taken above is not.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
+    let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let ta_proto_handle = scope.root_raw_mut_ptr(ta_proto_addr as *mut ObjectHeader);
+
     // Read Array constructor from globalThis, then Array.prototype.toString.
     let arr_key = crate::string::js_string_from_bytes(b"Array".as_ptr(), 5);
-    let arr_ctor = js_object_get_field_by_name(singleton, arr_key);
+    let arr_ctor = js_object_get_field_by_name(singleton(), arr_key);
     if (arr_ctor.bits() >> 48) != 0x7FFD {
         return;
     }
@@ -690,8 +726,11 @@ fn alias_typed_array_proto_to_string(singleton: *mut ObjectHeader) {
     if arr_ctor_ptr.is_null() {
         return;
     }
+    let arr_ctor_handle = scope.root_raw_mut_ptr(arr_ctor_ptr);
+
     let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-    let arr_proto = js_object_get_field_by_name(arr_ctor_ptr, proto_key);
+    let arr_proto =
+        js_object_get_field_by_name(arr_ctor_handle.get_raw_mut_ptr::<ObjectHeader>(), proto_key);
     if (arr_proto.bits() >> 48) != 0x7FFD {
         return;
     }
@@ -699,15 +738,24 @@ fn alias_typed_array_proto_to_string(singleton: *mut ObjectHeader) {
     if arr_proto_ptr.is_null() {
         return;
     }
+    let arr_proto_handle = scope.root_raw_mut_ptr(arr_proto_ptr);
+
     let ts_key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
-    let to_string_fn = js_object_get_field_by_name(arr_proto_ptr, ts_key);
+    let to_string_fn =
+        js_object_get_field_by_name(arr_proto_handle.get_raw_mut_ptr::<ObjectHeader>(), ts_key);
     if to_string_fn.bits() == crate::value::TAG_UNDEFINED {
         return;
     }
+    let to_string_handle = scope.root_nanbox_u64(to_string_fn.bits());
+
     let ts_key2 = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
-    js_object_set_field_by_name(ta_proto, ts_key2, f64::from_bits(to_string_fn.bits()));
+    js_object_set_field_by_name(
+        ta_proto_handle.get_raw_mut_ptr::<ObjectHeader>(),
+        ts_key2,
+        f64::from_bits(to_string_handle.get_nanbox_u64()),
+    );
     super::super::set_builtin_property_attrs(
-        ta_proto as usize,
+        ta_proto_handle.get_raw_mut_ptr::<ObjectHeader>() as usize,
         "toString".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -717,14 +765,24 @@ fn alias_typed_array_proto_to_string(singleton: *mut ObjectHeader) {
 /// the two are the identical object (`Number.parseFloat === parseFloat`). Both
 /// the global helper and the `Number` constructor are already installed on the
 /// `singleton` by the time this runs. No-op if either lookup fails.
-fn alias_number_static_to_global_function(singleton: *mut ObjectHeader, name: &str) {
+fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader, name: &str) {
+    // #6982: same window as `populate_global_this_builtins` — every
+    // `js_string_from_bytes` here can trigger an evacuating minor that relocates
+    // `singleton`, the resolved global function and the `Number` constructor.
+    // Root each across the allocations and re-read through the handles.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
+    let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
+
     let global_key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let global_fn = js_object_get_field_by_name(singleton, global_key);
+    let global_fn = js_object_get_field_by_name(singleton(), global_key);
     if (global_fn.bits() >> 48) != 0x7FFD {
         return;
     }
+    let global_fn_handle = scope.root_nanbox_u64(global_fn.bits());
+
     let number_key = crate::string::js_string_from_bytes(b"Number".as_ptr(), 6);
-    let number_ctor = js_object_get_field_by_name(singleton, number_key);
+    let number_ctor = js_object_get_field_by_name(singleton(), number_key);
     if (number_ctor.bits() >> 48) != 0x7FFD {
         return;
     }
@@ -732,10 +790,17 @@ fn alias_number_static_to_global_function(singleton: *mut ObjectHeader, name: &s
     if ctor_ptr.is_null() {
         return;
     }
+    let ctor_handle = scope.root_raw_mut_ptr(ctor_ptr);
+
     let static_key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(ctor_ptr, static_key, f64::from_bits(global_fn.bits()));
+    let ctor_ptr = ctor_handle.get_raw_mut_ptr::<ObjectHeader>();
+    js_object_set_field_by_name(
+        ctor_ptr,
+        static_key,
+        f64::from_bits(global_fn_handle.get_nanbox_u64()),
+    );
     super::super::set_builtin_property_attrs(
-        ctor_ptr as usize,
+        ctor_handle.get_raw_mut_ptr::<ObjectHeader>() as usize,
         name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );

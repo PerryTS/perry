@@ -91,7 +91,14 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // reads without changing bare `new Array`.
     populate_global_this_builtins(new_ptr as *mut ObjectHeader);
     GLOBAL_THIS_READY.store(true, Ordering::Release);
-    crate::value::js_nanbox_pointer(new_ptr)
+    // #6982: population allocates heavily, so an evacuating minor may have moved
+    // the singleton since `new_ptr` was taken. The registered root slot above is
+    // rewritten to the forwarding address by the collector, so re-read it rather
+    // than handing back the stale from-space pointer. (`GLOBAL_THIS_PTR` is
+    // likewise rewritten by `scan_object_cache_roots_mut`.) Falling back to
+    // `new_ptr` keeps the pre-existing behaviour if the cache was cleared.
+    let current = THREAD_GLOBAL_THIS.with(|c| c.get());
+    crate::value::js_nanbox_pointer(if current != 0 { current } else { new_ptr })
 }
 
 #[no_mangle]
