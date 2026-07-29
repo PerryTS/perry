@@ -28,8 +28,10 @@ through its handle after the coercion — across:
   issue named the shared `canonical_index_for_key` helper; reading it showed the helper is clean and
   the hazard is at these two callers, which resolve the view address before the coercion and
   dereference it after.
-- `proxy.rs` — the class-instance store fast path in `ordinary_set_with_receiver` (`obj.f = v`), with
-  an inert-key fast path so the common already-heap-string key keeps the pre-fix code path verbatim.
+- `proxy.rs` — the store fast path in `ordinary_set_with_receiver` (`obj.f = v`). The issue named the
+  class-instance arm; the plain-object arm reaches the same coercion transitively through
+  `object_proto_may_intercept_key` → `obj_value_has_own_key`, so one optional scope now covers both.
+  An inert-key check keeps the common already-heap-string key on the pre-fix code path verbatim.
 - `object/object_ops/has_own.rs`, `object/native_call_method/common_methods.rs` —
   `hasOwnProperty` / `propertyIsEnumerable` in both their entry-point and method-call forms.
 - `object/object_ops/from_entries.rs` — `Object.fromEntries` (fresh result receiver **and** the entry
