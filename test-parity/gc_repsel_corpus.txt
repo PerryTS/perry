@@ -41,6 +41,13 @@ test_gap_repsel_p4a3_ptr_numarray
 # --- Phase 4b: class-field store note/addref elision (#6919) ----------------
 test_gap_repsel_p4b_field_store_elision
 
+# --- Phase 5a: Ptr<Shape> proven `this` in methods (#6925) ------------------
+# Registered here after the fact: #6925 added the file without registering it,
+# which is exactly the omission this manifest exists to catch — the matrix
+# script exits 3 on an unregistered `test_gap_repsel_*` file, so `gc-stress`
+# was failing on main for every PR until this line landed.
+test_gap_repsel_proven_this_frozen
+
 # --- The GC-live member ------------------------------------------------------
 # Every file above performs ZERO collections (measured, #6950), which makes the
 # GC arms inert against them. This one holds each representation's local live
