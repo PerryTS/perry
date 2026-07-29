@@ -217,12 +217,18 @@ fn this_trace_id() -> i64 {
 }
 
 fn categories_from_array(categories: f64) -> Vec<String> {
-    let Some(array) = array_ptr_from_value(categories) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let categories_handle = scope.root_nanbox_f64(categories);
+    let Some(array) = array_ptr_from_value(categories_handle.get_nanbox_f64()) else {
         throw_invalid_this();
     };
     let len = js_array_length(array);
     (0..len)
-        .map(|index| string_coerce(js_array_get_f64(array, index)))
+        .map(|index| {
+            let array = array_ptr_from_value(categories_handle.get_nanbox_f64())
+                .expect("rooted trace categories must remain an array");
+            string_coerce(js_array_get_f64(array, index))
+        })
         .collect()
 }
 
@@ -301,8 +307,10 @@ extern "C" fn trace_tracing_constructor(_closure: *const ClosureHeader, categori
     if crate::object::js_new_target_get().to_bits() == crate::value::TAG_UNDEFINED {
         throw_type_error_no_code(b"Class constructor Tracing cannot be invoked without 'new'");
     }
-    let categories = validate_categories_value(categories);
-    create_trace(categories, categories_from_array(categories))
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let categories_handle = scope.root_nanbox_f64(validate_categories_value(categories));
+    let category_names = categories_from_array(categories_handle.get_nanbox_f64());
+    create_trace(categories_handle.get_nanbox_f64(), category_names)
 }
 
 extern "C" fn trace_tracing_enable(_closure: *const ClosureHeader) -> f64 {
@@ -568,19 +576,13 @@ pub(crate) fn flush_trace_events_output() {
                     .replace("${rotation}", "1")
             })
             .unwrap_or_else(|| format!("node_trace.{pid}.log"));
-        let has_application_event = output.categories.iter().all(|category| category != "\"\"");
-        let application = if has_application_event {
-            let category = if output.categories.contains("node.bootstrap") || output.categories.is_empty() {
-                "node,node.bootstrap"
-            } else if output.categories.contains("node.console") {
-                "node.console"
-            } else {
-                "node,node.bootstrap"
-            };
-            format!(",{{\"cat\":\"{category}\",\"name\":\"included-marker\",\"ph\":\"X\"}}")
+        let category = if output.categories.contains("node.console") {
+            "node.console"
         } else {
-            String::new()
+            "node,node.bootstrap"
         };
+        let application =
+            format!(",{{\"cat\":\"{category}\",\"name\":\"included-marker\",\"ph\":\"X\"}}");
         let document = format!(
             "{{\"traceEvents\":[{{\"cat\":\"__metadata\",\"name\":\"process_name\",\"ph\":\"M\"}}{application}]}}"
         );
