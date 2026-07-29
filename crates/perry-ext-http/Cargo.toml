@@ -40,5 +40,5 @@ socket2.workspace = true
 
 [dev-dependencies]
 # GC and async test shims call runtime internals; production code uses only perry-ffi.
-perry-runtime.workspace = true
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }
 perry-ffi = { workspace = true, features = ["runtime-link"] }
