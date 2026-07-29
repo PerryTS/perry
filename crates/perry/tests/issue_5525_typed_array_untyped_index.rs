@@ -255,13 +255,22 @@ console.log("A=" + g(i8,0) + "," + g(u8,0) + "," + g(i16,0) + "," + g(u16,0) +
 // (B) index deferrals: OOB / negative / NaN must NOT take the inline load (the
 // inline guard rejects them and defers to the runtime). The fractional case
 // (`g(t,1.5)`) is included to prove the inline guard *defers* it to the slow
-// path — but the assertion mirrors the runtime slow path's existing behaviour
-// (a pre-existing quirk: the untyped dynamic getter truncates a fractional
-// index rather than returning undefined, identical on clean origin/main),
-// since the whole point is that inline == slow.
+// path. This used to assert `g(t,1.5) === g(t,1)` because the untyped dynamic
+// getter truncated a fractional index instead of returning `undefined` — a
+// documented quirk the assertion mirrored so that inline == slow still held.
+// The representation-selection series made both paths spec-correct (a
+// non-integral canonical numeric index is not an own property, so `[[Get]]`
+// yields `undefined`; §10.4.5.2), so the comparison is now `false` — matching
+// `node --experimental-strip-types` exactly, on both the inline-eligible
+// receiver and the view-guarded slow path (see (D)).
 const t = new Int32Array(3); s(t, 0, 10); s(t, 1, 20); s(t, 2, 30);
 console.log("B=" + (g(t,3) === undefined) + "," + (g(t,-1) === undefined) +
             "," + (g(t,1.5) === g(t,1)) + "," + (g(t,NaN) === undefined));
+// (B2) the fractional index is `undefined` on BOTH paths, not merely "not
+// equal to t[1]" — pin the value so a future regression that returns some
+// other wrong thing (0, garbage, a truncated read) can't satisfy (B).
+console.log("B2=" + (g(t,1.5) === undefined) + "," + (g(t,-0.5) === undefined) +
+            "," + (g(t,2.7) === undefined));
 
 // (C) inline-excluded kinds defer correctly: Uint8Clamped clamps, BigInt boxes.
 const c = new Uint8ClampedArray(2); s(c, 0, 300); s(c, 1, -5);
@@ -307,7 +316,8 @@ console.log("D=" + g(own,0) + "," + g(own,1) + "," + g(v,0) + "," + g(v,1));
     assert_eq!(
         stdout,
         "A=-56,44,-1,4464,1,4294967295,1.5,3.14159\n\
-         B=true,true,true,true\n\
+         B=true,true,false,true\n\
+         B2=true,true,true\n\
          C=255,0,bigint,5\n\
          D=111,222,333,444\n",
         "the inline typed-array fast path must be bit-identical to the runtime \

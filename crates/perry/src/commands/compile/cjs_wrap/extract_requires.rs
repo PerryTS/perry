@@ -77,10 +77,45 @@ pub fn extract_require_aliases_with_ranges(source: &str) -> Vec<(String, String,
         r#"(?m)^\s*(?:var|const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*(?:;|$)"#,
     )
     .unwrap();
+    let bytes = source.as_bytes();
     let mut seen = Vec::new();
     let mut out = Vec::new();
     for cap in re.captures_iter(source) {
         if let (Some(alias), Some(spec), Some(whole)) = (cap.get(1), cap.get(2), cap.get(0)) {
+            // Comma-continued declarator lists (pre-ES6 "comma-first" style).
+            //
+            // The trailing `(?m)$` lets a match end at end-of-LINE, so
+            //
+            //     var compileSchema = require('./compile')
+            //       , resolve = require('./compile/resolve')
+            //       , Cache = require('./cache');
+            //
+            // matches declarator #0 only. Blanking that range leaves the
+            // continuation `, resolve = require('./compile/resolve')` dangling
+            // at statement position, which parses as TS1109 ("Expression
+            // expected") — the same failure shape as the `.EventEmitter;`
+            // case in issue #845, just reached via a comma instead of a member
+            // access. Hit in the wild by ajv 6.x (`lib/ajv.js`,
+            // `lib/compile/index.js`) via the Vercel CLI corpus.
+            //
+            // Skip the entire declaration: with no alias entry nothing is
+            // blanked, the body keeps the original (valid) multi-declarator
+            // statement, and the IIFE-bound `require` resolves each specifier
+            // at runtime. The specifiers still become module-scope imports via
+            // `extract_require_specifiers`; only the alias-adoption
+            // optimization is forfeited. This is the same safe fallback the
+            // wrap already takes when it refuses an adoption.
+            //
+            // The single-line form `var a = require('x'), b = 42;` never
+            // matched in the first place (`\s*(?:;|$)` rejects the `,`), so
+            // this check only affects the multi-line style.
+            let mut p = whole.end();
+            while p < bytes.len() && (bytes[p] as char).is_whitespace() {
+                p += 1;
+            }
+            if p < bytes.len() && bytes[p] == b',' {
+                continue;
+            }
             let alias = alias.as_str().to_string();
             if seen.contains(&alias) {
                 continue;

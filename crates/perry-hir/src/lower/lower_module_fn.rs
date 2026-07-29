@@ -419,6 +419,10 @@ pub fn lower_module_full(
     let folded = super::builder_fold::fold_builder_sequences(ast_module);
     let ast_module = folded.as_ref().unwrap_or(ast_module);
     let mut ctx = LoweringContext::with_class_id_start(source_file_path, start_class_id);
+    // #6812 (w16): scan the module lowering actually consumes (post-fold) for
+    // constant-bounded dynamic-key builder widths; `lower_object` attaches
+    // them to the per-site empty-literal classes as alloc_width_hint.
+    ctx.empty_site_width_hints = super::builder_fold::empty_builder_width_hints(ast_module);
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
@@ -1180,6 +1184,18 @@ pub fn lower_module_full(
     // instead of the parent's `kind = "bare"` literal. Surfaced by the
     // #806 mixin harness (bare-factory section).
     infer_dynamic_extends_names(&mut module);
+
+    // Attach enums declared inside function bodies. They were registered in
+    // `ctx.enums` at their declaration site (so the name resolves) but had no
+    // route to `Module::enums`, which is what codegen consults to resolve
+    // `Expr::EnumMember`. Drained here, after every function body has been
+    // lowered. Module-scope enums are already in `module.enums`, so skip any
+    // name that is present to avoid a duplicate entry.
+    for en in std::mem::take(&mut ctx.pending_body_enums) {
+        if !module.enums.iter().any(|e| e.name == en.name) {
+            module.enums.push(en);
+        }
+    }
 
     Ok((module, ctx.next_class_id))
 }

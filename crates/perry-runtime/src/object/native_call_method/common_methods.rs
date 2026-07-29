@@ -69,7 +69,17 @@ pub(super) unsafe fn dispatch_common(
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
+            // #6935: `js_to_property_key` can run a user `Symbol.toPrimitive` /
+            // `toString` / `valueOf` (and allocates for every primitive key), so
+            // it can trigger a GC that **evacuates** the receiver. `object` —
+            // and the `jsval` tag view derived from it at the top of this
+            // function — are raw locals captured *before* the coercion; re-read
+            // the receiver through the caller's `object_handle`, which IS a
+            // root, and re-derive the tag view from that.
             let key_value = crate::object::js_to_property_key(key_value);
+            let key_value = root_scope.root_nanbox_f64(key_value).get_nanbox_f64();
+            let object = object_handle.get_nanbox_f64();
+            let jsval = JSValue::from_bits(object.to_bits());
             if crate::symbol::js_is_symbol(key_value) != 0 {
                 return Some(super::object_ops::js_object_has_own(object, key_value));
             }
@@ -89,7 +99,14 @@ pub(super) unsafe fn dispatch_common(
                 return Some(f64::from_bits(JSValue::bool(present).bits()));
             }
             if jsval.is_pointer() {
+                // #6943: `js_string_coerce` allocates for every non-heap-string
+                // key, so it can trigger a GC that **evacuates** the receiver.
+                // `object` — and the `jsval` tag view taken from it at the top
+                // of this function — are raw locals; re-read them through the
+                // caller's `object_handle`, which IS a root.
                 let key_str = crate::builtins::js_string_coerce(key_value);
+                let object = object_handle.get_nanbox_f64();
+                let jsval = JSValue::from_bits(object.to_bits());
                 if key_str.is_null() {
                     return Some(f64::from_bits(JSValue::bool(false).bits()));
                 }
@@ -224,7 +241,14 @@ pub(super) unsafe fn dispatch_common(
             // `toString`/`valueOf` yields a Symbol must be treated as that
             // Symbol (test262 propertyIsEnumerable/symbol_property_*), invoking
             // the user conversion exactly once.
+            //
+            // #6935: that user conversion can GC and evacuate the receiver, so
+            // re-read `object`/`jsval` through the caller's root handle
+            // afterwards — see the `hasOwnProperty` arm above.
             let key_value = crate::object::js_to_property_key(key_value);
+            let key_value = root_scope.root_nanbox_f64(key_value).get_nanbox_f64();
+            let object = object_handle.get_nanbox_f64();
+            let jsval = JSValue::from_bits(object.to_bits());
             // Symbol keys must not be string-coerced — route through the
             // canonical entry, which consults the SYMBOL_PROPERTIES side
             // table (mirrors hasOwnProperty's symbol arm).
@@ -233,7 +257,10 @@ pub(super) unsafe fn dispatch_common(
                     object, key_value,
                 ));
             }
+            // #6943: root the receiver across the GC-capable coercion — see
+            // the `hasOwnProperty` arm above.
             let key_str = crate::builtins::js_string_coerce(key_value);
+            let jsval = JSValue::from_bits(object_handle.get_nanbox_f64().to_bits());
             if key_str.is_null() {
                 return Some(f64::from_bits(JSValue::bool(false).bits()));
             }

@@ -8,10 +8,22 @@
 //! emits the cheap part of the guard's contract as inline IR: when the
 //! monomorphic shape holds (and, for raw-f64 fields, the per-object typed-layout
 //! intact bit is set), control branches straight to the fast slot load/store,
-//! skipping the call. Because every operand is loaded from a loop-invariant
-//! receiver, once the surrounding method is inlined (#5092) LLVM LICM can hoist
-//! the whole shape check out of the hot loop, collapsing the body to a bare
-//! `load`/`fadd`/`store`.
+//! skipping the call.
+//!
+//! NOTE (repsel Phase 3b audit, verified with `--trace llvm` + `opt -O3` on a
+//! `this.field`-in-loop method): LLVM LICM does NOT hoist this check out of
+//! hot loops. The volatile gate load is never hoistable (volatile ⇒
+//! `!isUnordered`), and — decisively — even a plain or `atomic unordered`
+//! gate load stays in the loop because the diamond's own guard-call/fallback
+//! arm puts an unknown external call inside the loop body, which
+//! clobber-blocks LICM for every load in the check. Per-access cost is
+//! therefore paid on every iteration. The hoisted form exists as the #5093
+//! versioned-loop preheader check (`emit_class_field_loop_preheader_check`,
+//! sound only for call-free clone bodies), and statically-proven receivers
+//! skip the diamond entirely (`collectors/ptr_shape.rs`). Do not "fix" this
+//! by de-volatilizing the gate: it buys nothing (the calls still block LICM)
+//! and weakens the mid-loop sticky-flip visibility guarantee for loops whose
+//! bodies CAN flip the gate through a call.
 //!
 //! The inline check is a strict subset of `class_field_fast_contract` (runtime
 //! `typed_feedback/guards.rs`): if it passes, the guard call would have returned

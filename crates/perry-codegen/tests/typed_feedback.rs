@@ -134,6 +134,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     }
 }
 
@@ -217,11 +218,27 @@ fn typed_feedback_trace_dump_runs_before_entry_return() {
     ));
 
     assert!(ir.contains("declare void @js_typed_feedback_maybe_dump_trace()"));
-    let dump_pos = ir
-        .rfind("call void @js_typed_feedback_maybe_dump_trace()")
-        .expect("entry should call typed-feedback trace dump");
-    let ret_pos = ir.rfind("ret i32 0").expect("entry should return i32 0");
-    assert!(dump_pos < ret_pos);
+    // The entry epilogue now has TWO exit paths: the host-return path
+    // (`ret i32 0`) and the event-loop exit path, which returns the dynamic
+    // `js_process_pending_exit_code` result (`ret i32 %rN`). The old
+    // rfind(dump) < rfind("ret i32 0") comparison broke the day the second
+    // path appeared — its dump call sits after the literal `ret i32 0`. The
+    // real invariant is stronger: EVERY entry return must be immediately
+    // preceded by the trace dump, so no exit path can skip the dump.
+    let mut ret_count = 0;
+    let mut search_from = 0;
+    while let Some(rel) = ir[search_from..].find("ret i32") {
+        let ret_pos = search_from + rel;
+        ret_count += 1;
+        let preceding = &ir[ret_pos.saturating_sub(200)..ret_pos];
+        assert!(
+            preceding.contains("call void @js_typed_feedback_maybe_dump_trace()"),
+            "entry return at byte {ret_pos} is not preceded by the typed-feedback \
+             trace dump:\n...{preceding}"
+        );
+        search_from = ret_pos + 1;
+    }
+    assert!(ret_count >= 1, "entry should return i32");
 }
 
 #[test]

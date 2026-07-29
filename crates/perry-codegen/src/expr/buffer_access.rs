@@ -237,7 +237,7 @@ fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
     }
 }
 
-fn can_lower_integer_typed_array_store_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+pub(crate) fn can_lower_integer_typed_array_store_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     can_lower_expr_as_i32(
         value,
         &ctx.i32_counter_slots,

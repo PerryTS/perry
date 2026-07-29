@@ -254,6 +254,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     }
 }
 
@@ -1554,15 +1555,16 @@ fn native_owned_uint8array_get_fallback_uses_uint8array_helper() {
             })),
         ],
     );
-    // #6088/#6092 moved the unproven-bounds JS-value read off the i32
-    // `js_uint8array_get` accessor, whose out-of-range answer is the `0`
-    // byte-sentinel, onto `js_uint8array_index_get_value`, which reads
-    // `undefined` per IntegerIndexedExotic `[[Get]]`. What this test is about
-    // is unchanged: the fallback must go through the Uint8Array-shaped
-    // accessor, never the Buffer-shaped one.
+    // Codegen migrated the disposed-view fallback from `js_uint8array_get`
+    // to `js_uint8array_index_get_value` (#6088-era JS-value getter), which
+    // validates the address against the typed-array kind registry before any
+    // dereference and returns undefined for dead views — the memory-safety
+    // property this test exists to pin. The suite was not CI-selected when
+    // that landed, so the old helper name went stale here.
     assert!(
         ir.contains("call double @js_uint8array_index_get_value"),
-        "disposed native Uint8Array fallback should call js_uint8array_index_get_value:\n{ir}"
+        "disposed native Uint8Array fallback should call the registry-validating \
+         js_uint8array_index_get_value:\n{ir}"
     );
     assert!(
         !ir.contains("call i32 @js_buffer_get"),
@@ -1940,13 +1942,29 @@ fn reassigned_typed_array_store_records_runtime_fallback() {
         }),
         "expected reassigned typed-array store to record runtime fallback:\n{artifact:#}"
     );
+    // The read must never take an UNCHECKED native path on a reassigned
+    // receiver. Two conforming lowerings exist: the runtime-call fallback
+    // (`slow_path` / dynamic_fallback) and, since #6883, the inline
+    // kind-GUARDED checked read (`checked_f64_param` / checked_native) —
+    // whose runtime guard re-validates the receiver on every access, so a
+    // reassignment can never serve stale data. What this asserts is the
+    // absence of the guard-free proven/unchecked forms.
     assert!(
         records.iter().any(|record| {
             record["expr_kind"] == "TypedArrayGet"
-                && record["consumer"] == "TypedArrayGet.slow_path"
-                && record["access_mode"] == "dynamic_fallback"
-                && !record["fallback_reason"].is_null()
+                && ((record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback")
+                    || (record["consumer"] == "TypedArrayGet.checked_f64_param"
+                        && record["access_mode"] == "checked_native"))
         }),
-        "expected reassigned typed-array read to record runtime fallback:\n{artifact:#}"
+        "expected reassigned typed-array read to stay on a runtime-checked path:\n{artifact:#}"
+    );
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "TypedArrayGet"
+                && (record["consumer"] == "TypedArrayGet.proven_view_checked"
+                    || record["access_mode"] == "unchecked_native")
+        }),
+        "reassigned typed-array read must never take a proven/unchecked form:\n{artifact:#}"
     );
 }

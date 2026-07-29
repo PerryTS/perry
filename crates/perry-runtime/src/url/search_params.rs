@@ -127,7 +127,7 @@ pub extern "C" fn js_url_search_params_subclass_init(this: f64, init: f64) -> f6
 
 /// Reached only from codegen-emitted IR (the `Expr::SuperCall` URLSearchParams
 /// arm); pin it so the auto-optimize bitcode rebuild's dead-strip can't drop it.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_URL_SEARCH_PARAMS_SUBCLASS_INIT: extern "C" fn(f64, f64) -> f64 =
     js_url_search_params_subclass_init;
 

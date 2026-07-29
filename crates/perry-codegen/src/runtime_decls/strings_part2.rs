@@ -102,6 +102,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_view", I64, &[I32, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_typed_array_length", I32, &[I64]);
     module.declare_function("js_typed_array_get", DOUBLE, &[I64, I32]);
+    // Cold fallback for the inline checked-i32 typed-array element read
+    // (returns ToInt32 of the element, or 0 for OOB / view / wrong-kind).
+    module.declare_function("js_typed_array_read_int32", I32, &[I64, I32]);
+    // Cold fallback for the inline checked-f64 typed-array element read (numeric
+    // context): numeric element in-bounds, TAG_UNDEFINED double for OOB / view /
+    // wrong-kind — bit-exact with js_typed_array_get.
+    module.declare_function("js_typed_array_read_f64", DOUBLE, &[I64, I32]);
     // #2063: string / dynamic-key `ta[key]` [[Get]] dispatcher (canonical
     // numeric index → element, else ordinary named-property [[Get]]).
     module.declare_function("js_typed_array_index_get_dynamic", DOUBLE, &[I64, DOUBLE]);
