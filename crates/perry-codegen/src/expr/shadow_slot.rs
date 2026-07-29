@@ -41,6 +41,34 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             Expr::LocalGet(arr_id)
                 if super::masked_window_fact_for_index(ctx, *arr_id, index).is_some()
         ),
+        // #6996: a typed-array / Buffer element read is a number (or
+        // `undefined` out of range) BY CONSTRUCTION -- `lower_buffer_load`'s
+        // inline byte load, `js_uint8array_index_get_value` and
+        // `js_buffer_index_get_value` can only ever produce one. It is never a
+        // heap reference, so #6951's argument-temporary rooting has nothing to
+        // protect and its push/re-read/truncate trio is pure TLS traffic in
+        // exactly the loops that can least afford it (`buf[i] + packet.tag`
+        // rooted the byte across the property get, once per iteration).
+        //
+        // The proof is about the LOWERING, not the declared type: annotations
+        // are unenforced, so `buf: Buffer` holding something else must not be
+        // load-bearing -- and it isn't, because both runtime accessors answer
+        // `undefined` for a receiver that is not a Uint8Array/Buffer.
+        //
+        // The two lowerings of this node that CAN yield a heap value are
+        // excluded by construction:
+        //   * a symbol key (`u8[Symbol.iterator]`) goes to
+        //     `js_object_get_symbol_property`, which returns the accessor;
+        //   * a key without the integer-array-index proof goes to
+        //     `js_typed_array_index_get_dynamic`, which falls through to
+        //     string-keyed property lookup (an expando can hold anything).
+        // `BufferIndexGet` has neither path -- every arm coerces the key to
+        // i32 and reads a byte -- so it needs no condition.
+        Expr::Uint8ArrayGet { index, .. } => {
+            !matches!(index.as_ref(), Expr::SymbolFor(_))
+                && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index)
+        }
+        Expr::BufferIndexGet { .. } => true,
         Expr::Conditional {
             then_expr,
             else_expr,
