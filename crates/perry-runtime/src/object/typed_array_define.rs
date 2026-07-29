@@ -267,6 +267,12 @@ pub(crate) unsafe fn typed_array_define_own_property(
         } else {
             value
         };
+        // #6943: `js_string_from_bytes` above allocated, and the
+        // `OrdinaryToPrimitive` just above ran USER JS — either can have
+        // evacuated the view since `addr` was last read. Re-read it through the
+        // handle before writing the element; the store is the whole point of
+        // this branch, so a stale address here writes into a forwarding stub.
+        let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
         let idx = numeric_index as u32;
         if is_buf {
             let n = crate::value::JSValue::from_bits(primitive.to_bits()).to_number();
