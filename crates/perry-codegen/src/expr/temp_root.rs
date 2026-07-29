@@ -429,17 +429,28 @@ pub(crate) fn any_may_trigger_gc<'a>(
 /// - provably not a heap reference — a slot for it is pure TLS traffic;
 /// - a string literal — a load from a module global `__perry_init_strings_*`
 ///   registered with `js_gc_register_global_root`;
-/// - a plain local or module-global read — the shadow stack and the module-var
-///   scanners already hold those for as long as generated code can see them.
+/// - a module-global read — `@perry_global_*` are registered GC roots;
+/// - a local that **has a reserved shadow slot**, and is therefore already a
+///   precise root for as long as generated code can observe it.
 ///
-/// The last one is why `new C(a, b)` on plain locals stays at its old IR even
-/// though the instance allocation that follows always collects.
+/// The last one is why `new C(a, b)` on ordinary locals stays at its old IR
+/// even though the instance allocation that follows always collects.
+///
+/// The shadow-slot check is load-bearing, not decoration. Suppressing every
+/// `LocalGet` looks equivalent and is not: a local can be pointer-valued and
+/// have *no* shadow slot, in which case it lives in a bare alloca that the root
+/// walk never visits (that is the #6968 defect). `m.set(fresh(), churn())`
+/// regressed straight back to an abort when this was written as a blanket
+/// `LocalGet` suppression — the Map receiver was exactly such a local.
 pub(crate) fn operand_needs_root(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    !super::expr_is_known_non_pointer_shadow_value(ctx, expr)
-        && !matches!(
-            expr,
-            Expr::String(_) | Expr::LocalGet(_) | Expr::GlobalGet(_)
-        )
+    if super::expr_is_known_non_pointer_shadow_value(ctx, expr) {
+        return false;
+    }
+    match expr {
+        Expr::String(_) | Expr::GlobalGet(_) => false,
+        Expr::LocalGet(id) => !ctx.shadow_slot_map.contains_key(id),
+        _ => true,
+    }
 }
 
 /// Open an expression-scope temp-root barrier for a call/constructor whose
