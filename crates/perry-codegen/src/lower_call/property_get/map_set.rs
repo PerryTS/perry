@@ -287,37 +287,57 @@ pub(crate) fn try_lower_collection_foreach(
         // with the full `(value, key, collection)` triple. Map.forEach
         // returns `undefined`.
         if is_map_expr(ctx, object) {
-            let m_box = lower_expr(ctx, object)?;
-            let cb_box = lower_expr(ctx, &args[0])?;
-            let this_arg = if args.len() >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            let m_handle = unbox_to_i64(blk, &m_box);
-            blk.call_void(
-                "js_map_foreach",
-                &[(I64, &m_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
-            );
+            // #6970: the callback (a closure allocation) and the optional
+            // `thisArg` are lowered after the receiver, so the receiver would
+            // otherwise be live only in an SSA register across them.
+            let mut operands: Vec<&Expr> = vec![object, &args[0]];
+            if args.len() >= 2 {
+                operands.push(&args[1]);
+            }
+            let (vals, guard) = temp_root::lower_exprs_rooted(ctx, &operands)?;
+            let m_box = vals[0].clone();
+            let cb_box = vals[1].clone();
+            let this_arg = vals
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            {
+                let blk = ctx.block();
+                let m_handle = unbox_to_i64(blk, &m_box);
+                blk.call_void(
+                    "js_map_foreach",
+                    &[(I64, &m_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+                );
+            }
+            temp_root::temp_root_release(ctx, guard);
             return Ok(Some(double_literal(f64::from_bits(
                 crate::nanbox::TAG_UNDEFINED,
             ))));
         }
         if is_set_expr(ctx, object) {
-            let s_box = lower_expr(ctx, object)?;
-            let cb_box = lower_expr(ctx, &args[0])?;
-            let this_arg = if args.len() >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
-            blk.call_void(
-                "js_set_foreach",
-                &[(I64, &s_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
-            );
+            // #6970: the callback (a closure allocation) and the optional
+            // `thisArg` are lowered after the receiver, so the receiver would
+            // otherwise be live only in an SSA register across them.
+            let mut operands: Vec<&Expr> = vec![object, &args[0]];
+            if args.len() >= 2 {
+                operands.push(&args[1]);
+            }
+            let (vals, guard) = temp_root::lower_exprs_rooted(ctx, &operands)?;
+            let s_box = vals[0].clone();
+            let cb_box = vals[1].clone();
+            let this_arg = vals
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            {
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &s_box);
+                blk.call_void(
+                    "js_set_foreach",
+                    &[(I64, &s_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+                );
+            }
+            temp_root::temp_root_release(ctx, guard);
             return Ok(Some(double_literal(f64::from_bits(
                 crate::nanbox::TAG_UNDEFINED,
             ))));
@@ -330,19 +350,29 @@ pub(crate) fn try_lower_collection_foreach(
         // runtime entry so the callback gets the string `(value, key)`
         // pair instead of `(NaN, 0)` from the Array.forEach fast path.
         if is_url_search_params_expr(ctx, object) {
-            let p_box = lower_expr(ctx, object)?;
-            let cb_box = lower_expr(ctx, &args[0])?;
-            let this_arg = if args.len() >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
-            blk.call_void(
-                "js_url_search_params_for_each",
-                &[(I64, &p_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
-            );
+            // #6970: the callback (a closure allocation) and the optional
+            // `thisArg` are lowered after the receiver, so the receiver would
+            // otherwise be live only in an SSA register across them.
+            let mut operands: Vec<&Expr> = vec![object, &args[0]];
+            if args.len() >= 2 {
+                operands.push(&args[1]);
+            }
+            let (vals, guard) = temp_root::lower_exprs_rooted(ctx, &operands)?;
+            let p_box = vals[0].clone();
+            let cb_box = vals[1].clone();
+            let this_arg = vals
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            {
+                let blk = ctx.block();
+                let p_handle = unbox_to_i64(blk, &p_box);
+                blk.call_void(
+                    "js_url_search_params_for_each",
+                    &[(I64, &p_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+                );
+            }
+            temp_root::temp_root_release(ctx, guard);
             return Ok(Some(double_literal(0.0)));
         }
     }
