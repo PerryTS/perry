@@ -148,10 +148,8 @@ unsafe fn generate_qr_image(text: &str, display_size: f64) -> Option<Retained<NS
         return None;
     }
 
-    // Wrap in Retained
-    let ns_image: Retained<NSImage> = Retained::retain(ns_image_raw as *mut NSImage)?;
-    // Balance the retain (init already gives us +1)
-    std::mem::forget(Retained::retain(ns_image_raw as *mut NSImage));
+    // Adopt the +1 result returned by the alloc/init pair.
+    let ns_image: Retained<NSImage> = Retained::from_raw(ns_image_raw as *mut NSImage)?;
 
     Some(ns_image)
 }

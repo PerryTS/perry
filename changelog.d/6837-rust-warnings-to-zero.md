@@ -27,5 +27,5 @@
   Eleven warnings appeared only under the reduced feature set `perry` selects
   (`default-features = false` on perry-runtime), where regex-engine,
   diagnostics and temporal are off. Those items are gated at the item, not
-  suppressed. The cross-host UI crates (ios/tvos/watchos/visionos/android/
+  suppressed. The cross-host UI crates (ios/tvos/watchOS/visionos/android/
   windows/gtk4) cannot be checked from a macOS or Linux host and are untouched.

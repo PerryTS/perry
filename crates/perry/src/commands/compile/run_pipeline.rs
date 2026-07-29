@@ -7,6 +7,14 @@
 
 use super::*;
 
+#[cfg(any(
+    not(feature = "backend-wasm"),
+    not(feature = "backend-swiftui"),
+    not(feature = "backend-glance"),
+    not(feature = "backend-wear-tiles")
+))]
+use super::helpers::backend_disabled_msg;
+
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
