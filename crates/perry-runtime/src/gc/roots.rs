@@ -4,6 +4,7 @@ use std::any::Any;
 mod runtime_handles;
 mod scanner_shims;
 mod shadow_stack;
+mod temp_roots;
 
 pub(super) use runtime_handles::{
     new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
@@ -27,6 +28,17 @@ pub use shadow_stack::{
     js_shadow_slot_set, shadow_stack_depth, SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS,
 };
 pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
+#[cfg(test)]
+pub(crate) use temp_roots::reset_temp_roots;
+#[cfg(test)]
+pub(super) use temp_roots::temp_root_depth;
+pub use temp_roots::{
+    js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,
+    js_gc_temp_root_truncate,
+};
+pub(super) use temp_roots::{
+    new_temp_root_scan_state, scan_temp_roots_mut, scan_temp_roots_mut_step,
+};
 
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
 pub(crate) type BudgetedMutableRootScanner =
@@ -1442,6 +1454,13 @@ pub(super) fn atomic_store_ordering(
     }
 }
 
+/// Which registry a mutable root slot came from.
+///
+/// The kind selects a *telemetry bucket* only — it must never select a
+/// different pointer decoding. Both kinds are marked by
+/// `mark_mutable_root_bits` and rewritten by `try_rewrite_value`, and both
+/// therefore accept a heap reference either NaN-boxed or bare. That symmetry
+/// is the #6910 invariant; see `gc::root_words`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MutableRootSlotKind {
     ShadowStack,
@@ -1569,7 +1588,7 @@ pub(super) fn mark_mutable_root_slots_step(
                 stats.record_scan(bits);
             }
             if bits != 0 {
-                try_mark_value(bits, valid_ptrs);
+                mark_mutable_root_bits(bits, valid_ptrs);
             }
             seen += 1;
             cursor.shadow_seen = seen;
@@ -1600,7 +1619,7 @@ pub(super) fn mark_mutable_root_slots_step(
             let bits = slot.read();
             record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
             if bits != 0 {
-                mark_global_root_bits(bits, valid_ptrs);
+                mark_mutable_root_bits(bits, valid_ptrs);
             }
             seen += 1;
             cursor.global_seen = seen;
@@ -1677,21 +1696,10 @@ pub(super) fn record_mutable_slot_rewrite_source(
     }
 }
 
-#[inline]
-pub(super) fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
-    // First try NaN-boxed interpretation (exported globals, closures, etc.).
-    if try_mark_value(bits, valid_ptrs) {
-        return;
-    }
-    // Module variable globals store raw I64 pointers (not NaN-boxed).
-    // Preserve the historical direct-object-start behavior: validate
-    // against valid_ptrs and mark the target, without the conservative
-    // interior-pointer fallback used by stack scanning.
-    let raw_ptr = bits as usize;
-    try_mark_raw_root_addr(raw_ptr, valid_ptrs);
-}
-
 /// Mark mutable roots (shadow-stack slots and registered globals).
+///
+/// Both slot kinds go through `mark_mutable_root_bits`, which shares its
+/// decoder with the rewrite path (#6910) — see `gc::root_words`.
 #[allow(dead_code)]
 pub(super) fn mark_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
@@ -1709,12 +1717,7 @@ pub(super) fn mark_mutable_root_slots(
         if bits == 0 {
             return;
         }
-        match slot.kind {
-            MutableRootSlotKind::ShadowStack => {
-                try_mark_value(bits, valid_ptrs);
-            }
-            MutableRootSlotKind::GlobalRoot => mark_global_root_bits(bits, valid_ptrs),
-        }
+        mark_mutable_root_bits(bits, valid_ptrs);
     });
 }
 

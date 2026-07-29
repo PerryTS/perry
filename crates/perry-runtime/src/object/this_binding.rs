@@ -70,7 +70,7 @@ pub(crate) fn static_this_disarm() {
 /// checks on subclass receivers throw (test262 static-private-method-
 /// subclass-receiver).
 // #1561-style force-keep: only generated IR calls this.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_STATIC_THIS_ARM_CLASSREF: extern "C" fn(u32) = js_static_this_arm_classref;
 
 #[no_mangle]
@@ -85,7 +85,7 @@ pub extern "C" fn js_static_this_arm_classref(class_id: u32) {
 /// class-ref expression and the method resolves on a parent class at compile
 /// time) right before the direct call.
 // #1561-style force-keep: only generated IR calls this.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_STATIC_THIS_ARM_VALUE: extern "C" fn(f64) = js_static_this_arm_value;
 
 #[no_mangle]
@@ -96,7 +96,7 @@ pub extern "C" fn js_static_this_arm_value(value: f64) {
 /// Static-method prologue `this` resolution: take the armed override if any,
 /// else the lexical class-ref the codegen passes in.
 // #1561-style force-keep: only generated IR calls this.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_STATIC_THIS_RESOLVE: extern "C" fn(f64) -> f64 = js_static_this_resolve;
 
 #[no_mangle]

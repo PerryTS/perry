@@ -126,6 +126,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.bswap.i16", I16, &[I16]);
     module.declare_function("llvm.bswap.i32", I32, &[I32]);
     module.declare_function("llvm.bswap.i64", I64, &[I64]);
+    // ARMv8.3 FEAT_JSCVT: spec-exact single-instruction ECMAScript ToInt32,
+    // emitted by `LlBlock::toint32_wrap` on apple-arm64 targets only (the
+    // declare is target-conditional — an aarch64 intrinsic in an x86 module
+    // would be rejected by the backend).
+    if crate::codegen::helpers::jscvt_enabled() {
+        module.declare_function("llvm.aarch64.fjcvtzs", I32, &[DOUBLE]);
+    }
     module.declare_function("llvm.memset.p0.i64", VOID, &[PTR, I8, I64, I1]);
     module.declare_function("llvm.memmove.p0.p0.i64", VOID, &[PTR, PTR, I64, I1]);
     // Keep js_math_pow for now — Math.pow has overflow / NaN
@@ -656,6 +663,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
     module.declare_function("js_string_compare", I32, &[I64, I64]);
+    // Repsel Phase 3a (canonical-Str locals): boxed-operand variants for the
+    // non-proven-heap compare arms. `js_jsvalue_equals` content-compares
+    // strings in any representation mix (heap × SSO) without materializing
+    // SSO bits to the heap, and never number-coerces (`5 === "5"` is false).
+    // `js_string_compare_value` is the relational (`<`/`>`) counterpart.
+    module.declare_function("js_jsvalue_equals", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_string_compare_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_random", DOUBLE, &[]);
     // WebAssembly host runtime (issue #76). All take/return NaN-boxed

@@ -17,15 +17,20 @@ mod hot_callees;
 mod i32_locals;
 mod i64_emit;
 mod index_uses;
+mod int_valued_ta_locals;
 mod integer_locals;
 mod local_refs;
 mod mutation;
 mod not_bigint_locals;
 mod pointer_locals;
+mod proven_this;
+mod ptr_numarray;
+mod ptr_shape;
 mod refs;
 mod scalar_method_dispatch;
 mod scalar_methods;
 mod shadow_slots;
+mod spec_abi_sites;
 mod this_as_value;
 mod uppercase_strings;
 
@@ -43,7 +48,10 @@ pub(crate) use closures::collect_closures_in_stmts;
 pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
 pub(crate) use escape_check::{check_escapes_in_stmts, find_new_candidates};
 pub(crate) use escape_news::MAX_SCALAR_ARRAY_LEN;
-pub(crate) use hir_facts::{collect_native_region_fact_graph, NativeRegionFactGraph};
+pub(crate) use hir_facts::{
+    collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_lens,
+    NativeRegionFactGraph,
+};
 pub(crate) use hot_callees::collect_hot_loop_callees;
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,
@@ -55,6 +63,9 @@ pub(crate) use integer_locals::{
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
 pub(crate) use mutation::has_any_mutation;
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
+pub(crate) use proven_this::{method_proven_this, prune_colliding_clones, pshape_method_name};
+pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
+pub(crate) use ptr_shape::PtrShapeLocal;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };
@@ -64,6 +75,9 @@ pub(crate) use scalar_method_dispatch::{
 pub(crate) use scalar_methods::simple_scalar_method_summary;
 pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
+};
+pub(crate) use spec_abi_sites::{
+    collect_spec_abi_facts, local_is_reassigned, reassigned_locals, SpecParamRep, SpecTaBinding,
 };
 pub(crate) use this_as_value::{
     class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,

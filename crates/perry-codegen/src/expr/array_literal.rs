@@ -4,8 +4,9 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
+use super::temp_root::{lower_exprs_rooted, temp_root_release};
 use super::{
-    emit_jsvalue_slot_store_on_block, expr_produces_non_pointer_bits_by_construction, lower_expr,
+    emit_jsvalue_slot_store_on_block, expr_produces_non_pointer_bits_by_construction,
     nanbox_pointer_inline, FnCtx,
 };
 use crate::type_analysis::is_numeric_expr;
@@ -33,8 +34,15 @@ use crate::types::{DOUBLE, I32, I64, I8, PTR};
 /// allocated slot (offset hasn't advanced past the `fits` check) or a
 /// header with `length == capacity` and uninitialized elements. No
 /// allocator call runs between the header write and the element stores,
-/// so GC can't run in that window. Element expressions with their own
-/// allocations lower to SSA values pinned by conservative stack scanning.
+/// so GC can't run in that window.
+///
+/// #6951: element values themselves are a different matter. They are lowered
+/// before the allocation and each one then sits in an SSA register across
+/// every later element's evaluation — which is not a root, and was only ever
+/// covered by conservative native-stack scanning. `[freshString(), f()]` lost
+/// its first element as soon as `f` collected. `lower_exprs_rooted` roots each
+/// value that has an allocating element after it, and emits nothing for the
+/// all-literal / all-local shapes.
 pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String> {
     let n = elements.len();
     let all_numeric_elements = elements.iter().all(|e| is_numeric_expr(ctx, e));
@@ -45,18 +53,18 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
         return Ok(nanbox_pointer_inline(ctx.block(), &arr));
     }
 
-    // Evaluate all element expressions *before* allocating. This keeps each
-    // value in an SSA register (spilled to stack if needed; reachable by the
-    // conservative stack scanner) so nested allocations inside element
-    // expressions don't see a half-initialized outer array.
-    let mut vals = Vec::with_capacity(n);
+    // Evaluate all element expressions *before* allocating, so nested
+    // allocations inside element expressions don't see a half-initialized
+    // outer array. Each evaluated value is kept in a temp root until the last
+    // element has been lowered (#6951).
     let mut layout_notes_needed = Vec::with_capacity(n);
     for value_expr in elements {
         layout_notes_needed.push(!expr_produces_non_pointer_bits_by_construction(
             ctx, value_expr,
         ));
-        vals.push(lower_expr(ctx, value_expr)?);
     }
+    let element_refs: Vec<&Expr> = elements.iter().collect();
+    let (vals, element_guard) = lower_exprs_rooted(ctx, &element_refs)?;
 
     // #5391: oversized modules outline array-literal construction. The inline
     // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
@@ -75,7 +83,9 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
         let arr = ctx
             .block()
             .call(I64, "js_array_from_values", &[(PTR, &buf), (I32, &n_str)]);
-        return Ok(nanbox_pointer_inline(ctx.block(), &arr));
+        let boxed = nanbox_pointer_inline(ctx.block(), &arr);
+        temp_root_release(ctx, element_guard);
+        return Ok(boxed);
     }
 
     // Inline bump-allocator path for small literals. Size threshold matches
@@ -211,7 +221,9 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             );
         }
 
-        return Ok(nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64));
+        let boxed = nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64);
+        temp_root_release(ctx, element_guard);
+        return Ok(boxed);
     }
 
     // Fallback for N > INLINE_MAX_ELEMENTS: keep the extern call + N inline
@@ -250,5 +262,7 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             .call(I32, "js_array_mark_numeric_f64_layout", &[(I64, &arr)]);
     }
 
-    Ok(nanbox_pointer_inline(ctx.block(), &arr))
+    let boxed = nanbox_pointer_inline(ctx.block(), &arr);
+    temp_root_release(ctx, element_guard);
+    Ok(boxed)
 }

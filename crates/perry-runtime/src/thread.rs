@@ -139,7 +139,7 @@
 //! ```
 
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
 use crate::closure::{self, real_capture_count, ClosureHeader};
@@ -269,6 +269,8 @@ pub enum SerializedValue {
     /// An `fs.promises.FileHandle` crossing a `perry/thread` boundary.
     /// Perry's fd registry is thread-local, so handles are not transferable;
     /// deserialize as a FileHandle-shaped object with `fd === -1`.
+    /// Recognised/built via [`FsThreadCodec`] so the fs surface is linked
+    /// only when a FileHandle can actually exist.
     DetachedFileHandle,
 
     /// A `SharedArrayBuffer` crossing a `perry/thread` boundary (#4913).
@@ -312,6 +314,47 @@ unsafe impl Sync for SerializedValue {}
 /// # Safety
 /// The `bits` must be a valid NaN-boxed JSValue. Pointer-tagged values must
 /// point to valid, live objects in the current thread's arena or malloc heap.
+/// Cross-thread codec hook for `fs.promises` FileHandle values (binary
+/// size). The serializer's FileHandle probe and the deserializer's
+/// detached-handle builder live in `crate::fs`; referencing them statically
+/// from this always-linked codec pinned the whole fs surface into every
+/// binary (the microtask pump drains diagnostics publishes through the
+/// codec, so it is reachable from `main` unconditionally). `crate::fs` arms
+/// the hook at the top of `build_filehandle_object` — before the first
+/// FileHandle object can exist — so a program that never creates one links
+/// none of it and can never observe the difference: with no FileHandle in
+/// the process, the probe cannot match and the variant is never produced.
+pub(crate) struct FsThreadCodec {
+    /// `is_fs_filehandle_value(v) || filehandle_object_fd(v).is_some()`.
+    pub is_filehandle: fn(f64) -> bool,
+    /// `build_detached_filehandle_object` (FileHandle shape, `fd === -1`).
+    pub build_detached: fn() -> f64,
+}
+
+static FS_THREAD_CODEC: AtomicPtr<FsThreadCodec> = AtomicPtr::new(ptr::null_mut());
+
+pub(crate) fn arm_fs_thread_codec(codec: &'static FsThreadCodec) {
+    // `black_box` for the same reason as `NM_INSTALL_ALL_HOOK`: a
+    // single-store AtomicPtr gets speculatively devirtualized by
+    // whole-program optimization (only one value is ever stored, so the
+    // compiler proves it and re-materializes the direct reference —
+    // re-pinning everything this hook exists to unpin).
+    FS_THREAD_CODEC.store(
+        std::hint::black_box(codec as *const FsThreadCodec as *mut FsThreadCodec),
+        Ordering::Release,
+    );
+}
+
+fn fs_thread_codec() -> Option<&'static FsThreadCodec> {
+    let p = FS_THREAD_CODEC.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        // SAFETY: only ever stores `&'static FsThreadCodec`.
+        Some(unsafe { &*p })
+    }
+}
+
 pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
     let tag = bits & TAG_MASK;
 
@@ -377,9 +420,7 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
             }
             gc::GC_TYPE_OBJECT => {
                 let value = f64::from_bits(bits);
-                if crate::fs::is_fs_filehandle_value(value)
-                    || crate::fs::filehandle_object_fd(value).is_some()
-                {
+                if fs_thread_codec().is_some_and(|codec| (codec.is_filehandle)(value)) {
                     return SerializedValue::DetachedFileHandle;
                 }
                 return serialize_object(raw_ptr as *const crate::object::ObjectHeader);
@@ -804,9 +845,14 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
             crate::date::alloc_date_cell(*ts).to_bits()
         }
 
-        SerializedValue::DetachedFileHandle => {
-            crate::fs::build_detached_filehandle_object().to_bits()
-        }
+        SerializedValue::DetachedFileHandle => match fs_thread_codec() {
+            Some(codec) => (codec.build_detached)().to_bits(),
+            // Unreachable in practice: the variant is only produced by an
+            // armed serializer, and arming is process-global (all agents
+            // share one binary's statics). Defensive `undefined` mirrors the
+            // `Unsupported` fallback below rather than panicking.
+            None => TAG_UNDEFINED,
+        },
 
         SerializedValue::SharedArrayBuffer { addr } => {
             // Alias the same process-global backing store (#4913) — no copy.

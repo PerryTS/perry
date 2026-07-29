@@ -19,7 +19,7 @@ jobs:
   security-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -64,6 +64,78 @@ jobs:
             --ignore RUSTSEC-2026-0119 \
             --ignore RUSTSEC-2026-0187
 
+  # Soak parity gate + external-tool pin gate. Always-run (deliberately not
+  # path-filtered — nub hid this gate in a path-gated job and it silently
+  # skipped Rust-only PRs). The scripts are dep-free erasable-TS .mts run
+  # with the pinned Node's native type stripping; no npm install needed.
+  soak-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Soak window parity (npm run soak)
+        run: node scripts/soak/soak.mts --check
+      - name: External-tool pins valid (npm run tools:check)
+        run: node scripts/soak/external-tools.mts --check
+      - name: Soak script unit tests (npm run test:scripts)
+        run: node --test scripts/soak/*.test.mts
+
+  # AgentShield — audits the operator-side Claude config (.claude/: hooks,
+  # permissions, MCP servers, agents) for prompt injection, leaked secrets,
+  # over-permissive tool grants. Installed from the SRI-pinned registry
+  # tarball in external-tools.json (never `npm install -g`).
+  agent-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Install pinned agentshield
+        env:
+          # download() attaches this to github.com fetches only (release
+          # assets); without it private assets 404 and public ones ride
+          # unauthenticated rate limits.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/soak/external-tools.mts --install agentshield
+      - name: Scan .claude/ config
+        run: |
+          BIN_DIR="$(node scripts/soak/external-tools.mts --print-bin)"
+          export PATH="$BIN_DIR:$PATH"
+          agentshield scan
+
+  # SkillSpector (NVIDIA) — audits the repo's Claude skills (.claude/skills/)
+  # before they run on anyone's machine: YARA + AST static analysis (the
+  # --no-llm path; no API key needed in CI). Pinned to the same git SHA as
+  # external-tools.json tools.skillspector; python pinned because
+  # yara-python ships no cp314 wheels yet.
+  skills-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Scan each skill
+        run: |
+          set -euo pipefail
+          for skill in .claude/skills/*/; do
+            echo "::group::skillspector ${skill}"
+            uv tool run --python 3.12 \
+              --from git+https://github.com/NVIDIA/skillspector@2eb84478 \
+              skillspector scan "${skill}" --no-llm
+            echo "::endgroup::"
+          done
+
   # License policy + duplicate-version tracking (deny.toml at repo root).
   # Advisories stay with cargo-audit above — deny.toml doesn't duplicate them.
   # Pure metadata check: no compilation, runs in ~1 min once cargo-deny is
@@ -72,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

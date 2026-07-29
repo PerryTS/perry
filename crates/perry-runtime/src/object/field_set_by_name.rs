@@ -1114,27 +1114,15 @@ pub extern "C" fn js_object_set_field_by_name(
         }
 
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            let property_name =
-                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
-            let module_name =
-                get_module_name_from_namespace(crate::value::js_nanbox_pointer(obj as i64));
-            if module_name == "buffer.Buffer" && property_name == "poolSize" {
-                super::set_buffer_pool_size(value);
-                return;
-            }
-            // CommonJS module exports are MUTABLE in Node: monkey-patching
-            // like Next.js's `require('node:timers').setImmediate = patched`
-            // must store the override (read back via `vt_get_own_field`)
-            // instead of falling through to the frozen-object throw.
-            if !module_name.is_empty() && property_name != "__module__" {
-                super::native_module::native_namespace_prop_override_store(
-                    module_name,
-                    property_name,
-                    value,
-                );
-                return;
+            // Namespace-object stores route through the armed ops table (see
+            // `nm_namespace_hooks`) so binaries without module imports don't
+            // statically link the namespace override machinery. Unarmed +
+            // matching class_id is unreachable (only the arming bootstrap
+            // assigns NATIVE_MODULE_CLASS_ID).
+            if let Some(ops) = super::nm_namespace_ops() {
+                if (ops.field_set_override)(obj, key, value) {
+                    return;
+                }
             }
         }
 
@@ -1941,4 +1929,38 @@ pub extern "C" fn js_object_set_field_by_name_nonconfigurable(
             );
         }
     }
+}
+
+/// Dynamic field store on a native-module namespace object (extracted
+/// verbatim from the former inline branch). Reached ONLY through
+/// `NmNamespaceOps::field_set_override`; returns true when the store was
+/// fully handled (caller returns), false to fall through to the generic
+/// store path.
+pub(crate) unsafe fn nm_field_set_override(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let property_name =
+        std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+    let module_name = get_module_name_from_namespace(crate::value::js_nanbox_pointer(obj as i64));
+    if module_name == "buffer.Buffer" && property_name == "poolSize" {
+        super::set_buffer_pool_size(value);
+        return true;
+    }
+    // CommonJS module exports are MUTABLE in Node: monkey-patching
+    // like Next.js's `require('node:timers').setImmediate = patched`
+    // must store the override (read back via `vt_get_own_field`)
+    // instead of falling through to the frozen-object throw.
+    if !module_name.is_empty() && property_name != "__module__" {
+        super::native_module::native_namespace_prop_override_store(
+            module_name,
+            property_name,
+            value,
+        );
+        return true;
+    }
+    false
 }

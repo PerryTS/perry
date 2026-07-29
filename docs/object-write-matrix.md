@@ -46,7 +46,7 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 | w9_poly2 | 2 shapes through one site | *(pre-multi-group baseline)* PIC → per-group whole-loop clone | 27 → 5-8 | 6 | 4.5 → **~1.0** | Ties/beats node — the inliner's two-array body matches as two monomorphic groups, one guard call each (idle 15-run pending for the exact ratio) |
 | w10_poly8 | 8 shapes through one site | PIC exhausted → runtime miss | 27 | 19 | 1.4 | close; megamorphic path is decent |
 | w11_stable_dynkey | `o[k]`, `const k = "c"` | clone (const-string local = static) | 6 | 8 | **0.75** | BEATS node |
-| w12_arb_dynkey | rotating keys from array | generic | 84 | 18 | 4.7 | GAP: GC-safe dynamic-key cache |
+| w12_arb_dynkey | rotating keys from array | *(pre-IC baseline)* generic → dyn-key IC → key-table clone lane | 84 → 3 | 18 | 4.7 → **0.17** | BEATS node 6× — the 3-way dynamic-key IC covers scattered writes; a loop-invariant key array upgrades to the clone via the resolved slot table (integer-domain index, no fmod) |
 | w13_int_key | `o[7]` on plain object | *(pre-spill-lanes baseline)* generic → peel + whole-loop clone with spill lanes | 160 → 7 | 13 | 12.3 → **0.54** | BEATS node — integer static keys (#6841), first-iteration peel (#6841), object-owned spill (#6849), and guard/emitter spill lanes make the append-past-capacity array clone-eligible |
 | w15_append_build | fresh `{}` + 6 assigns (builder) | *(pre-#6829 baseline)* generic transitions; `class_id==0` blocks PIC | 1489 → 196 (#6829) | 8 | 186 → 25 | #6829 folds builders into literals; residual tracked below |
 | w16_overflow_slot | writes past inline capacity | *(pre-#6812-w16 baseline)* runtime (PIC bounds reject) → whole-loop clone | 4163 → 3 | 29 | 173 → **0.26** | BEATS node — `{}` per-site classes + learned width + compile-time width hint make builder arrays uniform and clone-eligible. The #6812-w13 peel adds one ordinary outer round (3 → 6 ms; reclaimable with a guard-first second-chance design). Ratios vs each run's own node baseline (2026-07-25 sweeps) |
@@ -55,7 +55,7 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 
 ### Reading of the triage pass
 
-- **Beating node (14 of 18 rows as of #6868):** everything the whole-loop
+- **Beating node (15 of 18 rows as of the key-table lane):** everything the whole-loop
   clone covers — `Mul` RHS, dynamic bounds, `while` form, `let` aliases,
   builder-pattern arrays, inlined-helper bodies, peeled first-write
   appends, spill lanes (append past capacity), multi-group parallel-array

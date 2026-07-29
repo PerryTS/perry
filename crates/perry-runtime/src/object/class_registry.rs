@@ -41,9 +41,9 @@ mod class_meta;
 mod construct;
 mod dispatch;
 mod gc_roots;
-mod parent_static;
+pub(crate) mod parent_static;
 mod prototype_methods;
-mod prototype_objects;
+pub(crate) mod prototype_objects;
 mod registration;
 mod state;
 

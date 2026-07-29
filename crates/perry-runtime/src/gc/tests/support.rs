@@ -229,6 +229,56 @@ impl Drop for ConservativeScanAutoGuard {
     }
 }
 
+/// Put the runtime-handle mutable-root scanner back into this thread's
+/// registry.
+///
+/// REQUIRED before a `RuntimeHandleScope` roots anything inside
+/// `ScopedRootScannerRegistryGuard` / `GcTestIsolationGuard` /
+/// `CopyingNurseryTestGuard`: those guards `mem::take` the thread's
+/// `MUTABLE_ROOT_SCANNERS` so a collection sees exactly the roots the test
+/// installs, and the runtime-handle scanner goes with it. Without this call a
+/// `RuntimeHandleScope` inside such a test is decorative — its handles are
+/// neither marked nor rewritten, so a raw pointer held across a GC-capable
+/// call is silently unrooted and the test can pass for the wrong reason.
+pub(super) fn register_runtime_handle_root_scanner_for_tests() {
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        scan_runtime_handle_roots_mut_step,
+        new_runtime_handle_root_scan_state,
+        MutableRootScannerSource::RuntimeHandles,
+    );
+}
+
+/// Pin this thread's conservative-scan mode to `Disabled` for the guard's
+/// lifetime, restoring the prior override on drop.
+///
+/// `Auto` and `Disabled` both resolve to
+/// `ConservativeStackScanDecision::SkipDisabled`, but `Disabled` says so
+/// unconditionally and cannot be re-interpreted by a future `Auto` policy
+/// change. Tests that assert an object survives *only* because a precise
+/// root marked it (#6910) must use this: under the test build's `Full`
+/// default the native-stack scan accepts bare addresses and would rescue the
+/// object, hiding a missing precise mark.
+pub(super) struct ConservativeScanDisabledGuard {
+    prev: Option<crate::gc::ConservativeStackScanMode>,
+}
+
+impl ConservativeScanDisabledGuard {
+    pub(super) fn new() -> Self {
+        Self {
+            prev: crate::gc::set_conservative_stack_scan_override(Some(
+                crate::gc::ConservativeStackScanMode::Disabled,
+            )),
+        }
+    }
+}
+
+impl Drop for ConservativeScanDisabledGuard {
+    fn drop(&mut self) {
+        crate::gc::set_conservative_stack_scan_override(self.prev);
+    }
+}
+
 pub(super) struct ScopedRootScannerRegistryGuard {
     rust_roots_len: usize,
     /// The thread's mutable scanner registry is taken whole (not just length-

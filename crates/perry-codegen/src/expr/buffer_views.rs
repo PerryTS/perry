@@ -285,6 +285,10 @@ pub(crate) fn update_buffer_view_for_assignment(
                 alias: AliasState::MayAlias,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,
+                // Reassignment refresh: `Uint8ArrayNew` with a non-literal arg
+                // can be the view form (`new Uint8Array(buffer)`), so the
+                // inline-storage proof is not re-established here.
+                storage_inline_proven: false,
             },
         );
     } else {
