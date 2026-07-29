@@ -219,6 +219,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         val_double.clone()
                     };
                     ctx.block().store(DOUBLE, &stored_value, &slot);
+                    // #6968: bind the field alloca as a precise GC root, the
+                    // same treatment `emit_shadow_slot_update_for_expr` gives
+                    // an ordinary pointer-typed local. Skipped for a
+                    // `numeric_store`, whose stored bits are a canonicalized
+                    // raw `f64` by construction.
+                    if !numeric_store {
+                        crate::expr::root_scalar_replaced_slot(ctx, &slot, value);
+                    }
                     // String-alias fix (mirror of `let y = x` in stmt/let_stmt.rs):
                     // a string-typed local stored into a scalar-replaced field's
                     // alloca slot aliases the same heap buffer. The runtime
@@ -301,6 +309,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             val_double.clone()
                         };
                         ctx.block().store(DOUBLE, &stored_value, &slot);
+                        // #6968: see the `ScalarObjectFieldSet` path above —
+                        // an inlined constructor's `this.f = …` writes the
+                        // same kind of unrooted per-field alloca.
+                        if !numeric_store {
+                            crate::expr::root_scalar_replaced_slot(ctx, &slot, value);
+                        }
                         // String-alias fix: see the ScalarObjectFieldSet path
                         // above. `this.field = s` into a scalar-replaced ctor slot
                         // aliases the string buffer; mark it shared so a later

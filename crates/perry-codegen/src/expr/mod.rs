@@ -131,6 +131,7 @@ pub(crate) use write_barrier::{
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
 mod dispatch;
 mod record_value;
+mod scalar_slot_root;
 mod shadow_slot;
 mod slot_rep;
 pub(crate) mod temp_root;
@@ -142,6 +143,9 @@ pub(crate) use slot_rep::{
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
+pub(crate) use scalar_slot_root::{
+    root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
+};
 pub(crate) use shadow_slot::{
     emit_shadow_slot_bind_for_local, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     enable_persistent_shadow_slot_for_array_alias, expr_is_known_non_pointer_shadow_value,
@@ -1005,6 +1009,14 @@ pub(crate) struct FnCtx<'a> {
     /// A non-escaping uppercase result represented by a slot holding its
     /// original receiver. Only fused string operations may consume it.
     pub scalar_replaced_uppercase_sources: std::collections::HashMap<u32, String>,
+
+    /// Shadow-frame slot reserved for a scalar-replacement alloca, keyed by
+    /// the alloca's SSA name (#6968). These allocas belong to no HIR local,
+    /// so `collect_pointer_typed_locals` cannot see them and the frame is
+    /// grown on demand — see `expr::scalar_slot_root`. Populated the first
+    /// time a possibly-pointer value is stored into the alloca; a field that
+    /// only ever holds numbers never appears here and costs nothing.
+    pub scalar_slot_shadow_slots: std::collections::HashMap<String, u32>,
 
     /// Non-escaping array literals identified by escape analysis. Maps
     /// local_id → length. Used by the Stmt::Let lowering to intercept

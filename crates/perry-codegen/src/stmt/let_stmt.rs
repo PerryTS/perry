@@ -562,7 +562,13 @@ pub(crate) fn lower_let(
                             (I32, &index.to_string()),
                         ],
                     );
-                    ctx.block().store(DOUBLE, &value, &slots[index as usize]);
+                    let part_slot = slots[index as usize].clone();
+                    ctx.block().store(DOUBLE, &value, &part_slot);
+                    // #6968: `js_string_split_part_value` hands back a fresh
+                    // heap string whose only reference is this alloca. There
+                    // is no HIR expression to gate on — the value is
+                    // synthesized by codegen — and it is always a string.
+                    crate::expr::root_scalar_replaced_slot_unconditional(ctx, &part_slot);
                 }
             }
             ctx.scalar_replaced_arrays.insert(id, slots);
@@ -606,6 +612,11 @@ pub(crate) fn lower_let(
                 }
                 let v = lower_expr(ctx, elem)?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
+                // #6968: same rooting hole as the object-literal fields —
+                // the element alloca is the only reference to a heap value
+                // stored here, and no HIR local names it.
+                let elem_slot = slots[i].clone();
+                crate::expr::root_scalar_replaced_slot(ctx, &elem_slot, elem);
                 // A uniquely-owned string captured into this scalar-replaced
                 // array slot aliases its heap buffer; demote it to shared so a
                 // later in-place `+=` on the source local doesn't mutate the
@@ -687,6 +698,10 @@ pub(crate) fn lower_let(
                 let v = lower_expr(ctx, value_expr)?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
+                    // #6968: the field alloca is this heap value's only
+                    // reference — there is no object for #6951/#6972's
+                    // handle rooting to cover — so bind it as a precise root.
+                    crate::expr::root_scalar_replaced_slot(ctx, &slot, value_expr);
                     let lowered = LoweredValue {
                         semantic: SemanticKind::JsValue,
                         rep: NativeRep::JsValue,
@@ -797,6 +812,10 @@ pub(crate) fn lower_let(
                         let arg_val = lower_expr(ctx, arg)?;
                         if let Some(slot) = slot {
                             ctx.block().store(DOUBLE, &arg_val, &slot);
+                            // #6968: anonymous-shape scalar replacement stores
+                            // constructor arguments straight into per-field
+                            // allocas — same unrooted-heap-value hole.
+                            crate::expr::root_scalar_replaced_slot(ctx, &slot, arg);
                             let lowered = LoweredValue {
                                 semantic: SemanticKind::JsValue,
                                 rep: NativeRep::JsValue,

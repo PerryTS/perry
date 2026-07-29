@@ -775,6 +775,7 @@ pub(super) fn compile_function(
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
         scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
+        scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),

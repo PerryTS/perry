@@ -59,6 +59,15 @@ test_gap_repsel_proven_this_frozen
 # per-PR when `evac_minor` joins PR_ARMS.
 test_gap_gc_ta_ctor_source_rooting
 
+# --- Scalar-replaced object/array locals (#6968) -----------------------------
+# Not a representation of its own: escape analysis DELETES the object and keeps
+# one entry-block alloca per field/element. Those allocas belong to no HIR
+# local, so the shadow-slot assignment pass could not see them and a heap value
+# living in one was invisible to a precise-roots collection. Live by
+# construction (it churns across every read), so the `cons_scan_off` and
+# `evac_minor` arms both bite.
+test_gap_repsel_scalar_replaced_locals
+
 # --- The GC-live member ------------------------------------------------------
 # Every file above performs ZERO collections (measured, #6950), which makes the
 # GC arms inert against them. This one holds each representation's local live
