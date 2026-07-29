@@ -53,16 +53,12 @@ pub unsafe extern "C" fn js_native_call_value(
     // VALUE here with IMPLICIT_THIS bound to the fresh subclass instance. Install
     // the EventEmitter listener/emit methods onto that instance, exactly as the
     // direct form does, so `this.setMaxListeners(…)`/`.on`/`.emit` resolve.
-    if let Some((module, method)) =
-        unsafe { crate::object::bound_native_callable_module_and_method(func_value) }
-    {
-        if module.trim_start_matches("node:") == "events"
-            && (method == "EventEmitter" || method == "EventEmitterAsyncResource")
-        {
-            let this_val = crate::object::js_implicit_this_get();
-            if JSValue::from_bits(this_val.to_bits()).is_pointer() {
-                return crate::node_stream::js_event_emitter_subclass_init(this_val);
-            }
+    // Routed through the armed ops table (see `nm_namespace_hooks`): the
+    // probe can only match a bound native callable, which exists only once
+    // `callable_exports` minted one (arming the table).
+    if let Some(ops) = crate::object::nm_namespace_ops() {
+        if let Some(result) = unsafe { (ops.ee_dynamic_super)(func_value) } {
+            return result;
         }
     }
 

@@ -47,12 +47,15 @@ mod closure_collect;
 mod entry;
 mod func_registry;
 mod function;
-mod helpers;
+// `pub(crate)` so `crate::linker` can read the inline-hot-small policy
+// (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
+pub(crate) mod helpers;
 mod i64_spec;
 mod method;
 mod method_registry;
 mod module_globals_emit;
 mod opts;
+mod spec_abi;
 mod string_pool;
 mod typed_abi;
 
@@ -66,6 +69,7 @@ pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
+pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
     generic_function_body_name, generic_method_body_name, typed_f64_closure_name,
@@ -155,6 +159,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // afresh for every module — including the `false` case, to clear any prior
     // module's decision on this thread.
     set_full_outline_ic(decide_full_outline_ic(module_callable_count(hir)));
+    // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
+    // set-per-module discipline as the outline gate above.
+    helpers::set_jscvt_for_target(&triple);
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target
@@ -422,6 +429,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let stub = perry_hir::Class {
             id: 0, // imported — no local ClassId
             name: effective_name.to_string(),
+            // #6812: width hints don't cross module metadata; imported stubs
+            // fall back to runtime learned sizing.
+            alloc_width_hint: 0,
             type_params: Vec::new(),
             extends: None,
             extends_name: ic.parent_name.clone(),
@@ -1085,6 +1095,45 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         }
     }
+    // Representation-selection Phase 2: top-level `const <name> = <numeric
+    // literal>` module bindings are compile-time constants by ECMAScript
+    // semantics (a `const` reassignment is a parse-time error), so their
+    // reads constant-fold — this is what proves `P[BLOWFISH_NUM_ROUNDS + 1]`
+    // in-bounds against a constant-length view. Excluded: any id carried by a
+    // `PreallocateBoxes`/`PreallocateTdzBoxes` statement — a box-backed slot
+    // holds a box pointer, and a TDZ-flagged binding must keep its
+    // ReferenceError on pre-declaration reads instead of folding to a value.
+    {
+        let mut prealloc_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for s in &hir.init {
+            if let perry_hir::Stmt::PreallocateBoxes(ids)
+            | perry_hir::Stmt::PreallocateTdzBoxes(ids) = s
+            {
+                prealloc_ids.extend(ids.iter().copied());
+            }
+        }
+        for s in &hir.init {
+            if let perry_hir::Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(init),
+                ..
+            } = s
+            {
+                if prealloc_ids.contains(id) {
+                    continue;
+                }
+                let value = match init {
+                    perry_hir::Expr::Integer(n) => Some(*n as f64),
+                    perry_hir::Expr::Number(n) if n.is_finite() => Some(*n),
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    compile_time_constants.entry(*id).or_insert(value);
+                }
+            }
+        }
+    }
 
     // Issue #235: per-method explicit-param-count map covering BOTH local
     // classes (from `hir.classes`) AND imported classes (from
@@ -1291,9 +1340,41 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
+    // eligibility loop because representation-selection Phase 5a's
+    // proven-`this` admission consults them (§5.2 shape barriers, the
+    // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
+    // below — computed exactly once per module either way.
+    let module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    // Representation-selection Phase 5a: proven-`this` method clones.
+    let mut pshape_methods: std::collections::HashMap<
+        (String, String),
+        crate::collectors::PtrShapeLocal,
+    > = std::collections::HashMap::new();
+    // Phase 3b typed-receiver widening: chain-global field indexes need the
+    // full class table — and it must be the SAME table dynamic dispatch's
+    // call-site gating consults (`class_table`, incl. class-expression
+    // aliases), or a chain resolvable only through an alias would gate a
+    // clone call the emission loop never produced (undefined symbol at
+    // link).
+    let receiver_class_table = &class_table;
     for class in &hir.classes {
         for method in &class.methods {
             let source_function = format!("{}::{}", class.name, method.name);
+            // Representation-selection Phase 5a: does this method admit a
+            // proven-`this` clone? Uses the SAME class table as the
+            // typed-receiver decision below, for the same reason — the two
+            // routing sites gate on this map, and a chain resolvable only
+            // through an alias would gate a call to a symbol the emission
+            // loop never produced.
+            if let Some(fact) = crate::collectors::method_proven_this(
+                class,
+                method,
+                receiver_class_table,
+                &module_dispatch_facts,
+            ) {
+                pshape_methods.insert((class.name.clone(), method.name.clone()), fact);
+            }
             match typed_abi::typed_f64_method_rejection_reason(method) {
                 None => {
                     let key = (class.name.clone(), method.name.clone());
@@ -1315,15 +1396,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     ],
                 ),
             }
-            match typed_abi::typed_f64_receiver_method_info(class, method) {
+            match typed_abi::typed_f64_receiver_method_info(class, method, receiver_class_table) {
                 Some(info) => {
                     typed_f64_receiver_methods
                         .insert((class.name.clone(), method.name.clone()), info);
                 }
                 None => {
-                    if let Some(reason) =
-                        typed_abi::typed_f64_receiver_method_rejection_reason(class, method)
-                    {
+                    if let Some(reason) = typed_abi::typed_f64_receiver_method_rejection_reason(
+                        class,
+                        method,
+                        &receiver_class_table,
+                    ) {
                         record_typed_clone_rejection(
                             &mut typed_clone_rejection_records,
                             source_function.clone(),
@@ -1541,7 +1624,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         compile_time_constants,
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
-        module_dispatch: crate::collectors::collect_module_dispatch_facts(hir),
+        module_dispatch: module_dispatch_facts,
+        // Inline-hot-small pre-pass (#6850 follow-up): FuncIds with an in-loop
+        // call site AND few total call sites, so small hot callees can earn
+        // `inlinehint` while the call-site cap bounds duplication.
+        hot_loop_callees: crate::collectors::collect_hot_loop_callees(
+            hir,
+            crate::codegen::helpers::inline_hot_small_max_call_sites(),
+        ),
         clamp3_functions: hir
             .functions
             .iter()
@@ -1565,6 +1655,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .filter(|f| crate::collectors::returns_i32_identity_arg(f))
             .map(|f| f.id)
             .collect(),
+        // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
+        // pass (mutual exclusion), below; start empty here.
+        spec_abi_functions: std::collections::HashMap::new(),
+        spec_ta_bindings: std::collections::HashMap::new(),
         typed_f64_functions,
         typed_i32_functions,
         typed_i1_functions,
@@ -1576,6 +1670,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_string_methods,
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
+        pshape_methods,
         typed_f64_closures: std::collections::HashSet::new(),
         typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),
@@ -1756,6 +1851,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &imported_class_source_name,
         &module_prefix,
     );
+
+    // Representation-selection Phase 5a: now that the method registry exists,
+    // drop any proven-`this` clone whose composed symbol would collide with a
+    // symbol a real user member already owns (issue #6927 tracks the
+    // family-wide fix for every generated-clone suffix). Pruning HERE — before
+    // `emit_module_artifacts` reads `cross_module.pshape_methods` for both
+    // emission and call-site routing — keeps the two in lockstep, so a call
+    // site can never route to a clone the emission loop declined to produce.
+    crate::collectors::prune_colliding_clones(&mut cross_module.pshape_methods, &method_names);
 
     // Resolve user function names + signatures up front. See
     // `func_registry::build_func_registry`.
@@ -2067,6 +2171,142 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .typed_i1_function_param_reps
         .retain(|id, _| !i64_specialized.contains(id));
 
+    // ---- Representation-selection Phase 2: specialized-ABI plan selection.
+    // Runs AFTER the i64-specialization pass and the typed_abi clone sets so
+    // mutual exclusion is decidable; the entries themselves are emitted below
+    // in the pre-public loop. Bounded: one entry per function (the dominant
+    // tuple), `PERRY_SPECIALIZED_ABI_MAX` per module.
+    if spec_abi::spec_abi_enabled() {
+        let spec_facts = crate::collectors::collect_spec_abi_facts(hir);
+        let spec_budget = spec_abi::spec_abi_max();
+        let mut spec_emitted = 0usize;
+        for f in &hir.functions {
+            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
+                continue;
+            };
+            let mut reject =
+                |reason: typed_abi::TypedCloneRejectionReason,
+                 records: &mut Vec<crate::native_value::NativeRepRecord>| {
+                    record_typed_clone_rejection(
+                        records,
+                        f.name.clone(),
+                        "spec_abi_entry_decision",
+                        reason,
+                        vec![
+                            "typed_clone_kind=spec_abi_entry".to_string(),
+                            format!("function_id={}", f.id),
+                            format!("symbol={}", f.name),
+                        ],
+                    );
+                };
+            if f.is_async || f.is_generator || f.was_plain_async {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::AsyncOrGenerator,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if !f.captures.is_empty() {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::Captures,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if f.params.iter().any(|p| p.default.is_some()) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::ParamDefault,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if f.params.iter().any(|p| p.is_rest) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::RestParam,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if f.params.iter().any(|p| p.arguments_object.is_some())
+                || func_synthetic_arguments.contains(&f.id)
+            {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::ArgumentsObject,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if cross_module.funcs_reading_dynamic_this.contains(&f.id) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecReadsDynamicThis,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if i64_specialized.contains(&f.id) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::I64Specialized,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            if cross_module.typed_f64_functions.contains(&f.id)
+                || cross_module.typed_i32_functions.contains(&f.id)
+                || cross_module.typed_i1_functions.contains(&f.id)
+                || cross_module.typed_string_functions.contains(&f.id)
+            {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecTypedCloneOverlap,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            // Callee-side demotion: params the raw ABI cannot accept keep the
+            // boxed protocol (reassigned params would stale the entry-bound
+            // proofs; closure-referenced params feed the capture machinery).
+            let closure_refs = crate::expr::collect_closure_referenced_locals(&f.body);
+            let reassigned = crate::collectors::reassigned_locals(&f.body);
+            let demoted: Vec<bool> = f
+                .params
+                .iter()
+                .map(|p| reassigned.contains(&p.id) || closure_refs.contains(&p.id))
+                .collect();
+            let plan = match spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted) {
+                Some((reps, _matching_sites)) => SpecFnPlan {
+                    reps,
+                    dispatch: SpecDispatch::Static,
+                },
+                None => {
+                    // Tier B: declaration-derived tuple, runtime-guarded
+                    // dispatch. Only viable with ≥1 declared-Int32 param.
+                    let reps = spec_abi::declaration_tuple(&f.params, &demoted);
+                    if spec_abi::spec_tuple_is_viable(&reps) {
+                        SpecFnPlan {
+                            reps,
+                            dispatch: SpecDispatch::Guarded,
+                        }
+                    } else {
+                        reject(
+                            typed_abi::TypedCloneRejectionReason::SpecTupleUnproven,
+                            &mut typed_clone_rejection_records,
+                        );
+                        continue;
+                    }
+                }
+            };
+            if spec_emitted >= spec_budget {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecBudgetExceeded,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
+            spec_emitted += 1;
+            cross_module.spec_abi_functions.insert(f.id, plan);
+        }
+        cross_module.spec_ta_bindings = spec_facts.ta_bindings;
+    }
+
     // Emit internal typed-f64 clones before their public/generic wrappers. The
     // public wrapper keeps the JSValue ABI; it and direct proven numeric call
     // sites can call the internal clone.
@@ -2111,6 +2351,37 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .with_context(|| format!("lowering typed-string clone for function '{}'", f.name))?;
     }
 
+    // Representation-selection Phase 2: emit full-body specialized entries
+    // (`{public}__spec_...`, internal linkage) before the public bodies. Same
+    // real `compile_function`, parameterized on the plan's rep tuple.
+    for f in &hir.functions {
+        let Some(plan) = cross_module.spec_abi_functions.get(&f.id).cloned() else {
+            continue;
+        };
+        compile_function(
+            &mut llmod,
+            f,
+            &func_names,
+            &mut strings,
+            &class_table,
+            &method_names,
+            &module_globals,
+            &module_global_types,
+            &opts.import_function_prefixes,
+            &enum_table,
+            &static_field_globals,
+            &class_ids,
+            &func_signatures,
+            &func_synthetic_arguments,
+            &module_boxed_vars,
+            &closure_rest_params,
+            &cross_module,
+            None,
+            Some(&plan),
+        )
+        .with_context(|| format!("lowering specialized entry for function '{}'", f.name))?;
+    }
+
     // Lower each user function into the module (skip i64-specialized ones).
     for f in &hir.functions {
         if i64_specialized.contains(&f.id) {
@@ -2146,6 +2417,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &closure_rest_params,
             &cross_module,
             typed_public_trampoline,
+            None,
         )
         .with_context(|| format!("lowering function '{}'", f.name))?;
     }

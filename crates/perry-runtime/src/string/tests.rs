@@ -2,7 +2,7 @@
 //!
 //! Moved verbatim from the pre-split monolithic `string.rs`.
 
-use super::intern::{with_intern_table, InternEntry, INTERN_TABLE_MASK};
+use super::intern::{with_intern_table, INTERN_TABLE_MASK};
 use super::*;
 
 fn malloc_object_count_for_test() -> usize {
@@ -67,6 +67,66 @@ fn dispatch_id_resolver_accepts_raw_heap_and_sso_string_forms() {
         .unwrap()
         .bits() as i64;
     assert_eq!(bytes_from(boxed_sso), b"id");
+}
+
+#[test]
+fn dispatch_id_resolver_accepts_static_rodata_descriptor_form() {
+    let bytes = b"publish";
+    let descriptor = StaticDispatchString {
+        byte_len: bytes.len() as u32,
+        flags: 0,
+        hash: 0xe2bf_e841_1c47_2768,
+        bytes: bytes.as_ptr(),
+    };
+    let id = STATIC_DISPATCH_TAG
+        | ((&descriptor as *const StaticDispatchString as u64) & crate::value::POINTER_MASK);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let resolved = perry_string_ref_from_dispatch_id(id as i64, &mut scratch).unwrap();
+    assert!(resolved.heap.is_null());
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(resolved.ptr, resolved.len) },
+        bytes
+    );
+}
+
+#[test]
+fn static_dispatch_key_materialization_is_cached_per_thread() {
+    let bytes = b"publish";
+    let descriptor = StaticDispatchString {
+        byte_len: bytes.len() as u32,
+        flags: 0,
+        hash: 0xe2bf_e841_1c47_2768,
+        bytes: bytes.as_ptr(),
+    };
+    let id = STATIC_DISPATCH_TAG
+        | ((&descriptor as *const StaticDispatchString as u64) & crate::value::POINTER_MASK);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let key = perry_string_ref_from_dispatch_id(id as i64, &mut scratch).unwrap();
+    let first = materialize_dispatch_key(key);
+    let second = materialize_dispatch_key(key);
+    assert!(!first.is_null());
+    assert_eq!(first, second);
+}
+
+#[test]
+fn static_dispatch_key_materialization_preserves_wtf8_flag() {
+    let bytes = b"\xED\xA0\x80";
+    let descriptor = StaticDispatchString {
+        byte_len: bytes.len() as u32,
+        flags: STATIC_DISPATCH_FLAG_WTF8,
+        hash: fnv1a_for_test(bytes),
+        bytes: bytes.as_ptr(),
+    };
+    let id = STATIC_DISPATCH_TAG
+        | ((&descriptor as *const StaticDispatchString as u64) & crate::value::POINTER_MASK);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let key = perry_string_ref_from_dispatch_id(id as i64, &mut scratch).unwrap();
+    let heap = materialize_dispatch_key(key);
+    assert!(!heap.is_null());
+    assert_ne!(
+        unsafe { (*heap).flags } & STRING_FLAG_HAS_LONE_SURROGATES,
+        0
+    );
 }
 
 #[test]
@@ -413,4 +473,55 @@ fn test_string_append_loop() {
         "Expected >980 in-place appends, got {}",
         inplace_count
     );
+}
+
+// ── Repsel Phase 3a: js_string_compare_value ───────────────────────────────
+
+#[test]
+fn string_compare_value_heap_and_sso_mixes() {
+    use super::compare::js_string_compare_value;
+    let heap = |s: &str| {
+        let p = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(p).bits())
+    };
+    let sso = |s: &str| {
+        f64::from_bits(
+            crate::value::JSValue::try_short_string(s.as_bytes())
+                .expect("<=5 bytes")
+                .bits(),
+        )
+    };
+    // heap × heap
+    assert_eq!(js_string_compare_value(heap("abc"), heap("abd")), -1);
+    assert_eq!(js_string_compare_value(heap("abc"), heap("abc")), 0);
+    // SSO × SSO
+    assert_eq!(js_string_compare_value(sso("ab"), sso("ac")), -1);
+    assert_eq!(js_string_compare_value(sso("ab"), sso("ab")), 0);
+    assert_eq!(js_string_compare_value(sso("b"), sso("a")), 1);
+    // mixed representations, equal content
+    assert_eq!(js_string_compare_value(sso("ok"), heap("ok")), 0);
+    assert_eq!(js_string_compare_value(heap("ok"), sso("oz")), -1);
+    // astral vs BMP: UTF-16 code-unit order, not code-point order
+    assert_eq!(
+        js_string_compare_value(heap("\u{1F600}"), heap("\u{FFFD}")),
+        -1
+    );
+    // number operand coerces via its decimal string form (legacy unified
+    // behavior this helper's arm replaces) — both orders and both string
+    // representations, exercising the "allocating coercions complete before
+    // any heap-payload view is taken" phase split (the number path calls
+    // js_number_to_string, which allocates and may move the other operand's
+    // heap string under evacuation).
+    assert_eq!(js_string_compare_value(42.0, heap("42")), 0);
+    assert_eq!(js_string_compare_value(heap("42"), 42.0), 0);
+    assert_eq!(js_string_compare_value(42.0, heap("5")), -1);
+    assert_eq!(js_string_compare_value(heap("5"), 42.0), 1);
+    assert_eq!(js_string_compare_value(42.0, sso("42")), 0);
+    assert_eq!(js_string_compare_value(sso("41"), 42.0), -1);
+    assert_eq!(js_string_compare_value(1.5, 2.5), -1); // both numbers coerce
+                                                       // non-string, non-number operands rank as invalid
+    let undef = f64::from_bits(crate::value::JSValue::undefined().bits());
+    assert_eq!(js_string_compare_value(undef, heap("x")), -1);
+    assert_eq!(js_string_compare_value(heap("x"), undef), 1);
+    assert_eq!(js_string_compare_value(undef, undef), 0);
 }

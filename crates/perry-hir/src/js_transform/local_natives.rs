@@ -1159,6 +1159,9 @@ pub fn fix_native_instance_expr_with_locals(
         Expr::Unary { operand, .. } => {
             fix_native_instance_expr_with_locals(operand, native_instances, local_id_instances);
         }
+        Expr::StringCoerce(value) => {
+            fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
+        }
         Expr::Logical { left, right, .. } => {
             fix_native_instance_expr_with_locals(left, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(right, native_instances, local_id_instances);
@@ -1217,6 +1220,24 @@ pub fn fix_native_instance_expr_with_locals(
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if let Expr::LocalGet(local_id) = object.as_ref() {
+                if matches!(property.as_str(), "status" | "statusText" | "data")
+                    && matches!(
+                        local_id_instances.get(local_id),
+                        Some((module, class)) if module == "axios" && class == "Response"
+                    )
+                {
+                    let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
+                    *expr = Expr::NativeMethodCall {
+                        module: "axios".to_string(),
+                        class_name: Some("Response".to_string()),
+                        object: Some(Box::new(object_expr)),
+                        method: property.clone(),
+                        args: Vec::new(),
+                    };
+                    return;
+                }
+            }
             // Recurse into the object first so any nested `$(sel)` Call has
             // been rewritten to a cheerio NativeMethodCall.
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
@@ -1325,6 +1346,10 @@ pub fn detect_native_instance_creation_with_context(
                 ("http2", "createSecureServer") => "Http2SecureServer",
                 ("node-cron", "schedule") => "CronJob",
                 ("readline", "createInterface") => "Interface",
+                (
+                    "axios",
+                    "get" | "post" | "put" | "delete" | "patch" | "head" | "options" | "request",
+                ) => "Response",
                 // Issue #1193: `const $ = load(html)` / `loadFragment(html)`
                 // returns the jQuery-like callable used as `$(selector)`.
                 // Tagging the local as CheerioAPI lets the rewriter below

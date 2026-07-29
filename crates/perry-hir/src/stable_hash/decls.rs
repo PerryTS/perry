@@ -33,6 +33,7 @@ impl SH for Class {
             is_exported,
             aliases,
             is_nested,
+            alloc_width_hint,
         } = self;
         id.hash(h);
         name.hash(h);
@@ -56,6 +57,7 @@ impl SH for Class {
         is_exported.hash(h);
         aliases.hash(h);
         is_nested.hash(h);
+        alloc_width_hint.hash(h);
     }
 }
 

@@ -50,7 +50,8 @@ fn conversion_failed(detail: &str) -> ! {
 /// registry — never produced a KeyObject at all.
 pub(super) unsafe fn key_object_from(value: f64) -> f64 {
     let addr = value_addr(value);
-    let Some((_algo, _hash, kind, _extractable, _usages)) = crate::buffer::crypto_key_meta(addr)
+    let Some((_algo, _hash, kind, _extractable, _usages, _bit_length)) =
+        crate::buffer::crypto_key_meta(addr)
     else {
         invalid_key(value);
     };

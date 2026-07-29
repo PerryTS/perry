@@ -606,6 +606,18 @@ impl LlBlock {
     /// (poison otherwise); every clamped case is mathematically 0 anyway.
     pub fn toint32_wrap(&mut self, val: &str) -> String {
         use crate::types::{I1, I32, I64};
+        // ARMv8.3 FEAT_JSCVT: `fjcvtzs` IS ECMAScript ToInt32 in one
+        // instruction — truncate toward zero, wrap modulo 2^32, NaN/±Inf/-0
+        // → 0. Replaces the ~25-op branchless tower below on targets that
+        // have it (all Apple Silicon); the tower remains the portable path.
+        if crate::codegen::helpers::jscvt_enabled() {
+            let r = self.reg();
+            self.emit(format!(
+                "{} = call i32 @llvm.aarch64.fjcvtzs(double {})",
+                r, val
+            ));
+            return r;
+        }
         let bits = self.bitcast_double_to_i64(val);
         let exp_shifted = self.lshr(I64, &bits, "52");
         let bexp = self.and(I64, &exp_shifted, "2047");

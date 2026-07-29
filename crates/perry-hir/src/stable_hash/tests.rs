@@ -281,6 +281,7 @@ fn module_metadata_affects_hash() {
         is_exported: false,
         aliases: vec![],
         is_nested: false,
+        alloc_width_hint: 0,
     });
     assert_ne!(base_hash, hash_module(&m_class));
 

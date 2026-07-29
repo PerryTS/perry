@@ -148,21 +148,46 @@ pub fn is_valid_string_ptr(p: *const StringHeader) -> bool {
 
 /// Borrowed byte view for a Perry string-like dispatch key.
 ///
-/// Static dispatch IDs currently use the raw interned `StringHeader*` pointer
-/// payload. Newer lowering paths may naturally carry a full NaN-boxed string
-/// value, including `SHORT_STRING_TAG`. This view lets by-ID wrappers accept
-/// both forms without open-coding heap-only string reads at each callsite.
+/// Current static dispatch IDs use immutable descriptors emitted into the
+/// compiled module. Legacy lowering paths may carry a raw `StringHeader*`,
+/// while dynamic paths may naturally carry a full NaN-boxed string value,
+/// including `SHORT_STRING_TAG`. This view lets by-ID wrappers accept all
+/// forms without open-coding heap-only string reads at each callsite.
 #[derive(Clone, Copy)]
 pub struct PerryStringRef {
     pub ptr: *const u8,
     pub len: usize,
     pub heap: *const StringHeader,
+    /// Address of the immutable AOT descriptor, or zero for legacy/dynamic
+    /// forms. A nonzero value tells heap materialization that `hash` was
+    /// precomputed by trusted codegen.
+    pub static_id: usize,
+    /// Precomputed FNV-1a content hash for a static descriptor.
+    pub hash: u64,
+    /// Whether descriptor bytes use Perry's WTF-8 representation.
+    pub is_wtf8: bool,
 }
+
+/// Immutable descriptor emitted into the compiled module's read-only data for
+/// static property/method names. By-id dispatch uses a tagged pointer to this
+/// descriptor instead of a `StringHeader*`, because the latter belongs to the
+/// main thread's moving GC arena and is not valid in `perry/thread` workers.
+#[repr(C)]
+struct StaticDispatchString {
+    byte_len: u32,
+    flags: u32,
+    hash: u64,
+    bytes: *const u8,
+}
+
+const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;
+const STATIC_DISPATCH_FLAG_WTF8: u32 = 1;
 
 /// Resolve a static property/method id into a byte view.
 ///
 /// Accepted forms:
-/// - raw interned `StringHeader*` pointer payload (today's StringPool id);
+/// - tagged immutable [`StaticDispatchString`] pointer (current codegen);
+/// - raw interned `StringHeader*` pointer payload (legacy codegen);
 /// - boxed heap `STRING_TAG` bits;
 /// - boxed inline `SHORT_STRING_TAG` bits, copied into `scratch`.
 #[inline]
@@ -176,6 +201,28 @@ pub fn perry_string_ref_from_dispatch_id(
 
     let bits = id as u64;
     let tag = bits & crate::value::TAG_MASK;
+    if tag == STATIC_DISPATCH_TAG {
+        let descriptor =
+            (bits & crate::value::POINTER_MASK) as usize as *const StaticDispatchString;
+        if descriptor.is_null()
+            || (descriptor as usize & (std::mem::align_of::<StaticDispatchString>() - 1)) != 0
+        {
+            return None;
+        }
+        unsafe {
+            if (*descriptor).bytes.is_null() {
+                return None;
+            }
+            return Some(PerryStringRef {
+                ptr: (*descriptor).bytes,
+                len: (*descriptor).byte_len as usize,
+                heap: std::ptr::null(),
+                static_id: descriptor as usize,
+                hash: (*descriptor).hash,
+                is_wtf8: (*descriptor).flags & STATIC_DISPATCH_FLAG_WTF8 != 0,
+            });
+        }
+    }
     if tag == crate::value::STRING_TAG || tag == crate::value::SHORT_STRING_TAG {
         return str_bytes_from_jsvalue(f64::from_bits(bits), scratch).map(|(ptr, len)| {
             let jsval = crate::value::JSValue::from_bits(bits);
@@ -187,6 +234,9 @@ pub fn perry_string_ref_from_dispatch_id(
                 } else {
                     std::ptr::null()
                 },
+                static_id: 0,
+                hash: 0,
+                is_wtf8: false,
             }
         });
     }
@@ -207,7 +257,23 @@ pub fn perry_string_ref_from_dispatch_id(
             ptr: (hdr as *const u8).add(std::mem::size_of::<StringHeader>()),
             len: (*hdr).byte_len as usize,
             heap: hdr,
+            static_id: 0,
+            hash: 0,
+            is_wtf8: (*hdr).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
         })
+    }
+}
+
+/// Return a current-thread heap key for an API that still consumes a
+/// `StringHeader*`. Static AOT descriptors are materialized at most once per
+/// content-hash slot and thread; subsequent accesses are allocation-free, and
+/// the existing intern-table root scanner keeps the pointer GC-safe.
+#[inline]
+pub(crate) fn materialize_dispatch_key(key: PerryStringRef) -> *const StringHeader {
+    if !key.heap.is_null() {
+        key.heap
+    } else {
+        intern::intern_dispatch_bytes(key.static_id, key.ptr, key.len, key.hash, key.is_wtf8)
     }
 }
 

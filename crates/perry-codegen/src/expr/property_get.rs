@@ -271,6 +271,80 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(ctx.block().load(DOUBLE, &slot));
                 }
             }
+            // Representation-selection Phase 3a: `.length` on a statically-
+            // string receiver (canonical-Str local, `string[]` element,
+            // string-returning expression). The receiver bits are freshly
+            // produced with no safepoint before the header read (no
+            // forwarding hazard — evacuation rewrites slots/returns before
+            // the mutator resumes), so the ~18-op generic tower below
+            // (GC-type byte, forwarding flag, handle-band checks) collapses
+            // to a 3-arm tag dispatch: SSO → inline length-byte extract
+            // (`lshr 40; and 0xFF`, matching `js_value_length_f64`'s SSO
+            // branch), heap STRING_TAG → `load i32` of `utf16_len` at
+            // offset 0, anything else (annotation lie, nullable-union
+            // receiver) → the same `js_value_length_f64` slow call the
+            // generic tower's slow arm uses.
+            {
+                if crate::expr::canonical_str_locals_enabled()
+                    && is_string_expr(ctx, object)
+                    && !is_array_expr(ctx, object)
+                {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+                    let tag = ctx.block().lshr(I64, &bits, "48");
+                    let is_sso =
+                        ctx.block()
+                            .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+                    let sso_idx = ctx.new_block("strlen.sso");
+                    let chk_idx = ctx.new_block("strlen.chk");
+                    let heap_idx = ctx.new_block("strlen.heap");
+                    let slow_idx = ctx.new_block("strlen.slow");
+                    let merge_idx = ctx.new_block("strlen.merge");
+                    let sso_label = ctx.block_label(sso_idx);
+                    let chk_label = ctx.block_label(chk_idx);
+                    let heap_label = ctx.block_label(heap_idx);
+                    let slow_label = ctx.block_label(slow_idx);
+                    let merge_label = ctx.block_label(merge_idx);
+                    ctx.block().cond_br(&is_sso, &sso_label, &chk_label);
+
+                    ctx.current_block = sso_idx;
+                    let len_shifted = ctx.block().lshr(I64, &bits, "40");
+                    let len_byte = ctx.block().and(I64, &len_shifted, "255");
+                    let sso_len = ctx.block().uitofp(I64, &len_byte, DOUBLE);
+                    let sso_pred = ctx.block().label.clone();
+                    ctx.block().br(&merge_label);
+
+                    ctx.current_block = chk_idx;
+                    let is_heap =
+                        ctx.block()
+                            .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
+                    ctx.block().cond_br(&is_heap, &heap_label, &slow_label);
+
+                    ctx.current_block = heap_idx;
+                    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                    let len_i32 = ctx.block().safe_load_i32_from_ptr(&handle);
+                    let heap_len = ctx.block().uitofp(I32, &len_i32, DOUBLE);
+                    let heap_pred = ctx.block().label.clone();
+                    ctx.block().br(&merge_label);
+
+                    ctx.current_block = slow_idx;
+                    let slow_len =
+                        ctx.block()
+                            .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
+                    let slow_pred = ctx.block().label.clone();
+                    ctx.block().br(&merge_label);
+
+                    ctx.current_block = merge_idx;
+                    return Ok(ctx.block().phi(
+                        DOUBLE,
+                        &[
+                            (&sso_len, &sso_pred),
+                            (&heap_len, &heap_pred),
+                            (&slow_len, &slow_pred),
+                        ],
+                    ));
+                }
+            }
             // Issue #73: validate the receiver before the inline load.
             // The compile-time condition above fires for Array / String /
             // Named / Tuple, but TypeScript type erasure (a `Named`-typed
@@ -1227,6 +1301,84 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .map(|(fact, _)| fact.obj_ptr.clone()),
                             _ => None,
                         };
+                        // Representation-selection Phase 3b: shape-proven
+                        // Ptr<Shape> local (collectors/ptr_shape.rs). The
+                        // guard diamond is statically proven away — emit the
+                        // bare fixed-offset load: slot reload (the local's
+                        // shadow-bound alloca; rebase-after-safepoint falls
+                        // out of alias analysis) → bitcast → POINTER_MASK →
+                        // gep header → gep index → load. No volatile gate, no
+                        // header checks, no fallback arm, no phi.
+                        // Phase 5a extends the same proof to `this` inside a
+                        // proven-`this` method clone (collectors/proven_this.rs).
+                        let ptr_shape_fact = ctx
+                            .ptr_shape_receiver_fact(object.as_ref())
+                            .filter(|fact| fact.class_name == class_name)
+                            .cloned();
+                        if let Some(fact) = ptr_shape_fact {
+                            let recv_box = lower_expr(ctx, object)?;
+                            let field_idx_str = field_index.to_string();
+                            let header_skip =
+                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
+                                    .to_string();
+                            let numeric = fact.numeric_fields.contains(property);
+                            let blk = ctx.block();
+                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                            let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                            let val = blk.load(DOUBLE, &field_ptr);
+                            let (semantic, rep) = if numeric {
+                                (SemanticKind::JsNumber, NativeRep::F64)
+                            } else {
+                                // Bit-identical NaN-boxed value; consumers
+                                // keep generic dispatch (the field may hold
+                                // any value class).
+                                (SemanticKind::JsValue, NativeRep::JsValue)
+                            };
+                            let fast = LoweredValue {
+                                semantic,
+                                rep,
+                                llvm_ty: DOUBLE,
+                                value: val.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode_and_facts(
+                                "ClassFieldGet",
+                                None,
+                                "class_field_get.shape_proven_load",
+                                &fast,
+                                Some(BoundsState::Guarded {
+                                    guard_id: "ptr_shape_static_proof".to_string(),
+                                }),
+                                None,
+                                Some(BufferAccessMode::CheckedNative),
+                                None,
+                                None,
+                                None,
+                                if numeric {
+                                    vec![raw_f64_layout_fact(
+                                        None,
+                                        "consumed",
+                                        "ptr_shape_static_proof",
+                                        None,
+                                    )]
+                                } else {
+                                    Vec::new()
+                                },
+                                Vec::new(),
+                                false,
+                                false,
+                                vec![
+                                    format!("class={}", class_name),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                    "receiver_proof=ptr_shape_local".to_string(),
+                                    format!("numeric_proven={}", numeric),
+                                ],
+                            );
+                            return Ok(val);
+                        }
                         if let Some(obj_ptr) = loop_fact_ptr {
                             let field_idx_str = field_index.to_string();
                             let header_skip =

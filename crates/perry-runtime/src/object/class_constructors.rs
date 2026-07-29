@@ -108,7 +108,7 @@ pub extern "C" fn js_register_class_constructor_flags(
 }
 
 /// Keepalive anchor (generated-code-only callee).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_REGISTER_CLASS_CONSTRUCTOR_FLAGS: extern "C" fn(i64, i64, i64) =
     js_register_class_constructor_flags;
 
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn js_class_register_capture_values(
 
 /// Keepalive anchor for the auto-optimize whole-program build —
 /// `js_class_register_capture_values` is a generated-code-only callee.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_CLASS_REGISTER_CAPTURE_VALUES: unsafe extern "C" fn(u32, *const f64, usize) =
     js_class_register_capture_values;
 
@@ -351,12 +351,12 @@ pub(crate) fn fallback_is_tag_stripped(fallback: f64) -> bool {
 }
 
 /// Keepalive anchors (generated-code-only callees).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_CLASS_CAPTURE_VALUE: extern "C" fn(u32, u32) -> f64 = js_class_capture_value;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_CLASS_CAPTURE_VALUE_OR: extern "C" fn(u32, u32, f64) -> f64 =
     js_class_capture_value_or;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_PARAM_OR_CLASS_CAPTURE_VALUE: extern "C" fn(f64, u32, u32) -> f64 =
     js_param_or_class_capture_value;
 
@@ -529,6 +529,11 @@ pub unsafe extern "C" fn js_super_construct_apply(
     // value is the Intl constructor closure; run it (new.target set) and re-home
     // the branded instance onto `this`, the spread counterpart of the
     // `js_fetch_or_value_super` Intl branch.
+    // `class X extends Intl.<Ctor>` — behind `intl-namespace` for the same
+    // reason as the instanceof probe: with the feature off no Intl
+    // constructor value exists, so the branch is unreachable, and skipping it
+    // keeps this always-live path from pinning the Intl constructor web.
+    #[cfg(feature = "intl-namespace")]
     {
         let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
         if crate::intl::is_intl_constructor_value(parent_val) {
@@ -549,7 +554,7 @@ pub unsafe extern "C" fn js_super_construct_apply(
 }
 
 /// Keepalive anchor (generated-code-only callee).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SUPER_CONSTRUCT_APPLY: unsafe extern "C" fn(u32, f64, f64) -> f64 =
     js_super_construct_apply;
 
@@ -714,7 +719,7 @@ unsafe fn call_displaced_native_base_method(
 }
 
 /// Keepalive anchor (generated-code-only callee).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC: unsafe extern "C" fn(
     u32,
     *const u8,
@@ -771,7 +776,7 @@ pub unsafe extern "C" fn js_super_method_call_dynamic_apply(
 }
 
 /// Keepalive anchor (generated-code-only callee).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC_APPLY: unsafe extern "C" fn(
     u32,
     *const u8,
@@ -927,7 +932,7 @@ pub unsafe extern "C" fn js_array_push_spread_any(
 }
 
 /// Keepalive anchor (generated-code-only callee).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_PUSH_SPREAD_ANY: unsafe extern "C" fn(
     *mut crate::array::ArrayHeader,
     f64,
@@ -1025,7 +1030,7 @@ pub unsafe extern "C" fn js_error_subclass_default_init(
 }
 
 /// Keepalive: generated code is the only caller (#6469).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT: unsafe extern "C" fn(
     f64,
     f64,

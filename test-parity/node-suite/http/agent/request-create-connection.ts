@@ -15,31 +15,42 @@ const server = http.createServer((req, res) => {
   res.end("hello from server");
 });
 
-server.listen(0, () => {
-  const addr = server.address();
-  const port = typeof addr === "object" && addr !== null ? addr.port : 0;
-
-  const agent = new http.Agent();
-  let created = false;
-  agent.createConnection = (options: any) => {
-    created = true;
-    return net.connect(options.port, options.host);
-  };
-
-  const req = http.request(
-    { host: "localhost", port, path: "/", agent },
-    (res: any) => {
-      let body = "";
-      res.on("data", (chunk: any) => {
-        body += chunk.toString();
-      });
-      res.on("end", () => {
-        console.log("status:", res.statusCode);
-        console.log("body:", body);
-        console.log("createConnection called:", created);
-        server.close();
-      });
-    },
-  );
-  req.end();
+await new Promise<void>((resolve, reject) => {
+  server.once("error", reject);
+  server.listen(0, "127.0.0.1", resolve);
 });
+const addr = server.address();
+if (!addr || typeof addr === "string") throw new Error("missing address");
+
+const agent = new http.Agent();
+let created = false;
+agent.createConnection = (options: any) => {
+  created = true;
+  return net.connect(options.port, "127.0.0.1");
+};
+
+try {
+  await new Promise<void>((resolve, reject) => {
+    const req = http.request(
+      { host: "127.0.0.1", port: addr.port, path: "/", agent },
+      (res: any) => {
+        let body = "";
+        res.on("data", (chunk: any) => {
+          body += chunk.toString();
+        });
+        res.once("error", reject);
+        res.on("end", () => {
+          console.log("status:", res.statusCode);
+          console.log("body:", body);
+          console.log("createConnection called:", created);
+          resolve();
+        });
+      },
+    );
+    req.once("error", reject);
+    req.end();
+  });
+} finally {
+  agent.destroy();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}

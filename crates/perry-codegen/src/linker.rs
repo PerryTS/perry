@@ -216,6 +216,20 @@ fn build_clang_compile_plan(
         clang_args.push("-g".to_string());
     }
     clang_args.push("-fno-math-errno".to_string());
+    // Inline-hot-small (#6850 follow-up): raise LLVM's `-inlinehint-threshold`
+    // so `inlinehint`-marked callees (Perry stamps that ONLY on small functions
+    // with an in-loop call site — see codegen/function.rs) actually inline into
+    // their hot loops. The default hint threshold (325) is below the ~800 cost
+    // of a NaN-boxed bit-mixer kernel. This only lifts the ceiling for hinted
+    // functions; every other function keeps the base -O3 threshold, so cold
+    // code is untouched (the anti-bloat property). Only meaningful at -O3.
+    if opt_flag == "-O3" && crate::codegen::helpers::inline_hot_small_enabled() {
+        clang_args.push("-mllvm".to_string());
+        clang_args.push(format!(
+            "-inlinehint-threshold={}",
+            crate::codegen::helpers::inline_hot_small_hint_threshold()
+        ));
+    }
     if let Some(arg) = &native_tuning_arg {
         clang_args.push(arg.clone());
     }

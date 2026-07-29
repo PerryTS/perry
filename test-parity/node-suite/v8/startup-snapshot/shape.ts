@@ -9,11 +9,13 @@ console.log("addDeserializeCallback:", typeof s.addDeserializeCallback);
 console.log("setDeserializeMainFunction:", typeof s.setDeserializeMainFunction);
 console.log("isBuildingSnapshot():", s.isBuildingSnapshot());
 
-for (const [name, fn] of [
-  ["addSerializeCallback", s.addSerializeCallback],
-  ["addDeserializeCallback", s.addDeserializeCallback],
-  ["setDeserializeMainFunction", s.setDeserializeMainFunction],
-] as const) {
+for (
+  const [name, fn] of [
+    ["addSerializeCallback", s.addSerializeCallback],
+    ["addDeserializeCallback", s.addDeserializeCallback],
+    ["setDeserializeMainFunction", s.setDeserializeMainFunction],
+  ] as const
+) {
   try {
     fn(() => {});
     console.log(name + ": no throw");
