@@ -174,7 +174,7 @@
       "description": "NVIDIA's third-party-skill security scanner (LangGraph-based; YARA + AST + OSV.dev CVE lookups + optional LLM analysis). No PyPI release / no GH tags upstream — pinned to a git SHA on main + installed via a locked uv project (pyproject.toml + uv.lock, `uv sync --locked`; the fleet uv pin + exclude-newer make it reproducible). Sibling to AgentShield: AgentShield audits the operator's .claude/ config; SkillSpector audits untrusted upstream skills before install.",
       "release": "uv-project",
       "repository": "github:NVIDIA/skillspector",
-      "version": "2eb84478",
+      "version": "2eb844780ab163f01468ecf142c40a2ec0fcaec0",
       "versionDate": "2026-05-18"
     }
   }

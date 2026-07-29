@@ -131,7 +131,7 @@ jobs:
           for skill in .claude/skills/*/; do
             echo "::group::skillspector ${skill}"
             uv tool run --python 3.12 \
-              --from git+https://github.com/NVIDIA/skillspector@2eb84478 \
+              --from git+https://github.com/NVIDIA/skillspector@2eb844780ab163f01468ecf142c40a2ec0fcaec0 \
               skillspector scan "${skill}" --no-llm
             echo "::endgroup::"
           done
