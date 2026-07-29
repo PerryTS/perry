@@ -52,6 +52,16 @@ pub(crate) fn temp_root_get_double(ctx: &mut FnCtx<'_>, idx: &str) -> String {
     ctx.block().bitcast_i64_to_double(&bits)
 }
 
+/// Overwrite slot `idx` with a new raw `i64`.
+///
+/// For producers that hand back a *different* address each round — the
+/// `concat` accumulator (#6971), where every `js_string_concat` yields a new
+/// string and the old one stops being the value that must stay alive.
+pub(crate) fn temp_root_set_i64(ctx: &mut FnCtx<'_>, idx: &str, value_i64: &str) {
+    ctx.block()
+        .call_void("js_gc_temp_root_set", &[(I32, idx), (I64, value_i64)]);
+}
+
 /// Drop slot `idx` and everything pushed above it.
 pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
     ctx.block()
