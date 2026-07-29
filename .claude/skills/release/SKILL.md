@@ -1,134 +1,95 @@
 ---
 name: release
-description: Create a new Perry release — tag the current HEAD (version already in Cargo.toml / CLAUDE.md from prior commits), push the tag, create a GitHub release, and watch the gated release-packages workflow
+description: Create a new Perry release via the tag-LAST pipeline — dispatch release-packages.yml in cut_release mode on a pinned branch, let it gate + build everything, and only then does CI create the vX.Y.Z tag + GitHub Release and publish
 disable-model-invocation: true
-argument-hint: [optional: "minor" to request a minor bump instead of just tagging HEAD, or free-text release highlights]
+argument-hint: [optional free-text notes for the operator; the release notes themselves come from changelog.d fragments]
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep
 ---
 
-# New Perry Release
+# New Perry Release (tag-last)
 
 ## Model (important — read before acting)
 
-Perry's day-to-day workflow already bumps the patch version on **every** commit that lands on `main`. The CLAUDE.md workflow rule is explicit: each on-main commit touches `[workspace.package] version` in `Cargo.toml` and prepends a `Recent Changes` entry in `CLAUDE.md`. That means by the time `/release` runs, the current HEAD already knows what version it is.
+Perry releases are **tag-last**: nothing public happens until the test gate and every build leg are green. You dispatch `release-packages.yml` with `cut_release=true` on a branch pinned at the release candidate; the workflow then:
 
-`/release` therefore does **not**:
-- bump the version (it's already bumped)
-- commit anything (the work is already committed, usually across many commits)
-- write a changelog entry (already in CLAUDE.md)
+1. `preflight` — resolves `vX.Y.Z` from `Cargo.toml` on that SHA, fails fast if the tag already exists, if CLAUDE.md's `**Current Version:**` disagrees, or if `changelog.d/` has no fragments.
+2. `await-tests` — dispatches `test.yml` + `simctl-tests.yml` on the branch if no run exists on the SHA yet, then polls by head SHA until both are green.
+3. `build` + `build-cross` — all release binaries, archives as workflow artifacts.
+4. `create-release` — **only now** creates the tag + GitHub Release (notes concatenated from `changelog.d/` fragments via `cut_release_notes.sh --notes-only`), and dispatches the tag-rider workflows (docs, benchmark, container-tests) on the new tag.
+5. `publish-assets` → homebrew / apt / apt-repo / winget / npm / update-workers.
 
-What `/release` **does**:
-1. Reads the current version off HEAD
-2. Tags HEAD with `vX.Y.Z` and pushes the tag
-3. Creates a GitHub Release (notes assembled from the commits since the previous tag)
-4. Watches `release-packages.yml` — which now gates on `Tests` + `Simulator Tests (iOS)` — and reports when publish succeeds or fails
+So a red gate or a broken build leg costs **nothing**: no burned tag, no half-published release. Version numbers only get consumed by releases that actually shipped.
 
-There will typically be tens of commits between releases. That's normal; releases are a distribution event, not a commit event.
+`/release` does **not** bump versions, commit code, or write release notes — versions ride on every merged PR, and notes are the accumulated `changelog.d/` fragments.
 
 ## Steps
 
 ### 1. Sanity checks
 
-- `git status` — **must be clean**. If there are uncommitted changes, STOP and report. Those changes belong in regular commits (with version bumps + CLAUDE.md entries), not folded silently into a release.
+- `git status` — **must be clean**. If not, STOP and report.
 - `git rev-parse --abbrev-ref HEAD` — must be `main`. If not, STOP.
 - `git fetch origin && git log HEAD..origin/main --oneline` — must be empty. If origin is ahead, pull/resolve first.
+- `ls changelog.d/[0-9]*.md` — at least one fragment must exist (they become the release notes). None → nothing to release, STOP.
 
-### 2. Read the current version
+### 2. Read the version + verify the tag is free
 
-Grep `Cargo.toml` for `^version = "` under `[workspace.package]`. This is the version to tag. Do **not** bump it here — the `$ARGUMENTS` "minor" handling is only for the edge case where the most recent on-main commit forgot to bump, which is rare.
+- `VERSION` from `[workspace.package]` in `Cargo.toml`; must match CLAUDE.md's `**Current Version:**` line. Disagreement → STOP (preflight would also catch it, but catch it here in seconds).
+- `git ls-remote origin "refs/tags/v$VERSION"` — must be empty. A hit means this version already shipped; land a bump first.
 
-Verify: `perry --version` (if installed locally) should match, and the `**Current Version:**` line in CLAUDE.md should match. If the three sources disagree, STOP and report — something is off in the history.
-
-### 3. Verify the tag doesn't exist
-
-```bash
-git rev-parse "vX.Y.Z" 2>/dev/null && echo "tag exists — aborting" && exit 1
-```
-
-If the tag already exists locally or on origin, STOP. Either the release already shipped, or someone started it and didn't finish; either way, don't silently duplicate.
-
-### 4. Survey commits since the last tag
+### 3. Pin the candidate + dispatch
 
 ```bash
-last_tag=$(git describe --tags --abbrev=0)
-git log "$last_tag"..HEAD --oneline
+git branch "release/v$VERSION" HEAD
+git push origin "release/v$VERSION"
+gh workflow run release-packages.yml --ref "release/v$VERSION" -f cut_release=true
 ```
 
-There may be 20–60 commits. Read their subjects, mentally group by `fix:` / `feat:` / `docs:` / `chore:`. The GitHub Release body will summarize them. Don't paste the raw commit list — the release notes should be a *summary*.
+The pinned branch matters for two reasons: `workflow_dispatch` always runs on a ref's **tip** (so `main` moving would shift the SHA under you), and `test.yml`'s `test-<ref>` concurrency group means dispatching tests on `main` cancels a running nightly.
 
-### 5. Tag + push
+Optional pre-warm: dispatch `test.yml` + `simctl-tests.yml` on the branch yourself right away — the gate matches any run on the SHA, so pre-flighted runs subtract their ~30 min from the critical path. If you skip this, `await-tests` dispatches them for you.
 
-```bash
-git tag "vX.Y.Z"
-git push origin "vX.Y.Z"
-```
-
-This tag push fires three workflows in parallel (see `.github/workflows/`):
-- `test.yml` — runs the full PR test matrix on the tag SHA
-- `simctl-tests.yml` — tier-2 iOS simulator doc-example verification
-- `release-packages.yml` — waits for the two above via its `await-tests` gate job, then builds binaries and publishes brew / apt / npm / GitHub release assets
-
-### 6. Create the GitHub Release
-
-```bash
-gh release create "vX.Y.Z" \
-  --title "vX.Y.Z" \
-  --notes "$(cat <<'EOF'
-## Highlights
-- ...
-
-## Fixes
-- ...
-
-## Features
-- ...
-
-## Infrastructure
-- ...
-EOF
-)"
-```
-
-Group the commits since the last tag by type. Keep each bullet to one line. Link to issue numbers where the commit message mentions them. If `$ARGUMENTS` was provided, use it as the "Highlights" seed.
-
-**Note**: `release-packages.yml` also triggers on `release: published`. Since we already pushed the tag in step 5, both the tag-push and release-published paths converge — `concurrency` at the workflow level deduplicates.
-
-### 7. Watch the gated publish
+### 4. Watch
 
 ```bash
 gh run watch $(gh run list --workflow="Release Packages" --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
-Expected timeline on the tag push:
-- `Tests` finishes in ~12 min
-- `Simulator Tests (iOS)` finishes in ~15 min
-- `release-packages` `await-tests` unblocks when both are green, then build+publish runs ~20 min
+Expected timeline: gate ~30 min (queue-dependent; 120-min budget) → builds ~30-40 min → create-release seconds → publish ~20 min.
 
-If `await-tests` shows a failed gate workflow in its logs, the release is blocked. Investigate the failed run, fix on main, cut the next patch. Do **not** re-tag vX.Y.Z — bump to vX.Y.(Z+1) and tag that. Retagging a published tag is a cardinal sin.
+### 5. After success: fold fragments + clean up
 
-### 8. Verify locally (optional but recommended)
+The release exists, but the fragments that became its notes are still on `main`:
 
-After the release is published:
 ```bash
-cargo install --path crates/perry --force
-perry --version  # should print vX.Y.Z
+./scripts/cut_release_notes.sh --fold "v$VERSION"   # removes exactly the fragments recorded at the tag, commits
+git push origin main                                 # or via PR, per protection rules
+git push origin ":release/v$VERSION"                 # drop the pin branch
 ```
 
-Report back:
-- GitHub release URL
-- Whether `release-packages.yml` was green end-to-end
-- Local `perry --version` confirming the new build
+`--fold` is tag-scoped: fragments merged after the release SHA survive for the next release.
+
+### 6. Verify (optional but recommended)
+
+```bash
+cargo install --path crates/perry --force && perry --version   # should print X.Y.Z
+```
+
+Report back: GitHub release URL, whether release-packages was green end-to-end, local `perry --version`.
 
 ## Failure modes
 
-- **Dirty worktree**: STOP. Don't commit; hand control back to the user.
-- **Tag already exists**: STOP. Investigate before deciding whether to bump further or resume a partial release.
-- **Gate workflow failed (Tests or Simulator Tests)**: the tag is public but the release can't publish. Fix on main, push a new patch commit (with its own version bump + CLAUDE.md entry), then `/release` again. The stale vX.Y.Z tag is harmless — no assets, no GH release body; some git log noise.
-- **`release-packages.yml` build leg failed**: similar — investigate, patch forward, never retag.
+- **Preflight red** (tag exists / version drift / no fragments): nothing ran. Fix, re-dispatch.
+- **Gate or build red**: nothing was tagged or published. Fix on `main` (normal PR, version bumps at merge), delete + re-pin the branch at the new candidate, re-dispatch. No version number is burned — the same `vX.Y.Z` can try again if the version didn't move.
+- **Publish leg red (after create-release)**: the tag + release exist with partial assets. `gh run rerun <run-id> --failed` reruns the failed legs and everything downstream of them; the npm job is idempotent (skips already-published versions). Never delete/re-create the tag.
+- **Branch moved under the dispatch**: `await-tests` fails fast with "ref moved" — re-pin and re-dispatch.
+
+## Fallback: legacy tag-first path
+
+Still fully supported if CI dispatch is unavailable: `./scripts/cut_release_notes.sh vX.Y.Z` from a clean main creates the tag + release (notes from fragments, removal committed for you); the `release: published` event runs the same pipeline with the same test gate. Re-publish an existing release with `gh workflow run release-packages.yml -f existing_tag=vX.Y.Z` (add `-f publish_npm=true` to redo npm).
 
 ## What NOT to do
 
-- Do not create commits during the release. If CLAUDE.md needs an entry, it needed it at commit time; it's too late now.
-- Do not rewrite or amend the version-bump commit. Just tag HEAD as-is.
-- Do not use `git add -A` anywhere in this skill — a dirty worktree is a STOP condition, not a thing to sweep into a release.
-- Do not force-push tags.
+- Do not create the tag or GitHub Release yourself in the tag-last flow — `create-release` does it, and a pre-existing tag makes preflight abort.
+- Do not re-tag or force-push tags, ever. A failed publish is rerun-able; a mutated public tag is not.
+- Do not commit anything during the release except the `--fold` commit afterwards.
+- Do not use `git add -A` anywhere in this skill.

@@ -74,7 +74,7 @@ fn notify_crypto_key_death(addr: usize) {
     hook(addr);
 }
 
-pub type CryptoKeyMeta = (u8, u8, u8, bool, u32);
+pub type CryptoKeyMeta = (u8, u8, u8, bool, u32, u32);
 
 thread_local! {
     static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -284,6 +284,7 @@ pub fn mark_as_crypto_key(addr: usize, algo: u8, hash: u8, kind: u8) {
         kind,
         true,
         default_crypto_key_usages(algo, kind),
+        0,
     );
 }
 
@@ -294,10 +295,11 @@ pub fn mark_as_crypto_key_with_flags(
     kind: u8,
     extractable: bool,
     usages: u32,
+    bit_length: u32,
 ) {
     CRYPTO_KEY_META_REGISTRY.with(|r| {
         r.borrow_mut()
-            .insert(addr, (algo, hash, kind, extractable, usages));
+            .insert(addr, (algo, hash, kind, extractable, usages, bit_length));
     });
 }
 
@@ -309,10 +311,11 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     kind: u8,
     extractable: u8,
     usages: u32,
+    bit_length: u32,
 ) {
     register_buffer(addr as *const BufferHeader);
     mark_as_uint8array(addr);
-    mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages);
+    mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages, bit_length);
     // Latch BEFORE the insert — see js_buffer_register_external.
     EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_buffers().lock() {
@@ -322,7 +325,10 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
         r.insert(addr);
     }
     if let Ok(mut r) = external_crypto_keys().lock() {
-        r.insert(addr, (algo, hash, kind, extractable != 0, usages));
+        r.insert(
+            addr,
+            (algo, hash, kind, extractable != 0, usages, bit_length),
+        );
     }
 }
 

@@ -837,8 +837,24 @@ pub fn run_with_parse_cache(
             .filter(|f| f.is_exported)
             .map(|f| &f.name)
             .collect();
+        // Alias exports bound to DECLARED functions (`export const decodeSync =
+        // decodeUnknownSync` / `export { impl as api }`) land in BOTH
+        // `exported_objects` and `exported_functions` (HIR records the alias
+        // with the origin FuncId, gated on `lookup_func`, so const-closures
+        // never appear here). Their cross-module symbol resolves through
+        // origin-name mapping to the FUNCTION BODY, not a var getter —
+        // classifying them as vars made consumers 0-arg "getter"-call the
+        // symbol, silently EXECUTING the function at import-read time
+        // (Effect's `decodeSync` ran `decodeUnknownSync(undefined)` during
+        // module init → "Cannot read properties of undefined (reading
+        // 'checks')").
+        let function_alias_names: std::collections::HashSet<&String> = hir_module
+            .exported_functions
+            .iter()
+            .map(|(n, _)| n)
+            .collect();
         for obj_name in &hir_module.exported_objects {
-            if is_function_decl.contains(obj_name) {
+            if is_function_decl.contains(obj_name) || function_alias_names.contains(obj_name) {
                 continue;
             }
             let key = (path_str.clone(), obj_name.clone());
@@ -1874,6 +1890,30 @@ pub fn run_with_parse_cache(
                         global.id
                     );
                     perry_codegen::NamespaceEntryKind::LocalVar { global_name: gname }
+                } else if let Some(func) = target_hir
+                    .exported_functions
+                    .iter()
+                    .find(|(n, _)| n == &fe.source_local || n == &fe.name)
+                    .and_then(|(_, fid)| target_hir.functions.iter().find(|f| f.id == *fid))
+                {
+                    // Alias export bound to a declared function
+                    // (`export const decodeEffect = decodeUnknownEffect`).
+                    // The ForeignVar fallback below getter-CALLS
+                    // `perry_fn_<mod>__<alias>` — but for aliases that symbol
+                    // is the #460 forwarding wrapper (the function body), so
+                    // the populator EXECUTED the function with zeroed args at
+                    // module init (Effect SchemaParser: decodeUnknownEffect
+                    // ran during init → "Cannot read properties of undefined
+                    // (reading 'checks')"). Resolve to the ORIGIN function's
+                    // closure singleton instead, matching plain declarations.
+                    let scoped = format!(
+                        "perry_fn_{}__{}",
+                        sanitize_module_name(&target_hir.name),
+                        sanitize_module_name(&func.name)
+                    );
+                    perry_codegen::NamespaceEntryKind::LocalFunction {
+                        wrap_symbol: format!("__perry_wrap_{}", scoped),
+                    }
                 } else {
                     // Best-effort: treat unknown locals as Var sourced
                     // by getter. This covers re-export shapes that the
@@ -1900,6 +1940,22 @@ pub fn run_with_parse_cache(
                         src.classes.iter().find(|c| c.name == fe.source_local)
                     {
                         perry_codegen::NamespaceEntryKind::LocalClass { class_id: class.id }
+                    } else if let Some(func) = src
+                        .exported_functions
+                        .iter()
+                        .find(|(n, _)| n == &fe.source_local || n == &fe.name)
+                        .and_then(|(_, fid)| src.functions.iter().find(|f| f.id == *fid))
+                    {
+                        // Cross-module alias of a declared function — same
+                        // hazard as the local-binding arm above: the
+                        // ForeignVar getter-call would EXECUTE the forwarding
+                        // wrapper. Route to the origin function's closure
+                        // singleton via ForeignFunction under its ORIGIN name.
+                        perry_codegen::NamespaceEntryKind::ForeignFunction {
+                            source_prefix: source_prefix.clone(),
+                            source_local: func.name.clone(),
+                            param_count: func.params.len(),
+                        }
                     } else {
                         perry_codegen::NamespaceEntryKind::ForeignVar {
                             source_prefix: source_prefix.clone(),

@@ -72,6 +72,7 @@ extern "C" {
         kind: u8,
         extractable: u8,
         usages: u32,
+        bit_length: u32,
     );
 }
 
@@ -280,6 +281,14 @@ pub(super) static CRYPTO_KEY_REGISTRY: Lazy<Mutex<HashMap<usize, CryptoKeyMateri
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub(super) fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
+    register_crypto_key_with_bit_length(buf_addr, mat, 0);
+}
+
+pub(super) fn register_crypto_key_with_bit_length(
+    buf_addr: usize,
+    mat: CryptoKeyMaterial,
+    bit_length: u32,
+) {
     CRYPTO_KEY_REGISTRY.lock().unwrap().insert(buf_addr, mat);
     unsafe {
         js_buffer_mark_as_crypto_key_external(
@@ -289,6 +298,7 @@ pub(super) fn register_crypto_key(buf_addr: usize, mat: CryptoKeyMaterial) {
             runtime_key_kind_id(mat.kind),
             u8::from(mat.extractable),
             mat.usages,
+            bit_length,
         );
     }
 }
@@ -367,7 +377,7 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
         .get(&buf_addr)
         .copied()
         .or_else(|| {
-            let (algo, hash, kind, extractable, usages) =
+            let (algo, hash, kind, extractable, usages, _bit_length) =
                 perry_runtime::buffer::crypto_key_meta(buf_addr)?;
             let algo = match algo {
                 1 => KeyAlgo::Hmac,
@@ -973,10 +983,7 @@ pub(super) fn compute_kmac(
     data: &[u8],
     output_bits: u32,
 ) -> Option<Vec<u8>> {
-    if output_bits % 8 != 0 {
-        return None;
-    }
-    let mut out = vec![0u8; (output_bits / 8) as usize];
+    let mut out = vec![0u8; output_bits.div_ceil(8) as usize];
     match algo {
         KeyAlgo::Kmac128 => {
             use sha3_010::digest::{core_api::CoreProxy, ExtendableOutput, Update, XofReader};

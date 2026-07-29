@@ -500,6 +500,19 @@ date_setter_thunk!(date_set_utc_milliseconds, 1, 6);
 /// both. A `Date` is a specific INSTANT, so we shift its epoch into the resolved
 /// zone's wall clock (the `timeZone` option, else the host zone) before
 /// formatting it as the now-zone-agnostic date-time.
+/// Locale-aware `Date.prototype.toLocale*String`. Behind `intl-namespace`
+/// (which the compiler enables on any `toLocale*` token, among others): with
+/// the feature off no program in this binary can call these thunks, so the
+/// fallback simply defers to the non-locale formatter instead of statically
+/// pinning the Intl formatting web from the always-installed Date prototype.
+#[cfg(not(feature = "intl-namespace"))]
+fn date_to_locale_opts_impl(_rest: f64, _ctx: crate::intl::TemporalLocaleCtx) -> f64 {
+    let this = require_date_this();
+    let s = crate::date::js_date_to_locale_string(this);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+#[cfg(feature = "intl-namespace")]
 fn date_to_locale_opts_impl(rest: f64, ctx: crate::intl::TemporalLocaleCtx) -> f64 {
     let this = require_date_this();
     let epoch_ms = crate::date::date_cell_timestamp(this);

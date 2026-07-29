@@ -902,6 +902,131 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Inline-hot-small (#6850 follow-up): the enable flag changes the emitted
+    // IR (`inlinehint` attribute) AND the clang args (`-inlinehint-threshold`),
+    // and the size-cap / threshold change which functions get the hint and how
+    // aggressively they inline — all affect the .o bytes, so a warm cache must
+    // not serve an object built under a different setting.
+    h.field(
+        "env_inline_hot_small",
+        env_var("PERRY_INLINE_HOT_SMALL").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_inline_hot_small_cap",
+        env_var("PERRY_INLINE_HOT_SMALL_CAP")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_inline_hot_small_threshold",
+        env_var("PERRY_INLINE_HOT_SMALL_THRESHOLD")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_inline_hot_small_max_sites",
+        env_var("PERRY_INLINE_HOT_SMALL_MAX_SITES")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // Non-BigInt inline bitwise fast path: `=0`/`off`/`false` reverts the six
+    // bitwise ops to the `js_dynamic_bit*` runtime call for non-statically-
+    // numeric operands, which changes the emitted IR / .o bytes — a warm cache
+    // must not serve an object built under the other setting.
+    h.field(
+        "env_inline_nonbigint_bitwise",
+        env_var("PERRY_INLINE_NONBIGINT_BITWISE")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // Inline checked-f64 typed-array-param read: `=0`/`off`/`false` reverts a
+    // numeric-context typed-array parameter read (`n += S[i]`) from the inline
+    // checked load back to the `js_typed_array_get` runtime call, which changes
+    // the emitted IR / .o bytes — a warm cache must not serve an object built
+    // under the other setting.
+    h.field(
+        "env_ta_param_f64_read",
+        env_var("PERRY_TA_PARAM_F64_READ").as_deref().unwrap_or(""),
+    );
+    // Native-i32 residency for integer-valued locals seeded by possibly-OOB int
+    // typed-array reads (bcryptjs `_encipher` Feistel accumulators): `=0`/`off`/
+    // `false` reverts `l`/`r`-shaped locals from an i32 shadow slot back to the
+    // f64 slot + per-access ToInt32 round-trip, which changes the emitted IR /
+    // .o bytes — a warm cache must not serve an object built under the other
+    // setting.
+    h.field(
+        "env_int_valued_locals",
+        env_var("PERRY_INT_VALUED_LOCALS").as_deref().unwrap_or(""),
+    );
+    // Representation-selection Phase 1 — canonical unboxed i32 locals:
+    // `=0`/`off`/`false` reverts eligible integer locals from canonical-i32
+    // storage (single i32 slot, no double slot, no shadow binding) back to
+    // the parallel-shadow model (double slot + mirrored i32 writes), which
+    // changes the emitted IR / .o bytes — a warm cache must not serve an
+    // object built under the other setting.
+    h.field(
+        "env_canonical_i32_locals",
+        env_var("PERRY_CANONICAL_I32_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // Representation-selection Phase 3a — canonical string locals
+    // (tagged-at-rest): `=0`/`off`/`false` reverts the Str-gated lowerings
+    // (`+=` tag-dispatch, inline `.length`, direct string compares, the
+    // char-access receiver fast arm, and the inline StringRef retag) back to
+    // the pre-phase sequences, which changes the emitted IR / .o bytes — a
+    // warm cache must not serve an object built under the other setting.
+    h.field(
+        "env_canonical_str_locals",
+        env_var("PERRY_CANONICAL_STR_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // Representation-selection Phase 2 — specialized calling convention:
+    // `PERRY_SPECIALIZED_ABI=0/off/false` removes the specialized entries and
+    // their static/guarded dispatch sites; `PERRY_SPECIALIZED_ABI_MAX`
+    // changes which functions get an entry. Both change emitted IR / .o
+    // bytes — an unkeyed flag would make A/B arms silently share objects.
+    h.field(
+        "env_specialized_abi",
+        env_var("PERRY_SPECIALIZED_ABI").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_specialized_abi_max",
+        env_var("PERRY_SPECIALIZED_ABI_MAX")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // Representation-selection Phase 3b — shape-proven Ptr<Shape> locals:
+    // `=0`/`off`/`false` reverts proven object locals from bare fixed-offset
+    // access (no guard diamond, unguarded direct method calls) back to the
+    // guarded class-field path, which changes the emitted IR / .o bytes — a
+    // warm cache must not serve an object built under the other setting.
+    h.field(
+        "env_ptr_shape_locals",
+        env_var("PERRY_PTR_SHAPE_LOCALS").as_deref().unwrap_or(""),
+    );
+    // Representation-selection Phase 5a — proven-`this` method clones. Off
+    // removes the `__pshape` bodies and routes both proven call sites back to
+    // the public guarded body, changing the emitted IR / .o bytes.
+    h.field(
+        "env_ptr_shape_this",
+        env_var("PERRY_PTR_SHAPE_THIS").as_deref().unwrap_or(""),
+    );
+    // Representation-selection Phase 4a.3 — Ptr<NumArray> locals:
+    // `=0`/`off`/`false` reverts proven numeric-array locals from guard-free
+    // element access back to the Phase 4a.1/4a.2 guarded tiers, which changes
+    // the emitted IR / .o bytes — a warm cache must not serve an object built
+    // under the other setting.
+    h.field(
+        "env_ptr_numarray_locals",
+        env_var("PERRY_PTR_NUMARRAY_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // FEAT_JSCVT ToInt32 (`fjcvtzs` on apple-arm64): flipping it changes
+    // every `toint32_wrap` emission site's IR, so it must key the cache.
+    h.field("env_jscvt", env_var("PERRY_JSCVT").as_deref().unwrap_or(""));
 
     h.finish()
 }

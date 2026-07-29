@@ -443,10 +443,10 @@ fn data_view_method_name<'a>(buf: &'a mut [u8; 16], prefix: &str, kind: DataView
 }
 
 // Called from generated code — keep the exports alive under release/LTO.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_DATA_VIEW_GET_DIRECT: extern "C" fn(f64, f64, f64, i32, i32) -> f64 =
     js_data_view_get_direct;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_DATA_VIEW_SET_DIRECT: extern "C" fn(f64, f64, f64, f64, i32, i32) -> f64 =
     js_data_view_set_direct;
 

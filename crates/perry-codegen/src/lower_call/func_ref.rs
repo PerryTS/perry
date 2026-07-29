@@ -45,6 +45,229 @@ fn typed_i1_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
     }
 }
 
+/// Representation-selection Phase 2, Tier A: statically-proven dispatch to a
+/// specialized entry — direct call with raw args, no guard, no diamond, no
+/// phi. Every non-`Boxed` slot must be proven BY CONSTRUCTION at this exact
+/// call site (this check, not the collector, is the load-bearing soundness
+/// gate — a mismatch silently keeps today's boxed path):
+///
+/// - `I32` — integer literal in i32 range.
+/// - `F64` — numeric literal (bit-identical raw double).
+/// - `TaPtr` — `LocalGet` of a pre-pass-proven, never-reassigned,
+///   non-closure-referenced typed-array binding whose kind/const-len match
+///   the slot, whose top-level `Stmt::Let` has lowered in THIS body
+///   (`spec_ta_ready` — the dominance mirror), and which is not box-backed.
+///   All `TaPtr` args must be DISTINCT locals: distinct proven bindings are
+///   distinct fresh allocations, which is what justifies the entry's
+///   pairwise-noalias view slots.
+fn try_emit_spec_static_call(
+    ctx: &mut FnCtx<'_>,
+    fname: &str,
+    plan: &crate::codegen::SpecFnPlan,
+    args: &[Expr],
+    lowered: &[String],
+) -> Option<String> {
+    use crate::collectors::SpecParamRep;
+    if plan.reps.len() != args.len() || plan.reps.len() != lowered.len() {
+        return None;
+    }
+    // Per-slot proof + raw-arg plan (no IR emitted until every slot matches).
+    enum RawArg {
+        Double(usize),
+        I32Const(i64),
+        TaPtr(usize),
+    }
+    let mut raw_plan: Vec<RawArg> = Vec::with_capacity(args.len());
+    let mut ta_locals: Vec<u32> = Vec::new();
+    for (i, (rep, arg)) in plan.reps.iter().zip(args.iter()).enumerate() {
+        match rep {
+            SpecParamRep::Boxed => raw_plan.push(RawArg::Double(i)),
+            SpecParamRep::F64 => match arg {
+                Expr::Number(_) | Expr::Integer(_) => raw_plan.push(RawArg::Double(i)),
+                _ => return None,
+            },
+            SpecParamRep::I32 => match arg {
+                Expr::Integer(n) if i32::try_from(*n).is_ok() => {
+                    raw_plan.push(RawArg::I32Const(*n))
+                }
+                _ => return None,
+            },
+            SpecParamRep::TaPtr { kind, const_len } => {
+                let Expr::LocalGet(id) = arg else {
+                    return None;
+                };
+                let Some(binding) = ctx.spec_ta_bindings.get(id) else {
+                    return None;
+                };
+                if binding.kind != *kind
+                    || binding.const_len != *const_len
+                    || !ctx.spec_ta_ready.contains(id)
+                    || ctx.boxed_vars.contains(id)
+                    || ctx.prealloc_boxes.contains(id)
+                    || ctx.tdz_boxes.contains(id)
+                    || ta_locals.contains(id)
+                {
+                    return None;
+                }
+                ta_locals.push(*id);
+                raw_plan.push(RawArg::TaPtr(i));
+            }
+        }
+    }
+
+    let spec_name = crate::codegen::spec_function_name(fname, &plan.reps);
+    let mut raw_args_storage: Vec<(crate::types::LlvmType, String)> =
+        Vec::with_capacity(raw_plan.len());
+    for entry in &raw_plan {
+        match entry {
+            RawArg::Double(i) => raw_args_storage.push((DOUBLE, lowered[*i].clone())),
+            RawArg::I32Const(n) => raw_args_storage.push((I32, n.to_string())),
+            RawArg::TaPtr(i) => {
+                let blk = ctx.block();
+                let bits = blk.bitcast_double_to_i64(&lowered[*i]);
+                let raw = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+                raw_args_storage.push((I64, raw));
+            }
+        }
+    }
+    let call_args: Vec<(crate::types::LlvmType, &str)> = raw_args_storage
+        .iter()
+        .map(|(ty, v)| (*ty, v.as_str()))
+        .collect();
+    let result = ctx.block().call(DOUBLE, &spec_name, &call_args);
+    let tuple_note: Vec<String> = plan.reps.iter().map(|r| r.label()).collect();
+    ctx.record_lowered_value(
+        "Call",
+        None,
+        "spec_abi_static_call",
+        &LoweredValue::js_value(result.clone()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![
+            format!("spec_call=static; symbol={spec_name}"),
+            format!("tuple={}", tuple_note.join(",")),
+        ],
+    );
+    Some(result)
+}
+
+/// Phase 2, Tier B: declaration-proven reps keep the existing runtime-guarded
+/// diamond shape — guard each raw slot, call the specialized entry on the
+/// fast arm, the PUBLIC boxed body on the fallback arm, merge with a phi.
+fn try_emit_spec_guarded_call(
+    ctx: &mut FnCtx<'_>,
+    fname: &str,
+    plan: &crate::codegen::SpecFnPlan,
+    args: &[Expr],
+    lowered: &[String],
+) -> Option<String> {
+    use crate::collectors::SpecParamRep;
+    if plan.reps.len() != args.len() || plan.reps.len() != lowered.len() {
+        return None;
+    }
+    // Static filter first (same spirit as typed_param_reps_match_args): only
+    // sites whose args are statically i32-shaped take the guarded route.
+    for (rep, arg) in plan.reps.iter().zip(args.iter()) {
+        match rep {
+            SpecParamRep::I32 => {
+                if !is_i32_expr(ctx, arg) {
+                    return None;
+                }
+            }
+            SpecParamRep::Boxed => {}
+            // Declaration tuples only contain I32/Boxed slots in this phase.
+            _ => return None,
+        }
+    }
+
+    let spec_name = crate::codegen::spec_function_name(fname, &plan.reps);
+    let mut guard: Option<String> = None;
+    for (value, rep) in lowered.iter().zip(plan.reps.iter()) {
+        if !matches!(rep, SpecParamRep::I32) {
+            continue;
+        }
+        let ok = crate::codegen::emit_typed_arg_guard(
+            ctx.block(),
+            crate::codegen::TypedParamRep::I32,
+            value,
+        );
+        guard = Some(match guard {
+            Some(prev) => ctx.block().and(I1, &prev, &ok),
+            None => ok,
+        });
+    }
+    let fast_idx = ctx.new_block("spec_guarded_call.fast");
+    let fallback_idx = ctx.new_block("spec_guarded_call.fallback");
+    let merge_idx = ctx.new_block("spec_guarded_call.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    if let Some(guard) = guard {
+        ctx.block().cond_br(&guard, &fast_label, &fallback_label);
+    } else {
+        ctx.block().br(&fast_label);
+    }
+
+    ctx.current_block = fast_idx;
+    let mut raw_storage: Vec<(crate::types::LlvmType, String)> = Vec::with_capacity(lowered.len());
+    for (value, rep) in lowered.iter().zip(plan.reps.iter()) {
+        match rep {
+            SpecParamRep::I32 => {
+                let raw = crate::codegen::emit_typed_arg_to_raw(
+                    ctx.block(),
+                    crate::codegen::TypedParamRep::I32,
+                    value,
+                );
+                raw_storage.push((I32, raw));
+            }
+            _ => raw_storage.push((DOUBLE, value.clone())),
+        }
+    }
+    let fast_args: Vec<(crate::types::LlvmType, &str)> = raw_storage
+        .iter()
+        .map(|(ty, v)| (*ty, v.as_str()))
+        .collect();
+    let fast_value = ctx.block().call(DOUBLE, &spec_name, &fast_args);
+    let after_fast = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = fallback_idx;
+    let boxed_args: Vec<(crate::types::LlvmType, &str)> =
+        lowered.iter().map(|v| (DOUBLE, v.as_str())).collect();
+    let fallback_value = ctx.block().call(DOUBLE, fname, &boxed_args);
+    let after_fallback = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    let result = ctx.block().phi(
+        DOUBLE,
+        &[
+            (fast_value.as_str(), after_fast.as_str()),
+            (fallback_value.as_str(), after_fallback.as_str()),
+        ],
+    );
+    ctx.record_lowered_value(
+        "Call",
+        None,
+        "spec_abi_guarded_call",
+        &LoweredValue::js_value(result.clone()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![format!("spec_call=guarded; symbol={spec_name}")],
+    );
+    Some(result)
+}
+
 fn typed_signature_note(
     ret: &str,
     reps: &[crate::codegen::TypedParamRep],
@@ -274,6 +497,34 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
+    // Representation-selection Phase 2: specialized-ABI dispatch. Tier A
+    // (static, guard-free) fires only when every slot's proof holds AT THIS
+    // SITE; Tier B keeps the guarded-diamond shape. Any mismatch falls
+    // through to the existing typed/generic chain — the public boxed entry is
+    // the permanent fallback ABI.
+    let spec_result: Option<String> = if crate::codegen::spec_abi_enabled()
+        && !resets_this
+        && !has_rest
+        && !ctx.func_synthetic_arguments.contains(fid)
+        && declared_count == args.len()
+    {
+        match ctx.spec_abi_functions.get(fid).cloned() {
+            Some(plan) => match plan.dispatch {
+                crate::codegen::SpecDispatch::Static => {
+                    try_emit_spec_static_call(ctx, &fname, &plan, args, &lowered)
+                }
+                crate::codegen::SpecDispatch::Guarded => {
+                    try_emit_spec_guarded_call(ctx, &fname, &plan, args, &lowered)
+                }
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
+    // No `spec_result.is_none()` gate on the typed-clone candidate arms: plan
+    // selection makes the spec and typed-clone sets mutually exclusive, and
+    // the `if let` chain below consumes `spec_result` first anyway.
     let typed_f64_call_param_reps = if !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
@@ -326,7 +577,9 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
-    let result = if let Some(reps) = typed_f64_call_param_reps {
+    let result = if let Some(spec) = spec_result {
+        spec
+    } else if let Some(reps) = typed_f64_call_param_reps {
         let typed_name = crate::codegen::typed_f64_function_name(&fname);
         let generic_body_name = crate::codegen::generic_function_body_name(&fname);
         let mut guard: Option<String> = None;

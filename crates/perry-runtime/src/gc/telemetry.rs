@@ -528,7 +528,19 @@ impl GcDebtSnapshot {
     #[inline]
     pub(super) fn current() -> Self {
         let total = crate::arena::arena_total_bytes();
-        let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
+        // #6950: read the SAME trigger the arming path compares against.
+        // `gc_budgeted_due_trigger` uses `effective_next_arena_trigger()`, which
+        // substitutes the device/`PERRY_GC_HEAP_LIMIT`-derived ceiling while the
+        // raw cell still holds its 128 MB desktop-default const initializer
+        // (`GC_TRIGGER_ARMED == false`). Reading the raw cell here made the two
+        // disagree: a cycle armed at a 2 MB effective trigger measured its own
+        // debt against 128 MB and therefore reported ZERO debt, so
+        // `gc_mutator_assist_scaled_work_units` never scaled past its 256-unit
+        // floor and the budgeted cycle crawled without ever completing —
+        // 300k escaping allocations / 330 MB RSS with ZERO collections. That is
+        // exactly the unbounded-growth failure the debt-proportional pacing was
+        // introduced to prevent.
+        let next_arena_trigger = effective_next_arena_trigger();
         let malloc_count = malloc_object_count();
         let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
         let old_in_use = crate::arena::old_gen_in_use_bytes();

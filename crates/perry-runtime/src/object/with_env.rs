@@ -124,9 +124,9 @@ pub extern "C" fn js_with_implicit_unset() -> f64 {
 }
 
 // #1561-style force-keep: only generated IR calls these.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_WITH_IMPLICIT_UNSET: extern "C" fn() -> f64 = js_with_implicit_unset;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_WITH_IMPLICIT_READ: extern "C" fn(f64, f64) -> f64 = js_with_implicit_read;
 
 /// `name` arrives as a NaN-boxed string (codegen lowers `Expr::String` args
@@ -149,9 +149,16 @@ pub extern "C" fn js_with_implicit_read(value: f64, name: f64) -> f64 {
         // (`var o = {foo:1}; with (o) { foo = 42; } foo` — with/12.10-0-7).
         let g = crate::object::js_get_global_this();
         if js_is_truthy(crate::object::js_object_has_property(g, name)) != 0 {
-            let gj = JSValue::from_bits(g.to_bits());
-            let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+            // #6943: `js_string_coerce` allocates for every non-heap-string
+            // name, so it can trigger a GC that **evacuates**. `gptr` — the
+            // global object's header, extracted on the line above and
+            // dereferenced by `js_object_get_field_by_name` below — was a raw
+            // Rust local across the call.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let g_handle = scope.root_heap_word_u64(g.to_bits());
             let key = crate::builtins::js_string_coerce(name);
+            let gj = JSValue::from_bits(g_handle.get_heap_word_u64());
+            let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
             if !gptr.is_null() && !key.is_null() {
                 let v = crate::object::js_object_get_field_by_name(gptr, key);
                 return f64::from_bits(v.bits());

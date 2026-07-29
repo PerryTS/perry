@@ -829,7 +829,7 @@ fn sweep_with_age_bump_and_old_reclaim_targets(
 ) -> SweepTraceStats {
     // These synchronous wrappers age-bump exactly when sweeping a MINOR
     // trace, so `do_age_bump` doubles as the minor-ness signal for the
-    // forwarded-stub retention rule (see `retain_all_forwarded_stubs`).
+    // old-gen retention rules (see `minor_sweep`).
     let mut state = IncrementalSweepState::new(
         do_age_bump,
         reclaim_dead_old_blocks,
@@ -1198,7 +1198,7 @@ impl IncrementalSweepState {
         reclaim_dead_old_blocks: bool,
         targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
         sweep_malloc: bool,
-        retain_all_forwarded_stubs: bool,
+        minor_sweep: bool,
     ) -> Self {
         Self {
             subphase: SweepCycleSubphase::Malloc,
@@ -1210,7 +1210,8 @@ impl IncrementalSweepState {
             arena: ArenaSweepObjectsState::new(
                 do_age_bump,
                 reclaim_dead_old_blocks,
-                retain_all_forwarded_stubs,
+                minor_sweep,
+                targeted_old_blocks.clone(),
             ),
             cleanup: None,
             reclaim_dead_old_blocks,
@@ -1341,17 +1342,34 @@ struct ArenaSweepObjectsState {
     overflow_active: bool,
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
-    /// Minor sweeps must retain EVERY forwarding stub: array growth installs
-    /// PERMANENT stubs (#6228 — stale pre-growth pointers keep resolving for
-    /// reads, references are never rewritten), and a minor treats old-gen
-    /// parents as black leaves whose slots are only visited via dirty pages.
-    /// An old parent (e.g. a long-lived Map's entries buffer) whose page is
-    /// no longer dirty never marks the stub its slot points at, so
-    /// "unmarked stub" does NOT imply "unreferenced" in a minor — reclaiming
-    /// it is a use-after-free (reads through the stale pointer return
-    /// reused-memory garbage). Full traces DO visit every live parent, so
-    /// mark-based stub reclaim stays sound (and bounds the accumulation).
-    retain_all_forwarded_stubs: bool,
+    /// This sweep follows a MINOR trace, whose mark bits say nothing about the
+    /// old generation: old-gen parents are black leaves whose slots are only
+    /// visited through dirty remembered-set pages, so an object reachable only
+    /// from a non-dirty old parent is never marked. "Unmarked" therefore does
+    /// NOT imply "dead" for anything in the old generation.
+    ///
+    /// Two consequences, both handled below:
+    ///
+    /// * Forwarding stubs must ALL be retained: array growth installs
+    ///   PERMANENT stubs (#6228 — stale pre-growth pointers keep resolving for
+    ///   reads, references are never rewritten). An old parent (e.g. a
+    ///   long-lived Map's entries buffer) whose page is no longer dirty never
+    ///   marks the stub its slot points at, so reclaiming it is a
+    ///   use-after-free.
+    /// * Ordinary old-gen objects must not be reclaimed either (#6892). The
+    ///   minor never frees their memory, but `reclaim_dead_object` still runs
+    ///   `finalize_dead_arena_payload` on them, which wipes a LIVE object's GC
+    ///   slot-layout mask and payload side tables and frees its external
+    ///   payload buffers.
+    ///
+    /// Full traces DO visit every live parent, so mark-based reclaim stays
+    /// sound there (and bounds the accumulation).
+    minor_sweep: bool,
+    /// Old-gen blocks selected for page defrag this cycle. Their live contents
+    /// were evacuated out during this same cycle, so what is left really is
+    /// reclaimable even in a minor — and the block-level reclaim needs
+    /// `block_has_live` to stay false for them.
+    targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
     freed_bytes: u64,
     retained_forwarded_stub_objects: usize,
     retained_forwarded_stub_bytes: usize,
@@ -1361,7 +1379,8 @@ impl ArenaSweepObjectsState {
     fn new(
         do_age_bump: bool,
         reclaim_dead_old_blocks: bool,
-        retain_all_forwarded_stubs: bool,
+        minor_sweep: bool,
+        targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
     ) -> Self {
         let n_blocks = crate::arena::arena_block_count();
         let block_snapshots = crate::arena::arena_block_snapshots();
@@ -1378,7 +1397,8 @@ impl ArenaSweepObjectsState {
                 || crate::closure::closure_dynamic_side_tables_nonempty(),
             do_age_bump,
             reclaim_dead_old_blocks,
-            retain_all_forwarded_stubs,
+            minor_sweep,
+            targeted_old_blocks,
             freed_bytes: 0,
             retained_forwarded_stub_objects: 0,
             retained_forwarded_stub_bytes: 0,
@@ -1443,12 +1463,35 @@ impl ArenaSweepObjectsState {
                 self.process_forwarded_object(header, block_idx, flags);
                 return;
             }
-            if flags & GC_FLAG_MARKED == 0 {
+            if flags & GC_FLAG_MARKED == 0 && self.unmarked_is_provably_dead(block_idx) {
                 self.reclaim_dead_object(header, block_idx);
             } else {
                 self.keep_live_object(header, block_idx, flags, age_bump_this, false);
             }
         }
+    }
+
+    /// Does `flags & MARKED == 0` actually prove this object is garbage?
+    ///
+    /// Only when the trace that produced the marks covered the object's
+    /// generation. A minor trace never marks the old generation (see
+    /// `minor_sweep`), so an unmarked old-gen object is merely *unvisited* —
+    /// it stays live and must not be finalized. #6892: reclaiming one wiped
+    /// the GC slot-layout mask of a live old-gen array, after which the next
+    /// `layout_note_slot` rebuilt the mask from a single slot and the
+    /// following minor stopped tracing the array's other pointer elements,
+    /// sweeping objects that were still referenced.
+    ///
+    /// The old-page defrag targets are exempt: this cycle evacuated their live
+    /// contents, so the remainder is genuinely reclaimable.
+    #[inline]
+    fn unmarked_is_provably_dead(&self, block_idx: usize) -> bool {
+        if !self.minor_sweep || block_idx < self.old_block_start {
+            return true;
+        }
+        self.targeted_old_blocks
+            .as_ref()
+            .is_some_and(|selected| selected.contains(&block_idx))
     }
 }
 
@@ -1490,10 +1533,10 @@ impl ArenaSweepObjectsState {
         block_idx: usize,
         flags: u8,
     ) {
-        // See `retain_all_forwarded_stubs`: a minor cannot prove a stub
-        // unreferenced (old-gen parents are black leaves), so it must keep
-        // them all; a full trace reclaims the genuinely unreferenced ones.
-        let retain_stub = self.retain_all_forwarded_stubs
+        // See `minor_sweep`: a minor cannot prove a stub unreferenced (old-gen
+        // parents are black leaves), so it must keep them all; a full trace
+        // reclaims the genuinely unreferenced ones.
+        let retain_stub = self.minor_sweep
             || flags & GC_FLAG_MARKED != 0
             || (block_idx < self.resettable_general_n
                 && crate::arena::general_block_in_recent_window(block_idx));

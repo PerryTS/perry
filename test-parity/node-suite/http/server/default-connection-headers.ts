@@ -7,7 +7,6 @@
 
 import { createServer, get } from "node:http";
 
-const PORT = 19044;
 const sockets: any[] = [];
 
 const server = createServer((req: any, res: any) => {
@@ -18,34 +17,50 @@ const server = createServer((req: any, res: any) => {
 });
 
 function probe(path: string, headers: any): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing address");
+    }
     const req = get(
-      { hostname: "127.0.0.1", port: PORT, path, headers },
+      { hostname: "127.0.0.1", port: address.port, path, headers },
       (res: any) => {
         res.on("data", () => {});
+        res.once("error", reject);
         res.on("end", () => {
           const h = res.headers;
           console.log(
-            `${path} -> connection=${h.connection} keep-alive=${h["keep-alive"]}`
+            `${path} -> connection=${h.connection} keep-alive=${
+              h["keep-alive"]
+            }`,
           );
           resolve();
         });
-      }
+      },
     );
     req.on("socket", (s: any) => sockets.push(s));
+    req.once("error", reject);
   });
 }
 
-server.listen(PORT, async () => {
+await new Promise<void>((resolve, reject) => {
+  server.once("error", reject);
+  server.listen(0, "127.0.0.1", resolve);
+});
+
+try {
   // Default HTTP/1.1 request: server keeps the connection alive.
   await probe("/", {});
   // Client asks to close: server echoes Connection: close, no Keep-Alive.
   await probe("/close", { Connection: "close" });
   // Handler set its own Connection header: respected, not overridden.
   await probe("/explicit-close", {});
-  // Drop any lingering keep-alive sockets so the process exits promptly.
+} finally {
   for (const s of sockets) s.destroy();
-  server.close(() => console.log("closed"));
-});
-
-setTimeout(() => {}, 1500);
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      console.log("closed");
+      resolve();
+    });
+  });
+}

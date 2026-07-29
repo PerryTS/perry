@@ -50,6 +50,21 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
+#[test]
+fn extracted_get_builtin_module_keeps_dynamic_namespace_keys() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+import process from "node:process";
+const getBuiltinModule = process.getBuiltinModule;
+const http2 = getBuiltinModule("http2");
+console.log(["connect", "createServer", "constants"].map((key) => Object.keys(http2).includes(key)).join(","));
+"#,
+    );
+    assert_eq!(stdout, "true,true,true\n");
+}
+
 /// #6644 (pi wall #3): `require('node:diagnostics_channel')` through
 /// `createRequire` threw `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE` — the module is
 /// implemented as a node_submodules spec (real pub/sub channel registry) but was

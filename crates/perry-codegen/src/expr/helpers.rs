@@ -45,7 +45,10 @@ pub(crate) fn expr_has_numeric_pointer_free_array_layout(ctx: &FnCtx<'_>, expr: 
 
 fn local_get_produces_non_pointer_bits_by_dataflow(ctx: &FnCtx<'_>, id: u32) -> bool {
     (ctx.i32_counter_slots.contains_key(&id) || ctx.integer_locals.contains(&id))
-        && ctx.locals.contains_key(&id)
+        // Repsel Phase 1: a canonical-i32 local has no `ctx.locals` entry —
+        // its rep-map membership proves plain (non-boxed, non-captured)
+        // numeric storage just as well.
+        && (ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id))
         && !ctx.boxed_vars.contains(&id)
         && !ctx.closure_captures.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)
@@ -131,6 +134,85 @@ pub(crate) fn array_store_needs_layout_note(ctx: &FnCtx<'_>, array: &Expr, value
 
 pub(crate) fn array_store_needs_write_barrier(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     !expr_produces_non_pointer_bits_by_construction(ctx, value)
+}
+
+/// Object twin of [`array_store_needs_layout_note`] — Phase 4b.1.
+///
+/// `layout_note_slot` is a provable no-op for a class-field store whose value is
+/// a **non-pointer by construction**: in that case the note can only ever
+/// *clear* mask state, never set it, so it is never the difference between a
+/// slot being scanned and a live child being stranded. That holds in every
+/// layout state the receiver can be in:
+///
+/// - `GC_LAYOUT_UNKNOWN` — the note returns at its own state check.
+/// - intact typed descriptor — a non-pointer value falls straight through the
+///   `pointer_mask` arm without touching the descriptor. (The `raw_f64_mask`
+///   arm is unreachable from the caller: it only uses this predicate when
+///   `requires_raw_f64` is false, and that is the very same
+///   `type_is_raw_f64_candidate` predicate the mask is built from.)
+/// - `GC_LAYOUT_POINTER_FREE` — the note's `!pointer && POINTER_FREE` early
+///   return.
+/// - `GC_LAYOUT_SIDE_MASK` — the note would only *clear* this slot's bit.
+///   Skipping that leaves a stale set bit over a non-pointer, which costs an
+///   extra visit and nothing else: `mark_field_into_worklist` (`gc/trace.rs`)
+///   re-validates every slot word — f64 bit patterns fall outside the 48-bit
+///   user-address range and are rejected — and the evacuation rewrite path
+///   routes through the same function.
+///
+/// **Deliberately NOT elided: a pointer-valued store into a pointer-masked
+/// slot.** That would be a no-op under an intact descriptor, but the receiver
+/// is not guaranteed to have one — `lower_new_impl` has an exit
+/// (`lower_call/new.rs`, the standalone-ctor-symbol branch where
+/// `call_local_constructor_symbol` yields `None`) that returns a freshly
+/// allocated instance *without* emitting `js_gc_init_typed_shape_layout`. Such
+/// an object sits at `GC_LAYOUT_POINTER_FREE`, where the note is the only thing
+/// that ever sets the pointer-mask bit the collector reads. Closing that exit
+/// (#6921) is the prerequisite for the stronger elision.
+pub(crate) fn class_field_store_needs_layout_note(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    !expr_produces_non_pointer_bits_by_construction(ctx, value)
+}
+
+/// `js_string_addref_if_heap_string` demotes a uniquely-owned (refcount==1)
+/// heap string to shared when it becomes aliased from a heap slot, and is a
+/// no-op for every non-`STRING_TAG` value (`string/alloc.rs`). So it is dead
+/// exactly when the stored value provably cannot be a heap string — a strictly
+/// weaker condition than "cannot be a pointer", which is why this is gated
+/// separately from the layout note above.
+///
+/// **This is keyed on the value expression, never on the declared field type.**
+/// Perry does not validate declared types at runtime (see CLAUDE.md, "No
+/// runtime type *validation*"): a field declared `boolean` legitimately
+/// receives a string that arrived through an `any`, and skipping the demote
+/// there would leave a refcount==1 string aliased from the heap for a later
+/// in-place `+=` to rewrite underneath the stored slot — silent corruption
+/// with no crash to trace it back from.
+pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    !expr_cannot_produce_heap_string(ctx, value)
+}
+
+/// The stored value provably does not carry `STRING_TAG`.
+///
+/// Beyond the non-pointer set, the three *literal* constructor forms qualify:
+/// each evaluates to a freshly allocated `POINTER_TAG` value with no path to a
+/// primitive result. `Expr::New` is deliberately excluded — a constructor
+/// return override (`js_ctor_return_override`) makes "what `new C()` evaluates
+/// to" a runtime question, and this predicate must not depend on the answer.
+fn expr_cannot_produce_heap_string(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Object(_) | Expr::Array(_) | Expr::Closure { .. } => true,
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_cannot_produce_heap_string(ctx, then_expr)
+                && expr_cannot_produce_heap_string(ctx, else_expr)
+        }
+        Expr::Sequence(exprs) => exprs
+            .last()
+            .is_some_and(|last| expr_cannot_produce_heap_string(ctx, last)),
+        _ => expr_produces_non_pointer_bits_by_construction(ctx, expr),
+    }
 }
 
 /// `lower_expr` variant that hands an expected-type hint down to the

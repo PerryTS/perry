@@ -557,6 +557,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_noop_proto_methods(proto_obj, &[("compile", 2)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-url")]
         "URLPattern" => {
             install_proto_method_rest(proto_obj, "exec", url_pattern_exec_thunk as *const u8, 1);
             install_proto_method_rest(proto_obj, "test", url_pattern_test_thunk as *const u8, 1);
@@ -605,14 +606,17 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-text")]
         "TextEncoder" => {
             install_noop_proto_methods(proto_obj, &[("encode", 1), ("encodeInto", 2)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-text")]
         "TextDecoder" => {
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-webfetch")]
         "Headers" => {
             install_noop_proto_methods(
                 proto_obj,
@@ -631,6 +635,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-webfetch")]
         "Request" | "Response" => {
             install_noop_proto_methods(
                 proto_obj,
@@ -646,6 +651,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-webfetch")]
         "Blob" | "File" => {
             install_noop_proto_methods(
                 proto_obj,
@@ -659,6 +665,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-webfetch")]
         "FormData" => {
             install_noop_proto_methods(
                 proto_obj,
@@ -677,10 +684,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-websocket")]
         "WebSocket" => {
             websocket_global::install_proto_methods(proto_obj);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-webcrypto")]
         "Crypto" => {
             install_webcrypto_proto_getter(
                 proto_obj,
@@ -701,6 +710,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-webcrypto")]
         "CryptoKey" => {
             for (name, func_ptr) in [
                 ("algorithm", cryptokey_algorithm_getter_thunk as *const u8),
@@ -715,6 +725,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        #[cfg(feature = "global-webcrypto")]
         "SubtleCrypto" => {
             for (name, func_ptr, length) in [
                 (

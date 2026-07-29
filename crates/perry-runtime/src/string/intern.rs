@@ -26,12 +26,19 @@ pub(crate) const INTERN_MAX_BYTE_LEN: u32 = 64;
 // `static mut`, which both raced under concurrent allocation and risked
 // handing back foreign-arena pointers.
 thread_local! {
-    // arm64_32 fix: HEAP-allocate (Box) this ~128KB table instead of inline TLS.
+    // arm64_32 fix: HEAP-allocate this table instead of inline TLS.
     // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its
     // writes corrupt adjacent thread-locals. Boxing keeps only a pointer in TLS.
     pub(crate) static INTERN_TABLE: std::cell::UnsafeCell<Box<[InternEntry]>> =
         std::cell::UnsafeCell::new(
-            vec![InternEntry { hash: 0, string_ptr: 0 }; INTERN_TABLE_SIZE].into_boxed_slice(),
+            vec![
+                InternEntry {
+                    hash: 0,
+                    string_ptr: 0,
+                };
+                INTERN_TABLE_SIZE
+            ]
+            .into_boxed_slice(),
         );
 }
 
@@ -94,6 +101,79 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
 
         key
     }
+}
+
+/// Materialize an immutable AOT dispatch descriptor into the current thread's
+/// intern table. The precomputed content hash selects the existing direct-
+/// mapped slot without re-hashing; content comparison preserves correctness
+/// across hash collisions while keeping the table's per-thread RSS unchanged.
+pub(crate) fn intern_dispatch_bytes(
+    static_dispatch_id: usize,
+    bytes: *const u8,
+    byte_len: usize,
+    precomputed_hash: u64,
+    is_wtf8: bool,
+) -> *const StringHeader {
+    if (bytes.is_null() && byte_len != 0) || byte_len > u32::MAX as usize {
+        return std::ptr::null();
+    }
+    let input = if byte_len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(bytes, byte_len) }
+    };
+    let hash = if static_dispatch_id != 0 {
+        precomputed_hash
+    } else {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for &byte in input {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        hash
+    };
+    let slot = (hash as usize) & INTERN_TABLE_MASK;
+
+    let hit = with_intern_table(|table| unsafe {
+        let entry = &mut (*table)[slot];
+        if entry.string_ptr == 0 {
+            return None;
+        }
+        let existing = entry.string_ptr as *const StringHeader;
+        if entry.hash == hash
+            && is_valid_string_ptr(existing)
+            && (*existing).byte_len as usize == byte_len
+            && std::slice::from_raw_parts(
+                (existing as *const u8).add(std::mem::size_of::<StringHeader>()),
+                byte_len,
+            ) == input
+        {
+            return Some(existing);
+        }
+        None
+    });
+    if let Some(existing) = hit {
+        return existing;
+    }
+
+    let key = if is_wtf8 {
+        js_string_from_wtf8_bytes(bytes, byte_len as u32)
+    } else {
+        js_string_from_bytes(bytes, byte_len as u32)
+    };
+    unsafe {
+        let gc_header =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*gc_header).gc_flags |= crate::gc::GC_FLAG_INTERNED;
+        (*key).refcount = 0;
+    }
+    with_intern_table(|table| unsafe {
+        (*table)[slot] = InternEntry {
+            hash,
+            string_ptr: key as usize,
+        };
+    });
+    key
 }
 
 /// Byte-level content comparison for intern table lookups.

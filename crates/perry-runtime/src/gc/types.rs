@@ -107,6 +107,13 @@ pub(crate) enum GcLayoutSlotKind {
     ArrayElements,
     ObjectFields,
     ClosureCaptures,
+    /// #6812: ObjectMeta records carry two live edges — the custom
+    /// `[[Prototype]]` value and the raw spill-buffer pointer. Before the
+    /// spill buffer these were enumerated only on the REWRITE path, which
+    /// left them invisible to marking (latent for prototypes, which are
+    /// normally rooted elsewhere; fatal for the spill buffer, which is
+    /// reachable through meta alone).
+    ObjectMeta,
 }
 
 #[allow(dead_code)]
@@ -548,7 +555,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcAllocationPolicy::Arena,
         true,
         GcRewriteDescriptorKind::ObjectMeta,
-        GcLayoutSlotKind::None,
+        GcLayoutSlotKind::ObjectMeta,
         // Movable: the owner's `meta` header slot is a raw-pointer child
         // edge (visited in the Object rewrite descriptor), so evacuation
         // rewrites it like any other reference — no address-keyed side
@@ -789,12 +796,20 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
         | GcRewriteDescriptorKind::Error
         | GcRewriteDescriptorKind::Map
         | GcRewriteDescriptorKind::LazyArray
-        | GcRewriteDescriptorKind::Set
-        | GcRewriteDescriptorKind::ObjectMeta => {
+        | GcRewriteDescriptorKind::Set => {
             if info.layout_slot_kind != GcLayoutSlotKind::None {
                 return Err(
                     "external-backed rewrite descriptor must not expose payload layout slots",
                 );
+            }
+        }
+        GcRewriteDescriptorKind::ObjectMeta => {
+            // #6812: meta records expose their two child edges (prototype,
+            // spill buffer) to MARKING via GcLayoutSlotKind::ObjectMeta —
+            // the spill buffer is reachable through meta alone, so a
+            // rewrite-only descriptor would leave it invisible to liveness.
+            if info.layout_slot_kind != GcLayoutSlotKind::ObjectMeta {
+                return Err("object-meta descriptor must expose its child edges to marking");
             }
         }
         GcRewriteDescriptorKind::NativeTypedView | GcRewriteDescriptorKind::NativePodView => {

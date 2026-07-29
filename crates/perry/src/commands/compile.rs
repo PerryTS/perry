@@ -17,7 +17,10 @@ mod bootstrap;
 mod build_cache;
 mod bundle_apple;
 mod bundle_ios;
-mod cjs_wrap;
+// `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s
+// comment/string masker for its source scans (D005) instead of duplicating a
+// subtle scanner.
+pub(crate) mod cjs_wrap;
 mod codegen_steps;
 mod collect_modules;
 mod compressed_libs;

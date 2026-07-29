@@ -34,6 +34,11 @@ pub const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 /// Must match `perry-runtime::value::tags::SHORT_STRING_TAG` (used by the
 /// inline `is-number` guard in `stmt::loops`).
 pub const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
+/// Internal-only tag for a pointer to an immutable static-dispatch string
+/// descriptor. This is not a JavaScript value; it travels only through the
+/// property/method `*_by_id` ABI. `0x7FF8` is outside Perry's JS-value tag
+/// band and corresponds to the otherwise-unused canonical quiet-NaN prefix.
+pub const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;
 pub const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 
 pub const TAG_UNDEFINED_I64: &str = "9222246136947933185";
@@ -47,6 +52,11 @@ pub const POINTER_MASK_I64: &str = "281474976710655";
 pub const INT32_TAG_I64: &str = "9222809086901354496";
 pub const STRING_TAG_I64: &str = "9223090561878065152";
 pub const BIGINT_TAG_I64: &str = "9221683186994511872";
+/// Top-16-bit comparands for `lshr 48`-style tag dispatch (repsel Phase 3a
+/// canonical-Str lowerings): `STRING_TAG >> 48` and `SHORT_STRING_TAG >> 48`.
+/// Asserted against the u64 tags in `tag_strings_match_u64_values`.
+pub const STRING_TAG_TOP16_I64: &str = "32767";
+pub const SHORT_STRING_TAG_TOP16_I64: &str = "32761";
 
 /// Format a `u64` as a signed LLVM i64 literal (LLVM IR integer literals are signed).
 pub fn i64_literal(v: u64) -> String {
@@ -101,6 +111,12 @@ mod tests {
         assert_eq!(i64_literal(INT32_TAG), INT32_TAG_I64);
         assert_eq!(i64_literal(STRING_TAG), STRING_TAG_I64);
         assert_eq!(i64_literal(BIGINT_TAG), BIGINT_TAG_I64);
+        assert_eq!(i64_literal(STATIC_DISPATCH_TAG), "9221120237041090560");
+        assert_eq!(i64_literal(STRING_TAG >> 48), STRING_TAG_TOP16_I64);
+        assert_eq!(
+            i64_literal(SHORT_STRING_TAG >> 48),
+            SHORT_STRING_TAG_TOP16_I64
+        );
     }
 
     #[test]

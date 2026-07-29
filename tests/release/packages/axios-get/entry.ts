@@ -1,7 +1,13 @@
 import axios from "axios";
+import { createHash } from "node:crypto";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 
 async function main(): Promise<void> {
+    const hashes: any[] = [];
+    for (let i = 0; i < 16; i++) {
+        hashes.push(createHash("sha256"));
+    }
+
     const port = 18902;
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         if (req.url === "/json") {
@@ -19,9 +25,21 @@ async function main(): Promise<void> {
     });
 
     const r = await axios.get(`http://127.0.0.1:${port}/json`);
+    const head = await axios.head(`http://127.0.0.1:${port}/json`);
+    const options = await axios.options(`http://127.0.0.1:${port}/json`);
     console.log(`status=${r.status}`);
+    console.log(`head.status=${head.status}`);
+    console.log(`options.status=${options.status}`);
     console.log(`data.ok=${r.data.ok}`);
     console.log(`data.path=${r.data.path}`);
+
+    let foreignStatus: any = undefined;
+    for (let i = 0; i < hashes.length; i++) {
+        if (hashes[i].status !== undefined) {
+            foreignStatus = hashes[i].status;
+        }
+    }
+    console.log(`foreign.status=${String(foreignStatus)}`);
 
     server.close();
 }

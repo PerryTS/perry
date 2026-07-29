@@ -157,6 +157,13 @@ pub struct LoweringContext {
     pub(crate) class_field_types: Vec<(String, Vec<(String, Type)>)>,
     /// Enums: name -> (id, members with values)
     pub(crate) enums: Vec<(String, EnumId, Vec<(String, EnumValue)>)>,
+    /// Enums declared inside a FUNCTION BODY, awaiting attachment to the
+    /// module. `lower_body_stmt` has no `&mut Module`, but codegen resolves
+    /// `Expr::EnumMember` against `Module::enums` — so body-local enums are
+    /// parked here and drained in `lower_module_full` once every function has
+    /// been lowered. Registration in `enums` above is what makes the *name*
+    /// resolve; this is what makes it survive to codegen.
+    pub(crate) pending_body_enums: Vec<Enum>,
     /// Interfaces: name -> id
     pub(crate) interfaces: Vec<(String, InterfaceId)>,
     /// Type aliases: name -> (id, type_params, aliased_type)
@@ -288,6 +295,11 @@ pub struct LoweringContext {
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
     /// Source file path (for import.meta.url)
     pub(crate) source_file_path: String,
+    /// #6812 (w16): span.lo of empty object literals whose builder width the
+    /// pre-lowering scan proved (`builder_fold::empty_builder_width_hints`)
+    /// → final width. Consumed by `lower_object`'s empty-literal branch to
+    /// set `Class::alloc_width_hint` on the per-site anon-shape class.
+    pub(crate) empty_site_width_hints: std::collections::HashMap<u32, u32>,
     /// Variables that hold closures or other values needing cross-module export globals
     /// (arrow functions, object literals, call expressions, arrays, new expressions)
     // #854: initialized in `new` but not yet read on this lowering path.
