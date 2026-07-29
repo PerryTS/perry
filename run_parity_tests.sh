@@ -762,7 +762,7 @@ for test_file in "${TEST_FILES[@]}"; do
     # so a concurrent heavy job can transiently eat the +50 headroom; recomputing
     # per test keeps that window small, and the worst case is one test
     # classified as crash rather than a wedged machine.
-    run_with_timeout 10 /bin/sh -c '
+    run_with_timeout 10 "$BASH" -c '
         if [ "$(uname -s)" = "Linux" ]; then
             proc_list=$(ps -u "$(id -u)" -L -o lwp= 2>/dev/null)
         else
