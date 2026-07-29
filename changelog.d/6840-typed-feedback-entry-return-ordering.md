@@ -16,5 +16,5 @@
   `add_pre_return_void_call` in `crates/perry-codegen/src/codegen/entry.rs`
   makes it fail, which the old shape could not guarantee.
 
-  Integration suites under `crates/*/tests/` don't run per-PR (#5960), which is
-  why this sat red.
+  The PR workflow now uses diff-based selection in `e2e-scoped`, so changing
+  this integration test pulls its suite into the per-PR run.
