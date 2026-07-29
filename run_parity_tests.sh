@@ -751,7 +751,7 @@ for test_file in "${TEST_FILES[@]}"; do
     # up on the 2>&1-captured stream for any test that exercises a flagged
     # API (dns/dgram loopback, v8 heap snapshot, …) and diff against Node.
     perry_tmp=$(mktemp)
-    # Cap the test binary's fork budget at current-user-procs + 50: legit
+    # Cap the test binary's fork budget at current-user-tasks + 50: legit
     # multi-process tests (cluster/child_process) fit easily, while a
     # fork-bombing test (cluster re-exec loop, 2026-07-22) stalls at ~50
     # orphans instead of saturating the user process limit — which would
@@ -763,7 +763,11 @@ for test_file in "${TEST_FILES[@]}"; do
     # per test keeps that window small, and the worst case is one test
     # classified as crash rather than a wedged machine.
     run_with_timeout 10 /bin/sh -c '
-        proc_list=$(ps -u "$(id -u)" -o pid= 2>/dev/null) || {
+        if [ "$(uname -s)" = "Linux" ]; then
+            proc_list=$(ps -u "$(id -u)" -L -o lwp= 2>/dev/null)
+        else
+            proc_list=$(ps -u "$(id -u)" -o pid= 2>/dev/null)
+        fi || {
             echo "failed to measure the current user process count" >&2
             exit 125
         }
