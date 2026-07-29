@@ -15,11 +15,13 @@ try {
     );
   });
   console.log("callback:", callback);
+  console.log("callback query:", await server.nextQuery());
   const promise = await dnsPromises.resolve4("mañana.example").then(
     (value) => JSON.stringify(value),
     (error) => `error:${error.code}`,
   );
   console.log("promise:", promise);
+  console.log("promise query:", await server.nextQuery());
 } finally {
   await server.close();
 }
