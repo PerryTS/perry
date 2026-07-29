@@ -46,7 +46,9 @@ mod parse_cache;
 mod post_link;
 mod precompile_capture;
 mod reachability;
-mod resolve;
+// pub(crate): commands/deps.rs (the `check --check-deps` dependency checker)
+// reuses the subpath-imports + tsconfig-paths resolvers for `#` specifiers.
+pub(crate) mod resolve;
 mod resources;
 mod sandbox_buildrs;
 mod strip_dedup;

@@ -144,6 +144,49 @@ impl DependencyResolver {
             return;
         }
 
+        // Node subpath imports (`#…`) resolve through the importing package's
+        // own `package.json` `"imports"` map, never through node_modules —
+        // treating them as package names produced false R003 "Package '#…'
+        // not found in node_modules" errors. Resolve them with the same
+        // spec resolver the compiler uses (see resolve/subpath_imports.rs).
+        if import_source.starts_with('#') {
+            use super::compile::resolve::subpath_imports::{
+                resolve_subpath_import, SubpathImportOutcome, DEFAULT_CONDITIONS,
+            };
+            match resolve_subpath_import(import_source, importing_file, DEFAULT_CONDITIONS) {
+                // Maps to a real file inside the package: resolved.
+                Ok(SubpathImportOutcome::File(_)) => return,
+                // Maps to a bare package specifier: verify THAT package the
+                // way any other bare import is verified.
+                Ok(SubpathImportOutcome::External(spec)) => {
+                    if is_node_builtin(&spec)
+                        || is_perry_builtin(&spec)
+                        || self.resolve_package(&spec).is_some()
+                    {
+                        return;
+                    }
+                }
+                // Not defined by an `imports` map (or spec-invalid): mirror
+                // the compile resolver's ordering and give the tsconfig
+                // `paths` fallback a chance before flagging it unresolved.
+                Ok(SubpathImportOutcome::NotDefined) | Err(_) => {
+                    if super::compile::resolve::tsconfig_paths::resolve_tsconfig_paths(
+                        import_source,
+                        importing_file,
+                    )
+                    .is_some()
+                    {
+                        return;
+                    }
+                }
+            }
+            self.unresolved_imports
+                .entry(import_source.to_string())
+                .or_default()
+                .push(importing_file.to_path_buf());
+            return;
+        }
+
         // Node.js built-ins are tracked but not resolved
         if is_node_builtin(import_source) {
             return;
@@ -194,7 +237,14 @@ impl DependencyResolver {
         let packages: HashSet<String> = self
             .all_imports
             .iter()
-            .filter(|s| !s.starts_with('.') && !is_node_builtin(s) && !is_perry_builtin(s))
+            .filter(|s| {
+                // `#` subpath imports are package-internal mappings, not
+                // node_modules packages — nothing to compatibility-scan.
+                !s.starts_with('.')
+                    && !s.starts_with('#')
+                    && !is_node_builtin(s)
+                    && !is_perry_builtin(s)
+            })
             .map(|s| {
                 // Extract base package name
                 if s.starts_with('@') {

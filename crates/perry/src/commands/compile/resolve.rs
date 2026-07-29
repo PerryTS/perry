@@ -38,7 +38,11 @@ use super::CompilationContext;
 use super::{NativeBackend, NativeLibraryManifest};
 
 mod native_library;
-mod tsconfig_paths;
+// pub(crate): the `check --check-deps` dependency checker (commands/deps.rs)
+// consults both resolvers so `#` subpath imports and tsconfig-aliased
+// specifiers stop reporting false R003 "not found in node_modules" errors.
+pub(crate) mod subpath_imports;
+pub(crate) mod tsconfig_paths;
 pub(crate) use native_library::validate_native_library_manifest_value;
 pub(super) use native_library::{
     ergonomic_export_alias, has_perry_native_library, has_perry_native_module,
@@ -850,39 +854,6 @@ pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Opt
     )
 }
 
-/// Node subpath imports (#5039): resolve a `#`-prefixed specifier through the
-/// importing package's own `package.json` `"imports"` map
-/// (https://nodejs.org/api/packages.html#imports). chalk 5 loads its vendored
-/// dependencies this way (`import ansiStyles from '#ansi-styles'` →
-/// `./source/vendor/ansi-styles/index.js`), so without this every compiled
-/// chalk style table came up empty. The map shares the `exports` value shape
-/// (string / conditional object / `*` patterns), so the same resolver is
-/// reused — with `node` ranked above `default` so conditional pairs like
-/// chalk's `#supports-color` `{ node, default: browser }` pick the node build
-/// for native compilation. Per Node's package-scope rule, only the NEAREST
-/// `package.json` up from the importer is consulted.
-fn resolve_subpath_import(import_source: &str, importer_path: &Path) -> Option<PathBuf> {
-    let mut dir = importer_path.parent();
-    while let Some(d) = dir {
-        let pkg_json = d.join("package.json");
-        if pkg_json.is_file() {
-            let content = std::fs::read_to_string(&pkg_json).ok()?;
-            let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-            let target = resolve_exports_with_conditions(
-                json.get("imports")?,
-                import_source,
-                &["perry", "node", "import", "module", "default", "require"],
-            )?;
-            let base = d.join(target.trim_start_matches("./"));
-            return resolve_with_extensions(&base)
-                .and_then(|p| p.canonicalize().ok())
-                .or_else(|| base.canonicalize().ok());
-        }
-        dir = d.parent();
-    }
-    None
-}
-
 /// Like [`resolve_exports`], but returns EVERY condition branch's resolution
 /// in priority order instead of only the first. Callers that check disk
 /// existence (`resolve_package_entry`) walk the list so a pruned target
@@ -1233,13 +1204,48 @@ pub(super) fn resolve_import(
         return None; // Native modules are handled by stdlib, not file imports
     }
 
-    // Node subpath imports (`#…`, #5039) resolve through the importing
-    // package's own `"imports"` map and then classify exactly like a relative
-    // import to the mapped file.
+    // Node subpath imports (`#…`, #5039): resolve through the importing
+    // package's own `package.json` `"imports"` map with full
+    // PACKAGE_IMPORTS_RESOLVE semantics (see subpath_imports.rs), then
+    // classify exactly like a relative import to the mapped file. This runs
+    // BEFORE the tsconfig-paths fallback so spec-defined resolution wins over
+    // tsconfig aliasing; when no `imports` field governs the importer the
+    // specifier falls through, so a tsconfig `paths` alias covering `#…`
+    // keeps working.
     let subpath_import_target = if import_source.starts_with('#') {
-        match resolve_subpath_import(import_source, importer_path) {
-            Some(canonical) => Some(canonical),
-            None => return None,
+        use subpath_imports::SubpathImportOutcome;
+        match subpath_imports::resolve_subpath_import(
+            import_source,
+            importer_path,
+            subpath_imports::DEFAULT_CONDITIONS,
+        ) {
+            Ok(SubpathImportOutcome::File(canonical)) => Some(canonical),
+            // Bare-package target: re-enter resolution with the mapped
+            // specifier, which resolves through node_modules per spec (or the
+            // stdlib for `node:` builtins).
+            Ok(SubpathImportOutcome::External(spec)) => {
+                return resolve_import(
+                    &spec,
+                    importer_path,
+                    project_root,
+                    compile_packages,
+                    compile_package_dirs,
+                );
+            }
+            // Not covered by an `imports` map — fall through (the tsconfig
+            // `paths` fallback below may still alias it).
+            Ok(SubpathImportOutcome::NotDefined) => None,
+            // Spec-defined hard errors (`#` / `#/…`, escaping targets, …)
+            // must be surfaced, not silently degraded to tsconfig aliasing.
+            Err(err) => {
+                eprintln!(
+                    "warning: cannot resolve '{}' (imported from {}): {}",
+                    import_source,
+                    importer_path.display(),
+                    err
+                );
+                return None;
+            }
         }
     } else {
         None
