@@ -416,6 +416,18 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
         Expr::IndexGet { object, .. } => static_type_of(ctx, object)
             .as_ref()
             .is_some_and(type_has_numeric_pointer_free_array_layout_for_fallback),
+        // Repsel Phase 4a.0: `a || b` / `a && b` / `a ?? b` pass ONE operand
+        // value through, so the result carries the boxed-fallback hazard when
+        // EITHER operand does (`counts[v] || 0` can surface the read's boxed
+        // `undefined` through the `&&`/`??` value edge). Must stay in lockstep
+        // with `is_numeric_expr`'s Logical arm: everything that treats a
+        // proven-numeric Logical as a real double consults this predicate to
+        // decide whether a `js_number_coerce` / `js_is_truthy` is still
+        // needed.
+        Expr::Logical { left, right, .. } => {
+            expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left)
+                || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right)
+        }
         _ => false,
     }
 }

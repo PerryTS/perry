@@ -2,11 +2,15 @@
 // `WebSocket` as the global WebSocket constructor and `_connectionListener`
 // as an enumerable function export.
 import httpDefault, * as http from "node:http";
-import { WebSocket, _connectionListener } from "node:http";
+import { _connectionListener, WebSocket } from "node:http";
 
 const keys = Object.keys(httpDefault as any);
 
-console.log("keys:", keys.includes("WebSocket"), keys.includes("_connectionListener"));
+console.log(
+  "keys:",
+  keys.includes("WebSocket"),
+  keys.includes("_connectionListener"),
+);
 console.log(
   "connectionListener:",
   typeof _connectionListener,
@@ -31,7 +35,8 @@ console.log(
 console.log(
   "enumerable:",
   Object.getOwnPropertyDescriptor(httpDefault as any, "WebSocket")?.enumerable,
-  Object.getOwnPropertyDescriptor(httpDefault as any, "_connectionListener")?.enumerable,
+  Object.getOwnPropertyDescriptor(httpDefault as any, "_connectionListener")
+    ?.enumerable,
 );
 console.log(
   "prototype methods:",

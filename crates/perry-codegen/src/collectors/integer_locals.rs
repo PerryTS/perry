@@ -148,7 +148,7 @@ pub(crate) fn static_index_window(e: &perry_hir::Expr) -> Option<(i64, i64)> {
 /// and the binding is only ever used as an element-access receiver (`S[...]`
 /// reads and writes) — so nothing can alias it, detach its buffer, or swap
 /// the value behind it. Returns `id → length`.
-fn collect_const_int_ta_views(stmts: &[perry_hir::Stmt]) -> HashMap<u32, i64> {
+pub(crate) fn collect_const_int_ta_views(stmts: &[perry_hir::Stmt]) -> HashMap<u32, i64> {
     use perry_hir::{Expr, Stmt};
     let mut views: HashMap<u32, i64> = HashMap::new();
     fn seed_stmt(stmt: &Stmt, views: &mut HashMap<u32, i64>) {
@@ -330,7 +330,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
 
 /// `S[idx]` where `S` is a tracked const int-typed-array view and `idx`'s
 /// static window is inside `[0, length)` — an integer by construction.
-fn is_proven_int_ta_load(views: &HashMap<u32, i64>, e: &perry_hir::Expr) -> bool {
+pub(crate) fn is_proven_int_ta_load(views: &HashMap<u32, i64>, e: &perry_hir::Expr) -> bool {
     use perry_hir::Expr;
     let Expr::IndexGet { object, index } = e else {
         return false;

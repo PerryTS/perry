@@ -296,6 +296,12 @@ mod tests {
         // Real shell-out: write a tiny package, allowlist it via
         // run_scripts_all, and assert the postinstall ran (it touches
         // a sentinel file).
+        //
+        // `augment_path` reads the process-global `PATH` to resolve `sh`, and
+        // `optimized_libs::tests` swaps `PATH` for a fake, `sh`-less directory
+        // while it runs. Without sharing that lock this spawns with the fake
+        // PATH and fails as `No such file or directory`.
+        let _env = crate::test_env_lock::env_lock();
         let td = TempDir::new().unwrap();
         let pkg_dir = td.path().join("node_modules/sentinel-pkg");
         fs::create_dir_all(&pkg_dir).unwrap();

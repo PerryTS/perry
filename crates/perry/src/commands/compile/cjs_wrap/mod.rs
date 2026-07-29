@@ -36,7 +36,7 @@
 //!     follows up to a small depth (2 levels) to handle one level of env
 //!     switching; deeper indirection is rare and gets the no-op fallback.
 
-pub(in crate::commands::compile) mod detect;
+pub(crate) mod detect;
 mod extract_exports;
 mod extract_requires;
 mod hoist_classes;
@@ -1532,6 +1532,67 @@ module.exports = SafeBuffer;"#;
         );
         assert_eq!(aliases[0].0, "Net");
         assert_eq!(aliases[0].1, "net");
+    }
+
+    #[test]
+    fn require_alias_extract_skips_comma_first_declarator_list() {
+        // ajv 6.x `lib/ajv.js` — pre-ES6 comma-first declarator list.
+        //
+        // The trailing `(?m)$` in the alias regex lets a match end at
+        // end-of-LINE, so only declarator #0 (`compileSchema`) matched.
+        // Blanking that range left `, resolve = require('./compile/resolve')`
+        // dangling at statement position -> TS1109.
+        //
+        // A multi-declarator statement must yield NO aliases: nothing is
+        // blanked, the body keeps the valid original, and the IIFE `require`
+        // resolves each spec at runtime.
+        let src = "'use strict';\n\
+                   var compileSchema = require('./compile')\n\
+                     , resolve = require('./compile/resolve')\n\
+                     , Cache = require('./cache');\n\
+                   var standalone = require('./standalone');\n";
+        let aliases = extract_require_aliases_with_ranges(src);
+        assert_eq!(
+            aliases.len(),
+            1,
+            "comma-first list must yield no aliases; only the standalone \
+             single-declarator statement should match, got: {:?}",
+            aliases
+        );
+        assert_eq!(aliases[0].0, "standalone");
+        assert_eq!(aliases[0].1, "./standalone");
+    }
+
+    #[test]
+    fn wrap_does_not_dangle_comma_continuation_after_blanking() {
+        // Regression test for the ajv 6.x comma-first shape: the wrap output
+        // must stay parseable. A top-level class declaration is included to
+        // force the blanking pass to run.
+        let src = "'use strict';\n\
+                   var compileSchema = require('./compile')\n\
+                     , resolve = require('./compile/resolve')\n\
+                     , Cache = require('./cache');\n\
+                   class Ajv { constructor() { this.c = new Cache(); } }\n\
+                   module.exports = Ajv;\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/ajv.js"));
+        // The declaration must survive INTACT. Before the fix, declarator #0
+        // was blanked to spaces while `, resolve = …` / `, Cache = …` stayed,
+        // leaving a comma at statement position. A leading `,` on a line is
+        // fine on its own — it is a legal continuation — so the meaningful
+        // assertions are that the head is still there and the whole thing
+        // still parses.
+        assert!(
+            wrapped.contains("var compileSchema = require('./compile')"),
+            "declarator #0 was blanked, leaving its continuations dangling:\n{}",
+            wrapped
+        );
+        let parsed = perry_parser::parse_typescript(&wrapped, "ajv.js");
+        assert!(
+            parsed.is_ok(),
+            "wrap output failed to parse: {:?}\nwrapped:\n{}",
+            parsed.err(),
+            wrapped
+        );
     }
 
     #[test]

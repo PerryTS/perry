@@ -433,6 +433,46 @@ fn materialize_js_value_bits_to_js_value(
     value
 }
 
+/// NaN-box a raw `StringRef` handle (i64 `StringHeader*`) as a boxed string
+/// value. Repsel Phase 3a: with `PERRY_CANONICAL_STR_LOCALS` on (the
+/// default), the hot non-null path is the inline `or STRING_TAG; bitcast`
+/// pair (`expr/nanbox_inline.rs` shape) instead of the opaque
+/// `js_nanbox_string` call; the helper's one semantic addition — a null
+/// handle allocates an empty string — is preserved in a cold arm that still
+/// calls it. Flag off reverts to the pre-phase unconditional call.
+fn nanbox_string_ref_boxed(ctx: &mut FnCtx<'_>, handle: &str) -> String {
+    if !crate::expr::canonical_str_locals_enabled() {
+        return ctx
+            .block()
+            .call(DOUBLE, "js_nanbox_string", &[(I64, handle)]);
+    }
+    let is_null = ctx.block().icmp_eq(I64, handle, "0");
+    let null_idx = ctx.new_block("strref.null");
+    let tag_idx = ctx.new_block("strref.tag");
+    let merge_idx = ctx.new_block("strref.merge");
+    let null_label = ctx.block_label(null_idx);
+    let tag_label = ctx.block_label(tag_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&is_null, &null_label, &tag_label);
+
+    ctx.current_block = null_idx;
+    let null_box = ctx
+        .block()
+        .call(DOUBLE, "js_nanbox_string", &[(I64, handle)]);
+    let null_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = tag_idx;
+    let tagged = ctx.block().or(I64, handle, crate::nanbox::STRING_TAG_I64);
+    let tag_box = ctx.block().bitcast_i64_to_double(&tagged);
+    let tag_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&null_box, &null_pred), (&tag_box, &tag_pred)])
+}
+
 pub(crate) fn materialize_js_value(
     ctx: &mut FnCtx<'_>,
     lowered: LoweredValue,
@@ -512,10 +552,7 @@ pub(crate) fn materialize_js_value(
         }
         NativeRep::BufferLen => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
         NativeRep::F32 => ctx.block().fpext(F32, &lowered.value, DOUBLE),
-        NativeRep::StringRef => {
-            ctx.block()
-                .call(DOUBLE, "js_nanbox_string", &[(I64, &lowered.value)])
-        }
+        NativeRep::StringRef => nanbox_string_ref_boxed(ctx, &lowered.value),
         NativeRep::BufferView(_) => lowered.value.clone(),
         NativeRep::PodRecord { .. } => lowered.value.clone(),
         NativeRep::PodRecordView { .. } => lowered.value.clone(),
@@ -556,10 +593,7 @@ pub(crate) fn materialize_js_value_without_record(
             let tagged = ctx.block().or(I64, &lowered.value, POINTER_TAG_I64);
             ctx.block().bitcast_i64_to_double(&tagged)
         }
-        NativeRep::StringRef => {
-            ctx.block()
-                .call(DOUBLE, "js_nanbox_string", &[(I64, &lowered.value)])
-        }
+        NativeRep::StringRef => nanbox_string_ref_boxed(ctx, &lowered.value),
         NativeRep::I1 => {
             let bits = ctx.block().select(
                 I1,

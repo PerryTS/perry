@@ -401,7 +401,12 @@ pub(super) fn try_local_array_methods(
                                 // exactly one argument. Zero-arg and multi-arg
                                 // calls fall through to generic dispatch, which
                                 // routes to the variadic runtime helper.
-                                if args.len() == 1 => {
+                                //
+                                // #6870: `unshift(...src)` is also exactly one
+                                // argument, but the value to prepend is every
+                                // *element* of `src`, not `src` itself. Fall
+                                // through so the variadic helper spreads it.
+                                if args.len() == 1 && call.args[0].spread.is_none() => {
                                     return Ok(Ok(Expr::ArrayUnshift {
                                         array_id,
                                         value: Box::new(args.into_iter().next().unwrap()),
@@ -478,7 +483,15 @@ pub(super) fn try_local_array_methods(
                                 }
                                 // Fall through to normal Call handling for strings or unknown types
                             }
-                            "splice" => {
+                            // #6870: the fast path materializes each item as one
+                            // `ArraySplice` element, so a spread argument would be
+                            // inserted as a single nested array instead of being
+                            // expanded. Bail to generic dispatch (which handles
+                            // spread correctly) whenever any argument spreads —
+                            // same escape hatch `unshift` uses below for its
+                            // unsupported arities (#2814).
+                            "splice"
+                                if call.args.iter().all(|a| a.spread.is_none()) => {
                                 // arr.splice(start, deleteCount?, ...items) - returns deleted elements
                                 let has_start = !args.is_empty();
                                 let mut args_iter = args.into_iter();

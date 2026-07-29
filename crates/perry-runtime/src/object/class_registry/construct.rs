@@ -399,6 +399,7 @@ pub unsafe extern "C" fn js_new_function_construct(
             std::slice::from_raw_parts(args_ptr, args_len)
         };
         match name {
+            #[cfg(feature = "global-webcrypto")]
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
                 return crate::object::js_webcrypto_illegal_constructor();
             }
@@ -508,6 +509,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let wr = crate::weakref::js_weakref_new(target);
                 return crate::value::js_nanbox_pointer(wr as i64);
             }
+            #[cfg(feature = "global-webfetch")]
             "Blob" => {
                 let parts = args
                     .first()
@@ -519,6 +521,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_blob_thunk(std::ptr::null(), parts, options);
             }
+            #[cfg(feature = "global-webfetch")]
             "File" => {
                 let parts = args
                     .first()
@@ -539,6 +542,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                     options,
                 );
             }
+            #[cfg(feature = "global-webfetch")]
             "Headers" => {
                 let init = args
                     .first()
@@ -546,6 +550,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_headers_thunk(std::ptr::null(), init);
             }
+            #[cfg(feature = "global-webfetch")]
             "Request" => {
                 let input = args
                     .first()
@@ -557,6 +562,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_request_thunk(std::ptr::null(), input, init);
             }
+            #[cfg(feature = "global-webfetch")]
             "Response" => {
                 let body = args
                     .first()
@@ -694,12 +700,14 @@ pub unsafe extern "C" fn js_new_function_construct(
                 };
                 return crate::value::js_nanbox_pointer(ta as i64);
             }
+            #[cfg(feature = "global-text")]
             "TextEncoderStream" => {
                 return text_encoding_stream_new_with_constructor(
                     func_value,
                     CLASS_ID_TEXT_ENCODER_STREAM,
                 );
             }
+            #[cfg(feature = "global-text")]
             "TextDecoderStream" => {
                 return text_encoding_stream_new_with_constructor(
                     func_value,
@@ -753,6 +761,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::messaging::js_broadcast_channel_new(name);
             }
+            #[cfg(feature = "global-url")]
             "URL" => {
                 let input = args
                     .first()
@@ -767,6 +776,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                 };
                 return crate::value::js_nanbox_pointer(url as i64);
             }
+            #[cfg(feature = "global-url")]
             "URLSearchParams" => {
                 let params = if let Some(init) = args.first().copied() {
                     crate::url::js_url_search_params_new_any(init)
@@ -775,6 +785,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                 };
                 return crate::value::js_nanbox_pointer(params as i64);
             }
+            #[cfg(feature = "global-text")]
             "TextEncoder" => {
                 let encoder = crate::text::js_text_encoder_new();
                 return crate::value::js_nanbox_pointer(encoder);
@@ -801,6 +812,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let promise = crate::promise::js_promise_new_with_executor(exec_ptr);
                 return crate::value::js_nanbox_pointer(promise as i64);
             }
+            #[cfg(feature = "global-text")]
             "TextDecoder" => {
                 let label = args
                     .first()

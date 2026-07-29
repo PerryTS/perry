@@ -152,6 +152,7 @@ pub(super) fn pty_register_live(ipty: f64, child: native::PtyChild) -> u64 {
             },
         );
     }
+    crate::stdlib_pump::register_runtime_pump(1, pty_reactor_pump_extern);
     PTY_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
     pty_spawn_reader(handle, child.master);
     pty_spawn_waiter(handle, child.pid);
@@ -256,6 +257,13 @@ fn pty_decode_utf8(carry: &mut Vec<u8>, bytes: &[u8]) -> String {
 
 /// Drive the reactor one tick: deliver pending `data` and terminal `exit`
 /// for all live ptys. Called from `js_run_stdlib_pump`.
+
+/// `extern "C"` wrapper registered into the armed runtime-pump slots on the
+/// first live pty (see `stdlib_pump::register_runtime_pump`).
+extern "C" fn pty_reactor_pump_extern() {
+    pty_reactor_pump();
+}
+
 pub(crate) fn pty_reactor_pump() {
     if PTY_LIVE_COUNT.load(Ordering::Relaxed) == 0 {
         return;

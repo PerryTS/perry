@@ -9,7 +9,7 @@ use perry_hir::{BinaryOp, Expr, WithSetFallback};
 
 use crate::nanbox::{double_literal, i64_literal, POINTER_MASK_I64};
 use crate::type_analysis::is_string_expr;
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
     emit_root_nanbox_store_on_block, emit_shadow_slot_bind_for_local, emit_string_literal_global,
@@ -113,6 +113,11 @@ fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<S
             blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
             emit_write_barrier(ctx, &box_ptr, &value_bits);
         }
+    } else if crate::expr::store_canonical_local_from_double(ctx, id, value, None) {
+        // Repsel Phase 1: canonical-i32 local — the prelowered value entered
+        // the (only) i32 slot through the NaN-safe ToInt32 conversion. This
+        // matches the pre-phase observable behavior: the parallel-shadow
+        // mirror below wrote the same slot, and every read preferred it.
     } else if let Some(slot) = ctx.locals.get(&id).cloned() {
         ctx.block().store(DOUBLE, value, &slot);
         if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
@@ -1393,6 +1398,88 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     blk.store(DOUBLE, &new, &slot);
                     return Ok(if *prefix { new } else { old_num });
+                }
+            }
+            // Representation-selection Phase 3b: `o.f++` on a shape-proven
+            // Ptr<Shape> local whose field is numeric-proven — bare
+            // load/fadd/store at the fixed offset, no by-name runtime calls.
+            // The store keeps the raw-slot plain-finite discipline (an
+            // Inf-crossing update side-exits to the by-name setter, which
+            // performs the layout downgrade the GC scan relies on).
+            // (Phase 5a's proven `this` never claims numeric fields, so this
+            // site remains Phase-3b-local-only in practice.)
+            {
+                let fact = ctx.ptr_shape_receiver_fact(object.as_ref()).cloned();
+                {
+                    if let Some(fact) = fact {
+                        if fact.numeric_fields.contains(property.as_str()) {
+                            if let Some(field_index) =
+                                crate::type_analysis::class_field_global_index(
+                                    ctx,
+                                    &fact.class_name,
+                                    property,
+                                )
+                            {
+                                let recv_box = lower_expr(ctx, object)?;
+                                let field_idx_str = field_index.to_string();
+                                let header_skip = crate::target_layout::object_header_size_bytes(
+                                    ctx.target_triple,
+                                )
+                                .to_string();
+                                let (obj_handle, field_ptr, old, new) = {
+                                    let blk = ctx.block();
+                                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                                    let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                                    let field_ptr =
+                                        blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                                    let old = blk.load(DOUBLE, &field_ptr);
+                                    let new = match op {
+                                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
+                                        _ => blk.fadd(&old, "1.0"),
+                                    };
+                                    (obj_handle, field_ptr, old, new)
+                                };
+                                let store_idx = ctx.new_block("ptr_shape_update.raw_store");
+                                let cold_idx = ctx.new_block("ptr_shape_update.downgrade");
+                                let merge_idx = ctx.new_block("ptr_shape_update.merge");
+                                let store_label = ctx.block_label(store_idx);
+                                let cold_label = ctx.block_label(cold_idx);
+                                let merge_label = ctx.block_label(merge_idx);
+                                {
+                                    let blk = ctx.block();
+                                    let new_bits = blk.bitcast_double_to_i64(&new);
+                                    let finite = crate::expr::class_field_inline_guard::
+                                        emit_plain_finite_number_check(blk, &new_bits);
+                                    blk.cond_br(&finite, &store_label, &cold_label);
+                                }
+                                ctx.current_block = store_idx;
+                                {
+                                    let blk = ctx.block();
+                                    blk.store(DOUBLE, &new, &field_ptr);
+                                    blk.br(&merge_label);
+                                }
+                                ctx.current_block = cold_idx;
+                                {
+                                    let key_idx = ctx.strings.intern(property);
+                                    let key_handle_global =
+                                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                                    let blk = ctx.block();
+                                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                    blk.call_void(
+                                        "js_object_set_field_by_name",
+                                        &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
+                                    );
+                                    blk.br(&merge_label);
+                                }
+                                ctx.current_block = merge_idx;
+                                return Ok(if *prefix { new } else { old });
+                            }
+                        }
+                    }
                 }
             }
             let obj_box = lower_expr(ctx, object)?;
