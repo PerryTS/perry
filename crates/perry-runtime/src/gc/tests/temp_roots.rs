@@ -191,3 +191,87 @@ fn shadow_savepoint_restores_the_temp_root_depth() {
 
     js_gc_temp_root_truncate(outer);
 }
+
+/// Rewriting a slot must re-aim the root: the NEW value becomes reachable and
+/// the replaced one does not stay alive on the strength of having once been in
+/// that slot.
+///
+/// This is the semantics `String.prototype.concat` depends on (#6971). Its
+/// accumulator is a bare `StringHeader*` that changes address on every
+/// iteration — each `js_string_concat` returns a *new* string — so codegen
+/// writes the result back with `js_gc_temp_root_set` before lowering the next
+/// argument. If a write-back rooted the old address instead of the new one,
+/// the accumulator under construction would be the thing swept.
+///
+/// Pins `ConservativeStackScanMode::Disabled`: with the unit-test default
+/// (`Full`) the native-stack scan finds both raw pointers in these Rust locals
+/// and the test passes without proving anything about precise roots.
+#[test]
+fn rewriting_a_slot_roots_the_new_value_and_releases_the_replaced_one() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_temp_root_scanner_for_tests();
+    reset_temp_roots();
+    reset_old_reclaim_pressure();
+
+    let dead_headers = allocate_dead_malloc_churn_headers(8);
+
+    let replaced = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    let successor = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(replaced);
+        init_test_closure(successor);
+    }
+    assert!(
+        malloc_user_ptr_tracked(replaced) && malloc_user_ptr_tracked(successor),
+        "precondition: both objects are tracked"
+    );
+
+    // The accumulator pattern: root the first value, then hand the slot the
+    // successor the way `js_string_concat`'s result is written back.
+    let slot = js_gc_temp_root_push(replaced as u64);
+    js_gc_temp_root_set(slot, successor as u64);
+
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
+    gc_check_trigger();
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+
+    assert_eq!(
+        tracked_malloc_headers_matching(&dead_headers),
+        0,
+        "the sweep must actually have run for this test to mean anything"
+    );
+
+    let survivor = js_gc_temp_root_get(slot);
+    assert_eq!(
+        survivor, successor as u64,
+        "the slot must still hold the value written back into it"
+    );
+    assert!(
+        malloc_user_ptr_tracked(survivor as *mut u8),
+        "the value a slot was re-aimed at must be marked, not swept (#6971)"
+    );
+    unsafe {
+        assert_eq!(
+            (*(survivor as *mut crate::closure::ClosureHeader)).type_tag,
+            crate::closure::CLOSURE_MAGIC,
+            "the surviving accumulator must still be intact"
+        );
+    }
+    assert!(
+        !malloc_user_ptr_tracked(replaced),
+        "the replaced value must NOT be retained by a slot that no longer \
+         points at it — otherwise every concat round leaks its input"
+    );
+
+    js_gc_temp_root_truncate(slot);
+    assert_eq!(temp_root_depth(), 0);
+}

@@ -556,10 +556,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the runtime call both live only in SSA registers, so a collection
             // there sweeps them: `m.set(fresh(k), churn(N))` aborted inside
             // `js_map_set` on a key whose header had been recycled.
+            let value_collects = temp_root::expr_may_trigger_gc(value);
             let roots = temp_root::root_operands(
                 ctx,
                 &[&m_box, &k_box],
-                temp_root::expr_may_trigger_gc(value),
+                &[
+                    value_collects && temp_root::operand_needs_root(ctx, map),
+                    value_collects && temp_root::operand_needs_root(ctx, key),
+                ],
             );
             // Unbox eagerly only on the unprotected path, so its IR — including
             // register numbering — is exactly what it was before this change.

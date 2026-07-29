@@ -293,21 +293,24 @@ pub(crate) struct RootedOperands {
     guard: Option<String>,
 }
 
-/// Root each of `values` (NaN-boxed `double` registers) when `protect` says
-/// something between here and the consuming call can collect.
+/// Root each of `values` (NaN-boxed `double` registers) whose corresponding
+/// `protect` flag says something between here and the consuming call can
+/// collect *and* the operand is not already rooted elsewhere.
 ///
-/// `protect` is the caller's judgement precisely because the hazard is not
-/// visible in an expression list: for `m.set(k, v)` it is `v`'s lowering, for
-/// `new C(a, b)` it is the instance allocation.
+/// The caller supplies the flags precisely because the hazard is not visible in
+/// an expression list: for `m.set(k, v)` it is `v`'s lowering, for
+/// `new C(a, b)` it is the instance allocation. Pair each flag with
+/// [`operand_needs_root`] so a plain local receiver — already held by the
+/// shadow stack — keeps its old IR.
 pub(crate) fn root_operands(
     ctx: &mut FnCtx<'_>,
     values: &[&str],
-    protect: bool,
+    protect: &[bool],
 ) -> RootedOperands {
     let mut slots = Vec::with_capacity(values.len());
     let mut guard: Option<String> = None;
-    for value in values {
-        if protect {
+    for (i, value) in values.iter().enumerate() {
+        if protect.get(i).copied().unwrap_or(false) {
             let idx = temp_root_push_double(ctx, value);
             if guard.is_none() {
                 guard = Some(idx.clone());
