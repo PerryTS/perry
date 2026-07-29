@@ -261,6 +261,93 @@ pub(crate) fn lower_operand_pair_rooted(
     Ok((left_value, right_value, guard))
 }
 
+/// Already-lowered operand values kept alive across work whose shape the
+/// caller controls — a later operand whose *representation* is chosen per
+/// branch (`Expr::MapSet`, #6970) or an allocation that happens after the whole
+/// list is lowered (`new C(a, b)`, #6969).
+///
+/// [`lower_exprs_rooted`] cannot serve those: it decides what to protect from
+/// the expressions it is handed and re-reads immediately, whereas these sites
+/// need the re-read to happen *after* a step the helper never sees. So the
+/// caller supplies the protection decision and picks the re-read point.
+///
+/// When `protect` is false this emits nothing at all and [`RootedOperands::reread`]
+/// hands the original registers straight back, so unprotected sites keep their
+/// pre-#6951 IR byte for byte.
+pub(crate) struct RootedOperands {
+    /// Slot index per operand, or `None` when the operand was not rooted.
+    slots: Vec<Option<String>>,
+    /// The registers as originally lowered — the answer when nothing is rooted.
+    values: Vec<String>,
+    /// First slot pushed; truncating it drops the whole group.
+    guard: Option<String>,
+}
+
+/// Root each of `values` (NaN-boxed `double` registers) when `protect` says
+/// something between here and the consuming call can collect.
+///
+/// `protect` is the caller's judgement precisely because the hazard is not
+/// visible in an expression list: for `m.set(k, v)` it is `v`'s lowering, for
+/// `new C(a, b)` it is the instance allocation.
+pub(crate) fn root_operands(
+    ctx: &mut FnCtx<'_>,
+    values: &[&str],
+    protect: bool,
+) -> RootedOperands {
+    let mut slots = Vec::with_capacity(values.len());
+    let mut guard: Option<String> = None;
+    for value in values {
+        if protect {
+            let idx = temp_root_push_double(ctx, value);
+            if guard.is_none() {
+                guard = Some(idx.clone());
+            }
+            slots.push(Some(idx));
+        } else {
+            slots.push(None);
+        }
+    }
+    RootedOperands {
+        slots,
+        values: values.iter().map(|v| (*v).to_string()).collect(),
+        guard,
+    }
+}
+
+impl RootedOperands {
+    /// Re-read every rooted operand. Mandatory after the collection point, not
+    /// defensive: the slot is a *mutable* root, so an evacuating cycle rewrites
+    /// it and the register pushed beforehand is stale.
+    ///
+    /// Emits nothing when nothing was rooted.
+    pub(crate) fn reread(&self, ctx: &mut FnCtx<'_>) -> Vec<String> {
+        self.slots
+            .iter()
+            .zip(self.values.iter())
+            .map(|(slot, original)| match slot {
+                Some(idx) => {
+                    let idx = idx.clone();
+                    temp_root_get_double(ctx, &idx)
+                }
+                None => original.clone(),
+            })
+            .collect()
+    }
+
+    /// True when this group actually pushed slots — the signal a caller uses to
+    /// keep an eager unbox (and therefore its exact register numbering) on the
+    /// unprotected path.
+    pub(crate) fn is_rooted(&self) -> bool {
+        self.guard.is_some()
+    }
+
+    /// Drop the group. Call it *after* the consuming call: the consumer
+    /// allocates while reading these values.
+    pub(crate) fn release(self, ctx: &mut FnCtx<'_>) {
+        temp_root_release(ctx, self.guard);
+    }
+}
+
 /// Release a guard returned by [`lower_exprs_rooted`]. Call it *after* the
 /// consuming call, not before: the consumer allocates while reading these
 /// values.
