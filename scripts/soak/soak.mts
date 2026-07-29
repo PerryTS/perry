@@ -400,16 +400,21 @@ export function checkToolchainSoak(body: string, file: string): Finding[] {
 
 export function checkTazeConfig(body: string, file: string): Finding[] {
   const out: Finding[] = []
-  if (!body.includes('maturityPeriod')) {
+  const importsSoakDays =
+    /import\s*\{[^}]*\bSOAK_DAYS\b[^}]*\}\s*from\s*['"][^'"]*scripts\/soak\/constants\.mts['"]/.test(
+      body,
+    )
+  const usesSoakDays = /\bmaturityPeriod\s*:\s*SOAK_DAYS\b/.test(body)
+  if (!usesSoakDays) {
     out.push({
       file,
       what: 'taze maturityPeriod',
-      saw: '(not set)',
+      saw: body.includes('maturityPeriod') ? 'not set to SOAK_DAYS' : '(not set)',
       wanted: 'maturityPeriod: SOAK_DAYS',
       fix: 'set maturityPeriod: SOAK_DAYS in the taze config',
     })
   }
-  if (!body.includes('constants.mts')) {
+  if (!importsSoakDays) {
     out.push({
       file,
       what: 'taze config soak import',
@@ -432,9 +437,6 @@ export function checkTazeConfig(body: string, file: string): Finding[] {
  * `- package-ecosystem:` line to the next one.
  */
 export function checkDependabotCooldown(body: string, file: string): Finding[] {
-  if (SOAK_DAYS === 0) {
-    return []
-  }
   const out: Finding[] = []
   for (const block of parseDependabotBlocks(body)) {
     const days = /^\s+default-days:\s*(\d+)\s*$/m.exec(block.body)?.[1]
@@ -485,9 +487,6 @@ export function parseDependabotBlocks(body: string): DependabotBlock[] {
 // window. A MISSING cooldown block stays a --check finding (line-based
 // YAML insertion is riskier than telling a human where the two lines go).
 export function fixDependabotCooldown(body: string): string {
-  if (SOAK_DAYS === 0) {
-    return body
-  }
   return body.replace(/^(\s+default-days:\s*)\d+\s*$/gm, `$1${SOAK_DAYS}`)
 }
 

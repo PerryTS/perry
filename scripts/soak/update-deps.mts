@@ -9,8 +9,8 @@
  *   - cargo: `cargo update` via rustup's shim. `.cargo/config.toml` carries
  *     min-publish-age for the same window — an [unstable] cargo feature, so
  *     it bites only under a nightly toolchain; on perry's stable toolchain
- *     the automated window rides dependabot's cooldown and this path is a
- *     plain update.
+ *     the automated window rides dependabot's cooldown and this manual path
+ *     refuses a mutating update.
  *
  *   Usage: node scripts/soak/update-deps.mts [--npm|--cargo] [--dry-run]
  *   (no ecosystem flag = both)
@@ -67,6 +67,40 @@ function updateCargo(dryRun: boolean): number {
     console.error('[update-deps] rustup cargo shim not found — refusing a cargo that cannot follow the repo toolchain')
     return 1
   }
+  // Before a mutating update, run the exact resolver in dry-run mode. Cargo
+  // stable accepts the config while warning that min-publish-age is unused;
+  // detecting that only after `cargo update` would be too late because the
+  // lockfile may already contain fresh releases.
+  if (!dryRun) {
+    const preflightArgs = ['update', '--dry-run']
+    console.log(`[update-deps] preflight: ${RUSTUP_CARGO} ${preflightArgs.join(' ')} (in .)`)
+    const preflight = spawnSync(RUSTUP_CARGO, preflightArgs, {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      stdio: ['inherit', 'inherit', 'pipe'],
+    })
+    const preflightStderr = preflight.stderr ?? ''
+    process.stderr.write(preflightStderr)
+    if (preflight.error) {
+      console.error(`[update-deps] ${RUSTUP_CARGO}: ${preflight.error.message}`)
+      return 1
+    }
+    if (isBlockedByPublishAge(preflightStderr)) {
+      reportPublishAgeBlock()
+      return preflight.status ?? 1
+    }
+    if (shouldRefuseUnsupportedCargoUpdate(dryRun, preflightStderr)) {
+      console.error(
+        '[update-deps] refusing mutating cargo update: this toolchain ignored\n' +
+          '  [unstable] min-publish-age, so it cannot enforce the dependency soak.\n' +
+          '  Use --dry-run for diagnostics or a pinned nightly that supports the key.',
+      )
+      return 1
+    }
+    if ((preflight.status ?? 1) !== 0) {
+      return preflight.status ?? 1
+    }
+  }
   const args = dryRun ? ['update', '--dry-run'] : ['update']
   // Report honestly when the cargo-side window did not apply. perry rides
   // stable, where `[unstable] min-publish-age` is a warning-only unused
@@ -94,16 +128,7 @@ function updateCargo(dryRun: boolean): number {
   // bypass this design deliberately does not have. Say so before someone
   // copy-pastes it out of a red terminal.
   if (isBlockedByPublishAge(stderr)) {
-    console.error(
-      '[update-deps] the cargo soak BLOCKED this re-resolution: a requirement can\n' +
-        '  only be satisfied by a release younger than the window (see the error above).\n' +
-        '  This is the window working, not a bug. Options, in order of preference:\n' +
-        '    1. wait out the remaining days and re-run;\n' +
-        '    2. relax/repin the requirement so an already-soaked version satisfies it;\n' +
-        '    3. if the fresh release is genuinely required, adopt it as a deliberate,\n' +
-        '       reviewable commit — NOT via CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE,\n' +
-        '       which silently disables the window for every crate in the graph.',
-    )
+    reportPublishAgeBlock()
     return res.status ?? 1
   }
   if (isMinPublishAgeUnsupported(stderr)) {
@@ -116,6 +141,19 @@ function updateCargo(dryRun: boolean): number {
   return res.status ?? 1
 }
 
+function reportPublishAgeBlock(): void {
+  console.error(
+    '[update-deps] the cargo soak BLOCKED this re-resolution: a requirement can\n' +
+      '  only be satisfied by a release younger than the window (see the error above).\n' +
+      '  This is the window working, not a bug. Options, in order of preference:\n' +
+      '    1. wait out the remaining days and re-run;\n' +
+      '    2. relax/repin the requirement so an already-soaked version satisfies it;\n' +
+      '    3. if the fresh release is genuinely required, adopt it as a deliberate,\n' +
+      '       reviewable commit — NOT via CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE,\n' +
+      '       which silently disables the window for every crate in the graph.',
+  )
+}
+
 /**
  * cargo emits `unused config key ...` (a warning, exit 0) for an
  * `[unstable]` key it does not implement, so the ONLY signal that the soak
@@ -123,6 +161,10 @@ function updateCargo(dryRun: boolean): number {
  */
 export function isMinPublishAgeUnsupported(stderr: string): boolean {
   return /unused config key `unstable\.min-publish-age`/.test(stderr)
+}
+
+export function shouldRefuseUnsupportedCargoUpdate(dryRun: boolean, stderr: string): boolean {
+  return !dryRun && isMinPublishAgeUnsupported(stderr)
 }
 
 /**

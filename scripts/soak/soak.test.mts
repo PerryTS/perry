@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { SOAK_DAYS, addDaysIso, todayIso } from './constants.mts'
+import { SOAK_DAYS, SOAK_MINUTES, addDaysIso, todayIso } from './constants.mts'
 import {
   checkCargoConfig,
   checkCatalogParity,
@@ -31,7 +31,7 @@ const FRESH_REM = addDaysIso(FRESH_PUB, SOAK_DAYS)
 
 const CLEAN_YAML = `catalog:
   taze: 19.14.1
-minimumReleaseAge: 10080
+minimumReleaseAge: ${SOAK_MINUTES}
 minimumReleaseAgeExclude:
   # published: ${FRESH_PUB} | removable: ${FRESH_REM}
   - 'left-pad@1.3.0'
@@ -40,25 +40,28 @@ minimumReleaseAgeExclude:
 `
 
 test('cargo config: wrong window and missing unstable gate are findings', () => {
-  const good = '[unstable]\nmin-publish-age = true\n\n[registry]\nglobal-min-publish-age = "7 days"\n'
+  const good = `[unstable]\nmin-publish-age = true\n\n[registry]\nglobal-min-publish-age = "${SOAK_DAYS} days"\n`
   assert.equal(checkCargoConfig(good, 'c').length, 0)
-  assert.equal(checkCargoConfig(good.replace('7 days', '3 days'), 'c').length, 1)
-  assert.equal(checkCargoConfig('[registry]\nglobal-min-publish-age = "7 days"\n', 'c').length, 1)
+  assert.equal(checkCargoConfig(good.replace(`${SOAK_DAYS} days`, `${SOAK_DAYS + 1} days`), 'c').length, 1)
+  assert.equal(
+    checkCargoConfig(`[registry]\nglobal-min-publish-age = "${SOAK_DAYS} days"\n`, 'c').length,
+    1,
+  )
 })
 
 test('npmrc: window must match SOAK_DAYS and fix writes it', () => {
-  assert.equal(checkNpmrc('min-release-age=7\n', 'n').length, 0)
+  assert.equal(checkNpmrc(`min-release-age=${SOAK_DAYS}\n`, 'n').length, 0)
   assert.equal(checkNpmrc('min-release-age=3\n', 'n').length, 1)
   assert.equal(checkNpmrc('# nothing\n', 'n').length, 1)
-  assert.match(fixNpmrc('# nothing\n'), /min-release-age=7/)
-  assert.match(fixNpmrc('min-release-age=3\n'), /min-release-age=7/)
+  assert.ok(fixNpmrc('# nothing\n').includes(`min-release-age=${SOAK_DAYS}`))
+  assert.ok(fixNpmrc('min-release-age=3\n').includes(`min-release-age=${SOAK_DAYS}`))
 })
 
 test('npmrc excludes: version pins need dated annotations, globs do not', () => {
   // The shape a fleet repo actually uses: trusted scopes and bare names
   // are standing trust and need no annotation.
   const trusted = [
-    'min-release-age=7',
+    `min-release-age=${SOAK_DAYS}`,
     'min-release-age-exclude[]=@socketsecurity/*',
     'min-release-age-exclude[]=sfw',
   ].join('\n')
@@ -83,12 +86,12 @@ test('workspace yaml: clean fixture passes', () => {
 })
 
 test('workspace yaml: wrong minutes value is a finding', () => {
-  const bad = CLEAN_YAML.replace('10080', '1440')
+  const bad = CLEAN_YAML.replace(String(SOAK_MINUTES), String(SOAK_MINUTES + 1))
   assert.equal(checkWorkspaceYaml(bad, 'y').filter(f => f.what.includes('minimumReleaseAge')).length, 1)
 })
 
 test('excludes: flow-style list is rejected outright', () => {
-  const flow = "minimumReleaseAge: 10080\nminimumReleaseAgeExclude: ['left-pad@1.3.0']\n"
+  const flow = `minimumReleaseAge: ${SOAK_MINUTES}\nminimumReleaseAgeExclude: ['left-pad@1.3.0']\n`
   const findings = checkExcludeAnnotations(flow, 'y')
   assert.equal(findings.length, 1)
   assert.match(findings[0]!.what, /flow style/)
@@ -106,7 +109,7 @@ test('excludes: wrong removable date is a finding; expiry is a warning, not a fi
   assert.match(checkExcludeAnnotations(wrong, 'y')[0]!.what, /removable date/)
   // Expired-but-valid is STALE, not unsafe: check exits clean, the stale
   // list reports it, and --fix / the soak-autofix workflow prunes it.
-  const expired = `minimumReleaseAgeExclude:\n  # published: 2020-01-01 | removable: 2020-01-08\n  - 'b@1.0.0'\n`
+  const expired = `minimumReleaseAgeExclude:\n  # published: 2020-01-01 | removable: ${addDaysIso('2020-01-01', SOAK_DAYS)}\n  - 'b@1.0.0'\n`
   assert.deepEqual(checkExcludeAnnotations(expired, 'y'), [])
   assert.deepEqual(staleExcludes(expired), ['b@1.0.0'])
   // Fresh and malformed entries are never "stale".
@@ -132,14 +135,14 @@ test('fix and stale-list skip a wrong-arithmetic expired annotation', () => {
   // published + SOAK_DAYS != removable and removable is already past:
   // this must stay a check failure for a human, not silently prune —
   // the real window may still be open.
-  const yaml = `minimumReleaseAge: 10080\nminimumReleaseAgeExclude:\n  # published: ${todayIso()} | removable: 2020-01-02\n  - 'wrongmath@1.0.0'\n`
+  const yaml = `minimumReleaseAge: ${SOAK_MINUTES}\nminimumReleaseAgeExclude:\n  # published: ${todayIso()} | removable: 2020-01-02\n  - 'wrongmath@1.0.0'\n`
   assert.deepEqual(staleExcludes(yaml), [])
   assert.ok(fixWorkspaceYaml(yaml).includes('wrongmath@1.0.0'))
   assert.ok(checkExcludeAnnotations(yaml, 'y').length >= 1)
 })
 
 test('fix prunes expired pins together with their annotations', () => {
-  const yaml = `minimumReleaseAge: 10080\nminimumReleaseAgeExclude:\n  # published: 2020-01-01 | removable: 2020-01-08\n  - 'old@1.0.0'\n  # published: ${FRESH_PUB} | removable: ${FRESH_REM}\n  - 'fresh@1.0.0'\n`
+  const yaml = `minimumReleaseAge: ${SOAK_MINUTES}\nminimumReleaseAgeExclude:\n  # published: 2020-01-01 | removable: ${addDaysIso('2020-01-01', SOAK_DAYS)}\n  - 'old@1.0.0'\n  # published: ${FRESH_PUB} | removable: ${FRESH_REM}\n  - 'fresh@1.0.0'\n`
   const fixed = fixWorkspaceYaml(yaml)
   assert.ok(!fixed.includes('old@1.0.0'))
   assert.ok(!fixed.includes('2020-01-01'))
@@ -163,16 +166,22 @@ test('catalog parity: entries after a blank line are still checked', () => {
 test('taze config: window must be imported, not hand-copied', () => {
   const good = "import { SOAK_DAYS } from './scripts/soak/constants.mts'\nexport default { maturityPeriod: SOAK_DAYS }\n"
   assert.equal(checkTazeConfig(good, 't').length, 0)
-  assert.equal(checkTazeConfig('export default { maturityPeriod: 7 }\n', 't').length, 1)
+  assert.equal(checkTazeConfig('export default { maturityPeriod: 7 }\n', 't').length, 2)
   assert.equal(checkTazeConfig('export default {}\n', 't').length, 2)
+  const unrelated =
+    "// constants.mts and maturityPeriod are mentioned, but not wired together\nexport default { maturityPeriod: 1 }\n"
+  assert.equal(checkTazeConfig(unrelated, 't').length, 2)
 })
 
 test('toolchain soak: nightly must be SOAK_DAYS old at adoption; stable passes', () => {
-  const good = '# adopted: 2026-07-11\n[toolchain]\nchannel = "nightly-2026-07-04"\n'
+  const channel = '2026-07-04'
+  const adopted = addDaysIso(channel, SOAK_DAYS)
+  const good = `# adopted: ${adopted}\n[toolchain]\nchannel = "nightly-${channel}"\n`
   assert.equal(checkToolchainSoak(good, 't').length, 0)
-  const tooFresh = '# adopted: 2026-07-11\n[toolchain]\nchannel = "nightly-2026-07-08"\n'
+  const tooFreshChannel = addDaysIso(adopted, -(SOAK_DAYS - 1))
+  const tooFresh = `# adopted: ${adopted}\n[toolchain]\nchannel = "nightly-${tooFreshChannel}"\n`
   assert.match(checkToolchainSoak(tooFresh, 't')[0]!.what, /nightly soak/)
-  const noDate = '[toolchain]\nchannel = "nightly-2026-07-04"\n'
+  const noDate = `[toolchain]\nchannel = "nightly-${channel}"\n`
   assert.match(checkToolchainSoak(noDate, 't')[0]!.what, /adoption date/)
   const stable = '[toolchain]\nchannel = "1.95.0"\n'
   assert.equal(checkToolchainSoak(stable, 't').length, 0)

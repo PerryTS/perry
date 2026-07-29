@@ -5,6 +5,7 @@ import {
   isBlockedByPublishAge,
   isMinPublishAgeUnsupported,
   selectEcosystems,
+  shouldRefuseUnsupportedCargoUpdate,
 } from './update-deps.mts'
 
 test('no ecosystem flag updates both', () => {
@@ -30,6 +31,8 @@ test('detects the unused-config-key warning that means the cargo soak did not ap
   const real =
     'warning: unused config key `unstable.min-publish-age` in `/repo/.cargo/config.toml`\n'
   assert.equal(isMinPublishAgeUnsupported(real), true)
+  assert.equal(shouldRefuseUnsupportedCargoUpdate(false, real), true)
+  assert.equal(shouldRefuseUnsupportedCargoUpdate(true, real), false)
   assert.equal(isMinPublishAgeUnsupported('warning: unused config key `unstable.other`\n'), false)
   assert.equal(isMinPublishAgeUnsupported(''), false)
   assert.equal(isMinPublishAgeUnsupported('    Updating crates.io index\n'), false)

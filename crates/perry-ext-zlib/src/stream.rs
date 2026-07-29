@@ -418,7 +418,10 @@ impl CodecState {
             // the inner Vec; Decoder::into_inner is tolerant of an
             // unterminated frame (same stance as BrotliDec above).
             CodecState::ZstdEnc(w) => w.finish(),
-            CodecState::ZstdDec(w) => Ok(w.into_inner()),
+            CodecState::ZstdDec(mut w) => {
+                w.flush()?;
+                Ok(w.into_inner())
+            }
         }
     }
 }
@@ -1443,6 +1446,15 @@ mod stream_tests {
             run_codec(Codec::Gunzip, &c).unwrap(),
             b"hello streaming world"
         );
+    }
+
+    #[test]
+    fn zstd_decoder_finish_flushes_pending_output() {
+        let expected = b"zstd decoder output buffered until the stream finishes";
+        let compressed = zstd::stream::encode_all(expected.as_slice(), ZSTD_DEFAULT_LEVEL).unwrap();
+        let mut decoder = make_codec_state(Codec::ZstdDecompress).expect("zstd decoder");
+        decoder.write_chunk(&compressed).unwrap();
+        assert_eq!(decoder.finish().unwrap(), expected);
     }
 
     #[test]
