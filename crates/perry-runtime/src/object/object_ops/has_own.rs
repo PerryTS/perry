@@ -132,7 +132,31 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
-        let key_str = crate::builtins::js_string_coerce(key_value);
+        // #6943: `js_string_coerce` allocates for every non-heap-string key and
+        // runs a user `toString` / `valueOf` for an object key, so it can
+        // trigger a GC that **evacuates**. `obj_value` — and the `obj_js` tag
+        // view derived from it at the top of this function — were raw Rust
+        // locals across the call, and every arm below dereferences one or the
+        // other. The already-heap-string key, which is what
+        // `o.hasOwnProperty("x")` compiles to for names past the SSO bound,
+        // keeps the pre-fix path verbatim.
+        let (obj_value, obj_js, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
+            (
+                obj_value,
+                obj_js,
+                crate::builtins::js_string_coerce(key_value),
+            )
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            (
+                obj_value,
+                crate::JSValue::from_bits(obj_value.to_bits()),
+                key_str,
+            )
+        };
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);
         }
@@ -473,7 +497,16 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
         }
 
-        let key_str = crate::builtins::js_string_coerce(key_value);
+        // #6943: root the receiver across the GC-capable key coercion — see
+        // `js_object_has_own` above for the full reasoning.
+        let (obj_value, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
+            (obj_value, crate::builtins::js_string_coerce(key_value))
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            (f64::from_bits(obj_handle.get_heap_word_u64()), key_str)
+        };
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);
         }

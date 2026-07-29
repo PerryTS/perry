@@ -56,7 +56,15 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // typed arrays are plain-`alloc`ed without a `GcHeader`, so reading
         // `addr - 8` is allocator-metadata garbage.
         if crate::typedarray::lookup_typed_array_kind(obj_addr).is_some() {
+            // #6943: `js_string_coerce` allocates for every non-heap-string key
+            // and runs a user `toString` / `valueOf` for an object key, so it
+            // can trigger a GC that **evacuates**. `obj` was resolved from
+            // `value` before the call and is dereferenced as a
+            // `TypedArrayHeader` after it.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
             let key_str = crate::builtins::js_string_coerce(key);
+            let obj = obj_handle.get_raw_mut_ptr::<super::ObjectHeader>();
             if key_str.is_null() {
                 return false;
             }
@@ -74,7 +82,12 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
                 if arr.is_null() {
                     return false;
                 }
+                // #6943: `arr` is the (tag-cleaned) array header, resolved
+                // before the GC-capable coercion and walked after it.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let arr_handle = scope.root_raw_const_ptr(arr);
                 let key_str = crate::builtins::js_string_coerce(key);
+                let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
                 if key_str.is_null() {
                     return false;
                 }
@@ -107,7 +120,19 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
                 }
             }
         }
-        let key_str = crate::builtins::js_string_coerce(key);
+        // #6943: the ordinary arm dereferences `obj` for its `keys_array`
+        // *after* the GC-capable coercion, so the receiver is rooted across it.
+        // An already-heap-string key — the common `Reflect.defineProperty(o,
+        // "x", …)` shape — keeps the pre-fix path: `js_string_coerce` returns
+        // that pointer unchanged without touching the allocator.
+        let (obj, key_str) = if crate::builtins::string_coerce_is_inert(key) {
+            (obj, crate::builtins::js_string_coerce(key))
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let key_str = crate::builtins::js_string_coerce(key);
+            (obj_handle.get_raw_mut_ptr::<super::ObjectHeader>(), key_str)
+        };
         if key_str.is_null() {
             return false;
         }
@@ -135,7 +160,16 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
         if obj.is_null() {
             return None;
         }
+        // #6943: `key_to_rust_string` runs the GC-capable `js_string_coerce`,
+        // and `obj as usize` is the descriptor side table's OWNER KEY. A stale
+        // address doesn't crash here — it silently misses, so a
+        // `Reflect.defineProperty` on a non-configurable property would report
+        // the all-true default and let the redefine through. Root the receiver
+        // across the coercion. (Not in #6943's site list; found by reading.)
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
         let k = key_to_rust_string(key)?;
+        let obj = obj_handle.get_raw_mut_ptr::<super::ObjectHeader>();
         super::get_property_attrs(obj as usize, &k).map(|a| (a.writable(), a.configurable()))
     }
 }

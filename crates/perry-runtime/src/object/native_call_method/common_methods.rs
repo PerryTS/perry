@@ -89,7 +89,14 @@ pub(super) unsafe fn dispatch_common(
                 return Some(f64::from_bits(JSValue::bool(present).bits()));
             }
             if jsval.is_pointer() {
+                // #6943: `js_string_coerce` allocates for every non-heap-string
+                // key, so it can trigger a GC that **evacuates** the receiver.
+                // `object` — and the `jsval` tag view taken from it at the top
+                // of this function — are raw locals; re-read them through the
+                // caller's `object_handle`, which IS a root.
                 let key_str = crate::builtins::js_string_coerce(key_value);
+                let object = object_handle.get_nanbox_f64();
+                let jsval = JSValue::from_bits(object.to_bits());
                 if key_str.is_null() {
                     return Some(f64::from_bits(JSValue::bool(false).bits()));
                 }
@@ -233,7 +240,10 @@ pub(super) unsafe fn dispatch_common(
                     object, key_value,
                 ));
             }
+            // #6943: root the receiver across the GC-capable coercion — see
+            // the `hasOwnProperty` arm above.
             let key_str = crate::builtins::js_string_coerce(key_value);
+            let jsval = JSValue::from_bits(object_handle.get_nanbox_f64().to_bits());
             if key_str.is_null() {
                 return Some(f64::from_bits(JSValue::bool(false).bits()));
             }

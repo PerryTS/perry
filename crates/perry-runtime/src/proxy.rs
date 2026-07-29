@@ -811,6 +811,11 @@ fn target_set(target: f64, key: f64, value: f64) {
         }
         return;
     }
+    // #6943 audit: this `js_string_coerce` is provably INERT and needs no
+    // rooting. `js_to_property_key` returns either a Symbol — taken by the
+    // early return above — or `js_nanbox_string(heap_ptr)`, i.e. an
+    // already-heap `STRING_TAG` value, which `js_string_coerce` hands straight
+    // back without touching the allocator.
     let key_ptr = crate::builtins::js_string_coerce(property_key) as *const crate::StringHeader;
     if crate::object::class_ref_id(target).is_some() {
         // Preserve the INT32-tagged class-ref bits so class dynamic props
@@ -1324,13 +1329,18 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         && header._reserved & SLOW_FLAGS == 0
                     {
                         let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
-                        let fast_safe = if class_id == 0 {
+                        let (fast_safe, target, value) = if class_id == 0 {
                             // Plain object: prototype is exactly Object.prototype, and
                             // Object.prototype doesn't intercept this key (per-key, not
                             // the coarse process-wide descriptor flag — that made wide
                             // builds O(n²)).
-                            crate::object::prototype_chain::object_static_prototype(addr).is_none()
-                                && !crate::object::object_proto_may_intercept_key(key)
+                            (
+                                crate::object::prototype_chain::object_static_prototype(addr)
+                                    .is_none()
+                                    && !crate::object::object_proto_may_intercept_key(key),
+                                target,
+                                value,
+                            )
                         } else {
                             // `DisposableStack#disposed` is a getter-only
                             // builtin accessor on a reserved native prototype.
@@ -1369,8 +1379,41 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // class chain — SLOW_FLAGS above already excluded
                             // frozen/sealed/descriptor bits; add the per-instance
                             // divergence flags (setPrototypeOf override / null proto).
+                            //
+                            // #6943: `js_string_coerce` is GC-capable for every
+                            // key shape EXCEPT an already-heap `STRING_TAG`
+                            // one (it hands that pointer straight back without
+                            // touching the allocator) — an SSO short key
+                            // materializes onto the heap, a numeric key builds
+                            // its stringification, and an object key runs a
+                            // user `toString` / `valueOf`. Any of those can
+                            // trigger a GC that **evacuates**. `addr` (the
+                            // receiver, dereferenced twice for `plan_eligible`
+                            // and passed to `class_instance_set_may_intercept`),
+                            // `target` and the `value` about to be written
+                            // INTO it were all raw Rust locals across the call.
+                            // The heap-string key — what `obj.field = v`
+                            // lowers to for any name longer than the SSO
+                            // bound — keeps the pre-fix path and pays nothing.
+                            let inert = crate::builtins::string_coerce_is_inert(key);
+                            let scope = (!inert).then(crate::gc::RuntimeHandleScope::new);
+                            let roots = scope.as_ref().map(|s| {
+                                (
+                                    s.root_heap_word_u64(target.to_bits()),
+                                    s.root_nanbox_f64(value),
+                                    s.root_raw_mut_ptr(addr as *mut u8),
+                                )
+                            });
                             let key_ptr = crate::builtins::js_string_coerce(key)
                                 as *const crate::StringHeader;
+                            let (target, value, addr) = match &roots {
+                                Some((t, v, a)) => (
+                                    f64::from_bits(t.get_heap_word_u64()),
+                                    v.get_nanbox_f64(),
+                                    a.get_raw_mut_ptr::<u8>() as usize,
+                                ),
+                                None => (target, value, addr),
+                            };
                             let interned = crate::object::interned_key_ptr(key_ptr);
                             // #6595: a per-evaluation CLASS OBJECT (what a
                             // capture-carrying class materializes as,
@@ -1394,7 +1437,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 && (*(addr as *const crate::ObjectHeader)).object_type
                                     == crate::error::OBJECT_TYPE_REGULAR
                                 && interned != 0;
-                            if plan_eligible
+                            let verdict = if plan_eligible
                                 && crate::object::prop_plan::store_plan_check(class_id, interned)
                             {
                                 true
@@ -1406,7 +1449,8 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                     crate::object::prop_plan::store_plan_record(class_id, interned);
                                 }
                                 clear
-                            }
+                            };
+                            (verdict, target, value)
                         };
                         if fast_safe {
                             target_set(target, key, value);

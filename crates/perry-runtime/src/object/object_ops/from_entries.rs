@@ -171,16 +171,37 @@ pub extern "C" fn js_object_from_entries(entries_value: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
 
+        // #6943: `js_string_coerce` on an entry key allocates for every
+        // non-heap-string shape and runs a user `toString` / `valueOf` for an
+        // object key, so it can trigger a GC that **evacuates**. The result
+        // object `obj` (the receiver), `val_val` (the value being written INTO
+        // it) and `arr_ptr` (the entry source re-read every iteration) were all
+        // raw Rust locals across the call — a stale receiver drops the write on
+        // a forwarding stub and a stale value plants a dangling pointer inside
+        // a live object. The three handles are allocated once and rewritten per
+        // iteration so a long entry list doesn't grow the handle stack.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let arr_handle = scope.root_raw_mut_ptr(arr_ptr as *mut crate::array::ArrayHeader);
+        let val_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
         for i in 0..length {
-            let entry_val = crate::array::js_array_get_f64(arr_ptr, i as u32);
+            let entry_val = crate::array::js_array_get_f64(
+                arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>(),
+                i as u32,
+            );
             let (key_val, val_val) = object_from_entries_entry_values(entry_val);
+            val_handle.set_nanbox_f64(val_val);
             let key_str = crate::builtins::js_string_coerce(key_val);
             if key_str.is_null() {
                 continue;
             }
-            js_object_set_field_by_name(obj, key_str, val_val);
+            js_object_set_field_by_name(
+                obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+                key_str,
+                val_handle.get_nanbox_f64(),
+            );
         }
 
-        crate::value::js_nanbox_pointer(obj as i64)
+        crate::value::js_nanbox_pointer(obj_handle.get_raw_mut_ptr::<ObjectHeader>() as i64)
     }
 }

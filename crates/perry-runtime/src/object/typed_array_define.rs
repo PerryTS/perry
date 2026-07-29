@@ -130,6 +130,13 @@ unsafe fn field_present(desc: *mut ObjectHeader, name: &[u8]) -> bool {
 /// If `key_value` is a String key that is a CanonicalNumericIndexString, return
 /// its numeric value. Returns `None` for symbols, non-string keys, and strings
 /// that aren't canonical numeric indices (those go through ordinary semantics).
+///
+/// #6943 names this function's `js_string_coerce` call as an unrooted-operand
+/// site, but the coercion here is self-contained: the key bytes are consumed
+/// into an owned `String`/`f64` before returning and nothing heap-referencing
+/// spans the call *within* this function. The hazard is at the two CALLERS
+/// below, which resolve the TypedArray's raw address before calling in and
+/// dereference it afterwards — that is where the rooting lives.
 unsafe fn canonical_index_for_key(key_value: f64) -> Option<f64> {
     if crate::symbol::js_is_symbol(key_value) != 0 {
         return None;
@@ -162,9 +169,17 @@ pub(crate) unsafe fn typed_array_own_index(obj_value: f64, key_value: f64) -> Ty
     let Some((addr, is_buf, length)) = typed_array_view_info(obj_value) else {
         return TypedArrayOwnIndex::NotTypedArray;
     };
+    // #6943: `canonical_index_for_key` runs `js_string_coerce`, which allocates
+    // for every non-heap-string key and can run a user `toString` / `valueOf`
+    // for an object key — so it can trigger a GC that **evacuates**. `addr` is
+    // the view's raw heap address, resolved on the line above and dereferenced
+    // as a `TypedArrayHeader` / `BufferHeader` below.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
     let Some(numeric_index) = canonical_index_for_key(key_value) else {
         return TypedArrayOwnIndex::NotTypedArray;
     };
+    let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
     if !is_valid_integer_index(numeric_index, length) {
         return TypedArrayOwnIndex::OutOfBounds;
     }
@@ -193,10 +208,19 @@ pub(crate) unsafe fn typed_array_define_own_property(
         return TypedArrayDefineOutcome::NotTypedArray;
     };
 
+    // #6943: same GC-capable coercion as `typed_array_own_index` above. Here
+    // BOTH the view address `addr` (written through at the element store) and
+    // `descriptor_value` (whose `value` field is the payload being stored) were
+    // raw Rust locals across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
+    let desc_handle = scope.root_nanbox_f64(descriptor_value);
     let Some(numeric_index) = canonical_index_for_key(key_value) else {
         // Symbol / non-string / non-canonical key → ordinary define handles it.
         return TypedArrayDefineOutcome::NotTypedArray;
     };
+    let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
+    let descriptor_value = desc_handle.get_nanbox_f64();
 
     // Canonical numeric index → integer-indexed branch. From here every path
     // returns Rejected or Defined; we never fall back to ordinary define.

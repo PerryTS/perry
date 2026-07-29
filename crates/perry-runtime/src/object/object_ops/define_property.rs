@@ -603,7 +603,24 @@ pub extern "C" fn js_object_define_property(
                 }
                 return obj_value;
             }
+            // #6943: `js_string_coerce` on an object key runs a user
+            // `toString` / `valueOf`, and allocates the stringified form for
+            // every primitive key — either can trigger a GC that **evacuates**
+            // live objects. `obj_value` (the receiver), `descriptor_value`, and
+            // the already-dereferenced `closure_ptr` were raw Rust locals
+            // across the call — neither GC roots nor shadow slots. A stale
+            // receiver rebinds the accessors onto a forwarding stub; a stale
+            // `closure_ptr` files the property under a dead address, where the
+            // matching read can never find it. Root all three across the
+            // coercion and read them back through their handles.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let desc_handle = scope.root_nanbox_f64(descriptor_value);
+            let closure_handle = scope.root_raw_mut_ptr(closure_ptr as *mut u8);
             let key_str = crate::builtins::js_string_coerce(key_value);
+            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let descriptor_value = desc_handle.get_nanbox_f64();
+            let closure_ptr = closure_handle.get_raw_mut_ptr::<u8>() as usize;
             if key_str.is_null() {
                 return obj_value;
             }
@@ -787,7 +804,18 @@ pub extern "C" fn js_object_define_property(
                 );
                 return obj_value;
             }
+            // #6943: same GC-capable coercion as the closure arm above. Here
+            // the raw local at risk is `addr` — the TypedArray's heap address,
+            // resolved from `obj_value` *before* the coercion and dereferenced
+            // as a `TypedArrayHeader` after it.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let desc_handle = scope.root_nanbox_f64(descriptor_value);
+            let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
             let key_str = crate::builtins::js_string_coerce(key_value);
+            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let descriptor_value = desc_handle.get_nanbox_f64();
+            let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
             if key_str.is_null() {
                 return obj_value;
             }
@@ -889,8 +917,22 @@ pub extern "C" fn js_object_define_property(
                 return obj_value;
             }
         }
-        // Extract key string
+        // Extract key string.
+        //
+        // #6943: the ordinary arm's raw local is `obj` — the receiver's
+        // `ObjectHeader`, resolved above and dereferenced below (class-id
+        // probe, typed-array define, `define_array_property`, the keys_array
+        // walk). It, `obj_value` and `descriptor_value` are rooted across the
+        // GC-capable coercion; see the closure arm above for the full
+        // reasoning.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
+        let desc_handle = scope.root_nanbox_f64(descriptor_value);
         let key_str = crate::builtins::js_string_coerce(key_value);
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+        let descriptor_value = desc_handle.get_nanbox_f64();
         if key_str.is_null() {
             return obj_value;
         }
