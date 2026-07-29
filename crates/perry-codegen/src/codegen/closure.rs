@@ -754,8 +754,18 @@ pub(super) fn compile_closure(
         && !is_async
         && !cross_module.async_step_closures.contains(&func_id)
         && !cross_module.local_generator_funcs.contains(&func_id);
-    let repsel_closure_refs = if repsel_allows {
+    // Phase 3a: same context restrictions, independent env gate.
+    let repsel_str_allows = crate::expr::canonical_str_locals_enabled()
+        && !is_async
+        && !cross_module.async_step_closures.contains(&func_id)
+        && !cross_module.local_generator_funcs.contains(&func_id);
+    let repsel_closure_refs = if repsel_allows || repsel_str_allows {
         crate::expr::collect_closure_referenced_locals(body)
+    } else {
+        std::collections::HashSet::new()
+    };
+    let repsel_str_ineligible = if repsel_str_allows {
+        crate::expr::collect_canonical_str_ineligible_locals(body)
     } else {
         std::collections::HashSet::new()
     };
@@ -869,6 +879,8 @@ pub(super) fn compile_closure(
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
         repsel_closure_ref_locals: repsel_closure_refs,
+        repsel_context_allows_canonical_str: repsel_str_allows,
+        repsel_str_ineligible_locals: repsel_str_ineligible,
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
@@ -891,6 +903,7 @@ pub(super) fn compile_closure(
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
         scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
+        scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
@@ -916,6 +929,8 @@ pub(super) fn compile_closure(
         typed_i1_functions: &cross_module.typed_i1_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
+        pshape_methods: &cross_module.pshape_methods,
+        proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
         typed_string_methods: &cross_module.typed_string_methods,

@@ -198,6 +198,30 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Explicit numeric-coercion node — lowers to `js_number_coerce`,
         // which always yields a clean f64.
         Expr::NumberCoerce(_) => true,
+        // `a || b` / `a && b` / `a ?? b` select ONE OF THE OPERAND VALUES —
+        // never a synthesized value — so the result is numeric when BOTH
+        // operands are (repsel Phase 4a.0, #6904: `(counts[v] || 0) + 1`
+        // previously routed the whole Add through
+        // `js_dynamic_string_or_number_add`).
+        //
+        // Soundness notes:
+        // * A possibly-string / union / bool operand fails `is_numeric_expr`
+        //   on that side, so `x || "fallback"` and `s && n` stay non-numeric
+        //   (the `1 + "foo"` concat hazard keeps the dynamic-add bail).
+        // * A proven-numeric operand can still surface a BOXED value at
+        //   runtime through a raw-f64 array/field read's cold fallback (a
+        //   hole reads `undefined`). That hazard is tracked separately by
+        //   `expr_may_return_boxed_value_from_raw_f64_fallback`, which gained
+        //   the matching Logical arm — every consumer of `is_numeric_expr`
+        //   that needs a REAL double (truthiness fcmp, fadd operands, raw
+        //   stores) already consults it and inserts `js_number_coerce` /
+        //   `js_is_truthy` on that path, and the runtime numeric-array SET
+        //   guard independently rejects non-numeric VALUES, so a passed-
+        //   through `undefined` still stores as `undefined` via the boxed
+        //   fallback (hole-vs-undefined observability is preserved).
+        Expr::Logical { left, right, .. } => {
+            is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right)
+        }
         // `obj.field` where the field is declared as `number` on the
         // owning class. Without this, `this.value + 1` in a hot loop
         // wraps the field load in `js_number_coerce` which prevents
@@ -328,6 +352,94 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 false
             }
         }
+        _ => false,
+    }
+}
+
+/// Repsel Phase 4a.0 (#6904): statically prove that an expression's LOWERED
+/// value is a **canonical raw f64** — a real machine double whose bit pattern
+/// is never a NaN-box tag (`0x7FF9..=0x7FFF` upper 16 with a set quiet-NaN
+/// payload in tag space). Such a value may be stored into a raw-f64 numeric
+/// array slot verbatim, skipping the `js_array_numeric_value_to_raw_f64`
+/// canonicalization call (whose INT32-unbox + `is_class_id_registered`
+/// registry probe cannot fire for a value this predicate admits).
+///
+/// SOUNDNESS CONTRACT — a `true` return authorizes a raw slot store with no
+/// runtime value check, so the value must be a real number for EVERY input:
+/// * never NaN-boxed (INT32/STRING/POINTER/BIGINT/UNDEFINED/HOLE tags), and
+/// * any NaN it produces must carry a non-tag payload. Arithmetic on
+///   canonical inputs propagates canonical NaNs (hardware qNaN `0x7FF8…`, or
+///   a sign-flipped `0xFFF8…` through `fneg` — both outside tag space), and
+///   every operand feeding these lowerings is itself coerced/canonical, so
+///   the property holds inductively.
+///
+/// Structurally admitted:
+/// * numeric literals;
+/// * `Binary` arithmetic/bitwise when the whole node is `is_numeric_expr` AND
+///   `is_provably_not_bigint` (a possibly-BigInt chain routes through the
+///   BIGINT-boxed dynamic helpers — those results are NaN-boxed pointers);
+/// * `Unary` Neg/Pos/BitNot over a non-BigInt operand;
+/// * `Update` (++/--) when numeric per `is_numeric_expr`;
+/// * the `Math.*` family / `Date.now` (Rust-computed f64s);
+/// * explicit `NumberCoerce`;
+/// * `Logical` selections whose BOTH operands are themselves canonical.
+///
+/// Deliberately NOT admitted: `LocalGet` (a Number-typed local can hold an
+/// INT32-boxed value assigned from a boxed read fallback), reads
+/// (`IndexGet`/`PropertyGet` — cold fallbacks return boxed bits), and calls.
+pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Binary { .. } => is_numeric_expr(ctx, e) && is_provably_not_bigint(ctx, e),
+        Expr::Unary { op, operand } => {
+            matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
+                && is_provably_not_bigint(ctx, operand)
+        }
+        Expr::Update { .. } => is_numeric_expr(ctx, e),
+        Expr::NumberCoerce(_) => true,
+        Expr::Logical { left, right, .. } => {
+            expr_produces_canonical_raw_f64(ctx, left)
+                && expr_produces_canonical_raw_f64(ctx, right)
+        }
+        Expr::MathFloor(..)
+        | Expr::MathCeil(..)
+        | Expr::MathRound(..)
+        | Expr::MathTrunc(..)
+        | Expr::MathSign(..)
+        | Expr::MathAbs(..)
+        | Expr::MathSqrt(..)
+        | Expr::MathLog(..)
+        | Expr::MathLog2(..)
+        | Expr::MathLog10(..)
+        | Expr::MathPow(..)
+        | Expr::MathMin(..)
+        | Expr::MathMax(..)
+        | Expr::MathMinSpread(..)
+        | Expr::MathMaxSpread(..)
+        | Expr::MathImul(..)
+        | Expr::MathRandom
+        | Expr::MathSin(..)
+        | Expr::MathCos(..)
+        | Expr::MathTan(..)
+        | Expr::MathAsin(..)
+        | Expr::MathAcos(..)
+        | Expr::MathAtan(..)
+        | Expr::MathAtan2(..)
+        | Expr::MathCbrt(..)
+        | Expr::MathHypot(..)
+        | Expr::MathFround(..)
+        | Expr::MathF16round(..)
+        | Expr::MathClz32(..)
+        | Expr::MathExpm1(..)
+        | Expr::MathLog1p(..)
+        | Expr::MathSinh(..)
+        | Expr::MathCosh(..)
+        | Expr::MathTanh(..)
+        | Expr::MathAsinh(..)
+        | Expr::MathAcosh(..)
+        | Expr::MathAtanh(..)
+        | Expr::MathExp(..)
+        | Expr::DateNow => true,
         _ => false,
     }
 }

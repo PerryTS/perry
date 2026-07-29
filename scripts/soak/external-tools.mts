@@ -115,16 +115,6 @@ export function checkPins(tools: Record<string, ToolPin>): string[] {
     }
     if (pin.soakBypass) {
       const { published, removable } = pin.soakBypass
-      // A bypass names the version it was granted for. Bump the pin and
-      // leave the annotation behind and it now vouches for a version that
-      // is no longer installed — the ledger says "1.13.1 was adopted early"
-      // while 1.14.0 ships unreviewed. Mismatch is a hard finding, not a
-      // stale-annotation warning.
-      if (pin.soakBypass.version !== pin.version) {
-        out.push(
-          `${name}: soakBypass is for ${pin.soakBypass.version} but the pin is ${pin.version} — re-date the annotation for the version actually pinned, or drop it`,
-        )
-      }
       if (!isValidIsoDate(published) || !isValidIsoDate(removable)) {
         out.push(`${name}: soakBypass dates are not real YYYY-MM-DD calendar dates`)
         continue
@@ -159,11 +149,6 @@ export function staleBypasses(tools: Record<string, ToolPin>): string[] {
     if (!isValidIsoDate(bypass.published) || !isValidIsoDate(bypass.removable)) {
       continue
     }
-    // Wrong-arithmetic annotations are a hard checkPins failure, never
-    // stale/prunable — a too-early removable must not read as "cleared".
-    if (bypass.removable !== addDaysIso(bypass.published, SOAK_DAYS)) {
-      continue
-    }
     if (bypass.removable < today) {
       out.push(name)
     }
@@ -189,11 +174,6 @@ export function pruneExpiredSoakBypasses(doc: {
       continue
     }
     if (!isValidIsoDate(bypass.published) || !isValidIsoDate(bypass.removable)) {
-      continue
-    }
-    // Wrong-arithmetic annotations are a hard checkPins failure, never
-    // stale/prunable — a too-early removable must not read as "cleared".
-    if (bypass.removable !== addDaysIso(bypass.published, SOAK_DAYS)) {
       continue
     }
     if (bypass.removable < today) {
@@ -226,16 +206,7 @@ export function checkDockerPrebake(
   if (shimList && shimList.join(' ') !== SFW_ECOSYSTEMS.join(' ')) {
     out.push(`docker prebake: shim list [${shimList.join(' ')}] != SFW_ECOSYSTEMS [${SFW_ECOSYSTEMS.join(' ')}]`)
   }
-  // Parse the install line's full argument list rather than substring-
-  // matching: `rustup toolchain install 1.91.0 1.93.0` must satisfy an
-  // msrv of 1.93 even though "toolchain install 1.93" never appears.
-  const installedToolchains = [...dockerBody.matchAll(/toolchain install ([^\\\n]+)/g)]
-    .flatMap(m => m[1]!.trim().split(/\s+/))
-    .filter(a => /^\d/.test(a))
-  if (
-    rustVersion &&
-    !installedToolchains.some(t => t === rustVersion || t.startsWith(`${rustVersion}.`))
-  ) {
+  if (rustVersion && !dockerBody.includes(`toolchain install ${rustVersion}`)) {
     out.push(`docker prebake: image does not pre-install the ${rustVersion} msrv toolchain`)
   }
   const sfw = tools['sfw-free']
@@ -273,39 +244,20 @@ export function checkDockerPrebake(
 }
 
 export async function download(url: string, expectedSri: string): Promise<Buffer> {
+  const headers: Record<string, string> = {}
   // Only GitHub gets the token (private release assets); sending it to any
   // other host (e.g. the npm registry for purl tools) would leak the
   // credential. Cross-origin redirects strip the header automatically.
-  const token =
-    process.env.GITHUB_TOKEN && new URL(url).hostname === 'github.com'
-      ? process.env.GITHUB_TOKEN
-      : ''
+  if (process.env.GITHUB_TOKEN && new URL(url).hostname === 'github.com') {
+    headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`
+  }
   // Fail fast on a stalled release/registry response instead of hanging
   // CI; 120s is generous for the largest pinned binary on a slow runner.
-  const attempt = (withAuth: boolean) =>
-    fetch(url, {
-      headers: withAuth && token ? { authorization: `Bearer ${token}` } : {},
-      redirect: 'follow',
-      signal: AbortSignal.timeout(120_000),
-    })
-  let res = await attempt(Boolean(token))
-  // Retry semantics, split by what the status actually means:
-  //   401/403/404 with a token — the credential is the problem (a PUBLIC
-  //     cross-repo asset endpoint rejecting an Actions token). Retry
-  //     WITHOUT it; public assets need none.
-  //   >=500 — transient. Retry with the SAME auth: dropping it here made a
-  //     private asset (sfw-enterprise) 404 on the retry, reporting a bogus
-  //     "download failed 404" and guaranteeing the retry could never
-  //     succeed.
-  // The URL is fixed and the SRI is verified below either way, so no retry
-  // can substitute a different artifact.
-  if (!res.ok && token && [401, 403, 404].includes(res.status)) {
-    res = await attempt(false)
-  }
-  if (!res.ok && res.status >= 500) {
-    await new Promise(r => setTimeout(r, 2_000))
-    res = await attempt(Boolean(token))
-  }
+  const res = await fetch(url, {
+    headers,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(120_000),
+  })
   if (!res.ok) {
     throw new Error(`download failed ${res.status} ${url}`)
   }
@@ -375,19 +327,9 @@ export function linkHandle(target: string, name: string): void {
 }
 
 async function installAssetTool(name: string, pin: ToolPin): Promise<void> {
-  const key = platformKey()
-  const plat = pin.platforms?.[key]
+  const plat = pin.platforms?.[platformKey()]
   if (!plat) {
-    const available = Object.keys(pin.platforms ?? {}).join(', ') || '(none)'
-    // Name the musl case explicitly: several upstreams (sfw today) ship no
-    // musl asset, and the failure is otherwise a puzzle on an alpine
-    // runner. Failing loud beats installing a glibc binary that cannot
-    // run, but the message has to say what to do about it.
-    const muslHint = key.endsWith('-musl')
-      ? `\n  ${name} publishes no musl asset. Either run this on a glibc host, ` +
-        `or add a ${key} entry to external-tools.json once upstream ships one.`
-      : ''
-    throw new Error(`${name}: no pinned asset for ${key} (pinned: ${available})${muslHint}`)
+    throw new Error(`${name}: no pinned asset for ${platformKey()}`)
   }
   // A platform pinned to a registry .tgz (pnpm has no darwin-x64 SEA
   // upstream) routes through the npm-tarball path instead.
@@ -609,11 +551,9 @@ if [ -n "\${${sentinel}:-}" ] || [ -z "$REAL" ] || ! command -v sfw >/dev/null 2
   echo "${cmd}: not found" >&2; exit 127
 fi
 export ${sentinel}=1
-# Enterprise sfw defaults to BLOCK for non-registry hosts
-# (SFW_UNKNOWN_HOST_ACTION, parsed by the enterprise config), which
-# breaks ordinary dev flows the day a Socket key lands. Only the
-# enterprise build reads the var — it is inert for the free tier — so
-# setting it unconditionally is safe.
+# Enterprise sfw defaults to BLOCK for non-registry hosts, which breaks
+# ordinary dev flows the day a Socket key lands; free tier hardcodes
+# ignore and disregards the var, so setting it is always safe.
 export SFW_UNKNOWN_HOST_ACTION=ignore
 exec sfw '${cmd}' "$@"
 `

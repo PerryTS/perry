@@ -263,7 +263,17 @@ pub(crate) unsafe fn array_length_reflect_define(
     if obj.is_null() || !is_array_object(obj) {
         return None;
     }
+    // #6943: `js_string_coerce` allocates for every non-heap-string key and can
+    // run a user `toString` / `valueOf` for an object key, so it can trigger a
+    // GC that **evacuates**. `obj` (the array header that
+    // `array_set_length_from_descriptor` truncates through) and
+    // `descriptor_value` were raw Rust locals across the call.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let desc_handle = scope.root_nanbox_f64(descriptor_value);
     let key_str = crate::builtins::js_string_coerce(key_value);
+    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let descriptor_value = desc_handle.get_nanbox_f64();
     if key_str.is_null() {
         return None;
     }

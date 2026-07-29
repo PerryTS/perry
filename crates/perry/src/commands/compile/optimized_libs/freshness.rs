@@ -55,6 +55,27 @@ pub(crate) fn auto_optimized_archives_are_fresh(
     true
 }
 
+/// `PERRY_SIZE_OPT=z|s` — opt-in size-optimized rebuild of the
+/// auto-optimized runtime/stdlib archives (`-C opt-level=z`/`s` instead of
+/// the profile's `3`). Any other value (or unset) means "off". Read in the
+/// rustflags builder AND the cache key so the two can never disagree about
+/// which archive a `target/perry-auto-<hash>` dir contains.
+pub(crate) fn size_opt_level() -> Option<&'static str> {
+    match std::env::var("PERRY_SIZE_OPT").ok().as_deref() {
+        Some("z") => Some("z"),
+        Some("s") => Some("s"),
+        _ => None,
+    }
+}
+
+/// `PERRY_SIZE_LTO=fat` — additionally rebuild the archives with fat LTO +
+/// a single codegen unit. Slower build, smaller/faster archive; only
+/// meaningful together with `size_opt_level`. Keyed into the cache like the
+/// opt level.
+pub(crate) fn size_lto_fat() -> bool {
+    std::env::var("PERRY_SIZE_LTO").ok().as_deref() == Some("fat")
+}
+
 /// Cache key for the auto-optimize target dir + build stamp. Hashed into the
 /// `target/perry-auto-<hash>` dir name so each (features, panic-mode, target,
 /// runtime-gate, version) combination gets its own incremental cache. Kept in
@@ -67,7 +88,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|http2={}|dyneval={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -79,6 +100,17 @@ pub(crate) fn auto_optimized_cache_key(
         ctx.uses_string_normalize,
         ctx.uses_intl_segmenter,
         ctx.uses_intl_locale,
+        ctx.uses_intl_namespace,
+        ctx.uses_global_math,
+        ctx.uses_global_json,
+        ctx.uses_global_reflect,
+        ctx.uses_global_atomics,
+        ctx.uses_global_url,
+        ctx.uses_global_text,
+        ctx.uses_global_websocket,
+        ctx.uses_global_webcrypto,
+        ctx.uses_global_webfetch,
+        ctx.uses_proc_ipc,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
         // HTTP/2 imports and dynamic builtin resolution pull in
@@ -88,6 +120,12 @@ pub(crate) fn auto_optimized_cache_key(
         // #6559: dyn-eval presence changes the built archive, so it must
         // key the freshness stamp like every other runtime feature toggle.
         perry_hir::has_deferred_dynamic_code_sites(),
+        format!(
+            "{}{}",
+            size_opt_level().unwrap_or("off"),
+            if size_lto_fat() { "+fatlto" } else { "" }
+        ),
+        std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1"),
         env!("CARGO_PKG_VERSION"),
     )
 }
@@ -139,6 +177,32 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_intl_segmenter {
         cross_features.push("perry-runtime/intl-segmenter".to_string());
     }
+    // `Intl.*` namespace surface — see perry-runtime's `intl-namespace`.
+    // A deferred dynamic-code site can construct `Intl.…` from a runtime
+    // string, so force it on there too (mirrors the dyn-eval regex rule).
+    if ctx.uses_intl_namespace || perry_hir::has_deferred_dynamic_code_sites() {
+        cross_features.push("perry-runtime/intl-namespace".to_string());
+    }
+    // Per-namespace globalThis member tables — see perry-runtime's `global-*`.
+    // A deferred dynamic-code site can reach any namespace by runtime string,
+    // so force all four on there (mirrors the intl-namespace rule).
+    let dynamic_code = perry_hir::has_deferred_dynamic_code_sites();
+    for (used, feat) in [
+        (ctx.uses_global_math, "global-math"),
+        (ctx.uses_global_json, "global-json"),
+        (ctx.uses_global_reflect, "global-reflect"),
+        (ctx.uses_global_atomics, "global-atomics"),
+        (ctx.uses_global_url, "global-url"),
+        (ctx.uses_global_text, "global-text"),
+        (ctx.uses_global_websocket, "global-websocket"),
+        (ctx.uses_global_webcrypto, "global-webcrypto"),
+        (ctx.uses_global_webfetch, "global-webfetch"),
+        (ctx.uses_proc_ipc, "proc-ipc"),
+    ] {
+        if used || dynamic_code {
+            cross_features.push(format!("perry-runtime/{feat}"));
+        }
+    }
     if ctx.uses_intl_locale {
         cross_features.push("perry-runtime/intl-locale".to_string());
     }
@@ -176,6 +240,25 @@ pub(crate) fn auto_optimized_cross_features(
         if !ctx.uses_regex {
             cross_features.push("perry-runtime/regex-engine".to_string());
         }
+    }
+    // mimalloc global allocator (#62): force-added on EVERY auto-optimize
+    // rebuild, including size-optimized ones. Dropping it for size (~140 KB)
+    // produces binaries whose console output silently vanishes / that throw
+    // spurious TypeErrors: runtime pointer-classification paths assume the
+    // allocator's address bands (the macOS mimalloc heap lands in a high
+    // window; system-malloc allocations land elsewhere and get misread as
+    // handles/non-pointers). Until value/addr_class.rs is audited for
+    // system-allocator ranges, the feature stays force-on; the cfg gate in
+    // perry-runtime remains for that future audit.
+    cross_features.push("perry-runtime/alloc-mimalloc".to_string());
+    // The `#[used]` keep-alive anchors exist for the whole-program bitcode
+    // LTO path only (see perry-runtime's `keepalive-anchors` feature docs).
+    // The classic link keeps every reachable symbol via real undefined
+    // references, so the anchors are omitted there — that is what lets
+    // `-dead_strip` drop the never-imported node-module surface from small
+    // programs. Re-enable them whenever the bitcode link was requested.
+    if std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1") {
+        cross_features.push("perry-runtime/keepalive-anchors".to_string());
     }
     // Compile OUT perry-runtime's no-op fetch stubs (`js_fetch_with_options` /
     // `js_headers_new` / `js_request_new`, gated `#[cfg(not(feature =

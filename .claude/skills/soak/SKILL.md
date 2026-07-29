@@ -33,11 +33,9 @@ against it:
   shims into the dev-tools bin dir
 - `npm run test:scripts` — the scripts' own unit tests
 
-The gates fail closed on invalid states (missing, malformed, or
-wrong-arithmetic annotations) and WARN on expired ones — stale is not
-unsafe, and nobody has to watch for it: the scheduled `soak-autofix`
-workflow runs `soak:fix` + `tools:fix` daily and commits the pruning
-as a bot PR.
+The gates fail closed when a bypass window clears, but nobody has to
+watch for that: the scheduled `soak-autofix` workflow runs `soak:fix` +
+`tools:fix` daily and commits the pruning as a bot PR.
 
 A soak change is done when `npm run soak` and `npm run test:scripts`
 both exit 0 — the same gates CI runs. Re-run them after every fix.

@@ -23,6 +23,9 @@ mod local_refs;
 mod mutation;
 mod not_bigint_locals;
 mod pointer_locals;
+mod proven_this;
+mod ptr_numarray;
+mod ptr_shape;
 mod refs;
 mod scalar_method_dispatch;
 mod scalar_methods;
@@ -60,6 +63,9 @@ pub(crate) use integer_locals::{
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
 pub(crate) use mutation::has_any_mutation;
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
+pub(crate) use proven_this::{method_proven_this, prune_colliding_clones, pshape_method_name};
+pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
+pub(crate) use ptr_shape::PtrShapeLocal;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };

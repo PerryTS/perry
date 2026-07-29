@@ -1340,9 +1340,41 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
+    // eligibility loop because representation-selection Phase 5a's
+    // proven-`this` admission consults them (§5.2 shape barriers, the
+    // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
+    // below — computed exactly once per module either way.
+    let module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    // Representation-selection Phase 5a: proven-`this` method clones.
+    let mut pshape_methods: std::collections::HashMap<
+        (String, String),
+        crate::collectors::PtrShapeLocal,
+    > = std::collections::HashMap::new();
+    // Phase 3b typed-receiver widening: chain-global field indexes need the
+    // full class table — and it must be the SAME table dynamic dispatch's
+    // call-site gating consults (`class_table`, incl. class-expression
+    // aliases), or a chain resolvable only through an alias would gate a
+    // clone call the emission loop never produced (undefined symbol at
+    // link).
+    let receiver_class_table = &class_table;
     for class in &hir.classes {
         for method in &class.methods {
             let source_function = format!("{}::{}", class.name, method.name);
+            // Representation-selection Phase 5a: does this method admit a
+            // proven-`this` clone? Uses the SAME class table as the
+            // typed-receiver decision below, for the same reason — the two
+            // routing sites gate on this map, and a chain resolvable only
+            // through an alias would gate a call to a symbol the emission
+            // loop never produced.
+            if let Some(fact) = crate::collectors::method_proven_this(
+                class,
+                method,
+                receiver_class_table,
+                &module_dispatch_facts,
+            ) {
+                pshape_methods.insert((class.name.clone(), method.name.clone()), fact);
+            }
             match typed_abi::typed_f64_method_rejection_reason(method) {
                 None => {
                     let key = (class.name.clone(), method.name.clone());
@@ -1364,15 +1396,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     ],
                 ),
             }
-            match typed_abi::typed_f64_receiver_method_info(class, method) {
+            match typed_abi::typed_f64_receiver_method_info(class, method, receiver_class_table) {
                 Some(info) => {
                     typed_f64_receiver_methods
                         .insert((class.name.clone(), method.name.clone()), info);
                 }
                 None => {
-                    if let Some(reason) =
-                        typed_abi::typed_f64_receiver_method_rejection_reason(class, method)
-                    {
+                    if let Some(reason) = typed_abi::typed_f64_receiver_method_rejection_reason(
+                        class,
+                        method,
+                        &receiver_class_table,
+                    ) {
                         record_typed_clone_rejection(
                             &mut typed_clone_rejection_records,
                             source_function.clone(),
@@ -1590,7 +1624,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         compile_time_constants,
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
-        module_dispatch: crate::collectors::collect_module_dispatch_facts(hir),
+        module_dispatch: module_dispatch_facts,
         // Inline-hot-small pre-pass (#6850 follow-up): FuncIds with an in-loop
         // call site AND few total call sites, so small hot callees can earn
         // `inlinehint` while the call-site cap bounds duplication.
@@ -1636,6 +1670,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_string_methods,
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
+        pshape_methods,
         typed_f64_closures: std::collections::HashSet::new(),
         typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),
@@ -1816,6 +1851,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &imported_class_source_name,
         &module_prefix,
     );
+
+    // Representation-selection Phase 5a: now that the method registry exists,
+    // drop any proven-`this` clone whose composed symbol would collide with a
+    // symbol a real user member already owns (issue #6927 tracks the
+    // family-wide fix for every generated-clone suffix). Pruning HERE — before
+    // `emit_module_artifacts` reads `cross_module.pshape_methods` for both
+    // emission and call-site routing — keeps the two in lockstep, so a call
+    // site can never route to a clone the emission loop declined to produce.
+    crate::collectors::prune_colliding_clones(&mut cross_module.pshape_methods, &method_names);
 
     // Resolve user function names + signatures up front. See
     // `func_registry::build_func_registry`.

@@ -5,7 +5,7 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::{BinaryOp, Expr, LogicalOp};
 
 use crate::lower_string_method::{
     flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
@@ -22,9 +22,31 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, I1, I128, I32, I64};
 
+use super::temp_root::{lower_operand_pair_rooted, temp_root_release};
 use super::{is_known_finite, lower_expr, FnCtx};
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
+    // Repsel Phase 4a.0 (#6904): a numeric-proven `a || b` / `a && b` /
+    // `a ?? b` consumed as an arithmetic operand lowers with BOTH sides in
+    // number context, so the selection is a real-double diamond (`fcmp one` +
+    // phi — SimplifyCFG folds it to a `select`) instead of a boxed
+    // `js_is_truthy` dispatch whose merged value then needs a site
+    // `js_number_coerce`. This is the `(counts[v] || 0) + 1` histogram shape.
+    //
+    // Early coercion is semantics-preserving here because the consumer is an
+    // arithmetic operand: every value the coerced test can misclassify
+    // relative to JS truthiness under HONEST types is `undefined` (a raw-f64
+    // read's hole fallback), and ToNumber(undefined) = NaN is falsy exactly
+    // like `undefined`; the passed-through value is coerced by the consumer
+    // regardless. `??` keeps its nullish test on the UNCOERCED left value —
+    // a coerced hole (NaN) is indistinguishable from a stored NaN, but
+    // `NaN ?? x` is NaN while `undefined ?? x` is `x`.
+    if let Expr::Logical { op, left, right } = expr {
+        if is_numeric_expr(ctx, expr) {
+            let value = lower_numeric_logical_for_number_context(ctx, *op, left, right)?;
+            return Ok((value, true));
+        }
+    }
     if expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
         if let Some(value) =
             super::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, expr)?
@@ -50,6 +72,119 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         return Ok((value, true));
     }
     Ok((lower_expr(ctx, expr)?, false))
+}
+
+/// The shared residual-coercion rule for arithmetic operands: a lowered
+/// operand still needs a `js_number_coerce` when the fallback did not already
+/// coerce it AND it is either not statically numeric (booleans, `null`, …)
+/// or can surface a boxed value through a raw-f64 read's cold fallback.
+fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced: bool) -> bool {
+    !fallback_coerced
+        && (!is_numeric_expr(ctx, expr)
+            || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr))
+}
+
+/// Lower an operand in number context: route through
+/// [`lower_arithmetic_operand`], then apply the shared residual-coercion rule
+/// — the result is ALWAYS a real (canonical) numeric double, never a
+/// NaN-boxed value.
+fn lower_operand_as_number(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    let (raw, fallback_coerced) = lower_arithmetic_operand(ctx, expr)?;
+    if operand_needs_residual_coerce(ctx, expr, fallback_coerced) {
+        Ok(ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &raw)]))
+    } else {
+        Ok(raw)
+    }
+}
+
+/// Repsel Phase 4a.0: number-context lowering of a numeric-proven logical
+/// selection (see the caller comment in [`lower_arithmetic_operand`]).
+///
+/// `&&` / `||`: the left side is lowered in number context (a real double),
+/// so its truthiness test is a bare `fcmp one l, 0.0` — falsy is exactly
+/// {`+0`, `-0`, NaN}, and the values that JS-truthiness could disagree on
+/// (boxed `undefined` from a hole fallback) have already been coerced to NaN
+/// (falsy — identical verdict to `undefined`). Both phi inputs are real
+/// doubles, so the merged value feeds `fadd`/`fmul`/… with no further
+/// dispatch.
+///
+/// `??`: the nullish test runs on the UNCOERCED left value (`bits ==
+/// TAG_NULL | TAG_UNDEFINED`); the pass-through edge then coerces (only when
+/// the operand carries the boxed-fallback hazard), keeping `NaN ?? x` = NaN
+/// vs `undefined ?? x` = `x` byte-exact.
+fn lower_numeric_logical_for_number_context(
+    ctx: &mut FnCtx<'_>,
+    op: LogicalOp,
+    left: &Expr,
+    right: &Expr,
+) -> Result<String> {
+    if matches!(op, LogicalOp::Coalesce) {
+        let l_boxed = lower_expr(ctx, left)?;
+        let is_nullish = {
+            let blk = ctx.block();
+            let l_bits = blk.bitcast_double_to_i64(&l_boxed);
+            let is_null = blk.icmp_eq(I64, &l_bits, crate::nanbox::TAG_NULL_I64);
+            let is_undef = blk.icmp_eq(I64, &l_bits, crate::nanbox::TAG_UNDEFINED_I64);
+            blk.or(I1, &is_null, &is_undef)
+        };
+        let right_idx = ctx.new_block("numlog.coalesce.right");
+        let keep_idx = ctx.new_block("numlog.coalesce.keep");
+        let merge_idx = ctx.new_block("numlog.coalesce.merge");
+        let right_label = ctx.block_label(right_idx);
+        let keep_label = ctx.block_label(keep_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        ctx.block().cond_br(&is_nullish, &right_label, &keep_label);
+
+        ctx.current_block = right_idx;
+        let r = lower_operand_as_number(ctx, right)?;
+        let r_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = keep_idx;
+        // Non-nullish left: coerce only when the operand can surface a boxed
+        // value (e.g. an INT32-boxed number from a read fallback). A plain
+        // proven double passes through untouched.
+        let l_num = if expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left) {
+            ctx.block()
+                .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_boxed)])
+        } else {
+            l_boxed
+        };
+        let keep_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = merge_idx;
+        return Ok(ctx
+            .block()
+            .phi(DOUBLE, &[(&r, &r_end), (&l_num, &keep_end)]));
+    }
+
+    let l = lower_operand_as_number(ctx, left)?;
+    let l_bool = ctx.block().fcmp("one", &l, "0.0");
+    let l_end = ctx.block().label.clone();
+
+    let then_idx = ctx.new_block("numlog.then");
+    let merge_idx = ctx.new_block("numlog.merge");
+    let then_label = ctx.block_label(then_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    match op {
+        // a && b: truthy left evaluates the right side; falsy left is the
+        // result.
+        LogicalOp::And => ctx.block().cond_br(&l_bool, &then_label, &merge_label),
+        // a || b: truthy left is the result; falsy left evaluates the right.
+        LogicalOp::Or => ctx.block().cond_br(&l_bool, &merge_label, &then_label),
+        LogicalOp::Coalesce => unreachable!("handled above"),
+    }
+
+    ctx.current_block = then_idx;
+    let r = lower_operand_as_number(ctx, right)?;
+    let r_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(DOUBLE, &[(&l, &l_end), (&r, &r_end)]))
 }
 
 fn small_bigint_literal_value(expr: &Expr) -> Option<i64> {
@@ -277,13 +412,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if other_known_primitive {
                         return lower_string_coerce_concat(ctx, left, right, l_is_str, r_is_str);
                     }
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx.block().call(
+                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                    let sum = ctx.block().call(
                         DOUBLE,
                         "js_dynamic_string_or_number_add",
                         &[(DOUBLE, &l), (DOUBLE, &r)],
-                    ));
+                    );
+                    temp_root_release(ctx, guard);
+                    return Ok(sum);
                 }
                 if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) {
                     if let Some(value) = try_lower_small_bigint_literal_binary(
@@ -294,13 +430,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ) {
                         return Ok(value);
                     }
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_dynamic_add",
-                        &[(DOUBLE, &l), (DOUBLE, &r)],
-                    ));
+                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                    let sum =
+                        ctx.block()
+                            .call(DOUBLE, "js_dynamic_add", &[(DOUBLE, &l), (DOUBLE, &r)]);
+                    temp_root_release(ctx, guard);
+                    return Ok(sum);
                 }
                 // Refs #486: neither operand is statically known. Per JS
                 // spec for `+`, if EITHER side is a string at runtime, the
@@ -320,13 +455,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && crate::type_analysis::is_numeric_expr(ctx, right))
                     || add_operands_have_pod_materialization_hazard(ctx, left, right)
                 {
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx.block().call(
+                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                    let sum = ctx.block().call(
                         DOUBLE,
                         "js_dynamic_string_or_number_add",
                         &[(DOUBLE, &l), (DOUBLE, &r)],
-                    ));
+                    );
+                    temp_root_release(ctx, guard);
+                    return Ok(sum);
                 }
             }
             // BigInt arithmetic fast path. NaN-tagged bigints compare
@@ -349,11 +485,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return Ok(value);
                 }
-                let l = lower_expr(ctx, left)?;
-                let r = lower_expr(ctx, right)?;
-                return Ok(ctx
+                let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                let value = ctx
                     .block()
-                    .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                    .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
+                temp_root_release(ctx, guard);
+                return Ok(value);
             }
             // A non-primitive operand may `ToNumeric` to a BigInt at runtime
             // (`Object(1n)`, or an object with a BigInt-returning
@@ -404,12 +541,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         && crate::type_analysis::is_provably_not_bigint(ctx, left)
                         && crate::type_analysis::is_provably_not_bigint(ctx, right);
                     if !inline_bitwise {
+                        // #6951: the dynamic helper runs ToNumeric on both
+                        // operands, so a pointer-bearing left operand must
+                        // survive the right operand's evaluation.
                         let fname = bigint_dynamic_helper(*op);
-                        let l = lower_expr(ctx, left)?;
-                        let r = lower_expr(ctx, right)?;
-                        return Ok(ctx
+                        let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                        let value = ctx
                             .block()
-                            .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                            .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
+                        temp_root_release(ctx, guard);
+                        return Ok(value);
                     }
                 }
             }
@@ -462,12 +603,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // JS: `true + true = 2`, `null + 1 = 1`, etc. Without
             // this, fadd on NaN-tagged booleans propagates the NaN
             // payload instead of computing 1.0 + 1.0 = 2.0.
-            let l_numeric = is_numeric_expr(ctx, left);
-            let r_numeric = is_numeric_expr(ctx, right);
-            let l_needs_coerce = !l_fallback_coerced
-                && (!l_numeric || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left));
-            let r_needs_coerce = !r_fallback_coerced
-                && (!r_numeric || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right));
+            let l_needs_coerce = operand_needs_residual_coerce(ctx, left, l_fallback_coerced);
+            let r_needs_coerce = operand_needs_residual_coerce(ctx, right, r_fallback_coerced);
             let l = if l_needs_coerce {
                 ctx.block()
                     .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])

@@ -492,7 +492,7 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
 
 // #6088-style keep: codegen emits the only call; a whole-program bitcode
 // link would otherwise dead-strip the IC entry.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(*mut [i64; 8], f64, f64, f64, i32) -> f64 =
     js_put_value_set_dyn_ic;
 
