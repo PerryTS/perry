@@ -342,23 +342,25 @@ fn lower_new_impl_inner(
     // user args happened to equal its captured locals.
 
     // Lower the args first (constructor params).
-    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-    for a in args {
-        lowered_args.push(lower_constructor_arg(ctx, a)?);
-    }
-    // #6969: every argument is now finished, but the instance allocation below
-    // — and, for a multi-argument list, the later arguments' own lowering —
-    // collects while they live in nothing but SSA registers.
-    // `new Pair(fresh(0), churn(N))` lost `fresh(0)` that way. Root them here;
-    // the re-read is immediately after the allocation (see `obj_box`), and the
+    //
+    // #6969: each argument is rooted as soon as it is lowered, NOT after the
+    // loop — `new Pair(fresh(0), churn(N))` collects inside `churn`, which is
+    // argument 1's lowering, and by then argument 0 exists only in an SSA
+    // register. (Rooting after the loop is worse than not rooting at all: it
+    // publishes an already-dangling pointer to the scanner.) The roots also
+    // carry the arguments across the instance allocation below, which always
+    // collects; the re-read is immediately after it (see `obj_box`), and the
     // scope cut in `lower_new_impl` is the release.
-    let mut arg_roots: Vec<Option<String>> = Vec::with_capacity(lowered_args.len());
-    for (a, value) in args.iter().zip(lowered_args.iter()) {
+    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    let mut arg_roots: Vec<Option<String>> = Vec::with_capacity(args.len());
+    for a in args {
+        let value = lower_constructor_arg(ctx, a)?;
         let slot = if temp_root::operand_needs_root(ctx, a) {
-            Some(temp_root::temp_root_push_double(ctx, value))
+            Some(temp_root::temp_root_push_double(ctx, &value))
         } else {
             None
         };
+        lowered_args.push(value);
         arg_roots.push(slot);
     }
 
