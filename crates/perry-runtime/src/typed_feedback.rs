@@ -51,7 +51,29 @@ pub(crate) fn typed_feedback_active() -> bool {
 }
 
 #[cfg(test)]
-pub(crate) static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Serializes the typed-feedback unit tests, which all drive the one
+/// process-global site registry.
+///
+/// Recovers from poisoning **on purpose**. The mutex guards no invariant of its
+/// own: every test re-initializes the shared state with
+/// `reset_typed_feedback_for_tests()` as its next statement, so a lock left
+/// poisoned by an earlier test's assertion failure is still perfectly usable.
+///
+/// #6957: with a plain `.unwrap()`, the first genuine failure in the module
+/// poisoned the lock and turned all 31 subsequent tests into `PoisonError`
+/// panics. That reported two real regressions as 33 red tests, hid which two
+/// were real, and made the module's result depend on `--test-threads` (32 red
+/// serially, 33 in parallel — purely a function of how many tests ran *after*
+/// the poisoning one). Recovering keeps a failure count equal to the number of
+/// actual failures.
+#[cfg(test)]
+pub(crate) fn typed_feedback_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TYPED_FEEDBACK_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -1206,6 +1228,15 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
     }
 }
 
+#[cfg(test)]
+pub(crate) fn numeric_array_index_guard_for_tests(
+    arr: *const ArrayHeader,
+    index: u32,
+    require_in_bounds: bool,
+) -> bool {
+    numeric_array_index_guard(arr, index, require_in_bounds)
+}
+
 fn numeric_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bounds: bool) -> bool {
     if !plain_array_index_guard(arr, index, require_in_bounds) {
         return false;
@@ -1963,7 +1994,7 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard(
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_F64_RANGE_LOOP_GUARD: extern "C" fn(
     u64,
     f64,
@@ -2004,7 +2035,7 @@ pub extern "C" fn js_typed_feedback_packed_i32_array_loop_guard(
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
     js_typed_feedback_packed_i32_array_loop_guard;
 
@@ -2041,7 +2072,7 @@ pub extern "C" fn js_typed_feedback_packed_u32_array_loop_guard(
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
     js_typed_feedback_packed_u32_array_loop_guard;
 
@@ -2426,15 +2457,26 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 crate::value::js_nanbox_pointer(new_arr as i64)
             }
             crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
+                // #6935: `js_jsvalue_to_string` on an object index runs a user
+                // `toString` / `valueOf` (and allocates for every primitive
+                // one), so it can trigger a GC that **evacuates**. The receiver
+                // `raw_addr` and the `value` being stored were raw Rust locals
+                // across it — a stale receiver dropped the write onto a
+                // forwarding stub and a stale `value` planted a dangling
+                // pointer inside a live object.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let recv = scope.root_raw_mut_ptr(raw_addr as *mut ObjectHeader);
+                let value_handle = scope.root_nanbox_f64(value);
+                let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
                 let key_ptr = crate::value::js_jsvalue_to_string(index);
                 if !key_ptr.is_null() {
                     crate::object::js_object_set_field_by_name(
-                        raw_addr as *mut ObjectHeader,
+                        recv.get_raw_mut_ptr::<ObjectHeader>(),
                         key_ptr,
-                        value,
+                        value_handle.get_nanbox_f64(),
                     );
                 }
-                receiver
+                f64::from_bits(receiver_handle.get_heap_word_u64())
             }
             _ => receiver,
         }

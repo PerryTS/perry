@@ -921,12 +921,25 @@ pub(crate) fn build_and_run_link(
         windows_link::add_system_libs(&mut cmd);
         windows_link::embed_app_manifest(&mut cmd, ctx.needs_ui);
     } else {
-        // macOS frameworks for runtime (sysinfo, etc.) and V8.
+        // macOS frameworks for the stdlib (rustls platform verifier /
+        // keychain, DNS, iconv), UI, plugins, and geisterhand.
         // Gate on `!is_harmonyos` so the macOS host doesn't leak its
         // frameworks into ELF cross-compile targets that fall through this
         // `else` branch — `cfg!(target_os = "macos")` is true whenever we're
         // running ON macOS, regardless of the actual target.
-        if (cfg!(target_os = "macos") || is_cross_macos) && !is_harmonyos {
+        //
+        // Runtime-only console binaries import exclusively from libSystem
+        // (verified via `dyld_info -imports` on a dead-stripped build), and
+        // every extra LC_LOAD_DYLIB costs real launch time — measured on an
+        // M-series host, CoreFoundation+libobjc initialization alone is
+        // ~+1.8 ms on a ~3 ms hello world. Skip the whole list for those
+        // links: a runtime-only program that genuinely needs one of these
+        // fails AT LINK TIME with an undefined symbol (deterministic,
+        // caught by the parity suites), never at runtime.
+        if (cfg!(target_os = "macos") || is_cross_macos)
+            && !is_harmonyos
+            && (ctx.needs_stdlib || ctx.needs_ui || ctx.needs_plugins || ctx.needs_geisterhand)
+        {
             cmd.arg("-framework")
                 .arg("Security")
                 .arg("-framework")
@@ -1850,6 +1863,16 @@ pub(crate) fn build_and_run_link(
     // line, so the invocation no longer scales with module count. Only the
     // native-Windows host is affected (other hosts have a multi-MB `ARG_MAX`);
     // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path elsewhere for testing.
+    // PERRY_EXTRA_LINK_ARGS — space-separated args appended verbatim to the
+    // final link invocation. Diagnostic escape hatch (e.g.
+    // `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived
+    // dead-strip); not part of any documented stable surface.
+    if let Ok(extra) = std::env::var("PERRY_EXTRA_LINK_ARGS") {
+        for a in extra.split_whitespace() {
+            cmd.arg(a);
+        }
+    }
+
     let mut response_file_to_clean: Option<PathBuf> = None;
     if cfg!(target_os = "windows") || std::env::var_os("PERRY_FORCE_LINK_RESPONSE_FILE").is_some() {
         // MSVC-style quoting for the native-Windows linker (link.exe/lld-link);

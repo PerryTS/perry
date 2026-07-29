@@ -253,8 +253,17 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             if chunks.is_empty() {
                 READABLE_EOF_NOTIFIED.store(true, Ordering::Release);
             }
-            for cb_i64 in &readable_callbacks {
-                let closure = *cb_i64 as *const ClosureHeader;
+            // A callback may allocate and move every later closure in this
+            // cloned list. The registry scanner rewrites the original list,
+            // not this snapshot, so keep the snapshot in mutable handles and
+            // reload each pointer immediately before dispatch.
+            let callback_scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let callback_handles: Vec<_> = readable_callbacks
+                .iter()
+                .map(|cb| callback_scope.root_raw_const_ptr(*cb as *const ClosureHeader))
+                .collect();
+            for callback in callback_handles {
+                let closure = callback.get_raw_const_ptr::<ClosureHeader>();
                 js_closure_call0(closure);
                 fired += 1;
             }
@@ -270,18 +279,30 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
         .lock()
         .map(|v| v.clone())
         .unwrap_or_default();
+    // `stdin_chunk_value`, the sequence string and key-object construction
+    // all allocate. Root these cloned callback snapshots because the mutable
+    // registry scanner can only rewrite the original listener lists.
+    let callback_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let data_callback_handles: Vec<_> = data_callbacks
+        .iter()
+        .map(|cb| callback_scope.root_raw_const_ptr(*cb as *const ClosureHeader))
+        .collect();
+    let keypress_callback_handles: Vec<_> = keypress_callbacks
+        .iter()
+        .map(|cb| callback_scope.root_raw_const_ptr(*cb as *const ClosureHeader))
+        .collect();
     for chunk in chunks {
-        for cb_i64 in &data_callbacks {
+        for callback in &data_callback_handles {
             let arg = stdin_chunk_value(&chunk);
-            let closure = *cb_i64 as *const ClosureHeader;
+            let closure = callback.get_raw_const_ptr::<ClosureHeader>();
             js_closure_call1(closure, arg);
             fired += 1;
         }
-        if keypress_callbacks.is_empty() {
+        if keypress_callback_handles.is_empty() {
             continue;
         }
         if let Some((name, ctrl, shift, meta, seq)) = parse_keypress(&chunk) {
-            for cb_i64 in &keypress_callbacks {
+            for callback in &keypress_callback_handles {
                 // Root the sequence string across build_keypress_object's
                 // allocations (a moving minor GC there would leave arg1
                 // pointing at from-space).
@@ -290,7 +311,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                 let arg1 =
                     scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(seq_str).bits()));
                 let arg2 = build_keypress_object(&name, ctrl, shift, meta, &seq);
-                let closure = *cb_i64 as *const ClosureHeader;
+                let closure = callback.get_raw_const_ptr::<ClosureHeader>();
                 js_closure_call2(closure, arg1.get_nanbox_f64(), arg2);
                 fired += 1;
             }
@@ -401,5 +422,54 @@ pub extern "C" fn js_readline_has_active() -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_keypress;
+
+    #[test]
+    fn parse_keypress_arrow_keys() {
+        let (name, ctrl, shift, meta, seq) = parse_keypress(b"\x1b[A").unwrap();
+        assert_eq!(name, "up");
+        assert!(!ctrl && !shift && !meta);
+        assert_eq!(seq, "\x1b[A");
+
+        assert_eq!(parse_keypress(b"\x1b[B").unwrap().0, "down");
+        assert_eq!(parse_keypress(b"\x1b[C").unwrap().0, "right");
+        assert_eq!(parse_keypress(b"\x1b[D").unwrap().0, "left");
+    }
+
+    #[test]
+    fn parse_keypress_ctrl_letter() {
+        // Ctrl+C = 0x03
+        let (name, ctrl, _, _, _) = parse_keypress(&[0x03]).unwrap();
+        assert_eq!(name, "c");
+        assert!(ctrl);
+        // Ctrl+A = 0x01
+        let (name, ctrl, _, _, _) = parse_keypress(&[0x01]).unwrap();
+        assert_eq!(name, "a");
+        assert!(ctrl);
+    }
+
+    #[test]
+    fn parse_keypress_special_keys() {
+        assert_eq!(parse_keypress(b"\r").unwrap().0, "return");
+        assert_eq!(parse_keypress(b"\n").unwrap().0, "return");
+        assert_eq!(parse_keypress(b"\t").unwrap().0, "tab");
+        assert_eq!(parse_keypress(&[0x7f]).unwrap().0, "backspace");
+        assert_eq!(parse_keypress(&[0x1b]).unwrap().0, "escape");
+        assert_eq!(parse_keypress(b" ").unwrap().0, "space");
+    }
+
+    #[test]
+    fn parse_keypress_letter_shift_flag() {
+        let (name, ctrl, shift, _, _) = parse_keypress(b"A").unwrap();
+        assert_eq!(name, "A");
+        assert!(!ctrl);
+        assert!(shift); // uppercase A → shift true
+        let (_, _, shift, _, _) = parse_keypress(b"a").unwrap();
+        assert!(!shift);
     }
 }

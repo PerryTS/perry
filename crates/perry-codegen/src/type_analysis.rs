@@ -32,7 +32,8 @@ mod refine;
 mod strings;
 
 pub(crate) use numeric::{
-    is_bigint_expr, is_bool_expr, is_integer_valued_expr, is_numeric_expr, is_provably_not_bigint,
+    expr_produces_canonical_raw_f64, is_bigint_expr, is_bool_expr, is_integer_valued_expr,
+    is_numeric_expr, is_provably_not_bigint,
 };
 pub(crate) use pod::{
     add_operands_have_pod_materialization_hazard,

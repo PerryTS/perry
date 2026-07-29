@@ -903,16 +903,13 @@ mod tests {
         unsafe {
             js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
         }
-        // #6430 made async `randomBytes` fire its callback on a macrotask
-        // (`setImmediate`) to match Node's libuv-threadpool timing, so the
-        // dispatch above only ENQUEUES the callback. Unlike `pbkdf2` — which
-        // still settles inline — this one needs the immediate queue drained
-        // before the record is observable. Asserting straight after dispatch
-        // (as this test did when it was written for #5539, a month before
-        // #6430) reads the pre-drain state and always fails.
+        // #6430: the async `randomBytes` callback runs on a macrotask
+        // (`setImmediate`), like Node's libuv-threadpool dispatch — never
+        // inline. Assert that, then pump the callback-timer queue to observe
+        // the delivered `(err, buffer)` arguments.
         assert!(
             !CB_FIRED.with(|f| f.get()),
-            "randomBytes callback must NOT fire synchronously (#6430: it is deferred to a macrotask)"
+            "randomBytes callback must not fire synchronously"
         );
         perry_runtime::timer::js_callback_timer_tick();
         assert!(CB_FIRED.with(|f| f.get()), "randomBytes callback must fire");

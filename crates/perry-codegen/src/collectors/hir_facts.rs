@@ -39,6 +39,14 @@ pub(crate) struct RepresentationFacts {
     /// is a non-BigInt expression). Seeds `is_provably_not_bigint`, which gates
     /// the inline non-BigInt bitwise fast path. See `collect_not_bigint_locals`.
     pub not_bigint_locals: HashSet<u32>,
+    /// The `int_valued_ta_locals` subset of `integer_locals` (#6898): every
+    /// write is i32-producing OR a possibly-OOB int-kind typed-array read, and
+    /// every observation is ToInt32-coercing. Retained separately because that
+    /// whole-function observation proof makes canonical-i32 storage (repsel
+    /// Phase 1) output-invariant even when the local is neither index-used nor
+    /// strictly-i32-bounded — the box `slot.ts` mix shape (`let l = P[0]` from
+    /// an Int32Array PARAM, bitwise-only updates and observations).
+    pub int_valued_ta_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +120,20 @@ pub(crate) struct ShapeStabilityFacts {
     // codegen consumer reads it yet.
     #[allow(dead_code)]
     pub scalar_replaceable_object_locals: HashSet<u32>,
+    /// Representation-selection Phase 3b: function-locals proven to hold
+    /// exactly one object of a statically-immutable shape for their entire
+    /// lifetime (`collectors/ptr_shape.rs`). Consumers: guard-free fixed-
+    /// offset field access (`expr/property_get.rs`, `expr/property_set.rs`)
+    /// and unguarded direct method dispatch
+    /// (`lower_call/property_get/dynamic_dispatch.rs`).
+    pub shape_proven_ptr_locals: HashMap<u32, super::PtrShapeLocal>,
+    /// Representation-selection Phase 4a.3: function-locals proven to satisfy
+    /// the `Ptr<NumArray>` invariants (raw-f64-or-hole slots, never-shrinking
+    /// length, no stale-binding path) for their entire lifetime
+    /// (`collectors/ptr_numarray.rs`). Consumers: guard-free element access
+    /// in `expr/index_get.rs` / `expr/index_set.rs` at sites with an
+    /// additional per-site in-bounds proof.
+    pub num_array_locals: HashMap<u32, super::NumArrayLocal>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -127,6 +149,10 @@ impl TypeFacts {
 
     pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.unsigned_i32_locals
+    }
+
+    pub(crate) fn int_valued_ta_locals(&self) -> &HashSet<u32> {
+        &self.representation.int_valued_ta_locals
     }
 
     pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
@@ -284,6 +310,19 @@ impl TypeFacts {
         &self.shape_stability.scalar_replaceable_object_locals
     }
 
+    /// Representation-selection Phase 3b: the shape-proof fact for a local,
+    /// when it is a proven `Ptr<Shape>` local (`collectors/ptr_shape.rs`).
+    pub(crate) fn shape_proven_ptr_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
+        self.shape_stability.shape_proven_ptr_locals.get(&local_id)
+    }
+
+    /// Representation-selection Phase 4a.3: the numeric-array proof for a
+    /// local, when it is a proven `Ptr<NumArray>` local
+    /// (`collectors/ptr_numarray.rs`).
+    pub(crate) fn num_array_local(&self, local_id: u32) -> Option<&super::NumArrayLocal> {
+        self.shape_stability.num_array_locals.get(&local_id)
+    }
+
     pub(crate) fn proves_scalar_replacement(&self, local_id: u32) -> bool {
         self.shape_stability
             .scalar_replaceable_object_locals
@@ -316,6 +355,7 @@ pub(crate) fn collect_type_facts(
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
+    spec_ta_lens: &HashMap<u32, i64>,
 ) -> TypeFacts {
     let mut integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
@@ -330,12 +370,20 @@ pub(crate) fn collect_type_facts(
     // `PERRY_INT_VALUED_LOCALS` (keyed into the object cache). Boxed / module-
     // global locals are excluded (they never take the i32 shadow slot and would
     // only pollute the fact for other consumers).
+    let mut int_valued_ta_locals: HashSet<u32> = HashSet::new();
     if super::int_valued_ta_locals::enabled() {
-        let extra =
-            super::int_valued_ta_locals::collect_int_valued_ta_locals(stmts, params, binding_types);
+        let extra = super::int_valued_ta_locals::collect_int_valued_ta_locals(
+            stmts,
+            params,
+            binding_types,
+            spec_ta_lens,
+        );
         for id in extra {
             if !boxed_vars.contains(&id) && !module_globals.contains_key(&id) {
                 integer_locals.insert(id);
+                // Retained as its own fact for repsel Phase 1 eligibility —
+                // see `RepresentationFacts::int_valued_ta_locals`.
+                int_valued_ta_locals.insert(id);
             }
         }
     }
@@ -345,11 +393,22 @@ pub(crate) fn collect_type_facts(
     let (array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
+    // Repsel Phase 1: under `PERRY_CANONICAL_I32_LOCALS` (default on), a
+    // proven in-window const int-typed-array element load counts as a STRICT
+    // i32 write (`let l = P[0]` with a literal-length `Int32Array` view) —
+    // the same judgment that already seeds `integer_locals`. Off, the view
+    // map is empty and the strictness judgment is bit-identical to before.
+    let strict_int_ta_views = if crate::expr::canonical_i32_locals_enabled() {
+        super::integer_locals::collect_const_int_ta_views(stmts)
+    } else {
+        HashMap::new()
+    };
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
         &integer_locals,
         flat_const_ids,
         clamp_fn_ids,
+        strict_int_ta_views,
     );
     let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
     let non_escaping_news = super::escape_news::collect_non_escaping_news(
@@ -391,11 +450,34 @@ pub(crate) fn collect_type_facts(
         .chain(non_escaping_object_literals.keys())
         .copied()
         .collect();
+    // Representation-selection Phase 3b: shape-proven pointer locals. Gated
+    // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
+    // inside the collector.
+    let shape_proven_ptr_locals = super::ptr_shape::collect_shape_proven_ptr_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        &not_bigint_locals,
+    );
+    // Representation-selection Phase 4a.3: `Ptr<NumArray>` locals. Gated on
+    // `PERRY_PTR_NUMARRAY_LOCALS`, the module-wide §5.2 barrier scan, and the
+    // array-specific prototype-indexed-write kill inside the collector.
+    let num_array_locals = super::ptr_numarray::collect_num_array_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        module_dispatch,
+        compile_time_constants,
+        &integer_locals,
+    );
     let graph = TypeFacts {
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
             unsigned_i32_locals,
             not_bigint_locals,
+            int_valued_ta_locals,
         },
         arrays: array_facts,
         effect: effect_facts,
@@ -427,6 +509,8 @@ pub(crate) fn collect_type_facts(
         },
         shape_stability: ShapeStabilityFacts {
             scalar_replaceable_object_locals,
+            shape_proven_ptr_locals,
+            num_array_locals,
         },
         materialization_hazards,
     };
@@ -453,6 +537,41 @@ pub(crate) fn collect_native_region_fact_graph(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
 ) -> NativeRegionFactGraph {
+    collect_native_region_fact_graph_with_spec_lens(
+        stmts,
+        params,
+        flat_const_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+        boxed_vars,
+        module_globals,
+        binding_types,
+        classes,
+        compile_time_constants,
+        module_dispatch,
+        &HashMap::new(),
+    )
+}
+
+/// Variant carrying spec-ABI `TaPtr` parameter lengths (representation-
+/// selection Phase 2): the call-site pre-pass proved these params hold
+/// non-view typed arrays with these constant element counts, which unlocks
+/// the wrap-i32 additive admission's in-bounds operand proof.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_native_region_fact_graph_with_spec_lens(
+    stmts: &[Stmt],
+    params: &[perry_hir::Param],
+    flat_const_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    binding_types: &HashMap<u32, perry_hir::types::Type>,
+    classes: &HashMap<String, &perry_hir::Class>,
+    compile_time_constants: &HashMap<u32, f64>,
+    module_dispatch: &super::ModuleDispatchFacts,
+    spec_ta_lens: &HashMap<u32, i64>,
+) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
         params,
@@ -465,6 +584,7 @@ pub(crate) fn collect_native_region_fact_graph(
         classes,
         compile_time_constants,
         module_dispatch,
+        spec_ta_lens,
     )
 }
 
@@ -490,6 +610,7 @@ pub(crate) fn collect_hir_facts(
         // No class table here, so no scalar-method summary can apply; the
         // conservative default keeps it that way if one ever could.
         &super::ModuleDispatchFacts::default(),
+        &HashMap::new(),
     )
 }
 

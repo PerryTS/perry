@@ -291,6 +291,90 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("property: \"Segmenter\"") {
             ctx.uses_intl_segmenter = true;
         }
+        // `Intl.*` namespace surface (~219 KB). Every `Intl.X` access lowers
+        // with `Intl` as a property/identifier token, and the locale-aware
+        // prototype methods below can hand back Intl-formatted output, so any
+        // of them enables the namespace. Deliberately over-approximate — a
+        // missed detection leaves `Intl.NumberFormat` undefined at runtime,
+        // so err toward enabling (same contract as `temporal`).
+        if hir_debug.contains("\"Intl\"")
+            || hir_debug.contains("property: \"NumberFormat\"")
+            || hir_debug.contains("property: \"DateTimeFormat\"")
+            || hir_debug.contains("property: \"Collator\"")
+            || hir_debug.contains("property: \"RelativeTimeFormat\"")
+            || hir_debug.contains("property: \"ListFormat\"")
+            || hir_debug.contains("property: \"PluralRules\"")
+            || hir_debug.contains("property: \"DisplayNames\"")
+            || hir_debug.contains("property: \"DurationFormat\"")
+            || hir_debug.contains("property: \"Segmenter\"")
+            || hir_debug.contains("property: \"getCanonicalLocales\"")
+            || hir_debug.contains("property: \"supportedValuesOf\"")
+            || hir_debug.contains("property: \"supportedLocalesOf\"")
+            || hir_debug.contains("toLocale")
+            || hir_debug.contains("localeCompare")
+        {
+            ctx.uses_intl_namespace = true;
+        }
+        // Per-namespace `globalThis` member tables (`Math`/`JSON`/`Reflect`/
+        // `Atomics`). Static call sites (`Math.max(x)`, `JSON.stringify(v)`)
+        // lower to codegen intrinsics that never touch these tables, so a
+        // surviving mention of the name means the namespace may be used as a
+        // VALUE (`const m = Math`, `Object.keys(JSON)`) — exactly when the
+        // members must exist. Bare-substring matching keeps this
+        // over-approximate on purpose (a user identifier containing the name
+        // only costs size).
+        if hir_debug.contains("\"Math\"") {
+            ctx.uses_global_math = true;
+        }
+        if hir_debug.contains("\"JSON\"") {
+            ctx.uses_global_json = true;
+        }
+        if hir_debug.contains("\"Reflect\"") {
+            ctx.uses_global_reflect = true;
+        }
+        if hir_debug.contains("\"Atomics\"") {
+            ctx.uses_global_atomics = true;
+        }
+        // Web-platform member tables. Identifier tokens cover explicit use
+        // (`new URL(u)`, `new TextDecoder()`, `crypto.subtle`); the fetch
+        // value types additionally ride `uses_fetch`, because a `fetch()`
+        // result is a `Response` whose methods the source may reach without
+        // ever naming the type. Over-approximate by construction.
+        if hir_debug.contains("\"URL") {
+            ctx.uses_global_url = true;
+        }
+        if hir_debug.contains("\"Text") {
+            ctx.uses_global_text = true;
+        }
+        if hir_debug.contains("\"WebSocket\"") {
+            ctx.uses_global_websocket = true;
+        }
+        if hir_debug.contains("rypto") || hir_debug.contains("\"subtle\"") {
+            ctx.uses_global_webcrypto = true;
+        }
+        if ctx.uses_fetch
+            || hir_debug.contains("\"Headers\"")
+            || hir_debug.contains("\"Request\"")
+            || hir_debug.contains("\"Response\"")
+            || hir_debug.contains("\"Blob\"")
+            || hir_debug.contains("\"File\"")
+            || hir_debug.contains("\"FormData\"")
+            || hir_debug.contains("\"fetch\"")
+        {
+            ctx.uses_global_webfetch = true;
+        }
+        // `process` IPC channel properties. Bare-token matching on purpose:
+        // the property name reaches the runtime as a string, so any `send` /
+        // `disconnect` / `connected` / `channel` mention enables the path. A
+        // miss would make `process.send` undefined at runtime, so this errs
+        // heavily toward enabling.
+        if hir_debug.contains("\"send\"")
+            || hir_debug.contains("\"disconnect\"")
+            || hir_debug.contains("\"connected\"")
+            || hir_debug.contains("\"channel\"")
+        {
+            ctx.uses_proc_ipc = true;
+        }
         // `Intl.getCanonicalLocales(...)` / `Intl.*.supportedLocalesOf(...)` gate
         // `perry-runtime/intl-locale` (`icu_locale_core` BCP-47 canonicalization).
         // Both lower with the method name as a `property` token.

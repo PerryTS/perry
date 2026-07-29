@@ -719,7 +719,7 @@ pub extern "C" fn js_yoga_get_computed_edge(id: f64, kind: f64, edge: f64) -> f6
 // Typed statics (coercion, not a const ptr→int cast).
 macro_rules! keep {
     ($n:ident : $t:ty = $f:ident) => {
-        #[used]
+        #[cfg_attr(feature = "keepalive-anchors", used)]
         static $n: $t = $f;
     };
 }

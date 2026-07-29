@@ -114,6 +114,6 @@ fn throw_raw_type_error() -> ! {
 /// Keepalive anchor — `js_string_raw` is emitted only by generated code
 /// (the `String.raw(...)` call lowering), so the auto-optimize whole-program
 /// LLVM rebuild would otherwise dead-strip this `#[no_mangle]` symbol and
-/// break linking (see PR #3320 / the `#[used]` keepalive pattern).
-#[used]
+/// break linking (see PR #3320 / the `#[cfg_attr(feature = "keepalive-anchors", used)]` keepalive pattern).
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_STRING_RAW: extern "C" fn(f64, f64) -> *mut StringHeader = js_string_raw;

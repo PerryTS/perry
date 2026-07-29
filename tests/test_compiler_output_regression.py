@@ -473,10 +473,26 @@ def numeric_array_native_records():
 
 
 def numeric_arrays_inline_ir():
+    # Repsel 4a.1/4a.2 shapes: canonical pushes take the inline store + length
+    # bump (no guarded helper), the numeric read fast arm loads the raw slot
+    # and canonicalizes NaN payloads (fcmp ord + select), and a canonical RHS
+    # write stores verbatim (no js_array_numeric_value_to_raw_f64 call).
     return """
 define i32 @main() {
 entry:
-  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
+  br label %apush.inbounds.0
+
+apush.inbounds.0:
+  %lp = inttoptr i64 1 to ptr
+  %len = load i32, ptr %lp
+  %paddr = add i64 1, 8
+  %pp = inttoptr i64 %paddr to ptr
+  store double 2.0, ptr %pp, align 8
+  %newlen = add i32 %len, 1
+  store i32 %newlen, ptr %lp, align 4
+  br label %apush.merge.0
+
+apush.merge.0:
   %g = call i32 @js_typed_feedback_numeric_array_index_get_guard(i64 1, double 0.0, double 0.0, i32 0, i32 1)
   %gc = icmp ne i32 %g, 0
   br i1 %gc, label %bidx.num.fast.1, label %bidx.num.fallback.2
@@ -485,6 +501,8 @@ bidx.num.fast.1:
   %addr = add i64 1, 8
   %p = inttoptr i64 %addr to ptr
   %v = load double, ptr %p, align 8
+  %vo = fcmp ord double %v, %v
+  %vc = select i1 %vo, double %v, double 0x7FF8000000000000
   br label %bidx.num.merge.3
 
 bidx.num.fallback.2:
@@ -499,8 +517,7 @@ idxset.bounded_numeric_fast.4:
   %sval = fadd double 3.0, 0.0
   %saddr = add i64 1, 8
   %sp = inttoptr i64 %saddr to ptr
-  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
-  store double %sraw, ptr %sp, align 8
+  store double %sval, ptr %sp, align 8
   br label %idxset.bounded_numeric_merge.5
 
 idxset.bounded_numeric_merge.5:
@@ -1678,44 +1695,12 @@ idxset.bounded_numeric_merge.5:
 
     def test_generic_native_rep_checks_require_configured_records(self):
         # The numeric indexed read is inlined: a guarded fast block computes the
-        # element pointer (inttoptr) and performs a direct `load double` instead
-        # of calling js_array_numeric_get_f64_unboxed. The indexed write
-        # canonicalizes the input and stores inline after its guard instead of
-        # calling the raw-f64 set helper.
-        ir = """
-define i32 @main() {
-entry:
-  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
-  %g = call i32 @js_typed_feedback_numeric_array_index_get_guard(i64 1, double 0.0, double 0.0, i32 0, i32 1)
-  %gc = icmp ne i32 %g, 0
-  br i1 %gc, label %bidx.num.fast.1, label %bidx.num.fallback.2
-
-bidx.num.fast.1:
-  %addr = add i64 1, 8
-  %p = inttoptr i64 %addr to ptr
-  %v = load double, ptr %p, align 8
-  br label %bidx.num.merge.3
-
-bidx.num.fallback.2:
-  br label %bidx.num.merge.3
-
-bidx.num.merge.3:
-  %sg = call i32 @js_typed_feedback_numeric_array_index_set_guard(i64 1, double 0.0, i32 0, double 3.0, i32 1)
-  %sc = icmp ne i32 %sg, 0
-  br i1 %sc, label %idxset.bounded_numeric_fast.4, label %idxset.bounded_numeric_merge.5
-
-idxset.bounded_numeric_fast.4:
-  %sval = fadd double 3.0, 0.0
-  %saddr = add i64 1, 8
-  %sp = inttoptr i64 %saddr to ptr
-  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
-  store double %sraw, ptr %sp, align 8
-  br label %idxset.bounded_numeric_merge.5
-
-idxset.bounded_numeric_merge.5:
-  ret i32 0
-}
-"""
+        # element pointer (inttoptr), performs a direct `load double`, and
+        # canonicalizes NaN payloads (repsel 4a.2) instead of calling
+        # js_array_numeric_get_f64_unboxed. The indexed write stores the
+        # canonical value inline after its guard, and canonical pushes take the
+        # inline store + length bump (repsel 4a.1).
+        ir = numeric_arrays_inline_ir()
         records = numeric_array_native_records()
         report = HARNESS.verify_artifacts(
             workload="numeric_arrays",
@@ -1775,27 +1760,7 @@ idxset.bounded_numeric_merge.5:
         )
 
     def test_numeric_array_native_rep_checks_require_raw_layout_facts(self):
-        ir = """
-define i32 @main() {
-entry:
-  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
-  call double @js_array_numeric_get_f64_unboxed(i64 1, i32 0)
-  %sg = call i32 @js_typed_feedback_numeric_array_index_set_guard(i64 1, double 0.0, i32 0, double 3.0, i32 1)
-  %sc = icmp ne i32 %sg, 0
-  br i1 %sc, label %idxset.bounded_numeric_fast.4, label %idxset.bounded_numeric_merge.5
-
-idxset.bounded_numeric_fast.4:
-  %sval = fadd double 3.0, 0.0
-  %saddr = add i64 1, 8
-  %sp = inttoptr i64 %saddr to ptr
-  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
-  store double %sraw, ptr %sp, align 8
-  br label %idxset.bounded_numeric_merge.5
-
-idxset.bounded_numeric_merge.5:
-  ret i32 0
-}
-"""
+        ir = numeric_arrays_inline_ir()
         checked_records = numeric_array_native_records()
         for record in checked_records:
             if record.get("access_mode") == "checked_native":
@@ -1811,7 +1776,10 @@ idxset.bounded_numeric_merge.5:
         )
         self.assertEqual(checked_report["status"], "fail")
         self.assertTrue(
-            any("native_reps_required_numeric_array_push_fast_f64" in error for error in checked_report["errors"]),
+            any(
+                "native_reps_required_numeric_array_get_fast_f64" in error
+                for error in checked_report["errors"]
+            ),
             checked_report["errors"],
         )
 
@@ -1883,30 +1851,15 @@ idxset.bounded_numeric_merge.5:
         )
 
     def test_numeric_array_native_rep_checks_require_fact_reason(self):
-        ir = """
-define i32 @main() {
-entry:
-  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
-  call double @js_array_numeric_get_f64_unboxed(i64 1, i32 0)
-  %sg = call i32 @js_typed_feedback_numeric_array_index_set_guard(i64 1, double 0.0, i32 0, double 3.0, i32 1)
-  %sc = icmp ne i32 %sg, 0
-  br i1 %sc, label %idxset.bounded_numeric_fast.4, label %idxset.bounded_numeric_merge.5
-
-idxset.bounded_numeric_fast.4:
-  %sval = fadd double 3.0, 0.0
-  %saddr = add i64 1, 8
-  %sp = inttoptr i64 %saddr to ptr
-  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
-  store double %sraw, ptr %sp, align 8
-  br label %idxset.bounded_numeric_merge.5
-
-idxset.bounded_numeric_merge.5:
-  ret i32 0
-}
-"""
+        # Repsel 4a.1: the guarded push tier (and its record requirements) is
+        # gone, so the reason-required probe targets the GET fallback record.
+        ir = numeric_arrays_inline_ir()
         records = numeric_array_native_records()
         for record in records:
-            if record.get("access_mode") == "dynamic_fallback":
+            if (
+                record.get("access_mode") == "dynamic_fallback"
+                and record.get("consumer") == "js_typed_feedback_array_index_get_fallback_boxed"
+            ):
                 for fact in record.get("rejected_facts", []):
                     if fact.get("kind") == "raw_f64_layout":
                         fact["reason"] = None
@@ -1923,7 +1876,7 @@ idxset.bounded_numeric_merge.5:
         self.assertEqual(report["status"], "fail")
         self.assertTrue(
             any(
-                "native_reps_required_numeric_array_push_dynamic_fallback" in error
+                "native_reps_required_numeric_array_get_dynamic_fallback" in error
                 for error in report["errors"]
             ),
             report["errors"],

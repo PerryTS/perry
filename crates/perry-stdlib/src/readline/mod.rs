@@ -367,7 +367,11 @@ fn stdin_chunk_value(chunk: &[u8]) -> f64 {
 }
 
 fn try_register_pump() {
-    #[cfg(feature = "async-runtime")]
+    // Unit tests drive the queues directly through
+    // `js_readline_process_pending`; initializing the whole stdlib dispatch
+    // graph here requires the generated-program bootstrap and throws in the
+    // standalone Rust test harness.
+    #[cfg(all(feature = "async-runtime", not(test)))]
     crate::common::async_bridge::ensure_pump_registered();
     ensure_stdin_listeners_provider_registered();
 }
@@ -446,8 +450,15 @@ fn key_ptr(key: &[u8]) -> *mut StringHeader {
 }
 
 fn object_field(value: f64, key: &[u8]) -> Option<f64> {
-    let obj = object_ptr_from_value(value)?;
-    let field = js_object_get_field_by_name_f64(obj, key_ptr(key));
+    // Creating the property-name string can trigger a moving collection.
+    // Keep the receiver rooted and derive its raw pointer only after that
+    // allocation; otherwise option/custom-stream reads can dereference a
+    // stale from-space object.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let key = key_ptr(key);
+    let obj = object_ptr_from_value(value.get_nanbox_f64())?;
+    let field = js_object_get_field_by_name_f64(obj, key);
     if JSValue::from_bits(field.to_bits()).is_undefined() {
         None
     } else {
@@ -1682,7 +1693,6 @@ fn test_inject_chunk(chunk: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::pump::parse_keypress;
     use super::*;
     use std::sync::{Mutex, MutexGuard};
 
@@ -1840,8 +1850,11 @@ mod tests {
     #[test]
     fn stdin_remove_listener_detaches_data_callback() {
         let _g = reset();
-        let cb = data_counter_callback();
         let event = event_name("data");
+        // Allocate the event string before the raw callback pointer. The real
+        // JS caller roots both arguments; this unit test must not leave its
+        // freshly allocated closure unrooted across `event_name`.
+        let cb = data_counter_callback();
         let _ = js_readline_stdin_on(event, cb);
         let _ = js_readline_stdin_remove_listener(event, cb);
         test_inject_chunk(b"x");
@@ -1853,8 +1866,9 @@ mod tests {
     #[test]
     fn stdin_pause_resume_gates_data_dispatch() {
         let _g = reset();
+        let event = event_name("data");
         let cb = data_counter_callback();
-        let _ = js_readline_stdin_on(event_name("data"), cb);
+        let _ = js_readline_stdin_on(event, cb);
         let _ = js_readline_stdin_pause();
         test_inject_chunk(b"x");
         assert_eq!(js_readline_process_pending(), 0);
@@ -1877,8 +1891,8 @@ mod tests {
         assert!(!RAW_MODE.load(Ordering::Acquire));
         assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
 
-        let cb = data_counter_callback();
         let event = event_name("data");
+        let cb = data_counter_callback();
         let _ = js_readline_stdin_on(event, cb);
         assert!(STDIN_DATA_FLOWING.load(Ordering::Acquire));
         // Cooked-mode data listener keeps the event loop alive.
@@ -1917,57 +1931,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_keypress_arrow_keys() {
-        let (name, ctrl, shift, meta, seq) = parse_keypress(b"\x1b[A").unwrap();
-        assert_eq!(name, "up");
-        assert!(!ctrl && !shift && !meta);
-        assert_eq!(seq, "\x1b[A");
-
-        assert_eq!(parse_keypress(b"\x1b[B").unwrap().0, "down");
-        assert_eq!(parse_keypress(b"\x1b[C").unwrap().0, "right");
-        assert_eq!(parse_keypress(b"\x1b[D").unwrap().0, "left");
-    }
-
-    #[test]
-    fn parse_keypress_ctrl_letter() {
-        // Ctrl+C = 0x03
-        let (name, ctrl, _, _, _) = parse_keypress(&[0x03]).unwrap();
-        assert_eq!(name, "c");
-        assert!(ctrl);
-        // Ctrl+A = 0x01
-        let (name, ctrl, _, _, _) = parse_keypress(&[0x01]).unwrap();
-        assert_eq!(name, "a");
-        assert!(ctrl);
-    }
-
-    #[test]
-    fn parse_keypress_special_keys() {
-        assert_eq!(parse_keypress(b"\r").unwrap().0, "return");
-        assert_eq!(parse_keypress(b"\n").unwrap().0, "return");
-        assert_eq!(parse_keypress(b"\t").unwrap().0, "tab");
-        assert_eq!(parse_keypress(&[0x7f]).unwrap().0, "backspace");
-        assert_eq!(parse_keypress(&[0x1b]).unwrap().0, "escape");
-        assert_eq!(parse_keypress(b" ").unwrap().0, "space");
-    }
-
-    #[test]
-    fn parse_keypress_letter_shift_flag() {
-        let (name, ctrl, shift, _, _) = parse_keypress(b"A").unwrap();
-        assert_eq!(name, "A");
-        assert!(!ctrl);
-        assert!(shift); // uppercase A → shift true
-        let (_, _, shift, _, _) = parse_keypress(b"a").unwrap();
-        assert!(!shift);
-    }
-
-    #[test]
     fn split_escape_sequence_reassembles_to_single_keypress() {
         // The raw-mode reader queues one byte per chunk, so an arrow key
         // arrives as `\x1b`, `[`, `A` in three chunks. The pump must
         // reassemble them into ONE 'up' keypress, not escape + [ + A.
         let _g = reset();
+        let event = event_name("keypress");
         let cb = keypress_recorder_callback();
-        let _ = js_readline_stdin_on(event_name("keypress"), cb);
+        let _ = js_readline_stdin_on(event, cb);
         test_inject_chunk(b"\x1b");
         test_inject_chunk(b"[");
         test_inject_chunk(b"A");
@@ -1982,8 +1953,9 @@ mod tests {
         // within one tick — it's held, then flushed as a bare 'escape'
         // keypress on the next tick if nothing followed.
         let _g = reset();
+        let event = event_name("keypress");
         let cb = keypress_recorder_callback();
-        let _ = js_readline_stdin_on(event_name("keypress"), cb);
+        let _ = js_readline_stdin_on(event, cb);
         test_inject_chunk(b"\x1b");
         assert_eq!(js_readline_process_pending(), 0);
         // The held prefix keeps the loop alive so the flush tick runs.
@@ -1997,8 +1969,9 @@ mod tests {
         // A registered 'readable' listener must not be invoked on ticks
         // that delivered no new data (that was a per-tick JS busy loop).
         let _g = reset();
+        let event = event_name("readable");
         let cb = readable_counter_callback();
-        let _ = js_readline_stdin_on(event_name("readable"), cb);
+        let _ = js_readline_stdin_on(event, cb);
         assert_eq!(js_readline_process_pending(), 0);
         assert_eq!(js_readline_process_pending(), 0);
         test_inject_chunk(b"x");

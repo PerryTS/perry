@@ -74,18 +74,7 @@ pub(crate) fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index
     }
 }
 
-fn bitand_has_nonnegative_i32_mask(left: &Expr, right: &Expr) -> bool {
-    fn mask(expr: &Expr) -> Option<i64> {
-        match expr {
-            Expr::Integer(i) => Some(*i),
-            Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
-            _ => None,
-        }
-    }
-    mask(left)
-        .or_else(|| mask(right))
-        .is_some_and(|mask| (0..=i32::MAX as i64).contains(&mask))
-}
+use super::proven_view_access::bitand_has_nonnegative_i32_mask;
 
 /// #6011: decompose a packed-loop index expression into `(counter_local_id,
 /// constant_offset)`. Matches `i`, `i + c`, `c + i`, and `i - c` with a small
@@ -320,6 +309,23 @@ fn lower_class_method_bind(
 // counter), so the guard takes only `idx_i32` (no `f64` index) — keeping the
 // int→fp conversion out of the hot region. The boxed fallback still needs the
 // `f64` index, so it is materialized lazily inside the (cold) fallback block.
+/// Repsel 4a.2 (#6904): the receiver's repairable local slot, when it is a
+/// plain (non-boxed, non-captured) stack local. The guard tiers' COLD arm
+/// stores the chain-followed live array head back into it so a stale
+/// growth-forwarded binding (e.g. left behind by a specialized-ABI callee
+/// growing a caller-allocated array) self-heals instead of pinning every
+/// access to the boxed fallback. Boxed/captured locals are excluded — their
+/// slot holds the box/capture pointer, not the array head.
+fn receiver_repair_slot(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    if ctx.boxed_vars.contains(id) || ctx.closure_captures.contains_key(id) {
+        return None;
+    }
+    ctx.locals.get(id).cloned()
+}
+
 fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -327,6 +333,7 @@ fn lower_guarded_array_index_get(
     block_prefix: &str,
     require_numeric_layout: bool,
     coerce_numeric_fallback: bool,
+    receiver_slot: Option<&str>,
 ) -> Result<String> {
     let contract = if require_numeric_layout {
         TypedFeedbackContract::numeric_array_get_index()
@@ -346,14 +353,33 @@ fn lower_guarded_array_index_get(
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    if !require_numeric_layout && !typed_feedback_emission_enabled() {
+    if !typed_feedback_emission_enabled() {
         // Normal builds do not collect feedback. Inline the plain-array
         // structural guard instead of paying an out-of-line call merely to
         // rediscover the same header facts before the direct slot load below.
         // Prototype-chain invalidators are summarized by one sticky runtime
         // byte; per-array descriptors and forwarding remain receiver-local.
+        //
+        // Repsel 4a.1: the NUMERIC tier gets the same inline guard — plus an
+        // `_reserved & GC_ARRAY_RAW_F64_LAYOUT (0x80)` dense-proof test on the
+        // header word the plain guard already loads. A dense-flagged array
+        // needs no runtime call at all (the raw-f64 slot IS the value, no
+        // hole select). Arrays not yet flagged take a COLD out-of-line
+        // `js_typed_feedback_numeric_array_index_get_guard` call, whose
+        // first-touch path verifies-and-rewrites the layout (setting the
+        // flag), so the steady state is the inline tier. This ends the
+        // typed-`number[]`-slower-than-untyped inversion for reads.
         let deref_idx = ctx.new_block(&format!("{}.guard.deref", block_prefix));
         let deref_label = ctx.block_label(deref_idx);
+        let cold_guard_idx = if require_numeric_layout {
+            Some(ctx.new_block(&format!("{}.guard.cold", block_prefix)))
+        } else {
+            None
+        };
+        let guard_fail_label = match cold_guard_idx {
+            Some(idx) => ctx.block_label(idx),
+            None => fallback_label.clone(),
+        };
         {
             let blk = ctx.block();
             let arr_bits = blk.bitcast_double_to_i64(arr_box);
@@ -362,7 +388,7 @@ fn lower_guarded_array_index_get(
             let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
             let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
             let heap_candidate = blk.and(I1, &is_pointer, &above_handle_band);
-            blk.cond_br(&heap_candidate, &deref_label, &fallback_label);
+            blk.cond_br(&heap_candidate, &deref_label, &guard_fail_label);
         }
 
         ctx.current_block = deref_idx;
@@ -410,7 +436,63 @@ fn lower_guarded_array_index_get(
             guard_ok = blk.and(I1, &guard_ok, &length_sane);
             guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
             guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
-            blk.cond_br(&guard_ok, &fast_label, &fallback_label);
+            if require_numeric_layout {
+                // Dense raw-f64 proof: every slot in [0, length) holds
+                // canonical raw f64 bits (GC_ARRAY_RAW_F64_LAYOUT, 0x80).
+                //
+                // Repsel 4a.2 (#6904): a NUMBER-CONTEXT read (the caller will
+                // ToNumber the element regardless — `coerce_numeric_fallback`)
+                // additionally accepts the hole-tolerant invariant
+                // (GC_ARRAY_RAW_F64_HOLES, 0x1000): every slot is canonical
+                // raw f64 OR TAG_HOLE, and the fast arm canonicalizes any NaN
+                // payload (TAG_HOLE included) to the quiet NaN — bit-exact
+                // with ToNumber(undefined) for a hole and with ToNumber(NaN)
+                // for a stored NaN. This is the `new Array(n)` mid-fill axis:
+                // such arrays are provably-not-dense until the last slot is
+                // written, so the dense-only tier never fired for them.
+                let raw_mask = if coerce_numeric_fallback {
+                    "4224" // 0x1080 = RAW_F64_LAYOUT | RAW_F64_HOLES
+                } else {
+                    "128" // dense only: the raw slot is exposed verbatim
+                };
+                let raw_bits = blk.and(I16, &reserved, raw_mask);
+                let is_raw = blk.icmp_ne(I16, &raw_bits, "0");
+                guard_ok = blk.and(I1, &guard_ok, &is_raw);
+            }
+            blk.cond_br(&guard_ok, &fast_label, &guard_fail_label);
+        }
+
+        if let Some(cold_idx) = cold_guard_idx {
+            // Cold arm: the out-of-line guard rebuilds unmarked-but-numeric
+            // arrays into raw-f64 layout (then this call site goes inline on
+            // every later read); everything else routes to the boxed fallback.
+            ctx.current_block = cold_idx;
+            // Self-heal a stale growth-forwarded binding first (see
+            // `receiver_repair_slot`): follow the chain, write the live head
+            // back to the local slot. This iteration still takes the guard
+            // on the ORIGINAL value (a forwarded head fails it → boxed
+            // fallback, which follows the chain — correct either way); every
+            // later iteration re-loads the repaired slot and goes inline.
+            if let Some(slot) = receiver_slot {
+                let blk = ctx.block();
+                let fresh = blk.call(DOUBLE, "js_array_refresh_local_head", &[(DOUBLE, arr_box)]);
+                blk.store(DOUBLE, &fresh, slot);
+            }
+            let guard_ok = {
+                let blk = ctx.block();
+                let guard_i32 = blk.call(
+                    I32,
+                    "js_typed_feedback_numeric_array_index_get_guard",
+                    &[
+                        (I64, &feedback_site_id),
+                        (DOUBLE, arr_box),
+                        (I32, idx_i32),
+                        (I32, "1"),
+                    ],
+                );
+                blk.icmp_ne(I32, &guard_i32, "0")
+            };
+            ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
         }
     } else {
         let guard_ok = {
@@ -495,20 +577,34 @@ fn lower_guarded_array_index_get(
     let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
     let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
     let fast_val = if require_numeric_layout {
-        // The `numeric_array_index_get_guard` on the way into this block already
-        // proved: a plain, non-forwarded `Array`, in raw-f64 numeric layout,
-        // with `index` in bounds (`plain_array_index_guard(.., in_bounds=true)`
-        // && `js_array_is_numeric_f64_layout`). So load the slot inline instead
-        // of calling `js_array_numeric_get_f64_unboxed`, whose hot path
-        // re-validates exactly those same conditions and then does this load.
-        // Raw-f64 arrays are dense (no HOLE slots) and the slot holds a raw f64,
-        // matching the runtime helper's `return *elements_ptr.add(index)`.
+        // The guard on the way into this block (inline tier or the runtime
+        // `numeric_array_index_get_guard`) already proved: a plain,
+        // non-forwarded `Array`, in raw-f64 (or, for number-context reads,
+        // raw-f64-or-holes) layout, with `index` in bounds. So load the slot
+        // inline instead of calling `js_array_numeric_get_f64_unboxed`,
+        // whose hot path re-validates exactly those same conditions and then
+        // does this load.
         let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
         let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
         let with_header = fast_blk.add(I64, &byte_offset, "8");
         let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
         let element_ptr = fast_blk.inttoptr(I64, &element_addr);
-        fast_blk.load(DOUBLE, &element_ptr)
+        let raw = fast_blk.load(DOUBLE, &element_ptr);
+        if coerce_numeric_fallback {
+            // Repsel 4a.2: number-context canonicalization — any NaN payload
+            // (a TAG_HOLE slot under the raw-f64-or-holes proof, or a stored
+            // canonical NaN) becomes the quiet NaN. Bit-exact:
+            // ToNumber(undefined) = NaN for a hole, ToNumber(NaN) = NaN for a
+            // stored NaN, identity for every real number. PROOF-GATED: only
+            // sound because the guard admitted raw-f64-or-holes slots — an
+            // arbitrary NaN-boxed tag would be wrongly collapsed to NaN.
+            let is_ord = fast_blk.fcmp("ord", &raw, &raw);
+            fast_blk.select(I1, &is_ord, DOUBLE, &raw, "0x7FF8000000000000")
+        } else {
+            // Dense-only proof: no HOLE slots exist; the raw slot IS the
+            // element value, exposed verbatim.
+            raw
+        }
     } else {
         let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
         let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
@@ -1058,6 +1154,17 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         }
     }
 
+    // Repsel Phase 4a.3: guard-free `Ptr<NumArray>` load — supersedes the
+    // packed/bounded/guarded tiers when the local proof + a per-site
+    // in-bounds proof both hold.
+    if let Some(value) = super::ptr_numarray_access::try_lower_num_array_guard_free_get(
+        ctx,
+        object.as_ref(),
+        index.as_ref(),
+    )? {
+        return Ok(Some(value));
+    }
+
     if let Expr::LocalGet(arr_id) = object.as_ref() {
         if let Some((fact, idx_id, offset)) =
             packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())
@@ -1078,16 +1185,24 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
             .any(|fact| fact.index_local_id == *idx_id && fact.array_local_id == *arr_id)
         {
             if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+                let repair_slot = receiver_repair_slot(ctx, object);
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_i32 = ctx.block().load(I32, &i32_slot);
                 return lower_guarded_array_index_get(
-                    ctx, &arr_box, &idx_i32, "bidx.num", true, true,
+                    ctx,
+                    &arr_box,
+                    &idx_i32,
+                    "bidx.num",
+                    true,
+                    true,
+                    repair_slot.as_deref(),
                 )
                 .map(Some);
             }
         }
     }
 
+    let repair_slot = receiver_repair_slot(ctx, object);
     let arr_box = lower_expr(ctx, object)?;
     if !numeric_index_has_integer_array_index_proof(ctx, index) {
         let idx_double = lower_expr(ctx, index)?;
@@ -1099,7 +1214,16 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         )));
     }
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
-    lower_guarded_array_index_get(ctx, &arr_box, &idx_i32, "arr", true, true).map(Some)
+    lower_guarded_array_index_get(
+        ctx,
+        &arr_box,
+        &idx_i32,
+        "arr",
+        true,
+        true,
+        repair_slot.as_deref(),
+    )
+    .map(Some)
 }
 
 /// #5525: lower an `S[i]` read whose receiver is an *untyped* (`any`/unknown)
@@ -1410,6 +1534,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         value,
                         MaterializationReason::RuntimeApi,
                     ));
+                }
+                // Phase 2 checked tier: see expr/proven_view_access.rs.
+                if let Some(v) = super::try_lower_proven_view_checked_f64_load(ctx, object, index)?
+                {
+                    return Ok(v);
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     let arr_box = lower_expr(ctx, object)?;
@@ -1769,11 +1898,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         fact.index_local_id == *idx_id && fact.array_local_id == *arr_id
                     }) {
                         if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+                            let repair_slot = receiver_repair_slot(ctx, object);
                             let arr_box = lower_expr(ctx, object)?;
                             let idx_i32 = ctx.block().load(I32, &i32_slot);
                             if require_numeric_layout {
                                 return lower_guarded_array_index_get(
-                                    ctx, &arr_box, &idx_i32, "bidx.num", true, false,
+                                    ctx,
+                                    &arr_box,
+                                    &idx_i32,
+                                    "bidx.num",
+                                    true,
+                                    false,
+                                    repair_slot.as_deref(),
                                 );
                             }
                             return lower_bounded_array_index_get(ctx, &arr_box, &idx_i32);
@@ -1781,6 +1917,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
 
+                let repair_slot = receiver_repair_slot(ctx, object);
                 let arr_box = lower_expr(ctx, object)?;
                 if !numeric_index_has_integer_array_index_proof(ctx, index) {
                     let idx_double = lower_expr(ctx, index)?;
@@ -1808,6 +1945,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "arr",
                     require_numeric_layout,
                     false,
+                    repair_slot.as_deref(),
                 );
             }
             // Generic dynamic object access: stringify the index (no-op

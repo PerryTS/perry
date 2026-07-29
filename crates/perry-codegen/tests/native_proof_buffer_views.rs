@@ -1935,13 +1935,29 @@ fn reassigned_typed_array_store_records_runtime_fallback() {
         }),
         "expected reassigned typed-array store to record runtime fallback:\n{artifact:#}"
     );
+    // The read must never take an UNCHECKED native path on a reassigned
+    // receiver. Two conforming lowerings exist: the runtime-call fallback
+    // (`slow_path` / dynamic_fallback) and, since #6883, the inline
+    // kind-GUARDED checked read (`checked_f64_param` / checked_native) —
+    // whose runtime guard re-validates the receiver on every access, so a
+    // reassignment can never serve stale data. What this asserts is the
+    // absence of the guard-free proven/unchecked forms.
     assert!(
         records.iter().any(|record| {
             record["expr_kind"] == "TypedArrayGet"
-                && record["consumer"] == "TypedArrayGet.slow_path"
-                && record["access_mode"] == "dynamic_fallback"
-                && !record["fallback_reason"].is_null()
+                && ((record["consumer"] == "TypedArrayGet.slow_path"
+                    && record["access_mode"] == "dynamic_fallback")
+                    || (record["consumer"] == "TypedArrayGet.checked_f64_param"
+                        && record["access_mode"] == "checked_native"))
         }),
-        "expected reassigned typed-array read to record runtime fallback:\n{artifact:#}"
+        "expected reassigned typed-array read to stay on a runtime-checked path:\n{artifact:#}"
+    );
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "TypedArrayGet"
+                && (record["consumer"] == "TypedArrayGet.proven_view_checked"
+                    || record["access_mode"] == "unchecked_native")
+        }),
+        "reassigned typed-array read must never take a proven/unchecked form:\n{artifact:#}"
     );
 }

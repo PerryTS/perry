@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Release-age soak: a bumped version must be at least this many days
+    # old before dependabot proposes it (SOAK_DAYS in
+    # scripts/soak/constants.mts; `npm run soak` gates the parity).
+    cooldown:
+      default-days: 7
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
@@ -33,6 +38,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "ci"
       include: scope

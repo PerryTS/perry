@@ -992,7 +992,27 @@ fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receive
         key,
         Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
     ) || is_string_expr(ctx, key);
-    recv_unknown && !key_is_static_string_or_symbol
+    // Representation-selection Phase 2: a receiver statically typed as a
+    // numeric typed array also belongs on `index_set::lower`'s typed-array
+    // arm — that file carries the proven-view / checked-native element-store
+    // tiers plus the same dynamic-key dispatcher this path would reach, so
+    // element writes on typed receivers (the spec-ABI `lr[off] = …` shape)
+    // stop routing through the generic write-IC.
+    let recv_typed_array = matches!(
+        crate::type_analysis::receiver_class_name(ctx, target).as_deref(),
+        Some(
+            "Int8Array"
+                | "Uint8Array"
+                | "Uint8ClampedArray"
+                | "Int16Array"
+                | "Uint16Array"
+                | "Int32Array"
+                | "Uint32Array"
+                | "Float32Array"
+                | "Float64Array"
+        )
+    );
+    (recv_unknown || recv_typed_array) && !key_is_static_string_or_symbol
 }
 
 fn try_lower_process_env_put_value_set(
