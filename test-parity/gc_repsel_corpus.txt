@@ -47,3 +47,10 @@ test_gap_repsel_p4b_field_store_elision
 # across escaping allocation churn heavy enough to reach the collector, so the
 # "collect" arms actually bite. Keep it registered and keep it collecting.
 test_gap_repsel_gc_stress
+
+# --- Phase 5a: Ptr<Shape> proven `this` in methods (#6925) -------------------
+# Landed in 1a533a3a8 WITHOUT registering here, which made
+# `gc_repsel_matrix.sh --arms all` refuse to run at all (the UNREGISTERED gate
+# fires before any cell is evaluated). Registering it is the action that gate
+# asks for.
+test_gap_repsel_proven_this_frozen

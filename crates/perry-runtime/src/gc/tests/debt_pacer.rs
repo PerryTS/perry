@@ -724,3 +724,67 @@ fn minor_sweep_retains_window_expired_growth_stub() {
     assert_eq!(crate::array::js_array_length(live), 64);
     assert_eq!(crate::array::js_array_get_f64_unchecked(live, 63), 63.0);
 }
+
+/// #6950: the pacing path must measure allocation debt against the SAME
+/// trigger the arming path compares against.
+///
+/// `gc_budgeted_due_trigger` arms a cycle when
+/// `arena_total_bytes() >= effective_next_arena_trigger()`, which substitutes
+/// the device / `PERRY_GC_HEAP_LIMIT`-derived ceiling while the raw
+/// `GC_NEXT_TRIGGER_BYTES` cell still holds its desktop-default const
+/// initializer (`GC_TRIGGER_ARMED == false`). `GcDebtSnapshot::current` read
+/// the RAW cell, so a cycle armed at the (lower) effective trigger measured its
+/// own debt against the (higher) raw one and reported ZERO debt.
+///
+/// `gc_mutator_assist_scaled_work_units` scales the assist budget by exactly
+/// that number, so it never left its 256-unit floor and the budgeted cycle
+/// crawled without ever completing. Measured on a compiled program: 300 000
+/// escaping allocations, 330 MB RSS, ZERO collections — the unbounded-growth
+/// failure the debt-proportional pacing exists to prevent.
+#[test]
+fn test_arena_debt_measured_against_effective_trigger_not_raw_cell() {
+    use super::super::heap_budget::gc_trigger_absolute_ceiling_bytes;
+    use super::super::policy::{
+        effective_next_arena_trigger, GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
+    };
+
+    let prev_total = crate::arena::ARENA_TOTAL_BYTES.with(|c| c.get());
+    let prev_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
+    let prev_armed = GC_TRIGGER_ARMED.with(|c| c.get());
+
+    // Un-armed with a raw cell far above the ceiling: exactly the state a
+    // process is in before its FIRST collection.
+    GC_TRIGGER_ARMED.with(|c| c.set(false));
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(usize::MAX / 2));
+    let ceiling = gc_trigger_absolute_ceiling_bytes();
+    let overshoot = 64 * 1024 * 1024;
+    crate::arena::ARENA_TOTAL_BYTES.with(|c| c.set(ceiling.saturating_add(overshoot)));
+
+    let effective = effective_next_arena_trigger();
+    let due = crate::arena::arena_total_bytes() >= effective;
+    let debt = GcDebtSnapshot::current().arena_debt_bytes;
+    let units = gc_mutator_assist_scaled_work_units();
+
+    crate::arena::ARENA_TOTAL_BYTES.with(|c| c.set(prev_total));
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(prev_trigger));
+    GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
+
+    assert_eq!(
+        effective, ceiling,
+        "an un-armed trigger cell must read as the device ceiling"
+    );
+    assert!(
+        due,
+        "the arming path must consider this arena total past the effective trigger"
+    );
+    assert_eq!(
+        debt, overshoot as u64,
+        "debt must be measured against the EFFECTIVE trigger the cycle was armed on, \
+         not the raw cell — reading the raw cell reports 0 and freezes the assist \
+         budget at its floor"
+    );
+    assert!(
+        units > GC_MUTATOR_ASSIST_WORK_UNITS,
+        "a cycle with real debt must scale its assist budget past the fixed floor"
+    );
+}
