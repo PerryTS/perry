@@ -8781,12 +8781,14 @@ checksum = "b1afc06e45b0d63943c777d0233523fa2e23a12431a73c37b1c0366777b31717"
 dependencies = [
  "calendrical_calculations",
  "core_maths",
+ "iana-time-zone",
  "icu_calendar",
  "icu_locale_core",
  "ixdtf",
  "num-traits",
  "timezone_provider",
  "tinystr",
+ "web-time",
  "writeable",
 ]
 
