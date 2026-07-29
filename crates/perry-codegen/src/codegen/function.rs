@@ -485,12 +485,29 @@ pub(super) fn compile_function(
                     let boxed = crate::expr::nanbox_pointer_inline(blk, &arg_name);
                     let slot = blk.alloca(DOUBLE);
                     blk.store(DOUBLE, &boxed, &slot);
-                    // No callee-side shadow binding: every route into this
-                    // entry is a Tier-A call whose argument is a proven
-                    // never-reassigned rooted binding (module-global root or
-                    // caller-frame slot) that stays live for the whole call,
-                    // and typed-array storage is non-movable — the callee
-                    // root would be redundant TLS traffic on the hot path.
+                    // No callee-side shadow binding. Both halves of that
+                    // argument are load-bearing, and the second one is NOT
+                    // "typed-array storage is non-movable" — the value passed
+                    // is the HEADER, and a header is an object (#6981):
+                    //
+                    //  1. Liveness — every route into this entry is a Tier-A
+                    //     call (`lower_call/func_ref.rs`) whose argument is a
+                    //     pre-pass-proven, never-reassigned, non-closure-
+                    //     referenced binding: a module-global root, or the
+                    //     caller's own shadow-bound frame slot. That root
+                    //     keeps the header live for the whole call.
+                    //  2. Address stability — the header does not MOVE,
+                    //     because `typed_array_alloc` puts the whole
+                    //     allocation (header + inline payload) in the OLD
+                    //     arena with `GC_FLAG_TENURED`. The nursery copying
+                    //     minor only relocates nursery objects, and old-page
+                    //     defrag is the one consumer of `gc_type_is_movable`,
+                    //     which is `false` for `GC_TYPE_TYPED_ARRAY`.
+                    //
+                    // Both together are what make the callee root redundant
+                    // TLS traffic. Neither generalizes: an ordinary
+                    // `GC_TYPE_OBJECT` IS movable and IS nursery-allocated,
+                    // so any new raw-pointer rep must argue (2) afresh.
                     map.insert(p.id, slot);
                     continue;
                 }
@@ -901,9 +918,14 @@ pub(super) fn compile_function(
     // live through the CALLER's proven never-reassigned rooted binding (a
     // module-global root or the caller's own frame slot — the only routes into
     // this entry are Tier-A calls whose args carry that proof); the hoisted
-    // data pointer stays valid because typed-array storage is non-movable
-    // (`gc/types.rs`: `GC_TYPE_TYPED_ARRAY`/`GC_TYPE_BUFFER` `movable: false`)
-    // and a non-view typed array cannot be detached or resized.
+    // data pointer stays valid because the HEADER itself never moves —
+    // `typed_array_alloc` allocates header + inline payload in the OLD arena
+    // (`arena_alloc_gc_old`, `GC_FLAG_TENURED`), which the nursery copying
+    // minor never relocates, and old-page defrag skips it because
+    // `gc_type_is_movable(GC_TYPE_TYPED_ARRAY)` is `false`. Note the reason is
+    // header residency, not "storage is non-movable": the value in `%arg` is
+    // the header, and hoisting data+length reads THROUGH it (#6981). A
+    // non-view typed array also cannot be detached or resized.
     if let Some(plan) = spec_entry {
         for (p, rep) in f.params.iter().zip(plan.reps.iter()) {
             let crate::collectors::SpecParamRep::TaPtr { kind, const_len } = rep else {

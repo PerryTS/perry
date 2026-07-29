@@ -48,6 +48,17 @@ test_gap_repsel_p4b_field_store_elision
 # was failing on main for every PR until this line landed.
 test_gap_repsel_proven_this_frozen
 
+# --- Typed-array constructor source rooting (#6981) --------------------------
+# Not a representation file, so the UNREGISTERED gate does not auto-detect it:
+# registered explicitly per the header rule above. Gates the runtime-side half
+# of #6981 -- a typed-array constructor SOURCE is only a C-ABI argument, and the
+# classification/materialization inside the helper allocates. Verified to FAIL
+# on the `evac_minor` arm before the fix (`literal: 0 undefined undefined`,
+# 9 675 objects copied) and pass after. It is green on the PR arm set, because
+# `cons_scan_off` alone does not reach the evacuating minor -- it starts gating
+# per-PR when `evac_minor` joins PR_ARMS.
+test_gap_gc_ta_ctor_source_rooting
+
 # --- The GC-live member ------------------------------------------------------
 # Every file above performs ZERO collections (measured, #6950), which makes the
 # GC arms inert against them. This one holds each representation's local live
