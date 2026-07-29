@@ -1137,6 +1137,12 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     } else {
         crate::array::clear_array_numeric_layout_ptr(new_user as usize);
     }
+    // Read the source object's intact bit BEFORE the transfer clears it — it is
+    // the per-object half of the shape-keyed resolution below. `_reserved` is
+    // untouched by `set_forwarding_address` (which writes gc_flags and the first
+    // payload word), so it is still authoritative here even though the
+    // evacuation callers forward the original before calling us.
+    let old_intact = (*old_header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0;
     let new_has_typed = TYPED_LAYOUTS.with(|m| {
         let mut typed = m.borrow_mut();
         typed.remove(&(new_user as usize));
@@ -1147,11 +1153,39 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
             false
         }
     });
+    // #6964: the canonical descriptor may live in EITHER map, exactly as the
+    // query helpers resolve it (#6957/#6963). The per-object `TYPED_LAYOUTS`
+    // entry is keyed by ADDRESS, so it has to be moved (above). The shape-keyed
+    // `SHAPE_LAYOUTS` entry (#6893) is keyed by the shared `keys_array`, which
+    // the relocated copy carries verbatim — it needs no move, but it only
+    // describes THIS object while the object is still INTACT.
+    //
+    // Probing only `TYPED_LAYOUTS` missed for every object #6893 actually moved
+    // (i.e. every class instance: it carries a keys_array and therefore has NO
+    // per-object entry), so `new_has_typed` was false and the relocated copy had
+    // a still-valid intact bit CLEARED — permanently deopting its typed guards.
+    // Latent until an evacuating minor became reachable (#6950); the fourth
+    // caller, array growth in `array/push_pop.rs`, is `GC_TYPE_ARRAY`, which is
+    // not `GcLayoutSlotKind::ObjectFields` and so never had a shape-keyed
+    // descriptor to lose.
+    //
+    // Read the shape through `new_user`: the evacuation callers install the
+    // forwarding pointer over the ORIGINAL's first payload word, which for an
+    // ObjectFields object overlaps the header fields this lookup reads.
+    //
+    // Mirrors #6963's split: the per-object half stays ungated (so a forged or
+    // stale intact bit cannot manufacture a descriptor), the shared half is
+    // gated on the source object's intact bit (so an object that diverged from
+    // its shape does not silently re-adopt the shape's stale descriptor by
+    // moving).
+    let new_has_shape_typed = !new_has_typed
+        && old_intact
+        && with_shape_shared_descriptor(new_user as usize, |_| ()).is_some();
     // Keep the intact bit in lock-step with the moved descriptor. Copying GC
     // normally propagates `_reserved` (so the bit already rode along), but
     // re-sync defensively for callers that allocate the destination fresh
     // (e.g. array growth) so a stale/missing bit can never desync from the map.
-    if new_has_typed {
+    if new_has_typed || new_has_shape_typed {
         header_set_typed_layout_intact(new_header);
     } else {
         header_clear_typed_layout_intact(new_header);
