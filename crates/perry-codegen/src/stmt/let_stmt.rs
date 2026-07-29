@@ -2,6 +2,7 @@
 
 use super::*;
 
+use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
 use super::unused_expr::lower_unused_expr;
 use crate::expr::{
     box_i1_for_compat_shadow, emit_root_nanbox_store_on_block,
@@ -9,9 +10,8 @@ use crate::expr::{
     lower_expr_with_expected_type, unbox_str_handle,
 };
 use crate::native_value::{
-    AliasState, BufferAccessMode, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
-    LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
-    PodLocal, SemanticKind,
+    BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, PodLayoutDecision, PodLocal,
+    SemanticKind,
 };
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -54,7 +54,7 @@ pub(crate) fn lower_let(
     id: u32,
     name: &str,
     init: Option<&perry_hir::Expr>,
-    ty: &perry_types::Type,
+    ty: &perry_hir::types::Type,
     mutable: bool,
 ) -> Result<()> {
     // `let C = SomeClass` aliases the local `C` to the class
@@ -236,10 +236,25 @@ pub(crate) fn lower_let(
     // We only refine Any → something more specific; we don't
     // override declared types because the user may have written
     // `let x: Object = ...` deliberately.
-    let refined_ty = if matches!(ty, perry_types::Type::Any) {
+    let refined_ty = if matches!(ty, perry_hir::types::Type::Any) {
         init.and_then(|e| crate::type_analysis::refine_type_from_init(ctx, e))
+            // A local proven integer-valued (a loop counter, or an
+            // `int_valued_ta` Feistel accumulator whose init `lr[off]` the
+            // structural refiner can't type) is still definitely a clean
+            // Number — never a heap pointer. When the structural refiner can't
+            // pin it down, fall back to Number so the numeric Let/LocalSet
+            // lowering (i32 shadow slot, no conservative Any boxing, no GC
+            // shadow-slot pointer tracking) fires — matching a source `| 0`.
+            // Without this the accumulator stays `Any`, its f64 mirror is kept
+            // live across the loop, and `-O3` cannot collapse the residual
+            // `sitofp`/`fptosi` round-trips.
+            .or_else(|| {
+                ctx.integer_locals
+                    .contains(&id)
+                    .then_some(perry_hir::types::Type::Number)
+            })
             .unwrap_or_else(|| ty.clone())
-    } else if matches!(ty, perry_types::Type::Array(ref elem) if matches!(**elem, perry_types::Type::Any))
+    } else if matches!(ty, perry_hir::types::Type::Array(ref elem) if matches!(**elem, perry_hir::types::Type::Any))
     {
         // Also refine Array<Any> when the init provides more
         // specific element type info. Object.keys() returns
@@ -295,7 +310,12 @@ pub(crate) fn lower_let(
     // the canonical write path that maintains every shadow (boxed cell,
     // i32 mirror, GC shadow slot, closure capture). A redeclaration with
     // no initializer (`var x;`) keeps the prior value, matching JS.
-    if ctx.locals.contains_key(&id) {
+    //
+    // Repsel Phase 1: a canonical-i32 local has NO `ctx.locals` entry — its
+    // storage is the i32 slot tracked through `local_slot_reps` — so the
+    // reuse guard must consider the rep map too, or a redeclaration would
+    // re-run the allocation path and leave the local with two slots.
+    if ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id) {
         if let Some(init_expr) = init {
             // The binding's OWN declaration ends its Temporal Dead Zone: the
             // reused-slot write below (plain, unchecked) overwrites any TAG_TDZ
@@ -432,7 +452,20 @@ pub(crate) fn lower_let(
             };
             let source = lower_expr(ctx, object)?;
             let source_slot = ctx.func.alloca_entry(DOUBLE);
+            // See the array-element slots below: the root bind is hoisted to
+            // function entry, so this alloca is a live root before the store
+            // below runs. Give it a decodable `undefined` first.
+            let source_undef =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.func
+                .entry_allocas_push_store(DOUBLE, &source_undef, &source_slot);
             ctx.block().store(DOUBLE, &source, &source_slot);
+            // #6968: the whole point of capturing the receiver here is that the
+            // source local may be overwritten afterwards — at which moment this
+            // alloca holds the ONLY reference to that string, across every
+            // collection until the fused consumer reads it. Same unrooted-alloca
+            // hole as the object/array field slots below.
+            crate::expr::root_scalar_replaced_slot(ctx, &source_slot, object);
             let dummy_slot = ctx.func.alloca_entry(DOUBLE);
             let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             ctx.func
@@ -542,7 +575,13 @@ pub(crate) fn lower_let(
                             (I32, &index.to_string()),
                         ],
                     );
-                    ctx.block().store(DOUBLE, &value, &slots[index as usize]);
+                    let part_slot = slots[index as usize].clone();
+                    ctx.block().store(DOUBLE, &value, &part_slot);
+                    // #6968: `js_string_split_part_value` hands back a fresh
+                    // heap string whose only reference is this alloca. There
+                    // is no HIR expression to gate on — the value is
+                    // synthesized by codegen — and it is always a string.
+                    crate::expr::root_scalar_replaced_slot_unconditional(ctx, &part_slot);
                 }
             }
             ctx.scalar_replaced_arrays.insert(id, slots);
@@ -567,8 +606,18 @@ pub(crate) fn lower_let(
         if ctx.non_escaping_arrays.contains_key(&id) {
             let n = elements.len();
             let mut slots: Vec<String> = Vec::with_capacity(n);
+            // Initialize to `undefined` in the entry block, like the
+            // object-literal field slots below. `root_scalar_replaced_slot`
+            // binds a pointer-capable element's alloca as a GC root once at
+            // function entry, which makes the collector dereference it from
+            // entry onward — before the element store runs, and on paths where
+            // it never runs at all. An uninitialized alloca would feed the
+            // root-word decoder stack garbage.
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             for _ in 0..n {
-                slots.push(ctx.func.alloca_entry(DOUBLE));
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                slots.push(slot);
             }
             // Evaluate each element expression first; store the
             // result into its slot. Order matches source, so any
@@ -586,6 +635,11 @@ pub(crate) fn lower_let(
                 }
                 let v = lower_expr(ctx, elem)?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
+                // #6968: same rooting hole as the object-literal fields —
+                // the element alloca is the only reference to a heap value
+                // stored here, and no HIR local names it.
+                let elem_slot = slots[i].clone();
+                crate::expr::root_scalar_replaced_slot(ctx, &elem_slot, elem);
                 // A uniquely-owned string captured into this scalar-replaced
                 // array slot aliases its heap buffer; demote it to shared so a
                 // later in-place `+=` on the source local doesn't mutate the
@@ -667,6 +721,10 @@ pub(crate) fn lower_let(
                 let v = lower_expr(ctx, value_expr)?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
+                    // #6968: the field alloca is this heap value's only
+                    // reference — there is no object for #6951/#6972's
+                    // handle rooting to cover — so bind it as a precise root.
+                    crate::expr::root_scalar_replaced_slot(ctx, &slot, value_expr);
                     let lowered = LoweredValue {
                         semantic: SemanticKind::JsValue,
                         rep: NativeRep::JsValue,
@@ -777,6 +835,10 @@ pub(crate) fn lower_let(
                         let arg_val = lower_expr(ctx, arg)?;
                         if let Some(slot) = slot {
                             ctx.block().store(DOUBLE, &arg_val, &slot);
+                            // #6968: anonymous-shape scalar replacement stores
+                            // constructor arguments straight into per-field
+                            // allocas — same unrooted-heap-value hole.
+                            crate::expr::root_scalar_replaced_slot(ctx, &slot, arg);
                             let lowered = LoweredValue {
                                 semantic: SemanticKind::JsValue,
                                 rep: NativeRep::JsValue,
@@ -1107,6 +1169,177 @@ pub(crate) fn lower_let(
         }
         return Ok(());
     }
+    // Re-declaration of an already-canonical local: `var n, l = lr[off]`
+    // hoisting lowers as TWO `Stmt::Let`s for the same id (an `undefined`
+    // seed, then the real init). The first Let selected canonical-i32
+    // storage; the second must route its init into the SAME canonical slot —
+    // falling through to the plain path would allocate a double slot that
+    // shadows the canonical one (reads through `local_slot_reps` would see a
+    // stale 0). Mirrors the canonical branch's init lowering exactly.
+    //
+    // Phase 3a: canonical-Str locals are NOT routed here — their storage is
+    // the ordinary `ctx.locals` double slot, so a re-declaration must take
+    // exactly the pre-phase plain path below (`local_rep_is_canonical_i32`
+    // is false for `SlotRep::Str`).
+    if crate::expr::local_rep_is_canonical_i32(ctx, id) {
+        if let Some(init_expr) = init {
+            let i32_slots = ctx.i32_counter_slots.clone();
+            let flat_ca = ctx.flat_const_arrays.clone();
+            let ara = ctx.array_row_aliases.clone();
+            let int_locals = ctx.integer_locals.clone();
+            if crate::expr::can_lower_expr_as_i32(
+                init_expr,
+                &i32_slots,
+                &flat_ca,
+                &ara,
+                &int_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
+            ) {
+                let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
+                let slot = ctx
+                    .i32_counter_slots
+                    .get(&id)
+                    .cloned()
+                    .expect("canonical local must have an i32 slot");
+                ctx.block().store(I32, &v_i32, &slot);
+            } else {
+                let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                crate::expr::store_canonical_local_from_double(ctx, id, &v, Some(init_expr));
+            }
+        }
+        return Ok(());
+    }
+    // Int32 eligibility (issue #48 / #436 / repsel Phase 1). Computed BEFORE
+    // any storage is allocated so the canonical-i32 path can skip the double
+    // slot entirely. See the block comments below (kept at their historical
+    // position) for the full gate rationale.
+    let init_in_i32_range = match init {
+        Some(perry_hir::Expr::Integer(n)) => i32::try_from(*n).is_ok(),
+        _ => true, // non-Integer init: writes will always go via i32-coercing paths
+    };
+    let is_unsigned_i32_local = ctx.unsigned_i32_locals.contains(&id);
+    let i32_safe_local = ctx.index_used_locals.contains(&id)
+        || ctx.strictly_i32_bounded_locals.contains(&id)
+        || is_unsigned_i32_local;
+    let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+        && i32_safe_local
+        && init_in_i32_range
+        && !matches!(refined_ty, perry_hir::types::Type::BigInt)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.i32_counter_slots.contains_key(&id);
+
+    // Representation-selection Phase 1: for an eligible local in a context
+    // that allows it, the i32 slot IS the canonical (and only) storage — no
+    // double slot, no dual writes, no shadow-stack GC binding. Excluded (stay
+    // on the parallel-shadow / boxed model): closure-referenced locals (the
+    // capture machinery snapshots the double slot), flat-const row aliases
+    // (array-valued), and async/generator contexts (gated at FnCtx build).
+    // See `expr/slot_rep.rs` for the mechanism and range-soundness audit.
+    //
+    // Canonical-only safety term: an `int_valued_ta_locals` member (#6898) is
+    // eligible even when neither index-used nor strictly-i32-bounded — its
+    // whole-function proof (every write i32-producing or an int-kind TA read,
+    // every observation ToInt32-coercing) makes canonical-i32 storage
+    // output-invariant with the NaN-safe entry conversion. The parallel-shadow
+    // gate (`needs_i32_slot` below) is deliberately NOT widened, so the
+    // flag-off model stays exactly the pre-phase one.
+    let canonical_safe_local =
+        i32_safe_local || ctx.native_facts.int_valued_ta_locals().contains(&id);
+    let canonical_i32 = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+        && canonical_safe_local
+        && init_in_i32_range
+        && !matches!(refined_ty, perry_hir::types::Type::BigInt)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.i32_counter_slots.contains_key(&id)
+        && ctx.repsel_context_allows_canonical_i32
+        && !ctx.repsel_closure_ref_locals.contains(&id)
+        && !ctx.array_row_aliases.contains_key(&id);
+    if canonical_i32 {
+        let rep = if is_unsigned_i32_local {
+            crate::expr::SlotRep::U32
+        } else {
+            crate::expr::SlotRep::I32
+        };
+        // Entry-block alloca, zero-initialized: a branch-skipped `Let` (switch
+        // fallthrough, hoisted `var`) reads 0 — identical to the parallel-
+        // shadow model, whose reads already preferred the 0-seeded i32 slot.
+        let i32_slot = ctx.func.alloca_entry(I32);
+        ctx.func.entry_allocas_push_store(I32, "0", &i32_slot);
+        ctx.i32_counter_slots.insert(id, i32_slot.clone());
+        ctx.local_slot_reps.insert(id, rep);
+        ctx.local_types.insert(id, refined_ty.clone());
+        crate::expr::note_canonical_local(ctx, id, name, rep);
+        if let Some(init_expr) = init {
+            let i32_slots = ctx.i32_counter_slots.clone();
+            let flat_ca = ctx.flat_const_arrays.clone();
+            let ara = ctx.array_row_aliases.clone();
+            let int_locals = ctx.integer_locals.clone();
+            if crate::expr::can_lower_expr_as_i32(
+                init_expr,
+                &i32_slots,
+                &flat_ca,
+                &ara,
+                &int_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
+            ) {
+                // i32-native init: compute directly in i32, single store.
+                let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
+                ctx.block().store(I32, &v_i32, &i32_slot);
+            } else {
+                // Boxed init entering the i32 slot: NaN-safe conversion (the
+                // #6898 trap — an OOB int-typed-array read is a NaN-boxed
+                // `undefined`; raw fptosi of it is poison on x86-64).
+                let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                crate::expr::store_canonical_local_from_double(ctx, id, &v, Some(init_expr));
+            }
+        }
+        if !mutable {
+            if let Some(value) = init.and_then(|expr| match expr {
+                perry_hir::Expr::Integer(value) => Some(*value as f64),
+                perry_hir::Expr::Number(value) if value.is_finite() => Some(*value),
+                _ => None,
+            }) {
+                ctx.const_number_locals.insert(id, value);
+            }
+        }
+        return Ok(());
+    }
+
+    // Representation-selection Phase 3a: canonical-Str selection
+    // (tagged-at-rest). Unlike canonical-i32, this does NOT change storage:
+    // the local keeps the ordinary `ctx.locals` double slot allocated below,
+    // its shadow-slot GC binding, and every alias/refcount demote — the
+    // NaN-box string bits at rest ARE the canonical representation. The rep
+    // entry is a compile-time proof consumed by the string-op lowerings
+    // (`+=` self-append, `.length`, `===`/`<`, `charCodeAt`-family), which
+    // tag-dispatch on the slot bits inline instead of routing operands
+    // through `js_get_string_pointer_unified`. See `expr/slot_rep.rs`.
+    let canonical_str = ctx.repsel_context_allows_canonical_str
+        && matches!(
+            refined_ty,
+            perry_hir::types::Type::String | perry_hir::types::Type::StringLiteral(_)
+        )
+        && !ctx.local_slot_reps.contains_key(&id)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.repsel_closure_ref_locals.contains(&id)
+        && !ctx.repsel_str_ineligible_locals.contains(&id)
+        && !ctx.i32_counter_slots.contains_key(&id);
+    if canonical_str {
+        ctx.local_slot_reps.insert(id, crate::expr::SlotRep::Str);
+        crate::expr::note_canonical_local(ctx, id, name, crate::expr::SlotRep::Str);
+        // Fall through: storage, init lowering, aliasing demotes, and GC
+        // binding are exactly the plain path's.
+    }
+
     // Slot must live in the entry block — see the boxed-var case
     // above. Putting allocas inside an `if` arm causes verifier
     // failures the moment a closure in another branch captures
@@ -1142,10 +1375,7 @@ pub(crate) fn lower_let(
     // and silently corrupts every read of the i32 slot. Mutable locals
     // are always written through paths we control (Update, `(expr) | 0`)
     // which produce in-range int32 values per JS ToInt32 semantics.
-    let init_in_i32_range = match init {
-        Some(perry_hir::Expr::Integer(n)) => i32::try_from(*n).is_ok(),
-        _ => true, // non-Integer init: writes will always go via i32-coercing paths
-    };
+    // (`init_in_i32_range` is computed once, above the canonical-i32 branch.)
     // Issue #140 follow-up + #435 fix: gate the Let-site i32
     // shadow on `index_used_locals` (with transitive closure —
     // see `collect_index_used_locals` in collectors.rs).  The
@@ -1184,24 +1414,16 @@ pub(crate) fn lower_let(
     // recovers the FNV-1a `h` accumulator and similar
     // explicit-i32-coerce shapes without reintroducing #435's
     // accumulator overflow).
-    let is_unsigned_i32_local = ctx.unsigned_i32_locals.contains(&id);
-    let i32_safe_local = ctx.index_used_locals.contains(&id)
-        || ctx.strictly_i32_bounded_locals.contains(&id)
-        || is_unsigned_i32_local;
-    let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
-        && i32_safe_local
-        && init_in_i32_range
-        && !matches!(refined_ty, perry_types::Type::BigInt)
-        && !ctx.boxed_vars.contains(&id)
-        && !ctx.module_globals.contains_key(&id)
-        && !ctx.i32_counter_slots.contains_key(&id);
+    // (`needs_i32_slot` and its inputs are computed once, above the
+    // canonical-i32 branch; when that branch fires this parallel-shadow
+    // allocation is skipped entirely.)
     if needs_i32_slot {
         let i32_slot = ctx.func.alloca_entry(I32);
         ctx.func.entry_allocas_push_store(I32, "0", &i32_slot);
         ctx.i32_counter_slots.insert(id, i32_slot);
     }
     if init.is_some()
-        && matches!(refined_ty, perry_types::Type::Boolean)
+        && matches!(refined_ty, perry_hir::types::Type::Boolean)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && !ctx.i1_local_slots.contains_key(&id)
@@ -1272,8 +1494,8 @@ pub(crate) fn lower_let(
         let v = if !used_i32_init {
             let native_init = if matches!(
                 refined_ty,
-                perry_types::Type::Number | perry_types::Type::Int32
-            ) || (matches!(refined_ty, perry_types::Type::Boolean)
+                perry_hir::types::Type::Number | perry_hir::types::Type::Int32
+            ) || (matches!(refined_ty, perry_hir::types::Type::Boolean)
                 && ctx.i1_local_slots.contains_key(&id))
             {
                 lower_expr_value(ctx, init_expr)?
@@ -1382,7 +1604,10 @@ pub(crate) fn lower_let(
                     // started returning `start-try-finally` instead of
                     // `start-try`.
                     if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                        if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
+                        if matches!(
+                            ctx.local_types.get(src_id),
+                            Some(perry_hir::types::Type::String)
+                        ) {
                             let blk = ctx.block();
                             let s_ptr = blk.call(
                                 crate::types::I64,
@@ -1413,7 +1638,10 @@ pub(crate) fn lower_let(
                 // started returning `start-try-finally` instead of
                 // `start-try`.
                 if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                    if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
+                    if matches!(
+                        ctx.local_types.get(src_id),
+                        Some(perry_hir::types::Type::String)
+                    ) {
                         let blk = ctx.block();
                         let s_ptr = blk.call(
                             crate::types::I64,
@@ -1437,7 +1665,7 @@ pub(crate) fn lower_let(
                             if view_type.is_some()
                                 && matches!(
                                     refined_ty,
-                                    perry_types::Type::Any | perry_types::Type::Unknown
+                                    perry_hir::types::Type::Any | perry_hir::types::Type::Unknown
                                 ) =>
                         {
                             crate::native_value::layout_for_pod_view_type(
@@ -1495,8 +1723,23 @@ pub(crate) fn lower_let(
             // UB for such values; going through i64 then truncating gives
             // the correct bit pattern.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(&id).cloned() {
-                let v_i64 = ctx.block().fptosi(DOUBLE, &v, crate::types::I64);
-                let v_i32 = ctx.block().trunc(crate::types::I64, &v_i64, I32);
+                // A possibly-non-finite init (`let l = lr[off]` — an int
+                // typed-array read that yields `undefined` = a NaN-boxed double
+                // on an out-of-bounds/fractional index) must seed the slot with
+                // spec ToInt32, which is `0` for NaN/±Infinity. A raw
+                // `fptosi(NaN)` is LLVM poison — 0 on aarch64 but a garbage
+                // sentinel on x86-64 — so it is NOT portable. `int_valued_ta`
+                // locals (and any other i32-shadow local with a non-known-finite
+                // init) are only ever observed through ToInt32, so seeding with
+                // the exact ToInt32 keeps every arm identical. Known-finite
+                // inits keep the cheaper `fptosi→i64→trunc` (bit-identical for
+                // finite values), so existing i32-shadow locals are unchanged.
+                let v_i32 = if crate::expr::is_known_finite(ctx, init_expr) {
+                    let v_i64 = ctx.block().fptosi(DOUBLE, &v, crate::types::I64);
+                    ctx.block().trunc(crate::types::I64, &v_i64, I32)
+                } else {
+                    ctx.block().toint32_wrap(&v)
+                };
                 ctx.block().store(I32, &v_i32, &i32_slot);
             }
         }
@@ -1576,274 +1819,6 @@ fn native_i32_alias_source(expr: &perry_hir::Expr) -> Option<u32> {
 fn buffer_local_alias_source(expr: &perry_hir::Expr) -> Option<u32> {
     match expr {
         perry_hir::Expr::LocalGet(id) => Some(*id),
-        _ => None,
-    }
-}
-
-struct BufferViewInit {
-    elem: BufferElem,
-    element_width_bytes: u32,
-    index_unit: BufferIndexUnit,
-    data_offset_bytes: i32,
-    length_offset_from_data: i32,
-    length_source: LengthSource,
-    native_owner_local_id: Option<u32>,
-    native_byte_offset: Option<i64>,
-    native_byte_length: Option<i64>,
-}
-
-fn register_noalias_buffer_view(
-    ctx: &mut FnCtx<'_>,
-    id: u32,
-    init_expr: &perry_hir::Expr,
-    value: &str,
-) {
-    let Some(init) = buffer_view_init_for_expr(ctx, init_expr) else {
-        return;
-    };
-    let blk = ctx.block();
-    let handle = crate::expr::unbox_to_i64(blk, value);
-    let handle_ptr = blk.inttoptr(I64, &handle);
-    let data_ptr = if init.native_owner_local_id.is_some() {
-        let data_field = blk.gep(I8, &handle_ptr, &[(I32, "24")]);
-        blk.load(PTR, &data_field)
-    } else {
-        blk.gep(
-            I8,
-            &handle_ptr,
-            &[(I32, &init.data_offset_bytes.to_string())],
-        )
-    };
-    let data_slot = ctx.func.alloca_entry(PTR);
-    ctx.block().store(PTR, &data_ptr, &data_slot);
-    let length_slot = if init.native_owner_local_id.is_some() {
-        let len_field = ctx.block().gep(I8, &handle_ptr, &[(I32, "0")]);
-        let len_value = ctx.block().load(I32, &len_field);
-        let slot = ctx.func.alloca_entry(I32);
-        ctx.block().store(I32, &len_value, &slot);
-        Some(slot)
-    } else {
-        None
-    };
-    let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
-    ctx.buffer_data_slots
-        .insert(id, (data_slot.clone(), scope_idx));
-    let native_owned = match init.native_owner_local_id {
-        Some(owner_local_id) => {
-            let owner_local_id = crate::expr::native_arena_canonical_owner_id(ctx, owner_local_id);
-            Some(NativeOwnedViewSlot {
-                owner_local_id,
-                byte_offset: init.native_byte_offset,
-                byte_length: init.native_byte_length,
-                owner_rooted: true,
-                disposed: false,
-                pointer_free_backing: true,
-            })
-        }
-        None => None,
-    };
-    ctx.buffer_view_slots.insert(
-        id,
-        BufferViewSlot {
-            data_slot,
-            length_slot,
-            scope_idx: Some(scope_idx),
-            elem: init.elem,
-            element_width_bytes: init.element_width_bytes,
-            index_unit: init.index_unit,
-            view_byte_offset: Some(0),
-            length_offset_from_data: init.length_offset_from_data,
-            alias: AliasState::NoAliasProven,
-            length_source: Some(init.length_source),
-            native_owned,
-        },
-    );
-}
-
-fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<BufferViewInit> {
-    match expr {
-        perry_hir::Expr::NativeMethodCall {
-            module,
-            method,
-            object: None,
-            ..
-        } if module == "buffer" && method == "copyBytesFrom" => Some(BufferViewInit {
-            elem: BufferElem::U8,
-            element_width_bytes: 1,
-            index_unit: BufferIndexUnit::Byte,
-            data_offset_bytes: 8,
-            length_offset_from_data: -8,
-            length_source: buffer_alloc_length_source(ctx, expr),
-            native_owner_local_id: None,
-            native_byte_offset: None,
-            native_byte_length: None,
-        }),
-        perry_hir::Expr::BufferAlloc { .. }
-        | perry_hir::Expr::BufferAllocUnsafe(_)
-        | perry_hir::Expr::Uint8ArrayNew(_) => Some(BufferViewInit {
-            elem: BufferElem::U8,
-            element_width_bytes: 1,
-            index_unit: BufferIndexUnit::Byte,
-            data_offset_bytes: 8,
-            length_offset_from_data: -8,
-            length_source: buffer_alloc_length_source(ctx, expr),
-            native_owner_local_id: None,
-            native_byte_offset: None,
-            native_byte_length: None,
-        }),
-        perry_hir::Expr::TypedArrayNew { kind, .. } => {
-            let (elem, width) = typed_array_elem_width_for_kind(*kind)?;
-            Some(BufferViewInit {
-                elem,
-                element_width_bytes: width,
-                index_unit: BufferIndexUnit::Element,
-                data_offset_bytes: 16,
-                length_offset_from_data: -16,
-                length_source: buffer_alloc_length_source(ctx, expr),
-                native_owner_local_id: None,
-                native_byte_offset: None,
-                native_byte_length: None,
-            })
-        }
-        perry_hir::Expr::NativeArenaView {
-            owner,
-            kind,
-            byte_offset,
-            length,
-        } => {
-            let (elem, width) = typed_array_elem_width_for_kind(*kind)?;
-            let owner_local_id = match owner.as_ref() {
-                perry_hir::Expr::LocalGet(id) => Some(*id),
-                _ => None,
-            }?;
-            let byte_offset_const = const_i64_expr(byte_offset);
-            let length_const = const_i64_expr(length);
-            let native_byte_length = length_const.and_then(|len| len.checked_mul(width as i64));
-            Some(BufferViewInit {
-                elem,
-                element_width_bytes: width,
-                index_unit: BufferIndexUnit::Element,
-                data_offset_bytes: 24,
-                length_offset_from_data: 0,
-                length_source: length_source_from_expr(ctx, length)
-                    .unwrap_or(LengthSource::Unknown),
-                native_owner_local_id: Some(owner_local_id),
-                native_byte_offset: byte_offset_const,
-                native_byte_length,
-            })
-        }
-        _ => None,
-    }
-}
-
-fn typed_array_elem_width_for_kind(kind: u8) -> Option<(BufferElem, u32)> {
-    match kind {
-        perry_hir::TYPED_ARRAY_KIND_INT8 => Some((BufferElem::I8, 1)),
-        perry_hir::TYPED_ARRAY_KIND_UINT8 => Some((BufferElem::U8, 1)),
-        perry_hir::TYPED_ARRAY_KIND_UINT8_CLAMPED => Some((BufferElem::U8Clamped, 1)),
-        perry_hir::TYPED_ARRAY_KIND_INT16 => Some((BufferElem::I16, 2)),
-        perry_hir::TYPED_ARRAY_KIND_UINT16 => Some((BufferElem::U16, 2)),
-        perry_hir::TYPED_ARRAY_KIND_INT32 => Some((BufferElem::I32, 4)),
-        perry_hir::TYPED_ARRAY_KIND_UINT32 => Some((BufferElem::U32, 4)),
-        perry_hir::TYPED_ARRAY_KIND_FLOAT32 => Some((BufferElem::F32, 4)),
-        perry_hir::TYPED_ARRAY_KIND_FLOAT64 => Some((BufferElem::F64, 8)),
-        _ => None,
-    }
-}
-
-fn math_min_length_buffer_ids(expr: &perry_hir::Expr) -> Option<Vec<u32>> {
-    let perry_hir::Expr::MathMin(args) = expr else {
-        return None;
-    };
-    if args.len() < 2 {
-        return None;
-    }
-    let mut out = Vec::new();
-    for arg in args {
-        if let Some(id) = length_of_local_buffer_id(arg) {
-            out.push(id);
-        } else {
-            return None;
-        }
-    }
-    out.sort_unstable();
-    out.dedup();
-    (!out.is_empty()).then_some(out)
-}
-
-fn length_of_local_buffer_id(expr: &perry_hir::Expr) -> Option<u32> {
-    match expr {
-        perry_hir::Expr::Uint8ArrayLength(inner) | perry_hir::Expr::BufferLength(inner) => {
-            match inner.as_ref() {
-                perry_hir::Expr::LocalGet(id) => Some(*id),
-                _ => None,
-            }
-        }
-        perry_hir::Expr::PropertyGet {
-            object, property, ..
-        } if property == "length" => match object.as_ref() {
-            perry_hir::Expr::LocalGet(id) => Some(*id),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn buffer_alloc_length_source(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> LengthSource {
-    let len = match expr {
-        perry_hir::Expr::BufferAlloc { size, .. } => Some(size.as_ref()),
-        perry_hir::Expr::BufferAllocUnsafe(size) => Some(size.as_ref()),
-        perry_hir::Expr::Uint8ArrayNew(Some(size)) => Some(size.as_ref()),
-        perry_hir::Expr::TypedArrayNew {
-            arg: Some(size), ..
-        } => Some(size.as_ref()),
-        perry_hir::Expr::TypedArrayNew { arg: None, .. } => {
-            return LengthSource::Constant(0);
-        }
-        perry_hir::Expr::NativeMethodCall {
-            module,
-            method,
-            object: None,
-            ..
-        } if module == "buffer" && method == "copyBytesFrom" => None,
-        perry_hir::Expr::NativeArenaView { length, .. } => Some(length.as_ref()),
-        _ => None,
-    };
-    len.and_then(|expr| length_source_from_expr(ctx, expr))
-        .unwrap_or(LengthSource::Unknown)
-}
-
-fn const_i64_expr(expr: &perry_hir::Expr) -> Option<i64> {
-    match expr {
-        perry_hir::Expr::Integer(n) => Some(*n),
-        perry_hir::Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
-        _ => None,
-    }
-}
-
-fn length_source_from_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<LengthSource> {
-    if let Some(range) = crate::expr::int_range_expr(ctx, expr) {
-        if range.min == range.max {
-            return Some(LengthSource::Constant(range.min));
-        }
-    }
-    match expr {
-        perry_hir::Expr::Integer(n) => Some(LengthSource::Constant(*n)),
-        perry_hir::Expr::LocalGet(id) => Some(LengthSource::Local { id: *id, addend: 0 }),
-        perry_hir::Expr::Binary {
-            op: perry_hir::BinaryOp::Add,
-            left,
-            right,
-        } => match (left.as_ref(), right.as_ref()) {
-            (perry_hir::Expr::LocalGet(id), perry_hir::Expr::Integer(addend))
-            | (perry_hir::Expr::Integer(addend), perry_hir::Expr::LocalGet(id)) => {
-                Some(LengthSource::Local {
-                    id: *id,
-                    addend: *addend,
-                })
-            }
-            _ => None,
-        },
         _ => None,
     }
 }

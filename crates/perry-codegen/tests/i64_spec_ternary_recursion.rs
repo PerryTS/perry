@@ -7,8 +7,8 @@
 //! by the emitter's `as i64` lowering.
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt};
-use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -28,7 +28,6 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
-        namespace_reexport_named_imports: std::collections::HashSet::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),

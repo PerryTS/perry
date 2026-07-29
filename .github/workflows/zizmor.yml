@@ -1,0 +1,53 @@
+name: zizmor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ['.github/**']
+
+permissions: {}
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      # zizmor rides the same SRI-pinned rack as every other external tool
+      # (external-tools.json tools.zizmor) instead of a marketplace action —
+      # one pin source, and local `npm run tools:install` audits with the
+      # exact same binary CI does.
+      - name: Install pinned zizmor
+        env:
+          # download() attaches this to github.com fetches only (release
+          # assets) — avoids unauthenticated rate limits.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/soak/external-tools.mts --install zizmor
+          node scripts/soak/external-tools.mts --print-bin >> "$GITHUB_PATH"
+      - name: Audit GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pass the token only when non-empty: zizmor treats an empty
+          # --gh-token as a real token, then fatally errors when its online
+          # impostor-commit check can't authenticate.
+          #
+          # Starting gate: high only (config in .github/zizmor.yml). The 34
+          # medium findings (missing permissions: blocks in test.yml /
+          # benchmark.yml / container-tests.yml / cache-warm.yml /
+          # simctl-tests.yml) are a tracked ratchet — audit each job's real
+          # token needs, add the blocks, then gate at medium.
+          if [ -n "${GH_TOKEN}" ]; then
+            zizmor .github/ --gh-token "${GH_TOKEN}" --min-severity high
+          else
+            zizmor .github/ --min-severity high
+          fi

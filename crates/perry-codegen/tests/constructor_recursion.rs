@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Class, Expr, Function, Module, ModuleInitKind, Param, Stmt};
-use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -122,6 +122,7 @@ fn module_with_recursive_constructor_return() -> Module {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            alloc_width_hint: 0,
         }],
         interfaces: Vec::new(),
         type_aliases: Vec::new(),

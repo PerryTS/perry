@@ -4,8 +4,8 @@
 
 use super::*;
 
+use crate::types::LocalId;
 use anyhow::Result;
-use perry_types::LocalId;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;

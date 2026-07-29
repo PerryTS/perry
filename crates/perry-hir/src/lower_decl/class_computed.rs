@@ -2,8 +2,8 @@
 //! declared inside a function body. Extracted from `body_stmt.rs` to keep that
 //! file under the source-size gate.
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;

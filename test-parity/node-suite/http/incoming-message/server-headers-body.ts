@@ -21,29 +21,43 @@ const server = http.createServer((req: any, res: any) => {
   });
 });
 
-server.listen(0, () => {
-  const addr = server.address();
-  const port = typeof addr === "object" && addr !== null ? addr.port : 0;
-  const req = http.request(
-    {
-      hostname: "127.0.0.1",
-      port,
-      method: "POST",
-      path: "/submit",
-      headers: {
-        "Content-Type": "text/plain",
-        "X-Test": "hi",
-      },
-    },
-    (res: any) => {
-      res.on("data", () => {});
-      res.on("end", () => {
-        console.log("client status:", res.statusCode);
-        server.close(() => console.log("closed"));
-      });
-    },
-  );
-  req.end("hello body");
+await new Promise<void>((resolve, reject) => {
+  server.once("error", reject);
+  server.listen(0, "127.0.0.1", resolve);
 });
+const addr = server.address();
+if (!addr || typeof addr === "string") throw new Error("missing address");
 
-setTimeout(() => {}, 1500);
+try {
+  await new Promise<void>((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: addr.port,
+        method: "POST",
+        path: "/submit",
+        headers: {
+          "Content-Type": "text/plain",
+          "X-Test": "hi",
+        },
+      },
+      (res: any) => {
+        res.on("data", () => {});
+        res.once("error", reject);
+        res.on("end", () => {
+          console.log("client status:", res.statusCode);
+          resolve();
+        });
+      },
+    );
+    req.once("error", reject);
+    req.end("hello body");
+  });
+} finally {
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      console.log("closed");
+      resolve();
+    });
+  });
+}

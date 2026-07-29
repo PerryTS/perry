@@ -46,7 +46,7 @@ mod widgets;
 mod tests;
 
 use crate::ir::Module;
-use perry_types::Type;
+use crate::types::Type;
 use primitives::SH;
 
 /// Streaming hasher — minimal API so any djb2/fnv/blake variant can plug in.

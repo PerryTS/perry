@@ -4,7 +4,7 @@
 //! Extracted from `expr_call/mod.rs` in #1104 as a pure mechanical move;
 //! the function's only consumer is `lower_call_inner` inside this module.
 
-use perry_types::Type;
+use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use super::super::LoweringContext;

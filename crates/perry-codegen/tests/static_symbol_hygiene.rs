@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Class, Expr, Function, Module, ModuleInitKind, Stmt};
-use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -117,6 +117,7 @@ fn class_with_static(id: u32, value: f64) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     }
 }
 

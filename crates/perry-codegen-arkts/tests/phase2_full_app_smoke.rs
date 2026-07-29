@@ -26,7 +26,7 @@
 
 use perry_codegen_arkts::emit_index_ets;
 use perry_hir::ir::{Expr, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
+use perry_hir::types::{FuncId, LocalId, Type};
 
 fn empty_module() -> Module {
     Module {

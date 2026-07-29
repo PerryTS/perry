@@ -680,6 +680,28 @@ pub struct CompilationContext {
     /// `perry-runtime/intl-locale` (`icu_locale_core`'s data-free BCP-47 / UTS #35
     /// structural parser). A program that never canonicalizes a locale links a
     /// lighter hand-rolled fallback instead.
+    /// The program can reach the `Intl.*` namespace surface (any `Intl`
+    /// token or locale-formatting API). Gates `perry-runtime/intl-namespace`
+    /// (~219 KB of constructor/option/format machinery). Over-approximates:
+    /// a dynamic-code site forces it on.
+    pub uses_intl_namespace: bool,
+    /// Per-namespace `globalThis` member tables (`Math`/`JSON`/`Reflect`/
+    /// `Atomics`). Each gates the matching `perry-runtime/global-*` feature;
+    /// set when the program mentions the name at all (call sites lower to
+    /// intrinsics, so a mention means it may be used as a VALUE).
+    pub uses_global_math: bool,
+    pub uses_global_json: bool,
+    pub uses_global_reflect: bool,
+    pub uses_global_atomics: bool,
+    /// Per-group `globalThis` web-platform member tables (URL / Text* /
+    /// WebSocket / webcrypto / fetch value types).
+    pub uses_global_url: bool,
+    pub uses_global_text: bool,
+    pub uses_global_websocket: bool,
+    pub uses_global_webcrypto: bool,
+    pub uses_global_webfetch: bool,
+    /// `process.send`/`disconnect`/`connected`/`channel` — gates `proc-ipc`.
+    pub uses_proc_ipc: bool,
     pub uses_intl_locale: bool,
     /// Whether any TS module localizes a date/time — `Intl.DateTimeFormat`, or
     /// `Date.prototype.toLocale{,Date,Time}String`. Gates
@@ -703,6 +725,10 @@ pub struct CompilationContext {
     /// none of it. NB: not via `native_module_imports`, which only tracks
     /// `requires_stdlib` modules — dgram is runtime-only.
     pub uses_dgram: bool,
+    /// Whether any module calls `process.getBuiltinModule`. The requested
+    /// module is only known at runtime, so auto-optimized runtimes must retain
+    /// optional builtin namespace data such as the HTTP/2 key tables.
+    pub uses_get_builtin_module: bool,
     /// Whether `perry/thread` is imported. When true, the runtime must
     /// keep `panic = "unwind"` so that worker-thread panics translate to
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
@@ -717,7 +743,7 @@ pub struct CompilationContext {
     /// elsewhere) silently iterates 0 times because the iterable's static
     /// type is unknown and the `SetValues`/`MapEntries` wrap is skipped at
     /// `lower_decl.rs:3737-3747`. See ECS demo-simple repro / #412.
-    pub cross_module_class_field_types: HashMap<String, Vec<(String, perry_types::Type)>>,
+    pub cross_module_class_field_types: HashMap<String, Vec<(String, perry_hir::types::Type)>>,
     /// Cross-module class accessor names collected alongside field types.
     /// HIR lowering uses this to avoid inferring subclass `this.x = ...`
     /// constructor writes as data fields when `x` is an inherited accessor
@@ -1024,10 +1050,22 @@ impl CompilationContext {
             uses_url: false,
             uses_string_normalize: false,
             uses_intl_segmenter: false,
+            uses_intl_namespace: false,
+            uses_global_math: false,
+            uses_global_json: false,
+            uses_global_reflect: false,
+            uses_global_atomics: false,
+            uses_global_url: false,
+            uses_global_text: false,
+            uses_global_websocket: false,
+            uses_global_webcrypto: false,
+            uses_global_webfetch: false,
+            uses_proc_ipc: false,
             uses_intl_locale: false,
             uses_intl_datetime: false,
             uses_diagnostics: false,
             uses_dgram: false,
+            uses_get_builtin_module: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             cross_module_class_accessors: HashMap::new(),

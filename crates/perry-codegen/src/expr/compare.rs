@@ -5,9 +5,10 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::{CompareOp, Expr};
-use perry_types::Type as HirType;
 
+use crate::nanbox::POINTER_MASK_I64;
 use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_bigint_expr, is_bool_expr,
     is_numeric_expr, is_string_expr,
@@ -15,6 +16,59 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{lower_expr, unbox_str_handle, unbox_to_i64, FnCtx};
+
+/// Repsel Phase 3a shared dispatch for the canonical-Str compare arms:
+/// lower both operands' bits, branch on "both heap `STRING_TAG`", call
+/// `heap_fn(handle, handle)` on the hot arm and `boxed_fn(box, box)` on the
+/// mixed/SSO/lie arm, and phi the i32 result. The caller applies its own
+/// predicate tail (`!= 0` select for equality, signed compare for
+/// relational).
+fn canonical_str_cmp_dispatch(
+    ctx: &mut FnCtx<'_>,
+    l: &str,
+    r: &str,
+    heap_fn: &str,
+    boxed_fn: &str,
+    prefix: &str,
+) -> String {
+    let l_bits = ctx.block().bitcast_double_to_i64(l);
+    let r_bits = ctx.block().bitcast_double_to_i64(r);
+    let l_tag = ctx.block().lshr(I64, &l_bits, "48");
+    let r_tag = ctx.block().lshr(I64, &r_bits, "48");
+    let l_heap = ctx
+        .block()
+        .icmp_eq(I64, &l_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let r_heap = ctx
+        .block()
+        .icmp_eq(I64, &r_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let both_heap = ctx.block().and(crate::types::I1, &l_heap, &r_heap);
+
+    let heap_idx = ctx.new_block(&format!("{prefix}.heap"));
+    let boxed_idx = ctx.new_block(&format!("{prefix}.boxed"));
+    let merge_idx = ctx.new_block(&format!("{prefix}.merge"));
+    let heap_label = ctx.block_label(heap_idx);
+    let boxed_label = ctx.block_label(boxed_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&both_heap, &heap_label, &boxed_label);
+
+    ctx.current_block = heap_idx;
+    let l_handle = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
+    let r_handle = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
+    let res_heap = ctx
+        .block()
+        .call(I32, heap_fn, &[(I64, &l_handle), (I64, &r_handle)]);
+    let heap_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = boxed_idx;
+    let res_boxed = ctx.block().call(I32, boxed_fn, &[(DOUBLE, l), (DOUBLE, r)]);
+    let boxed_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(I32, &[(&res_heap, &heap_pred), (&res_boxed, &boxed_pred)])
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -292,6 +346,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // unordered → always false). When both operands are
             // statically strings, dispatch through js_string_equals.
             let both_strings = is_string_expr(ctx, left) && is_string_expr(ctx, right);
+            // Representation-selection Phase 3a: when a canonical-Str local
+            // is an operand, tag-dispatch inline instead of paying the two
+            // opaque (SSO-heap-materializing) unified unbox calls: both
+            // proven heap → direct `js_string_equals(h, h)` on the raw
+            // handles; any other mix → one `js_jsvalue_equals` call, which
+            // content-compares heap × SSO without materializing and never
+            // number-coerces (a lying annotation gets exact `===`
+            // semantics, strictly closer to spec than the legacy path).
+            let canonical_str_involved = matches!(
+                left.as_ref(), Expr::LocalGet(id) if crate::expr::local_is_canonical_str(ctx, *id)
+            ) || matches!(
+                right.as_ref(), Expr::LocalGet(id) if crate::expr::local_is_canonical_str(ctx, *id)
+            );
+            if both_strings
+                && canonical_str_involved
+                && matches!(
+                    op,
+                    CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
+                )
+            {
+                let l = lower_expr(ctx, left)?;
+                let r = lower_expr(ctx, right)?;
+                let i32_eq = canonical_str_cmp_dispatch(
+                    ctx,
+                    &l,
+                    &r,
+                    "js_string_equals",
+                    "js_jsvalue_equals",
+                    "streq",
+                );
+                let blk = ctx.block();
+                let bit = blk.icmp_ne(I32, &i32_eq, "0");
+                let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
+                    blk.xor(crate::types::I1, &bit, "true")
+                } else {
+                    bit
+                };
+                let tagged_i64 = blk.select(
+                    crate::types::I1,
+                    &bit_final,
+                    crate::types::I64,
+                    crate::nanbox::TAG_TRUE_I64,
+                    crate::nanbox::TAG_FALSE_I64,
+                );
+                return Ok(blk.bitcast_i64_to_double(&tagged_i64));
+            }
             if both_strings
                 && matches!(
                     op,
@@ -332,6 +432,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // so dispatch through js_string_compare which returns
             // -1/0/1 like memcmp. Then test the result against 0 with
             // the right icmp predicate.
+            // Representation-selection Phase 3a: relational counterpart of
+            // the canonical-Str equality arm above — both proven heap →
+            // direct `js_string_compare(h, h)`; any other mix → one
+            // `js_string_compare_value` call (SSO-aware, no heap
+            // materialization, numbers coerced via their decimal string
+            // form exactly like the legacy unified path).
+            if both_strings
+                && canonical_str_involved
+                && matches!(
+                    op,
+                    CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+                )
+            {
+                let l = lower_expr(ctx, left)?;
+                let r = lower_expr(ctx, right)?;
+                let cmp_i32 = canonical_str_cmp_dispatch(
+                    ctx,
+                    &l,
+                    &r,
+                    "js_string_compare",
+                    "js_string_compare_value",
+                    "strcmp",
+                );
+                let blk = ctx.block();
+                let bit = match op {
+                    CompareOp::Lt => blk.icmp_slt(I32, &cmp_i32, "0"),
+                    CompareOp::Le => blk.icmp_sle(I32, &cmp_i32, "0"),
+                    CompareOp::Gt => blk.icmp_sgt(I32, &cmp_i32, "0"),
+                    CompareOp::Ge => blk.icmp_sge(I32, &cmp_i32, "0"),
+                    _ => unreachable!(),
+                };
+                let tagged_i64 = blk.select(
+                    crate::types::I1,
+                    &bit,
+                    crate::types::I64,
+                    crate::nanbox::TAG_TRUE_I64,
+                    crate::nanbox::TAG_FALSE_I64,
+                );
+                return Ok(blk.bitcast_i64_to_double(&tagged_i64));
+            }
             if both_strings
                 && matches!(
                     op,

@@ -18,8 +18,8 @@
 //! Here we only fold the JS-level path *string*.
 
 use crate::ir::{BinaryOp, Export, Expr, Function, Module, Param, Stmt};
+use crate::types::Type;
 use crate::walker::walk_expr_children;
-use perry_types::Type;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 

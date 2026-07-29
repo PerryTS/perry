@@ -43,6 +43,87 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
     }
 }
 
+/// Cold fallback for the codegen inline **checked i32** typed-array element read
+/// (integer-kind receivers reached through an erased / typed parameter — e.g.
+/// `function f(S: Int32Array){ return S[i] | 0 }`). The inline path serves the
+/// overwhelmingly common inline-storage, correct-kind, in-bounds case with a
+/// bare native load, and yields `0` directly for a genuine in-kind out-of-bounds
+/// read (`== ToInt32(undefined)`, the only observable value in the i32/ToInt32
+/// consumer context that path serves). It routes here only when its guard
+/// rejects the access — a view/detached/resizable backing
+/// (`PERRY_TA_VIEW_GUARD != 0`), a kind-cache miss, or a receiver that is not the
+/// statically-expected kind. This helper performs the full ECMAScript
+/// IntegerIndexedExotic `[[Get]]` (bounds-checked, view-aware, detach-safe) and
+/// applies `ToInt32` to the result (`undefined` / non-finite -> `0`). Because it
+/// is only ever consumed where the surrounding expression `ToInt32`s the value,
+/// returning the i32 directly is exact.
+#[no_mangle]
+pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: i32) -> i32 {
+    // Memory safety: this cold fallback is entered on a kind-cache miss / wrong
+    // runtime kind, which INCLUDES a receiver that is not actually a typed array
+    // — TS types are erased, so `function f(S: Int32Array){ S[i] }` compiles the
+    // statically-emitted checked path but may be called with an arbitrary value.
+    // `js_typed_array_get` would read `(*ta).length` (a `TypedArrayHeader` field)
+    // before classifying the pointer, type-confusing the first GC-header read.
+    // Validate the raw pointer is a registered typed array first (the same gate
+    // `strict_typed_array_from_raw` uses — it covers native/inline views); a
+    // non-typed-array receiver has no element to read, and
+    // `ToInt32(undefined) == 0` in this i32 consumer context.
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+        return 0;
+    }
+    let v = js_typed_array_get(ta, index);
+    // `js_typed_array_get` returns a plain finite f64 element for an in-bounds
+    // read and TAG_UNDEFINED (a NaN) for OOB. `ToInt32` maps NaN / ±Inf -> 0.
+    if !v.is_finite() {
+        return 0;
+    }
+    const TWO_32: f64 = 4_294_967_296.0;
+    (v.trunc().rem_euclid(TWO_32) as u32) as i32
+}
+
+// Codegen-only export: the inline checked-i32 read emits the call in
+// `perry-codegen/src/expr/i32_fast_path.rs`; a whole-program bitcode link is
+// otherwise free to internalize and dead-strip it (it has no internal Rust
+// caller). The `#[cfg_attr(feature = "keepalive-anchors", used)]` anchor pins it, mirroring the getter above.
+#[cfg_attr(feature = "keepalive-anchors", used)]
+static KEEP_JS_TYPED_ARRAY_READ_INT32: extern "C" fn(*const TypedArrayHeader, i32) -> i32 =
+    js_typed_array_read_int32;
+
+/// Cold fallback for the codegen inline **checked f64** typed-array element read
+/// (a typed-array parameter read in *numeric* context — `bcryptjs`'s
+/// `_encipher` S-box reads `n = S[l >>> 24]; n += S[...]`, where the element
+/// flows into `+`/`+=` rather than `| 0`). The inline path
+/// (`perry-codegen/src/expr/ta_param_f64_read.rs`) serves the common
+/// inline-storage, correct-kind case with a bare native load widened to f64, and
+/// yields the `TAG_UNDEFINED` double directly for a genuine out-of-bounds read —
+/// **bit-exact** with [`js_typed_array_get`] (numeric element in-bounds,
+/// `TAG_UNDEFINED` OOB), so the fast path is a pure call→load swap needing no
+/// consumer-context analysis. It routes here only on a guard miss
+/// (view/detached/resizable backing, kind-cache miss, or a receiver that is not
+/// the statically-expected kind).
+///
+/// Memory safety mirrors [`js_typed_array_read_int32`]: a kind-cache miss can be
+/// entered with a receiver that is not a typed array at all (TS types are
+/// erased), so validate the raw pointer is a registered typed array before any
+/// header deref — a non-typed-array receiver has no element and reads
+/// `undefined` (`TAG_UNDEFINED`). Otherwise defer to the full ECMAScript
+/// `[[Get]]`.
+#[no_mangle]
+pub extern "C" fn js_typed_array_read_f64(ta: *const TypedArrayHeader, index: i32) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    js_typed_array_get(ta, index)
+}
+
+// Codegen-only export (see the i32 sibling above): pin under whole-program LTO.
+#[cfg_attr(feature = "keepalive-anchors", used)]
+static KEEP_JS_TYPED_ARRAY_READ_F64: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
+    js_typed_array_read_f64;
+
 /// #2063 — dynamic / string-key `[[Get]]` on a TypedArray (`ta[key]`).
 ///
 /// The codegen element-read fast path only fires for statically-proven
@@ -68,8 +149,8 @@ pub extern "C" fn js_typed_array_index_get_dynamic(ta: *const TypedArrayHeader, 
 // `js_dyn_index_get`, this export has zero internal Rust callers — it is only
 // invoked from generated LLVM IR (codegen emits the call in
 // `perry-codegen/src/expr/index_get.rs`), so a whole-program bitcode link is
-// free to internalize and dead-strip it. The `#[used]` anchor pins it.
-#[used]
+// free to internalize and dead-strip it. The `#[cfg_attr(feature = "keepalive-anchors", used)]` anchor pins it.
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC: extern "C" fn(*const TypedArrayHeader, f64) -> f64 =
     js_typed_array_index_get_dynamic;
 
@@ -480,7 +561,7 @@ pub extern "C" fn js_uint8array_index_get_value(
 // #6088: force-keep the JS-value Uint8Array index getter under LTO /
 // auto-optimize — it has zero internal Rust callers (codegen emits the only
 // call), so a whole-program bitcode link is otherwise free to dead-strip it.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_UINT8ARRAY_INDEX_GET_VALUE: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
     js_uint8array_index_get_value;
 

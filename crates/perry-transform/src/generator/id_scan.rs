@@ -519,7 +519,7 @@ pub fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_types::Type;
+    use perry_hir::types::Type;
 
     /// #4851: `Object.assign(p, { a: () => 1, b: () => 2 })` lowers to
     /// `ObjectAssign { sources: [New { __AnonShape, args: [Closure, ...] }] }`.
@@ -629,6 +629,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            alloc_width_hint: 0,
         }
     }
 

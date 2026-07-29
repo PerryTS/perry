@@ -292,24 +292,24 @@ fn key_stable_for_order_insensitive_graph_lists() {
     );
 }
 
-fn record_row_type(property_insert_order: &[&str]) -> perry_types::Type {
+fn record_row_type(property_insert_order: &[&str]) -> perry_hir::types::Type {
     let mut properties = std::collections::HashMap::new();
     for name in property_insert_order {
         let ty = match *name {
-            "name" => perry_types::Type::String,
-            "id" | "value" => perry_types::Type::Number,
+            "name" => perry_hir::types::Type::String,
+            "id" | "value" => perry_hir::types::Type::Number,
             _ => panic!("unexpected property"),
         };
         properties.insert(
             (*name).to_string(),
-            perry_types::PropertyInfo {
+            perry_hir::types::PropertyInfo {
                 ty,
                 optional: false,
                 readonly: false,
             },
         );
     }
-    perry_types::Type::Object(perry_types::ObjectType {
+    perry_hir::types::Type::Object(perry_hir::types::ObjectType {
         name: None,
         properties,
         property_order: Some(vec!["id".into(), "name".into(), "value".into()]),
@@ -441,7 +441,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         setter_names: vec![],
         parent_name: None,
         field_names: vec!["x".into()],
-        field_types: vec![perry_types::Type::Number],
+        field_types: vec![perry_hir::types::Type::Number],
         static_field_names: vec![],
         source_class_id: Some(42),
     };
@@ -481,7 +481,7 @@ fn key_changes_with_imported_class_codegen_surface() {
     assert_ne!(base_key, key_for(changed));
 
     let mut changed = base;
-    changed.field_types = vec![perry_types::Type::String];
+    changed.field_types = vec![perry_hir::types::Type::String];
     assert_ne!(base_key, key_for(changed));
 }
 
@@ -604,6 +604,31 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_CODEGEN_UNIT_SIZE",
         "PERRY_SETJMP_VOLATILE",
         "PERRY_GC_MOVING_LOOP_POLLS",
+        // Inline-hot-small (#6850 follow-up).
+        "PERRY_INLINE_HOT_SMALL",
+        "PERRY_INLINE_HOT_SMALL_CAP",
+        "PERRY_INLINE_HOT_SMALL_THRESHOLD",
+        "PERRY_INLINE_HOT_SMALL_MAX_SITES",
+        // Non-BigInt inline bitwise fast path.
+        "PERRY_INLINE_NONBIGINT_BITWISE",
+        // Inline checked-f64 typed-array-param read.
+        "PERRY_TA_PARAM_F64_READ",
+        // Native-i32 residency for int-typed-array-seeded locals.
+        "PERRY_INT_VALUED_LOCALS",
+        // Representation-selection Phase 1: canonical unboxed i32 locals.
+        "PERRY_CANONICAL_I32_LOCALS",
+        // Representation-selection Phase 3a: canonical string locals.
+        "PERRY_CANONICAL_STR_LOCALS",
+        // Representation-selection Phase 2: specialized calling convention.
+        "PERRY_SPECIALIZED_ABI",
+        "PERRY_SPECIALIZED_ABI_MAX",
+        // Representation-selection Phase 3b: shape-proven Ptr<Shape> locals.
+        "PERRY_PTR_SHAPE_LOCALS",
+        "PERRY_PTR_SHAPE_THIS",
+        // Representation-selection Phase 4a.3: Ptr<NumArray> locals.
+        "PERRY_PTR_NUMARRAY_LOCALS",
+        // FEAT_JSCVT single-instruction ToInt32 (apple-arm64).
+        "PERRY_JSCVT",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.

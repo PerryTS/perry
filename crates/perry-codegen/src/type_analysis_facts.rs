@@ -1,7 +1,7 @@
 //! HIR-backed type facts for codegen type analysis.
 
+use perry_hir::types::Type as HirType;
 use perry_hir::{infer_expr_type, infer_refinable_expr_type, Expr, HirTypeFacts};
-use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 
@@ -126,7 +126,7 @@ pub(crate) fn hir_inferred_static_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<H
 }
 
 pub(crate) fn function_type_from_decl(function: &perry_hir::Function) -> HirType {
-    HirType::Function(perry_types::FunctionType {
+    HirType::Function(perry_hir::types::FunctionType {
         params: function
             .params
             .iter()
@@ -139,7 +139,7 @@ pub(crate) fn function_type_from_decl(function: &perry_hir::Function) -> HirType
 }
 
 fn interface_method_type(method: &perry_hir::InterfaceMethod) -> HirType {
-    HirType::Function(perry_types::FunctionType {
+    HirType::Function(perry_hir::types::FunctionType {
         params: method.params.clone(),
         return_type: Box::new(method.return_type.clone()),
         is_async: false,

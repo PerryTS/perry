@@ -2,7 +2,7 @@
 //! `let/const/var` identifier binding (extracted from `var_decl.rs`'s
 //! `Pat::Ident` arm).
 
-use perry_types::Type;
+use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use crate::lower::LoweringContext;

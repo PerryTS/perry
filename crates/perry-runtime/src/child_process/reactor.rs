@@ -413,6 +413,7 @@ pub(super) fn cp_register_live_child(
             },
         );
     }
+    crate::stdlib_pump::register_runtime_pump(0, cp_reactor_pump_extern);
     CP_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
 
     if let Some(o) = stdout_pipe {
@@ -897,6 +898,7 @@ pub(super) fn cp_exec_async(
                     },
                 );
             }
+            crate::stdlib_pump::register_runtime_pump(0, cp_reactor_pump_extern);
             CP_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
 
             if let Some(o) = stdout_pipe {
@@ -1027,6 +1029,14 @@ extern "C" fn cp_exec_cb_thunk(closure: *const ClosureHeader) -> f64 {
 
 /// Drive the reactor one tick: emit pending `spawn`/`data`/`end`/`exit`/`close`
 /// for all live children. Called from `js_run_stdlib_pump`.
+
+/// `extern "C"` wrapper registered into the armed runtime-pump slots on the
+/// first live child (see `stdlib_pump::register_runtime_pump`) — programs
+/// that never spawn link no reactor code.
+extern "C" fn cp_reactor_pump_extern() {
+    cp_reactor_pump();
+}
+
 pub(crate) fn cp_reactor_pump() {
     if CP_LIVE_COUNT.load(Ordering::Relaxed) == 0 {
         return;

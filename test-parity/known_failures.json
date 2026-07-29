@@ -1,42 +1,43 @@
 {
   "_schema": {
-    "description": "Each entry maps a parity-suite test name to a structured record. The CI gate in .github/workflows/test.yml reads `keys[]` from this file \u2014 a test that fails AND is not a key here breaks CI. Add entries here only with full provenance (issue + added date) so we can revalidate.",
+    "description": "Each entry maps a parity-suite test name to a structured record. The CI gate in .github/workflows/test.yml reads `keys[]` from this file — a test that fails AND is not a key here breaks CI. Add entries here only with full provenance (issue + added date) so we can revalidate.",
     "fields": {
-      "issue": "Open GitHub issue number tracking this failure (e.g. \"793\"), or null when the failure is environmental / pending triage. Closed issues must be re-evaluated \u2014 flag the entry as `category: bug-stale` until a new tracking issue is filed.",
+      "issue": "Open GitHub issue number tracking this failure (e.g. \"793\"), or null when the failure is environmental / pending triage. Closed issues must be re-evaluated — flag the entry as `category: bug-stale` until a new tracking issue is filed.",
       "added": "ISO date (YYYY-MM-DD) when the test was first skip-listed. Use 2026-05-15 for entries inherited from the pre-audit format where the historical date is unknown.",
-      "category": "ci-env | module-inventory | bug-open | bug-stale | gap-categorical | gap-bisect \u2014 see test-parity/README.md for definitions.",
-      "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
-    }
+      "category": "ci-env | module-inventory | bug-open | bug-stale | gap-categorical | gap-bisect — see test-parity/README.md for definitions.",
+      "reason": "Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change)."
+    },
+    "scope": "Consumed by the TAG-GATED `parity` job (full test-files/*.ts suite) only. The per-PR gap-suite gate moved to test-parity/gap_snapshot.json, which is generated and checked in BOTH directions (see test-parity/README.md); the test_gap_* entries below are redundant with it and kept only so the tag-gated job keeps passing. Migrating this file to a generated snapshot needs a full-suite baseline from a tag run — follow-up to #797."
   },
   "test_parity_stream": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_stream_web": {
     "issue": "793",
     "added": "2026-05-15",
     "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+    "reason": "Node.js module inventory — `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_sock_write_map": {
     "issue": "1634",
     "added": "2026-05-15",
     "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental \u2014 issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
+    "reason": "Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental — issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
   },
   "test_ramda_sum": {
     "issue": "1634",
     "added": "2026-05-18",
     "category": "ci-env",
-    "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
+    "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list — the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
   },
   "test_gap_2159_defineproperty_class_prototype": {
     "issue": "2159",
     "added": "2026-07-04",
     "category": "bug-open",
-    "reason": "defineProperty on class prototypes \u2014 standing gap (issue encoded in name); confirmed standing (pre-dates v0.5.1205) in the #5917 parity diff."
+    "reason": "defineProperty on class prototypes — standing gap (issue encoded in name); confirmed standing (pre-dates v0.5.1205) in the #5917 parity diff."
   },
   "test_gap_2514_settracesigint": {
     "issue": "2514",
@@ -60,25 +61,25 @@
     "issue": "5917",
     "added": "2026-07-04",
     "category": "gap-bisect",
-    "reason": "class-expression extends + static call `this` \u2014 no dedicated issue; tracked via the #5917 standing-tail worklist (watch for newness: flagged there as one of two to eyeball)."
+    "reason": "class-expression extends + static call `this` — no dedicated issue; tracked via the #5917 standing-tail worklist (watch for newness: flagged there as one of two to eyeball)."
   },
   "test_gap_class_expr_static_this": {
     "issue": "5917",
     "added": "2026-07-04",
     "category": "gap-bisect",
-    "reason": "class-expression static `this` \u2014 tracked via #5917 standing-tail worklist (eyeball-for-newness pair)."
+    "reason": "class-expression static `this` — tracked via #5917 standing-tail worklist (eyeball-for-newness pair)."
   },
   "test_gap_console_bare_global": {
     "issue": "5917",
     "added": "2026-07-04",
     "category": "gap-categorical",
-    "reason": "console formatting/global surface \u2014 CLAUDE.md categorical gap (console.dir/group formatting); standing per #5917."
+    "reason": "console formatting/global surface — CLAUDE.md categorical gap (console.dir/group formatting); standing per #5917."
   },
   "test_gap_console_validate_write": {
     "issue": "5917",
     "added": "2026-07-04",
     "category": "gap-categorical",
-    "reason": "console write validation \u2014 categorical console gap; standing per #5917."
+    "reason": "console write validation — categorical console gap; standing per #5917."
   },
   "test_gap_diagchannel_3082_3084_3085_3086": {
     "issue": "3082",
@@ -192,7 +193,7 @@
     "issue": "5917",
     "added": "2026-07-04",
     "category": "gap-bisect",
-    "reason": "yield* inherited-iterator `this` \u2014 tracked via #5917 standing-tail worklist (eyeball-for-newness pair)."
+    "reason": "yield* inherited-iterator `this` — tracked via #5917 standing-tail worklist (eyeball-for-newness pair)."
   },
   "test_gap_zlib_3285_params": {
     "issue": "3285",
@@ -204,12 +205,42 @@
     "issue": "3698",
     "added": "2026-07-04",
     "category": "module-inventory",
-    "reason": "node:readline surface (#3698+) \u2014 compile_fail in the 2026-07-03 baseline (tls/zlib/readline compile cluster, possibly runner env); standing per #5917."
+    "reason": "node:readline surface (#3698+) — compile_fail in the 2026-07-03 baseline (tls/zlib/readline compile cluster, possibly runner env); standing per #5917."
   },
   "test_gap_disposablestack_2875": {
     "issue": "6364",
     "added": "2026-07-13",
     "category": "bug-open",
     "reason": "DisposableStack/Symbol.dispose surface incomplete: `.disposed` returns undefined where Node returns false/true, and the dispose path leaves the adopt/defer callback count at 0. NEWLY VISIBLE, not a regression: DisposableStack is Node 24+, so under CI's old Node 22 pin *node itself* exited non-zero, the harness classified the test `node_fail`, and it was dropped from the gate entirely. Raising the oracle to 26 (.node-version) makes the pre-existing gap observable for the first time. Perry's implementation lives in crates/perry-runtime/src/disposable.rs. Flips to PASS when #6364 lands."
+  },
+  "test_gap_zlib_4917_level": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_zlib_fs_assert_2935_2752_2971": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_3662_node_argvalidation": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_constants_tail_3683plus": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
+  },
+  "test_gap_handle_band_object_ops": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "toolchain",
+    "reason": "auto-opt pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild: undefined js_zlib_deflate_raw_sync + panic_unwind symbols on a COLD object cache (warm /tmp caches mask it, which is how it went unnoticed). Compiles fine with PERRY_NO_AUTO_OPTIMIZE=1. Not a parity regression."
   }
 }

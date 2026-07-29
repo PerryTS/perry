@@ -3,7 +3,7 @@
 //! Contains functions for collecting local references, tracking assigned locals,
 //! checking `this` usage, and identifying builtin functions.
 
-use perry_types::LocalId;
+use crate::types::LocalId;
 
 use crate::ir::*;
 use crate::walker::{walk_expr_children, walk_expr_children_mut};

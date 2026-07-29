@@ -1,7 +1,7 @@
 use super::*;
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::super::super::LoweringContext;

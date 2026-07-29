@@ -23,8 +23,8 @@
 
 use anyhow::{bail, Result};
 use perry_dispatch::{ArgKind as UiArgKind, ReturnKind as UiReturnKind};
+use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
-use perry_types::Type as HirType;
 
 use crate::expr::{
     emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
@@ -160,12 +160,13 @@ pub(crate) fn lower_native_method_call(
                             body,
                             ..
                         } => {
-                            let mut inner_ids: std::collections::HashSet<perry_types::LocalId> =
-                                params.iter().map(|p| p.id).collect();
+                            let mut inner_ids: std::collections::HashSet<
+                                perry_hir::types::LocalId,
+                            > = params.iter().map(|p| p.id).collect();
                             for stmt in body {
                                 collect_closure_introduced_ids(stmt, &mut inner_ids);
                             }
-                            let mut outer_writes: Vec<perry_types::LocalId> = Vec::new();
+                            let mut outer_writes: Vec<perry_hir::types::LocalId> = Vec::new();
                             for stmt in body {
                                 find_outer_writes_stmt(stmt, &inner_ids, &mut outer_writes);
                             }

@@ -1451,7 +1451,24 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
     interface
 }
 
+/// Cross-thread codec for FileHandle values (see `thread::FsThreadCodec`):
+/// keeps the fs surface out of binaries that never create a FileHandle. The
+/// probe unifies the two identity checks the thread serializer used to call
+/// directly.
+static FS_THREAD_CODEC_IMPL: crate::thread::FsThreadCodec = crate::thread::FsThreadCodec {
+    is_filehandle: fs_codec_is_filehandle,
+    build_detached: build_detached_filehandle_object,
+};
+
+fn fs_codec_is_filehandle(value: f64) -> bool {
+    crate::fs::is_fs_filehandle_value(value) || crate::fs::filehandle_object_fd(value).is_some()
+}
+
 fn build_filehandle_object(fd: i32) -> f64 {
+    // Arm BEFORE the object exists: every FileHandle (attached or detached)
+    // is minted here, so the thread codec is live from the first moment a
+    // probe could ever match.
+    crate::thread::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
     crate::closure::js_register_closure_arity(filehandle_stat_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(filehandle_write_file_impl as *const u8, 2);
     crate::closure::js_register_closure_arity(filehandle_append_file_impl as *const u8, 2);

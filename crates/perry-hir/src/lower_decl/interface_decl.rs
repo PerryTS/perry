@@ -1,5 +1,5 @@
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -141,12 +141,12 @@ pub fn lower_interface_decl(
     }
     // Also materialize an ObjectType so `resolve_typed_parse_ty` can
     // expand `Named("Item")` → `Object{fields}` for codegen.
-    let mut obj_props: std::collections::HashMap<String, perry_types::PropertyInfo> =
+    let mut obj_props: std::collections::HashMap<String, crate::types::PropertyInfo> =
         std::collections::HashMap::new();
     for p in &properties {
         obj_props.insert(
             p.name.clone(),
-            perry_types::PropertyInfo {
+            crate::types::PropertyInfo {
                 ty: p.ty.clone(),
                 optional: p.optional,
                 readonly: p.readonly,
@@ -156,7 +156,7 @@ pub fn lower_interface_decl(
     if !obj_props.is_empty() {
         ctx.interface_object_types.insert(
             name.clone(),
-            perry_types::ObjectType {
+            crate::types::ObjectType {
                 name: Some(name.clone()),
                 properties: obj_props,
                 property_order: Some(source_keys.clone()),

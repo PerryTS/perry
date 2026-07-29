@@ -2,8 +2,8 @@
 //! desugar helper. Extracted from the trunk `lower_expr.rs`. Pure code move.
 
 use super::*;
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 /// If `call` matches `Text(\`...${state.value}...\`)` with at least one State

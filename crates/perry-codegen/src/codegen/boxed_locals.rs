@@ -92,8 +92,8 @@ pub(crate) fn collect_module_boxed_vars(hir: &HirModule) -> std::collections::Ha
 /// learn the types of captured vars from the enclosing scope.
 /// HIR LocalIds are globally unique within the module, so a
 /// single flat map works.
-pub(crate) fn collect_module_local_types(hir: &HirModule) -> HashMap<u32, perry_types::Type> {
-    let mut module_local_types: HashMap<u32, perry_types::Type> = HashMap::new();
+pub(crate) fn collect_module_local_types(hir: &HirModule) -> HashMap<u32, perry_hir::types::Type> {
+    let mut module_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
     collect_let_types_in_stmts(&hir.init, &mut module_local_types);
     for f in &hir.functions {
         for p in &f.params {

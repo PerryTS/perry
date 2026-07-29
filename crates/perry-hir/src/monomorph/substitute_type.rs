@@ -28,7 +28,7 @@ pub fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type
                 .map(|t| substitute_type(t, substitutions))
                 .collect(),
         },
-        Type::Function(func_type) => Type::Function(perry_types::FunctionType {
+        Type::Function(func_type) => Type::Function(crate::types::FunctionType {
             params: func_type
                 .params
                 .iter()

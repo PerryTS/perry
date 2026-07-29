@@ -4,7 +4,7 @@
 //! Named re-exports in `lower_types.rs` keep every existing call path
 //! (`crate::lower_types::extract_ts_type`, ...) compiling unchanged.
 
-use perry_types::{Type, TypeParam};
+use crate::types::{Type, TypeParam};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -207,7 +207,7 @@ pub(crate) fn extract_ts_type_with_ctx(
 
                     let return_type = extract_ts_type_with_ctx(&fn_ty.type_ann.type_ann, ctx);
 
-                    Type::Function(perry_types::FunctionType {
+                    Type::Function(crate::types::FunctionType {
                         params,
                         return_type: Box::new(return_type),
                         is_async: false,
@@ -295,7 +295,7 @@ pub(crate) fn extract_ts_type_with_ctx(
                             }
                             properties.insert(
                                 field_name,
-                                perry_types::PropertyInfo {
+                                crate::types::PropertyInfo {
                                     ty: field_type,
                                     optional: prop.optional,
                                     readonly: prop.readonly,
@@ -321,8 +321,8 @@ pub(crate) fn extract_ts_type_with_ctx(
                                 .collect();
                             properties.insert(
                                 method_name,
-                                perry_types::PropertyInfo {
-                                    ty: Type::Function(perry_types::FunctionType {
+                                crate::types::PropertyInfo {
+                                    ty: Type::Function(crate::types::FunctionType {
                                         params,
                                         return_type: Box::new(return_type),
                                         is_async: false,
@@ -338,7 +338,7 @@ pub(crate) fn extract_ts_type_with_ctx(
                         // index signature: { [key: string]: T }
                         if let Some(ann) = &idx_sig.type_ann {
                             let val_type = extract_ts_type_with_ctx(&ann.type_ann, ctx);
-                            return Type::Object(perry_types::ObjectType {
+                            return Type::Object(crate::types::ObjectType {
                                 name: None,
                                 properties,
                                 property_order: Some(property_order),
@@ -352,7 +352,7 @@ pub(crate) fn extract_ts_type_with_ctx(
             if properties.is_empty() {
                 Type::Any
             } else {
-                Type::Object(perry_types::ObjectType {
+                Type::Object(crate::types::ObjectType {
                     name: None,
                     properties,
                     property_order: Some(property_order),

@@ -480,9 +480,6 @@ unsafe fn kmac_output_length(algo_bits: u64) -> Result<u32, (&'static str, &'sta
     let Some(length) = object_field_number(algo_bits, b"outputLength") else {
         return Err(("TypeError", "KmacParams.outputLength is required"));
     };
-    if length % 8 != 0 {
-        return Err(("NotSupportedError", "Unsupported KmacParams outputLength"));
-    }
     Ok(length)
 }
 

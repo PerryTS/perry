@@ -10,8 +10,8 @@
 //! The match arms inside `lower_stmt` collapse to one-line delegations
 //! to `lower_stmt_for_of` / `lower_stmt_for_in`.
 
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -856,7 +856,7 @@ pub(crate) fn lower_stmt_for_of(
     // a synthesized top-level generator function taking `this`
     // as its first parameter; the for-of here dispatches by
     // calling that function with the lowered receiver.
-    let iter_from_class: Option<perry_types::FuncId> =
+    let iter_from_class: Option<crate::types::FuncId> =
         if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
             if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
                 let class_name = ident.sym.to_string();

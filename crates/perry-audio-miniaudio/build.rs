@@ -7,10 +7,14 @@ fn main() {
 
     let target = env::var("TARGET").unwrap_or_default();
 
-    // We compile miniaudio for every host, including Apple — Apple targets
-    // get the rlib but never link the symbols (perry-ui-macos owns the
-    // AVAudioEngine backend). Compiling here keeps `cargo check` /
-    // `cargo build -p perry-audio-miniaudio` clean on developer Macs.
+    let supported =
+        target.contains("linux") || target.contains("android") || target.contains("windows");
+    if !supported {
+        return;
+    }
+
+    // This backend supports Linux, Windows, and Android. Apple targets use
+    // the AVAudioEngine backend in their platform UI crates.
     let mut build = cc::Build::new();
     build
         .file("vendor/miniaudio_impl.c")
@@ -48,17 +52,6 @@ fn main() {
         // requirement explicit here so the rlib stands on its own.
         println!("cargo:rustc-link-lib=ole32");
         println!("cargo:rustc-link-lib=winmm");
-    } else if target.contains("apple") {
-        // Apple targets compile this crate (so the workspace builds
-        // cleanly on macOS developer machines) but should never link
-        // its symbols — perry-ui-macos provides the real backend
-        // backed by AVAudioEngine. Pull in the Core Audio frameworks
-        // anyway because miniaudio_impl.c references them in its
-        // Apple branch.
-        println!("cargo:rustc-link-lib=framework=CoreAudio");
-        println!("cargo:rustc-link-lib=framework=AudioToolbox");
-        println!("cargo:rustc-link-lib=framework=AudioUnit");
-        println!("cargo:rustc-link-lib=framework=CoreFoundation");
     }
 
     build.compile("miniaudio_impl");

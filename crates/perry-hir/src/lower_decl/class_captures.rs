@@ -1,4 +1,4 @@
-use perry_types::{LocalId, Type};
+use crate::types::{LocalId, Type};
 
 use crate::ir::*;
 use crate::lower::LoweringContext;

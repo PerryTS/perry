@@ -1,6 +1,6 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
-use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -837,5 +837,140 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
     assert!(
         fn_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
         "boxed captured local should bind its outer shadow slot to the box slot"
+    );
+}
+
+// ── Representation-selection Phase 3a: canonical string locals ─────────────
+
+fn canonical_str_shadow_module() -> Module {
+    Module {
+        script_global_functions: Vec::new(),
+        references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
+        name: "canonical_str_shadow.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![Function {
+            id: 1,
+            name: "probe_str".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 1,
+                    name: "acc".to_string(),
+                    ty: Type::String,
+                    mutable: true,
+                    init: Some(Expr::String("hello world!".to_string())),
+                },
+                // acc = acc + "x" — the canonical `+=` self-append shape.
+                Stmt::Expr(Expr::LocalSet(
+                    1,
+                    Box::new(Expr::Binary {
+                        op: perry_hir::BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(1)),
+                        right: Box::new(Expr::String("x".to_string())),
+                    }),
+                )),
+                // acc.length — the canonical `.length` tag dispatch.
+                Stmt::Return(Some(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                })),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        class_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
+    }
+}
+
+/// Phase 3a invariants (default flag state, `PERRY_CANONICAL_STR_LOCALS` on):
+/// a canonical-Str local keeps EXACTLY the pre-phase GC protocol — same
+/// double slot, same `js_shadow_slot_bind` — while the string ops tag-
+/// dispatch inline. The `+=` hot arm calls `js_string_append` on raw
+/// handles with no `js_get_string_pointer_unified` in it, and `.length`
+/// drops the generic GC-type-byte tower for the 3-arm tag dispatch.
+#[test]
+fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
+    let ir =
+        String::from_utf8(compile_module(&canonical_str_shadow_module(), empty_opts()).unwrap())
+            .expect("LLVM IR should be UTF-8");
+    let fn_ir = function_slice(&ir, "perry_fn_canonical_str_shadow_ts__probe_str");
+
+    // GC contract: the canonical-Str local still binds its shadow slot
+    // (tagged-at-rest bits are marked/rewritten through the same path).
+    assert!(
+        fn_ir.contains("call void @js_shadow_slot_bind"),
+        "canonical-Str local must keep its shadow-slot binding:\n{fn_ir}"
+    );
+
+    // `+=` selected the canonical tag-dispatched shape, and its proven-heap
+    // arm appends raw handles without the opaque unified unbox. Locate the
+    // BLOCK DEFINITIONS (lines ending in ':'), not the branch-operand label
+    // references.
+    fn block_def_offset(fn_ir: &str, prefix: &str) -> usize {
+        let mut offset = 0usize;
+        for line in fn_ir.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with(prefix) && trimmed.trim_end().ends_with(':') {
+                return offset;
+            }
+            offset += line.len() + 1;
+        }
+        panic!("expected a '{prefix}…:' block definition in:\n{fn_ir}");
+    }
+    let heap_arm_start = block_def_offset(fn_ir, "strapp.heap");
+    let heap_arm_end =
+        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rcold") + 1;
+    let heap_arm = &fn_ir[heap_arm_start..heap_arm_end];
+    assert!(
+        heap_arm.contains("call i64 @js_string_append"),
+        "heap arm must call js_string_append directly:\n{heap_arm}"
+    );
+    assert!(
+        !heap_arm.contains("js_get_string_pointer_unified"),
+        "heap arm must not route through js_get_string_pointer_unified:\n{heap_arm}"
+    );
+
+    // `.length` selected the canonical 3-arm tag dispatch, not the generic
+    // GC-type-byte tower.
+    assert!(
+        fn_ir.contains("strlen.heap"),
+        "canonical-Str .length should emit the strlen tag dispatch:\n{fn_ir}"
+    );
+    assert!(
+        !fn_ir.contains("plen.check_gc"),
+        "canonical-Str .length must not fall into the generic receiver tower:\n{fn_ir}"
     );
 }

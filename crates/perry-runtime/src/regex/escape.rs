@@ -138,6 +138,6 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
 
 /// Keepalive anchor: `js_regexp_escape` is only called from codegen-emitted
 /// `.o`, so the auto-optimize whole-program LLVM rebuild would dead-strip it
-/// without this `#[used]` reference (see #3320).
-#[used]
+/// without this `#[cfg_attr(feature = "keepalive-anchors", used)]` reference (see #3320).
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REGEXP_ESCAPE: extern "C" fn(f64) -> f64 = js_regexp_escape;

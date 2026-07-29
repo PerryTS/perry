@@ -4,7 +4,7 @@
 //! visibility and are re-exported from `lower/mod.rs` so the existing
 //! `expr_*` submodules and the rest of the crate keep compiling unchanged.
 
-use perry_types::{FunctionType, Type};
+use crate::types::{FunctionType, Type};
 
 use super::*;
 use crate::ir::*;

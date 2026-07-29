@@ -1,5 +1,5 @@
+use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::*;
@@ -1126,7 +1126,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     false
                 };
 
-            let iter_from_class: Option<perry_types::FuncId> =
+            let iter_from_class: Option<crate::types::FuncId> =
                 if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
                     if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
                         let class_name = ident.sym.to_string();
@@ -1966,15 +1966,51 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         // Type-only declarations are fully erased at compile time.
         ast::Stmt::Decl(ast::Decl::TsInterface(_)) | ast::Stmt::Decl(ast::Decl::TsTypeAlias(_)) => {
         }
-        // Body-local enum / namespace are valid TS but Perry only registers them
-        // at module scope (see lower.rs::lower_module). Silently dropping them
-        // here produced runtime ReferenceErrors at the use site instead of a
-        // compile diagnostic — fail loud so the user knows to hoist the decl.
+        // Body-local enum. Enum accesses never need a runtime object: both the
+        // named (`E.M`) and computed (`E[k]`) member paths are materialized
+        // inline from `ctx.lookup_enum` (see lower/expr_member.rs), so
+        // registering the declaration is all a body-local enum needs. Only the
+        // registration was module-scope-only, which is why this used to bail.
+        //
+        // The one real hazard is a name collision: registration is by name, and
+        // `lower_enum_decl` REUSES an existing registration's members when the
+        // name is already taken. Two same-named enums with different members
+        // (e.g. a local `enum Section` in two functions) would silently take the
+        // first one's values. Detect that and keep the original hoist-it
+        // diagnostic rather than miscompile.
         ast::Stmt::Decl(ast::Decl::TsEnum(enum_decl)) => {
-            crate::lower_bail!(
-                enum_decl.span,
-                "enum declared inside a function body is not supported; declare it at module scope"
-            );
+            let name = enum_decl.id.sym.to_string();
+            let members = compute_enum_members(enum_decl);
+            if let Some((_, existing)) = ctx.lookup_enum(&name) {
+                let same_value = |a: &EnumValue, b: &EnumValue| match (a, b) {
+                    (EnumValue::Number(x), EnumValue::Number(y)) => x == y,
+                    (EnumValue::String(x), EnumValue::String(y)) => x == y,
+                    _ => false,
+                };
+                let identical = existing.len() == members.len()
+                    && existing
+                        .iter()
+                        .zip(members.iter())
+                        .all(|((en, ev), m)| *en == m.name && same_value(ev, &m.value));
+                if !identical {
+                    crate::lower_bail!(
+                        enum_decl.span,
+                        "enum `{}` conflicts with another enum of the same name; \
+                         declare it at module scope under a unique name",
+                        name
+                    );
+                }
+            }
+            let lowered = lower_enum_decl(ctx, enum_decl, false)?;
+            // Only park it once — a function lowered more than once (or a
+            // second identical declaration) must not duplicate the entry.
+            if !ctx
+                .pending_body_enums
+                .iter()
+                .any(|e| e.name == lowered.name)
+            {
+                ctx.pending_body_enums.push(lowered);
+            }
         }
         ast::Stmt::Decl(ast::Decl::TsModule(ts_module)) => {
             crate::lower_bail!(

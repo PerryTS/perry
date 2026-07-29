@@ -9,7 +9,7 @@
 //! set __state and `return {value, done: false}`.
 
 use perry_hir::ir::*;
-use perry_types::{FuncId, LocalId, Type};
+use perry_hir::types::{FuncId, LocalId, Type};
 
 mod break_continue;
 mod helpers;

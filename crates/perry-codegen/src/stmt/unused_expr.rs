@@ -169,7 +169,7 @@ fn array_map_callback_is_discard_pure(callback: &perry_hir::Expr) -> bool {
     matches!(body.as_slice(), [perry_hir::Stmt::Return(Some(expr))] if discard_pure_expr(expr, param_id))
 }
 
-fn discard_pure_expr(expr: &perry_hir::Expr, param_id: perry_types::LocalId) -> bool {
+fn discard_pure_expr(expr: &perry_hir::Expr, param_id: perry_hir::types::LocalId) -> bool {
     match expr {
         perry_hir::Expr::Undefined
         | perry_hir::Expr::Null

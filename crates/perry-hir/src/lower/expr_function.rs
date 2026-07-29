@@ -15,8 +15,8 @@
 //! recursion through `super::lower_expr`, all `LoweringContext`
 //! mutation goes through public methods + `pub(crate)` fields.
 
+use crate::types::{LocalId, Type};
 use anyhow::Result;
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::{
@@ -40,7 +40,7 @@ use super::{lower_expr, LoweringContext};
 /// installed (unit tests / `check`).
 pub(crate) fn capture_function_source(
     ctx: &mut LoweringContext,
-    func_id: perry_types::FuncId,
+    func_id: crate::types::FuncId,
     span: &swc_common::Span,
     is_async: bool,
 ) {
@@ -1520,7 +1520,7 @@ fn compute_closure_captures(
 /// registration overwrites them in program order.
 pub(crate) fn insert_class_capture_refresh_after_assignments(
     stmts: &mut Vec<Stmt>,
-    regs: &[(Stmt, std::collections::HashSet<perry_types::LocalId>)],
+    regs: &[(Stmt, std::collections::HashSet<crate::types::LocalId>)],
 ) {
     let mut i = 0;
     while i < stmts.len() {

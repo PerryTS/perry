@@ -35,7 +35,7 @@ pub(crate) fn collect_view_builders(module: &Module, next_group_id: &mut u32) ->
     // targets that are module-level. Pick the function's "primary target"
     // as the first matching one (Mango's pattern is one terminal target
     // per view-builder; multi-target view-builders aren't supported yet).
-    let mut primary_target: HashMap<perry_types::FuncId, LocalId> = HashMap::new();
+    let mut primary_target: HashMap<perry_hir::types::FuncId, LocalId> = HashMap::new();
     for f in &module.functions {
         if f.is_async || f.is_generator {
             continue;
@@ -54,7 +54,7 @@ pub(crate) fn collect_view_builders(module: &Module, next_group_id: &mut u32) ->
     // anywhere in the module (closures in module.init AND inside other
     // function bodies). Calls inside top-level Stmts of module.init or
     // function bodies that are NOT inside a closure don't count.
-    let mut called_from_closure: HashSet<perry_types::FuncId> = HashSet::new();
+    let mut called_from_closure: HashSet<perry_hir::types::FuncId> = HashSet::new();
     walk_for_funcref_calls_in_closures_in_stmts(&module.init, &mut called_from_closure);
     for f in &module.functions {
         walk_for_funcref_calls_in_closures_in_stmts(&f.body, &mut called_from_closure);
@@ -63,7 +63,7 @@ pub(crate) fn collect_view_builders(module: &Module, next_group_id: &mut u32) ->
     // Pass 4 — find functions called from module.init OR from a function
     // that's itself called from module.init. Used to EXCLUDE module-init
     // call paths from view-builder treatment (avoids duplicate emit).
-    let mut called_from_module_init: HashSet<perry_types::FuncId> = HashSet::new();
+    let mut called_from_module_init: HashSet<perry_hir::types::FuncId> = HashSet::new();
     walk_for_funcref_calls_top_level_in_stmts(&module.init, &mut called_from_module_init);
 
     // Pass 5 — assemble ViewBuilders. Stable target_synth assignment by
@@ -72,9 +72,10 @@ pub(crate) fn collect_view_builders(module: &Module, next_group_id: &mut u32) ->
     let mut next_target_synth: usize = 0;
 
     let mut builders: Vec<ViewBuilder> = Vec::new();
-    let function_lookup: HashMap<perry_types::FuncId, &perry_hir::ir::Function> =
+    let function_lookup: HashMap<perry_hir::types::FuncId, &perry_hir::ir::Function> =
         module.functions.iter().map(|f| (f.id, f)).collect();
-    let mut sorted_func_ids: Vec<perry_types::FuncId> = primary_target.keys().copied().collect();
+    let mut sorted_func_ids: Vec<perry_hir::types::FuncId> =
+        primary_target.keys().copied().collect();
     sorted_func_ids.sort();
     for func_id in sorted_func_ids {
         if !called_from_closure.contains(&func_id) {
@@ -226,14 +227,14 @@ pub(crate) fn rewrite_view_builder_calls_in_stmts(stmts: &mut Vec<Stmt>, builder
     if builders.is_empty() {
         return;
     }
-    let lookup: HashMap<perry_types::FuncId, &ViewBuilder> =
+    let lookup: HashMap<perry_hir::types::FuncId, &ViewBuilder> =
         builders.iter().map(|b| (b.func_id, b)).collect();
     rewrite_view_builder_calls_in_stmts_with_lookup(stmts, &lookup);
 }
 
 pub(crate) fn rewrite_view_builder_calls_in_stmts_with_lookup(
     stmts: &mut Vec<Stmt>,
-    lookup: &HashMap<perry_types::FuncId, &ViewBuilder>,
+    lookup: &HashMap<perry_hir::types::FuncId, &ViewBuilder>,
 ) {
     let mut i = 0;
     while i < stmts.len() {
@@ -249,7 +250,7 @@ pub(crate) fn rewrite_view_builder_calls_in_stmts_with_lookup(
 
 pub(crate) fn rewrite_view_builder_calls_in_stmt(
     stmt: &mut Stmt,
-    lookup: &HashMap<perry_types::FuncId, &ViewBuilder>,
+    lookup: &HashMap<perry_hir::types::FuncId, &ViewBuilder>,
 ) {
     match stmt {
         Stmt::Expr(e) | Stmt::Return(Some(e)) => {
@@ -302,7 +303,7 @@ pub(crate) fn rewrite_view_builder_calls_in_stmt(
 
 pub(crate) fn rewrite_view_builder_calls_in_expr(
     e: &mut Expr,
-    lookup: &HashMap<perry_types::FuncId, &ViewBuilder>,
+    lookup: &HashMap<perry_hir::types::FuncId, &ViewBuilder>,
 ) {
     // When we hit a closure: prepend a setContentView call for every
     // view-builder funcref called inside the closure's body, then recurse
@@ -310,7 +311,7 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
     if let Expr::Closure { body, .. } = e {
         // Collect all view-builder funcrefs called inside this closure.
         let mut called_builders: Vec<&ViewBuilder> = Vec::new();
-        let mut seen: std::collections::HashSet<perry_types::FuncId> =
+        let mut seen: std::collections::HashSet<perry_hir::types::FuncId> =
             std::collections::HashSet::new();
         scan_closure_body_for_view_builder_calls(body, lookup, &mut called_builders, &mut seen);
         if !called_builders.is_empty() {
@@ -397,9 +398,9 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
 
 pub(crate) fn scan_closure_body_for_view_builder_calls<'a>(
     stmts: &[Stmt],
-    lookup: &HashMap<perry_types::FuncId, &'a ViewBuilder>,
+    lookup: &HashMap<perry_hir::types::FuncId, &'a ViewBuilder>,
     out: &mut Vec<&'a ViewBuilder>,
-    seen: &mut std::collections::HashSet<perry_types::FuncId>,
+    seen: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     for stmt in stmts {
         scan_closure_body_for_view_builder_calls_in_stmt(stmt, lookup, out, seen);
@@ -408,9 +409,9 @@ pub(crate) fn scan_closure_body_for_view_builder_calls<'a>(
 
 pub(crate) fn scan_closure_body_for_view_builder_calls_in_stmt<'a>(
     stmt: &Stmt,
-    lookup: &HashMap<perry_types::FuncId, &'a ViewBuilder>,
+    lookup: &HashMap<perry_hir::types::FuncId, &'a ViewBuilder>,
     out: &mut Vec<&'a ViewBuilder>,
-    seen: &mut std::collections::HashSet<perry_types::FuncId>,
+    seen: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
         Stmt::Expr(e) | Stmt::Return(Some(e)) => {
@@ -436,9 +437,9 @@ pub(crate) fn scan_closure_body_for_view_builder_calls_in_stmt<'a>(
 
 pub(crate) fn scan_closure_body_for_view_builder_calls_in_expr<'a>(
     e: &Expr,
-    lookup: &HashMap<perry_types::FuncId, &'a ViewBuilder>,
+    lookup: &HashMap<perry_hir::types::FuncId, &'a ViewBuilder>,
     out: &mut Vec<&'a ViewBuilder>,
-    seen: &mut std::collections::HashSet<perry_types::FuncId>,
+    seen: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     // Don't recurse into nested closures — their setContentView prepend
     // happens at their own level via `rewrite_view_builder_calls_in_expr`.

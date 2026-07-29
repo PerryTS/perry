@@ -72,7 +72,7 @@ pub fn fix_cross_module_native_instances(
 
     // Scan for variables assigned from calls to native-returning functions
     // Maps LocalId -> (module_name, class_name)
-    let mut local_id_native_instances: HashMap<perry_types::LocalId, (String, String)> =
+    let mut local_id_native_instances: HashMap<crate::types::LocalId, (String, String)> =
         HashMap::new();
 
     if !func_return_instances.is_empty() {
@@ -240,7 +240,7 @@ pub fn scan_for_native_func_returns(
     stmt: &Stmt,
     func_return_instances: &HashMap<String, (String, String)>,
     local_native_instances: &mut HashMap<String, (String, String)>,
-    local_id_native_instances: &mut HashMap<perry_types::LocalId, (String, String)>,
+    local_id_native_instances: &mut HashMap<crate::types::LocalId, (String, String)>,
 ) {
     match stmt {
         Stmt::Let { id, name, init, .. } => {
@@ -400,7 +400,7 @@ pub fn scan_for_native_func_returns(
 pub fn scan_for_ident_init_propagation(
     stmt: &Stmt,
     local_native_instances: &mut HashMap<String, (String, String)>,
-    local_id_native_instances: &mut HashMap<perry_types::LocalId, (String, String)>,
+    local_id_native_instances: &mut HashMap<crate::types::LocalId, (String, String)>,
 ) -> bool {
     let mut changed = false;
     match stmt {
@@ -523,7 +523,7 @@ pub fn scan_for_ident_init_propagation(
 pub fn lookup_native_from_init_ident(
     expr: &Expr,
     _local_native_instances: &HashMap<String, (String, String)>,
-    local_id_native_instances: &HashMap<perry_types::LocalId, (String, String)>,
+    local_id_native_instances: &HashMap<crate::types::LocalId, (String, String)>,
 ) -> Option<(String, String)> {
     if let Expr::LocalGet(id) = expr {
         return local_id_native_instances.get(id).cloned();
@@ -538,7 +538,7 @@ pub fn scan_expr_for_closure_returns(
     expr: &Expr,
     func_return_instances: &HashMap<String, (String, String)>,
     local_native_instances: &mut HashMap<String, (String, String)>,
-    local_id_native_instances: &mut HashMap<perry_types::LocalId, (String, String)>,
+    local_id_native_instances: &mut HashMap<crate::types::LocalId, (String, String)>,
 ) {
     match expr {
         Expr::Closure { body, .. } => {
@@ -655,7 +655,7 @@ pub fn scan_expr_for_closure_returns(
 pub fn fix_native_instance_stmt(
     stmt: &mut Stmt,
     native_instances: &HashMap<String, (String, String)>,
-    local_id_instances: &HashMap<perry_types::LocalId, (String, String)>,
+    local_id_instances: &HashMap<crate::types::LocalId, (String, String)>,
 ) {
     match stmt {
         Stmt::Expr(expr) => fix_native_instance_expr(expr, native_instances, local_id_instances),
@@ -758,7 +758,7 @@ pub fn fix_native_instance_stmt(
 pub fn resolve_native_instance<'a>(
     object: &Expr,
     native_instances: &'a HashMap<String, (String, String)>,
-    local_id_instances: &'a HashMap<perry_types::LocalId, (String, String)>,
+    local_id_instances: &'a HashMap<crate::types::LocalId, (String, String)>,
 ) -> Option<(&'a String, &'a String)> {
     match object {
         Expr::ExternFuncRef { name, .. } => native_instances.get(name).map(|(m, c)| (m, c)),
@@ -770,7 +770,7 @@ pub fn resolve_native_instance<'a>(
 pub fn fix_native_instance_expr(
     expr: &mut Expr,
     native_instances: &HashMap<String, (String, String)>,
-    local_id_instances: &HashMap<perry_types::LocalId, (String, String)>,
+    local_id_instances: &HashMap<crate::types::LocalId, (String, String)>,
 ) {
     match expr {
         // The key case: method calls that might be on native instances

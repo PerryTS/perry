@@ -3,7 +3,7 @@
 //! Pure move: `collect_closures_from_stmts` / `collect_closures_from_expr`.
 
 use perry_hir::ir::*;
-use perry_types::{FuncId, LocalId};
+use perry_hir::types::{FuncId, LocalId};
 
 /// Recursively collect all Expr::Closure nodes from statements
 pub(super) fn collect_closures_from_stmts(

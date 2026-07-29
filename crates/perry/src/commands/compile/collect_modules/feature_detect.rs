@@ -29,6 +29,12 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"globSync\"")
 }
 
+fn debug_hir_uses_get_builtin_module(hir_debug: &str) -> bool {
+    hir_debug.contains("property: \"getBuiltinModule\"")
+        || (hir_debug.contains("module: \"process\"")
+            && hir_debug.contains("method: \"getBuiltinModule\""))
+}
+
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
     hir_module.imports.iter().any(|import| {
         !import.type_only
@@ -285,6 +291,90 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("property: \"Segmenter\"") {
             ctx.uses_intl_segmenter = true;
         }
+        // `Intl.*` namespace surface (~219 KB). Every `Intl.X` access lowers
+        // with `Intl` as a property/identifier token, and the locale-aware
+        // prototype methods below can hand back Intl-formatted output, so any
+        // of them enables the namespace. Deliberately over-approximate — a
+        // missed detection leaves `Intl.NumberFormat` undefined at runtime,
+        // so err toward enabling (same contract as `temporal`).
+        if hir_debug.contains("\"Intl\"")
+            || hir_debug.contains("property: \"NumberFormat\"")
+            || hir_debug.contains("property: \"DateTimeFormat\"")
+            || hir_debug.contains("property: \"Collator\"")
+            || hir_debug.contains("property: \"RelativeTimeFormat\"")
+            || hir_debug.contains("property: \"ListFormat\"")
+            || hir_debug.contains("property: \"PluralRules\"")
+            || hir_debug.contains("property: \"DisplayNames\"")
+            || hir_debug.contains("property: \"DurationFormat\"")
+            || hir_debug.contains("property: \"Segmenter\"")
+            || hir_debug.contains("property: \"getCanonicalLocales\"")
+            || hir_debug.contains("property: \"supportedValuesOf\"")
+            || hir_debug.contains("property: \"supportedLocalesOf\"")
+            || hir_debug.contains("toLocale")
+            || hir_debug.contains("localeCompare")
+        {
+            ctx.uses_intl_namespace = true;
+        }
+        // Per-namespace `globalThis` member tables (`Math`/`JSON`/`Reflect`/
+        // `Atomics`). Static call sites (`Math.max(x)`, `JSON.stringify(v)`)
+        // lower to codegen intrinsics that never touch these tables, so a
+        // surviving mention of the name means the namespace may be used as a
+        // VALUE (`const m = Math`, `Object.keys(JSON)`) — exactly when the
+        // members must exist. Bare-substring matching keeps this
+        // over-approximate on purpose (a user identifier containing the name
+        // only costs size).
+        if hir_debug.contains("\"Math\"") {
+            ctx.uses_global_math = true;
+        }
+        if hir_debug.contains("\"JSON\"") {
+            ctx.uses_global_json = true;
+        }
+        if hir_debug.contains("\"Reflect\"") {
+            ctx.uses_global_reflect = true;
+        }
+        if hir_debug.contains("\"Atomics\"") {
+            ctx.uses_global_atomics = true;
+        }
+        // Web-platform member tables. Identifier tokens cover explicit use
+        // (`new URL(u)`, `new TextDecoder()`, `crypto.subtle`); the fetch
+        // value types additionally ride `uses_fetch`, because a `fetch()`
+        // result is a `Response` whose methods the source may reach without
+        // ever naming the type. Over-approximate by construction.
+        if hir_debug.contains("\"URL") {
+            ctx.uses_global_url = true;
+        }
+        if hir_debug.contains("\"Text") {
+            ctx.uses_global_text = true;
+        }
+        if hir_debug.contains("\"WebSocket\"") {
+            ctx.uses_global_websocket = true;
+        }
+        if hir_debug.contains("rypto") || hir_debug.contains("\"subtle\"") {
+            ctx.uses_global_webcrypto = true;
+        }
+        if ctx.uses_fetch
+            || hir_debug.contains("\"Headers\"")
+            || hir_debug.contains("\"Request\"")
+            || hir_debug.contains("\"Response\"")
+            || hir_debug.contains("\"Blob\"")
+            || hir_debug.contains("\"File\"")
+            || hir_debug.contains("\"FormData\"")
+            || hir_debug.contains("\"fetch\"")
+        {
+            ctx.uses_global_webfetch = true;
+        }
+        // `process` IPC channel properties. Bare-token matching on purpose:
+        // the property name reaches the runtime as a string, so any `send` /
+        // `disconnect` / `connected` / `channel` mention enables the path. A
+        // miss would make `process.send` undefined at runtime, so this errs
+        // heavily toward enabling.
+        if hir_debug.contains("\"send\"")
+            || hir_debug.contains("\"disconnect\"")
+            || hir_debug.contains("\"connected\"")
+            || hir_debug.contains("\"channel\"")
+        {
+            ctx.uses_proc_ipc = true;
+        }
         // `Intl.getCanonicalLocales(...)` / `Intl.*.supportedLocalesOf(...)` gate
         // `perry-runtime/intl-locale` (`icu_locale_core` BCP-47 canonicalization).
         // Both lower with the method name as a `property` token.
@@ -319,7 +409,10 @@ pub(super) fn detect_optional_feature_usage(
     // diagnostics (GC-diag / typed-feedback JSON) ride the same feature and
     // degrade gracefully when off, so they need no detection.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        let hir_debug: String = format!(
+            "{:?}{:?}{:?}",
+            &hir_module.init, &hir_module.functions, &hir_module.classes
+        );
         if hir_debug.contains("method: \"getHeapSnapshot\"")
             || hir_debug.contains("method: \"writeHeapSnapshot\"")
             || hir_debug.contains("property: \"report\"")
@@ -331,6 +424,9 @@ pub(super) fn detect_optional_feature_usage(
         // in `native_module_imports`).
         if hir_debug.contains("module: \"dgram\"") {
             ctx.uses_dgram = true;
+        }
+        if debug_hir_uses_get_builtin_module(&hir_debug) {
+            ctx.uses_get_builtin_module = true;
         }
     }
 
@@ -373,7 +469,9 @@ pub(super) fn detect_optional_feature_usage(
 
 #[cfg(test)]
 mod tests {
-    use super::{debug_hir_uses_regex, imports_fs_promises_glob};
+    use super::{
+        debug_hir_uses_get_builtin_module, debug_hir_uses_regex, imports_fs_promises_glob,
+    };
     use perry_hir::{Import, ImportSpecifier, Module, ModuleKind};
 
     #[test]
@@ -383,6 +481,19 @@ mod tests {
         ));
         assert!(debug_hir_uses_regex(
             r#"NativeMethodCall { module: String("path.win32"), method: String("matchesGlob"), args: [] }"#
+        ));
+    }
+
+    #[test]
+    fn get_builtin_module_gate_detects_direct_and_extracted_calls() {
+        assert!(debug_hir_uses_get_builtin_module(
+            r#"NativeMethodCall { module: "process", method: "getBuiltinModule" }"#
+        ));
+        assert!(debug_hir_uses_get_builtin_module(
+            r#"PropertyGet { property: "getBuiltinModule" }"#
+        ));
+        assert!(!debug_hir_uses_get_builtin_module(
+            r#"NativeMethodCall { module: "process", method: "cwd" }"#
         ));
     }
 

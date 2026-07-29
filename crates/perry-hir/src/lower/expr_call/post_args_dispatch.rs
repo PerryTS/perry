@@ -6,7 +6,7 @@
 //! `match &call.callee { ... }` dispatch. Extracted from
 //! `expr_call/mod.rs` as a mechanical move.
 
-use perry_types::Type;
+use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;

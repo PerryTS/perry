@@ -25,7 +25,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use perry_types::{LocalId, Type};
+use crate::types::{LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
 /// Ordered stack of scope-local bindings with a name→positions index.

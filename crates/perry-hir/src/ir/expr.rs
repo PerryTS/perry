@@ -3,7 +3,7 @@
 //! mod.rs stays scannable. Re-exported from `super`.
 
 use super::*;
-use perry_types::{FuncId, GlobalId, LocalId, Type};
+use crate::types::{FuncId, GlobalId, LocalId, Type};
 
 /// Fallback when a dynamic `with` object environment does not bind the
 /// assignment target. The object lookup is performed before the RHS is

@@ -18,7 +18,7 @@ use perry_transform::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
@@ -51,7 +51,7 @@ use import_helpers::{
 // Re-exported at `pub(super)` because `compile.rs` (the parent module) calls
 // `collect_modules::known_node_submodule_key` directly.
 pub(super) use import_helpers::known_node_submodule_key;
-use native_addon::refuse_compile_package_native_addon;
+use native_addon::{refuse_compile_package_native_addon, refuse_node_addon_binary};
 use parse_error::annotate_parse_error;
 use static_require_transform::transform_static_literal_requires;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
@@ -311,6 +311,7 @@ fn collect_module_one(
             });
         }
 
+        refuse_node_addon_binary(&canonical)?;
         let source = fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
         progress.record(ProgressSnapshot {
@@ -420,6 +421,7 @@ fn collect_module_one(
         stub.source
     } else {
         // It's a TypeScript (or synthetic JSON/text) file to compile natively.
+        refuse_node_addon_binary(&canonical)?;
         fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
     };
@@ -507,7 +509,11 @@ fn collect_module_one(
     // delta to the prefix so the wrapped-line → original-line subtraction is
     // computed against the FINAL parsed source.
     let lines_before_transform = source.bytes().filter(|&b| b == b'\n').count();
-    let source = transform_static_literal_requires(&source, &ctx.compile_packages);
+    let source = transform_static_literal_requires(
+        &source,
+        &ctx.compile_packages,
+        canonical.parent().unwrap_or_else(|| Path::new(".")),
+    );
     if was_cjs_wrapped && ctx.debug_symbols {
         if let Some(prefix_lines) = cjs_wrap_body_prefix_lines {
             let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
@@ -760,6 +766,9 @@ fn collect_module_one(
         }
     };
     *next_class_id = new_next_class_id; // Update the global class_id counter
+                                        // Preserve native result types before async lowering splits awaited values
+                                        // across synthetic locals. The later global fixup remains for inlined code.
+    perry_hir::fix_local_native_instances(&mut hir_module);
 
     // #2309 Stage 2: fold build-time `process.env` branches BEFORE dynamic
     // `import()` edges are registered below, so a dead `import()` inside a
@@ -1860,7 +1869,7 @@ fn collect_module_finish(
             for prior_module in ctx.native_modules.values() {
                 for class in &prior_module.classes {
                     for f in &class.fields {
-                        if let perry_types::Type::Named(field_class) = &f.ty {
+                        if let perry_hir::types::Type::Named(field_class) = &f.ty {
                             extra_class_fields
                                 .entry((class.name.clone(), f.name.clone()))
                                 .or_insert_with(|| field_class.clone());

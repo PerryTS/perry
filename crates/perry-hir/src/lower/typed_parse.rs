@@ -8,7 +8,7 @@
 //! Visibility note: bumped from `pub(super)` to `pub(crate)` so the
 //! mod.rs named re-export can propagate the symbols across the crate.
 
-use perry_types::Type;
+use crate::types::Type;
 
 use super::*;
 

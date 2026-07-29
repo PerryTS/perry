@@ -47,6 +47,8 @@
 //! Tracks discussion #3486. Near-term Win32 polish on the default target lives
 //! in #4681.
 
+#![cfg(target_os = "windows")]
+
 // Re-export the entire Win32 backend. For Rust consumers this exposes the same
 // module API as `perry-ui-windows`; for the C ABI it is a no-op (the
 // `#[no_mangle]` entry points are emitted when `perry-ui-windows` is compiled

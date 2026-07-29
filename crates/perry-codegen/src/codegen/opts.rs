@@ -216,7 +216,7 @@ pub struct CompileOptions {
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// Type alias map (name → Type) aggregated from all modules. Codegen
     /// uses this to resolve `Named` types in function signatures.
-    pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
+    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Imported function parameter counts, keyed by function name.
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #608 — imported function names whose source-side signature
@@ -230,7 +230,7 @@ pub struct CompileOptions {
     /// just trailing), matching `arguments.length` semantics.
     pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
     /// Imported function return types, keyed by local function name.
-    pub imported_func_return_types: std::collections::HashMap<String, perry_types::Type>,
+    pub imported_func_return_types: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Names of imports that are exported VARIABLES (not functions). When an
     /// `ExternFuncRef` with one of these names appears as a value (not as a
     /// Call callee), the codegen calls the getter function to fetch the value
@@ -530,7 +530,7 @@ pub struct ImportedClass {
     /// class returns `Type::Any` and the dispatch chain breaks at the
     /// first hop. Empty (or filled with `Type::Any`) is the legacy fallback
     /// when the source side hasn't been updated to populate it yet.
-    pub field_types: Vec<perry_types::Type>,
+    pub field_types: Vec<perry_hir::types::Type>,
     /// Class id assigned by the source module. When present, the importing
     /// module reuses this id in its `class_ids` map so that `instanceof`
     /// on an imported class compares against the same id stamped onto
@@ -598,7 +598,7 @@ pub(crate) struct CrossModuleCtx {
     /// sloppy/strict `this` resolution sees "no receiver" instead of a
     /// leaked receiver from an enclosing method dispatch (#3576).
     pub funcs_reading_dynamic_this: std::collections::HashSet<u32>,
-    pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
+    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.
     /// Cloned from the same field so codegen helpers reachable via
@@ -633,7 +633,7 @@ pub(crate) struct CrossModuleCtx {
     /// `arguments` rest. The cross-module call bundles ALL args into it (not
     /// just trailing), matching `arguments.length` semantics.
     pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
-    pub imported_func_return_types: std::collections::HashMap<String, perry_types::Type>,
+    pub imported_func_return_types: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Refs #915 (gap 3 / #321 follow-up): function ids in THIS module
     /// whose body unconditionally returns a `ClassRef` (or transitively
     /// returns another such factory). Maps function id → produced
@@ -737,6 +737,14 @@ pub(crate) struct CrossModuleCtx {
     pub returns_int_functions: std::collections::HashSet<u32>,
     /// Single-argument integer helpers that return the argument coerced to i32.
     pub i32_identity_functions: std::collections::HashSet<u32>,
+    /// Representation-selection Phase 2 (`codegen/spec_abi.rs`): FuncId →
+    /// specialization plan for functions with an emitted full-body specialized
+    /// entry (internal linkage, named by `spec_function_name`). Mutually
+    /// exclusive with the typed_abi clone families and `i64_specialized`.
+    pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// Phase 2 pre-pass: LocalIds proven to permanently hold one specific
+    /// non-view typed array (see `collectors/spec_abi_sites.rs`).
+    pub spec_ta_bindings: std::collections::HashMap<u32, crate::collectors::SpecTaBinding>,
     /// User functions that have a generated internal typed-f64 clone. The
     /// public wrapper keeps the JSValue ABI; direct numeric call sites may call
     /// the clone.
@@ -789,6 +797,15 @@ pub(crate) struct CrossModuleCtx {
     /// calling the clone.
     pub typed_f64_receiver_methods:
         std::collections::HashMap<(String, String), super::typed_abi::TypedReceiverMethodInfo>,
+    /// Representation-selection Phase 5a: `(class, method)` pairs that have a
+    /// generated `internal` proven-`this` clone
+    /// (`collectors/proven_this.rs`). Keys are OWN declarations of
+    /// module-local classes only, which is precisely the condition the two
+    /// routing sites rely on: a hit means the receiver's proven exact class is
+    /// the class the clone was compiled for, so `this` cannot be a subclass
+    /// instance with a different chain.
+    pub pshape_methods:
+        std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
     /// Inline closure bodies that have a generated internal typed-f64 clone.
     /// Only statically-known local closure calls may select these clones after
     /// closure identity/arity and numeric argument guards pass.
@@ -911,4 +928,12 @@ pub(crate) struct CrossModuleCtx {
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`
     /// is empty (side-effect-only modules with no `export`s).
     pub is_dynamic_import_target: bool,
+    /// Inline-hot-small pre-pass result: `FuncId`s in THIS module that have
+    /// ≥1 direct call site inside a loop (`for`/`while`/`do-while`). Consumed
+    /// by `compile_function` to decide whether a small callee earns LLVM's
+    /// `inlinehint`. Built once per module via
+    /// `collectors::collect_hot_loop_callees`. Empty when
+    /// `PERRY_INLINE_HOT_SMALL` is off (the flag is checked at the decision
+    /// site, so the set is still populated but simply not consulted).
+    pub hot_loop_callees: std::collections::HashSet<u32>,
 }

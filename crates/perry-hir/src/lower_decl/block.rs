@@ -1,5 +1,5 @@
+use crate::types::{LocalId, Type};
 use anyhow::{bail, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::*;
@@ -1256,7 +1256,7 @@ pub fn lower_fn_body_block_stmt(
     // refresh-before-EVERY-return placement.
     {
         let mut re_regs: Vec<Stmt> = Vec::new();
-        let mut re_reg_capsets: Vec<(Stmt, std::collections::HashSet<perry_types::LocalId>)> =
+        let mut re_reg_capsets: Vec<(Stmt, std::collections::HashSet<crate::types::LocalId>)> =
             Vec::new();
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
@@ -1279,7 +1279,7 @@ pub fn lower_fn_body_block_stmt(
                         // they ALREADY carry appends; restrict this pass to
                         // non-member code by walking the lowered body only
                         // (member bodies live in pending_classes, not here).
-                        let cap_args: Vec<(perry_types::LocalId, perry_types::LocalId)> =
+                        let cap_args: Vec<(crate::types::LocalId, crate::types::LocalId)> =
                             captured.iter().map(|id| (*id, *id)).collect();
                         for s in body.iter_mut() {
                             super::class_captures::append_new_args_stmt(s, &cname, &cap_args, true);

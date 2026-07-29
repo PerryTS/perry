@@ -1,6 +1,7 @@
 # Architecture
 
-This is a brief overview for contributors. For detailed implementation notes, see the project's `CLAUDE.md`.
+This is a brief overview for contributors. The rules for creating, retaining,
+or removing workspace crates live in the [crate policy](crate-policy.md).
 
 ## Compilation Pipeline
 
@@ -24,19 +25,19 @@ Native Executable
 |-------|---------|
 | `perry` | CLI driver, command parsing, compilation orchestration |
 | `perry-parser` | SWC wrapper for TypeScript parsing |
-| `perry-types` | Type system definitions |
-| `perry-hir` | HIR data structures (`ir.rs`) and AST→HIR lowering (`lower.rs`) |
+| `perry-hir` | HIR types and data structures, plus AST→HIR lowering |
 | `perry-transform` | IR passes: function inlining, closure conversion, async lowering |
-| `perry-codegen-llvm` | LLVM-based native code generation |
+| `perry-codegen` | LLVM-based native code generation |
 | `perry-codegen-wasm` | WebAssembly code generation for `--target web` / `--target wasm` (HIR → WASM bytecode + JS bridge) |
 | `perry-codegen-js` | Legacy JavaScript code generator (still present for the JS minifier; the JS-emit `--target web` path was consolidated into `perry-codegen-wasm`) |
 | `perry-codegen-swiftui` | SwiftUI code generation for WidgetKit extensions |
 | `perry-runtime` | Runtime library: NaN-boxed values, GC, arena allocator, objects, arrays, strings |
-| `perry-stdlib` | Node.js API implementations: mysql2, redis, fastify, bcrypt, etc. |
-| `perry-ui` | Shared UI types |
+| `perry-ffi` | Stable interface used by native binding crates |
+| `perry-stdlib` | Runtime-coupled Node.js and Perry standard-library implementations |
+| `perry-ext-*` | Independently linked native bindings selected per program |
+| `perry-ui` / `perry-ui-model` | Shared UI interface and public model metadata |
 | `perry-ui-macos` | macOS UI (AppKit) |
 | `perry-ui-ios` | iOS UI (UIKit) |
-| `perry-jsruntime` | JavaScript interop via QuickJS |
 
 ## Key Concepts
 
@@ -68,7 +69,7 @@ UI widgets are represented as small integer handles NaN-boxed with `POINTER_TAG`
 The codegen crate is organized into focused modules:
 
 ```
-perry-codegen-llvm/src/
+perry-codegen/src/
   codegen.rs       # Main entry, module compilation
   types.rs         # Type definitions, context structs
   util.rs          # Helper functions

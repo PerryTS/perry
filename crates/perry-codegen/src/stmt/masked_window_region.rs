@@ -44,7 +44,8 @@ use perry_hir::{Expr, Stmt};
 
 use super::loops::{
     local_is_number_array, local_is_untyped_candidate, packed_f64_range_loop_pure_expr_collect,
-    packed_loop_array_binding_storage_is_addressable, PackedF64RangeArrayAccess,
+    packed_loop_array_binding_storage_is_addressable, record_packed_f64_range_static_access,
+    PackedF64RangeArrayAccess,
 };
 use super::{emit_shadow_clears_after_stmt, lower_stmt};
 use crate::expr::{
@@ -68,6 +69,13 @@ pub(super) struct MaskedWindowRegionArray {
     /// Merged static window over every tracked read of this array.
     pub lo: i64,
     pub hi: i64,
+    /// Representation-selection Phase 2: the binding carries a
+    /// `storage_inline_proven` I32 `BufferViewSlot` whose CONSTANT length
+    /// covers the merged window — the ta_i32 classification is a compile-time
+    /// fact, so no runtime probe is needed for this array. When EVERY region
+    /// array is proven, the region lowers as a single guard-free fast copy
+    /// (no probes, no plain/slow copies, no branches).
+    pub proven_ta_i32: bool,
 }
 
 /// One scheduled fast-copy type refinement: after lowering the statement at
@@ -78,6 +86,16 @@ pub(super) struct RegionRefinement {
     /// `true` → set `Type::Number`; `false` → restore the original type (the
     /// local was reassigned a value we can no longer prove numeric).
     pub set_number: bool,
+    /// #6794 follow-up (a): when `true`, the ta_i32 fast copy ALSO binds
+    /// `local_id` to a region-scoped i32 shadow slot (`i32_counter_slots`) at
+    /// this point, so a `>>>`/`&`/`^` chain on an untyped-init local stays in
+    /// native i32 instead of paying a branchless ToInt32 tower per op (the
+    /// bcryptjs `_encipher` residual: `l/r` init from a dynamic `lr[off]` read,
+    /// so they never earn a static i32 slot). Only set on `set_number`
+    /// refinements whose local has EVERY in-region write strictly-i32-bounded
+    /// (per `is_strictly_i32_bounded_expr`) and is never un-refined — so every
+    /// write maintains the slot and the value is always a true signed i32.
+    pub as_i32: bool,
 }
 
 pub(super) struct MaskedWindowRegion {
@@ -161,7 +179,7 @@ fn expr_is_number_under(
             refined.contains(id)
                 || matches!(
                     ctx.local_types.get(id),
-                    Some(perry_types::Type::Number | perry_types::Type::Int32)
+                    Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
                 )
         }
         Expr::IndexGet { object, index } => {
@@ -228,6 +246,147 @@ fn expr_is_number_under(
     }
 }
 
+/// #6794 follow-up (a): region locals eligible for i32-slot refinement — a
+/// `LocalSet` target whose EVERY in-region write is strictly-i32-bounded (a
+/// bitwise / `| 0` / `Math.imul` result, i.e. a true signed i32) and that is
+/// never an `Update` target (`x++` is full-f64 ToNumeric, not a mod-2^32 wrap).
+///
+/// Uses EMPTY oracle / const sets: `is_strictly_i32_bounded_expr`'s bitwise and
+/// `| 0` arms are self-contained (they don't consult any of those sets), so this
+/// soundly admits the Blowfish round shape (`l = (l ^ P[k]) | 0`,
+/// `r = ((… S[…] …) ^ …) | 0`) while conservatively dropping copy-shaped writes
+/// (`l = r`, which would need the function-wide i32-ranged oracle).
+fn region_i32_bounded_write_locals(stmts: &[Stmt]) -> std::collections::HashSet<u32> {
+    let empty = std::collections::HashSet::new();
+    let empty_views = std::collections::HashMap::new();
+    let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut disqualified: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for stmt in stmts {
+        match stmt {
+            Stmt::Expr(Expr::LocalSet(id, value)) => {
+                written.insert(*id);
+                let strict = crate::collectors::is_strictly_i32_bounded_expr(
+                    value,
+                    &empty,
+                    &empty,
+                    &empty,
+                    &empty,
+                    &empty_views,
+                    &mut |_| {},
+                );
+                if !strict {
+                    disqualified.insert(*id);
+                }
+            }
+            Stmt::Expr(Expr::Update { id, .. }) => {
+                disqualified.insert(*id);
+            }
+            _ => {}
+        }
+    }
+    written.retain(|id| !disqualified.contains(id));
+    written
+}
+
+/// Phase 2: decompose a region-admissible proven-view element store —
+/// `IndexSet`/`PutValueSet` on a `storage_inline_proven` integer-element view
+/// receiver with an exact-i32 index shape. Element writes cannot rebind the
+/// receiver, resize it, or move its storage (non-view typed arrays are
+/// non-movable and non-detachable), and the checked-store lowering emits no
+/// calls, so the statement is safe inside every region copy.
+fn proven_view_store_parts<'e>(
+    ctx: &FnCtx<'_>,
+    expr: &'e Expr,
+) -> Option<(u32, &'e Expr, &'e Expr)> {
+    let (object, index, value) = match expr {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => (object, index, value),
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            let (Expr::LocalGet(t), Expr::LocalGet(r)) = (target.as_ref(), receiver.as_ref())
+            else {
+                return None;
+            };
+            if t != r {
+                return None;
+            }
+            (target, key, value)
+        }
+        _ => return None,
+    };
+    let Expr::LocalGet(id) = object.as_ref() else {
+        return None;
+    };
+    if !crate::expr::local_is_proven_int_store_view(ctx, *id) {
+        return None;
+    }
+    if !crate::expr::index_is_exact_i32_shape(ctx, index) {
+        return None;
+    }
+    Some((*id, index, value))
+}
+
+/// Ctx-aware operand collect for admitted proven-view stores: the same pure
+/// shapes as `packed_f64_range_loop_pure_expr_collect`, plus two ctx-backed
+/// index forms the ctx-free walk cannot see — a compile-time-constant index
+/// (`P[BLOWFISH_NUM_ROUNDS + 1]`, resolved through module-const folding) is a
+/// tracked single-element window, and an exact-i32 dynamic index on a proven
+/// inline view (`lr[off]`) is a pure UNTRACKED read (it lowers per-access
+/// through the checked tier in every copy).
+fn region_store_operand_collect(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+    accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+) -> bool {
+    match expr {
+        Expr::IndexGet { object, index } => {
+            let Expr::LocalGet(arr_id) = object.as_ref() else {
+                return false;
+            };
+            let window = crate::collectors::static_index_window(index).or_else(|| {
+                crate::expr::int_range_expr(ctx, index)
+                    .filter(|range| range.min == range.max)
+                    .map(|range| (range.min, range.max))
+            });
+            if let Some((lo, hi)) = window {
+                if lo < 0 || hi >= i64::from(i32::MAX) {
+                    return false;
+                }
+                if !region_store_operand_collect(ctx, index, accesses) {
+                    return false;
+                }
+                record_packed_f64_range_static_access(accesses, *arr_id, lo, hi);
+                return true;
+            }
+            crate::expr::local_is_proven_int_store_view(ctx, *arr_id)
+                && crate::expr::index_is_exact_i32_shape(ctx, index)
+                && region_store_operand_collect(ctx, index, accesses)
+        }
+        Expr::LocalGet(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            region_store_operand_collect(ctx, left, accesses)
+                && region_store_operand_collect(ctx, right, accesses)
+        }
+        Expr::Unary { operand, .. } | Expr::NumberCoerce(operand) => {
+            region_store_operand_collect(ctx, operand, accesses)
+        }
+        _ => false,
+    }
+}
+
 /// Match a masked-window region starting at `stmts[0]`. Returns `None` when
 /// the run is too short, tracks no eligible array, or carries fewer than
 /// [`REGION_MIN_TRACKED_READS`] tracked reads.
@@ -241,6 +400,11 @@ pub(super) fn try_match_masked_window_region(
     let mut accesses: std::collections::BTreeMap<u32, PackedF64RangeArrayAccess> =
         std::collections::BTreeMap::new();
     let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Phase 2: receivers of admitted proven-view element STORES. An element
+    // write never rebinds/resizes/moves a proven inline typed array, so such
+    // statements are region-safe — but a stored-to array must never be in the
+    // masked-READ eligible set (kept read-only).
+    let mut store_receivers: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut len = 0usize;
     for stmt in stmts {
         let ok = match stmt {
@@ -264,6 +428,23 @@ pub(super) fn try_match_masked_window_region(
                 true
             }
             Stmt::Expr(expr) => {
+                if let Some((receiver_id, index, value)) = proven_view_store_parts(ctx, expr) {
+                    // Admit the store: its index/value sub-expressions are held
+                    // to the ctx-aware collect rule (their masked reads join
+                    // the tracked set — `lr[off] = r ^ P[K + 1]` tracks the
+                    // `P[...]` read, resolving `K` through compile-time
+                    // constants).
+                    let mut trial = accesses.clone();
+                    if region_store_operand_collect(ctx, index, &mut trial)
+                        && region_store_operand_collect(ctx, value, &mut trial)
+                    {
+                        accesses = trial;
+                        store_receivers.insert(receiver_id);
+                        len += 1;
+                        continue;
+                    }
+                    break;
+                }
                 let mut trial = accesses.clone();
                 if packed_f64_range_loop_pure_expr_collect(
                     expr,
@@ -292,8 +473,13 @@ pub(super) fn try_match_masked_window_region(
     for access in accesses.values() {
         // A binding written anywhere in the region (`S = T` rebinding, or a
         // tracked store) is dropped from the eligible set — its reads keep
-        // the ordinary per-access lowering in every copy.
-        if access.written || written.contains(&access.array_id) {
+        // the ordinary per-access lowering in every copy. Element-STORE
+        // receivers (admitted proven-view stores) are likewise kept out: the
+        // eligible read set stays read-only.
+        if access.written
+            || written.contains(&access.array_id)
+            || store_receivers.contains(&access.array_id)
+        {
             continue;
         }
         if access.counter.is_some() {
@@ -320,7 +506,31 @@ pub(super) fn try_match_masked_window_region(
         {
             continue;
         }
-        if !local_is_number_array(ctx, access.array_id)
+        // Phase 2 proven class: an inline-storage-proven Int32 view whose
+        // constant length covers the window classifies as ta_i32 at COMPILE
+        // time (kind fixed at construction, length immutable, storage
+        // non-movable, in-window reads in-bounds by arithmetic). Requires an
+        // undowngraded view (`allows_noalias` + `scope_idx`) exactly like the
+        // sibling proven tiers — hazard paths (closure capture, unknown-call
+        // escape, aliasing) clear those markers when the tracked data slot can
+        // no longer be trusted, and this tier emits NO runtime re-validation.
+        let proven_ta_i32 = ctx
+            .buffer_view_slots
+            .get(&access.array_id)
+            .is_some_and(|view| {
+                view.storage_inline_proven
+                    && view.native_owned.is_none()
+                    && view.alias.allows_noalias()
+                    && view.scope_idx.is_some()
+                    && view.index_unit == crate::native_value::BufferIndexUnit::Element
+                    && matches!(view.elem, crate::native_value::BufferElem::I32)
+                    && matches!(
+                        view.length_source,
+                        Some(crate::native_value::LengthSource::Constant(len)) if hi < len
+                    )
+            });
+        if !proven_ta_i32
+            && !local_is_number_array(ctx, access.array_id)
             && !local_is_untyped_candidate(ctx, access.array_id)
         {
             continue;
@@ -329,12 +539,25 @@ pub(super) fn try_match_masked_window_region(
             array_id: access.array_id,
             lo,
             hi,
+            proven_ta_i32,
         });
     }
     if arrays.is_empty() {
         return None;
     }
 
+    if std::env::var("PERRY_REPSEL_DEBUG").as_deref() == Ok("1") {
+        eprintln!(
+            "masked-region match in {}: len={} arrays={:?} stores={:?}",
+            ctx.source_function,
+            len,
+            arrays
+                .iter()
+                .map(|a| (a.array_id, a.lo, a.hi, a.proven_ta_i32))
+                .collect::<Vec<_>>(),
+            store_receivers
+        );
+    }
     let eligible: std::collections::HashSet<u32> =
         arrays.iter().map(|array| array.array_id).collect();
     let mut reads = 0usize;
@@ -362,7 +585,7 @@ pub(super) fn try_match_masked_window_region(
             && !ctx.closure_captures.contains_key(&id)
             && !matches!(
                 ctx.local_types.get(&id),
-                Some(perry_types::Type::Number | perry_types::Type::Int32)
+                Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
             )
     };
     for (offset, stmt) in stmts[..len].iter().enumerate() {
@@ -374,6 +597,7 @@ pub(super) fn try_match_masked_window_region(
                             stmt_offset: offset,
                             local_id: *id,
                             set_number: true,
+                            as_i32: false,
                         });
                     }
                 } else if refined.remove(id) {
@@ -381,6 +605,7 @@ pub(super) fn try_match_masked_window_region(
                         stmt_offset: offset,
                         local_id: *id,
                         set_number: false,
+                        as_i32: false,
                     });
                 }
             }
@@ -390,6 +615,28 @@ pub(super) fn try_match_masked_window_region(
             // number is a number); an unrefined local stays unrefined.
             Stmt::Expr(Expr::Update { .. }) => {}
             _ => {}
+        }
+    }
+
+    // #6794 follow-up (a): promote a Number refinement to an i32-slot refinement
+    // when the local's EVERY in-region write is strictly-i32-bounded AND it is
+    // never un-refined (no `set_number == false` entry). "Never un-refined"
+    // guarantees every write after the first stays i32-lowerable, so the
+    // region-scoped i32 shadow slot the ta_i32 copy binds is maintained by every
+    // write and never reads back a stale value. The un-refined case is left as
+    // an ordinary Number refinement (f64), preserving today's behaviour.
+    let i32_write_locals = region_i32_bounded_write_locals(&stmts[..len]);
+    let un_refined: std::collections::HashSet<u32> = refinements
+        .iter()
+        .filter(|r| !r.set_number)
+        .map(|r| r.local_id)
+        .collect();
+    for refinement in refinements.iter_mut() {
+        if refinement.set_number
+            && i32_write_locals.contains(&refinement.local_id)
+            && !un_refined.contains(&refinement.local_id)
+        {
+            refinement.as_i32 = true;
         }
     }
 
@@ -414,6 +661,7 @@ fn lower_region_copy(
     emit_shadow_clears: bool,
     refinements: &[RegionRefinement],
     privatize: bool,
+    enable_i32: bool,
 ) -> Result<()> {
     // Locals refined to Number and never un-refined for the rest of the
     // region. When `privatize` holds (no enclosing `try` — an exception
@@ -430,8 +678,14 @@ fn lower_region_copy(
         .map(|refinement| refinement.local_id)
         .collect();
     let mut privatized: Vec<(u32, String)> = Vec::new();
-    let mut saved: Vec<(u32, Option<perry_types::Type>)> = Vec::new();
+    let mut saved: Vec<(u32, Option<perry_hir::types::Type>)> = Vec::new();
     let mut saved_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // #6794 follow-up (a): region-scoped i32 shadow slots this copy bound into
+    // `ctx.i32_counter_slots` (ta_i32 copy only). Removed at copy end so the
+    // plain_f64 / slow copies — which share `ctx.i32_counter_slots` — never see
+    // an untyped-array masked read as an i32 source (their reads are f64, so a
+    // leaked slot would be maintained by no write and read back stale).
+    let mut bound_i32: Vec<u32> = Vec::new();
     let mut result = Ok(());
     'stmts: for (offset, stmt) in region_stmts.iter().enumerate() {
         result = lower_stmt(ctx, stmt);
@@ -454,7 +708,7 @@ fn lower_region_copy(
                 saved.push((id, ctx.local_types.get(&id).cloned()));
             }
             if set_number {
-                ctx.local_types.insert(id, perry_types::Type::Number);
+                ctx.local_types.insert(id, perry_hir::types::Type::Number);
                 // The local now provably holds a number for the rest of the
                 // copy (or until an unset): clear its shadow slot once and
                 // suppress the per-statement shadow updates — numbers need
@@ -472,6 +726,11 @@ fn lower_region_copy(
                         if !already_cleared {
                             crate::expr::emit_shadow_slot_clear(ctx, slot_idx);
                         }
+                        // #6794 (b): the slot now holds 0 and suppression blocks
+                        // every further write to it, so record it — each later
+                        // per-statement clear of this slot is a redundant
+                        // `js_shadow_slot_set(slot, 0)` TLS hit we now skip.
+                        ctx.suppressed_cleared_shadow_slots.insert(slot_idx);
                     }
                 }
                 if privatize && !unset_ids.contains(&id) {
@@ -481,6 +740,26 @@ fn lower_region_copy(
                         ctx.block().store(DOUBLE, &current, &private_slot);
                         ctx.locals.insert(id, private_slot);
                         privatized.push((id, original_slot));
+                    }
+                }
+                // #6794 follow-up (a): bind a region-scoped i32 shadow slot so
+                // this local's `>>>`/`&`/`^`/`| 0` chain lowers to native i32
+                // (tower-free) for the rest of the ta_i32 copy — the
+                // disqualified-init (`l = lr[off]`) locals never earn one
+                // statically. Seed it from the just-written value, which is a
+                // true signed i32 (every in-region write is strictly-i32-bounded,
+                // guaranteed by `as_i32`), so `fptosi` is exact. `LocalSet`'s i32
+                // path (`literals_vars.rs`) then maintains BOTH the i32 slot and
+                // the double shadow on every later write, so the double slot the
+                // slot is dropped back to at copy end stays correct.
+                if enable_i32 && refinements[r].as_i32 && !ctx.i32_counter_slots.contains_key(&id) {
+                    if let Some(slot) = ctx.locals.get(&id).cloned() {
+                        let i32_slot = ctx.func.alloca_entry(I32);
+                        let current = ctx.block().load(DOUBLE, &slot);
+                        let as_i32 = ctx.block().fptosi(DOUBLE, &current, I32);
+                        ctx.block().store(I32, &as_i32, &i32_slot);
+                        ctx.i32_counter_slots.insert(id, i32_slot);
+                        bound_i32.push(id);
                     }
                 }
             } else {
@@ -499,6 +778,9 @@ fn lower_region_copy(
                 // it again.
                 if ctx.masked_region_scalar_locals.remove(&id) {
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
+                        // #6794 (b): suppression ended — later clears of this slot
+                        // are real again, so stop skipping them.
+                        ctx.suppressed_cleared_shadow_slots.remove(&slot_idx);
                         if let Some(local_slot) = ctx.locals.get(&id).cloned() {
                             crate::expr::emit_shadow_slot_bind_for_local(ctx, id);
                             let current = ctx.block().load(DOUBLE, &local_slot);
@@ -524,11 +806,21 @@ fn lower_region_copy(
         }
         ctx.locals.insert(*id, original_slot.clone());
     }
+    // #6794 follow-up (a): drop this copy's region-scoped i32 shadow slots so
+    // the plain_f64 / slow copies (which share `ctx.i32_counter_slots`) fall back
+    // to their own lowering. Every write maintained the double slot, so
+    // post-region reads read the correct value there.
+    for id in &bound_i32 {
+        ctx.i32_counter_slots.remove(id);
+    }
     // Drop any still-active suppressions before leaving the copy — the slow
     // copy and post-region code use the ordinary shadow protocol.
     for (id, _) in &saved {
         ctx.masked_region_scalar_locals.remove(id);
     }
+    // #6794 (b): the redundant-clear skip set is scoped to this copy; drop it so
+    // the next copy / post-region code emits real clears again.
+    ctx.suppressed_cleared_shadow_slots.clear();
     for (id, original) in saved {
         match original {
             Some(original) => {
@@ -551,6 +843,47 @@ pub(super) fn lower_masked_window_region(
     emit_shadow_clears: bool,
     region: &MaskedWindowRegion,
 ) -> Result<()> {
+    // Phase 2: when EVERY region array is compile-time-proven ta_i32 (spec-ABI
+    // `TaPtr` params, literal-length local views), the runtime classification
+    // is a foregone conclusion — emit ONE fast copy straight-line: no probe
+    // calls, no plain/slow copies, no branches, no merge. The data pointer
+    // comes from the entry-hoisted view slot (stable: typed-array storage
+    // never moves and the region admits no reassignment of the binding).
+    if region.arrays.iter().all(|array| array.proven_ta_i32) {
+        let ta_scope_id = ctx.next_loop_proof_scope_id();
+        for array in &region.arrays {
+            let view = ctx
+                .buffer_view_slots
+                .get(&array.array_id)
+                .cloned()
+                .expect("proven region array must have a view slot");
+            let data_ptr_val = ctx.block().load(crate::types::PTR, &view.data_slot);
+            let data_i64 = ctx.block().ptrtoint(&data_ptr_val, I64);
+            ctx.masked_window_array_facts.push(MaskedWindowArrayFact {
+                array_local_id: array.array_id,
+                scope_id: ta_scope_id,
+                guard_id: "masked_region_ta_i32_proven".to_string(),
+                min_idx: array.lo,
+                max_idx_exclusive: array.hi + 1,
+                values_i32: true,
+                elem: MaskedWindowElem::TaI32 { data_ptr: data_i64 },
+            });
+        }
+        let privatize = ctx.try_depth == 0;
+        let result = lower_region_copy(
+            ctx,
+            region_stmts,
+            base_idx,
+            emit_shadow_clears,
+            &region.refinements,
+            privatize,
+            true,
+        );
+        ctx.masked_window_array_facts
+            .retain(|fact| fact.scope_id != ta_scope_id);
+        return result;
+    }
+
     let ta_pre_idx = ctx.new_block("masked_region.ta_i32.preheader");
     let try_plain_idx = ctx.new_block("masked_region.try_plain");
     let plain_pre_idx = ctx.new_block("masked_region.plain_f64.preheader");
@@ -659,6 +992,10 @@ pub(super) fn lower_masked_window_region(
         emit_shadow_clears,
         &region.refinements,
         privatize,
+        // ta_i32 copy: masked reads are native i32, so bind region-scoped i32
+        // shadow slots and keep the whole bit-mixing chain out of the ToInt32
+        // towers (#6794 follow-up (a)).
+        true,
     )?;
     ctx.masked_window_array_facts
         .retain(|fact| fact.scope_id != ta_scope_id);
@@ -687,6 +1024,9 @@ pub(super) fn lower_masked_window_region(
         emit_shadow_clears,
         &region.refinements,
         privatize,
+        // plain_f64 copy: masked reads are f64, so an i32 shadow slot would be
+        // maintained by no write — keep the ordinary Number lowering here.
+        false,
     )?;
     ctx.masked_window_array_facts
         .retain(|fact| fact.scope_id != plain_scope_id);
@@ -696,7 +1036,15 @@ pub(super) fn lower_masked_window_region(
 
     // Slow copy: the untouched per-access lowering, original static types.
     ctx.current_block = slow_pre_idx;
-    lower_region_copy(ctx, region_stmts, base_idx, emit_shadow_clears, &[], false)?;
+    lower_region_copy(
+        ctx,
+        region_stmts,
+        base_idx,
+        emit_shadow_clears,
+        &[],
+        false,
+        false,
+    )?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }

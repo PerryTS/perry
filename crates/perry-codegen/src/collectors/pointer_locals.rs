@@ -1,5 +1,5 @@
+use perry_hir::types::{FunctionType, Type};
 use perry_hir::{infer_expr_type, BinaryOp, Expr, HirTypeFacts};
-use perry_types::{FunctionType, Type};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone)]
@@ -191,12 +191,31 @@ pub fn collect_pointer_typed_locals(
         matches!(
             ty,
             Type::String
+                // A string-LITERAL type (`"foo"`, or a `"a" | "b"` discriminant
+                // union member) is a heap String at runtime — it needs a root
+                // slot exactly like `Type::String`, or the moving-GC precise scan
+                // reaps a live string → silent corruption.
+                | Type::StringLiteral(_)
                 | Type::Array(_)
                 | Type::Tuple(_)
                 | Type::Object(_)
                 | Type::Named(_)
+                // An unresolved generic type parameter (`T`) can bind to any
+                // heap type; treat it as a pointer (fail-safe).
+                | Type::TypeVar(_)
                 | Type::Promise(_)
                 | Type::Function(_)
+                // A generic instantiation (`Map<K,V>`, `Set<T>`, `WeakMap`,
+                // `Box<T>`, `Array<T>`, a user generic class, …) is always a
+                // heap-reference type. Without this, a `Map`/`Set`-typed local
+                // got NO shadow-stack slot, so the PRECISE moving-GC root scan
+                // never saw it — the object was reaped as dead while still live
+                // (crash: "grown Map must retain its side-allocation owner
+                // record"). The non-moving default GC hid this via its
+                // conservative C-stack scan. Treating a rare non-pointer generic
+                // value as a root is harmless: the GC decode rejects any slot
+                // value that isn't a live heap pointer.
+                | Type::Generic { .. }
                 | Type::BigInt
                 | Type::Any
                 | Type::Unknown

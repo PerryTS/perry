@@ -1,5 +1,5 @@
+use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Expr, Function, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -1044,6 +1044,31 @@ pub fn inline_calls_in_expr(
                 enclosing_class,
                 class_field_types,
             ));
+            exact_receiver_facts.clear();
+        }
+        // #6812 (w6): PutValue references — sloppy-mode `o.k = f(x)` lowers
+        // to PutValueSet, and the missing arm here silently hid every call
+        // in a write's RHS (or computed key) from the inliner, stranding
+        // write loops with trivial helper calls on the generic path.
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            for sub in [target, key, value, receiver] {
+                hoisted.extend(inline_calls_in_expr(
+                    sub,
+                    func_candidates,
+                    method_candidates,
+                    local_types,
+                    exact_receiver_facts,
+                    next_local_id,
+                    enclosing_class,
+                    class_field_types,
+                ));
+            }
             exact_receiver_facts.clear();
         }
         Expr::PropertyGet { object, .. } => {

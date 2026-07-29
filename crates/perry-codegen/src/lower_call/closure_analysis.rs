@@ -17,7 +17,7 @@
 /// NOT into nested closures: those have their own inner-id set.
 pub fn collect_closure_introduced_ids(
     stmt: &perry_hir::Stmt,
-    out: &mut std::collections::HashSet<perry_types::LocalId>,
+    out: &mut std::collections::HashSet<perry_hir::types::LocalId>,
 ) {
     use perry_hir::Stmt;
     match stmt {
@@ -92,8 +92,8 @@ pub fn collect_closure_introduced_ids(
 /// a threading primitive).
 pub fn find_outer_writes_stmt(
     stmt: &perry_hir::Stmt,
-    inner_ids: &std::collections::HashSet<perry_types::LocalId>,
-    out: &mut Vec<perry_types::LocalId>,
+    inner_ids: &std::collections::HashSet<perry_hir::types::LocalId>,
+    out: &mut Vec<perry_hir::types::LocalId>,
 ) {
     use perry_hir::Stmt;
     match stmt {
@@ -196,8 +196,8 @@ pub fn find_outer_writes_stmt(
 
 fn find_outer_writes_expr(
     expr: &perry_hir::Expr,
-    inner_ids: &std::collections::HashSet<perry_types::LocalId>,
-    out: &mut Vec<perry_types::LocalId>,
+    inner_ids: &std::collections::HashSet<perry_hir::types::LocalId>,
+    out: &mut Vec<perry_hir::types::LocalId>,
 ) {
     use perry_hir::Expr;
     match expr {
@@ -282,7 +282,7 @@ pub enum ThreadClosureHazard {
     /// type is not a thread-transferable primitive. Module globals live in
     /// process-wide slots and are read in place — they do NOT go through
     /// the capture deep-copy — so the worker aliases main-heap objects.
-    ModuleGlobalAccess(perry_types::LocalId),
+    ModuleGlobalAccess(perry_hir::types::LocalId),
 }
 
 /// Types whose module-global slot value can be read from a worker thread
@@ -291,8 +291,8 @@ pub enum ThreadClosureHazard {
 /// rooted when they back a module global. `Any` / `Unknown` / type vars are
 /// allowed because this is a best-effort AST-level check — rejecting
 /// unprovable bindings would flag every untyped numeric global.
-fn is_thread_transferable_global_type(ty: &perry_types::Type) -> bool {
-    use perry_types::Type;
+fn is_thread_transferable_global_type(ty: &perry_hir::types::Type) -> bool {
+    use perry_hir::types::Type;
     match ty {
         Type::Void
         | Type::Null
@@ -328,8 +328,8 @@ fn is_thread_transferable_global_type(ty: &perry_types::Type) -> bool {
 /// `local_types`, and `module_global_types` skips `Any`).
 pub fn hazardous_module_global_ids(
     module_globals: &std::collections::HashMap<u32, String>,
-    local_types: &std::collections::HashMap<u32, perry_types::Type>,
-) -> std::collections::HashSet<perry_types::LocalId> {
+    local_types: &std::collections::HashMap<u32, perry_hir::types::Type>,
+) -> std::collections::HashSet<perry_hir::types::LocalId> {
     module_globals
         .keys()
         .filter(|id| {
@@ -353,7 +353,7 @@ pub fn hazardous_module_global_ids(
 /// (#6188/#6212) remain the backstop for what this walk can't prove.
 pub fn find_thread_hazard_in_body(
     body: &[perry_hir::Stmt],
-    hazardous_ids: &std::collections::HashSet<perry_types::LocalId>,
+    hazardous_ids: &std::collections::HashSet<perry_hir::types::LocalId>,
     async_step_closures: &std::collections::HashSet<u32>,
 ) -> Option<ThreadClosureHazard> {
     body.iter()
@@ -362,7 +362,7 @@ pub fn find_thread_hazard_in_body(
 
 fn find_thread_hazard_stmt(
     stmt: &perry_hir::Stmt,
-    hazardous_ids: &std::collections::HashSet<perry_types::LocalId>,
+    hazardous_ids: &std::collections::HashSet<perry_hir::types::LocalId>,
     async_step_closures: &std::collections::HashSet<u32>,
 ) -> Option<ThreadClosureHazard> {
     use perry_hir::Stmt;
@@ -425,7 +425,7 @@ fn find_thread_hazard_stmt(
 
 fn find_thread_hazard_expr(
     e: &perry_hir::Expr,
-    hazardous_ids: &std::collections::HashSet<perry_types::LocalId>,
+    hazardous_ids: &std::collections::HashSet<perry_hir::types::LocalId>,
     async_step_closures: &std::collections::HashSet<u32>,
 ) -> Option<ThreadClosureHazard> {
     use perry_hir::Expr;

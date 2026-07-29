@@ -1,6 +1,6 @@
+use perry_hir::types::LocalId;
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{Expr, Function, Stmt};
-use perry_types::LocalId;
 
 use super::*;
 
@@ -829,8 +829,8 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_hir::types::Type;
     use perry_hir::Param;
-    use perry_types::Type;
     use std::collections::HashSet;
 
     fn param(id: LocalId) -> Param {

@@ -1,7 +1,7 @@
 use super::*;
 
+use crate::types::Type;
 use anyhow::Result;
-use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::lower_types::extract_ts_type_with_ctx;
@@ -247,8 +247,8 @@ fn is_native_arena_alloc_call(ctx: &LoweringContext, call: &ast::CallExpr) -> bo
         && !native_arena_global_is_shadowed(ctx)
 }
 
-fn native_arena_owner_type(ty: &perry_types::Type) -> bool {
-    matches!(ty, perry_types::Type::Named(name) if name == "NativeArena" || name == "NativeArenaOwner")
+fn native_arena_owner_type(ty: &crate::types::Type) -> bool {
+    matches!(ty, crate::types::Type::Named(name) if name == "NativeArena" || name == "NativeArenaOwner")
 }
 
 fn is_native_arena_owner_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
