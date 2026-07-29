@@ -311,10 +311,20 @@ pub(crate) struct RootedOperands {
 /// This is the same staleness #6981 reports one layer in (a raw typed-array
 /// pointer passed under the specialized ABI).
 pub(crate) fn operand_is_reloadable(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::LocalGet(_) | Expr::GlobalGet(_) | Expr::String(_)
-    )
+    // ONLY provably immutable sources. A string literal always re-lowers to a
+    // load of the same `__perry_init_strings_*` handle, so re-reading it can
+    // never observe a different value.
+    //
+    // A local or a module global must NOT be here, even though both are
+    // registered roots whose storage evacuation rewrites. Re-lowering one reads
+    // its value *now*, and "now" is after the later arguments, the field
+    // initializers and possibly an inlined constructor body have run — any of
+    // which may have reassigned it. `new C(g, bump())` where `bump()` sets
+    // `g` must capture `g`'s value at call time; re-lowering produced the
+    // post-`bump()` value, a miscompile rather than a rooting bug. Those
+    // operands get a real temp root instead: the slot preserves the call-time
+    // value AND the collector rewrites it on evacuation.
+    matches!(expr, Expr::String(_))
 }
 
 /// Build the protection **incrementally**, one operand at a time, so each is
@@ -529,11 +539,15 @@ pub(crate) fn operand_needs_root(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     if super::expr_is_known_non_pointer_shadow_value(ctx, expr) {
         return false;
     }
-    match expr {
-        Expr::String(_) | Expr::GlobalGet(_) => false,
-        Expr::LocalGet(id) => !ctx.shadow_slot_map.contains_key(id),
-        _ => true,
-    }
+    // Only a string literal is suppressed: it is a registered root AND
+    // immutable, so `operand_is_reloadable` can recover it with a plain load.
+    //
+    // Locals and module globals are deliberately NOT suppressed. Being a
+    // registered root buys liveness, but the value has to survive relocation
+    // *and* stay the value the call actually observed — and a re-load gives up
+    // the second. Rooting is the only thing that gives both, so they pay for a
+    // slot.
+    !matches!(expr, Expr::String(_))
 }
 
 /// Open an expression-scope temp-root barrier for a call/constructor whose

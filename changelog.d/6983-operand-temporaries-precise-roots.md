@@ -42,15 +42,19 @@
   because a local can be pointer-valued with no shadow slot and therefore no
   precise root at all (that is #6968).
 
-  A temp root buys two things — liveness, and a location the collector rewrites
-  — and the suppressions only give up the first. A suppressed operand reads a
-  registered root, so it can never be *swept*; but evacuation **rewrites that
-  storage**, leaving the pre-collection register pointing at where the object
-  used to be. `operand_is_reloadable` therefore re-emits the load at the
-  re-read point instead of reusing the register: correct under relocation, and
-  a plain `load` rather than a runtime call. This is the same staleness #6981
-  reports one layer in, for a raw typed-array pointer under the specialized
-  ABI.
+  A temp root buys **three** things, and an operand needs all of them: liveness
+  (not swept), a location the collector rewrites (survives relocation), and the
+  value the call actually observed (not a later one). A registered root — a
+  local, a module global, a string literal — supplies the first for free, which
+  tempts you to skip the slot. Skipping it is only safe when the source is also
+  *immutable*: re-loading a local or global recovers the right address after
+  evacuation but reads its value **now**, after later arguments, field
+  initializers and possibly an inlined constructor body have run, any of which
+  may have reassigned it. `new C(g, bump())` where `bump()` sets `g` then
+  captured the post-`bump()` value — a miscompile, not a rooting bug, caught in
+  review and covered by `test_gap_ctor_arg_capture_order.ts`. So only string
+  literals are re-loaded; locals and globals get a real slot, which preserves
+  the call-time value and is rewritten on evacuation.
 
   Cost: on a probe of already-safe shapes (`"user_" + i`, `[1,2,3]`,
   `{a:i,b:total}`, all-local argument lists, `m.set(k, 1)`, `m.get(k)`,
