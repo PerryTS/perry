@@ -23,4 +23,5 @@ mod smoke;
 pub(super) mod support;
 mod teardown;
 mod telemetry_verifier;
+mod temp_roots;
 mod triggers;

@@ -22,6 +22,7 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, I1, I128, I32, I64};
 
+use super::temp_root::{lower_operand_pair_rooted, temp_root_release};
 use super::{is_known_finite, lower_expr, FnCtx};
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
@@ -411,13 +412,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if other_known_primitive {
                         return lower_string_coerce_concat(ctx, left, right, l_is_str, r_is_str);
                     }
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx.block().call(
+                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                    let sum = ctx.block().call(
                         DOUBLE,
                         "js_dynamic_string_or_number_add",
                         &[(DOUBLE, &l), (DOUBLE, &r)],
-                    ));
+                    );
+                    temp_root_release(ctx, guard);
+                    return Ok(sum);
                 }
                 if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) {
                     if let Some(value) = try_lower_small_bigint_literal_binary(
@@ -428,13 +430,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ) {
                         return Ok(value);
                     }
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_dynamic_add",
-                        &[(DOUBLE, &l), (DOUBLE, &r)],
-                    ));
+                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                    let sum =
+                        ctx.block()
+                            .call(DOUBLE, "js_dynamic_add", &[(DOUBLE, &l), (DOUBLE, &r)]);
+                    temp_root_release(ctx, guard);
+                    return Ok(sum);
                 }
                 // Refs #486: neither operand is statically known. Per JS
                 // spec for `+`, if EITHER side is a string at runtime, the
@@ -454,13 +455,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && crate::type_analysis::is_numeric_expr(ctx, right))
                     || add_operands_have_pod_materialization_hazard(ctx, left, right)
                 {
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx.block().call(
+                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                    let sum = ctx.block().call(
                         DOUBLE,
                         "js_dynamic_string_or_number_add",
                         &[(DOUBLE, &l), (DOUBLE, &r)],
-                    ));
+                    );
+                    temp_root_release(ctx, guard);
+                    return Ok(sum);
                 }
             }
             // BigInt arithmetic fast path. NaN-tagged bigints compare
@@ -483,11 +485,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return Ok(value);
                 }
-                let l = lower_expr(ctx, left)?;
-                let r = lower_expr(ctx, right)?;
-                return Ok(ctx
+                let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+                let value = ctx
                     .block()
-                    .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                    .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
+                temp_root_release(ctx, guard);
+                return Ok(value);
             }
             // A non-primitive operand may `ToNumeric` to a BigInt at runtime
             // (`Object(1n)`, or an object with a BigInt-returning

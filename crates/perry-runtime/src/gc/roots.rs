@@ -4,6 +4,7 @@ use std::any::Any;
 mod runtime_handles;
 mod scanner_shims;
 mod shadow_stack;
+mod temp_roots;
 
 pub(super) use runtime_handles::{
     new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
@@ -27,6 +28,17 @@ pub use shadow_stack::{
     js_shadow_slot_set, shadow_stack_depth, SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS,
 };
 pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
+#[cfg(test)]
+pub(crate) use temp_roots::reset_temp_roots;
+#[cfg(test)]
+pub(super) use temp_roots::temp_root_depth;
+pub use temp_roots::{
+    js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,
+    js_gc_temp_root_truncate,
+};
+pub(super) use temp_roots::{
+    new_temp_root_scan_state, scan_temp_roots_mut, scan_temp_roots_mut_step,
+};
 
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
 pub(crate) type BudgetedMutableRootScanner =

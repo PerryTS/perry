@@ -377,6 +377,16 @@ pub fn gc_init() {
         new_runtime_handle_root_scan_state,
         MutableRootScannerSource::RuntimeHandles,
     );
+    // #6951: expression temporaries generated code is holding in SSA registers
+    // across a collection point. Same standing as the shadow stack — a precise
+    // mutable root that is marked AND rewritten — and, like the shadow stack,
+    // load-bearing the moment the conservative native-stack scan is off.
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        scan_temp_roots_mut,
+        scan_temp_roots_mut_step,
+        new_temp_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
     gc_register_mutable_root_scanner(crate::promise::scan_native_async_completion_roots_mut);
     gc_register_budgeted_mutable_root_scanner_with_source(
         promise_mutable_root_scanner,

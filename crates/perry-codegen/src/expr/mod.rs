@@ -133,6 +133,7 @@ mod dispatch;
 mod record_value;
 mod shadow_slot;
 mod slot_rep;
+pub(crate) mod temp_root;
 pub(crate) use slot_rep::{
     canonical_i32_locals_enabled, canonical_local_i32_slot, canonical_str_locals_enabled,
     collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,

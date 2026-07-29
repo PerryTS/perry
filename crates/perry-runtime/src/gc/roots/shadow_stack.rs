@@ -246,10 +246,17 @@ pub(crate) fn shadow_stack_has_active_frame() -> bool {
 /// orphaned frames, reading — and, on the copying/evacuating path,
 /// *writing back into* — `slot_ptrs` that point into stack memory that
 /// has already been unwound and is being reused by the catch body.
+///
+/// The same reasoning applies to the temp-root stack (#6951): generated code
+/// pushes an expression temporary, evaluates something that throws, and never
+/// reaches its `js_gc_temp_root_truncate`. That depth is therefore recorded
+/// here and restored with the frames, so one savepoint covers both precise
+/// root stacks and `crate::exception` needs no separate hook.
 #[derive(Copy, Clone)]
 pub(crate) struct ShadowSavepoint {
     frame_top: usize,
     len: usize,
+    temp_roots: usize,
 }
 
 impl ShadowSavepoint {
@@ -258,6 +265,7 @@ impl ShadowSavepoint {
     pub(crate) const EMPTY: ShadowSavepoint = ShadowSavepoint {
         frame_top: usize::MAX,
         len: 0,
+        temp_roots: 0,
     };
 }
 
@@ -270,6 +278,7 @@ pub(crate) fn shadow_stack_savepoint() -> ShadowSavepoint {
         ShadowSavepoint {
             frame_top: s.frame_top,
             len: s.stack.len(),
+            temp_roots: super::temp_roots::temp_root_depth(),
         }
     })
 }
@@ -294,4 +303,5 @@ pub(crate) fn shadow_stack_restore(sp: ShadowSavepoint) {
         }
         s.frame_top = sp.frame_top;
     });
+    super::temp_roots::temp_roots_restore(sp.temp_roots);
 }

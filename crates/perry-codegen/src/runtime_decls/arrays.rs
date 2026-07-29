@@ -101,6 +101,21 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
     module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
     module.declare_function("js_gc_write_barriers_emitted", VOID, &[I32]);
+    // #6951: precise roots for expression temporaries the shadow stack has no
+    // slot for — the argument accumulator of a variadic call, an operand
+    // waiting for its sibling. Push before the collection point, read back
+    // after (an evacuating cycle rewrites the slot, so the pre-collection SSA
+    // register is stale), truncate when the region ends.
+    //   js_gc_temp_root_push(value: u64) -> u32 (slot index)
+    //   js_gc_temp_root_get(idx: u32) -> u64
+    //   js_gc_temp_root_set(idx: u32, value: u64)
+    //   js_gc_temp_root_truncate(base: u32)
+    //   js_array_push_f64_temp_rooted(idx: u32, value: f64)
+    module.declare_function("js_gc_temp_root_push", I32, &[I64]);
+    module.declare_function("js_gc_temp_root_get", I64, &[I32]);
+    module.declare_function("js_gc_temp_root_set", VOID, &[I32, I64]);
+    module.declare_function("js_gc_temp_root_truncate", VOID, &[I32]);
+    module.declare_function("js_array_push_f64_temp_rooted", VOID, &[I32, DOUBLE]);
     // Phase 2 of the moving-GC project: emitted at loop back-edges (only when
     // compiled with the moving-safepoint opt-in) so a deferred nursery
     // collection can run at a precise-root safepoint. No-op at runtime unless

@@ -7,6 +7,10 @@ use anyhow::{anyhow, bail, Result};
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
+use crate::expr::temp_root::{
+    lower_exprs_rooted, lower_operand_pair_rooted, temp_root_get_i64, temp_root_push_i64,
+    temp_root_release, temp_root_truncate,
+};
 use crate::expr::{
     i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
     FnCtx,
@@ -1586,8 +1590,12 @@ pub(crate) fn lower_string_coerce_concat(
     l_is_string: bool,
     r_is_string: bool,
 ) -> Result<String> {
-    let l_box = lower_expr(ctx, left)?;
-    let r_box = lower_expr(ctx, right)?;
+    // #6951: `l_box` is a heap string in an SSA register while `right` is
+    // lowered. If `right` allocates (`"tag" + f()`), a collection sweeps the
+    // left operand and the concat reads freed memory — a segfault, not a
+    // dropped character. `lower_operand_pair_rooted` emits nothing at all when
+    // `right` provably cannot collect, which is the common `"user_" + i` case.
+    let (l_box, r_box, guard) = lower_operand_pair_rooted(ctx, left, right)?;
 
     // Issue #58: fused string+value concat — when one side is a string
     // and the other is not, use the fused runtime call that collapses
@@ -1604,7 +1612,9 @@ pub(crate) fn lower_string_coerce_concat(
             "js_string_concat_value",
             &[(I64, &l_handle), (DOUBLE, &r_box)],
         );
-        return Ok(nanbox_string_inline(blk, &result_handle));
+        let boxed = nanbox_string_inline(blk, &result_handle);
+        temp_root_release(ctx, guard);
+        return Ok(boxed);
     }
 
     if !l_is_string && r_is_string {
@@ -1616,21 +1626,34 @@ pub(crate) fn lower_string_coerce_concat(
             "js_value_concat_string",
             &[(DOUBLE, &l_box), (I64, &r_handle)],
         );
-        return Ok(nanbox_string_inline(blk, &result_handle));
+        let boxed = nanbox_string_inline(blk, &result_handle);
+        temp_root_release(ctx, guard);
+        return Ok(boxed);
     }
 
     // Both non-string (shouldn't normally reach here) — fall back to
     // the generic path.
+    let l_handle = ctx
+        .block()
+        .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &l_box)]);
+    // The coercion of the right operand allocates, and `l_handle` is a bare
+    // string address in an SSA register — root it across that call (#6951).
+    let l_root = temp_root_push_i64(ctx, &l_handle);
+    let r_handle = ctx
+        .block()
+        .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &r_box)]);
+    let l_handle = temp_root_get_i64(ctx, &l_root);
     let blk = ctx.block();
-    let l_handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &l_box)]);
-    let r_handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &r_box)]);
 
     let result_handle = blk.call(
         I64,
         "js_string_concat",
         &[(I64, &l_handle), (I64, &r_handle)],
     );
-    Ok(nanbox_string_inline(blk, &result_handle))
+    let boxed = nanbox_string_inline(blk, &result_handle);
+    temp_root_truncate(ctx, &l_root);
+    temp_root_release(ctx, guard);
+    Ok(boxed)
 }
 
 /// Lower a static `s1 + s2` string concatenation. Both operands must
@@ -1656,8 +1679,9 @@ pub(crate) fn lower_string_concat(
     left: &Expr,
     right: &Expr,
 ) -> Result<String> {
-    let l_box = lower_expr(ctx, left)?;
-    let r_box = lower_expr(ctx, right)?;
+    // #6951: same hazard as `lower_string_coerce_concat` — the left operand is
+    // a heap string in an SSA register across the right operand's evaluation.
+    let (l_box, r_box, guard) = lower_operand_pair_rooted(ctx, left, right)?;
     let blk = ctx.block();
     // SSO-aware fast path: pass operands as NaN-boxed f64s directly to
     // `js_string_concat_sso`, which keeps SSO operands inline (no
@@ -1665,11 +1689,13 @@ pub(crate) fn lower_string_concat(
     // SSO when the total fits 5 bytes, heap-pointer otherwise. Saves up
     // to 3 heap allocations per concat on hot paths like ABC451D's
     // recursive `before + after` (1.4M concats with 1-9 byte operands).
-    Ok(blk.call(
+    let result = blk.call(
         DOUBLE,
         "js_string_concat_box",
         &[(DOUBLE, &l_box), (DOUBLE, &r_box)],
-    ))
+    );
+    temp_root_release(ctx, guard);
+    Ok(result)
 }
 
 /// Cap the per-call part count for the n-way fold. Must match the
@@ -1756,11 +1782,12 @@ pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) ->
     debug_assert!(parts.len() <= CONCAT_CHAIN_MAX_PARTS);
 
     // Lower each part first (in source order); side effects must fire
-    // left-to-right per JS spec.
-    let mut lowered: Vec<String> = Vec::with_capacity(parts.len());
-    for p in parts {
-        lowered.push(lower_expr(ctx, p)?);
-    }
+    // left-to-right per JS spec. #6951: that ordering is exactly what makes
+    // every earlier part a heap value in an SSA register across every later
+    // part's evaluation — this is the template-literal / log-line shape, and
+    // one allocating interpolation was enough to sweep the parts already
+    // lowered. Parts that nothing allocating follows emit no rooting calls.
+    let (lowered, guard) = lower_exprs_rooted(ctx, parts)?;
 
     let n = lowered.len();
     // Hoist the buffer to the function entry block. Issue #167.
@@ -1780,5 +1807,7 @@ pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) ->
         "js_string_concat_chain",
         &[(I64, &base_i64), (I32, &format!("{}", n))],
     );
-    Ok(nanbox_string_inline(blk, &result_handle))
+    let boxed = nanbox_string_inline(blk, &result_handle);
+    temp_root_release(ctx, guard);
+    Ok(boxed)
 }
