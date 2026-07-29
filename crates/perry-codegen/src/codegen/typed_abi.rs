@@ -229,6 +229,9 @@ pub(crate) enum TypedCloneRejectionReason {
     ReceiverClassHasAccessor,
     ReceiverClassHasComputedMember,
     ReceiverClassHasComputedField,
+    /// A subclass re-declares a parent chain field name: the flattened slot
+    /// layout would be ambiguous (Phase 3b chain widening).
+    ReceiverFieldShadowed,
     ReceiverFieldNotOwn,
     ReceiverFieldNotF64,
     ThisEscape,
@@ -276,6 +279,7 @@ impl TypedCloneRejectionReason {
             Self::ReceiverClassHasAccessor => "receiver_class_has_accessor",
             Self::ReceiverClassHasComputedMember => "receiver_class_has_computed_member",
             Self::ReceiverClassHasComputedField => "receiver_class_has_computed_field",
+            Self::ReceiverFieldShadowed => "receiver_field_shadowed",
             Self::ReceiverFieldNotOwn => "receiver_field_not_own",
             Self::ReceiverFieldNotF64 => "receiver_field_not_f64",
             Self::ThisEscape => "this_escape",
@@ -468,15 +472,17 @@ pub(crate) fn typed_f64_method_rejection_reason(
 pub(crate) fn typed_f64_receiver_method_rejection_reason(
     class: &perry_hir::Class,
     method: &Function,
+    classes: &HashMap<String, &perry_hir::Class>,
 ) -> Option<TypedCloneRejectionReason> {
-    typed_f64_receiver_method_candidate(class, method).err()
+    typed_f64_receiver_method_candidate(class, method, classes).err()
 }
 
 pub(crate) fn typed_f64_receiver_method_info(
     class: &perry_hir::Class,
     method: &Function,
+    classes: &HashMap<String, &perry_hir::Class>,
 ) -> Option<TypedReceiverMethodInfo> {
-    typed_f64_receiver_method_candidate(class, method).ok()
+    typed_f64_receiver_method_candidate(class, method, classes).ok()
 }
 
 pub(crate) fn typed_i1_method_rejection_reason(
@@ -887,22 +893,84 @@ fn integer_literal_fits_i32(n: i64) -> bool {
     (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&n)
 }
 
-fn typed_receiver_own_field_index(
-    class: &perry_hir::Class,
-    property: &str,
-) -> Result<u32, TypedCloneRejectionReason> {
-    let mut index = 0u32;
-    for field in &class.fields {
-        if field.key_expr.is_some() {
+/// Flattened, chain-global field view of a receiver class: `(global slot
+/// index, field)` in allocation order — parent-chain fields FIRST, matching
+/// `class_field_global_index` / `js_object_alloc_with_parent` slot layout.
+pub(crate) struct TypedReceiverChainFields<'a> {
+    fields: Vec<(u32, &'a perry_hir::ClassField)>,
+}
+
+/// Build the chain-global field view, applying the receiver-shape admission
+/// checks to EVERY link of the chain (representation-selection Phase 3b
+/// widening of the original `extends_name.is_none()` restriction): each link
+/// must be a modeled, statically-extended user class with no accessors, no
+/// computed members, and no computed field keys; duplicate field names across
+/// the chain (a subclass shadowing a parent field) are rejected — the slot
+/// layout would be ambiguous.
+fn typed_receiver_chain_fields<'a>(
+    classes: &HashMap<String, &'a perry_hir::Class>,
+    class: &'a perry_hir::Class,
+) -> Result<TypedReceiverChainFields<'a>, TypedCloneRejectionReason> {
+    // Chain, self first.
+    let mut chain: Vec<&perry_hir::Class> = Vec::new();
+    let mut current: Option<&perry_hir::Class> = Some(class);
+    let mut seen: HashSet<&str> = HashSet::new();
+    while let Some(link) = current {
+        if !seen.insert(link.name.as_str()) || chain.len() > 64 {
+            return Err(TypedCloneRejectionReason::ReceiverClassExtends);
+        }
+        if link.extends_expr.is_some()
+            || link.native_extends.is_some()
+            || link.heritage_lexically_shadowed
+            || (link.extends.is_some() && link.extends_name.is_none())
+        {
+            return Err(TypedCloneRejectionReason::ReceiverClassExtends);
+        }
+        if !link.getters.is_empty() || !link.setters.is_empty() {
+            return Err(TypedCloneRejectionReason::ReceiverClassHasAccessor);
+        }
+        if !link.computed_members.is_empty() {
+            return Err(TypedCloneRejectionReason::ReceiverClassHasComputedMember);
+        }
+        if link.fields.iter().any(|field| field.key_expr.is_some()) {
             return Err(TypedCloneRejectionReason::ReceiverClassHasComputedField);
         }
+        chain.push(link);
+        current = match link.extends_name.as_deref() {
+            Some(parent) => match classes.get(parent) {
+                Some(parent_class) => Some(*parent_class),
+                None => return Err(TypedCloneRejectionReason::ReceiverClassExtends),
+            },
+            None => None,
+        };
+    }
+    // Parent fields first: walk root-most ancestor down to self.
+    let mut fields: Vec<(u32, &perry_hir::ClassField)> = Vec::new();
+    let mut names: HashSet<&str> = HashSet::new();
+    let mut index = 0u32;
+    for link in chain.iter().rev() {
+        for field in &link.fields {
+            if !names.insert(field.name.as_str()) {
+                return Err(TypedCloneRejectionReason::ReceiverFieldShadowed);
+            }
+            fields.push((index, field));
+            index += 1;
+        }
+    }
+    Ok(TypedReceiverChainFields { fields })
+}
+
+fn typed_receiver_chain_field_index(
+    chain_fields: &TypedReceiverChainFields<'_>,
+    property: &str,
+) -> Result<u32, TypedCloneRejectionReason> {
+    for (index, field) in &chain_fields.fields {
         if field.name == property {
             if crate::typed_shape::type_is_raw_f64_candidate(&field.ty) {
-                return Ok(index);
+                return Ok(*index);
             }
             return Err(TypedCloneRejectionReason::ReceiverFieldNotF64);
         }
-        index += 1;
     }
     Err(TypedCloneRejectionReason::ReceiverFieldNotOwn)
 }
@@ -910,6 +978,7 @@ fn typed_receiver_own_field_index(
 fn typed_f64_receiver_method_candidate(
     class: &perry_hir::Class,
     method: &Function,
+    classes: &HashMap<String, &perry_hir::Class>,
 ) -> Result<TypedReceiverMethodInfo, TypedCloneRejectionReason> {
     if method.is_async || method.is_generator || method.was_plain_async {
         return Err(TypedCloneRejectionReason::AsyncOrGenerator);
@@ -920,21 +989,9 @@ fn typed_f64_receiver_method_candidate(
     if !is_f64_type(&method.return_type) {
         return Err(TypedCloneRejectionReason::ReturnTypeNotF64);
     }
-    // Keep this first slice exact: only methods on a final known receiver shape
-    // with own string-keyed fields. Parent field offsets and inherited method
-    // resolution remain on the generic ABI until the proof is widened.
-    if class.extends_name.is_some() || class.extends.is_some() || class.extends_expr.is_some() {
-        return Err(TypedCloneRejectionReason::ReceiverClassExtends);
-    }
-    if !class.getters.is_empty() || !class.setters.is_empty() {
-        return Err(TypedCloneRejectionReason::ReceiverClassHasAccessor);
-    }
-    if !class.computed_members.is_empty() {
-        return Err(TypedCloneRejectionReason::ReceiverClassHasComputedMember);
-    }
-    if class.fields.iter().any(|field| field.key_expr.is_some()) {
-        return Err(TypedCloneRejectionReason::ReceiverClassHasComputedField);
-    }
+    // Phase 3b widening: extends chains are admitted when every link passes
+    // the receiver-shape checks; field indexes are chain-global.
+    let chain_fields = typed_receiver_chain_fields(classes, class)?;
 
     let mut locals = HashMap::new();
     for param in &method.params {
@@ -956,7 +1013,7 @@ fn typed_f64_receiver_method_candidate(
     let mut used_fields = Vec::new();
     let mut used_field_names = HashSet::new();
     typed_f64_receiver_body_rejection_reason(
-        class,
+        &chain_fields,
         &method.body,
         locals,
         &mut used_fields,
@@ -971,7 +1028,7 @@ fn typed_f64_receiver_method_candidate(
 }
 
 fn typed_f64_receiver_body_rejection_reason(
-    class: &perry_hir::Class,
+    chain_fields: &TypedReceiverChainFields<'_>,
     body: &[Stmt],
     mut locals: HashMap<u32, TypedParamRep>,
     used_fields: &mut Vec<TypedReceiverField>,
@@ -990,7 +1047,7 @@ fn typed_f64_receiver_body_rejection_reason(
                 ..
             } if is_f64_type(ty)
                 && receiver_expr_is_typed_f64_safe(
-                    class,
+                    chain_fields,
                     expr,
                     &locals,
                     used_fields,
@@ -1007,17 +1064,21 @@ fn typed_f64_receiver_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => {
-            receiver_expr_is_typed_f64_safe(class, expr, &locals, used_fields, used_field_names)
-                .map(|_| ())
-                .map_err(|_| TypedCloneRejectionReason::ReturnExprNotTypedF64Safe)
-        }
+        Stmt::Return(Some(expr)) => receiver_expr_is_typed_f64_safe(
+            chain_fields,
+            expr,
+            &locals,
+            used_fields,
+            used_field_names,
+        )
+        .map(|_| ())
+        .map_err(|_| TypedCloneRejectionReason::ReturnExprNotTypedF64Safe),
         _ => Err(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
 
 fn receiver_expr_is_typed_f64_safe(
-    class: &perry_hir::Class,
+    chain_fields: &TypedReceiverChainFields<'_>,
     expr: &Expr,
     locals: &HashMap<u32, TypedParamRep>,
     used_fields: &mut Vec<TypedReceiverField>,
@@ -1030,7 +1091,7 @@ fn receiver_expr_is_typed_f64_safe(
         Expr::PropertyGet {
             object, property, ..
         } if matches!(object.as_ref(), Expr::This) => {
-            let index = typed_receiver_own_field_index(class, property)?;
+            let index = typed_receiver_chain_field_index(chain_fields, property)?;
             if used_field_names.insert(property.clone()) {
                 used_fields.push(TypedReceiverField {
                     name: property.clone(),
@@ -1043,7 +1104,7 @@ fn receiver_expr_is_typed_f64_safe(
         Expr::Unary { op, operand } => {
             if matches!(op, UnaryOp::Pos | UnaryOp::Neg) {
                 receiver_expr_is_typed_f64_safe(
-                    class,
+                    chain_fields,
                     operand,
                     locals,
                     used_fields,
@@ -1060,8 +1121,20 @@ fn receiver_expr_is_typed_f64_safe(
             ) {
                 return Err(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe);
             }
-            receiver_expr_is_typed_f64_safe(class, left, locals, used_fields, used_field_names)?;
-            receiver_expr_is_typed_f64_safe(class, right, locals, used_fields, used_field_names)
+            receiver_expr_is_typed_f64_safe(
+                chain_fields,
+                left,
+                locals,
+                used_fields,
+                used_field_names,
+            )?;
+            receiver_expr_is_typed_f64_safe(
+                chain_fields,
+                right,
+                locals,
+                used_fields,
+                used_field_names,
+            )
         }
         _ => Err(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe),
     }

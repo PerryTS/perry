@@ -120,6 +120,20 @@ pub(crate) struct ShapeStabilityFacts {
     // codegen consumer reads it yet.
     #[allow(dead_code)]
     pub scalar_replaceable_object_locals: HashSet<u32>,
+    /// Representation-selection Phase 3b: function-locals proven to hold
+    /// exactly one object of a statically-immutable shape for their entire
+    /// lifetime (`collectors/ptr_shape.rs`). Consumers: guard-free fixed-
+    /// offset field access (`expr/property_get.rs`, `expr/property_set.rs`)
+    /// and unguarded direct method dispatch
+    /// (`lower_call/property_get/dynamic_dispatch.rs`).
+    pub shape_proven_ptr_locals: HashMap<u32, super::PtrShapeLocal>,
+    /// Representation-selection Phase 4a.3: function-locals proven to satisfy
+    /// the `Ptr<NumArray>` invariants (raw-f64-or-hole slots, never-shrinking
+    /// length, no stale-binding path) for their entire lifetime
+    /// (`collectors/ptr_numarray.rs`). Consumers: guard-free element access
+    /// in `expr/index_get.rs` / `expr/index_set.rs` at sites with an
+    /// additional per-site in-bounds proof.
+    pub num_array_locals: HashMap<u32, super::NumArrayLocal>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -296,6 +310,19 @@ impl TypeFacts {
         &self.shape_stability.scalar_replaceable_object_locals
     }
 
+    /// Representation-selection Phase 3b: the shape-proof fact for a local,
+    /// when it is a proven `Ptr<Shape>` local (`collectors/ptr_shape.rs`).
+    pub(crate) fn shape_proven_ptr_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
+        self.shape_stability.shape_proven_ptr_locals.get(&local_id)
+    }
+
+    /// Representation-selection Phase 4a.3: the numeric-array proof for a
+    /// local, when it is a proven `Ptr<NumArray>` local
+    /// (`collectors/ptr_numarray.rs`).
+    pub(crate) fn num_array_local(&self, local_id: u32) -> Option<&super::NumArrayLocal> {
+        self.shape_stability.num_array_locals.get(&local_id)
+    }
+
     pub(crate) fn proves_scalar_replacement(&self, local_id: u32) -> bool {
         self.shape_stability
             .scalar_replaceable_object_locals
@@ -423,6 +450,28 @@ pub(crate) fn collect_type_facts(
         .chain(non_escaping_object_literals.keys())
         .copied()
         .collect();
+    // Representation-selection Phase 3b: shape-proven pointer locals. Gated
+    // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
+    // inside the collector.
+    let shape_proven_ptr_locals = super::ptr_shape::collect_shape_proven_ptr_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        &not_bigint_locals,
+    );
+    // Representation-selection Phase 4a.3: `Ptr<NumArray>` locals. Gated on
+    // `PERRY_PTR_NUMARRAY_LOCALS`, the module-wide §5.2 barrier scan, and the
+    // array-specific prototype-indexed-write kill inside the collector.
+    let num_array_locals = super::ptr_numarray::collect_num_array_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        module_dispatch,
+        compile_time_constants,
+        &integer_locals,
+    );
     let graph = TypeFacts {
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
@@ -460,6 +509,8 @@ pub(crate) fn collect_type_facts(
         },
         shape_stability: ShapeStabilityFacts {
             scalar_replaceable_object_locals,
+            shape_proven_ptr_locals,
+            num_array_locals,
         },
         materialization_hazards,
     };

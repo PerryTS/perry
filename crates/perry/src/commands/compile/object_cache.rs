@@ -970,6 +970,18 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Representation-selection Phase 3a — canonical string locals
+    // (tagged-at-rest): `=0`/`off`/`false` reverts the Str-gated lowerings
+    // (`+=` tag-dispatch, inline `.length`, direct string compares, the
+    // char-access receiver fast arm, and the inline StringRef retag) back to
+    // the pre-phase sequences, which changes the emitted IR / .o bytes — a
+    // warm cache must not serve an object built under the other setting.
+    h.field(
+        "env_canonical_str_locals",
+        env_var("PERRY_CANONICAL_STR_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
     // Representation-selection Phase 2 — specialized calling convention:
     // `PERRY_SPECIALIZED_ABI=0/off/false` removes the specialized entries and
     // their static/guarded dispatch sites; `PERRY_SPECIALIZED_ABI_MAX`
@@ -982,6 +994,33 @@ fn compute_object_cache_key_with_env(
     h.field(
         "env_specialized_abi_max",
         env_var("PERRY_SPECIALIZED_ABI_MAX")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // Representation-selection Phase 3b — shape-proven Ptr<Shape> locals:
+    // `=0`/`off`/`false` reverts proven object locals from bare fixed-offset
+    // access (no guard diamond, unguarded direct method calls) back to the
+    // guarded class-field path, which changes the emitted IR / .o bytes — a
+    // warm cache must not serve an object built under the other setting.
+    h.field(
+        "env_ptr_shape_locals",
+        env_var("PERRY_PTR_SHAPE_LOCALS").as_deref().unwrap_or(""),
+    );
+    // Representation-selection Phase 5a — proven-`this` method clones. Off
+    // removes the `__pshape` bodies and routes both proven call sites back to
+    // the public guarded body, changing the emitted IR / .o bytes.
+    h.field(
+        "env_ptr_shape_this",
+        env_var("PERRY_PTR_SHAPE_THIS").as_deref().unwrap_or(""),
+    );
+    // Representation-selection Phase 4a.3 — Ptr<NumArray> locals:
+    // `=0`/`off`/`false` reverts proven numeric-array locals from guard-free
+    // element access back to the Phase 4a.1/4a.2 guarded tiers, which changes
+    // the emitted IR / .o bytes — a warm cache must not serve an object built
+    // under the other setting.
+    h.field(
+        "env_ptr_numarray_locals",
+        env_var("PERRY_PTR_NUMARRAY_LOCALS")
             .as_deref()
             .unwrap_or(""),
     );

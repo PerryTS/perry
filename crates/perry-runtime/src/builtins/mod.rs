@@ -101,6 +101,11 @@ pub use globals::{
 
 pub(crate) use globals::{drain_queued_microtasks_count, queued_microtasks_pending};
 
+/// #6943: inertness predicate for the `js_string_coerce`-as-property-key
+/// rooting family. Crate-internal — callers use it to skip a
+/// `RuntimeHandleScope` when the coercion provably cannot GC.
+pub(crate) use numbers::string_coerce_is_inert;
+
 pub use numbers::{
     js_is_finite, js_is_nan, js_number_coerce, js_number_is_finite, js_number_is_integer,
     js_number_is_nan, js_number_is_safe_integer, js_parse_float, js_parse_int, js_string_coerce,

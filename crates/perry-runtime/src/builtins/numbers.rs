@@ -673,6 +673,33 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
     js_string_from_bytes(result.as_ptr(), result.len() as u32)
 }
 
+/// True when [`js_string_coerce`] provably neither allocates nor calls back
+/// into user JS for `value`, so a caller may hold a raw receiver / stored value
+/// across it without a [`RuntimeHandleScope`] (#6943).
+///
+/// Only an already-heap `STRING_TAG` value qualifies — that is the one arm of
+/// [`js_string_coerce`] that returns before touching the allocator (it hands
+/// the very same `StringHeader` pointer back). Every other shape allocates:
+/// `undefined` / `null` / booleans / numbers / BigInt build their
+/// stringification, an SSO short string (`SHORT_STRING_TAG`, a *different* tag)
+/// materializes onto the heap, and a `POINTER_TAG` object routes through
+/// `js_jsvalue_to_string`, which can invoke a user `toString` / `valueOf`. Any
+/// of those can trigger a GC that **evacuates** live objects — moving the
+/// caller's receiver and the value it is about to store — so callers must root
+/// across the coercion instead.
+///
+/// This is the `js_string_coerce` analogue of #6935's
+/// `object::property_key_coercion_is_inert`, which makes the same claim about
+/// `js_to_property_key`. The two predicates coincide today, but they are
+/// assertions about two different functions: this one is justified by
+/// [`js_string_coerce`]'s own `is_string()` early return, directly above.
+///
+/// [`RuntimeHandleScope`]: crate::gc::RuntimeHandleScope
+#[inline]
+pub(crate) fn string_coerce_is_inert(value: f64) -> bool {
+    crate::value::JSValue::from_bits(value.to_bits()).is_string()
+}
+
 /// `RequireObjectCoercible(this)` + `ToString(this)` for the inline-lowered
 /// `String.prototype` methods (`charAt` / `charCodeAt` / `codePointAt` /
 /// `split` / `toUpperCase` / …) when the receiver is NOT statically

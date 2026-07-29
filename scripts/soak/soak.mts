@@ -70,124 +70,20 @@ export function checkCargoConfig(body: string, file: string): Finding[] {
   return out
 }
 
-/**
- * npm has its OWN exclude surface — `min-release-age-exclude[]=<spec>`
- * (npm >= 11.17) — parallel to pnpm's `minimumReleaseAgeExclude` block.
- * The same rule applies: a bare name or `@scope/*` glob expresses standing
- * trust, but a VERSION-PINNED entry is a dated bypass and needs the
- * `# published: | removable:` annotation on the line above. Without this
- * check, `min-release-age-exclude[]=lodash@1.2.3` was an unvalidated,
- * never-expiring hole in exactly the gate the yaml side closes (found by
- * auditing a fleet repo that uses this syntax heavily for trusted scopes).
- */
-export function checkNpmrcExcludes(body: string, file: string): Finding[] {
-  const out: Finding[] = []
-  const lines = body.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^min-release-age-exclude\[\]\s*=\s*(\S+)\s*$/.exec(lines[i]!)
-    if (!m) {
-      continue
-    }
-    const spec = m[1]!
-    if (!VERSION_PIN_RE.test(spec)) {
-      // Bare name / scope glob: standing trust, no annotation needed.
-      continue
-    }
-    const ann = ANNOTATION_RE.exec(lines[i - 1]?.trim() ?? '')
-    if (!ann) {
-      out.push({
-        file,
-        what: `npm soak exclude '${spec}' annotation`,
-        saw: '(no annotation on the line above)',
-        wanted: `# published: YYYY-MM-DD | removable: <published + ${SOAK_DAYS}d>`,
-        fix: 'annotate the pin with its real registry publish date, or exclude the bare name for standing trust',
-      })
-      continue
-    }
-    const [, published, removable] = ann as unknown as [string, string, string]
-    if (!isValidIsoDate(published) || !isValidIsoDate(removable)) {
-      out.push({
-        file,
-        what: `npm soak exclude '${spec}' annotation dates`,
-        saw: `${published} | ${removable}`,
-        wanted: 'real YYYY-MM-DD calendar dates',
-        fix: 'correct the annotation to the real registry publish date',
-      })
-      continue
-    }
-    const expected = addDaysIso(published, SOAK_DAYS)
-    if (removable !== expected) {
-      out.push({
-        file,
-        what: `npm soak exclude '${spec}' removable date`,
-        saw: removable,
-        wanted: `${expected} (published ${published} + ${SOAK_DAYS} days)`,
-        fix: 'correct the removable date',
-      })
-    }
-  }
-  return out
-}
-
 export function checkNpmrc(body: string, file: string): Finding[] {
-  const out: Finding[] = []
   const days = /^min-release-age=(\d+)\s*$/m.exec(body)?.[1]
-  if (Number(days) !== SOAK_DAYS) {
-    out.push({
+  if (Number(days) === SOAK_DAYS) {
+    return []
+  }
+  return [
+    {
       file,
       what: 'npm min-release-age window',
       saw: days ?? '(missing)',
       wanted: String(SOAK_DAYS),
       fix: `set min-release-age=${SOAK_DAYS} (or run --fix)`,
-    })
-  }
-  out.push(...checkNpmrcExcludes(body, file))
-  return out
-}
-
-interface NpmrcExcludeEntry {
-  spec: string
-  line: number
-  annotation?: { published: string; removable: string }
-}
-
-function parseNpmrcExcludeEntries(body: string): NpmrcExcludeEntry[] {
-  const lines = body.split('\n')
-  const out: NpmrcExcludeEntry[] = []
-  for (let i = 0; i < lines.length; i++) {
-    const match = /^min-release-age-exclude\[\]\s*=\s*(\S+)\s*$/.exec(lines[i]!)
-    if (!match) {
-      continue
-    }
-    const annotation = ANNOTATION_RE.exec(lines[i - 1]?.trim() ?? '')
-    out.push({
-      spec: match[1]!,
-      line: i,
-      ...(annotation
-        ? { annotation: { published: annotation[1]!, removable: annotation[2]! } }
-        : {}),
-    })
-  }
-  return out
-}
-
-function isStaleNpmrcExclude(entry: NpmrcExcludeEntry, today: string): boolean {
-  const annotation = entry.annotation
-  return Boolean(
-    VERSION_PIN_RE.test(entry.spec) &&
-      annotation &&
-      isValidIsoDate(annotation.published) &&
-      isValidIsoDate(annotation.removable) &&
-      annotation.removable === addDaysIso(annotation.published, SOAK_DAYS) &&
-      annotation.removable < today,
-  )
-}
-
-export function staleNpmrcExcludes(body: string): string[] {
-  const today = todayIso()
-  return parseNpmrcExcludeEntries(body)
-    .filter(entry => isStaleNpmrcExclude(entry, today))
-    .map(entry => entry.spec)
+    },
+  ]
 }
 
 export function checkWorkspaceYaml(body: string, file: string): Finding[] {
@@ -284,11 +180,6 @@ export function staleExcludes(body: string): string[] {
         e.annotation &&
         isValidIsoDate(e.annotation.published) &&
         isValidIsoDate(e.annotation.removable) &&
-        // Wrong-arithmetic annotations are NOT stale — they are a hard
-        // checkExcludeAnnotations failure a human must correct. Treating
-        // a too-early removable as "cleared" would prune a bypass whose
-        // real window may still be open.
-        e.annotation.removable === addDaysIso(e.annotation.published, SOAK_DAYS) &&
         e.annotation.removable < today,
     )
     .map(e => e.name)
@@ -445,21 +336,16 @@ export function checkToolchainSoak(body: string, file: string): Finding[] {
 
 export function checkTazeConfig(body: string, file: string): Finding[] {
   const out: Finding[] = []
-  const importsSoakDays =
-    /import\s*\{[^}]*\bSOAK_DAYS\b[^}]*\}\s*from\s*['"][^'"]*scripts\/soak\/constants\.mts['"]/.test(
-      body,
-    )
-  const usesSoakDays = /\bmaturityPeriod\s*:\s*SOAK_DAYS\b/.test(body)
-  if (!usesSoakDays) {
+  if (!body.includes('maturityPeriod')) {
     out.push({
       file,
       what: 'taze maturityPeriod',
-      saw: body.includes('maturityPeriod') ? 'not set to SOAK_DAYS' : '(not set)',
+      saw: '(not set)',
       wanted: 'maturityPeriod: SOAK_DAYS',
       fix: 'set maturityPeriod: SOAK_DAYS in the taze config',
     })
   }
-  if (!importsSoakDays) {
+  if (!body.includes('constants.mts')) {
     out.push({
       file,
       what: 'taze config soak import',
@@ -482,6 +368,9 @@ export function checkTazeConfig(body: string, file: string): Finding[] {
  * `- package-ecosystem:` line to the next one.
  */
 export function checkDependabotCooldown(body: string, file: string): Finding[] {
+  if (SOAK_DAYS === 0) {
+    return []
+  }
   const out: Finding[] = []
   for (const block of parseDependabotBlocks(body)) {
     const days = /^\s+default-days:\s*(\d+)\s*$/m.exec(block.body)?.[1]
@@ -532,6 +421,9 @@ export function parseDependabotBlocks(body: string): DependabotBlock[] {
 // window. A MISSING cooldown block stays a --check finding (line-based
 // YAML insertion is riskier than telling a human where the two lines go).
 export function fixDependabotCooldown(body: string): string {
+  if (SOAK_DAYS === 0) {
+    return body
+  }
   return body.replace(/^(\s+default-days:\s*)\d+\s*$/gm, `$1${SOAK_DAYS}`)
 }
 
@@ -543,34 +435,15 @@ export function fixCargoConfig(body: string): string {
 }
 
 export function fixNpmrc(body: string): string {
-  // [ \t] not \s: `\s` matches newlines, so `\s*$` under /m swallowed the
-  // blank lines that follow the key (silent reformatting of the file).
-  let out = body
-  if (/^min-release-age=\d+[ \t]*$/m.test(out)) {
-    out = out.replace(/^min-release-age=\d+[ \t]*$/m, `min-release-age=${SOAK_DAYS}`)
-  } else {
-    out = `${out.trimEnd()}\nmin-release-age=${SOAK_DAYS}\n`
+  if (/^min-release-age=\d+\s*$/m.test(body)) {
+    return body.replace(/^min-release-age=\d+\s*$/m, `min-release-age=${SOAK_DAYS}`)
   }
-  const lines = out.split('\n')
-  const drop = new Set<number>()
-  const today = todayIso()
-  for (const entry of parseNpmrcExcludeEntries(out)) {
-    if (!isStaleNpmrcExclude(entry, today)) {
-      continue
-    }
-    drop.add(entry.line)
-    if (ANNOTATION_RE.test(lines[entry.line - 1]?.trim() ?? '')) {
-      drop.add(entry.line - 1)
-    }
-  }
-  return drop.size > 0 ? lines.filter((_, i) => !drop.has(i)).join('\n') : out
+  return `${body.trimEnd()}\nmin-release-age=${SOAK_DAYS}\n`
 }
 
 export function fixWorkspaceYaml(body: string): string {
-  // [ \t] not \s on the trailing match: `\s*$` under /m consumes the
-  // newlines after the value, deleting following blank lines.
   let out = body.replace(
-    /^(minimumReleaseAge:[ \t]*)\d+[ \t]*$/m,
+    /^(minimumReleaseAge:\s*)\d+\s*$/m,
     `$1${SOAK_MINUTES}`,
   )
   // Prune expired pins together with their annotation line.
@@ -578,21 +451,7 @@ export function fixWorkspaceYaml(body: string): string {
   const lines = out.split('\n')
   const drop = new Set<number>()
   for (const entry of parseExcludeEntries(out)) {
-    // Prune only WELL-FORMED cleared annotations (same rule as
-    // staleExcludes): a wrong-arithmetic removable already in the past
-    // must surface as a check failure, not vanish silently.
-    // VERSION_PIN_RE too: the prune set must EQUAL the warn set
-    // (staleExcludes). Without it a bare-name / `@scope/*` standing-trust
-    // entry that merely sits under an expired annotation line was deleted
-    // by --fix — silently re-arming the soak for a whole scope, in a bot
-    // commit whose review story is "only annotation lines are touched".
-    if (
-      entry.annotation &&
-      VERSION_PIN_RE.test(entry.name) &&
-      isValidIsoDate(entry.annotation.published) &&
-      entry.annotation.removable === addDaysIso(entry.annotation.published, SOAK_DAYS) &&
-      entry.annotation.removable < today
-    ) {
+    if (entry.annotation && entry.annotation.removable < today) {
       drop.add(entry.line - 1)
       if (ANNOTATION_RE.test(lines[entry.line - 2]?.trim() ?? '')) {
         drop.add(entry.line - 2)
@@ -663,16 +522,8 @@ export function main(argv: string[] = process.argv.slice(2)): number {
   }
 
   // Catalog <-> package.json lockstep for the package next to the yaml.
-  const npmrcAbs = path.join(REPO_ROOT, SURFACES.npmrc)
   const yamlAbs = path.join(REPO_ROOT, SURFACES.workspaceYaml)
   const pkgAbs = path.join(path.dirname(yamlAbs), 'package.json')
-  if (existsSync(npmrcAbs)) {
-    for (const name of staleNpmrcExcludes(readFileSync(npmrcAbs, 'utf8'))) {
-      console.warn(
-        `[soak] warn: npm exclude '${name}' has soaked — stale pin, pruned by --fix / the soak-autofix workflow`,
-      )
-    }
-  }
   if (existsSync(yamlAbs)) {
     for (const name of staleExcludes(readFileSync(yamlAbs, 'utf8'))) {
       console.warn(

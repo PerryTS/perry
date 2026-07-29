@@ -103,7 +103,25 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // ToPropertyKey(V): fold an object argument (e.g. one whose `toString`
         // returns a Symbol) into its canonical key before the symbol/string
         // split. A no-op for keys that are already primitives.
-        let key_value = super::super::js_to_property_key(key_value);
+        //
+        // #6935: for an object key that fold runs USER JS, which allocates and
+        // can trigger a GC that **evacuates** the receiver. `obj_value` — and
+        // the `obj_js` tag view taken from it above — were raw NaN-boxed Rust
+        // locals across the call, so root the receiver and re-derive both.
+        let (obj_value, obj_js, key_value) =
+            if super::super::property_key_coercion_is_inert(key_value) {
+                (obj_value, obj_js, key_value)
+            } else {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+                let key_value = super::super::js_to_property_key(key_value);
+                let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+                (
+                    obj_value,
+                    crate::JSValue::from_bits(obj_value.to_bits()),
+                    key_value,
+                )
+            };
 
         // A Proxy is a small registered id, not a heap object — route
         // `hasOwnProperty` through `[[GetOwnProperty]]` (a present own property
@@ -132,7 +150,31 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
-        let key_str = crate::builtins::js_string_coerce(key_value);
+        // #6943: `js_string_coerce` allocates for every non-heap-string key and
+        // runs a user `toString` / `valueOf` for an object key, so it can
+        // trigger a GC that **evacuates**. `obj_value` — and the `obj_js` tag
+        // view derived from it at the top of this function — were raw Rust
+        // locals across the call, and every arm below dereferences one or the
+        // other. The already-heap-string key, which is what
+        // `o.hasOwnProperty("x")` compiles to for names past the SSO bound,
+        // keeps the pre-fix path verbatim.
+        let (obj_value, obj_js, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
+            (
+                obj_value,
+                obj_js,
+                crate::builtins::js_string_coerce(key_value),
+            )
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            (
+                obj_value,
+                crate::JSValue::from_bits(obj_value.to_bits()),
+                key_str,
+            )
+        };
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);
         }
@@ -428,7 +470,17 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // ToPropertyKey(V): fold an object argument (e.g. one whose `toString`
         // returns a Symbol) into its canonical key before the symbol/string
         // split. A no-op for keys that are already primitives.
-        let key_value = super::super::js_to_property_key(key_value);
+        //
+        // #6935: root the receiver across the (GC-capable) fold — see
+        // `js_object_has_own` above for the full reasoning.
+        let (obj_value, key_value) = if super::super::property_key_coercion_is_inert(key_value) {
+            (obj_value, key_value)
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let key_value = super::super::js_to_property_key(key_value);
+            (f64::from_bits(obj_handle.get_heap_word_u64()), key_value)
+        };
 
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather
@@ -473,7 +525,29 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
         }
 
-        let key_str = crate::builtins::js_string_coerce(key_value);
+        // #6943: root the receiver across the GC-capable key coercion — see
+        // `js_object_has_own` above for the full reasoning.
+        // `obj_jv` must be re-derived alongside `obj_value`: it is the tag view
+        // taken at the top of this function, and the arms below both TEST it
+        // (`is_any_string`) and DEREFERENCE it (`as_pointer`), so leaving it on
+        // pre-coercion bits reintroduces exactly the hazard this change closes.
+        let (obj_value, obj_jv, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
+            (
+                obj_value,
+                obj_jv,
+                crate::builtins::js_string_coerce(key_value),
+            )
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            (
+                obj_value,
+                crate::JSValue::from_bits(obj_value.to_bits()),
+                key_str,
+            )
+        };
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);
         }
@@ -622,6 +696,6 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROPERTY_IS_ENUMERABLE: extern "C" fn(f64, f64) -> f64 =
     js_object_property_is_enumerable;

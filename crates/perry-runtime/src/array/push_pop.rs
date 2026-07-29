@@ -415,7 +415,7 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
 
 // This raw numeric-array helper is called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` export.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern "C" fn(
     *mut ArrayHeader,
     f64,
@@ -820,6 +820,6 @@ pub extern "C" fn js_array_unshift_variadic(
     }
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
     js_array_unshift_variadic;

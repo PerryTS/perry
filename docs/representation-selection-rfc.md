@@ -70,6 +70,7 @@ roots — their win is *static dispatch and layout*, not root elimination.
 | `String` | `StringHeader*` | skip untag/retag; **direct** string-helper calls (no `js_jsvalue_to_string` dispatch) | rooted + rewritten | short-string (inline payload) values stay by-value |
 | `Object(shape S)` | `ObjHeader*` + static shape | **direct field offsets** (no hash lookup), **static method dispatch** | rooted + rewritten | the dominant win for real apps (property access ≫ arithmetic in web workloads); eligibility in §4.6 |
 | `TypedArray(kind)` | header ptr (+ hoisted data ptr/len in region) | guard-free element access once kind is proven | rooted + rewritten | data-ptr hoisting invalidated at safepoints if backing can move/detach |
+| `Array<number>` (`Ptr<NumArray>`) | `ArrayHeader*`; elements are raw f64 in place (the NaN-box of a number IS its double bits; `TAG_HOLE` marks holes) | Phase 4a.0-4a.2: inline guarded tiers — header-proof tests instead of out-of-line guard calls, zero runtime calls on the fast path. Phase 4a.3 (`collectors/ptr_numarray.rs`): fully guard-free element load/store under the collector proof at sites with a per-site in-bounds proof — no header tests, no bounds check, no barrier/note | rooted + rewritten | density lattice `Dense ⊒ HolesOK ⊒ Boxed` (§5.7); a hole-OBSERVING read needs the `TAG_HOLE→undefined` select (guard-free reads are therefore number-context only), hole-DEFAULT consumers (`\|\|0`, `??0`, `\|0`, `>>>0`, numeric `+`) admit the 2-instruction NaN-canonical form under the raw-f64-or-holes proof only; growth re-derives the base after any extend |
 | `Closure/Function` | code ptr + env ptr | static call targets (extends existing `FuncRef`) | env rooted | |
 | `SmallBigInt` | `i64` | native 64-bit arithmetic | not a root | overflow → boxed BigInt path, exists today |
 | `Null/Undefined` | singleton tags | fold checks statically | — | |
@@ -185,6 +186,40 @@ pointer-rep rules:
 - Unwinding runs the existing frame-pop path; registered slots die with the frame — no new
   exception machinery.
 
+#### 5.6.1 Enforcement — the GC x representation matrix
+
+Each representation above shipped its GC-safety argument in its own PR, verified once by hand at
+merge time, while the collector changed underneath all of them (#6910 mark/rewrite root-word
+parity, #6921 typed-shape layout on the ctor exit, #6892 minor-sweep finalization, #6655 operand
+rooting). Nobody verified the cross-product. It is now a maintained gate rather than a set of
+one-time arguments:
+
+- **The matrix.** `scripts/gc_repsel_matrix.sh` runs the whole representation corpus against every
+  GC arm — `PERRY_GC_FORCE_EVACUATE`, `PERRY_GC_VERIFY_EVACUATION`, `PERRY_GEN_GC=0`,
+  `PERRY_WRITE_BARRIERS=0`, `PERRY_CONSERVATIVE_STACK_SCAN=off`, `PERRY_GC_MOVING_LOOP_POLLS=1`,
+  their combinations, and *each representation flag OFF x evacuation* — byte-exact against the
+  pinned Node oracle. Wired into the `gc-stress` CI job: a fast 4-arm subset gates every PR, the
+  full arm list runs on push.
+- **A NEW REPRESENTATION MUST REGISTER ITS GAP FILE** in `test-parity/gc_repsel_corpus.txt`. The
+  script fails when a `test_gap_repsel_*` / `test_gap_specabi_*` file exists that is not registered.
+  This is the GC-side counterpart of the single-decoder refactor #6910 established for mark/rewrite:
+  adding a representation teaches all the paths at once, or CI says so.
+- **Liveness is part of the result.** Setting a GC env var does not prove the GC did anything. The
+  first automatic collection needs ~1M escaping allocations, so a small gap test performs *zero*
+  collections and every GC arm against it is inert (#6942, #6946, #6950). The harness therefore
+  asserts liveness from the collector's own `PERRY_GC_TRACE` / `PERRY_GC_DIAG` output and reports an
+  output-matching cell under an inert arm as **UNVERIFIED**, never green.
+  `test-files/test_gap_repsel_gc_stress.ts` is the corpus member built to be live: it holds each
+  representation's local across escaping allocation churn heavy enough to reach the collector. A new
+  representation should extend *that* file as well as adding its own, or its GC arms stay inert.
+- **What the matrix cannot verify today.** No reachable configuration in an AOT-compiled program
+  performs an *evacuating minor*: every automatic collection is a full mark-sweep taken under
+  `ManualGcScanGuard::force_full_scan()`, which additionally pins raw locals conservatively (#6950,
+  extending #6946 from the `gc()` path). The rebase-after-safepoint contract in the bullets above —
+  the core GC claim of every pointer representation — is therefore still argued, not tested. #6942
+  tracks making it testable; when that lands, the matrix's evacuating arms flip from UNVERIFIED to
+  green with no change to the harness.
+
 ### 5.7 Typed heap (Phase 4)
 Unboxed storage extends to heap slots where the *container's* shape is proven and stable:
 - **Eligibility:** an object qualifies for unboxed field layout only if its shape is
@@ -203,6 +238,81 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
   fields need none (another structural win).
 - Typed-array element reads stop re-boxing when the consumer is typed (the element is raw in
   memory today; only the access path boxes it).
+- **Plain numeric arrays (`Ptr<NumArray>`, Phase 4a).** Phase 4a.0-4a.2 shipped the inline
+  guarded tiers (per-access header-proof tests on the raw-f64 / raw-f64-or-holes bits
+  instead of out-of-line guard calls; zero runtime calls on the fast path). Phase 4a.3
+  (`collectors/ptr_numarray.rs`) ships the collector: a local `number[]` qualifies for
+  fully guard-free element access under provenance + containment, exactly like
+  `Ptr<Shape>` locals — single-`Let` provenance (`new Array(<static n>)` or the empty
+  literal `[]`; the first-increment scope excludes non-empty literals, `.fill` chains, and
+  param-sized allocations), every use a numeric-key element read, an element write whose
+  value is numeric-by-construction, `.length`, a numeric `push`, or a bare `return`; and
+  the module-wide §5.2 barrier kill extended with the array-specific barrier (any indexed
+  write through a `.prototype` object — a polluted prototype changes what a HOLE read
+  observes, and the guard-free read cannot consult the runtime pollution byte).
+  Length-shrinking / reordering / hole-materializing mutators (`arr.length = n`, `pop`/
+  `shift`/`splice`/`unshift`/`copyWithin`, `sort`/`reverse` — the latter arrive as
+  disqualifying method calls) and `delete` (module-wide, via §5.2) all demote. The
+  **stale-binding exemption** is part of eligibility: containment means no callee ever
+  receives the array (the Phase 2 specialized-ABI caller-allocated growth pattern cannot
+  occur), every in-function growth site writes the live head back to the local slot, and
+  consumers re-derive the base from the (shadow-bound) slot per access. Eligibility
+  carries a **density lattice** `Dense ⊒ HolesOK ⊒ Boxed`: `Dense` (empty-literal
+  provenance; growth only through numeric pushes — no hole can exist) drops the hole
+  handling entirely; `HolesOK` (`new Array(n)`) emits guard-free reads ONLY in ToNumber
+  contexts, where the proof-gated 2-instruction canonical-NaN form is bit-exact
+  (`TAG_HOLE` → quiet NaN ≡ `ToNumber(undefined)`); anything that can store a non-numeric
+  value demotes to `Boxed` (stays on the guarded tiers). Guard-free stores additionally
+  require a canonical-raw-f64 RHS and a per-site in-bounds proof (static index range vs
+  the allocation length — permanent because length can only grow — or a bounded-loop
+  fact). Hole-vs-undefined observability (`in`, `Object.keys`, `JSON.stringify`) is
+  preserved structurally: those surfaces reference the local as a bare value and
+  therefore disqualify it, and bare (non-ToNumber) element reads never lower guard-free.
+- **Unboxed object fields: assessed and REJECTED (Phase 4b).** The "unboxed field layout"
+  bullets at the top of this section were scoped down after recon, and the eligibility
+  machinery they describe was deliberately *not* built. Three findings drove that:
+  1. **`number` fields are already bit-unboxed.** NaN-boxing reserves only `0x7FF9..=0x7FFF`,
+     so a number field slot already holds raw IEEE bits; `raw_f64_mask`
+     (`gc/layout.rs::layout_raw_f64_bits`) is a *proof bit*, not a storage change. Phase 3b
+     already deleted the read-side guard on proven receivers, so no unboxing win remains.
+  2. **Raw string handles at rest would break SSO** — short strings live inline in the NaN
+     box and would have to be heap-materialized just to be stored "unboxed" — and buy nothing.
+  3. **Raw `i1`/`i32` slots would need a third mask *plus* a layout probe at ~25 direct
+     slot-read sites** — `JSON.stringify`, `util.inspect`, `v8` IPC serde and descriptor reads
+     among them. Those are hot paths, not the "rare, already-slow" surfaces the
+     observation-equivalence bullet assumes, so the probe would cost more than the
+     representation saves.
+
+  What Phase 4b ships instead is the bookkeeping the existing boxed layout was paying
+  needlessly:
+  - **4b.1** — a class-field store on a `Ptr<Shape>`-proven receiver retires
+    `js_gc_note_slot_layout` when the value is a **non-pointer by construction**, and
+    `js_string_addref_if_heap_string` when the value provably **cannot be a heap string** (the
+    strictly weaker condition, which is why the two are gated independently — an object or
+    array literal retires the addref but keeps the note). The generational write barrier is
+    untouched. The note elision is sound in every layout state the receiver can be in:
+    `UNKNOWN` and `POINTER_FREE` short-circuit inside the note; an intact descriptor falls
+    through the `pointer_mask` arm untouched; and under `SIDE_MASK` the note would only ever
+    *clear* the slot's bit, so skipping it leaves a stale set bit over a non-pointer, which
+    costs one extra visit and nothing else — `mark_field_into_worklist` re-validates every slot
+    word, and the evacuation rewrite path routes through the same function.
+    The addref elision is keyed on the **value expression, never the declared field type**:
+    Perry does not validate declared types at runtime, so a `boolean`-declared field can
+    legitimately receive a string through an `any`, and a wrong elision there silently corrupts
+    an aliased string on the next in-place append.
+
+    Two scope notes. **A pointer-valued store into a pointer-masked slot is deliberately not
+    elided**, even though it is a no-op under an intact descriptor: `lower_new_impl` has an exit
+    (the standalone-ctor-symbol branch where `call_local_constructor_symbol` yields `None`) that
+    returns a freshly allocated instance *without* emitting `js_gc_init_typed_shape_layout`, and
+    such an object sits at `POINTER_FREE` where the note is the only thing that ever sets the
+    pointer-mask bit the collector reads. Closing that exit (#6921) is the prerequisite for the
+    stronger elision. Likewise the **guarded (non-`Ptr<Shape>`) class-field store keeps both calls** — its
+    receiver can be a runtime-constructed object that never had a descriptor installed.
+  - **4b.2** — `runtime_store_jsvalue_slot` canonicalizes an INT32-boxed numeric store into a
+    raw-f64-masked slot (the object twin of `canonicalize_array_numeric_store_bits`), instead
+    of letting one FFI/native-supplied integer evict that object's typed descriptor
+    permanently and one-way.
 
 ## 6. Phasing (one design; each phase sound on its own)
 

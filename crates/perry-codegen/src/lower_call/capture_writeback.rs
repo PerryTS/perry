@@ -82,7 +82,10 @@ pub(crate) fn emit_class_capture_writeback(
         // Repsel Phase 1: a canonical-i32 local is in scope but has no
         // `ctx.locals` entry — its write-back goes through the i32 slot below.
         let outer_slot = ctx.locals.get(&outer_id).cloned();
-        let outer_is_canonical_i32 = ctx.local_slot_reps.contains_key(&outer_id);
+        // Phase 3a: a canonical-Str local (`SlotRep::Str`) HAS a `ctx.locals`
+        // slot and takes the plain double-store write-back below — only
+        // i32/u32 reps route through the i32 slot.
+        let outer_is_canonical_i32 = crate::expr::local_rep_is_canonical_i32(ctx, outer_id);
         if outer_slot.is_none() && !outer_is_canonical_i32 {
             continue;
         }

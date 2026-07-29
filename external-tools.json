@@ -3,7 +3,6 @@
     "pnpm": {
       "description": "pnpm — the fleet's package manager.",
       "version": "11.15.1",
-      "published": "2026-07-19",
       "packageManager": "pnpm",
       "repository": "github:pnpm/pnpm",
       "release": "asset",
@@ -54,13 +53,11 @@
       "description": "npm — pinned, SRI-verified registry tarball; installed without self-update",
       "repository": "npm:npm",
       "version": "12.0.1",
-      "published": "2026-07-10",
       "integrity": "sha512-L5T9i/YAQWQWqTS/xZxJkei/9zcu99hCeE4qi41IyBVV7mRQad3qc2JfuOktwmH+qwGI/V2rbCL+/UYxb1+RQA=="
     },
     "sfw-free": {
       "description": "Socket Firewall (free tier) — malware gate on dep installs.",
       "version": "1.14.0",
-      "published": "2026-07-23",
       "repository": "github:SocketDev/sfw-free",
       "release": "asset",
       "binaryName": "sfw",
@@ -100,7 +97,6 @@
     "sfw-enterprise": {
       "description": "Socket Firewall (enterprise tier) — selected when SOCKET_SECURITY_KEY is set.",
       "version": "1.14.0",
-      "published": "2026-07-23",
       "repository": "github:SocketDev/firewall-release",
       "release": "asset",
       "binaryName": "sfw",
@@ -140,7 +136,6 @@
     "zizmor": {
       "description": "GitHub Actions security linter — audits .github/ for workflow-injection / credential-leak patterns.",
       "version": "1.28.0",
-      "published": "2026-07-21",
       "repository": "github:zizmorcore/zizmor",
       "release": "asset",
       "notes": [
@@ -173,7 +168,6 @@
     "agentshield": {
       "description": "Claude AI config security scanner (prompt injection, secrets)",
       "purl": "pkg:npm/ecc-agentshield@1.4.0",
-      "published": "2026-03-21",
       "integrity": "sha512-R98OO1Ujyk2lezDLb+iQmMhF6FwTJCHajy3G4FCB6x7wkSTqR9f8+eAelC5KDzYDsGSbc0sOZvjXOOPRBtMpDg=="
     },
     "skillspector": {
@@ -181,7 +175,7 @@
       "release": "uv-project",
       "repository": "github:NVIDIA/skillspector",
       "version": "2eb84478",
-      "published": "2026-05-18"
+      "versionDate": "2026-05-18"
     }
   }
 }

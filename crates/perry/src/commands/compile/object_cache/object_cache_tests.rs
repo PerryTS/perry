@@ -617,9 +617,16 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_INT_VALUED_LOCALS",
         // Representation-selection Phase 1: canonical unboxed i32 locals.
         "PERRY_CANONICAL_I32_LOCALS",
+        // Representation-selection Phase 3a: canonical string locals.
+        "PERRY_CANONICAL_STR_LOCALS",
         // Representation-selection Phase 2: specialized calling convention.
         "PERRY_SPECIALIZED_ABI",
         "PERRY_SPECIALIZED_ABI_MAX",
+        // Representation-selection Phase 3b: shape-proven Ptr<Shape> locals.
+        "PERRY_PTR_SHAPE_LOCALS",
+        "PERRY_PTR_SHAPE_THIS",
+        // Representation-selection Phase 4a.3: Ptr<NumArray> locals.
+        "PERRY_PTR_NUMARRAY_LOCALS",
         // FEAT_JSCVT single-instruction ToInt32 (apple-arm64).
         "PERRY_JSCVT",
     ] {
