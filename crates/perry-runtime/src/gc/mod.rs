@@ -135,7 +135,8 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     // live bytes exceed K× the last full's live set (belt-and-suspenders for
     // callers that reach a minor outside the budgeted pressure path).
     if arena_growth_full_escalation_due() {
-        let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(trigger.kind));
+        let outcome =
+            gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(trigger.kind));
         restore_minor_in_alloc(prev_in_alloc);
         return outcome;
     }
