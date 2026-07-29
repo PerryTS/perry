@@ -188,6 +188,9 @@ pub(crate) fn abort_signal_ptr_from_value(value: f64) -> Option<*mut ObjectHeade
     if ptr.is_null() {
         return None;
     }
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
+        return None;
+    }
     let is_signal = unsafe { (*ptr).class_id == ABORT_SIGNAL_CLASS_ID };
     is_signal.then_some(ptr)
 }
@@ -632,12 +635,23 @@ pub extern "C" fn js_abort_signal_any(
 // #2582: keepalive anchors so the auto-optimize whole-program LLVM bitcode
 // rebuild doesn't internalize + dead-strip these codegen-only `#[no_mangle]`
 // entry points (see project_auto_optimize_keepalive_3320). These are only
-// referenced from generated `.o`, so without `#[used]` they vanish.
-#[used]
+// referenced from generated `.o`, so without `#[cfg_attr(feature = "keepalive-anchors", used)]` they vanish.
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ABORT_SIGNAL_ABORT: extern "C" fn(f64) -> *mut ObjectHeader = js_abort_signal_abort;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ABORT_SIGNAL_ANY: extern "C" fn(*mut crate::array::ArrayHeader) -> *mut ObjectHeader =
     js_abort_signal_any;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ABORT_SIGNAL_THROW_IF_ABORTED: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_abort_signal_throw_if_aborted;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_ptr_rejects_pointer_tagged_handle() {
+        let value = f64::from_bits(POINTER_TAG_AC | 5);
+        assert!(js_abort_signal_resolve_ptr(value).is_null());
+    }
+}

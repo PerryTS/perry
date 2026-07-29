@@ -1,0 +1,46 @@
+# zizmor (GitHub Actions security audit) configuration.
+# See: https://docs.zizmor.sh/configuration/
+#
+# Starting posture (first zizmor gate for this repo): enforce for NEW
+# surface, grandfather the existing debt explicitly so the gate is green
+# and meaningful from day one. Each carve-out below is a ratchet — remove
+# entries as the debt is paid down, never add without a dated reason.
+
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Official GitHub actions may ride major-version tags (dependabot
+        # keeps them bumped; GitHub controls the tags).
+        actions/*: ref-pin
+        github/*: ref-pin
+        # Grandfathered third-party actions already in the workflows
+        # (2026-07): ~75 use-sites, dominated by dtolnay/rust-toolchain
+        # where the ref IS the toolchain selector (@stable), so digest
+        # pinning needs a `toolchain:` input added per site. Ratchet:
+        # digest-pin these in a follow-up sweep, then delete the lines.
+        dtolnay/rust-toolchain: ref-pin
+        Swatinem/rust-cache: ref-pin
+        mozilla-actions/sccache-action: ref-pin
+        taiki-e/install-action: ref-pin
+        oven-sh/setup-bun: ref-pin
+        ilammy/msvc-dev-cmd: ref-pin
+        # Everything else — including any NEWLY introduced third-party
+        # action — must be pinned to a commit SHA.
+        "*": hash-pin
+
+  # 49 findings, all audit-confidence Low: Swatinem/rust-cache in workflows
+  # that also publish artifacts. The release workflows are tag-gated and
+  # caches are keyed per-workflow; restructuring cache scope is a workflow
+  # redesign, not a lint fix. Revisit if zizmor's confidence rises or the
+  # release pipeline changes.
+  cache-poisoning:
+    disable: true
+
+  excessive-permissions:
+    ignore:
+      # Workflow-level contents:write + actions:write predate this gate;
+      # splitting them across the 13 release jobs is a release-pipeline
+      # change that needs its own carefully-tested PR (a mistake only
+      # manifests at the next tag). Tracked as follow-up.
+      - release-packages.yml

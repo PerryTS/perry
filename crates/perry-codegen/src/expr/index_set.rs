@@ -749,6 +749,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         MaterializationReason::FunctionAbi,
                     ));
                 }
+                // Phase 2: storage-proven view with a dynamic (bounds-unproven)
+                // exact-i32 index — inline checked store (OOB = silent no-op),
+                // no kind guard, no runtime call.
+                if let Some(stored) =
+                    super::try_lower_proven_view_checked_store(ctx, object, index, value)?
+                {
+                    if ctx.discard_expr_value {
+                        return Ok(double_literal(0.0));
+                    }
+                    return Ok(materialize_js_value(
+                        ctx,
+                        stored,
+                        MaterializationReason::FunctionAbi,
+                    ));
+                }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     let arr_box = lower_expr(ctx, object)?;
                     let idx_double = lower_expr(ctx, index)?;
@@ -1009,6 +1024,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // string key on dynamic receiver → object field set, otherwise
             // bail with a clear error.
             if is_array_expr(ctx, object) {
+                // Repsel Phase 4a.3: guard-free `Ptr<NumArray>` store — the
+                // local proof (raw-f64-or-hole slots forever, length never
+                // shrinks, binding never stale) + a per-site in-bounds proof
+                // + a canonical-raw-f64 RHS lower `a[i] = v` to slot reload →
+                // mask → gep → `store double`, with no guard tier, no bounds
+                // arms, no barrier, no note, no length bump (in-bounds ⇒
+                // length unchanged). Anything unproven falls to the guarded
+                // tiers below, which maintain the same invariants.
+                if let Some(value) = super::ptr_numarray_access::try_lower_num_array_guard_free_set(
+                    ctx,
+                    object.as_ref(),
+                    index,
+                    value,
+                )? {
+                    return Ok(value);
+                }
                 // Bounded-index fast-fast path: when the surrounding
                 // for-loop has registered `(counter_id, arr_id)` as a
                 // bounded pair (via `lower_for`'s
@@ -1153,6 +1184,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             }
 
                             ctx.current_block = fast_idx;
+                            let value_is_canonical_raw_f64 =
+                                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
                             {
                                 let blk = ctx.block();
                                 let arr_bits = blk.bitcast_double_to_i64(&arr_box);
@@ -1168,12 +1201,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let with_header = blk.add(I64, &byte_offset, "8");
                                 let element_addr = blk.add(I64, &arr_handle, &with_header);
                                 let element_ptr = blk.inttoptr(I64, &element_addr);
-                                let numeric_value =
-                                    canonicalize_raw_f64_numeric_store_value(blk, &val_double);
                                 // GC_STORE_AUDIT(POINTER_FREE): guarded raw-f64
-                                // numeric store — the canonicalized value is a
+                                // numeric store — the (canonical) value is a
                                 // plain f64, never a GC pointer, so no barrier.
-                                blk.store(DOUBLE, &numeric_value, &element_ptr);
+                                if value_is_canonical_raw_f64 {
+                                    // Repsel 4a.0: canonical by construction —
+                                    // skip js_array_numeric_value_to_raw_f64.
+                                    blk.store(DOUBLE, &val_double, &element_ptr);
+                                } else {
+                                    let numeric_value =
+                                        canonicalize_raw_f64_numeric_store_value(blk, &val_double);
+                                    blk.store(DOUBLE, &numeric_value, &element_ptr);
+                                }
                                 blk.br(&merge_label);
                             }
                             let stored = LoweredValue {
@@ -1276,6 +1315,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // and the implicit length update vanishing.
                 if let Some(id) = local_id {
                     if ctx.locals.contains_key(&id) {
+                        let value_is_canonical_raw_f64 =
+                            crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
                         lower_index_set_fast(
                             ctx,
                             &arr_box,
@@ -1286,6 +1327,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             write_barrier_needed,
                             value_is_numeric,
                             require_numeric_layout,
+                            value_is_canonical_raw_f64,
                             &feedback_site_id,
                         )?;
                     } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {

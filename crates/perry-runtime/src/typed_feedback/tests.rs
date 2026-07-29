@@ -155,7 +155,7 @@ fn unique_temp_dir(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn typed_feedback_registers_source_attribution() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(1, TypedFeedbackSiteKind::PropertyGet, "obj.x");
     let snapshot = typed_feedback_snapshot();
@@ -169,7 +169,7 @@ fn typed_feedback_registers_source_attribution() {
 
 #[test]
 fn typed_feedback_state_transitions_to_megamorphic() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(2, TypedFeedbackSiteKind::HelperReturn, "helper");
     for i in 0..POLYMORPHIC_CAP {
@@ -208,7 +208,7 @@ fn typed_feedback_state_transitions_to_megamorphic() {
 
 #[test]
 fn typed_feedback_invalidation_counters_are_site_attributed() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(3, TypedFeedbackSiteKind::MethodCall, "m");
     observe(
@@ -233,7 +233,7 @@ fn typed_feedback_invalidation_counters_are_site_attributed() {
 
 #[test]
 fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(5, TypedFeedbackSiteKind::PropertyGet, "obj.x");
     register(6, TypedFeedbackSiteKind::MethodCall, "obj.m()");
@@ -278,7 +278,7 @@ fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
 
 #[test]
 fn typed_feedback_array_keys_use_element_facts_not_sample_identity() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(7, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
 
@@ -304,7 +304,7 @@ fn typed_feedback_array_keys_use_element_facts_not_sample_identity() {
 
 #[test]
 fn typed_feedback_helper_return_keys_use_shape_facts_not_sample_identity() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(8, TypedFeedbackSiteKind::HelperReturn, "helper()");
 
@@ -339,7 +339,7 @@ fn typed_feedback_helper_return_keys_use_shape_facts_not_sample_identity() {
 
 #[test]
 fn typed_feedback_tracks_all_site_categories() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     let kinds = [
         TypedFeedbackSiteKind::PropertyGet,
@@ -363,7 +363,7 @@ fn typed_feedback_tracks_all_site_categories() {
 
 #[test]
 fn typed_feedback_unboxed_numeric_write_falls_back_for_string_values() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(21, TypedFeedbackSiteKind::NumericFieldWrite, "obj.x=");
 
@@ -392,7 +392,7 @@ fn typed_feedback_unboxed_numeric_write_falls_back_for_string_values() {
 
 #[test]
 fn typed_feedback_helper_return_guard_failure_returns_original_value() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(22, TypedFeedbackSiteKind::HelperReturn, "helper()");
 
@@ -412,7 +412,7 @@ fn typed_feedback_helper_return_guard_failure_returns_original_value() {
 
 #[test]
 fn typed_feedback_array_guard_failure_matches_jsvalue_fallback() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(23, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
 
@@ -430,7 +430,7 @@ fn typed_feedback_array_guard_failure_matches_jsvalue_fallback() {
 
 #[test]
 fn typed_feedback_array_get_guard_failure_uses_jsvalue_object_fallback() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(25, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
 
@@ -456,7 +456,7 @@ fn typed_feedback_array_get_guard_failure_uses_jsvalue_object_fallback() {
 
 #[test]
 fn typed_feedback_non_bounded_array_set_guard_failure_uses_jsvalue_object_fallback() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(24, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
 
@@ -484,7 +484,7 @@ fn typed_feedback_non_bounded_array_set_guard_failure_uses_jsvalue_object_fallba
 
 #[test]
 fn typed_feedback_array_set_guards_reject_frozen_arrays() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(70, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
     register(71, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
@@ -517,7 +517,7 @@ fn typed_feedback_array_set_guards_reject_frozen_arrays() {
 
 #[test]
 fn typed_feedback_array_set_boxed_fallback_preserves_original_index_value() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(72, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
 
@@ -542,7 +542,7 @@ fn typed_feedback_array_set_boxed_fallback_preserves_original_index_value() {
 
 #[test]
 fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receivers() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(73, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
 
@@ -602,7 +602,7 @@ fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receiv
 
 #[test]
 fn typed_feedback_boxed_set_fallback_does_not_truncate_fractional_array_like_keys() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(74, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
 
@@ -752,7 +752,7 @@ fn polymorphic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers
 
 #[test]
 fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(26, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
 
@@ -779,7 +779,7 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
 
 #[test]
 fn typed_feedback_packed_i32_loop_guard_rejects_fractional_numeric_layout() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(70, TypedFeedbackSiteKind::ArrayElement, "packed_i32_loop");
 
@@ -811,7 +811,7 @@ fn typed_feedback_packed_i32_loop_guard_rejects_fractional_numeric_layout() {
 
 #[test]
 fn typed_feedback_packed_u32_loop_guard_rejects_signed_fractional_and_overflow_layouts() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(71, TypedFeedbackSiteKind::ArrayElement, "packed_u32_loop");
 
@@ -840,7 +840,7 @@ fn typed_feedback_packed_u32_loop_guard_rejects_signed_fractional_and_overflow_l
 
 #[test]
 fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(27, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
 
@@ -869,7 +869,7 @@ fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
 
 #[test]
 fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(68, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
     register(69, TypedFeedbackSiteKind::ArrayElement, "arr.push");
@@ -913,7 +913,7 @@ fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
 
 #[test]
 fn typed_feedback_numeric_array_push_guard_requires_room_numeric_value_and_layout() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(28, TypedFeedbackSiteKind::ArrayElement, "arr.push");
 
@@ -943,7 +943,7 @@ fn typed_feedback_numeric_array_push_guard_requires_room_numeric_value_and_layou
 
 #[test]
 fn typed_feedback_numeric_array_push_guard_rejects_mutability_restricted_arrays() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(72, TypedFeedbackSiteKind::ArrayElement, "arr.push");
 
@@ -995,12 +995,15 @@ fn assert_lto_keepalive_anchor(src: &str, static_name: &str, signature: &str, ta
     let static_pos = src
         .find(static_name)
         .unwrap_or_else(|| panic!("missing keepalive static {static_name} for {target}"));
-    let start = static_pos.saturating_sub(32);
+    // Lookback must cover the full gated attribute line above the static
+    // (`#[cfg_attr(feature = "keepalive-anchors", used)]` + newline).
+    let start = static_pos.saturating_sub(96);
     let end = (static_pos + 512).min(src.len());
     let window = &src[start..end];
     assert!(
-        window.contains("#[used]"),
-        "keepalive static {static_name} for {target} is not #[used]"
+        window.contains(r#"#[cfg_attr(feature = "keepalive-anchors", used)]"#),
+        "keepalive static {static_name} for {target} lacks the feature-gated #[used] \
+         (cfg_attr keepalive-anchors) attribute"
     );
     assert!(
         window.contains(signature),
@@ -1535,7 +1538,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
 
 #[test]
 fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(31, TypedFeedbackSiteKind::PropertySet, "obj.x=");
 
@@ -1560,7 +1563,7 @@ fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
 
 #[test]
 fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     CLASS_FIELD_SETTER_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
     CLASS_FIELD_SETTER_VALUE_BITS.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -1605,7 +1608,7 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
 
 #[test]
 fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(39, TypedFeedbackSiteKind::PropertyGet, "obj.x");
 
@@ -1635,7 +1638,7 @@ fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
 
 #[test]
 fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(43, TypedFeedbackSiteKind::PropertyGet, "obj.x");
 
@@ -1671,7 +1674,7 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
 
 #[test]
 fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(44, TypedFeedbackSiteKind::PropertySet, "obj.x=");
 
@@ -1747,7 +1750,7 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
 
 #[test]
 fn typed_feedback_object_set_fast_hits_learned_dynamic_key_transition() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(34, TypedFeedbackSiteKind::PropertySet, "obj[dyn]=");
 
@@ -1780,7 +1783,7 @@ fn typed_feedback_object_set_fast_hits_learned_dynamic_key_transition() {
 
 #[test]
 fn typed_feedback_object_set_fast_falls_back_for_uncached_dynamic_key() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(35, TypedFeedbackSiteKind::PropertySet, "obj[dyn_miss]=");
 
@@ -1797,7 +1800,7 @@ fn typed_feedback_object_set_fast_falls_back_for_uncached_dynamic_key() {
 
 #[test]
 fn typed_feedback_method_direct_guard_passes_for_exact_registered_method() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(61, TypedFeedbackSiteKind::MethodCall, "obj.m()");
 
@@ -1827,7 +1830,7 @@ fn typed_feedback_method_direct_guard_passes_for_exact_registered_method() {
 
 #[test]
 fn typed_feedback_method_direct_guard_fails_for_own_method_replacement() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(62, TypedFeedbackSiteKind::MethodCall, "obj.m()");
 
@@ -1859,7 +1862,7 @@ fn typed_feedback_method_direct_guard_fails_for_own_method_replacement() {
 
 #[test]
 fn typed_feedback_method_direct_guard_fails_for_prototype_method_registration() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(63, TypedFeedbackSiteKind::MethodCall, "obj.m()");
 
@@ -1897,7 +1900,7 @@ fn typed_feedback_method_direct_guard_fails_for_prototype_method_registration() 
 
 #[test]
 fn typed_feedback_method_direct_guard_fails_for_native_receiver() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(64, TypedFeedbackSiteKind::MethodCall, "native.m()");
 
@@ -1925,7 +1928,7 @@ fn typed_feedback_method_direct_guard_fails_for_native_receiver() {
 
 #[test]
 fn typed_feedback_method_direct_guard_fails_after_megamorphic_site() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(65, TypedFeedbackSiteKind::MethodCall, "obj.m()");
     for i in 0..=POLYMORPHIC_CAP {
@@ -1968,7 +1971,7 @@ fn typed_feedback_method_direct_guard_fails_after_megamorphic_site() {
 
 #[test]
 fn typed_feedback_closure_direct_guard_passes_and_rejects_bound_sentinel() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(66, TypedFeedbackSiteKind::ClosureCall, "cb()");
 
@@ -1991,7 +1994,7 @@ fn typed_feedback_closure_direct_guard_passes_and_rejects_bound_sentinel() {
 
 #[test]
 fn typed_feedback_trace_json_reports_counts() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(4, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
     js_typed_feedback_record_guard_pass(4);
@@ -2020,7 +2023,7 @@ fn typed_feedback_trace_json_reports_counts() {
 
 #[test]
 fn typed_feedback_trace_json_includes_observed_kinds() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(67, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
 
@@ -2068,7 +2071,7 @@ fn typed_feedback_trace_json_includes_observed_kinds() {
 
 #[test]
 fn typed_feedback_trace_dump_honors_env_paths() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
 
     let disabled_dir = unique_temp_dir("disabled");
@@ -2111,7 +2114,7 @@ fn typed_feedback_trace_dump_honors_env_paths() {
 
 #[test]
 fn typed_feedback_roots_rewrite_shape_observations() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
 
     let shape_user = crate::arena::arena_alloc_gc(64, 8, crate::gc::GC_TYPE_ARRAY);
@@ -2277,7 +2280,7 @@ fn typed_array_alloc_always_carries_a_real_typed_array_gc_header() {
 /// rather than the inline plain-`ArrayHeader` raw-slot path.
 #[test]
 fn plain_array_index_get_guard_rejects_typed_array_receivers() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(6136, TypedFeedbackSiteKind::ArrayElement, "nd.buf[i]");
 
@@ -2308,7 +2311,7 @@ fn plain_array_index_get_guard_rejects_typed_array_receivers() {
 /// above proves rejection of typed arrays rather than a guard that never passes.
 #[test]
 fn plain_array_index_get_guard_still_accepts_plain_arrays() {
-    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(6137, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
 

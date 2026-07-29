@@ -53,9 +53,10 @@ pub struct AxiosResponseHandle {
     pub headers: Vec<(String, String)>,
 }
 
-/// axios.get(url) -> Promise<AxiosResponse>
-#[no_mangle]
-pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Promise {
+unsafe fn request_without_body(
+    url_ptr: *const StringHeader,
+    method: reqwest::Method,
+) -> *mut Promise {
     let promise = js_promise_new();
 
     let url = match string_from_header(url_ptr) {
@@ -69,7 +70,7 @@ pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Prom
     };
     spawn_for_promise(promise as *mut u8, async move {
         let client = reqwest::Client::new();
-        match client.get(&url).send().await {
+        match client.request(method, &url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
                 let status_text = response
@@ -91,10 +92,8 @@ pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Prom
                             data,
                             headers,
                         });
-                        // Issue #340: NaN-box the handle as POINTER_TAG
-                        // (0x7FFD) so the awaiter sees a proper handle
-                        // value, not a subnormal float that decays to
-                        // undefined on `r.status` / `r.data` accesses.
+                        // NaN-box the handle so the awaiter keeps it as an
+                        // object instead of treating the small id as a number.
                         Ok((handle as u64) | 0x7FFD_0000_0000_0000)
                     }
                     Err(e) => Err(format!("Failed to read response body: {}", e)),
@@ -105,6 +104,24 @@ pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Prom
     });
 
     promise
+}
+
+/// axios.get(url) -> Promise<AxiosResponse>
+#[no_mangle]
+pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Promise {
+    request_without_body(url_ptr, reqwest::Method::GET)
+}
+
+/// axios.head(url) -> Promise<AxiosResponse>
+#[no_mangle]
+pub unsafe extern "C" fn js_axios_head(url_ptr: *const StringHeader) -> *mut Promise {
+    request_without_body(url_ptr, reqwest::Method::HEAD)
+}
+
+/// axios.options(url) -> Promise<AxiosResponse>
+#[no_mangle]
+pub unsafe extern "C" fn js_axios_options(url_ptr: *const StringHeader) -> *mut Promise {
+    request_without_body(url_ptr, reqwest::Method::OPTIONS)
 }
 
 /// axios.post(url, data) -> Promise<AxiosResponse>

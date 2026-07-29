@@ -9,7 +9,11 @@ const dispose = (server as any)[Symbol.asyncDispose];
 console.log("asyncDispose type:", typeof dispose);
 
 const result = dispose.call(server);
-console.log("asyncDispose promise:", typeof result?.then, Object.prototype.toString.call(result));
+console.log(
+  "asyncDispose promise:",
+  typeof result?.then,
+  Object.prototype.toString.call(result),
+);
 
 try {
   await result;

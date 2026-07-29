@@ -338,7 +338,7 @@ pub fn validate_port(value: f64, name: &str) -> u16 {
 // hard segfault rather than node's catchable `TypeError`. These helpers take
 // the *original* NaN-boxed value (as `f64`) plus the argument name, so codegen
 // can emit a `call void` validation BEFORE the unbox, throwing node's typed
-// error instead of crashing. The `#[used]` anchors below keep them alive
+// error instead of crashing. The `#[cfg_attr(feature = "keepalive-anchors", used)]` anchors below keep them alive
 // through the auto-optimize whole-program rebuild (the bitcode internalizer
 // drops `#[no_mangle]` symbols only referenced from generated `.o`).
 // ============================================================================
@@ -423,12 +423,12 @@ pub unsafe extern "C" fn js_runtime_validate_integer_arg(
     validate_integer(value, &name, min, max);
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_VALIDATE_STRING_ARG: unsafe extern "C" fn(f64, *const u8, u32) =
     js_runtime_validate_string_arg;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_VALIDATE_CRYPTO_KEY_ARG: unsafe extern "C" fn(f64, *const u8, u32) =
     js_runtime_validate_crypto_key_arg;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_VALIDATE_INTEGER_ARG: unsafe extern "C" fn(f64, *const u8, u32, f64, f64) =
     js_runtime_validate_integer_arg;

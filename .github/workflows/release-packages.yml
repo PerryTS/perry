@@ -5,27 +5,126 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      cut_release:
+        description: "Tag-last release: gate on tests, build every leg, then create the vX.Y.Z tag (version from Cargo.toml) + GitHub Release and publish. Dispatch on a branch pinned at the release-candidate commit."
+        type: boolean
+        default: false
+      existing_tag:
+        description: "Re-publish an existing release (e.g. v0.5.1300): rebuild and re-upload assets / re-run publish legs for that tag. Replaces the old implicit 'latest release' fallback."
+        type: string
+        default: ""
       publish_npm:
-        description: "Publish npm packages (use for the first run / to bypass release trigger)"
+        description: "With existing_tag: also (re-)publish the npm packages. release / cut_release runs always publish npm."
         type: boolean
         default: false
 
 permissions:
   contents: write
-  actions: read
+  # `write` (was `read`): the await-tests gate dispatches test.yml /
+  # simctl-tests.yml when a cut_release run has no test run on its SHA yet,
+  # and create-release dispatches the tag-rider workflows (docs, benchmark,
+  # container-tests) on the new tag — a GITHUB_TOKEN-created tag emits no
+  # push event, so those must be fired explicitly.
+  actions: write
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Resolve the run mode + release tag ONCE, up front. Every downstream job
+  # takes tag/version from these outputs — there is deliberately no "latest
+  # release" fallback anywhere anymore (pre-tag dispatches used to upload new
+  # binaries onto the PREVIOUS release through that fallback).
+  #
+  # Modes:
+  #   release      release: published event (legacy tag-first path — a human
+  #                created the tag + release; still fully supported)
+  #   cut-release  workflow_dispatch with cut_release=true — tag-LAST: nothing
+  #                is tagged or published until the gate + every build leg is
+  #                green; create-release then makes the tag + GH release and
+  #                the publish legs run in this same workflow run
+  #   republish    workflow_dispatch with existing_tag=vX.Y.Z — rebuild and
+  #                re-run the publish legs for an already-published release
+  #                (the old "bypass" lever, now with an explicit tag)
+  #   stage        plain workflow_dispatch — build-only smoke run; archives
+  #                land as workflow artifacts, nothing touches any release
+  # ---------------------------------------------------------------------------
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.resolve.outputs.mode }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve run mode + tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          CUT_RELEASE: ${{ inputs.cut_release }}
+          EXISTING_TAG: ${{ inputs.existing_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "release" ]; then
+            MODE=release
+            TAG="$RELEASE_TAG"
+          elif [ "$CUT_RELEASE" = "true" ] && [ -n "$EXISTING_TAG" ]; then
+            echo "::error::cut_release and existing_tag are mutually exclusive — cut_release derives the tag from Cargo.toml."
+            exit 1
+          elif [ "$CUT_RELEASE" = "true" ]; then
+            MODE=cut-release
+            VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+            TAG="v$VERSION"
+            # Same STOP conditions the /release skill enforces, checked here
+            # so a bad dispatch fails in seconds instead of after 40 min of
+            # builds.
+            if ! grep -qF "**Current Version:** $VERSION" CLAUDE.md; then
+              echo "::error::Cargo.toml says $VERSION but CLAUDE.md's Current Version line disagrees — fix the drift before releasing."
+              exit 1
+            fi
+            if gh api "repos/$REPO/git/ref/tags/$TAG" --silent 2>/dev/null; then
+              echo "::error::tag $TAG already exists — the version in Cargo.toml was already released. Land a version bump or use existing_tag to re-publish."
+              exit 1
+            fi
+            if ! find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' | grep -q .; then
+              echo "::error::no fragments in changelog.d/ — the release notes are cut from them; nothing to release."
+              exit 1
+            fi
+          elif [ -n "$EXISTING_TAG" ]; then
+            MODE=republish
+            TAG="$EXISTING_TAG"
+            if ! gh release view "$TAG" -R "$REPO" --json tagName >/dev/null; then
+              echo "::error::existing_tag=$TAG has no published GitHub release."
+              exit 1
+            fi
+          else
+            MODE=stage
+            TAG=""
+          fi
+          VERSION="${TAG#v}"
+          {
+            echo "mode=$MODE"
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE  tag=${TAG:-<none — stage-only build>}"
+
+  # ---------------------------------------------------------------------------
   # Gate: wait for Tests + Simulator Tests to pass on this commit before we
   # publish anything downstream (Homebrew bottle, apt .deb, npm tarballs).
-  # Both workflows are triggered by the same `push: tags: ['v*']` event that
-  # the /release skill does, so they run in parallel with this job. We poll
-  # `gh run list --commit <sha>` until each reports a conclusion. Fails fast
-  # if either workflow failed — npm publish is not reversible.
+  # The poll matches ANY successful run on this head SHA, event-agnostic:
+  # on the legacy path the `push: tags: ['v*']` event fires both workflows in
+  # parallel with this run; on the cut-release (tag-last) path there is no tag
+  # yet, so the step below dispatches them on this ref if no run exists.
+  # Fails fast if either workflow failed — npm publish is not reversible.
   #
-  # Skipped on workflow_dispatch so the "first-run / bypass" lever still works.
+  # Bypassed for republish (assets already shipped once for that tag) and
+  # stage (nothing publishes) — the old workflow_dispatch bypass lever.
   # ---------------------------------------------------------------------------
   await-tests:
+    needs: preflight
     runs-on: ubuntu-latest
     # Job-level timeout must match the bash `deadline=$(( SECONDS + N * 60 ))`
     # below. Both must move together.
@@ -42,12 +141,42 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          MODE: ${{ needs.preflight.outputs.mode }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "workflow_dispatch" ]; then
-            echo "workflow_dispatch — bypassing test gate (manual publish)."
-            exit 0
+          case "$MODE" in
+            republish|stage)
+              echo "$MODE mode — bypassing test gate (manual lever)."
+              exit 0
+              ;;
+          esac
+          if [ "$MODE" = "cut-release" ]; then
+            # Tag-last: no tag push fired the gate workflows, so make sure a
+            # run exists on this exact commit — dispatch one if none is there.
+            # Operator pre-flighted runs on the same SHA also satisfy the
+            # poll below (it matches by head SHA, event-agnostic).
+            # NOTE: test.yml's concurrency group is `test-<ref>` with
+            # cancel-in-progress — dispatching on `main` cancels a running
+            # nightly. The /release skill dispatches cut_release runs on a
+            # pinned release/vX.Y.Z branch for exactly that reason.
+            for wf_file in "test.yml" "simctl-tests.yml"; do
+              count=$(gh api \
+                "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$SHA&per_page=1" \
+                --jq '.total_count')
+              if [ "$count" = "0" ]; then
+                # workflow_dispatch runs on the ref TIP — if the ref moved past
+                # our SHA, a dispatched run would test the wrong commit and the
+                # poll below would hang for 120 min. Fail fast instead.
+                tip=$(gh api "/repos/$REPO/git/ref/heads/$REF_NAME" --jq '.object.sha')
+                if [ "$tip" != "$SHA" ]; then
+                  echo "::error::$REF_NAME moved to $tip (this run is on $SHA) — re-dispatch on a branch pinned at the release candidate."
+                  exit 1
+                fi
+                echo "No $wf_file run on $SHA yet — dispatching on $REF_NAME."
+                gh workflow run "$wf_file" --ref "$REF_NAME" -R "$REPO"
+              fi
+            done
           fi
           echo "Gating release on commit $SHA"
           # Query by workflow *filename* via `gh api`, not by display name via
@@ -136,7 +265,9 @@ jobs:
   # Build release binaries for all platforms
   # ---------------------------------------------------------------------------
   build:
-    needs: await-tests
+    # preflight is only in `needs` for its outputs (the update-manifest signing
+    # steps bake the release tag into the signed URL); await-tests is the gate.
+    needs: [preflight, await-tests]
     strategy:
       # Don't let one platform's build failure cancel the others (mirrors
       # build-cross). A broken cross-host target should not strand the
@@ -637,11 +768,15 @@ jobs:
       # authority. Sign a domain-separated, version/platform/URL/digest/size
       # bound manifest with the protected Ed25519 release key instead.
       - name: Sign authenticated CLI update manifest (Unix)
-        if: runner.os != 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
+        # The signed manifest binds the download URL, so it needs the release
+        # tag — preflight resolves it for every publishing mode (in cut-release
+        # mode the tag doesn't exist yet but its name is already fixed).
+        # Skipped on stage-only runs (no tag → nothing to bind to).
+        if: runner.os != 'Windows' && needs.preflight.outputs.tag != ''
         env:
           PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -650,7 +785,6 @@ jobs:
           : "${PERRY_CLI_UPDATE_PUBLIC_KEYS:?configure the compiled public-key keyring}"
           jq -e --arg id "$PERRY_CLI_UPDATE_KEY_ID" '.[] | select(.key_id == $id and (.public_key | length > 0))' <<< "$PERRY_CLI_UPDATE_PUBLIC_KEYS" >/dev/null
           TAG="$RELEASE_TAG"
-          if [ -z "$TAG" ]; then TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName'); fi
           ARCHIVE="${{ matrix.artifact }}.tar.gz"
           URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ARCHIVE}"
           "target/${{ matrix.target }}/dist/perry" updater sign-cli-manifest \
@@ -659,11 +793,11 @@ jobs:
             --secret-key-b64 "$PERRY_CLI_UPDATE_SIGNING_KEY" > "$ARCHIVE.update.json"
 
       - name: Sign authenticated CLI update manifest (Windows)
-        if: runner.os == 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
+        if: runner.os == 'Windows' && needs.preflight.outputs.tag != ''
         env:
           PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -672,7 +806,6 @@ jobs:
           if (-not $env:PERRY_CLI_UPDATE_PUBLIC_KEYS) { throw 'configure PERRY_CLI_UPDATE_PUBLIC_KEYS' }
           if (-not (($env:PERRY_CLI_UPDATE_PUBLIC_KEYS | ConvertFrom-Json) | Where-Object { $_.key_id -eq $env:PERRY_CLI_UPDATE_KEY_ID -and $_.public_key })) { throw 'configured key id is not in PERRY_CLI_UPDATE_PUBLIC_KEYS' }
           $tag = $env:RELEASE_TAG
-          if (-not $tag) { $tag = (gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName') }
           $archive = "${{ matrix.artifact }}.zip"
           $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$archive"
           & "target/${{ matrix.target }}/dist/perry.exe" updater sign-cli-manifest `
@@ -680,41 +813,33 @@ jobs:
             --release-version $tag.TrimStart('v') --key-id $env:PERRY_CLI_UPDATE_KEY_ID `
             --secret-key-b64 $env:PERRY_CLI_UPDATE_SIGNING_KEY | Out-File -Encoding utf8 "$archive.update.json"
 
-      - name: Upload release asset (Unix)
-        if: runner.os != 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # workflow_dispatch fallback: `github.event.release.tag_name` is
-          # only set for `release` events, so when triggered manually we
-          # look up the latest published release tag and upload to that.
-          # Pre-fix the v0.5.386 release shipped with NO assets uploaded
-          # because the original `release` run failed at await-tests, my
-          # workflow_dispatch bypass succeeded the build but skipped this
-          # upload step entirely.
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            echo "workflow_dispatch fallback: uploading to latest release tag $TAG"
-          fi
-          gh release upload "$TAG" "${{ matrix.artifact }}.tar.gz" --clobber
-          gh release upload "$TAG" "${{ matrix.artifact }}.tar.gz.sha256" --clobber
-          gh release upload "$TAG" "${{ matrix.artifact }}.tar.gz.update.json" --clobber
+      # Release-asset uploads moved to the publish-assets job: in cut-release
+      # (tag-last) mode there is no release to upload to while the matrix is
+      # still building, and the old per-leg upload with its "latest release"
+      # fallback was exactly what made pre-tag dispatches dangerous. The
+      # packaged archive + sidecar + update manifest travel as a workflow
+      # artifact instead.
+      - name: Upload packaged archive (Unix, for publish-assets job)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-archive-${{ matrix.artifact }}
+          # update.json only exists when a tag was resolved (not on stage-only
+          # runs) — the default `if-no-files-found: warn` tolerates that gap.
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.tar.gz.sha256
+            ${{ matrix.artifact }}.tar.gz.update.json
 
-      - name: Upload release asset (Windows)
-        if: runner.os == 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          if (-not $tag) {
-            $tag = (gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            Write-Host "workflow_dispatch fallback: uploading to latest release tag $tag"
-          }
-          gh release upload "$tag" "${{ matrix.artifact }}.zip" --clobber
-          gh release upload "$tag" "${{ matrix.artifact }}.zip.sha256" --clobber
-          gh release upload "$tag" "${{ matrix.artifact }}.zip.update.json" --clobber
+      - name: Upload packaged archive (Windows, for publish-assets job)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-archive-${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.zip.sha256
+            ${{ matrix.artifact }}.zip.update.json
 
       - name: Upload build artifact (Unix, for deb + npm-publish jobs)
         if: runner.os != 'Windows'
@@ -1103,41 +1228,12 @@ jobs:
           "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
           Get-Content "$archive.sha256"
 
-      - name: Upload cross release asset (Unix)
-        if: runner.os != 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            echo "workflow_dispatch fallback: uploading to latest release tag $TAG"
-          fi
-          ARCHIVE="perry-cross-${{ matrix.target }}.tar.gz"
-          gh release upload "$TAG" "$ARCHIVE" --clobber
-          gh release upload "$TAG" "$ARCHIVE.sha256" --clobber
-
-      - name: Upload cross release asset (Windows)
-        if: runner.os == 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          if (-not $tag) {
-            $tag = (gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            Write-Host "workflow_dispatch fallback: uploading to latest release tag $tag"
-          }
-          $archive = "perry-cross-${{ matrix.target }}.tar.gz"
-          gh release upload "$tag" "$archive" --clobber
-          gh release upload "$tag" "$archive.sha256" --clobber
-
-      # Always upload as a workflow artifact too — lets a maintainer
-      # pull the bundle off a workflow_dispatch run that didn't target an
-      # existing release (e.g. a smoke-test on a branch).
-      - name: Upload cross build artifact (for inspection)
+      # Release-asset upload happens in the publish-assets job (which pulls
+      # this artifact) — in cut-release mode no release exists while the
+      # matrix runs, and the old "latest release" fallback uploaded pre-tag
+      # dispatches onto the PREVIOUS release. The artifact also lets a
+      # maintainer pull the bundle off a stage-only run directly.
+      - name: Upload cross build artifact (for publish-assets job + inspection)
         uses: actions/upload-artifact@v7
         with:
           name: perry-cross-${{ matrix.target }}
@@ -1146,29 +1242,137 @@ jobs:
             perry-cross-${{ matrix.target }}.tar.gz.sha256
 
   # ---------------------------------------------------------------------------
+  # Tag-last core (cut-release mode only): every build leg is green, so NOW
+  # create the tag + GitHub Release. Release notes are cut from changelog.d/
+  # fragments — same contract as scripts/cut_release_notes.sh, whose
+  # --notes-only mode this job calls. The fragment-removal commit stays a
+  # maintainer step afterwards (GITHUB_TOKEN can't push to protected main):
+  #   ./scripts/cut_release_notes.sh --fold vX.Y.Z
+  # ---------------------------------------------------------------------------
+  create-release:
+    needs: [preflight, build, build-cross]
+    # Strict by design: in tag-last mode a red Tier-3 cross leg blocks the tag
+    # too (nothing is public yet, so "fix or rerun-to-green, then the skipped
+    # downstream jobs rerun via `gh run rerun <id> --failed`" is cheap).
+    if: >
+      !cancelled() &&
+      needs.preflight.outputs.mode == 'cut-release' &&
+      needs.build.result == 'success' &&
+      needs.build-cross.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create tag + GitHub Release (notes from changelog.d)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Preflight checked this ~1-2 h ago; re-check so a concurrent manual
+          # release of the same version fails here instead of clobbering.
+          if gh api "repos/$REPO/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            echo "::error::tag $TAG appeared while the builds ran — aborting."
+            exit 1
+          fi
+          ./scripts/cut_release_notes.sh --notes-only > /tmp/release-notes.md
+          # Created with GITHUB_TOKEN: GitHub suppresses events triggered by a
+          # workflow's own token, so this `release: published` does NOT fire a
+          # second release-packages run (publishing continues in THIS run),
+          # and the tag emits no `push: tags` event either — the step below
+          # dispatches the tag-rider workflows explicitly.
+          gh release create "$TAG" -R "$REPO" \
+            --target "$SHA" --title "$TAG" --notes-file /tmp/release-notes.md
+          echo "Created release $TAG at $SHA"
+
+      - name: Dispatch tag-rider workflows (docs, benchmark, container-tests)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # These normally ride `push: tags: ['v*']`. test.yml/simctl already
+          # ran on this SHA (await-tests gated on them), so only the rest are
+          # fired. benchmark.yml keys its hard-fail release gate off
+          # `startsWith(github.ref, 'refs/tags/v')`, which holds when
+          # dispatched with --ref <tag>. Best-effort: a failed dispatch must
+          # not fail the release itself.
+          for wf in docs.yml benchmark.yml container-tests.yml; do
+            gh workflow run "$wf" --ref "$TAG" -R "$REPO" \
+              || echo "::warning::could not dispatch $wf on $TAG — run it manually"
+          done
+
+  # ---------------------------------------------------------------------------
+  # Upload every packaged archive to the GitHub Release. Runs for all
+  # publishing modes (single upload path — the build legs no longer touch the
+  # release): release/republish upload to the pre-existing release,
+  # cut-release to the one create-release just made. Host archives are a hard
+  # requirement; cross bundles are best-effort on the legacy paths (workers
+  # rebuild from source when a bundle is missing), matching the old per-leg
+  # upload semantics where a red Tier-3 leg didn't sink the release.
+  # ---------------------------------------------------------------------------
+  publish-assets:
+    needs: [preflight, build, build-cross, create-release]
+    if: >
+      !cancelled() &&
+      needs.preflight.outputs.tag != '' &&
+      needs.build.result == 'success' &&
+      contains(fromJSON('["success", "failure"]'), needs.build-cross.result) &&
+      (needs.preflight.outputs.mode != 'cut-release' || needs.create-release.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged host archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-archive-*
+          merge-multiple: true
+          path: assets/
+
+      - name: Download cross bundles
+        # continue-on-error: a fully-red build-cross (legacy modes) must not
+        # stop the host archives from shipping.
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: perry-cross-*
+          merge-multiple: true
+          path: assets/
+
+      - name: Upload all assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(assets/*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no archives downloaded — nothing to upload to $TAG"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "uploading $(basename "$f")"
+            gh release upload "$TAG" "$f" -R "$REPO" --clobber
+          done
+
+  # ---------------------------------------------------------------------------
   # Update Homebrew tap
   # ---------------------------------------------------------------------------
   homebrew:
-    needs: build
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # publish-assets success implies: a tag exists, host builds are green, and
+    # the bottles this job downloads from the release are actually there.
+    needs: [preflight, publish-assets]
     runs-on: ubuntu-latest
     steps:
       - name: Get release info
         id: release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # workflow_dispatch fallback: github.event.release.tag_name is
-          # only set for `release` events. When triggered manually, fall
-          # back to the latest published release tag — same pattern the
-          # upload step uses (see v0.5.392 for the publish-jobs sweep).
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            echo "workflow_dispatch fallback: using latest release tag $TAG"
-          fi
-          VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          TAG="${{ needs.preflight.outputs.tag }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download source tarball and compute SHA256
@@ -1264,15 +1468,25 @@ jobs:
           git config user.name "perry-bot"
           git config user.email "bot@perryts.com"
           git add Formula/perry.rb
-          git commit -m "perry ${VERSION}" || echo "No changes"
+          # (pre-fix this said "$VERSION", a shell var that was never set in
+          # this step — every tap commit was titled just "perry ".)
+          git commit -m "perry ${{ steps.release.outputs.version }}" || echo "No changes"
           git push
 
   # ---------------------------------------------------------------------------
   # Build .deb packages and update APT repository
   # ---------------------------------------------------------------------------
   apt:
-    needs: build
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # Builds .debs from the build job's staging artifacts and uploads them to
+    # the release — so it needs the tag to EXIST (create-release in cut mode,
+    # pre-existing otherwise) but not publish-assets, letting it run in
+    # parallel with the archive uploads.
+    needs: [preflight, build, create-release]
+    if: >
+      !cancelled() &&
+      needs.preflight.outputs.tag != '' &&
+      needs.build.result == 'success' &&
+      (needs.preflight.outputs.mode != 'cut-release' || needs.create-release.result == 'success')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -1284,16 +1498,9 @@ jobs:
     steps:
       - name: Get release info
         id: release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            echo "workflow_dispatch fallback: using latest release tag $TAG"
-          fi
-          VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          TAG="${{ needs.preflight.outputs.tag }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifact
@@ -1479,22 +1686,16 @@ jobs:
   # Update APT repository (GitHub Pages)
   # ---------------------------------------------------------------------------
   apt-repo:
-    needs: apt
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # Default needs-semantics: runs only when apt succeeded (and is skipped
+    # whenever apt was skipped — stage mode, red builds, missing tag).
+    needs: [preflight, apt]
     runs-on: ubuntu-latest
     steps:
       - name: Get release info
         id: release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            echo "workflow_dispatch fallback: using latest release tag $TAG"
-          fi
-          VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          TAG="${{ needs.preflight.outputs.tag }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download .deb packages
@@ -1588,21 +1789,16 @@ jobs:
   # Publish to winget (Windows Package Manager)
   # ---------------------------------------------------------------------------
   winget:
-    needs: build
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # wingetcreate resolves the zip by its release-download URL, so the asset
+    # must already be on the release — hence publish-assets, not build.
+    needs: [preflight, publish-assets]
     runs-on: windows-latest
     steps:
       - name: Get release info
         id: release
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          if (-not $tag) {
-            $tag = (gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            Write-Host "workflow_dispatch fallback: using latest release tag $tag"
-          }
+          $tag = "${{ needs.preflight.outputs.tag }}"
           $version = $tag -replace '^v', ''
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "tag=$tag" >> $env:GITHUB_OUTPUT
@@ -1647,22 +1843,16 @@ jobs:
   # Notify build workers to update perry
   # ---------------------------------------------------------------------------
   update-workers:
-    needs: build
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # Workers pull the new binaries off the GitHub Release, so only ping them
+    # once the assets are actually up.
+    needs: [preflight, publish-assets]
     runs-on: ubuntu-latest
     steps:
       - name: Get release version
         id: release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
-            echo "workflow_dispatch fallback: using latest release tag $TAG"
-          fi
-          VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          TAG="${{ needs.preflight.outputs.tag }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Trigger worker perry update
         env:
@@ -1683,10 +1873,24 @@ jobs:
   # as a Trusted Publisher. See npm/README.md for the one-time setup.
   # ---------------------------------------------------------------------------
   npm-publish:
-    needs: build
+    # The irreversible leg. build-cross is in `needs` (completed, not
+    # necessarily green — stage-npm.sh backfills libperry_ui_android.a from
+    # the perry-cross bundle, so waiting removes the old race where npm
+    # staged whatever cross artifacts happened to exist yet). In cut-release
+    # mode create-release success means the tag + release exist before
+    # anything hits the registry; npm publishes on both release paths, and on
+    # republish only when publish_npm is explicitly set (the already-published
+    # version check keeps re-runs idempotent either way).
+    needs: [preflight, build, build-cross, create-release]
     if: >
-      github.event_name == 'release' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_npm == 'true')
+      !cancelled() &&
+      needs.build.result == 'success' &&
+      contains(fromJSON('["success", "failure"]'), needs.build-cross.result) &&
+      (
+        needs.preflight.outputs.mode == 'release' ||
+        (needs.preflight.outputs.mode == 'cut-release' && needs.create-release.result == 'success') ||
+        (needs.preflight.outputs.mode == 'republish' && inputs.publish_npm)
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read

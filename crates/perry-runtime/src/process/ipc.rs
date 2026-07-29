@@ -202,6 +202,17 @@ fn ipc_is_connected() -> bool {
     state.available && state.connected
 }
 
+/// IPC-backed `process` properties. Behind `proc-ipc` (default-on, compiler
+/// detected): with the feature off the channel can never be used by this
+/// program, so returning `None` keeps the always-live process-namespace
+/// lookup from statically pinning the IPC send path and, through it, the JSON
+/// serializer.
+#[cfg(not(feature = "proc-ipc"))]
+pub(crate) fn process_ipc_property(_name: &str) -> Option<f64> {
+    None
+}
+
+#[cfg(feature = "proc-ipc")]
 pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
     match name {
         "send" | "disconnect" | "connected" | "channel" => {}

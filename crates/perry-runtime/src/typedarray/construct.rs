@@ -39,65 +39,16 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
         crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
     }
     if top16 == 0x7FFD {
-        // POINTER_TAG — existing array pointer; copy its elements.
-        let arr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader;
-        // Issue #654: a NaN-boxed pointer can also point at a registered
-        // typed array (e.g. when the source flowed through a path that
-        // re-applied POINTER_TAG). Detect via the registry and copy
-        // through `typed_array_to_typed_array` so element values stay
-        // numeric instead of being read as f64-NaN-boxed bits.
-        let raw_addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if lookup_typed_array_kind(raw_addr).is_some() {
-            return typed_array_copy_from_typed_array(
-                kind as u8,
-                raw_addr as *const TypedArrayHeader,
-            );
-        }
-        if crate::buffer::is_registered_buffer(raw_addr) {
-            if crate::buffer::is_any_array_buffer(raw_addr) {
-                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-                return crate::typedarray_view::js_typed_array_view(
-                    kind, val, undefined, undefined,
-                );
-            }
-            return bigint::copy_from_uint8_buffer(
-                kind as u8,
-                raw_addr as *const crate::buffer::BufferHeader,
-            );
-        }
-        // A plain object that is neither a typed array nor a buffer is consumed
-        // per the spec's `new TypedArray(object)` path: if it exposes a
-        // *callable* `@@iterator` it is iterated (InitializeTypedArrayFromList);
-        // a non-callable non-nullish `@@iterator` is a TypeError; otherwise it
-        // is read as an array-like (`ToLength(Get(obj, "length"))` then each
-        // indexed element). Registered Maps/Sets keep the shared `Array.from`
-        // materialization (their `@@iterator` is native, not a stored symbol
-        // property). Functions are valid array-like/iterable sources too —
-        // previously they were reinterpreted as an `ArrayHeader` (crash).
-        if crate::map::is_registered_map(raw_addr)
-            || crate::set::is_registered_set(raw_addr)
-            || crate::array::is_builtin_iterator_class_id(raw_addr)
-            || crate::object::js_util_types_is_generator_object(val).to_bits()
-                == crate::value::TAG_TRUE
-        {
-            // Built-in iterables whose `@@iterator` is native (not a stored
-            // symbol property): Maps/Sets, builtin iterator objects, and
-            // generator objects (Perry generators carry own `next`/`return`
-            // closures and no `@@iterator` symbol prop). The shared
-            // `Array.from` materialization drives these correctly.
-            let materialized = crate::array::js_array_from_value(val);
-            return js_typed_array_new_from_array(kind, materialized);
-        }
-        if crate::closure::is_closure_ptr(raw_addr) {
-            return unsafe { typed_array_from_plain_object(kind as u8, val) };
-        }
-        if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_OBJECT {
-                return unsafe { typed_array_from_plain_object(kind as u8, val) };
-            }
-        }
-        return js_typed_array_new_from_array(kind, arr);
+        // POINTER_TAG — a heap source. `val` reaches this helper ONLY in a
+        // register / C-ABI stack slot, which is not a precise root, and the
+        // source-classification probes below allocate (#6981). Root the
+        // NaN-boxed value for the whole classification so the source survives
+        // a collection AND the collector rewrites the slot when it relocates.
+        // The handle holds the value the CALL observed, so re-reading it can
+        // never observe a later reassignment of the caller's binding.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = scope.root_nanbox_f64(val);
+        return typed_array_new_from_heap_source(kind, &rooted);
     }
     if top16 == 0x7FFE {
         // INT32_TAG — lower 32 bits are the signed length.
@@ -137,6 +88,92 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
     typed_array_alloc(kind as u8, len)
 }
 
+/// The POINTER_TAG arm of [`js_typed_array_new`], with the source value held
+/// in a runtime-handle root for the whole classification (#6981).
+///
+/// **Every** step below re-reads the boxed value from `rooted` instead of
+/// caching a raw address, because several of the probes allocate:
+/// `js_util_types_is_generator_object` walks own properties,
+/// `js_array_from_value` materializes, and the plain-object arm runs user
+/// `@@iterator` / `valueOf` code. Before this, a collection landing in that
+/// window left the classifier holding a pre-move (or already-swept) address —
+/// `clean_arr_ptr` then nulled it and `new Int32Array([7, 8])` silently
+/// produced a length-0 array.
+fn typed_array_new_from_heap_source(
+    kind: i32,
+    rooted: &crate::gc::RuntimeHandle<'_>,
+) -> *mut TypedArrayHeader {
+    // Re-read the (possibly rewritten) box; never cache the address across a
+    // potentially-allocating probe.
+    let cur = || {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
+
+    // Issue #654: a NaN-boxed pointer can also point at a registered
+    // typed array (e.g. when the source flowed through a path that
+    // re-applied POINTER_TAG). Detect via the registry and copy
+    // through `typed_array_to_typed_array` so element values stay
+    // numeric instead of being read as f64-NaN-boxed bits.
+    let (_, raw_addr) = cur();
+    if lookup_typed_array_kind(raw_addr).is_some() {
+        return typed_array_copy_from_typed_array(kind as u8, raw_addr as *const TypedArrayHeader);
+    }
+    if crate::buffer::is_registered_buffer(raw_addr) {
+        if crate::buffer::is_any_array_buffer(raw_addr) {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let (val, _) = cur();
+            return crate::typedarray_view::js_typed_array_view(kind, val, undefined, undefined);
+        }
+        return bigint::copy_from_uint8_buffer(
+            kind as u8,
+            raw_addr as *const crate::buffer::BufferHeader,
+        );
+    }
+    // A plain object that is neither a typed array nor a buffer is consumed
+    // per the spec's `new TypedArray(object)` path: if it exposes a
+    // *callable* `@@iterator` it is iterated (InitializeTypedArrayFromList);
+    // a non-callable non-nullish `@@iterator` is a TypeError; otherwise it
+    // is read as an array-like (`ToLength(Get(obj, "length"))` then each
+    // indexed element). Registered Maps/Sets keep the shared `Array.from`
+    // materialization (their `@@iterator` is native, not a stored symbol
+    // property). Functions are valid array-like/iterable sources too —
+    // previously they were reinterpreted as an `ArrayHeader` (crash).
+    let (val, raw_addr) = cur();
+    if crate::map::is_registered_map(raw_addr)
+        || crate::set::is_registered_set(raw_addr)
+        || crate::array::is_builtin_iterator_class_id(raw_addr)
+        || crate::object::js_util_types_is_generator_object(val).to_bits() == crate::value::TAG_TRUE
+    {
+        // Built-in iterables whose `@@iterator` is native (not a stored
+        // symbol property): Maps/Sets, builtin iterator objects, and
+        // generator objects (Perry generators carry own `next`/`return`
+        // closures and no `@@iterator` symbol prop). The shared
+        // `Array.from` materialization drives these correctly.
+        let (val, _) = cur();
+        let materialized = crate::array::js_array_from_value(val);
+        return js_typed_array_new_from_array(kind, materialized);
+    }
+    // `js_util_types_is_generator_object` above walks own properties and can
+    // collect, so re-derive before every remaining dereference.
+    let (_, raw_addr) = cur();
+    if crate::closure::is_closure_ptr(raw_addr) {
+        let (val, _) = cur();
+        return unsafe { typed_array_from_plain_object(kind as u8, val) };
+    }
+    let (_, raw_addr) = cur();
+    if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_OBJECT {
+            let (val, _) = cur();
+            return unsafe { typed_array_from_plain_object(kind as u8, val) };
+        }
+    }
+    let (_, raw_addr) = cur();
+    js_typed_array_new_from_array(kind, raw_addr as *const crate::array::ArrayHeader)
+}
+
 /// `new TA(object)` for a plain object / function source (ES2024 §23.2.5.1
 /// step 6.b.iii, InitializeTypedArrayFromList / InitializeTypedArrayFromArrayLike).
 ///
@@ -161,30 +198,45 @@ unsafe fn typed_array_from_plain_object(kind: u8, val: f64) -> *mut TypedArrayHe
 /// validation/iteration, the `ToLength(Get(obj, "length"))` coercion, and
 /// each indexed `Get` all run here and may throw.
 unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
+    // #6981: this arm runs USER code (`@@iterator`, `length`/index getters),
+    // so `val` must survive and follow relocation across every step. Root the
+    // observed value; the handle is a snapshot, never the caller's binding.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64(val);
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let iter_wk = crate::symbol::well_known_symbol("iterator");
     let using_iter = if iter_wk.is_null() {
         undefined
     } else {
         let sym = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
-        crate::symbol::js_object_get_symbol_property(val, sym)
+        crate::symbol::js_object_get_symbol_property(rooted.get_nanbox_f64(), sym)
     };
     let ub = using_iter.to_bits();
     if ub != crate::value::TAG_UNDEFINED && ub != crate::value::TAG_NULL {
-        let fn_raw = crate::value::js_nanbox_get_pointer(using_iter) as usize;
+        let using_iter_rooted = scope.root_nanbox_f64(using_iter);
+        let fn_raw =
+            crate::value::js_nanbox_get_pointer(using_iter_rooted.get_nanbox_f64()) as usize;
         if fn_raw < 0x10000 || !crate::closure::is_closure_ptr(fn_raw) {
             throw_type_error(b"object is not iterable");
         }
-        let bound = crate::closure::clone_closure_rebind_this(using_iter.to_bits(), val);
-        let iter = crate::closure::js_native_call_value(f64::from_bits(bound), ptr::null(), 0);
+        let bound = crate::closure::clone_closure_rebind_this(
+            using_iter_rooted.get_nanbox_f64().to_bits(),
+            rooted.get_nanbox_f64(),
+        );
+        let bound_rooted = scope.root_nanbox_u64(bound);
+        let iter =
+            crate::closure::js_native_call_value(bound_rooted.get_nanbox_f64(), ptr::null(), 0);
+        let iter_rooted = scope.root_nanbox_f64(iter);
         let mut raw: Vec<f64> = Vec::new();
-        while let Some(v) = crate::collection_iter::iterator_next_value(iter) {
+        while let Some(v) =
+            crate::collection_iter::iterator_next_value(iter_rooted.get_nanbox_f64())
+        {
             raw.push(v);
         }
         return raw;
     }
     // Array-like path.
-    let len_val = object_like_get(val, "length");
+    let len_val = object_like_get(rooted.get_nanbox_f64(), "length");
     let n = jsvalue_to_f64(len_val);
     // ToLength: NaN / negative → 0, clamp to 2^53-1.
     let len = if n.is_nan() || n <= 0.0 {
@@ -200,7 +252,7 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
     let len = len as u32;
     let mut raw: Vec<f64> = Vec::with_capacity(len as usize);
     for k in 0..len {
-        raw.push(object_like_get(val, &k.to_string()));
+        raw.push(object_like_get(rooted.get_nanbox_f64(), &k.to_string()));
     }
     raw
 }
@@ -212,33 +264,43 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
 /// Maps, Sets, iterators, generators, buffers) goes through the shared
 /// `Array.from` materialization.
 pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
-    let bits = val.to_bits();
-    if (bits >> 48) == 0x7FFD {
-        let raw_addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let special = crate::map::is_registered_map(raw_addr)
-            || crate::set::is_registered_set(raw_addr)
-            || crate::array::is_builtin_iterator_class_id(raw_addr)
-            || crate::object::js_util_types_is_generator_object(val).to_bits()
+    // #6981: `val` and the materialized `arr` below are register-only values.
+    // The classification probes (`js_util_types_is_generator_object` walks own
+    // properties) and `js_array_from_value` both allocate, so under precise
+    // roots a collection in that window sweeps or relocates the source. Root
+    // the value the call observed and re-read it after each allocating step.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64(val);
+    let cur_addr = || (rooted.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if (val.to_bits() >> 48) == 0x7FFD {
+        let special = crate::map::is_registered_map(cur_addr())
+            || crate::set::is_registered_set(cur_addr())
+            || crate::array::is_builtin_iterator_class_id(cur_addr())
+            || crate::object::js_util_types_is_generator_object(rooted.get_nanbox_f64()).to_bits()
                 == crate::value::TAG_TRUE
-            || lookup_typed_array_kind(raw_addr).is_some()
-            || crate::buffer::is_registered_buffer(raw_addr)
-            || crate::symbol::js_is_symbol(val) != 0;
+            || lookup_typed_array_kind(cur_addr()).is_some()
+            || crate::buffer::is_registered_buffer(cur_addr())
+            || crate::symbol::js_is_symbol(rooted.get_nanbox_f64()) != 0;
         if !special {
-            if crate::closure::is_closure_ptr(raw_addr) {
-                return typed_array_plain_object_values(val);
+            if crate::closure::is_closure_ptr(cur_addr()) {
+                return typed_array_plain_object_values(rooted.get_nanbox_f64());
             }
+            let raw_addr = cur_addr();
             if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
                 let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT {
-                    return typed_array_plain_object_values(val);
+                    return typed_array_plain_object_values(rooted.get_nanbox_f64());
                 }
             }
         }
     }
-    let arr = crate::array::js_array_from_value(val);
-    let len = crate::array::js_array_length(arr);
+    let arr = crate::array::js_array_from_value(rooted.get_nanbox_f64());
+    // `js_array_from_value` allocated; re-root on the RESULT, which is the
+    // value the element reads below must observe.
+    let arr_rooted = scope.root_raw_const_ptr(arr);
+    let len = crate::array::js_array_length(arr_rooted.get_raw_const_ptr());
     (0..len)
-        .map(|i| crate::array::js_array_get_f64(arr, i))
+        .map(|i| crate::array::js_array_get_f64(arr_rooted.get_raw_const_ptr(), i))
         .collect()
 }
 
@@ -332,10 +394,19 @@ pub extern "C" fn js_typed_array_new_from_array(
     // `new Float32Array(arr)` saw a garbage element count while
     // `arr.length` and indexed reads (which follow the chain) stayed
     // correct. It also validates the header and materializes lazy arrays.
-    let arr = crate::array::clean_arr_ptr(arr);
+    // #6981: `arr` is a raw pointer in a register — not a precise root. Both
+    // `clean_arr_ptr` (lazy-array materialization) and the element reads below
+    // can allocate, and a collection there would sweep or relocate the source
+    // out from under this pointer. Root the SNAPSHOT of the incoming value so
+    // the collector keeps it alive and rewrites the slot on relocation, then
+    // re-read the (possibly moved) address after each allocating step.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_raw_const_ptr(arr);
+    let arr = crate::array::clean_arr_ptr(rooted.get_raw_const_ptr::<ArrayHeader>());
     if arr.is_null() {
         return typed_array_alloc(kind, 0);
     }
+    rooted.set_raw_const_ptr(arr);
     unsafe {
         let len = (*arr).length;
         // Snapshot the raw source values BEFORE any coercion. Per spec the
@@ -347,7 +418,7 @@ pub extern "C" fn js_typed_array_new_from_array(
         // raw values first also keeps the snapshot ahead of the `typed_array_alloc`
         // GC point (#871).
         let raw: Vec<f64> = (0..len)
-            .map(|i| crate::array::js_array_get_f64(arr, i))
+            .map(|i| crate::array::js_array_get_f64(rooted.get_raw_const_ptr::<ArrayHeader>(), i))
             .collect();
         let vals: Vec<f64> = raw
             .into_iter()

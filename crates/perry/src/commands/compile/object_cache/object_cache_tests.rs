@@ -609,6 +609,26 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_INLINE_HOT_SMALL_CAP",
         "PERRY_INLINE_HOT_SMALL_THRESHOLD",
         "PERRY_INLINE_HOT_SMALL_MAX_SITES",
+        // Non-BigInt inline bitwise fast path.
+        "PERRY_INLINE_NONBIGINT_BITWISE",
+        // Inline checked-f64 typed-array-param read.
+        "PERRY_TA_PARAM_F64_READ",
+        // Native-i32 residency for int-typed-array-seeded locals.
+        "PERRY_INT_VALUED_LOCALS",
+        // Representation-selection Phase 1: canonical unboxed i32 locals.
+        "PERRY_CANONICAL_I32_LOCALS",
+        // Representation-selection Phase 3a: canonical string locals.
+        "PERRY_CANONICAL_STR_LOCALS",
+        // Representation-selection Phase 2: specialized calling convention.
+        "PERRY_SPECIALIZED_ABI",
+        "PERRY_SPECIALIZED_ABI_MAX",
+        // Representation-selection Phase 3b: shape-proven Ptr<Shape> locals.
+        "PERRY_PTR_SHAPE_LOCALS",
+        "PERRY_PTR_SHAPE_THIS",
+        // Representation-selection Phase 4a.3: Ptr<NumArray> locals.
+        "PERRY_PTR_NUMARRAY_LOCALS",
+        // FEAT_JSCVT single-instruction ToInt32 (apple-arm64).
+        "PERRY_JSCVT",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.

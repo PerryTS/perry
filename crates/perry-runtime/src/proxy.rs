@@ -804,13 +804,31 @@ pub(crate) fn reflect_ordinary_set_with_receiver(
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
+    // #6935: `js_to_property_key` runs a user `Symbol.toPrimitive` / `toString`
+    // / `valueOf` for an object key (and allocates for every primitive one), so
+    // it can trigger a GC that **evacuates** live objects. Both the `target`
+    // receiver and the `value` being written into it were raw NaN-boxed Rust
+    // locals across the call — a stale target dropped the write onto a
+    // forwarding stub, a stale value stored a dangling pointer in a live
+    // object. `target_get` already roots; this write sibling did not.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_heap_word_u64(target.to_bits());
+    let value_handle = scope.root_nanbox_f64(value);
     let property_key = unsafe { crate::object::js_to_property_key(key) };
+    let property_key = scope.root_nanbox_f64(property_key).get_nanbox_f64();
+    let target = f64::from_bits(target_handle.get_heap_word_u64());
+    let value = value_handle.get_nanbox_f64();
     if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         unsafe {
             crate::symbol::js_object_set_symbol_property(target, property_key, value);
         }
         return;
     }
+    // #6943 audit: this `js_string_coerce` is provably INERT and needs no
+    // rooting. `js_to_property_key` returns either a Symbol — taken by the
+    // early return above — or `js_nanbox_string(heap_ptr)`, i.e. an
+    // already-heap `STRING_TAG` value, which `js_string_coerce` hands straight
+    // back without touching the allocator.
     let key_ptr = crate::builtins::js_string_coerce(property_key) as *const crate::StringHeader;
     if crate::object::class_ref_id(target).is_some() {
         // Preserve the INT32-tagged class-ref bits so class dynamic props
@@ -1022,11 +1040,29 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         return Some(OwnSetDescriptor::Data { writable });
     }
 
+    // The null-receiver guard stays BEFORE the coercion: `key_to_rust_string`
+    // can run a user `toString`, and moving it earlier would make that side
+    // effect observable on a path that previously short-circuited.
+    if extract_pointer(target.to_bits()) as usize == 0 {
+        return None;
+    }
+    // #6943: `key_to_rust_string` runs the GC-capable `js_string_coerce`, and
+    // `obj_ptr` is BOTH a dereferenced heap address (the typed-array probe) and
+    // the raw ADDRESS KEY of the `ACCESSOR_DESCRIPTORS` /
+    // `PROPERTY_DESCRIPTORS` side tables. A stale one does not crash: it
+    // silently misses, so a non-writable own property or a setter-less accessor
+    // reads back as "no descriptor" and the [[Set]] that should have been
+    // rejected goes through. Root the receiver across the coercion and derive
+    // the address afterwards. (Found in the same review pass as the `key` gap
+    // below.)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_heap_word_u64(target.to_bits());
+    let key_name = key_to_rust_string(key)?;
+    let target = f64::from_bits(target_handle.get_heap_word_u64());
     let obj_ptr = extract_pointer(target.to_bits()) as usize;
     if obj_ptr == 0 {
         return None;
     }
-    let key_name = key_to_rust_string(key)?;
     // A typed array keeps its ordinary (non-index) own expando properties and
     // their descriptors in the typed-array side tables, which the generic
     // address-keyed lookups below skip (`object_has_descriptors` is
@@ -1324,6 +1360,65 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         && header._reserved & SLOW_FLAGS == 0
                     {
                         let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
+                        // #6943: BOTH arms below reach a GC-capable
+                        // `js_string_coerce` on `key` — the class arm calls it
+                        // directly for the store-plan key, and the plain-object
+                        // arm reaches it through
+                        // `object_proto_may_intercept_key` ->
+                        // `obj_value_has_own_key`. The coercion is inert only
+                        // for an already-heap `STRING_TAG` key; an SSO short
+                        // key materializes onto the heap, a numeric key builds
+                        // its stringification, and an object key runs a user
+                        // `toString` / `valueOf`. Any of those can trigger a GC
+                        // that **evacuates**.
+                        //
+                        // The rule is: when the coercion is NOT inert, every
+                        // operand that outlives it must be rooted and re-read
+                        // afterwards. That is four of them, not three —
+                        // `addr` (the receiver, dereferenced for `plan_eligible`
+                        // and passed to `class_instance_set_may_intercept`),
+                        // `target` and the `value` about to be written INTO it,
+                        // and **`key` itself**, which is re-used at the
+                        // interception check and again at `target_set`. An
+                        // object key is a `POINTER_TAG` heap value and is
+                        // exactly the shape that runs the user JS which can
+                        // evacuate it. (`key` was missed in the first pass of
+                        // this fix; caught in review.)
+                        //
+                        // Only an already-heap `STRING_TAG` key is inert — it
+                        // is handed straight back with no allocation — so that
+                        // one shape takes no scope. Every other shape does: an
+                        // SSO short key materializes onto the heap, a numeric
+                        // key builds its stringification, and an object key
+                        // runs a user `toString` / `valueOf`.
+                        let scope = (!crate::builtins::string_coerce_is_inert(key))
+                            .then(crate::gc::RuntimeHandleScope::new);
+                        let roots = scope.as_ref().map(|s| {
+                            (
+                                s.root_heap_word_u64(target.to_bits()),
+                                s.root_nanbox_f64(value),
+                                s.root_raw_mut_ptr(addr as *mut u8),
+                                s.root_nanbox_f64(key),
+                            )
+                        });
+                        // Re-read an operand through its handle (or pass the
+                        // original through untouched on the inert path).
+                        let cur_target = || match &roots {
+                            Some((t, ..)) => f64::from_bits(t.get_heap_word_u64()),
+                            None => target,
+                        };
+                        let cur_value = || match &roots {
+                            Some((_, v, ..)) => v.get_nanbox_f64(),
+                            None => value,
+                        };
+                        let cur_addr = || match &roots {
+                            Some((_, _, a, _)) => a.get_raw_mut_ptr::<u8>() as usize,
+                            None => addr,
+                        };
+                        let cur_key = || match &roots {
+                            Some((_, _, _, k)) => k.get_nanbox_f64(),
+                            None => key,
+                        };
                         let fast_safe = if class_id == 0 {
                             // Plain object: prototype is exactly Object.prototype, and
                             // Object.prototype doesn't intercept this key (per-key, not
@@ -1348,7 +1443,10 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             ) && property_key_to_rust_string(key)
                                 .as_deref()
                                 == Some("disposed")
-                                && own_set_descriptor(target, key).is_none();
+                                // #6943: `property_key_to_rust_string` runs
+                                // `ToPropertyKey` + `js_string_coerce`, so both
+                                // operands must be re-read before this probe.
+                                && own_set_descriptor(cur_target(), cur_key()).is_none();
                             if inherited_disposed_readonly {
                                 return false;
                             }
@@ -1369,8 +1467,12 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // class chain — SLOW_FLAGS above already excluded
                             // frozen/sealed/descriptor bits; add the per-instance
                             // divergence flags (setPrototypeOf override / null proto).
-                            let key_ptr = crate::builtins::js_string_coerce(key)
+                            let key_ptr = crate::builtins::js_string_coerce(cur_key())
                                 as *const crate::StringHeader;
+                            // #6943: re-read the receiver AND the key through
+                            // their handles — everything below uses both.
+                            let addr = cur_addr();
+                            let key = cur_key();
                             let interned = crate::object::interned_key_ptr(key_ptr);
                             // #6595: a per-evaluation CLASS OBJECT (what a
                             // capture-carrying class materializes as,
@@ -1394,7 +1496,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 && (*(addr as *const crate::ObjectHeader)).object_type
                                     == crate::error::OBJECT_TYPE_REGULAR
                                 && interned != 0;
-                            if plan_eligible
+                            let verdict = if plan_eligible
                                 && crate::object::prop_plan::store_plan_check(class_id, interned)
                             {
                                 true
@@ -1406,10 +1508,14 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                     crate::object::prop_plan::store_plan_record(class_id, interned);
                                 }
                                 clear
-                            }
+                            };
+                            verdict
                         };
+                        // #6943: the store itself takes the refreshed receiver,
+                        // KEY and payload — all three were rooted across
+                        // whichever coercion the arm above performed.
                         if fast_safe {
-                            target_set(target, key, value);
+                            target_set(cur_target(), cur_key(), cur_value());
                             return true;
                         }
                     }
@@ -1739,35 +1845,35 @@ pub extern "C" fn js_proxy_revocable(target: f64, handler: f64) -> f64 {
 }
 
 // #2846: retention anchor for `Proxy.revocable` (codegen-only callsite).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROXY_REVOCABLE: extern "C" fn(f64, f64) -> f64 = js_proxy_revocable;
 
 // #2762: retention anchors for the Reflect-specific extensibility entry points.
 // These `#[no_mangle]` fns are emitted only by codegen (no Rust caller in the
 // crate graph), so the auto-optimize whole-program LLVM bitcode rebuild would
 // otherwise internalize and dead-strip them. See node_stream_keepalive.rs.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_IS_EXTENSIBLE: extern "C" fn(f64) -> f64 = js_reflect_is_extensible;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_PREVENT_EXTENSIONS: extern "C" fn(f64) -> f64 = js_reflect_prevent_extensions;
 
 // #2761: retention anchor for `Reflect.setPrototypeOf` (codegen-only callsite).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_SET_PROTOTYPE_OF: extern "C" fn(f64, f64) -> f64 = js_reflect_set_prototype_of;
 
 // #2763/#2764/#2766/#2767: retention anchors for the Reflect entry points
 // whose only callsites are codegen-emitted. `js_reflect_get` gained a third
 // `receiver` arg (#2766) and must keep its new signature retained.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_GET: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_get;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_GET_OWN_PROPERTY_DESCRIPTOR: extern "C" fn(f64, f64) -> f64 =
     js_reflect_get_own_property_descriptor;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_HAS: extern "C" fn(f64, f64) -> f64 = js_reflect_has;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_OWN_KEYS: extern "C" fn(f64) -> f64 = js_reflect_own_keys;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REFLECT_APPLY: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_apply;
 
 /// Rewrite a `REFLECT_METADATA` key's POINTER-tagged target bits during the

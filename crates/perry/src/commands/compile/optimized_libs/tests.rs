@@ -7,13 +7,9 @@ use crate::OutputFormat;
 
 use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
 
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    ENV_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("env lock poisoned")
-}
+// The env guard now lives at crate root so tests OUTSIDE this module — which
+// read `PATH` while these tests swap it — can take the same lock.
+use crate::test_env_lock::env_lock;
 
 fn set_env_var(key: &str, value: Option<&str>) {
     match value {
@@ -372,6 +368,16 @@ fn http2_import_enables_http2_constants_cross_feature() {
             .any(|f| f == "perry-runtime/mod-http2-constants"),
         "no http2 import should leave mod-http2-constants off, got {cross_off:?}"
     );
+
+    let mut dynamic = CompilationContext::new(dir.path().to_path_buf());
+    dynamic.uses_get_builtin_module = true;
+    let dynamic_features = auto_optimized_cross_features(&dynamic, &empty_features, &[]);
+    assert!(
+        dynamic_features
+            .iter()
+            .any(|f| f == "perry-runtime/mod-http2-constants"),
+        "getBuiltinModule should enable mod-http2-constants, got {dynamic_features:?}"
+    );
 }
 
 #[test]
@@ -391,6 +397,14 @@ fn http2_import_changes_optimized_libs_cache_key() {
     assert_ne!(
         key_without, key_with,
         "an http2 import must change the auto-optimized cache key"
+    );
+
+    let mut dynamic = CompilationContext::new(dir.path().to_path_buf());
+    dynamic.uses_get_builtin_module = true;
+    assert_ne!(
+        key_without,
+        auto_optimized_cache_key("", true, None, &dynamic),
+        "getBuiltinModule must change the auto-optimized cache key"
     );
 }
 
