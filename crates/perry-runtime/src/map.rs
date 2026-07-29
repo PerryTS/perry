@@ -472,6 +472,8 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     MAP_REGISTRY.with(|r| {
         let mut registry = r.borrow_mut();
         let Some(allocation) = registry.remove(&old_addr) else {
+            // Old address had no side-allocation record (e.g. an inline-only
+            // Map) — nothing to re-key.
             return;
         };
         if registry.contains_key(&new_addr) {
@@ -546,8 +548,9 @@ fn is_dead_copied_minor_from_space_map(addr: usize) -> bool {
             return false;
         }
         let flags = (*header).gc_flags;
-        flags & crate::gc::GC_FLAG_ARENA != 0
-            && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
+        let dead = flags & crate::gc::GC_FLAG_ARENA != 0
+            && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0;
+        dead
     }
 }
 
@@ -1204,9 +1207,14 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     (*map).capacity = new_capacity;
     MAP_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
-        let allocation = registry
-            .get_mut(&(map as usize))
-            .expect("grown Map must retain its side-allocation owner record");
+        let allocation = match registry.get_mut(&(map as usize)) {
+            Some(a) => a,
+            None => {
+                // Invariant: every side-allocating Map is registered at alloc
+                // (js_map_alloc → register_map), so a grown Map must be present.
+                panic!("grown Map must retain its side-allocation owner record");
+            }
+        };
         allocation.entries = new_entries;
         allocation.capacity = new_capacity as usize;
     });

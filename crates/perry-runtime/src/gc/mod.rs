@@ -247,6 +247,29 @@ fn gc_verify_evacuation_enabled() -> bool {
     )
 }
 
+/// Phase-1 de-risking flag (OFF by default). When set, the alloc-point
+/// nursery-churn arm (`gc_check_trigger`) runs its direct minor with the
+/// PRECISE shadow-stack roots instead of forcing the conservative native
+/// scan. The conservative scan makes the copying fast path ineligible
+/// (`CopiedMinorFallbackReason::ConservativeStack`), pinning the minor to the
+/// non-moving in-place sweep that cannot reclaim array-growth stubs; skipping
+/// it lets the evacuating scavenge run and reset the whole young arena in
+/// O(live). NOT sound as a production default yet — the alloc point can be
+/// register-imprecise — so it stays behind this flag for measurement +
+/// `PERRY_GC_VERIFY_EVACUATION` probing only. Pairs with
+/// `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` so the #6939 pacing doesn't escalate the
+/// minor to a full before the copying path is reached.
+pub(super) fn gc_scavenge_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_SCAVENGE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
 #[cfg(test)]
 fn gc_collect_inner() -> u64 {
     if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Direct)) {
