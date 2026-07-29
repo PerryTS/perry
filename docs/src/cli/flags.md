@@ -129,7 +129,7 @@ auto-optimize):
 |----------|-------------|
 | `PERRY_SIZE_OPT=z` (or `s`) | Rebuild the runtime/stdlib at `-C opt-level=z`/`s` instead of `3`. Roughly halves a small program's binary at some runtime-speed cost (compute-heavy inner loops can run ~2-3× slower). Size-optimized and normal archives are cached independently. |
 | `PERRY_SIZE_LTO=fat` | Additionally run whole-archive fat LTO over the rebuilt archives (slower rebuild, smaller binary). Only meaningful together with `PERRY_SIZE_OPT`. |
-| `PERRY_SIZE_PANIC=abort-immediate` | Additionally rebuild the Rust standard library with the `immediate-abort` panic strategy, removing the backtrace symbolizer and unwind tables (~314 KB measured). Requires a nightly toolchain (`-Zbuild-std`); only meaningful together with `PERRY_SIZE_OPT`. A Rust-level internal panic then aborts without a symbolized backtrace — JS `throw`/`catch`, `finally`, error stacks and `uncaughtException` are unaffected. |
+| `PERRY_SIZE_PANIC=abort-immediate` | Additionally rebuild the Rust standard library with the `immediate-abort` panic strategy when auto-optimize proves that no UI/thread/plugin callback needs unwinding, removing the backtrace symbolizer and unwind tables (~314 KB measured). Requires a nightly toolchain (`-Zbuild-std`); only meaningful together with `PERRY_SIZE_OPT`. A Rust-level internal panic then aborts without a symbolized backtrace — JS `throw`/`catch`, `finally`, error stacks and `uncaughtException` are unaffected. |
 
 A `console.log` hello world on macOS arm64: 4.03 MB default → 2.17 MB with
 `PERRY_SIZE_OPT=z PERRY_SIZE_LTO=fat` → 1.87 MB adding

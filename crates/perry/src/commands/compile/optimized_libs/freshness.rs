@@ -86,6 +86,12 @@ pub(crate) fn size_panic_immediate_abort() -> bool {
         && size_opt_level().is_some()
 }
 
+/// Immediate-abort may only replace the normal panic strategy when the same
+/// reachability analysis that permits `panic=abort` found no unwind consumers.
+pub(crate) fn effective_size_panic_immediate_abort(panic_abort_safe: bool) -> bool {
+    panic_abort_safe && size_panic_immediate_abort()
+}
+
 pub(crate) fn size_lto_fat() -> bool {
     std::env::var("PERRY_SIZE_LTO").ok().as_deref() == Some("fat")
 }
@@ -97,6 +103,7 @@ pub(crate) fn size_lto_fat() -> bool {
 pub(crate) fn auto_optimized_cache_key(
     feature_arg: &str,
     panic_abort_safe: bool,
+    panic_immediate: bool,
     target: Option<&str>,
     ctx: &CompilationContext,
 ) -> String {
@@ -138,7 +145,7 @@ pub(crate) fn auto_optimized_cache_key(
             "{}{}{}",
             size_opt_level().unwrap_or("off"),
             if size_lto_fat() { "+fatlto" } else { "" },
-            if size_panic_immediate_abort() {
+            if panic_immediate {
                 "+panicimm"
             } else {
                 ""

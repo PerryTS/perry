@@ -456,6 +456,10 @@ pub(crate) fn build_optimized_libs(
     // and the matching landing pads / Drop glue.
     let panic_abort_safe =
         !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
+    // Keep the opt-in immediate-abort strategy behind the same reachability
+    // proof as ordinary panic=abort. UI/thread/plugin callbacks still rely on
+    // unwinding, so disabling their unwind tables would be unsound.
+    let panic_immediate = effective_size_panic_immediate_abort(panic_abort_safe);
 
     // Locate the workspace. Without source we can't rebuild — fall back
     // to whatever's prebuilt next to perry on disk. The fallback names are
@@ -557,7 +561,8 @@ pub(crate) fn build_optimized_libs(
     // "undefined symbol" link failure for exactly the newly-added entrypoints.
     // Keying on the version forces a matching rebuild whenever perry upgrades.
     // Cheap djb2 — no need for the SipHash overhead.
-    let key_input = auto_optimized_cache_key(&feature_arg, panic_abort_safe, target, ctx);
+    let key_input =
+        auto_optimized_cache_key(&feature_arg, panic_abort_safe, panic_immediate, target, ctx);
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
@@ -570,7 +575,7 @@ pub(crate) fn build_optimized_libs(
     // cargo args and this path can never disagree (they did in development:
     // the archives built fine and the link then reported them missing).
     let effective_triple: Option<&str> = rust_target_triple(target).or_else(|| {
-        if size_panic_immediate_abort() {
+        if panic_immediate {
             host_target_triple()
         } else {
             None
@@ -677,7 +682,13 @@ pub(crate) fn build_optimized_libs(
     }
 
     if matches!(format, OutputFormat::Text) {
-        let panic_str = if panic_abort_safe { "abort" } else { "unwind" };
+        let panic_str = if panic_immediate {
+            "immediate-abort"
+        } else if panic_abort_safe {
+            "abort"
+        } else {
+            "unwind"
+        };
         let feat_str = if features.is_empty() {
             "(no optional features)".to_string()
         } else {
@@ -697,10 +708,6 @@ pub(crate) fn build_optimized_libs(
         Some("tvos") | Some("tvos-simulator") | Some("watchos") | Some("watchos-simulator")
     );
 
-    // `panic_immediate_abort` needs the standard library rebuilt from source,
-    // which is a nightly-only `-Z` flag (same mechanism the tier-3 Apple
-    // targets already use).
-    let panic_immediate = size_panic_immediate_abort();
     let mut cargo_cmd = Command::new("cargo");
     if is_tier3 || panic_immediate {
         cargo_cmd.arg("+nightly");
@@ -995,32 +1002,18 @@ pub(crate) fn build_optimized_libs(
             println!("  auto-optimize: emitting LLVM bitcode for whole-program LTO");
         }
 
-        let mut bc_rustflags = String::new();
-        if panic_abort_safe {
-            bc_rustflags.push_str("-C panic=abort ");
-        }
-        // Mirror the size-optimized opt level into the bitcode emission so
-        // the merged whole-program module is built from the same tuning as
-        // the staticlib archives (last `-C opt-level` wins over the
-        // profile's, same as the archive rebuild above).
-        if let Some(level) = size_opt_level() {
-            bc_rustflags.push_str(&format!("-C opt-level={level} "));
-        }
-        bc_rustflags.push_str("-C codegen-units=1");
-        // #6125: the bitcode-LTO path must obey the same CPU baseline as the
-        // staticlib build above, or the LTO'd binary re-imports the build
-        // box's ISA through the runtime bitcode.
-        if let Some(cpu) = &requested_cpu {
-            match cpu.as_str() {
-                "generic" | "off" | "none" | "0" | "false" => {}
-                cpu => {
-                    bc_rustflags.push_str(&format!(" -C target-cpu={cpu}"));
-                }
-            }
-        }
+        // Start from the exact archive-build flags so panic strategy, unwind
+        // tables, size tuning, target CPU, and platform TLS remain identical.
+        // Bitcode emission adds only its single-codegen-unit requirement.
+        let mut bc_rustflags = rustflags.clone();
+        bc_rustflags.push("-C codegen-units=1".to_string());
+        let bc_rustflags = bc_rustflags.join(" ");
 
         let emit_bc = |crate_name: &str| -> Option<PathBuf> {
             let mut cmd = Command::new("cargo");
+            if is_tier3 || panic_immediate {
+                cmd.arg("+nightly");
+            }
             cmd.current_dir(&workspace_root)
                 .env("CARGO_TARGET_DIR", &cargo_env_dir)
                 .env("RUSTFLAGS", &bc_rustflags)
@@ -1029,10 +1022,13 @@ pub(crate) fn build_optimized_libs(
                 .arg("-p")
                 .arg(crate_name)
                 .arg("--no-default-features");
+            if is_tier3 || panic_immediate {
+                cmd.arg("-Zbuild-std=std,panic_abort");
+            }
             if !cross_features.is_empty() {
                 cmd.arg("--features").arg(cross_features.join(","));
             }
-            if let Some(triple) = rust_target_triple(target) {
+            if let Some(triple) = effective_triple {
                 cmd.arg("--target").arg(triple);
             }
             cmd.arg("--").arg("--emit=llvm-bc,link");
