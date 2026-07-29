@@ -496,6 +496,14 @@ pub(crate) fn lower_object_literal(
             let this_idx = auto_caps.len() as u32;
 
             let v = lower_expr(ctx, value_expr)?;
+            // No explicit release for these: `js_gc_temp_root_truncate` is a
+            // stack CUT, not a pop, and `rooted` was pushed before the loop —
+            // so the single `rooted_handle_release` at the end of this function
+            // drops the object handle AND every closure root above it. That
+            // depends on the push order, so keep `rooted_handle_begin` ahead of
+            // this loop and the release after the patch loop.
+            // (`gc::tests::temp_roots::truncate_drops_every_slot_above_the_base`
+            // pins the cut semantics.)
             let closure_root = protect_handle.then(|| temp_root_push_double(ctx, &v));
             this_patches.push((closure_root, v.clone(), this_idx));
 
