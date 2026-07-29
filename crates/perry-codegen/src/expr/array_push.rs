@@ -86,7 +86,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lower_array_push_value(ctx, value, layout_note_needed, write_barrier_needed)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
 
+            // Repsel 4a.1 (#6904 recon): the guarded numeric push was an
+            // INVERSION — 3 out-of-line calls (guard + unboxed push + length)
+            // where the untyped tier below inlines the store. When feedback
+            // emission is off and the pushed value is canonical-raw-f64 by
+            // construction, the untyped inline tier is byte-identical for a
+            // numeric-layout array: the bare `store double` writes canonical
+            // bits (keeping the raw-f64 invariant with no canonicalization
+            // call — `array_store_needs_layout_note` already skips the note
+            // for exactly this array/value class), and every guard the
+            // runtime tier checked (forwarded / integrity / descriptors /
+            // capacity) is checked inline before the store. Non-canonical
+            // numeric values (e.g. a read fallback's INT32-boxed bits) keep
+            // the runtime-guarded tier: stored verbatim they would corrupt
+            // the dense raw-f64 invariant.
+            let keep_guarded_numeric_push = super::typed_feedback_emission_enabled()
+                || !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
             if require_numeric_layout
+                && keep_guarded_numeric_push
                 && !ctx.boxed_vars.contains(array_id)
                 && !ctx.closure_captures.contains_key(array_id)
                 && ctx.locals.contains_key(array_id)

@@ -22,7 +22,28 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
+# Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
+# `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
+# points as dead-strip roots. They exist for the whole-program bitcode-LTO
+# link (`PERRY_LLVM_BITCODE_LINK=1`), where the merged module could otherwise
+# internalize + drop symbols only referenced from the user's separate `.o`.
+# The CLASSIC link path never needs them: every reachable runtime symbol is
+# kept by a real undefined reference from the program's objects, and the
+# anchors only defeat `-dead_strip` (measured: a hello-world binary carries
+# the entire fs/child_process/vm/node_submodules surface through ONE anchored
+# chain — KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED → dynamic-import fallback →
+# js_nm_install_all → every dispatch bucket). Kept in `default` so the
+# prebuilt/full archives and `cargo test` are unchanged; the auto-optimize
+# rebuild omits it unless the bitcode link was requested.
+keepalive-anchors = []
+# Route every Rust heap allocation through mimalloc (#62) — ~3-5× faster
+# per-alloc than macOS `malloc` on hot paths, at ~140 KB of binary. In
+# `default` (and force-added by the auto-optimize rebuild) so behavior is
+# unchanged everywhere; a size-optimized rebuild (`PERRY_SIZE_OPT=z|s`)
+# leaves it off and falls back to the system allocator. The #6882 VM-tag
+# retag rides the same gate (it only exists to label mimalloc's mappings).
+alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
@@ -88,6 +109,59 @@ string-normalize = ["dep:unicode-normalization"]
 # wrap-ansi@9+ (and thus ink). Only `intl.rs` uses it; a program that never
 # constructs an `Intl.Segmenter` links none of it.
 intl-segmenter = ["dep:unicode-segmentation"]
+# The `Intl.*` NAMESPACE surface (`Intl.NumberFormat`, `DateTimeFormat`,
+# `Collator`, `RelativeTimeFormat`, `ListFormat`, `PluralRules`,
+# `DisplayNames`, `DurationFormat`, `getCanonicalLocales`,
+# `supportedValuesOf`) — ~219 KB of constructor/option/format machinery
+# reached ONLY through `install_intl_namespace`, which `populate_global_this
+# _builtins` calls unconditionally. Gating the install (a no-op stub when
+# off) lets `-dead_strip` drop every part of `intl.rs` not also reachable
+# from a locale-aware method entry point. Programs keep working either way:
+# `Number/Date/String.prototype.toLocale*` and `localeCompare` live outside
+# this gate (their `js_*` entries stay compiled and their helpers stay
+# reachable), so only the `Intl.` namespace members depend on it. The
+# compiler enables it on any `Intl`/locale-formatting token, erring toward
+# enabling (same over-approximation contract as `temporal`).
+intl-namespace = []
+# Per-namespace `globalThis` member tables. Each installs the reflectable
+# members of one built-in namespace (`Math.max`, `JSON.stringify`,
+# `Reflect.get`, `Atomics.add`, …) as real properties. Call sites in user code
+# are codegen intrinsics that never read these — they exist for reflection
+# (`Object.keys(Math)`) and for namespace-as-value use (`const m = Math;
+# m.max(…)`). `populate_global_this_builtins` installs them unconditionally,
+# so every binary carried all four tables plus everything they reference. The
+# compiler enables each on its identifier token (deliberately over-approximate:
+# any mention of the name, plus any deferred dynamic-code site, turns it on),
+# so a program that only calls the intrinsics links none of the tables while
+# the namespace object itself still exists (`typeof JSON === "object"`).
+global-math = []
+global-json = []
+global-reflect = []
+global-atomics = []
+# Per-group `globalThis` web-platform surfaces: the prototype-method and
+# constructor-static tables for `URL`/`URLPattern`/`URLSearchParams`,
+# `Text{Encoder,Decoder}{,Stream}`, `WebSocket`, `Crypto`/`CryptoKey`/
+# `SubtleCrypto`, and the fetch value types (`Headers`/`Request`/`Response`/
+# `Blob`/`File`/`FormData`). `populate_global_this_builtins` installs all of
+# them unconditionally, so every binary carried each group plus everything it
+# references (the URL family alone is ~106 KB). The compiler enables each
+# group on its identifier tokens — and the fetch group additionally whenever
+# the program uses `fetch`, since a `fetch()` result is a `Response` the
+# source may never name. Constructors themselves stay installed either way, so
+# `typeof URL === "function"` and construction are unaffected; only the
+# reflectable member tables move.
+global-url = []
+global-text = []
+global-websocket = []
+global-webcrypto = []
+global-webfetch = []
+# `process.send` / `disconnect` / `connected` / `channel` — the child-process
+# IPC channel. The send path JSON-serializes every message, so the always-live
+# process-namespace property lookup statically pinned the whole `crate::json`
+# serializer (~84 KB) into binaries that never touch IPC. The compiler enables
+# this on any of the four property tokens (over-approximate: a missed
+# detection would make `process.send` undefined, so err toward enabling).
+proc-ipc = []
 # `Intl.getCanonicalLocales` / `*.supportedLocalesOf` BCP-47 (UTS #35) language-tag
 # canonicalization via `icu_locale_core` (the data-free structural parser — case
 # normalization, variant ordering, extension well-formedness, UTS35 rejection of
@@ -189,7 +263,12 @@ perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 # our code is binding glue per type. `compiled_data` vendors the IANA tz DB
 # hermetically (needed by ZonedDateTime / Now), `sys-local` adds the
 # current-system-zone lookup used by Temporal.Now.*ISO() with no argument.
-temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data", "sys-local"], optional = true }
+# NOTE: NO `sys-local` — that feature resolves the system time zone via
+# `iana_time_zone`, which links CoreFoundation on macOS and (because Temporal's
+# namespace is always registered) forced `-framework CoreFoundation` into every
+# output binary. Perry supplies its own CF-free host system in `temporal::now`
+# (clock via `SystemTime`, zone via `crate::date::host_time_zone_name`).
+temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data"], optional = true }
 
 serde.workspace = true
 serde_json.workspace = true
@@ -243,7 +322,16 @@ socket2 = { version = "0.6", features = ["all"] }
 # a corruption suspect, so lib.rs falls back to std::alloc::System there and we
 # avoid compiling mimalloc's C on that target entirely.
 [target.'cfg(target_pointer_width = "64")'.dependencies]
-mimalloc = { version = "0.1", default-features = false }
+mimalloc = { version = "0.1", default-features = false, optional = true }
+
+# #6882: mimalloc tags its OS mappings with VM tag 100, which macOS tooling
+# (vmmap, Instruments' VM Tracker, `footprint`) decodes as `IOAccelerator` —
+# the entire JS heap renders as GPU-driver memory. `js_gc_init` retags to
+# VM_MEMORY_APPLICATION_SPECIFIC_1 (240) via mi_option_set(mi_option_os_tag),
+# which lives behind libmimalloc-sys's `extended` API. Apple-only: the tag is
+# only consulted by Apple kernels, and mimalloc itself is 64-bit-only (above).
+[target.'cfg(all(target_pointer_width = "64", target_vendor = "apple"))'.dependencies]
+libmimalloc-sys = { version = "0.1", features = ["extended"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

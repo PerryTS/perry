@@ -37,6 +37,17 @@ pub struct LlFunction {
     /// function at every call site, exposing integer operations to the
     /// caller's optimizer context (critical for vectorization of clamp patterns).
     pub force_inline: bool,
+    /// When true (and `force_inline` is not), emit the `inlinehint` attribute.
+    /// Unlike `alwaysinline`, `inlinehint` only *raises* LLVM's inline
+    /// threshold for this callee — LLVM keeps its `-O3` growth budget and can
+    /// still decline to inline into cold / many call sites. Set for small
+    /// functions with a hot (in-loop) call site so a bit-mixer-style kernel
+    /// gets inlined into its loop without the binary-size blowup an
+    /// unconditional `alwaysinline` threshold bump causes. See the
+    /// inline-hot-small heuristic in `codegen/function.rs`. `alwaysinline`
+    /// already implies the hint, so the two are never emitted together, and
+    /// `has_try` (noinline) still wins over both in `to_ir`.
+    pub inline_hint: bool,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -92,10 +103,51 @@ pub struct LlFunction {
     /// land wiring incrementally (e.g. just `main`) before
     /// flipping the default across every user function.
     shadow_frame_slot: Option<String>,
+    /// Whether shadow-frame emission was requested for this function at all
+    /// (i.e. `enable_shadow_frame` / `enable_post_init_shadow_frame` ran).
+    ///
+    /// Distinct from `shadow_frame_slot.is_some()`: a function whose locals
+    /// were all proven non-pointer requests a frame but gets none, because a
+    /// zero-slot frame is pure overhead. `reserve_shadow_slot` needs to tell
+    /// that case (grow it — there is now something to root) apart from "the
+    /// shadow stack is switched off for this build" (do nothing).
+    shadow_frame_requested: bool,
+    /// Which region the frame push belongs in — `entry_post_init_setup` when
+    /// `enable_post_init_shadow_frame` was used, `entry_allocas` otherwise.
+    /// Remembered so a lazily-created frame lands where the eager one would.
+    shadow_frame_post_init_region: bool,
+    /// Where the emitted `js_shadow_frame_push` line lives, so its slot count
+    /// can be rewritten when lowering discovers a root the pre-lowering
+    /// pointer analysis could not see (#6968: scalar-replaced object fields
+    /// and array elements, which have no HIR local of their own).
+    shadow_frame_push: Option<ShadowFramePush>,
+    /// Slot count currently baked into that push line.
+    shadow_frame_slot_count: u32,
     /// Runtime hooks emitted immediately before each non-pointer `ret`.
     /// Entry/module-init functions use this for process-level diagnostics
     /// that must run regardless of which block reaches the normal epilogue.
     pre_return_void_calls: Vec<String>,
+}
+
+/// Render the frame-push instruction. Kept in one place so the eager
+/// emission and the later count rewrite cannot drift.
+fn shadow_frame_push_line(handle_reg: &str, slot_count: u32) -> String {
+    format!(
+        "  {} = call i64 @js_shadow_frame_push(i32 {})",
+        handle_reg, slot_count
+    )
+}
+
+/// Location of a function's `js_shadow_frame_push` line, so its slot-count
+/// operand can be rewritten in place after the fact.
+struct ShadowFramePush {
+    /// `true` when the line lives in `entry_post_init_setup` rather than
+    /// `entry_allocas`.
+    post_init: bool,
+    /// Index of the line within that region.
+    line_idx: usize,
+    /// SSA register the push result is assigned to, needed to re-render.
+    handle_reg: String,
 }
 
 impl LlFunction {
@@ -120,6 +172,7 @@ impl LlFunction {
             linkage: String::new(),
             has_try: false,
             force_inline: false,
+            inline_hint: false,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
@@ -128,6 +181,10 @@ impl LlFunction {
             entry_post_init_setup: Vec::new(),
             entry_init_boundary: None,
             shadow_frame_slot: None,
+            shadow_frame_requested: false,
+            shadow_frame_post_init_region: false,
+            shadow_frame_push: None,
+            shadow_frame_slot_count: 0,
             pre_return_void_calls: Vec::new(),
         }
     }
@@ -168,28 +225,83 @@ impl LlFunction {
     }
 
     fn enable_shadow_frame_inner(&mut self, slot_count: u32, post_init: bool) {
-        use crate::types::I64;
         if self.shadow_frame_slot.is_some() {
             return;
         }
+        // Record the request (and its region) even when no frame is emitted:
+        // `reserve_shadow_slot` uses it to tell "nothing to root yet" from
+        // "shadow stack disabled", and to place a lazily-created push line in
+        // the same region `enable_*_shadow_frame` would have used.
+        self.shadow_frame_requested = true;
+        self.shadow_frame_post_init_region = post_init;
         if slot_count == 0 {
             return;
         }
+        self.emit_shadow_frame_push(slot_count, post_init);
+    }
+
+    fn emit_shadow_frame_push(&mut self, slot_count: u32, post_init: bool) {
+        use crate::types::I64;
         let handle_slot = self.alloca_entry(I64);
         let handle_reg = format!("%r{}", self.reg_counter.next());
-        let push_line = format!(
-            "  {} = call i64 @js_shadow_frame_push(i32 {})",
-            handle_reg, slot_count
-        );
+        let push_line = shadow_frame_push_line(&handle_reg, slot_count);
         let store_line = format!("  store i64 {}, ptr {}", handle_reg, handle_slot);
-        if post_init {
-            self.entry_post_init_setup.push(push_line);
-            self.entry_post_init_setup.push(store_line);
+        let region = if post_init {
+            &mut self.entry_post_init_setup
         } else {
-            self.entry_allocas.push(push_line);
-            self.entry_allocas.push(store_line);
-        }
+            &mut self.entry_allocas
+        };
+        let line_idx = region.len();
+        region.push(push_line);
+        region.push(store_line);
+        self.shadow_frame_push = Some(ShadowFramePush {
+            post_init,
+            line_idx,
+            handle_reg,
+        });
+        self.shadow_frame_slot_count = slot_count;
         self.shadow_frame_slot = Some(handle_slot);
+    }
+
+    /// Reserve one more GC-root slot in this function's shadow frame and
+    /// return its index, rewriting the already-emitted
+    /// `js_shadow_frame_push` count in place.
+    ///
+    /// `collect_pointer_typed_locals` sizes the frame before lowering, from
+    /// the HIR locals it can see. Scalar replacement (#6968) creates storage
+    /// that has no HIR local of its own — one entry-block alloca per object
+    /// field / array element — so a heap value living in one of those is
+    /// invisible to the pre-lowering count. Rather than teach the collector
+    /// to predict every scalar-replacement decision (they are taken later, on
+    /// conditions the collector does not evaluate), the frame grows on demand
+    /// at the store site that actually needs the root.
+    ///
+    /// Returns `None` when shadow-stack emission is switched off for this
+    /// build, in which case the caller must not emit slot traffic either.
+    /// When the frame was skipped as empty, one is created here.
+    pub fn reserve_shadow_slot(&mut self) -> Option<u32> {
+        if !self.shadow_frame_requested {
+            return None;
+        }
+        if self.shadow_frame_push.is_none() {
+            let post_init = self.shadow_frame_post_init_region;
+            self.emit_shadow_frame_push(0, post_init);
+        }
+        let idx = self.shadow_frame_slot_count;
+        self.shadow_frame_slot_count += 1;
+        let count = self.shadow_frame_slot_count;
+        let Some(push) = &self.shadow_frame_push else {
+            return None;
+        };
+        let (post_init, line_idx) = (push.post_init, push.line_idx);
+        let line = shadow_frame_push_line(&push.handle_reg, count);
+        let region = if post_init {
+            &mut self.entry_post_init_setup
+        } else {
+            &mut self.entry_allocas
+        };
+        region[line_idx] = line;
+        Some(idx)
     }
 
     /// Mark the current end of the entry block as the boundary between
@@ -418,9 +530,14 @@ impl LlFunction {
         };
 
         let attrs = if self.has_try {
+            // noinline (setjmp/volatile/async-rejecting boundary) always wins,
+            // even if an inline attribute was optimistically set before body
+            // lowering discovered the try.
             " #1"
         } else if self.force_inline {
             " alwaysinline"
+        } else if self.inline_hint {
+            " inlinehint"
         } else {
             ""
         };

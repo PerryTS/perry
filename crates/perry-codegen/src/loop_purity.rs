@@ -52,6 +52,115 @@ pub(crate) fn body_needs_asm_barrier(body: &[Stmt]) -> bool {
     !body_writes_outside(body, &body_locals)
 }
 
+/// True when the loop body may allocate (or otherwise call into the runtime and
+/// trip a GC), so a moving-GC back-edge poll (`js_gc_loop_safepoint`) must be
+/// emitted to drain any deferred minor. Reuses the LLVM-purity whitelist: a body
+/// that is fully LLVM-pure performs no call / allocation / heap mutation, so it
+/// can never cross a nursery trigger and defer a collection — the poll would be
+/// a guaranteed no-op that only defeats vectorization. Conservative in the SAFE
+/// direction: anything not provably pure is treated as "may allocate" and gets
+/// the poll. A spurious poll costs a little vectorization; a missing one only
+/// delays a deferred minor to the next safepoint (bounded by the moving-GC hard
+/// cap) — never a correctness or UAF hazard.
+pub(crate) fn body_may_allocate(body: &[Stmt]) -> bool {
+    !body.iter().all(stmt_alloc_free)
+}
+
+/// Like `stmt_is_pure`, but the question is narrower — "can this allocate (or
+/// call into the runtime and trip a GC)?" — so it additionally accepts element
+/// ACCESS that never allocates: array/typed-array element READS and in-place
+/// numeric updates never allocate, and typed-array element WRITES store into a
+/// fixed-size backing buffer that never grows. Generic `IndexSet` is NOT
+/// accepted: a plain JS-array index write can grow (reallocate) the backing
+/// store. This lets a `for (…) acc += arr[i]` reduction stay poll-free (LLVM can
+/// vectorize) while `keep.push({…})` (a Call) still gets its poll.
+fn stmt_alloc_free(s: &Stmt) -> bool {
+    match s {
+        Stmt::Expr(e) => expr_alloc_free(e),
+        Stmt::Let { init, .. } => init.as_ref().is_none_or(expr_alloc_free),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_alloc_free(condition)
+                && then_branch.iter().all(stmt_alloc_free)
+                && else_branch
+                    .as_ref()
+                    .is_none_or(|b| b.iter().all(stmt_alloc_free))
+        }
+        Stmt::While { condition, body } => {
+            expr_alloc_free(condition) && body.iter().all(stmt_alloc_free)
+        }
+        Stmt::DoWhile { body, condition } => {
+            expr_alloc_free(condition) && body.iter().all(stmt_alloc_free)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_none_or(stmt_alloc_free)
+                && condition.as_ref().is_none_or(expr_alloc_free)
+                && update.as_ref().is_none_or(expr_alloc_free)
+                && body.iter().all(stmt_alloc_free)
+        }
+        Stmt::Labeled { body, .. } => stmt_alloc_free(body),
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
+        _ => false,
+    }
+}
+
+fn expr_alloc_free(e: &Expr) -> bool {
+    // Everything LLVM-pure is allocation-free (literals, reads, arithmetic).
+    if expr_is_pure(e) {
+        return true;
+    }
+    match e {
+        // Element READS never allocate — they return an existing element / a
+        // number. Recurse so the object and index are themselves alloc-free.
+        Expr::IndexGet { object, index } => expr_alloc_free(object) && expr_alloc_free(index),
+        Expr::BufferIndexGet { buffer, index } => {
+            expr_alloc_free(buffer) && expr_alloc_free(index)
+        }
+        Expr::Uint8ArrayGet { array, index } => expr_alloc_free(array) && expr_alloc_free(index),
+        // `arr[i]++` / `--`: read-modify-write of an existing numeric slot, no
+        // growth, no allocation.
+        Expr::IndexUpdate { object, index, .. } => {
+            expr_alloc_free(object) && expr_alloc_free(index)
+        }
+        // Typed-array element WRITES store into a fixed-size backing buffer that
+        // never grows/reallocates. (Generic `IndexSet` is deliberately absent —
+        // a plain JS-array write can grow the array and allocate.)
+        Expr::BufferIndexSet {
+            buffer,
+            index,
+            value,
+        } => expr_alloc_free(buffer) && expr_alloc_free(index) && expr_alloc_free(value),
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => expr_alloc_free(array) && expr_alloc_free(index) && expr_alloc_free(value),
+        // Re-handle the composite arithmetic/assign forms so an alloc-free (but
+        // not LLVM-pure) operand — e.g. a `BufferIndexGet` — propagates through.
+        Expr::LocalSet(_, val) => expr_alloc_free(val),
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => expr_alloc_free(left) && expr_alloc_free(right),
+        Expr::Unary { operand, .. } | Expr::TypeOf(operand) | Expr::Void(operand) => {
+            expr_alloc_free(operand)
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_alloc_free(condition) && expr_alloc_free(then_expr) && expr_alloc_free(else_expr),
+        _ => false,
+    }
+}
+
 fn stmt_is_pure(s: &Stmt) -> bool {
     match s {
         Stmt::Expr(e) => expr_is_pure(e),

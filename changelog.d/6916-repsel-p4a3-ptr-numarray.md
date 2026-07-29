@@ -1,0 +1,9 @@
+**Representation-selection Phase 4a.3 — `Ptr<NumArray>` guard-free numeric-array element access (#6904)**
+
+Completes the layer deferred from #6915 (RFC §4 `Array<number>` row / §5.7):
+
+- `collectors/ptr_numarray.rs` proves function-local `number[]` bindings under provenance (`new Array(<static n>)` / empty `[]`), containment (numeric-key element reads, numeric-by-construction writes, `.length`, numeric `push`, bare `return` — everything else disqualifies, including every length-shrinking/reordering mutator), the density lattice `Dense ⊒ HolesOK ⊒ Boxed`, and a module-wide barrier kill (Phase 3b's §5.2 scan plus any indexed write through a `.prototype` object). The #6915 stale-binding finding is an explicit structural eligibility term: containment excludes every path that could leave the local on a growth-forwarded stub.
+- At sites with a per-site in-bounds proof (static index range vs the allocation length, or a bounded-loop fact), element access lowers to slot reload → mask → `gep` → `load`/`store double` — no guard tier, no bounds arms, no barrier, no note. Guard-free reads are ToNumber-context only (`HolesOK` canonicalizes `TAG_HOLE` to the quiet NaN, bit-exact with `ToNumber(undefined)`; bare hole-observing reads stay on the guarded tiers), and guard-free stores require a canonical-raw-f64 RHS. Everything unproven falls back to the #6915 guarded tiers.
+- `PERRY_PTR_NUMARRAY_LOCALS` (default on) gates the whole phase and is keyed into the object cache.
+
+Post-`opt -O3` structural proof: the #6904 histogram inner loop is load/fcmp/select/fadd/store with zero guard instructions, zero runtime calls, and zero bounds checks. Two new gap files cover promotion, every disqualification class, and the barrier-module behavior — byte-exact vs Node under flag on/off, `PERRY_GC_FORCE_EVACUATE=1`, and `PERRY_GEN_GC=0`.

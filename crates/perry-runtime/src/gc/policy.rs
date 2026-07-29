@@ -78,13 +78,43 @@ pub(super) const GC_TRIGGER_ABSOLUTE_CEILING: usize = 128 * 1024 * 1024;
 /// device-derived ceiling while the cell still holds its desktop-default
 /// const initializer.
 pub(super) fn effective_next_arena_trigger() -> usize {
-    if GC_TRIGGER_ARMED.with(|a| a.get()) {
+    let base = if GC_TRIGGER_ARMED.with(|a| a.get()) {
         GC_NEXT_TRIGGER_BYTES.with(|c| c.get())
     } else {
         GC_NEXT_TRIGGER_BYTES
             .with(|c| c.get())
             .min(gc_trigger_absolute_ceiling_bytes())
+    };
+    // PERRY_GC_SCAVENGE (Phase-1 de-risking, OFF by default): with the
+    // evacuating young-gen scavenge, a minor is O(live) — copying ~1k live
+    // objects out of millions allocated — so the 128 MB-and-doubling adaptive
+    // trigger (tuned for the OLD world where a minor was an expensive O(heap)
+    // sweep, hence "collect rarely") is exactly backwards. Cap the nursery
+    // small so scavenges fire often and the young arena's high-water mark
+    // stays near the cap instead of ballooning to 128-260 MB between the ~8
+    // collections the adaptive trigger otherwise allows. Env-tunable via
+    // PERRY_GC_SCAVENGE_NURSERY_MB for measurement.
+    if super::gc_scavenge_enabled() || gc_moving_loop_polls_enabled() {
+        base.min(gc_scavenge_nursery_cap_bytes())
+    } else {
+        base
     }
+}
+
+/// Nursery high-water cap used only when `PERRY_GC_SCAVENGE` is on (default
+/// 16 MB; override with `PERRY_GC_SCAVENGE_NURSERY_MB`). See
+/// `effective_next_arena_trigger`.
+pub(super) fn gc_scavenge_nursery_cap_bytes() -> usize {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<usize> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::env::var("PERRY_GC_SCAVENGE_NURSERY_MB")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|&mb| mb > 0)
+            .unwrap_or(16)
+            .saturating_mul(1024 * 1024)
+    })
 }
 
 thread_local! {
@@ -288,17 +318,26 @@ pub(crate) fn gc_moving_safepoint_enabled() -> bool {
 }
 
 /// Phase 4 of the moving-GC project: gate the INCREMENTAL old-gen collector (the
-/// budgeted stepper). **EXPERIMENTAL — default OFF.** Perry has a full budgeted
-/// mark/sweep stepper but it never runs, because every compiled program
+/// budgeted stepper). **DEFAULT ON since the #6180 flip**; `PERRY_GC_INCREMENTAL=0`
+/// (or `off`/`false`) is the kill switch. Perry has a full budgeted
+/// mark/sweep stepper which, before that flip, never ran: every compiled program
 /// registers unbudgeted mutable root scanners and
-/// `registered_root_scanners_block_budgeted_gc()` blocks the cycle from ever
+/// `registered_root_scanners_block_budgeted_gc()` blocked the cycle from ever
 /// starting. When this is on, the stepper is allowed to start and runs those
 /// unbudgeted scanners SYNCHRONOUSLY in its initial root-scan step (a bounded
 /// initial-mark pause), then marks/sweeps the old gen incrementally across
 /// safepoints — the standard "initial-mark + incremental-mark" design. Off ⇒
-/// exactly today's non-incremental GC (the whole path is skipped). Independent
+/// exactly the non-incremental GC (the whole path is skipped). Independent
 /// of `PERRY_GC_MOVING_SAFEPOINT`; this is the concurrency layer that reduces
 /// old-gen pause time.
+///
+/// ★ This default is load-bearing for rooting arguments, not just for pause
+/// times: with the stepper on, budgeted cycles skip the conservative
+/// stack-scan subphase *structurally* (`gc/cycle.rs`, classifier mode), so a
+/// compiled program completes precise-roots-only cycles in its shipped
+/// configuration. Reasoning that assumes "the automatic arms force a
+/// conservative scan" is therefore wrong by default — that mistake was made in
+/// #6972 while this doc comment still claimed the gate was off (#6987).
 pub(crate) fn gc_incremental_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
@@ -317,21 +356,77 @@ pub(crate) fn gc_incremental_enabled() -> bool {
     })
 }
 
-/// Phase 2/3 (opt-in, default OFF): also make the moving minor PRIMARY inside
-/// loops — defer the alloc-point nursery collection to a codegen loop back-edge
-/// poll (`js_gc_loop_safepoint`) instead of collecting non-moving mid-expression.
-/// Off by default because the poll emits a call in every loop, defeating
-/// vectorization; when it's emitted only for allocating loops this can flip on.
-/// Must match the codegen `moving_safepoint_polls_enabled` (same env) so the
-/// deferral and the polls that drain it stay coherent.
+/// Make the moving minor PRIMARY inside loops: defer the alloc-point nursery
+/// collection to a codegen loop back-edge poll (`js_gc_loop_safepoint`) instead
+/// of collecting non-moving mid-expression, so reallocation-heavy loops evacuate
+/// (bounded RSS) instead of leaking. **DEFAULT ON** as of the moving-nursery flip
+/// — the poll is now emitted only for ALLOCATING loop bodies (`body_may_allocate`
+/// in codegen), so numeric/vectorizable loops stay call-free. Kill switch is an
+/// explicit `PERRY_GC_MOVING_LOOP_POLLS=0`/`off`/`false` (bisection / max-throughput
+/// batch). MUST match codegen `moving_safepoint_polls_enabled` (same env) so the
+/// deferral and the polls that drain it stay coherent — a runtime default-on with
+/// a codegen default-off (or vice versa) would defer collections that never drain.
 pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
+    // Test-only mode override (see `force_legacy_gc_pacing`). Consulted BEFORE
+    // the process-wide OnceLock so a single test can pin legacy (non-moving,
+    // budgeted/direct, 128 MiB-ceiling) pacing for its duration even though the
+    // process default is moving-on. Compiled out entirely in release builds.
+    #[cfg(test)]
+    if let Some(forced) = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(Cell::get) {
+        return forced;
+    }
+
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for [`gc_moving_loop_polls_enabled`]. When `Some(v)`,
+    /// the getter returns `v` before consulting the process-wide OnceLock. This
+    /// is the ONLY way a unit test can select GC pacing mode per-test: the
+    /// OnceLock caches the env-derived default once for the whole process, so
+    /// the entire test binary otherwise runs in a single mode. Because the
+    /// nursery-cap in `effective_next_arena_trigger`, the alloc-point routing in
+    /// `gc_check_trigger`, and the eager malloc-registry build in
+    /// `CopyingPointerSet::new` all consult `gc_moving_loop_polls_enabled()`
+    /// (and `gc_scavenge_enabled()` is env-gated OFF by default in tests), this
+    /// single override flips all of the moving-mode behavior coherently.
+    static GC_MOVING_LOOP_POLLS_TEST_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// RAII guard that pins LEGACY (non-moving, budgeted/direct, 128 MiB-ceiling) GC
+/// pacing for the tests that assert the budgeted/direct pacer + trigger
+/// arithmetic — the mechanism that, since the moving-nursery default-on flip,
+/// lives behind the `PERRY_GC_MOVING_LOOP_POLLS=0` kill switch rather than the
+/// default path. Restores the previous override state on drop. Test-only.
+#[cfg(test)]
+pub(super) struct LegacyGcPacingGuard {
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl Drop for LegacyGcPacingGuard {
+    fn drop(&mut self) {
+        GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Pin legacy GC pacing (moving-loop polls OFF) for the duration of the returned
+/// guard. See [`LegacyGcPacingGuard`] and [`gc_moving_loop_polls_enabled`].
+#[cfg(test)]
+pub(super) fn force_legacy_gc_pacing() -> LegacyGcPacingGuard {
+    let previous = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| {
+        let previous = cell.get();
+        cell.set(Some(false));
+        previous
+    });
+    LegacyGcPacingGuard { previous }
 }
 
 pub(super) fn gc_trace_enabled() -> bool {
@@ -533,6 +628,9 @@ thread_local! {
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Total arena in-use bytes measured right after the last FULL mark-sweep —
+    /// the baseline for major-GC pacing (`arena_growth_full_escalation_due`).
+    pub(super) static GC_LAST_FULL_ARENA_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Re-entrancy guard for the #5476 direct old-gen reclaim driven from
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
@@ -868,6 +966,10 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     let old_in_use =
         crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    // Record the TOTAL post-full live set for major-GC pacing (young+old): the
+    // full sweep is the only collection that frees forwarding stubs, so this is
+    // the "clean" size the arena returns to and the base for the K× growth gate.
+    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(crate::arena::arena_in_use_bytes()));
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
 }
 
@@ -1182,7 +1284,29 @@ pub fn gc_check_trigger() {
     // live only in registers, so the conservative native scan retains it —
     // which also makes copied-minor ineligible for THIS cycle, so the
     // non-moving minor runs (no relocation hazards at alloc points).
-    if !gc_budgeted_cycle_active() && super::roots::registered_root_scanners_block_budgeted_gc() {
+    // PERRY_GC_SCAVENGE (Phase-1 de-risking, OFF by default): when the budgeted
+    // stepper is NOT blocked (all scanners budgeted), the nursery-churn triggers
+    // fall through to the budgeted mutator-assist step below, which is
+    // deliberately non-moving (`low_pause_non_moving = is_budgeted()`), so a
+    // reallocation-heavy loop's minors free nothing. Route those triggers to the
+    // direct (non-budgeted, atomic) minor here instead so the copying/evacuating
+    // fast path can run (see the `force_full_scan` skip below).
+    // `gc_moving_loop_polls_enabled()`: the SOUND moving-nursery path. When loop
+    // polls are on, entering this block routes nursery pressure AWAY from the
+    // budgeted non-moving stepper (which would otherwise own it and free nothing
+    // on reallocation loops) and into the defer arm below, which sets
+    // GC_SAFEPOINT_PENDING and returns — the collection then runs as an
+    // evacuating MOVING minor at the next precise loop back-edge safepoint
+    // (`js_gc_loop_safepoint` → `gc_safepoint_moving_minor`), NOT here at the
+    // register-imprecise alloc point. Unlike `gc_scavenge_enabled()` (which skips
+    // the conservative scan HERE — sound only if the alloc point is precise), the
+    // loop-polls path never reaches the skip: it always defers to a real
+    // safepoint, so it is sound by construction.
+    if !gc_budgeted_cycle_active()
+        && (super::gc_scavenge_enabled()
+            || gc_moving_loop_polls_enabled()
+            || super::roots::registered_root_scanners_block_budgeted_gc())
+    {
         let direct_kind = match gc_budgeted_due_trigger() {
             Some(BudgetedGcTrigger::ArenaBytes) => Some(GcTriggerKind::ArenaBytes),
             Some(BudgetedGcTrigger::MallocCount) => Some(GcTriggerKind::MallocCount),
@@ -1204,7 +1328,16 @@ pub fn gc_check_trigger() {
             }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
-            let _scan = super::roots::ManualGcScanGuard::force_full_scan();
+            // PERRY_GC_SCAVENGE (Phase-1 de-risking, OFF by default): skip the
+            // conservative native-stack scan so this direct minor runs with the
+            // PRECISE shadow-stack roots and the copying fast path becomes
+            // eligible (an evacuating scavenge that resets the whole young arena
+            // in O(live)). The default path keeps `force_full_scan` — at an
+            // arbitrary alloc point a value mid-construction may live only in
+            // registers, which the conservative scan retains (and which makes
+            // copied-minor ineligible, so the non-moving minor runs).
+            let _scan = (!super::gc_scavenge_enabled())
+                .then(super::roots::ManualGcScanGuard::force_full_scan);
             let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
             // Re-baseline the arming trigger after the direct minor, mirroring
             // `gc_finish_budgeted_cycle`. This arm is taken whenever
@@ -1386,16 +1519,18 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
 /// (compacting, O(survivors), no sweep) instead of falling back to the
 /// non-moving minor. Trigger detection + re-baseline mirror the nursery-churn
 /// arm; this is purely additive (the alloc-point fallback is untouched) and
-/// gated by `gc_moving_safepoint_enabled` (default off).
+/// gated by `gc_moving_safepoint_enabled` (**default ON**; the kill switch is
+/// `PERRY_GC_MOVING_SAFEPOINT=0`).
 pub(crate) fn gc_safepoint_moving_minor() {
     // Same start guards the budgeted collector uses, minus the (here
     // irrelevant) scanner block: never collect mid-allocation, inside a
     // runtime handle scope, in an unsafe FFI zone, or during a budgeted cycle.
-    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
-        || gc_blocked_by_unsafe_zone()
-        || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
-        || gc_budgeted_cycle_active()
-    {
+    let flags = GC_FLAGS.with(|f| f.get());
+    let in_alloc = flags & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0;
+    let unsafe_zone = gc_blocked_by_unsafe_zone();
+    let root_lock = GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0);
+    let budgeted = gc_budgeted_cycle_active();
+    if in_alloc || unsafe_zone || root_lock || budgeted {
         // Blocked right now — leave GC_SAFEPOINT_PENDING set so the next poll
         // retries; do not clear it here.
         return;
@@ -1408,7 +1543,10 @@ pub(crate) fn gc_safepoint_moving_minor() {
     let kind = match gc_budgeted_due_trigger() {
         Some(BudgetedGcTrigger::ArenaBytes) => GcTriggerKind::ArenaBytes,
         Some(BudgetedGcTrigger::MallocCount) => GcTriggerKind::MallocCount,
-        _ => return,
+        _ => {
+            // No nursery-pressure trigger is due — nothing to collect here.
+            return;
+        }
     };
     let pre_in_use = crate::arena::arena_in_use_bytes();
     let pre_malloc_count = malloc_object_count();
@@ -1564,6 +1702,49 @@ pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
     cycle.state
 }
 
+/// #6893-followup: major-GC pacing. A non-moving minor sweep cannot free
+/// array-growth forwarding stubs (`Array.prototype.push` reallocations leave a
+/// stub per growth), so churn that grows arrays accumulates stubs that pin every
+/// arena block → unbounded RSS; only a FULL mark-sweep reclaims them. Escalate a
+/// minor to a full once the arena's live bytes exceed K× the clean live set
+/// measured after the last full. Gated by an absolute floor so small heaps never
+/// pay for a full, and by the K× ratio so a workload with a legitimately large
+/// *stable* live set (retain-style) does not over-escalate — its arena hovers
+/// near its own baseline, well under K×.
+pub(super) fn arena_growth_full_escalation_due() -> bool {
+    // Config is parsed ONCE — this runs on the minor-GC path, so no per-call
+    // env lookup / parse / String alloc. The env vars are for tuning and
+    // measurement (read at process start); defaults chosen so churn oscillates
+    // ~baseline..2×baseline and stays below node's peak.
+    use std::sync::OnceLock;
+    static CONFIG: OnceLock<(usize, usize)> = OnceLock::new();
+    let &(floor_bytes, growth_num) = CONFIG.get_or_init(|| {
+        const DEFAULT_FLOOR_MB: usize = 32;
+        const DEFAULT_GROWTH_NUM: usize = 2;
+        let floor_bytes = std::env::var("PERRY_GC_MAJOR_PACING_FLOOR_MB")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(DEFAULT_FLOOR_MB)
+            .saturating_mul(1024 * 1024);
+        let growth_num = std::env::var("PERRY_GC_MAJOR_PACING_GROWTH")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(DEFAULT_GROWTH_NUM);
+        (floor_bytes, growth_num)
+    });
+    if floor_bytes == 0 {
+        return false; // PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing
+    }
+    let in_use = crate::arena::arena_in_use_bytes();
+    if in_use < floor_bytes {
+        return false;
+    }
+    let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
+    // No full yet (baseline 0): bound the initial growth once we clear the floor.
+    baseline == 0 || in_use > baseline.saturating_mul(growth_num)
+}
+
 fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option<BudgetedGcCycle> {
     let trigger = gc_budgeted_due_trigger()?;
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
@@ -1580,7 +1761,10 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
             let rebaseline = BudgetedGcRebaseline::ArenaBytes {
                 pre_in_use: crate::arena::arena_in_use_bytes(),
             };
-            if gen_gc_enabled() {
+            // Major-GC pacing: escalate to a full when arena live-bytes grew
+            // past K× the last full's live set — the non-moving minor can't free
+            // array-growth forwarding stubs (see `arena_growth_full_escalation_due`).
+            if gen_gc_enabled() && !arena_growth_full_escalation_due() {
                 gc_start_budgeted_minor_fallback_cycle(
                     GcTriggerKind::ArenaBytes,
                     rebaseline,
@@ -1594,7 +1778,8 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
             let rebaseline = BudgetedGcRebaseline::MallocCount {
                 pre_count: malloc_object_count(),
             };
-            if gen_gc_enabled() {
+            // Major-GC pacing (malloc-count trigger twin of the ArenaBytes branch).
+            if gen_gc_enabled() && !arena_growth_full_escalation_due() {
                 gc_start_budgeted_minor_fallback_cycle(
                     GcTriggerKind::MallocCount,
                     rebaseline,

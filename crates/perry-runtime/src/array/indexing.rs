@@ -440,7 +440,7 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
 /// native-region wrappers (`__perry_wrap_*`) and elsewhere, so it must be a
 /// `#[no_mangle]` C export AND survive dead-stripping even when no Rust caller
 /// keeps it referenced — mirroring the neighbouring `js_array_push`.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_length;
 
 #[no_mangle]
@@ -852,10 +852,10 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
 
 // These raw numeric-array helpers are called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` exports.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32) -> f64 =
     js_array_numeric_get_f64_unboxed;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32, f64) -> i32 =
     js_array_numeric_set_f64_unboxed;
 
@@ -1095,12 +1095,19 @@ pub extern "C" fn js_array_set_f64_extend(
         // arrays serialized as `[0, 0, ...]` instead of `[null, null,
         // ...]`. Read paths translate TAG_HOLE → TAG_UNDEFINED via
         // `js_array_get_f64`'s post-#323 hole handling.
+        //
+        // Repsel 4a.2 (#6904): the gap fill goes through the hole-aware
+        // note — TAG_HOLE is part of the raw-f64-or-holes invariant, so it
+        // must not clear the layout flags the way a genuine non-numeric
+        // store does. When the array carried a raw-f64 invariant before the
+        // extend AND the stored value is numeric, the invariant still holds
+        // afterwards: record it (dense drops to holes) instead of demoting
+        // to the permanent O(n) verify walk.
+        let had_raw_layout = crate::array::header::array_has_raw_f64_layout_or_holes(arr);
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        let hole = f64::from_bits(crate::value::TAG_HOLE);
         for i in length..index {
-            // GC_STORE_AUDIT(BARRIERED): sparse gap sentinel is immediately recorded via note_array_slot.
-            ptr::write(elements_ptr.add(i as usize), hole);
-            note_array_slot(arr, i as usize, crate::value::TAG_HOLE);
+            // GC_STORE_AUDIT(BARRIERED): sparse gap sentinel is layout-noted + barriered by the hole-aware note.
+            crate::array::header::note_array_hole_fill_slot(arr, i as usize);
         }
 
         // Set the value
@@ -1110,6 +1117,12 @@ pub extern "C" fn js_array_set_f64_extend(
         ptr::write(elements_ptr.add(index as usize), value);
         note_array_slot(arr, index as usize, value_bits);
         (*arr).length = new_length;
+        if had_raw_layout
+            && index > length
+            && crate::array::header::value_bits_are_numeric(value_bits)
+        {
+            crate::array::header::demote_array_raw_f64_dense_to_holes(arr);
+        }
 
         arr
     }
@@ -1437,27 +1450,27 @@ pub extern "C" fn js_array_numeric_range_add_len(receiver: f64, start: f64, delt
     array_numeric_range_add_impl(receiver, start, None, delta)
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_CONST_EXTEND: extern "C" fn(
     *mut ArrayHeader,
     u32,
     f64,
 ) -> *mut ArrayHeader = js_array_fill_f64_const_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_IOTA_EXTEND: extern "C" fn(*mut ArrayHeader, u32) -> *mut ArrayHeader =
     js_array_fill_f64_iota_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_CONST_LEN_EXTEND: extern "C" fn(
     *mut ArrayHeader,
     f64,
 ) -> *mut ArrayHeader = js_array_fill_f64_const_len_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_FILL_F64_IOTA_LEN_EXTEND: extern "C" fn(*mut ArrayHeader) -> *mut ArrayHeader =
     js_array_fill_f64_iota_len_extend;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD: extern "C" fn(f64, f64, f64, f64) -> i64 =
     js_array_numeric_range_add;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD_LEN: extern "C" fn(f64, f64, f64) -> i64 =
     js_array_numeric_range_add_len;
 
@@ -1629,19 +1642,34 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
             } else {
                 format!("{:.0}", n)
             };
+            // #6935: `js_string_from_bytes` ALLOCATES, so it can trigger a GC
+            // that evacuates the receiver; `arr` is a bare Rust local.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let arr_handle = scope.root_raw_const_ptr(arr);
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            return array_get_property_by_key(arr, key_ptr);
+            return array_get_property_by_key(
+                arr_handle.get_raw_const_ptr::<ArrayHeader>(),
+                key_ptr,
+            );
         }
     }
 
     if unsafe { crate::symbol::js_is_symbol(idx) } != 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // #6935: read-side sibling of `js_array_set_index_or_string` below —
+    // `js_jsvalue_to_string` on an object key (`a[new Number(1)]`,
+    // `a[{toString(){...}}]`) runs user JS, allocates and can evacuate `arr`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_const_ptr(arr);
     let key = crate::value::js_jsvalue_to_string(idx);
     if key.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    array_get_property_by_key(arr, key as *const crate::StringHeader)
+    array_get_property_by_key(
+        arr_handle.get_raw_const_ptr::<ArrayHeader>(),
+        key as *const crate::StringHeader,
+    )
 }
 
 /// `arr[idx] = value` where idx may be a NaN-boxed string (numeric-string
@@ -1701,10 +1729,20 @@ pub extern "C" fn js_array_set_index_or_string(
         // number ("4294967295", "-1", "1.5", "NaN") rather than a truncated
         // integer — `js_array_set_string_key` then stores it on the expando
         // map without touching `length` or any element slot. (Issue #4543.)
+        // #6935: `js_jsvalue_to_string` allocates the stringified key, so it can
+        // GC and evacuate both the receiver and the value being stored.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        let value_handle = scope.root_nanbox_f64(value);
         let key = crate::value::js_jsvalue_to_string(idx);
         if !key.is_null() {
-            return js_array_set_string_key(arr, key as *const crate::StringHeader, value);
+            return js_array_set_string_key(
+                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                key as *const crate::StringHeader,
+                value_handle.get_nanbox_f64(),
+            );
         }
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
     // Fallback for a NON-numeric key: a primitive (`a[null]`, `a[undefined]`,
     // `a[true]`, `a[10n]`) or a boxed object (`a[new Number(1)]`). Per
@@ -1713,11 +1751,25 @@ pub extern "C" fn js_array_set_index_or_string(
     // Arrays previously DROPPED these writes (plain objects handled them).
     // Restricted to `numeric.is_none()`: numeric keys (including non-integer
     // finite floats) are handled above. Symbols stay symbol-keyed.
+    //
+    // #6935: this is the boxed-object arm the doc comment above names, so
+    // `js_jsvalue_to_string` here runs a USER `toString` / `valueOf` — allocate
+    // → GC → evacuation. Pre-fix `arr` and `value` were both raw Rust locals
+    // across it, so a stale receiver dropped the write and a stale `value`
+    // stored a dangling pointer inside a live array.
     if numeric.is_none() && unsafe { crate::symbol::js_is_symbol(idx) } == 0 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        let value_handle = scope.root_nanbox_f64(value);
         let key = crate::value::js_jsvalue_to_string(idx);
         if !key.is_null() {
-            return js_array_set_string_key(arr, key as *const crate::StringHeader, value);
+            return js_array_set_string_key(
+                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                key as *const crate::StringHeader,
+                value_handle.get_nanbox_f64(),
+            );
         }
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
     arr
 }

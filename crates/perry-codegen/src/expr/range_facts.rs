@@ -721,7 +721,16 @@ fn range_bounds_for_buffer_access(
     let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
         return BoundsState::Unknown;
     };
-    let Some(index_range) = int_range_expr(ctx, index) else {
+    // Ctx-aware range facts first; fall back to the ctx-free syntactic window
+    // (`collectors::static_index_window`) — it proves the masked/shift index
+    // shapes (`x >>> 24`, `0x100 | (x & 0xff)`) for ANY operand, which the
+    // local-fact ranges cannot see for untyped/param-seeded values. Together
+    // with a constant-length view this turns the bcryptjs S-box reads into
+    // bare in-bounds loads.
+    let index_range = int_range_expr(ctx, index).or_else(|| {
+        crate::collectors::static_index_window(index).map(|(lo, hi)| IntRange { min: lo, max: hi })
+    });
+    let Some(index_range) = index_range else {
         return BoundsState::Unknown;
     };
     let Some(length_range) = view

@@ -124,13 +124,30 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     // steps 10-11). Object-vs-object was settled above; symbols are primitives
     // (`eq_is_object` excludes them) and correctly fall through to not-equal.
     // Done before the BigInt block so `0n == { valueOf() { return 0n } }` works.
+    // #6655: `rel_to_primitive` runs a user `valueOf`/`toString`, so it can
+    // allocate, collect and evacuate. The *other* operand is a raw NaN-boxed
+    // local here — not a GC root — so it must be rooted across the coercion and
+    // re-read through its handle before the recursive call, or `==` compares
+    // against a forwarded address.
     if eq_is_object(a) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let b_handle = scope.root_nanbox_f64(f64::from_bits(b.bits()));
         let pa = unsafe { rel_to_primitive(f64::from_bits(a.bits())) };
-        return js_loose_eq(JSValue::from_bits(pa.to_bits()), b);
+        let pa_handle = scope.root_nanbox_f64(pa);
+        return js_loose_eq(
+            JSValue::from_bits(pa_handle.get_nanbox_u64()),
+            JSValue::from_bits(b_handle.get_nanbox_u64()),
+        );
     }
     if eq_is_object(b) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a_handle = scope.root_nanbox_f64(f64::from_bits(a.bits()));
         let pb = unsafe { rel_to_primitive(f64::from_bits(b.bits())) };
-        return js_loose_eq(a, JSValue::from_bits(pb.to_bits()));
+        let pb_handle = scope.root_nanbox_f64(pb);
+        return js_loose_eq(
+            JSValue::from_bits(a_handle.get_nanbox_u64()),
+            JSValue::from_bits(pb_handle.get_nanbox_u64()),
+        );
     }
     // BigInt abstract equality (ES2024 §7.2.15). Neither side is
     // null/undefined here and boxed wrappers (incl. `Object(0n)`) have already
@@ -273,22 +290,40 @@ unsafe fn rel_string_compare(a: f64, b: f64) -> i32 {
 /// runs on the two operands (observable when a `valueOf`/`toString` has side
 /// effects). Returns [`REL_TRUE`], [`REL_FALSE`], or [`REL_UNDEFINED`].
 unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
-    let (px, py) = if x_first {
-        let px = rel_to_primitive(x);
-        let py = rel_to_primitive(y);
+    // #6655: `rel_to_primitive` runs a user `Symbol.toPrimitive` / `valueOf` /
+    // `toString`, which can allocate, trigger a GC and *evacuate* live objects.
+    // Every raw NaN-boxed `f64` in a local here is invisible to the collector,
+    // so pre-fix the second operand was held unrooted across the first
+    // coercion, and `px` — frequently a *freshly allocated* heap string from
+    // the `DefaultString` arm — was held unrooted across the second. Root both
+    // inputs before the first coercion and both primitives as they are
+    // produced, then read every value back through its handle. Same discipline
+    // as `dynamic_bigint_binary_op` / `js_dynamic_ushr` in `value/dynamic_arith.rs`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let x_in = scope.root_nanbox_f64(x);
+    let y_in = scope.root_nanbox_f64(y);
+    let (px_handle, py_handle) = if x_first {
+        let px = scope.root_nanbox_f64(rel_to_primitive(x_in.get_nanbox_f64()));
+        let py = scope.root_nanbox_f64(rel_to_primitive(y_in.get_nanbox_f64()));
         (px, py)
     } else {
-        let py = rel_to_primitive(y);
-        let px = rel_to_primitive(x);
+        let py = scope.root_nanbox_f64(rel_to_primitive(y_in.get_nanbox_f64()));
+        let px = scope.root_nanbox_f64(rel_to_primitive(x_in.get_nanbox_f64()));
         (px, py)
     };
+    let px = px_handle.get_nanbox_f64();
+    let py = py_handle.get_nanbox_f64();
 
+    // NOTE: `vx` / `vy` are *snapshots*. Tag predicates (`is_any_string`,
+    // `is_bigint`, …) stay valid across a GC because evacuation preserves the
+    // tag, but any pointer payload read out of them (`as_bigint_ptr`) must be
+    // re-derived from the handle at the point of use — see the BigInt arms below.
     let vx = JSValue::from_bits(px.to_bits());
     let vy = JSValue::from_bits(py.to_bits());
 
     // Both String → code-unit (byte) compare; never `undefined`.
     if vx.is_any_string() && vy.is_any_string() {
-        return if rel_string_compare(px, py) < 0 {
+        return if rel_string_compare(px_handle.get_nanbox_f64(), py_handle.get_nanbox_f64()) < 0 {
             REL_TRUE
         } else {
             REL_FALSE
@@ -301,11 +336,16 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
     // BigInt vs String / String vs BigInt: parse the string as a BigInt
     // (StringToBigInt); a non-numeric string makes the comparison `undefined`.
     if x_big && vy.is_any_string() {
-        let s = string_content_for_bigint(py);
+        let s = string_content_for_bigint(py_handle.get_nanbox_f64());
+        // `string_to_bigint` allocates the parsed BigInt, so re-derive the `x`
+        // pointer from its handle *after* that call — the snapshot in `vx` may
+        // name a forwarded address by now (#6655).
         return match crate::bigint::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(ny) => {
-                if crate::bigint::js_bigint_cmp(vx.as_bigint_ptr(), ny) < 0 {
+                let px_ptr =
+                    JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
+                if crate::bigint::js_bigint_cmp(px_ptr, ny) < 0 {
                     REL_TRUE
                 } else {
                     REL_FALSE
@@ -314,11 +354,13 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         };
     }
     if vx.is_any_string() && y_big {
-        let s = string_content_for_bigint(px);
+        let s = string_content_for_bigint(px_handle.get_nanbox_f64());
         return match crate::bigint::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(nx) => {
-                if crate::bigint::js_bigint_cmp(nx, vy.as_bigint_ptr()) < 0 {
+                let py_ptr =
+                    JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
+                if crate::bigint::js_bigint_cmp(nx, py_ptr) < 0 {
                     REL_TRUE
                 } else {
                     REL_FALSE
@@ -327,9 +369,13 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         };
     }
 
-    // Both BigInt → exact integer compare.
+    // Both BigInt → exact integer compare. `js_bigint_cmp` does not allocate,
+    // but re-read both pointers through the handles anyway so this arm stays
+    // correct if it ever grows an allocating step.
     if x_big && y_big {
-        return if crate::bigint::js_bigint_cmp(vx.as_bigint_ptr(), vy.as_bigint_ptr()) < 0 {
+        let px_ptr = JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
+        let py_ptr = JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
+        return if crate::bigint::js_bigint_cmp(px_ptr, py_ptr) < 0 {
             REL_TRUE
         } else {
             REL_FALSE
@@ -339,17 +385,21 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
     // BigInt vs Number (mixed): exact mathematical compare. `js_number_coerce`
     // is `ToNumber` and throws on a Symbol operand, as the spec requires.
     if x_big {
-        let yn = js_number_coerce(py);
-        return match crate::bigint::bigint_cmp_f64(vx.as_bigint_ptr(), yn) {
+        // `js_number_coerce` on a string primitive can allocate; re-derive the
+        // BigInt pointer from its handle after the coercion (#6655).
+        let yn = js_number_coerce(py_handle.get_nanbox_f64());
+        let px_ptr = JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
+        return match crate::bigint::bigint_cmp_f64(px_ptr, yn) {
             2 => REL_UNDEFINED,
             c if c < 0 => REL_TRUE,
             _ => REL_FALSE,
         };
     }
     if y_big {
-        let xn = js_number_coerce(px);
+        let xn = js_number_coerce(px_handle.get_nanbox_f64());
+        let py_ptr = JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
         // `bigint_cmp_f64(y, xn)` is the sign of (y − x); x < y ⇔ that is positive.
-        return match crate::bigint::bigint_cmp_f64(vy.as_bigint_ptr(), xn) {
+        return match crate::bigint::bigint_cmp_f64(py_ptr, xn) {
             2 => REL_UNDEFINED,
             c if c > 0 => REL_TRUE,
             _ => REL_FALSE,
@@ -357,8 +407,8 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
     }
 
     // Both Number (after ToNumber). NaN on either side → undefined.
-    let xn = js_number_coerce(px);
-    let yn = js_number_coerce(py);
+    let xn = js_number_coerce(px_handle.get_nanbox_f64());
+    let yn = js_number_coerce(py_handle.get_nanbox_f64());
     if xn.is_nan() || yn.is_nan() {
         return REL_UNDEFINED;
     }
@@ -410,15 +460,15 @@ pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
 
 // The `js_rel_*` helpers are reached only from Perry-emitted LLVM (the relational
 // fallthrough in codegen), so a bitcode/auto-optimize link can dead-strip them
-// and leave `undefined _js_rel_lt …`. Pin them with `#[used]` statics — same
+// and leave `undefined _js_rel_lt …`. Pin them with `#[cfg_attr(feature = "keepalive-anchors", used)]` statics — same
 // pattern as the write-barrier roots in `gc/barrier.rs`.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REL_LT: extern "C" fn(f64, f64) -> f64 = js_rel_lt;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REL_GT: extern "C" fn(f64, f64) -> f64 = js_rel_gt;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REL_LE: extern "C" fn(f64, f64) -> f64 = js_rel_le;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_REL_GE: extern "C" fn(f64, f64) -> f64 = js_rel_ge;
 
 #[no_mangle]
