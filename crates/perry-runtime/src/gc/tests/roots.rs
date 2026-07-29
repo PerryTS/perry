@@ -100,6 +100,7 @@ impl Drop for GcUnsafeZoneResetGuard {
 
 #[test]
 fn lock_safe_runtime_scanners_tui_state_defers_gc_check_trigger() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _test_lock = lock_safe_runtime_scanner_test_guard();
     let _reset = ShadowAndGlobalRootResetGuard;
     ensure_lock_safe_runtime_scanners_registered();

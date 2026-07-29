@@ -185,6 +185,30 @@ pub(crate) fn write_barriers_enabled() -> bool {
 
 thread_local! {
     static FULL_OUTLINE_IC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static JSCVT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// FEAT_JSCVT (`fjcvtzs`) availability for the CURRENT module's target: the
+/// single-instruction, spec-exact ECMAScript `ToInt32` on ARMv8.3+. Only
+/// arm64 macOS triples opt in — every Apple Silicon Mac (M1+) is ≥ ARMv8.4,
+/// while iOS/tvOS device targets can still cover A7–A11 chips (ARMv8.0–8.2,
+/// no JSCVT — `fjcvtzs` would be an illegal instruction) and generic aarch64
+/// (Graviton2/Neoverse-N1) lacks it too. `PERRY_JSCVT=0/off/false` reverts
+/// `toint32_wrap` to the branchless shift/select tower (A/B bisection; keyed
+/// into the object cache). Same thread-local per-module discipline as
+/// `FULL_OUTLINE_IC` above.
+pub(crate) fn jscvt_enabled() -> bool {
+    JSCVT.with(|c| c.get())
+}
+
+pub(crate) fn set_jscvt_for_target(triple: &str) {
+    let env_off = matches!(
+        std::env::var("PERRY_JSCVT").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
+    let target_has_jscvt = (triple.starts_with("arm64") || triple.starts_with("aarch64"))
+        && (triple.contains("apple-macosx") || triple.contains("apple-darwin"));
+    JSCVT.with(|c| c.set(target_has_jscvt && !env_off));
 }
 
 /// Lever B (#5334) full-outline gate for class-field IC diamonds. Set ONCE per

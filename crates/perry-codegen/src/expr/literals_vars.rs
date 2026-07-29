@@ -440,6 +440,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(blk.bitcast_i64_to_double(&bits));
                 }
             }
+            // Repsel Phase 1: a canonical-i32 local's ONLY storage is the i32
+            // slot — materialize the boxed view (`sitofp`/`uitofp`) here, at
+            // the boxed use site.
+            if let Some(v) = crate::expr::load_canonical_local_boxed(ctx, *id) {
+                return Ok(v);
+            }
             if let Some(slot) = ctx.locals.get(id).cloned() {
                 // Issue #48: prefer the i32 slot for int32-stable locals so
                 // LLVM can promote the alloca to an i32 SSA value and skip the
@@ -544,6 +550,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         blk.sitofp(I32, &v_i32, DOUBLE)
                     };
+                    // Repsel Phase 1: a canonical-i32 local has no double slot
+                    // to mirror (the `ctx.locals` lookup below misses) and its
+                    // shadow slot is never bound, so no clear is needed — the
+                    // materialized `v_dbl` above only serves as the assignment
+                    // expression's value (DCE'd when discarded).
+                    let is_canonical = ctx.local_slot_reps.contains_key(id);
                     if let Some(slot) = ctx.locals.get(id).cloned() {
                         ctx.block().store(DOUBLE, &v_dbl, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
@@ -551,8 +563,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
                         emit_root_nanbox_store_on_block(ctx.block(), &v_dbl, &g_ref);
                     }
-                    if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
-                        emit_shadow_slot_clear(ctx, slot_idx);
+                    if !is_canonical {
+                        if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
+                            emit_shadow_slot_clear(ctx, slot_idx);
+                        }
                     }
                     super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                     super::record_int_facts_for_local_set(ctx, *id, value);
@@ -609,6 +623,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // object/string/array value).
                     emit_write_barrier(ctx, &box_ptr, &v_bits);
                 }
+            } else if crate::expr::store_canonical_local_from_double(ctx, *id, &v, Some(value)) {
+                // Repsel Phase 1: canonical-i32 local — the NaN-safe helper
+                // stored the value into the (only) i32 slot. No double store,
+                // no shadow-frame traffic (the slot is never bound: the value
+                // is a number, never a pointer).
             } else if let Some(slot) = ctx.locals.get(id).cloned() {
                 ctx.block().store(DOUBLE, &v, &slot);
                 // Gen-GC Phase A sub-phase 3b: mirror pointer-typed
@@ -751,6 +770,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
                     return Ok(if *prefix { new } else { old });
                 }
+            }
+            // Repsel Phase 1: canonical-i32 local — the whole update happens
+            // in the i32 slot (`load` / `add ±1` / `store`), which post-`-O3`
+            // promotes to a clean `phi i32` induction variable. The boxed
+            // double views exist only as the expression's value; LLVM DCEs
+            // them when the update is a statement. `++`/`--` on an unsigned
+            // (`>>> 0`-written) local never qualifies for a slot (the
+            // collector disqualifies Update writes), so the rep here is
+            // always `I32` — materialize with `sitofp`.
+            if let Some((i32_slot, _rep)) = crate::expr::canonical_local_i32_slot(ctx, *id) {
+                let blk = ctx.block();
+                let old_i32 = blk.load(I32, &i32_slot);
+                let delta = match op {
+                    UpdateOp::Increment => "1",
+                    UpdateOp::Decrement => "-1",
+                };
+                let new_i32 = blk.add(I32, &old_i32, delta);
+                blk.store(I32, &new_i32, &i32_slot);
+                let old = blk.sitofp(I32, &old_i32, DOUBLE);
+                let new = blk.sitofp(I32, &new_i32, DOUBLE);
+                super::record_int_facts_for_update(ctx, *id, *op);
+                return Ok(if *prefix { new } else { old });
             }
             let (storage, storage_is_root) = if let Some(slot) = ctx.locals.get(id).cloned() {
                 (slot, false)

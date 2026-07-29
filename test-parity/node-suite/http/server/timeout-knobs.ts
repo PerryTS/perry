@@ -50,4 +50,7 @@ console.log("chained === server:", chained === server);
 console.log("post-setTimeout timeout:", server.timeout);
 
 const optionsServer = createServer({ keepAliveTimeoutBuffer: 321 } as any);
-console.log("options keepAliveTimeoutBuffer:", optionsServer.keepAliveTimeoutBuffer);
+console.log(
+  "options keepAliveTimeoutBuffer:",
+  optionsServer.keepAliveTimeoutBuffer,
+);

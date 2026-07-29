@@ -639,6 +639,7 @@ pub(crate) fn install_builtin_constructor_statics(
                 false,
             );
         }
+        #[cfg(feature = "global-url")]
         "URL" => {
             install_constructor_static(
                 ctor,
@@ -649,6 +650,7 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             install_constructor_static(ctor, "parse", url_parse_thunk as *const u8, 1, false);
         }
+        #[cfg(feature = "global-webcrypto")]
         "SubtleCrypto" => {
             install_constructor_static_with_call_arity(
                 ctor,
