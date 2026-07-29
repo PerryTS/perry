@@ -9,9 +9,9 @@
 //! `js_shadow_slot_bind` for them:
 //!
 //! ```llvm
-//!   %r13 = call double @..._fresh__spec_i32(i32 0)
+//!   %r13 = call double @perry_fn_m__fresh(double 0.0)
 //!   store double %r13, ptr %r10          ; o.a — a bare, unrooted alloca
-//!   %r16 = call double @..._churn(double %r15)   ; collects; %r10 is swept
+//!   %r16 = call double @perry_fn_m__churn(double %r15)  ; collects; %r10 swept
 //! ```
 //!
 //! The object *local* does get a slot reserved (it is pointer-typed), but

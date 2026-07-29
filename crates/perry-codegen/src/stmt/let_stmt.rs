@@ -453,6 +453,12 @@ pub(crate) fn lower_let(
             let source = lower_expr(ctx, object)?;
             let source_slot = ctx.func.alloca_entry(DOUBLE);
             ctx.block().store(DOUBLE, &source, &source_slot);
+            // #6968: the whole point of capturing the receiver here is that the
+            // source local may be overwritten afterwards — at which moment this
+            // alloca holds the ONLY reference to that string, across every
+            // collection until the fused consumer reads it. Same unrooted-alloca
+            // hole as the object/array field slots below.
+            crate::expr::root_scalar_replaced_slot(ctx, &source_slot, object);
             let dummy_slot = ctx.func.alloca_entry(DOUBLE);
             let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             ctx.func
