@@ -288,17 +288,26 @@ pub(crate) fn gc_moving_safepoint_enabled() -> bool {
 }
 
 /// Phase 4 of the moving-GC project: gate the INCREMENTAL old-gen collector (the
-/// budgeted stepper). **EXPERIMENTAL — default OFF.** Perry has a full budgeted
-/// mark/sweep stepper but it never runs, because every compiled program
+/// budgeted stepper). **DEFAULT ON since the #6180 flip**; `PERRY_GC_INCREMENTAL=0`
+/// (or `off`/`false`) is the kill switch. Perry has a full budgeted
+/// mark/sweep stepper which, before that flip, never ran: every compiled program
 /// registers unbudgeted mutable root scanners and
-/// `registered_root_scanners_block_budgeted_gc()` blocks the cycle from ever
+/// `registered_root_scanners_block_budgeted_gc()` blocked the cycle from ever
 /// starting. When this is on, the stepper is allowed to start and runs those
 /// unbudgeted scanners SYNCHRONOUSLY in its initial root-scan step (a bounded
 /// initial-mark pause), then marks/sweeps the old gen incrementally across
 /// safepoints — the standard "initial-mark + incremental-mark" design. Off ⇒
-/// exactly today's non-incremental GC (the whole path is skipped). Independent
+/// exactly the non-incremental GC (the whole path is skipped). Independent
 /// of `PERRY_GC_MOVING_SAFEPOINT`; this is the concurrency layer that reduces
 /// old-gen pause time.
+///
+/// ★ This default is load-bearing for rooting arguments, not just for pause
+/// times: with the stepper on, budgeted cycles skip the conservative
+/// stack-scan subphase *structurally* (`gc/cycle.rs`, classifier mode), so a
+/// compiled program completes precise-roots-only cycles in its shipped
+/// configuration. Reasoning that assumes "the automatic arms force a
+/// conservative scan" is therefore wrong by default — that mistake was made in
+/// #6972 while this doc comment still claimed the gate was off (#6987).
 pub(crate) fn gc_incremental_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
@@ -1393,7 +1402,8 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
 /// (compacting, O(survivors), no sweep) instead of falling back to the
 /// non-moving minor. Trigger detection + re-baseline mirror the nursery-churn
 /// arm; this is purely additive (the alloc-point fallback is untouched) and
-/// gated by `gc_moving_safepoint_enabled` (default off).
+/// gated by `gc_moving_safepoint_enabled` (**default ON**; the kill switch is
+/// `PERRY_GC_MOVING_SAFEPOINT=0`).
 pub(crate) fn gc_safepoint_moving_minor() {
     // Same start guards the budgeted collector uses, minus the (here
     // irrelevant) scanner block: never collect mid-allocation, inside a
