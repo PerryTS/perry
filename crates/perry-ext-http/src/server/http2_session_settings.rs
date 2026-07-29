@@ -60,8 +60,7 @@ impl Http2SettingsState {
         if let Some(v) = obj.get("maxHeaderSize").and_then(json_u32) {
             self.max_header_size = v;
             self.max_header_list_size = v;
-        }
-        if let Some(v) = obj.get("maxHeaderListSize").and_then(json_u32) {
+        } else if let Some(v) = obj.get("maxHeaderListSize").and_then(json_u32) {
             self.max_header_list_size = v;
             self.max_header_size = v;
         }

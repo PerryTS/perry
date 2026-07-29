@@ -457,8 +457,8 @@ pub(crate) fn build_optimized_libs(
             // we can't rebuild perry-stdlib with a stripped feature set,
             // so the link uses the prebuilt full `libperry_stdlib.a`.
             // That full stdlib does NOT carry the `perry-ext-*` host
-            // functions — `node:http`'s server lives in perry-ext-http /
-            // perry-ext-http, which aren't perry-stdlib deps — so
+            // functions — `node:http`'s server lives in perry-ext-http,
+            // which isn't a perry-stdlib dependency — so
             // an out-of-box `node:http` server otherwise fails to link
             // with `Undefined symbols: _js_node_http_create_server…`.
             // Resolve the well-known ext staticlibs the program needs
