@@ -492,7 +492,7 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
 
 // #6088-style keep: codegen emits the only call; a whole-program bitcode
 // link would otherwise dead-strip the IC entry.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(*mut [i64; 8], f64, f64, f64, i32) -> f64 =
     js_put_value_set_dyn_ic;
 
@@ -960,6 +960,77 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         }
     }
     Some(slots)
+}
+
+/// #6812 (w12): preflight for the TABLE-DRIVEN write lane
+/// (`o[K[idx]] = v`). Validates the key table (live array, length covers
+/// the proven index range, first `required_len` entries are strings),
+/// materializes each entry to a stable heap string (SSO elements allocate,
+/// so the array/table/keys are rooted across materialization), then runs
+/// the SAME receiver-prefix proof as the numeric guard via
+/// `object_array_numeric_write_slots` — spill lanes included. On success,
+/// writes each resolved lane into `out_lanes` in the emitter's encoding
+/// (`(slot + 1) | spill_flag`) and returns 1.
+#[no_mangle]
+pub extern "C" fn js_object_array_keytable_write_guard(
+    array: f64,
+    key_table: f64,
+    required_len: u32,
+    receiver_count: u32,
+    out_lanes: *mut i64,
+) -> i32 {
+    if !(1..=4).contains(&required_len) || out_lanes.is_null() {
+        return 0;
+    }
+    let kt_bits = key_table.to_bits();
+    if (kt_bits & !POINTER_MASK) != POINTER_TAG {
+        return 0;
+    }
+    let kt_addr = (kt_bits & POINTER_MASK) as usize;
+    let Some(kt_gc) = (unsafe { crate::value::addr_class::try_read_gc_header(kt_addr) }) else {
+        return 0;
+    };
+    if kt_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        || kt_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return 0;
+    }
+    if unsafe { (*(kt_addr as *const crate::array::ArrayHeader)).length } < required_len {
+        return 0;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array_handle = scope.root_nanbox_f64(array);
+    let table_handle = scope.root_nanbox_f64(key_table);
+    let mut key_handles = Vec::with_capacity(required_len as usize);
+    for i in 0..required_len {
+        let table_now = table_handle.get_nanbox_f64();
+        let table_ptr = (table_now.to_bits() & POINTER_MASK) as *const crate::array::ArrayHeader;
+        let elem = crate::array::js_array_get(table_ptr, i);
+        let elem_f64 = f64::from_bits(elem.bits());
+        // Stable heap pointer for SSO/heap strings alike; may allocate, so
+        // every prior key stays rooted and the table re-reads per element.
+        let heap_ptr = crate::value::js_get_string_pointer_unified(elem_f64);
+        if heap_ptr == 0 {
+            return 0;
+        }
+        let boxed = f64::from_bits(crate::value::js_nanbox_string(heap_ptr).to_bits());
+        key_handles.push(scope.root_nanbox_f64(boxed));
+    }
+    let keys: Vec<f64> = key_handles.iter().map(|h| h.get_nanbox_f64()).collect();
+    let Some(slots) =
+        object_array_numeric_write_slots(array_handle.get_nanbox_f64(), &keys, receiver_count)
+    else {
+        return 0;
+    };
+    for i in 0..required_len as usize {
+        let lane = slots[i];
+        let low = (lane & 0x7FFF) as i64 + 1;
+        let flag = (lane & 0x8000) as i64;
+        unsafe {
+            *out_lanes.add(i) = low | flag;
+        }
+    }
+    1
 }
 
 /// Preflight for codegen's bounded call-free nested object-write loop.

@@ -45,6 +45,7 @@ mod object_literal;
 mod pod_layout_constants;
 mod pod_record;
 mod property_get_names;
+mod proven_view_access;
 mod range_facts;
 mod strings;
 mod typed_feedback;
@@ -55,9 +56,9 @@ mod write_barrier;
 pub(crate) use crate::native_value::{materialize_js_value, materialize_js_value_without_record};
 pub(crate) use array_literal::lower_array_literal;
 pub(crate) use buffer_access::{
-    access_facts_for_spec, emit_buffer_access_pointer, lower_buffer_access_proof,
-    lower_buffer_load, lower_buffer_store, lower_typed_array_load, lower_typed_array_store,
-    BufferAccessSpec,
+    access_facts_for_spec, can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
+    lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
+    lower_typed_array_store, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_native_owned_view_fact, buffer_access_materialization_reason,
@@ -71,6 +72,7 @@ pub(crate) use channel::{
 };
 pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
+    class_field_store_needs_layout_note, class_field_store_needs_string_addref,
     expr_has_numeric_pointer_free_array_layout, expr_produces_non_pointer_bits_by_construction,
     is_global_this_builtin_function_name, is_global_this_builtin_name,
     lower_expr_with_expected_type, lower_js_args_array, proxy_build_args_array, unbox_str_handle,
@@ -93,6 +95,10 @@ pub(crate) use pod_record::{
     lower_and_store_initial_pod_field, lower_pod_local_reassignment, materialize_pod_local,
     try_lower_pod_field_get, try_lower_pod_field_set,
 };
+pub(crate) use proven_view_access::{
+    index_is_exact_i32_shape, local_is_proven_int_store_view,
+    try_lower_proven_view_checked_f64_load, try_lower_proven_view_checked_store,
+};
 pub(crate) use range_facts::{
     bounds_for_buffer_access_width, effective_alias_state_for_access,
     guarded_buffer_indices_for_condition, int_range_expr, invalidate_local_write_facts,
@@ -112,7 +118,7 @@ pub(crate) use v8_interop::{
 };
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_jsvalue_slot_store_scalar_aware_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_heap_word_store_on_block,
     emit_root_nanbox_store_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
     lower_array_super_init, lower_event_emitter_subclass_init, lower_node_stream_super_init,
@@ -125,12 +131,25 @@ pub(crate) use write_barrier::{
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
 mod dispatch;
 mod record_value;
+mod scalar_slot_root;
 mod shadow_slot;
+mod slot_rep;
+pub(crate) mod temp_root;
+pub(crate) use slot_rep::{
+    canonical_i32_locals_enabled, canonical_local_i32_slot, canonical_str_locals_enabled,
+    collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,
+    load_canonical_local_boxed, local_is_canonical_str, local_rep_is_canonical_i32,
+    note_canonical_local, store_canonical_local_from_double, SlotRep,
+};
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
+pub(crate) use scalar_slot_root::{
+    root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
+};
 pub(crate) use shadow_slot::{
-    emit_shadow_slot_bind_for_local, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    enable_persistent_shadow_slot_for_array_alias, expr_is_known_non_pointer_shadow_value,
+    emit_persistent_shadow_root_barrier, emit_shadow_slot_bind_for_local, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, enable_persistent_shadow_slot_for_array_alias,
+    expr_is_known_non_pointer_shadow_value,
 };
 
 /// One in-flight inline-constructor return target. See
@@ -627,6 +646,13 @@ pub(crate) struct FnCtx<'a> {
     /// cleared after lowering that statement. Built once per user function
     /// from HIR local-reference last-use information.
     pub shadow_slot_clears_after_stmt: std::collections::HashMap<usize, Vec<u32>>,
+    /// Slot indices that have had at least one `js_shadow_slot_bind` (or
+    /// value-set) emitted so far. Slots start zeroed and are only ever
+    /// written through the bind/set helpers, so a scheduled CLEAR of a
+    /// never-bound slot is a provable no-op (`js_shadow_slot_set(idx, 0)` on
+    /// a slot that already holds 0) — `emit_shadow_slot_clear` skips it.
+    /// Seeded at construction with the entry-bound parameter slots.
+    pub shadow_slots_bound: std::collections::HashSet<u32>,
 
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses
@@ -731,6 +757,80 @@ pub(crate) struct FnCtx<'a> {
     /// on hot array-walking loops like `for (let i = 0; i < arr.length;
     /// i++) arr[i] = expr`.
     pub i32_counter_slots: std::collections::HashMap<u32, String>,
+
+    /// Representation-selection Phase 1 (RFC `docs/representation-selection-
+    /// rfc.md`): LocalId → selected slot representation. Absent = `Boxed`
+    /// (double slot in `ctx.locals`, exactly the pre-phase behavior). An
+    /// `I32`/`U32` entry means the i32 alloca registered in
+    /// `ctx.i32_counter_slots` is the CANONICAL AND ONLY storage for the
+    /// local: there is no double slot, no dual writes, and no shadow-stack GC
+    /// binding — a boxed double is materialized (`sitofp`/`uitofp`) only at
+    /// genuinely-boxed use sites. See `expr/slot_rep.rs` for the mechanism,
+    /// eligibility, and the range-soundness audit.
+    pub local_slot_reps: std::collections::HashMap<u32, SlotRep>,
+
+    /// Whether this function context permits canonical-i32 storage selection.
+    /// False for async / generator / `was_plain_async` bodies (the async-to-
+    /// generator transform boxes body locals into shared cells) and for module
+    /// init. Checked at the `Stmt::Let` eligibility site together with the
+    /// `PERRY_CANONICAL_I32_LOCALS` env gate.
+    pub repsel_context_allows_canonical_i32: bool,
+
+    /// Representation-selection Phase 5a (`collectors/proven_this.rs`): when
+    /// this body is a proven-`this` method clone, the `Ptr<Shape>` proof
+    /// carried by `this`. Consumed by [`FnCtx::ptr_shape_receiver_fact`], which
+    /// is what makes every `this.field` in the clone lower to the bare
+    /// fixed-offset form instead of the per-access guard diamond.
+    ///
+    /// `None` in every ordinary body — including the PUBLIC method body, which
+    /// keeps today's guarded lowering because its receiver is unproven.
+    pub proven_this: Option<crate::collectors::PtrShapeLocal>,
+
+    /// Phase 5a: `(class, method)` pairs with an emitted proven-`this` clone.
+    /// The two proven call sites consult this before routing; a hit also
+    /// proves the receiver's exact class DECLARES the method (own
+    /// declarations only), which is what rules out a subclass `this`.
+    pub pshape_methods:
+        &'a std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
+
+    /// Locals referenced anywhere inside a nested closure body (including
+    /// explicit capture lists). Excluded from canonical-i32 selection — the
+    /// capture machinery stays on the boxed protocol. Empty when
+    /// `repsel_context_allows_canonical_i32` is false.
+    pub repsel_closure_ref_locals: std::collections::HashSet<u32>,
+
+    /// Representation-selection Phase 3a: whether this function context
+    /// permits canonical-Str selection. Mirrors
+    /// `repsel_context_allows_canonical_i32` (sync bodies only, no module
+    /// init) but gated on `PERRY_CANONICAL_STR_LOCALS` instead, so the two
+    /// phases can be A/B-tested independently.
+    pub repsel_context_allows_canonical_str: bool,
+
+    /// Phase 3a eligibility pre-pass result
+    /// (`collect_canonical_str_ineligible_locals`): locals with a
+    /// non-string-proven reassignment, an equality compare against a
+    /// non-proven-string operand (the `other_side_is_any` hazard), or a
+    /// catch binding. Never selected canonical-Str. Empty when
+    /// `repsel_context_allows_canonical_str` is false.
+    pub repsel_str_ineligible_locals: std::collections::HashSet<u32>,
+
+    /// Representation-selection Phase 2 (`codegen/spec_abi.rs`): FuncId →
+    /// specialization plan for functions that have an emitted specialized
+    /// entry in this module. Direct `FuncRef` call sites consult this to
+    /// dispatch statically-proven sites to the raw-ABI symbol.
+    pub spec_abi_functions: &'a std::collections::HashMap<u32, crate::codegen::SpecFnPlan>,
+
+    /// Phase 2 pre-pass output (`collectors/spec_abi_sites.rs`): LocalIds
+    /// proven to permanently hold one specific non-view typed array. A call
+    /// arg `LocalGet(id)` matches a `TaPtr` slot only when `id` is here AND in
+    /// `spec_ta_ready` (its binding statement already lowered at top level).
+    pub spec_ta_bindings: &'a std::collections::HashMap<u32, crate::collectors::SpecTaBinding>,
+
+    /// Dominance mirror for `spec_ta_bindings`: ids whose top-level binding
+    /// `Stmt::Let` has been lowered in THIS body (inserted by
+    /// `stmt::lower_top_level_stmts`). A proven binding is only usable at call
+    /// sites it dominates; closure bodies get their own (empty) set.
+    pub spec_ta_ready: std::collections::HashSet<u32>,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -910,6 +1010,14 @@ pub(crate) struct FnCtx<'a> {
     /// A non-escaping uppercase result represented by a slot holding its
     /// original receiver. Only fused string operations may consume it.
     pub scalar_replaced_uppercase_sources: std::collections::HashMap<u32, String>,
+
+    /// Shadow-frame slot reserved for a scalar-replacement alloca, keyed by
+    /// the alloca's SSA name (#6968). These allocas belong to no HIR local,
+    /// so `collect_pointer_typed_locals` cannot see them and the frame is
+    /// grown on demand — see `expr::scalar_slot_root`. Populated the first
+    /// time a possibly-pointer value is stored into the alloca; a field that
+    /// only ever holds numbers never appears here and costs nothing.
+    pub scalar_slot_shadow_slots: std::collections::HashMap<String, u32>,
 
     /// Non-escaping array literals identified by escape analysis. Maps
     /// local_id → length. Used by the Stmt::Let lowering to intercept
@@ -1329,6 +1437,32 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 }
 
 impl<'a> FnCtx<'a> {
+    /// The `Ptr<Shape>` proof for a receiver expression, if any — the single
+    /// entry point every representation-selection object site consults.
+    ///
+    /// * `Expr::LocalGet` — Phase 3b: a shape-proven local
+    ///   (`collectors/ptr_shape.rs`), proven by provenance + containment.
+    /// * `Expr::This` — Phase 5a: the proven receiver of a proven-`this`
+    ///   method clone (`collectors/proven_this.rs`), proven by the routing call
+    ///   site's class-id + keys-token guard.
+    ///
+    /// Both carry the identical storage contract (a shadow-bound,
+    /// tagged-at-rest NaN-boxed slot), so consumers need no case analysis:
+    /// re-derive the raw pointer from the slot at every access.
+    pub(crate) fn ptr_shape_receiver_fact(
+        &self,
+        e: &perry_hir::Expr,
+    ) -> Option<&crate::collectors::PtrShapeLocal> {
+        if !self.repsel_context_allows_canonical_i32 {
+            return None;
+        }
+        match e {
+            perry_hir::Expr::LocalGet(id) => self.native_facts.shape_proven_ptr_local(*id),
+            perry_hir::Expr::This => self.proven_this.as_ref(),
+            _ => None,
+        }
+    }
+
     pub fn next_loop_proof_scope_id(&mut self) -> u32 {
         let id = self.next_loop_proof_scope_id;
         self.next_loop_proof_scope_id = self
@@ -1403,6 +1537,7 @@ mod env_clones;
 mod fs_await;
 mod index_get;
 mod masked_window;
+mod ptr_numarray_access;
 mod ta_param_f64_read;
 pub(crate) use index_get::packed_f64_loop_index_parts;
 pub(crate) use masked_window::masked_window_fact_for_index;

@@ -4,6 +4,9 @@ const server = createServer();
 const events: string[] = [];
 server.on("listening", () => events.push("listening"));
 server.on("close", () => events.push("close"));
+server.once("error", (error: any) => {
+  console.error("listen error:", error.name, error.code);
+});
 console.log("before:", server.listening, server.address());
 const listening = server.listen(0, "127.0.0.1", () => {
   const address = server.address();

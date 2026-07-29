@@ -25,8 +25,15 @@ pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 // canonical raw-f64 / pointer layout is known-valid — and cleared whenever that
 // descriptor is removed. Every downgrade routes through `layout_set_typed_unknown`
 // or the `layout_*` remove helpers below, all of which clear it, so the invariant
-//   intact bit set  ⟹  TYPED_LAYOUTS holds this object's canonical descriptor
-// holds at all times. The descriptor's raw-f64 mask is exactly the compile-time
+//   intact bit set  ⟹  a canonical typed descriptor exists for this object,
+//                      either per-object in `TYPED_LAYOUTS` OR (the #6893 common
+//                      case) shared by shape in `SHAPE_LAYOUTS`, keyed by the
+//                      object's `keys_array`
+// holds at all times. (Before #6893 the descriptor was always the per-object
+// `TYPED_LAYOUTS` entry; `shape_install_shared` now sets the bit while routing
+// same-shape objects through the shared map, so the bit no longer implies a
+// per-object entry — only that *some* descriptor is reachable.) The descriptor's
+// raw-f64 mask is exactly the compile-time
 // canonical mask codegen emits for the class, so combined with a class_id/
 // keys_array match the codegen-inlined class-field shape guard can conclude
 // "slot K is raw-f64" from this single bit — no cross-crate guard call, no
@@ -60,7 +67,7 @@ pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) enum LayoutSlotMask {
     Inline(u64),
     Heap(Vec<u64>),
@@ -275,7 +282,7 @@ impl LayoutSlotMask {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct TypedLayoutDescriptor {
     pub(super) slot_count: usize,
     pub(super) raw_f64_mask: LayoutSlotMask,
@@ -291,6 +298,196 @@ thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
     #[cfg(test)]
     pub(super) static TRACE_SLOT_READS: Cell<usize> = const { Cell::new(0) };
+}
+
+// #6893: SHAPE-keyed canonical typed layout. Replaces the per-OBJECT
+// TYPED_LAYOUTS + LAYOUT_SLOT_MASKS storage for the common case where an
+// object's live layout matches its shape (header `GC_OBJ_TYPED_LAYOUT_INTACT`).
+// Keyed by the shared `keys_array` pointer — all same-shape objects share ONE
+// canonical keys array ("shared keys_array IS a shape"), so this is O(shapes),
+// not O(objects). Measured: object churn stores a per-object descriptor for
+// every one of ~2M `{v,w}` objects (all identical) → ~392 MB; keying by the
+// (single) shared keys_array collapses that to one entry (churn peak RSS
+// 830→262 MB, behaviour-identical).
+//
+// Value `None` = AMBIGUOUS: two live layouts share the same key NAMES but
+// different value TYPES (`{v:1,w:2}` vs `{v:"a",w:"b"}`); those objects fall
+// back to the per-object maps. ACCELERATOR ONLY: a miss, a stale entry
+// (keys_array relocated/recycled by a moving GC), an ambiguous shape, or a
+// field-count mismatch all fall back to the per-object map and then the
+// conservative scan — never a wrong descriptor (mirrors the ShapeTable trust
+// model). Nothing to prune on object death (entries are per-shape, shared).
+thread_local! {
+    static SHAPE_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, Option<TypedLayoutDescriptor>>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+fn shape_layout_keyed_enabled() -> bool {
+    use std::sync::OnceLock;
+    static E: OnceLock<bool> = OnceLock::new();
+    // Default ON; `PERRY_SHAPE_LAYOUT_KEYED=0` restores the per-object maps
+    // (A/B validation).
+    *E.get_or_init(|| {
+        std::env::var("PERRY_SHAPE_LAYOUT_KEYED")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    })
+}
+
+/// keys_array only exists on genuine shaped objects (`ObjectFields`). Arrays,
+/// closures, RegExps etc. also flow through `layout_note_slot` /
+/// `layout_visit_pointer_slots`, and reading `ObjectHeader::keys_array` off one
+/// would interpret unrelated payload bytes as a pointer. Returns 0 for anything
+/// that is not an ObjectFields object (⟹ callers skip the shared shape path).
+#[inline]
+unsafe fn object_keys_array_ptr(user_ptr: usize) -> usize {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    let header = header_from_user_ptr(user_ptr as *const u8);
+    if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
+        return 0;
+    }
+    (*(user_ptr as *const crate::object::ObjectHeader)).keys_array as usize
+}
+
+/// Borrow the shared canonical descriptor for `user_ptr`'s shape, if
+/// shape-keying is on, the object carries a keys_array, and the shape is
+/// unambiguous (`Some`). Runs `f` against the descriptor in place — the GC
+/// trace path and the store fast path both consult it per object/per store, and
+/// a `Heap` mask would allocate a `Vec` on every clone.
+#[inline]
+unsafe fn with_shape_shared_descriptor<R>(
+    user_ptr: usize,
+    f: impl Fn(&TypedLayoutDescriptor) -> R,
+) -> Option<R> {
+    if !shape_layout_keyed_enabled() {
+        return None;
+    }
+    let keys = object_keys_array_ptr(user_ptr);
+    if keys == 0 {
+        return None;
+    }
+    // Defense-in-depth: the descriptor's `slot_count` is pinned to the owning
+    // object's `field_count` at install (`init_typed_shape_layout` rejects a
+    // mismatch). A differing current field_count means this object's shape is
+    // not the one the descriptor describes — e.g. a keys_array address reused by
+    // a shape with a different field count (moving-GC relocation before the new
+    // address is re-installed). Fall back (per-object → conservative).
+    let field_count = (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize;
+    SHAPE_LAYOUTS.with(|m| {
+        let map = m.borrow();
+        let desc = map.get(&keys)?.as_ref()?;
+        if desc.slot_count != field_count {
+            return None;
+        }
+        Some(f(desc))
+    })
+}
+
+/// Cloning form of [`with_shape_shared_descriptor`], for the callers that need
+/// to keep the descriptor past the `SHAPE_LAYOUTS` borrow.
+#[inline]
+unsafe fn shape_shared_descriptor(user_ptr: usize) -> Option<TypedLayoutDescriptor> {
+    with_shape_shared_descriptor(user_ptr, |desc| desc.clone())
+}
+
+/// Answer a *query* about `user_ptr`'s current canonical typed layout, whichever
+/// map holds it: the per-object `TYPED_LAYOUTS` entry (objects that diverged
+/// from their shape, or carry no keys_array), else — and only while the object
+/// is still `GC_OBJ_TYPED_LAYOUT_INTACT` — the shape-shared `SHAPE_LAYOUTS`
+/// entry.
+///
+/// #6957: #6893 moved the descriptor of every *shape-keyed* object (i.e. every
+/// class instance — it carries a shared `keys_array`) out of `TYPED_LAYOUTS` and
+/// **deleted the per-object entry**. It taught `layout_note_slot`,
+/// `layout_visit_pointer_slots` and `heap_payload_slot_selection`'s mask lookup
+/// about the new home but not the query helpers below, so every one of them
+/// started reporting "no typed descriptor" for real class instances — silently
+/// deopting every typed guard that consults them. The existing layout tests all
+/// allocate with `js_object_alloc` (class 0, no keys_array), which still takes
+/// the per-object path, so nothing caught it.
+///
+/// The INTACT gate on the shared half is load-bearing.
+/// `layout_set_typed_unknown` downgrades exactly ONE object (a store that
+/// contradicts the descriptor) by clearing its intact bit and dropping its
+/// per-object entry; it cannot drop the `SHAPE_LAYOUTS` entry, which still
+/// correctly describes every sibling that has *not* diverged. Reading the shared
+/// descriptor without the bit would therefore keep reporting the pre-downgrade
+/// layout for the very object that just invalidated it.
+///
+/// The per-object half stays ungated, so this remains an independent check on a
+/// forged/stale intact header bit (see
+/// [`layout_typed_accepts_finite_number_slot_for_user`]).
+#[inline]
+fn with_typed_descriptor_for_query<R>(
+    user_ptr: usize,
+    f: impl Fn(&TypedLayoutDescriptor) -> R,
+) -> Option<R> {
+    if let Some(result) = TYPED_LAYOUTS.with(|m| m.borrow().get(&user_ptr).map(&f)) {
+        return Some(result);
+    }
+    if !layout_typed_intact_for_user(user_ptr) {
+        return None;
+    }
+    unsafe { with_shape_shared_descriptor(user_ptr, f) }
+}
+
+/// Trace-path helper: pointer mask for a SIDE_MASK object with no per-object
+/// mask entry. Returns the shape's canonical pointer mask iff the object is
+/// still INTACT (⟹ it was registered against the shared shape descriptor, not
+/// a diverged per-object mask).
+#[inline]
+unsafe fn shape_shared_pointer_mask(
+    user_ptr: usize,
+    header: *const GcHeader,
+) -> Option<LayoutSlotMask> {
+    if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT == 0 {
+        return None;
+    }
+    shape_shared_descriptor(user_ptr).map(|d| d.pointer_mask)
+}
+
+/// Install `descriptor` as the canonical layout for `keys` and set the object's
+/// header state (INTACT + POINTER_FREE/SIDE_MASK), WITHOUT any per-object map
+/// entry. Returns `true` if the object now rides the shared shape descriptor;
+/// `false` if the shape is ambiguous (caller falls back to per-object).
+unsafe fn shape_install_shared(
+    keys: usize,
+    header: *mut GcHeader,
+    descriptor: &TypedLayoutDescriptor,
+) -> bool {
+    let mut shared_ok = false;
+    SHAPE_LAYOUTS.with(|m| {
+        let mut m = m.borrow_mut();
+        match m.get(&keys) {
+            None => {
+                m.insert(keys, Some(descriptor.clone()));
+                shared_ok = true;
+            }
+            Some(Some(existing)) if existing == descriptor => {
+                shared_ok = true;
+            }
+            Some(Some(_)) => {
+                // Same keys, different layout ⟹ ambiguous. Poison the entry so
+                // future lookups (and any still-INTACT siblings) fall back.
+                m.insert(keys, None);
+                shared_ok = false;
+            }
+            Some(None) => {
+                shared_ok = false; // already ambiguous
+            }
+        }
+    });
+    if shared_ok {
+        header_set_typed_layout_intact(header);
+        if descriptor.pointer_mask.is_empty() {
+            set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        } else {
+            set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+        }
+    }
+    shared_ok
 }
 
 pub(super) unsafe fn header_from_user_ptr(user_ptr: *const u8) -> *mut GcHeader {
@@ -452,11 +649,12 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
 }
 
 /// True when `user_ptr`'s object currently has a canonical `TypedLayoutDescriptor`
-/// installed in `TYPED_LAYOUTS`. Reads the O(1) `GC_OBJ_TYPED_LAYOUT_INTACT`
-/// header bit instead of probing the thread-local map: the bit is maintained in
-/// lock-step with every map insert/remove (intact set ⟺ descriptor present — see
-/// the invariant documented on `GC_OBJ_TYPED_LAYOUT_INTACT`), so it answers the
-/// same question without a per-call TLS hashmap touch. This is on the dynamic
+/// — per-object in `TYPED_LAYOUTS` or (the #6893 common case) shared by shape in
+/// `SHAPE_LAYOUTS`. Reads the O(1) `GC_OBJ_TYPED_LAYOUT_INTACT` header bit
+/// instead of probing either map: the bit is maintained in lock-step with
+/// descriptor install/removal (intact set ⟹ *some* descriptor is reachable —
+/// see the invariant on `GC_OBJ_TYPED_LAYOUT_INTACT`), so it answers the same
+/// question without a per-call TLS hashmap touch. This is on the dynamic
 /// object-store hot path via `mark_object_dynamic_shape_unknown` (#5094).
 pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
     layout_typed_intact_for_user(user_ptr)
@@ -495,16 +693,23 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         // The canonical typed-shape descriptor probe below is a thread-local
         // hashmap lookup, paid on every field/element store. Gate it on the
         // O(1) `GC_OBJ_TYPED_LAYOUT_INTACT` header bit: that bit is set and
-        // cleared in lock-step with every `TYPED_LAYOUTS` insert/remove (see the
-        // invariant documented on `GC_OBJ_TYPED_LAYOUT_INTACT`), so a clear bit
-        // proves the map has no entry for this object — the probe would return
-        // `None` and fall through to the pointer-mask path below. Skipping it
-        // removes the per-write TLS touch on the common dynamic-shape /
-        // pointer-free object and array store path (#5094). The inner `if let`
+        // cleared in lock-step with descriptor install/removal (per-object in
+        // `TYPED_LAYOUTS` or, since #6893, shared by shape in `SHAPE_LAYOUTS` —
+        // see the invariant on `GC_OBJ_TYPED_LAYOUT_INTACT`), so a clear bit
+        // proves neither map has a descriptor for this object — the probe would
+        // return `None` and fall through to the pointer-mask path below.
+        // Skipping it removes the per-write TLS touch on the common dynamic-shape
+        // / pointer-free object and array store path (#5094). The inner `if let`
         // still tolerates a `None` defensively, so a transiently desynced bit
         // can only cost an extra fall-through, never mis-track a slot.
         if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
-            if let Some(typed) = TYPED_LAYOUTS.with(|m| m.borrow().get(&parent_user).cloned()) {
+            // #6893: per-object descriptor (diverged/ambiguous objects) OR the
+            // shared shape descriptor (the common INTACT case). Exactly one is
+            // present for an INTACT object.
+            let typed = TYPED_LAYOUTS
+                .with(|m| m.borrow().get(&parent_user).cloned())
+                .or_else(|| shape_shared_descriptor(parent_user));
+            if let Some(typed) = typed {
                 if slot_index >= typed.slot_count {
                     layout_set_typed_unknown(header, parent_user);
                     return;
@@ -559,6 +764,54 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 }
             }
         });
+    }
+}
+
+/// True when `slot_index` of `parent_user` is a **raw-f64-masked slot of an
+/// intact typed-shape descriptor** — i.e. exactly the case where
+/// [`layout_note_slot`] would call `layout_set_typed_unknown` (permanently
+/// evicting the descriptor) for a stored value whose bits are not raw f64.
+///
+/// Mirrors `layout_note_slot`'s own prologue — forwarding resolution, the
+/// `GC_LAYOUT_UNKNOWN` short-circuit, and the O(1) `GC_OBJ_TYPED_LAYOUT_INTACT`
+/// gate before the thread-local probe — so the two agree on every object.
+pub(crate) fn layout_slot_is_raw_f64_typed(parent_user: usize, slot_index: usize) -> bool {
+    if slot_index > 16_000_000 {
+        return false;
+    }
+    unsafe {
+        let Some(header) = layout_header_for_user(parent_user) else {
+            return false;
+        };
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            let new_user = forwarding_address(header) as usize;
+            if new_user != 0 && new_user != parent_user {
+                return layout_slot_is_raw_f64_typed(new_user, slot_index);
+            }
+            return false;
+        }
+        if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
+            return false;
+        }
+        if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT == 0 {
+            return false;
+        }
+        // #6893/#6957: per-object descriptor (diverged objects, and objects with
+        // no keys_array) OR the shared shape descriptor — exactly as
+        // `layout_note_slot` resolves it, which is the agreement this helper
+        // documents.
+        TYPED_LAYOUTS
+            .with(|m| {
+                m.borrow().get(&parent_user).map(|typed| {
+                    slot_index < typed.slot_count && typed.raw_f64_mask.contains_slot(slot_index)
+                })
+            })
+            .or_else(|| {
+                with_shape_shared_descriptor(parent_user, |typed| {
+                    slot_index < typed.slot_count && typed.raw_f64_mask.contains_slot(slot_index)
+                })
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -646,6 +899,22 @@ unsafe fn init_typed_shape_layout(
         raw_f64_mask,
         pointer_mask: pointer_mask.clone(),
     };
+    // #6893: try the O(shapes) shared shape descriptor (keyed by the canonical
+    // keys_array) before per-object storage.
+    let keys = if shape_layout_keyed_enabled() {
+        object_keys_array_ptr(user_ptr)
+    } else {
+        0
+    };
+    if keys != 0 && shape_install_shared(keys, header, &descriptor) {
+        TYPED_LAYOUTS.with(|m| {
+            m.borrow_mut().remove(&user_ptr);
+        });
+        LAYOUT_SLOT_MASKS.with(|m| {
+            m.borrow_mut().remove(&user_ptr);
+        });
+        return;
+    }
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().insert(user_ptr, descriptor);
     });
@@ -751,6 +1020,21 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
             raw_f64_mask,
             pointer_mask: pointer_mask.clone(),
         };
+        // #6893: shared shape descriptor before per-object storage.
+        let keys = if shape_layout_keyed_enabled() {
+            object_keys_array_ptr(user_ptr)
+        } else {
+            0
+        };
+        if keys != 0 && shape_install_shared(keys, header, &descriptor) {
+            TYPED_LAYOUTS.with(|m| {
+                m.borrow_mut().remove(&user_ptr);
+            });
+            LAYOUT_SLOT_MASKS.with(|m| {
+                m.borrow_mut().remove(&user_ptr);
+            });
+            return;
+        }
         TYPED_LAYOUTS.with(|m| {
             m.borrow_mut().insert(user_ptr, descriptor);
         });
@@ -853,6 +1137,12 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     } else {
         crate::array::clear_array_numeric_layout_ptr(new_user as usize);
     }
+    // Read the source object's intact bit BEFORE the transfer clears it — it is
+    // the per-object half of the shape-keyed resolution below. `_reserved` is
+    // untouched by `set_forwarding_address` (which writes gc_flags and the first
+    // payload word), so it is still authoritative here even though the
+    // evacuation callers forward the original before calling us.
+    let old_intact = (*old_header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0;
     let new_has_typed = TYPED_LAYOUTS.with(|m| {
         let mut typed = m.borrow_mut();
         typed.remove(&(new_user as usize));
@@ -863,11 +1153,39 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
             false
         }
     });
+    // #6964: the canonical descriptor may live in EITHER map, exactly as the
+    // query helpers resolve it (#6957/#6963). The per-object `TYPED_LAYOUTS`
+    // entry is keyed by ADDRESS, so it has to be moved (above). The shape-keyed
+    // `SHAPE_LAYOUTS` entry (#6893) is keyed by the shared `keys_array`, which
+    // the relocated copy carries verbatim — it needs no move, but it only
+    // describes THIS object while the object is still INTACT.
+    //
+    // Probing only `TYPED_LAYOUTS` missed for every object #6893 actually moved
+    // (i.e. every class instance: it carries a keys_array and therefore has NO
+    // per-object entry), so `new_has_typed` was false and the relocated copy had
+    // a still-valid intact bit CLEARED — permanently deopting its typed guards.
+    // Latent until an evacuating minor became reachable (#6950); the fourth
+    // caller, array growth in `array/push_pop.rs`, is `GC_TYPE_ARRAY`, which is
+    // not `GcLayoutSlotKind::ObjectFields` and so never had a shape-keyed
+    // descriptor to lose.
+    //
+    // Read the shape through `new_user`: the evacuation callers install the
+    // forwarding pointer over the ORIGINAL's first payload word, which for an
+    // ObjectFields object overlaps the header fields this lookup reads.
+    //
+    // Mirrors #6963's split: the per-object half stays ungated (so a forged or
+    // stale intact bit cannot manufacture a descriptor), the shared half is
+    // gated on the source object's intact bit (so an object that diverged from
+    // its shape does not silently re-adopt the shape's stale descriptor by
+    // moving).
+    let new_has_shape_typed = !new_has_typed
+        && old_intact
+        && with_shape_shared_descriptor(new_user as usize, |_| ()).is_some();
     // Keep the intact bit in lock-step with the moved descriptor. Copying GC
     // normally propagates `_reserved` (so the bit already rode along), but
     // re-sync defensively for callers that allocate the destination fresh
     // (e.g. array growth) so a stale/missing bit can never desync from the map.
-    if new_has_typed {
+    if new_has_typed || new_has_shape_typed {
         header_set_typed_layout_intact(new_header);
     } else {
         header_clear_typed_layout_intact(new_header);
@@ -900,7 +1218,9 @@ pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(
                     }
                     return true;
                 }
-                let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
+                let mask = LAYOUT_SLOT_MASKS
+                    .with(|m| m.borrow().get(&user_ptr).cloned())
+                    .or_else(|| shape_shared_pointer_mask(user_ptr, header));
                 let Some(mask) = mask else {
                     set_layout_state(header, GC_LAYOUT_UNKNOWN);
                     return false;
@@ -937,14 +1257,10 @@ pub(crate) fn layout_typed_intact_for_user(user_ptr: usize) -> bool {
 }
 
 pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: usize) -> bool {
-    TYPED_LAYOUTS.with(|m| {
-        m.borrow()
-            .get(&user_ptr)
-            .map(|layout| {
-                slot_index < layout.slot_count && layout.raw_f64_mask.contains_slot(slot_index)
-            })
-            .unwrap_or(false)
+    with_typed_descriptor_for_query(user_ptr, |layout| {
+        slot_index < layout.slot_count && layout.raw_f64_mask.contains_slot(slot_index)
     })
+    .unwrap_or(false)
 }
 
 /// Validate that an intact typed descriptor contains `slot_index`.
@@ -959,23 +1275,16 @@ pub(crate) fn layout_typed_accepts_finite_number_slot_for_user(
     user_ptr: usize,
     slot_index: usize,
 ) -> bool {
-    TYPED_LAYOUTS.with(|m| {
-        m.borrow()
-            .get(&user_ptr)
-            .is_some_and(|layout| slot_index < layout.slot_count)
-    })
+    with_typed_descriptor_for_query(user_ptr, |layout| slot_index < layout.slot_count)
+        .unwrap_or(false)
 }
 
 fn layout_typed_raw_f64_slot_count_for_user(user_ptr: usize, slot_count: usize) -> usize {
-    TYPED_LAYOUTS.with(|m| {
-        m.borrow()
-            .get(&user_ptr)
-            .map(|layout| {
-                let bounded_count = slot_count.min(layout.slot_count);
-                layout.raw_f64_mask.count_slots(bounded_count)
-            })
-            .unwrap_or(0)
+    with_typed_descriptor_for_query(user_ptr, |layout| {
+        let bounded_count = slot_count.min(layout.slot_count);
+        layout.raw_f64_mask.count_slots(bounded_count)
     })
+    .unwrap_or(0)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1208,7 +1517,9 @@ pub(super) unsafe fn heap_payload_slot_selection(
                     raw_numeric_recorded: false,
                 };
             }
-            let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
+            let mask = LAYOUT_SLOT_MASKS
+                .with(|m| m.borrow().get(&user_ptr).cloned())
+                .or_else(|| shape_shared_pointer_mask(user_ptr, header));
             match mask {
                 Some(mask) => HeapPayloadSlotSelection::Masked {
                     mask,

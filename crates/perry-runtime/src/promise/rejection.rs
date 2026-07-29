@@ -96,7 +96,7 @@ pub extern "C" fn js_promise_mark_internally_handled(promise: *mut Promise) {
 /// Keep the stdlib-facing marker alive through the dead-strip pass on the
 /// PERRY_NO_AUTO_OPTIMIZE prebuilt-lib link (same pattern as the checkpoint
 /// hook anchors below).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROMISE_MARK_INTERNALLY_HANDLED: extern "C" fn(*mut Promise) =
     js_promise_mark_internally_handled;
 
@@ -248,13 +248,13 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
     process_rejections();
 }
 
-// #4876: keep the codegen-emitted hook alive through the auto-optimize
-// whole-program-bitcode link. It is emitted unconditionally into `_main` but is
-// reachable only from generated `.o`; without a `#[used]` anchor the
-// internalize+dead-strip pass drops it and every native link fails with
-// "undefined symbol" (see the error.rs/combinators.rs anchors for the same
-// pattern).
-#[used]
+// #4876: keep the codegen-emitted hook alive through the whole-program
+// bitcode-LTO link (`keepalive-anchors`). It is emitted unconditionally into
+// `_main` but is reachable only from generated `.o`; the bitcode
+// internalize+dead-strip pass would otherwise drop it and that link mode
+// fails with "undefined symbol". The classic link needs no anchor (see the
+// error.rs/combinators.rs anchors for the same pattern).
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROMISE_REPORT_UNHANDLED_REJECTIONS: extern "C" fn() =
     js_promise_report_unhandled_rejections;
 

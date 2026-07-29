@@ -156,6 +156,10 @@ pub(crate) fn nm_dispatch_lookup(name: &str) -> Option<NmDispatchFn> {
 
 #[no_mangle]
 pub extern "C" fn js_nm_install_assert() {
+    nm_register_attach(
+        NmBucket::Assert,
+        super::native_module::callable_exports::nm_attach_assert,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Assert as usize].store(
         nm_dispatch_assert as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -190,6 +194,10 @@ pub extern "C" fn js_globalthis_seed_async_local_storage() {
 
 #[no_mangle]
 pub extern "C" fn js_nm_install_async_hooks() {
+    nm_register_attach(
+        NmBucket::AsyncHooks,
+        super::native_module::callable_exports::nm_attach_async_hooks,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::AsyncHooks as usize].store(
         nm_dispatch_async_hooks as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -247,6 +255,10 @@ pub extern "C" fn js_nm_install_console() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_crypto() {
+    nm_register_attach(
+        NmBucket::Crypto,
+        super::native_module::callable_exports::nm_attach_crypto,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Crypto as usize].store(
         nm_dispatch_crypto as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -275,6 +287,10 @@ pub extern "C" fn js_nm_install_domain() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
+    nm_register_attach(
+        NmBucket::Events,
+        super::native_module::callable_exports::nm_attach_events,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Events as usize].store(
         nm_dispatch_events as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -302,6 +318,10 @@ pub extern "C" fn js_nm_install_inspector() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_module() {
+    nm_register_attach(
+        NmBucket::Module,
+        super::native_module::callable_exports::nm_attach_module,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Module as usize].store(
         nm_dispatch_module as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -335,6 +355,10 @@ pub extern "C" fn js_nm_install_path() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_perf() {
+    nm_register_attach(
+        NmBucket::Perf,
+        super::native_module::callable_exports::nm_attach_perf_hooks,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Perf as usize].store(
         nm_dispatch_perf as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -386,6 +410,10 @@ pub extern "C" fn js_nm_install_sea() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_sqlite() {
+    nm_register_attach(
+        NmBucket::Sqlite,
+        super::native_module::callable_exports::nm_attach_sqlite,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Sqlite as usize].store(
         nm_dispatch_sqlite as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -393,6 +421,10 @@ pub extern "C" fn js_nm_install_sqlite() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_stream() {
+    nm_register_attach(
+        NmBucket::Stream,
+        super::native_module::callable_exports::nm_attach_stream,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Stream as usize].store(
         nm_dispatch_stream as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -408,6 +440,10 @@ pub extern "C" fn js_nm_install_timers() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_tls() {
+    nm_register_attach(
+        NmBucket::Tls,
+        super::native_module::callable_exports::nm_attach_tls,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Tls as usize].store(
         nm_dispatch_tls as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -416,6 +452,10 @@ pub extern "C" fn js_nm_install_tls() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_tty() {
+    nm_register_attach(
+        NmBucket::Tty,
+        super::native_module::callable_exports::nm_attach_tty,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Tty as usize].store(
         nm_dispatch_tty as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -431,6 +471,10 @@ pub extern "C" fn js_nm_install_url() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_util() {
+    nm_register_attach(
+        NmBucket::Util,
+        super::native_module::callable_exports::nm_attach_util,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Util as usize].store(
         nm_dispatch_util as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -449,6 +493,10 @@ pub extern "C" fn js_nm_install_vm() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_wasi() {
+    nm_register_attach(
+        NmBucket::Wasi,
+        super::native_module::callable_exports::nm_attach_wasi,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Wasi as usize].store(
         nm_dispatch_wasi as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -589,4 +637,45 @@ pub(crate) fn nm_ctor_lookup(module: &str) -> Option<NmCtorFn> {
 /// bucket id, like NM_DISPATCH_REGISTRY — not speculatively devirtualizable).
 fn nm_register_ctor(b: NmBucket, f: NmCtorFn) {
     NM_CTOR_REGISTRY[b as usize].store(f as *mut (), Ordering::Relaxed);
+}
+
+/// Per-module callable-export "attach" handlers: prototype/statics decoration
+/// for bound module exports (`stream.Readable`'s prototype tower,
+/// `sqlite.DatabaseSync`'s methods, `AsyncLocalStorage.bind`, …). Formerly a
+/// hand-written per-module ladder inside
+/// `callable_exports::bound_native_callable_export_value`, which statically
+/// pinned every module's attach machinery (and through stream, the whole
+/// readable/pipeline tower) into any binary that could mint ANY bound export.
+/// Registered by the same `js_nm_install_<module>()` the dispatch/ctor
+/// registries use — sound because `bound_native_callable_export_value` is
+/// only reached through a module's namespace, which exists only after its
+/// install ran. Signature: (property_name, value, closure_addr) → possibly
+/// relocated value (attach helpers may allocate/evacuate).
+pub(crate) type NmAttachFn = unsafe fn(&str, f64, usize) -> f64;
+
+static NM_ATTACH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
+    [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
+
+pub(crate) fn nm_attach_lookup(module: &str) -> Option<NmAttachFn> {
+    let b = nm_module_index(module)
+        .or_else(|| nm_module_index(module.split('/').next().unwrap_or(module)))?;
+    let p = NM_ATTACH_REGISTRY[b as usize].load(Ordering::Relaxed);
+    if !p.is_null() {
+        return Some(unsafe { std::mem::transmute::<*mut (), NmAttachFn>(p) });
+    }
+    #[cfg(test)]
+    {
+        js_nm_install_all();
+        let p = NM_ATTACH_REGISTRY[b as usize].load(Ordering::Relaxed);
+        if !p.is_null() {
+            return Some(unsafe { std::mem::transmute::<*mut (), NmAttachFn>(p) });
+        }
+    }
+    None
+}
+
+/// Register a bucket's attach fn (runtime-indexed array slot — not
+/// speculatively devirtualizable, same as the ctor registry).
+fn nm_register_attach(b: NmBucket, f: NmAttachFn) {
+    NM_ATTACH_REGISTRY[b as usize].store(f as *mut (), Ordering::Relaxed);
 }

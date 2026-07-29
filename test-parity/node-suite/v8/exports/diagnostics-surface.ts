@@ -9,13 +9,15 @@ import {
   writeHeapSnapshot,
 } from "node:v8";
 
-for (const [name, value] of [
-  ["getCppHeapStatistics", getCppHeapStatistics],
-  ["getHeapSnapshot", getHeapSnapshot],
-  ["isStringOneByteRepresentation", isStringOneByteRepresentation],
-  ["queryObjects", queryObjects],
-  ["startCpuProfile", startCpuProfile],
-  ["writeHeapSnapshot", writeHeapSnapshot],
-] as const) {
+for (
+  const [name, value] of [
+    ["getCppHeapStatistics", getCppHeapStatistics],
+    ["getHeapSnapshot", getHeapSnapshot],
+    ["isStringOneByteRepresentation", isStringOneByteRepresentation],
+    ["queryObjects", queryObjects],
+    ["startCpuProfile", startCpuProfile],
+    ["writeHeapSnapshot", writeHeapSnapshot],
+  ] as const
+) {
   console.log(name, typeof value, value.length, typeof (v8 as any)[name]);
 }
