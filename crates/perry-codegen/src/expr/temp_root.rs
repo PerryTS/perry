@@ -417,3 +417,50 @@ pub(crate) fn any_may_trigger_gc<'a>(
 ) -> bool {
     exprs.into_iter().any(|e| expr_may_trigger_gc(ctx, e))
 }
+
+/// Would `expr`'s lowered value need a temp root, assuming everything after it
+/// reaches a collection point?
+///
+/// Three suppressions, each meaning "already rooted, or nothing to root":
+///
+/// - provably not a heap reference — a slot for it is pure TLS traffic;
+/// - a string literal — a load from a module global `__perry_init_strings_*`
+///   registered with `js_gc_register_global_root`;
+/// - a plain local or module-global read — the shadow stack and the module-var
+///   scanners already hold those for as long as generated code can see them.
+///
+/// The last one is why `new C(a, b)` on plain locals stays at its old IR even
+/// though the instance allocation that follows always collects.
+pub(crate) fn operand_needs_root(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    !super::expr_is_known_non_pointer_shadow_value(ctx, expr)
+        && !matches!(
+            expr,
+            Expr::String(_) | Expr::LocalGet(_) | Expr::GlobalGet(_)
+        )
+}
+
+/// Open an expression-scope temp-root barrier for a call/constructor whose
+/// operands are `args`.
+///
+/// Pushes a null marker slot and returns its index. Because
+/// [`temp_root_truncate`] is a stack *cut*, [`temp_root_scope_end`] drops the
+/// marker and every slot pushed above it — no matter which of the callee's
+/// return paths ran. That is what makes rooting tractable in
+/// `lower_call/new.rs`, where `lowered_args` is consumed at a dozen sites
+/// spread over ~20 return paths (#6969); the alternative is a `temp_root_release`
+/// at each, which is exactly the bookkeeping that gets missed.
+///
+/// A null word decodes to nothing, so the marker itself roots no object.
+/// Emits nothing when no operand could ever need rooting.
+pub(crate) fn temp_root_scope_begin(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Option<String> {
+    args.iter()
+        .any(|a| operand_needs_root(ctx, a))
+        .then(|| temp_root_push_i64(ctx, "0"))
+}
+
+/// Close a barrier opened by [`temp_root_scope_begin`].
+pub(crate) fn temp_root_scope_end(ctx: &mut FnCtx<'_>, scope: Option<String>) {
+    if let Some(idx) = scope {
+        temp_root_truncate(ctx, &idx);
+    }
+}

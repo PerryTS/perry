@@ -20,7 +20,7 @@ use super::new_helpers::{
     ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
     emit_promise_subclass_init, local_constructor_symbol_exists, node_stream_parent_kind,
 };
-use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
+use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, temp_root, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
@@ -132,6 +132,24 @@ pub(crate) fn lower_new_member_captured(
 }
 
 fn lower_new_impl(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    caps_absent_from_args: bool,
+) -> Result<String> {
+    // #6969: expression-scope temp-root barrier. The body below roots its
+    // constructor arguments across the instance allocation, and it has ~20
+    // return paths with `lowered_args` consumed at a dozen of them — one cut
+    // here releases the group whichever path ran, instead of a
+    // `temp_root_release` at each that reviewers and future edits must keep
+    // balanced.
+    let scope = temp_root::temp_root_scope_begin(ctx, args);
+    let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args);
+    temp_root::temp_root_scope_end(ctx, scope);
+    result
+}
+
+fn lower_new_impl_inner(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     args: &[Expr],
@@ -327,6 +345,21 @@ fn lower_new_impl(
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
         lowered_args.push(lower_constructor_arg(ctx, a)?);
+    }
+    // #6969: every argument is now finished, but the instance allocation below
+    // — and, for a multi-argument list, the later arguments' own lowering —
+    // collects while they live in nothing but SSA registers.
+    // `new Pair(fresh(0), churn(N))` lost `fresh(0)` that way. Root them here;
+    // the re-read is immediately after the allocation (see `obj_box`), and the
+    // scope cut in `lower_new_impl` is the release.
+    let mut arg_roots: Vec<Option<String>> = Vec::with_capacity(lowered_args.len());
+    for (a, value) in args.iter().zip(lowered_args.iter()) {
+        let slot = if temp_root::operand_needs_root(ctx, a) {
+            Some(temp_root::temp_root_push_double(ctx, value))
+        } else {
+            None
+        };
+        arg_roots.push(slot);
     }
 
     // Compute total field count including inherited parent fields.
@@ -768,6 +801,16 @@ fn lower_new_impl(
         )
     };
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
+    // #6969: the allocation above has run, so re-read every rooted argument.
+    // Mandatory rather than defensive — the slots are *mutable* roots, so an
+    // evacuating cycle rewrote them and the registers pushed earlier are stale.
+    // Every `lowered_args` consumer below this point sees the re-read values.
+    for (value, slot) in lowered_args.iter_mut().zip(arg_roots.iter()) {
+        if let Some(idx) = slot {
+            let idx = idx.clone();
+            *value = temp_root::temp_root_get_double(ctx, &idx);
+        }
+    }
 
     // Constructor bodies may contain terminating recursive construction
     // shapes such as `if (typeof opts === "function") return new C(...)`.
