@@ -25,8 +25,15 @@ pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 // canonical raw-f64 / pointer layout is known-valid — and cleared whenever that
 // descriptor is removed. Every downgrade routes through `layout_set_typed_unknown`
 // or the `layout_*` remove helpers below, all of which clear it, so the invariant
-//   intact bit set  ⟹  TYPED_LAYOUTS holds this object's canonical descriptor
-// holds at all times. The descriptor's raw-f64 mask is exactly the compile-time
+//   intact bit set  ⟹  a canonical typed descriptor exists for this object,
+//                      either per-object in `TYPED_LAYOUTS` OR (the #6893 common
+//                      case) shared by shape in `SHAPE_LAYOUTS`, keyed by the
+//                      object's `keys_array`
+// holds at all times. (Before #6893 the descriptor was always the per-object
+// `TYPED_LAYOUTS` entry; `shape_install_shared` now sets the bit while routing
+// same-shape objects through the shared map, so the bit no longer implies a
+// per-object entry — only that *some* descriptor is reachable.) The descriptor's
+// raw-f64 mask is exactly the compile-time
 // canonical mask codegen emits for the class, so combined with a class_id/
 // keys_array match the codegen-inlined class-field shape guard can conclude
 // "slot K is raw-f64" from this single bit — no cross-crate guard call, no
@@ -585,11 +592,12 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
 }
 
 /// True when `user_ptr`'s object currently has a canonical `TypedLayoutDescriptor`
-/// installed in `TYPED_LAYOUTS`. Reads the O(1) `GC_OBJ_TYPED_LAYOUT_INTACT`
-/// header bit instead of probing the thread-local map: the bit is maintained in
-/// lock-step with every map insert/remove (intact set ⟺ descriptor present — see
-/// the invariant documented on `GC_OBJ_TYPED_LAYOUT_INTACT`), so it answers the
-/// same question without a per-call TLS hashmap touch. This is on the dynamic
+/// — per-object in `TYPED_LAYOUTS` or (the #6893 common case) shared by shape in
+/// `SHAPE_LAYOUTS`. Reads the O(1) `GC_OBJ_TYPED_LAYOUT_INTACT` header bit
+/// instead of probing either map: the bit is maintained in lock-step with
+/// descriptor install/removal (intact set ⟹ *some* descriptor is reachable —
+/// see the invariant on `GC_OBJ_TYPED_LAYOUT_INTACT`), so it answers the same
+/// question without a per-call TLS hashmap touch. This is on the dynamic
 /// object-store hot path via `mark_object_dynamic_shape_unknown` (#5094).
 pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
     layout_typed_intact_for_user(user_ptr)
@@ -628,12 +636,13 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         // The canonical typed-shape descriptor probe below is a thread-local
         // hashmap lookup, paid on every field/element store. Gate it on the
         // O(1) `GC_OBJ_TYPED_LAYOUT_INTACT` header bit: that bit is set and
-        // cleared in lock-step with every `TYPED_LAYOUTS` insert/remove (see the
-        // invariant documented on `GC_OBJ_TYPED_LAYOUT_INTACT`), so a clear bit
-        // proves the map has no entry for this object — the probe would return
-        // `None` and fall through to the pointer-mask path below. Skipping it
-        // removes the per-write TLS touch on the common dynamic-shape /
-        // pointer-free object and array store path (#5094). The inner `if let`
+        // cleared in lock-step with descriptor install/removal (per-object in
+        // `TYPED_LAYOUTS` or, since #6893, shared by shape in `SHAPE_LAYOUTS` —
+        // see the invariant on `GC_OBJ_TYPED_LAYOUT_INTACT`), so a clear bit
+        // proves neither map has a descriptor for this object — the probe would
+        // return `None` and fall through to the pointer-mask path below.
+        // Skipping it removes the per-write TLS touch on the common dynamic-shape
+        // / pointer-free object and array store path (#5094). The inner `if let`
         // still tolerates a `None` defensively, so a transiently desynced bit
         // can only cost an extra fall-through, never mis-track a slot.
         if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0 {

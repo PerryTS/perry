@@ -1,8 +1,10 @@
 //! `Temporal.Now` — a namespace of method thunks reading the host clock/zone
 //!
 //! A namespace (not a constructor), like `Math`: a plain object of method
-//! thunks. Each call reads the host clock fresh via `perry_now()`
-//! (the `sys-local` feature supplies the system time zone + clock).
+//! thunks. Each call reads the host clock fresh via `perry_now()`, backed by
+//! [`PerryHostSystem`] — perry's own host system (std `SystemTime` clock,
+//! `crate::date::host_time_zone_name` for the zone). We do NOT use temporal_rs's
+//! `sys-local` feature, which would pull `iana_time_zone` (CoreFoundation).
 
 use super::dispatch::{self, ok_or_throw, raw_arg, string};
 use super::{alloc_temporal_cell, TemporalValue};

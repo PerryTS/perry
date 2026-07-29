@@ -1581,23 +1581,30 @@ pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
 /// *stable* live set (retain-style) does not over-escalate — its arena hovers
 /// near its own baseline, well under K×.
 pub(super) fn arena_growth_full_escalation_due() -> bool {
-    // Env overrides for tuning/measurement; defaults chosen so churn oscillates
+    // Config is parsed ONCE — this runs on the minor-GC path, so no per-call
+    // env lookup / parse / String alloc. The env vars are for tuning and
+    // measurement (read at process start); defaults chosen so churn oscillates
     // ~baseline..2×baseline and stays below node's peak.
-    const DEFAULT_FLOOR_MB: usize = 32;
-    const DEFAULT_GROWTH_NUM: usize = 2;
-    let floor_bytes = std::env::var("PERRY_GC_MAJOR_PACING_FLOOR_MB")
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_FLOOR_MB)
-        .saturating_mul(1024 * 1024);
+    use std::sync::OnceLock;
+    static CONFIG: OnceLock<(usize, usize)> = OnceLock::new();
+    let &(floor_bytes, growth_num) = CONFIG.get_or_init(|| {
+        const DEFAULT_FLOOR_MB: usize = 32;
+        const DEFAULT_GROWTH_NUM: usize = 2;
+        let floor_bytes = std::env::var("PERRY_GC_MAJOR_PACING_FLOOR_MB")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(DEFAULT_FLOOR_MB)
+            .saturating_mul(1024 * 1024);
+        let growth_num = std::env::var("PERRY_GC_MAJOR_PACING_GROWTH")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(DEFAULT_GROWTH_NUM);
+        (floor_bytes, growth_num)
+    });
     if floor_bytes == 0 {
         return false; // PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing
     }
-    let growth_num = std::env::var("PERRY_GC_MAJOR_PACING_GROWTH")
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|&n| n >= 1)
-        .unwrap_or(DEFAULT_GROWTH_NUM);
     let in_use = crate::arena::arena_in_use_bytes();
     if in_use < floor_bytes {
         return false;
