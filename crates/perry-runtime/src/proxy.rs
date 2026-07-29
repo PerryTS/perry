@@ -1329,18 +1329,39 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         && header._reserved & SLOW_FLAGS == 0
                     {
                         let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
-                        let (fast_safe, target, value) = if class_id == 0 {
+                        // #6943: BOTH arms below reach a GC-capable
+                        // `js_string_coerce` on `key` — the class arm calls it
+                        // directly for the store-plan key, and the plain-object
+                        // arm reaches it through
+                        // `object_proto_may_intercept_key` ->
+                        // `obj_value_has_own_key`. The coercion is inert only
+                        // for an already-heap `STRING_TAG` key; an SSO short
+                        // key materializes onto the heap, a numeric key builds
+                        // its stringification, and an object key runs a user
+                        // `toString` / `valueOf`. Any of those can trigger a GC
+                        // that **evacuates**, and `addr` (the receiver,
+                        // dereferenced for `plan_eligible` and passed to
+                        // `class_instance_set_may_intercept`), `target` and the
+                        // `value` about to be written INTO it were all raw Rust
+                        // locals across it. The heap-string key — what
+                        // `obj.field = v` lowers to for any name past the SSO
+                        // bound — takes no scope and keeps the pre-fix path.
+                        let scope = (!crate::builtins::string_coerce_is_inert(key))
+                            .then(crate::gc::RuntimeHandleScope::new);
+                        let roots = scope.as_ref().map(|s| {
+                            (
+                                s.root_heap_word_u64(target.to_bits()),
+                                s.root_nanbox_f64(value),
+                                s.root_raw_mut_ptr(addr as *mut u8),
+                            )
+                        });
+                        let fast_safe = if class_id == 0 {
                             // Plain object: prototype is exactly Object.prototype, and
                             // Object.prototype doesn't intercept this key (per-key, not
                             // the coarse process-wide descriptor flag — that made wide
                             // builds O(n²)).
-                            (
-                                crate::object::prototype_chain::object_static_prototype(addr)
-                                    .is_none()
-                                    && !crate::object::object_proto_may_intercept_key(key),
-                                target,
-                                value,
-                            )
+                            crate::object::prototype_chain::object_static_prototype(addr).is_none()
+                                && !crate::object::object_proto_may_intercept_key(key)
                         } else {
                             // `DisposableStack#disposed` is a getter-only
                             // builtin accessor on a reserved native prototype.
@@ -1379,40 +1400,13 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // class chain — SLOW_FLAGS above already excluded
                             // frozen/sealed/descriptor bits; add the per-instance
                             // divergence flags (setPrototypeOf override / null proto).
-                            //
-                            // #6943: `js_string_coerce` is GC-capable for every
-                            // key shape EXCEPT an already-heap `STRING_TAG`
-                            // one (it hands that pointer straight back without
-                            // touching the allocator) — an SSO short key
-                            // materializes onto the heap, a numeric key builds
-                            // its stringification, and an object key runs a
-                            // user `toString` / `valueOf`. Any of those can
-                            // trigger a GC that **evacuates**. `addr` (the
-                            // receiver, dereferenced twice for `plan_eligible`
-                            // and passed to `class_instance_set_may_intercept`),
-                            // `target` and the `value` about to be written
-                            // INTO it were all raw Rust locals across the call.
-                            // The heap-string key — what `obj.field = v`
-                            // lowers to for any name longer than the SSO
-                            // bound — keeps the pre-fix path and pays nothing.
-                            let inert = crate::builtins::string_coerce_is_inert(key);
-                            let scope = (!inert).then(crate::gc::RuntimeHandleScope::new);
-                            let roots = scope.as_ref().map(|s| {
-                                (
-                                    s.root_heap_word_u64(target.to_bits()),
-                                    s.root_nanbox_f64(value),
-                                    s.root_raw_mut_ptr(addr as *mut u8),
-                                )
-                            });
                             let key_ptr = crate::builtins::js_string_coerce(key)
                                 as *const crate::StringHeader;
-                            let (target, value, addr) = match &roots {
-                                Some((t, v, a)) => (
-                                    f64::from_bits(t.get_heap_word_u64()),
-                                    v.get_nanbox_f64(),
-                                    a.get_raw_mut_ptr::<u8>() as usize,
-                                ),
-                                None => (target, value, addr),
+                            // #6943: re-read the receiver through its handle —
+                            // everything below dereferences it.
+                            let addr = match &roots {
+                                Some((_, _, a)) => a.get_raw_mut_ptr::<u8>() as usize,
+                                None => addr,
                             };
                             let interned = crate::object::interned_key_ptr(key_ptr);
                             // #6595: a per-evaluation CLASS OBJECT (what a
@@ -1450,7 +1444,16 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 }
                                 clear
                             };
-                            (verdict, target, value)
+                            verdict
+                        };
+                        // #6943: the store itself takes the refreshed receiver
+                        // and payload — both were rooted across whichever
+                        // coercion the arm above performed.
+                        let (target, value) = match &roots {
+                            Some((t, v, _)) => {
+                                (f64::from_bits(t.get_heap_word_u64()), v.get_nanbox_f64())
+                            }
+                            None => (target, value),
                         };
                         if fast_safe {
                             target_set(target, key, value);
