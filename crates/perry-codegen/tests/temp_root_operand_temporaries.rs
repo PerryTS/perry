@@ -115,7 +115,6 @@ fn ir_for(name: &str, init: Vec<Stmt>) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
-
 /// An allocating operand: an object literal is a collection point, which is all
 /// `expr_may_trigger_gc` needs to see.
 fn allocating() -> Expr {

@@ -163,10 +163,8 @@ pub(crate) fn lower_string_method(
     // `gc::root_words` bare form covers. Root it across the whole dispatch;
     // the truncate below is the single release point for every one of the
     // match's ~60 return paths.
-    let recv_root = args
-        .iter()
-        .any(temp_root::expr_may_trigger_gc)
-        .then(|| temp_root_push_double(ctx, &recv_box));
+    let args_can_collect = args.iter().any(|a| temp_root::expr_may_trigger_gc(ctx, a));
+    let recv_root = args_can_collect.then(|| temp_root_push_double(ctx, &recv_box));
     let result = lower_string_method_dispatch(ctx, object, property, args, &recv_box, &recv_root);
     // Released only after the dispatch's consuming runtime call has run: that
     // call allocates while it reads the receiver.
@@ -1095,10 +1093,8 @@ fn lower_string_method_dispatch(
                 let blk = ctx.block();
                 unbox_str_handle(blk, &recv_box)
             };
-            let acc_root = args
-                .iter()
-                .any(temp_root::expr_may_trigger_gc)
-                .then(|| temp_root_push_i64(ctx, &acc_handle));
+            let args_can_collect = args.iter().any(|a| temp_root::expr_may_trigger_gc(ctx, a));
+            let acc_root = args_can_collect.then(|| temp_root_push_i64(ctx, &acc_handle));
             for a in args {
                 let a_is_str = is_string_expr(ctx, a);
                 let s_box = lower_expr(ctx, a)?;
