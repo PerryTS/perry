@@ -55,6 +55,7 @@ impl LoweringContext {
             class_native_extends: Vec::new(),
             class_field_types: Vec::new(),
             enums: Vec::new(),
+            pending_body_enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
             immutable_locals: HashSet::new(),

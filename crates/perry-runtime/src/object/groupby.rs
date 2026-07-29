@@ -136,9 +136,9 @@ pub extern "C" fn js_map_group_by(items_value: f64, callback: f64) -> f64 {
 /// Keepalive anchors: these `#[no_mangle]` helpers are only called from
 /// codegen-emitted `.o`. The auto-optimize whole-program LLVM rebuild
 /// dead-strips unreferenced `#[no_mangle]` symbols (see #3320), so pin them.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_OBJECT_GROUP_BY: extern "C" fn(f64, f64) -> f64 = js_object_group_by;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_MAP_GROUP_BY: extern "C" fn(f64, f64) -> f64 = js_map_group_by;
 
 /// Returns true if `value` is a Symbol (registered SymbolHeader pointer).

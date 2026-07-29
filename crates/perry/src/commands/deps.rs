@@ -323,6 +323,87 @@ fn is_supported_node_builtin(name: &str) -> bool {
     )
 }
 
+/// Does this package ship TypeScript declarations?
+///
+/// The old test probed three hardcoded paths (`index.d.ts`,
+/// `dist/index.d.ts`, `types/`) and ignored the *canonical* mechanism — the
+/// `types` / `typings` field in package.json, and the `types` condition inside
+/// an `exports` map. Packages that declare types anywhere else were reported
+/// as untyped: `date-fns` (`./typings.d.ts`), `tldts`
+/// (`dist/types/index.d.ts`) and `@inquirer/*` (`./dist/cjs/types/index.d.ts`)
+/// all tripped it in the Vercel CLI corpus.
+///
+/// Resolution order:
+///   1. `types` / `typings` in package.json (resolved relative to the package,
+///      accepting the extensionless form npm also allows).
+///   2. Any `"types"` key appearing in the `exports` map (nested conditions
+///      included) — checked by key presence, since exports targets can be
+///      arbitrarily nested per subpath/condition.
+///   3. The legacy hardcoded layouts.
+///   4. A bounded scan for any `.d.ts` in the package root or `dist/`, which
+///      covers hand-rolled layouts without walking a huge tree.
+fn package_declares_types(package_path: &Path) -> bool {
+    let manifest = package_path.join("package.json");
+    if let Ok(content) = fs::read_to_string(&manifest) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            for key in ["types", "typings"] {
+                if let Some(rel) = json.get(key).and_then(|v| v.as_str()) {
+                    let rel = rel.trim_start_matches("./");
+                    let direct = package_path.join(rel);
+                    if direct.exists() {
+                        return true;
+                    }
+                    // npm allows the extensionless form (`"types": "./index"`).
+                    if direct.extension().is_none()
+                        && package_path.join(format!("{rel}.d.ts")).exists()
+                    {
+                        return true;
+                    }
+                }
+            }
+            if let Some(exports) = json.get("exports") {
+                if exports_mentions_types(exports) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    if package_path.join("index.d.ts").exists()
+        || package_path.join("dist").join("index.d.ts").exists()
+        || package_path.join("types").exists()
+    {
+        return true;
+    }
+
+    for dir in [package_path.to_path_buf(), package_path.join("dist")] {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|n| n.ends_with(".d.ts"))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Does an `exports` map declare a `types` condition anywhere within it?
+fn exports_mentions_types(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| k == "types" || exports_mentions_types(v)),
+        serde_json::Value::Array(items) => items.iter().any(exports_mentions_types),
+        _ => false,
+    }
+}
+
 /// Check a package for compatibility issues
 pub fn check_package_compatibility(
     package_name: &str,
@@ -342,9 +423,7 @@ pub fn check_package_compatibility(
     };
 
     // Check if types are available
-    let has_types = package_path.join("index.d.ts").exists()
-        || package_path.join("dist").join("index.d.ts").exists()
-        || package_path.join("types").exists();
+    let has_types = package_declares_types(package_path);
 
     if !has_types {
         // Check for @types package
@@ -431,9 +510,113 @@ fn extract_version(content: &str) -> Option<String> {
     None
 }
 
+/// Line numbers (1-based) holding a genuinely *dynamic* `import(...)` — one
+/// whose argument is not a static string literal.
+///
+/// Two things the old per-line `!line.contains("import('")` test got wrong:
+///
+///  1. **Multi-line call sites.** Prettier wraps a long specifier onto its own
+///     line, so `await import(\n  './x'\n)` has no `import('` on the `import(`
+///     line and was reported as a variable path. The identical call written on
+///     one line was not — the check was formatting-sensitive rather than
+///     argument-sensitive. (Both shapes appear in the same file in the Vercel
+///     CLI: `commands/routes/shared.ts:293` vs `:296`.)
+///
+///  2. **`import(` inside string literals.** A loader script built as a
+///     template literal and written to disk for a *child Node process* is not
+///     code in this program, but was scanned as if it were
+///     (`util/compile-vercel-config.ts:336`).
+///
+/// Both are fixed by scanning a comment/string-masked copy of the whole source
+/// and resolving the argument across newlines. Masking also removes the need
+/// for the old `starts_with("//")` guard.
+///
+/// A template-literal argument stays "dynamic" — same as before — because it
+/// may interpolate.
+fn dynamic_import_lines(source: &str) -> std::collections::HashSet<u32> {
+    use crate::commands::compile::cjs_wrap::detect::strip_comments_and_strings;
+
+    let mut out = std::collections::HashSet::new();
+
+    // The masker returns a same-length copy (code bytes verbatim, comment and
+    // string bodies blanked to spaces). If a partially-masked multi-byte char
+    // made the lossy UTF-8 conversion change the length, byte offsets no
+    // longer line up — fall back to the raw source, which is what the old
+    // check scanned anyway.
+    let masked = strip_comments_and_strings(source);
+    let scan: &str = if masked.len() == source.len() {
+        &masked
+    } else {
+        source
+    };
+    let bytes = scan.as_bytes();
+    let src_bytes = source.as_bytes();
+
+    // Newlines inside a masked string literal are blanked to spaces, so
+    // restore them positionally to keep line numbering aligned with `source`.
+    let mut scan_owned = bytes.to_vec();
+    if scan_owned.len() == src_bytes.len() {
+        for (i, b) in src_bytes.iter().enumerate() {
+            if *b == b'\n' {
+                scan_owned[i] = b'\n';
+            }
+        }
+    }
+    let bytes = &scan_owned[..];
+
+    let is_ident = |c: u8| c == b'_' || c == b'$' || c.is_ascii_alphanumeric();
+
+    let mut line = 1u32;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            line += 1;
+            i += 1;
+            continue;
+        }
+        if bytes[i] != b'i' || !scan_owned[i..].starts_with(b"import") {
+            i += 1;
+            continue;
+        }
+        // Whole-word `import` only.
+        if i > 0 && is_ident(bytes[i - 1]) {
+            i += 1;
+            continue;
+        }
+        let mut p = i + "import".len();
+        // `import.meta` and static `import x from '…'` both fail the `(` test
+        // below, so they need no special case.
+        while p < bytes.len() && (bytes[p] as char).is_whitespace() {
+            p += 1;
+        }
+        if p >= bytes.len() || bytes[p] != b'(' {
+            i += 1;
+            continue;
+        }
+        // Resolve the argument, crossing newlines.
+        //
+        // Read it from the ORIGINAL source: the masker blanks string
+        // delimiters as well as their bodies, so `import('./x')` is
+        // `import(      )` in the masked copy and every call site would look
+        // variable. Offsets are aligned (same length), so `p` indexes both.
+        p += 1;
+        while p < src_bytes.len() && (src_bytes[p] as char).is_whitespace() {
+            p += 1;
+        }
+        let static_literal = p < src_bytes.len() && (src_bytes[p] == b'\'' || src_bytes[p] == b'"');
+        if !static_literal {
+            out.insert(line);
+        }
+        i += "import".len();
+    }
+
+    out
+}
+
 /// Scan source code for compatibility issues using pattern matching
 fn scan_source_for_issues(path: &Path, source: &str) -> Vec<CompatibilityIssue> {
     let mut issues = Vec::new();
+    let dynamic_imports = dynamic_import_lines(source);
 
     for (line_num, line) in source.lines().enumerate() {
         let line_num = (line_num + 1) as u32;
@@ -459,22 +642,16 @@ fn scan_source_for_issues(path: &Path, source: &str) -> Vec<CompatibilityIssue> 
             });
         }
 
-        // Check for dynamic import()
-        // Match import( but not import.meta or static imports
-        if line.contains("import(")
-            && !line.contains("import.meta")
-            && !line.trim().starts_with("//")
-        {
-            // Try to determine if it's dynamic (variable argument)
-            let is_dynamic = !line.contains("import('") && !line.contains("import(\"");
-            if is_dynamic {
-                issues.push(CompatibilityIssue {
-                    file: path.to_path_buf(),
-                    line: Some(line_num),
-                    kind: IssueKind::DynamicImport,
-                    message: "Dynamic import() with variable path cannot be compiled".to_string(),
-                });
-            }
+        // Dynamic import() — resolved whole-source in `dynamic_import_lines`
+        // so multi-line call sites and `import(` inside string literals are
+        // handled correctly.
+        if dynamic_imports.contains(&line_num) {
+            issues.push(CompatibilityIssue {
+                file: path.to_path_buf(),
+                line: Some(line_num),
+                kind: IssueKind::DynamicImport,
+                message: "Dynamic import() with variable path cannot be compiled".to_string(),
+            });
         }
 
         // Check for explicit 'any' type (in .ts files)
@@ -632,6 +809,157 @@ pub fn compatibility_to_diagnostics(packages: &[PackageCompatibility]) -> Diagno
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D005 must key off the *argument*, not the line's formatting. Both call
+    /// shapes below appear in the same file in the Vercel CLI
+    /// (`commands/routes/shared.ts:293` and `:296`); only the prettier-wrapped
+    /// one was reported.
+    #[test]
+    fn dynamic_import_ignores_multiline_static_specifier() {
+        let src = "const { default: a } = await import(\n  './util/a'\n);\n\
+                   const { default: b } = await import('./util/b');\n\
+                   const { c } = await import(\n  \"./util/c\"\n);\n";
+        assert!(
+            dynamic_import_lines(src).is_empty(),
+            "all three specifiers are static string literals; got: {:?}",
+            dynamic_import_lines(src)
+        );
+    }
+
+    /// A genuinely variable specifier must still be flagged, on the right line.
+    #[test]
+    fn dynamic_import_still_flags_variable_specifier() {
+        let src = "const p = compute();\n\
+                   const m = await import(p);\n\
+                   const n = await import('./static');\n";
+        let lines = dynamic_import_lines(src);
+        assert_eq!(
+            lines.len(),
+            1,
+            "exactly one dynamic site expected, got: {:?}",
+            lines
+        );
+        assert!(lines.contains(&2), "expected line 2, got: {:?}", lines);
+    }
+
+    /// `import(` inside a string literal is not code in this program. The
+    /// Vercel CLI builds a loader script as a template literal and writes it
+    /// to disk for a child Node process
+    /// (`util/compile-vercel-config.ts:336`).
+    #[test]
+    fn dynamic_import_ignores_import_inside_string_literal() {
+        let src = "const loaderScript = `\n\
+                   \x20 import { pathToFileURL } from 'url';\n\
+                   \x20 const mod = await import(pathToFileURL(process.argv[2]).href);\n\
+                   `;\n\
+                   await writeFile(loaderPath, loaderScript, 'utf-8');\n";
+        assert!(
+            dynamic_import_lines(src).is_empty(),
+            "import() inside a template literal must not be scanned; got: {:?}",
+            dynamic_import_lines(src)
+        );
+    }
+
+    /// T002 must honor the canonical `types`/`typings` field, not just the
+    /// three legacy hardcoded layouts. All three shapes below were reported as
+    /// untyped in the Vercel CLI corpus.
+    #[test]
+    fn package_types_field_is_honored() {
+        let cases: &[(&str, &str)] = &[
+            // date-fns
+            (
+                r#"{"name":"date-fns","types":"./typings.d.ts"}"#,
+                "typings.d.ts",
+            ),
+            // tldts
+            (
+                r#"{"name":"tldts","types":"dist/types/index.d.ts"}"#,
+                "dist/types/index.d.ts",
+            ),
+            // @inquirer/confirm
+            (
+                r#"{"name":"confirm","types":"./dist/cjs/types/index.d.ts"}"#,
+                "dist/cjs/types/index.d.ts",
+            ),
+            // legacy `typings` spelling
+            (
+                r#"{"name":"old","typings":"lib/main.d.ts"}"#,
+                "lib/main.d.ts",
+            ),
+            // extensionless form npm also allows
+            (r#"{"name":"ext","types":"./index"}"#, "index.d.ts"),
+        ];
+        for (manifest, decl_rel) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            std::fs::write(root.join("package.json"), manifest).unwrap();
+            let decl = root.join(decl_rel);
+            std::fs::create_dir_all(decl.parent().unwrap()).unwrap();
+            std::fs::write(&decl, "export {};\n").unwrap();
+            assert!(
+                package_declares_types(root),
+                "manifest {manifest} with {decl_rel} must count as typed"
+            );
+        }
+    }
+
+    /// A `types` condition inside an `exports` map also counts.
+    #[test]
+    fn package_exports_types_condition_is_honored() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"m","exports":{".":{"import":{"types":"./d.ts","default":"./m.js"}}}}"#,
+        )
+        .unwrap();
+        assert!(package_declares_types(root));
+    }
+
+    /// A genuinely untyped package must still be flagged.
+    #[test]
+    fn package_without_declarations_is_still_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"plain","main":"index.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("index.js"), "module.exports = {};\n").unwrap();
+        assert!(
+            !package_declares_types(root),
+            "package ships no declarations; T002 must still fire"
+        );
+    }
+
+    /// A `types` field pointing at a file that does not exist must not count.
+    #[test]
+    fn package_types_field_pointing_nowhere_is_not_honored() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"broken","types":"./missing.d.ts"}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("index.js"), "module.exports = {};\n").unwrap();
+        assert!(!package_declares_types(root));
+    }
+
+    /// `import.meta` and static ESM imports must never be mistaken for
+    /// dynamic `import()` calls.
+    #[test]
+    fn dynamic_import_ignores_import_meta_and_static_imports() {
+        let src = "import chalk from 'chalk';\n\
+                   import { join } from 'node:path';\n\
+                   const dir = import.meta.url;\n";
+        assert!(
+            dynamic_import_lines(src).is_empty(),
+            "got: {:?}",
+            dynamic_import_lines(src)
+        );
+    }
 
     /// #3744: `perry check` must not report a clean build for modern Node
     /// builtins that `perry compile` rejects. The builtin table feeds the

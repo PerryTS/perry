@@ -2,12 +2,12 @@
 // `globalAgent`, and the header validation / parser-proxy setter helpers.
 import * as http from "node:http";
 import {
-  validateHeaderName,
-  validateHeaderValue,
-  setMaxIdleHTTPParsers,
-  setGlobalProxyFromEnv,
   globalAgent,
   maxHeaderSize,
+  setGlobalProxyFromEnv,
+  setMaxIdleHTTPParsers,
+  validateHeaderName,
+  validateHeaderValue,
 } from "node:http";
 
 console.log("maxHeaderSize:", maxHeaderSize, typeof maxHeaderSize);

@@ -160,36 +160,36 @@ pub extern "C" fn js_typed_string_arg_to_raw(value: f64) -> i64 {
 // internal typed clone. They have no Rust call sites, so keep explicit
 // function-pointer references to prevent whole-program LTO/dead-strip from
 // removing the exported symbols.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_F64_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_f64_arg_guard;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_F64_ARG_TO_RAW: extern "C" fn(f64) -> f64 = js_typed_f64_arg_to_raw;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_I32_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_i32_arg_guard;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_I32_ARG_TO_RAW: extern "C" fn(f64) -> i32 = js_typed_i32_arg_to_raw;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_I1_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_i1_arg_guard;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_I1_ARG_TO_RAW: extern "C" fn(f64) -> i32 = js_typed_i1_arg_to_raw;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_STRING_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_string_arg_guard;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TYPED_STRING_ARG_TO_RAW: extern "C" fn(f64) -> i64 = js_typed_string_arg_to_raw;
 
 // Static-name and static-method lowering emits these by-id wrappers directly
 // from generated LLVM IR. Keep roots here so LTO cannot strip the symbols just
 // because the Rust crate graph has no ordinary caller.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_OBJECT_GET_FIELD_BY_PROPERTY_ID_F64: extern "C" fn(*const ObjectHeader, i64) -> f64 =
     crate::object::js_object_get_field_by_property_id_f64;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_OBJECT_SET_FIELD_BY_PROPERTY_ID: extern "C" fn(*mut ObjectHeader, i64, f64) =
     crate::object::js_object_set_field_by_property_id;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C" fn(f64, i64, *const f64, usize) -> f64 =
     crate::object::js_native_call_method_by_id;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C" fn(f64, i64, i64) -> f64 =
     crate::object::js_native_call_method_apply_by_id;
 

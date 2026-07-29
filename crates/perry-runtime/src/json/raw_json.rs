@@ -169,7 +169,7 @@ fn throw_raw_json_syntax_error() -> ! {
 // Keepalive anchors: these `#[no_mangle]` entry points are called only from
 // generated `.o`; the auto-optimize whole-program bitcode rebuild would
 // otherwise dead-strip them (see project_auto_optimize_keepalive_3320).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_RAW_JSON: unsafe extern "C" fn(f64) -> f64 = js_json_raw_json;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_IS_RAW_JSON: unsafe extern "C" fn(f64) -> f64 = js_json_is_raw_json;

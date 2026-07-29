@@ -1,7 +1,13 @@
+//! Clamp-pattern / integer-return detectors. All gates exclude
+//! `was_plain_async` alongside `is_async`/`is_generator`: the
+//! async-to-generator pre-pass rewrites a plain-async body into a state
+//! machine whose returns no longer mean what the pattern matchers assume
+//! (Phase 2 audit — the flag was previously missed here).
+
 use perry_hir::{BinaryOp, Expr, Function, Stmt};
 
 pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
-    if f.is_async || f.is_generator || f.params.len() != 3 {
+    if f.is_async || f.is_generator || f.was_plain_async || f.params.len() != 3 {
         return None;
     }
     if !matches!(f.return_type, perry_hir::types::Type::Number) {
@@ -81,7 +87,7 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
 /// argument-INdependent admission in `collect_integer_locals`) would put a
 /// truncating i32 shadow slot on a non-integer value.
 pub fn detect_clamp_u8(f: &Function) -> bool {
-    if f.is_async || f.is_generator || f.params.len() != 1 {
+    if f.is_async || f.is_generator || f.was_plain_async || f.params.len() != 1 {
         return false;
     }
     if f.body.len() != 3 {
@@ -146,7 +152,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
 
 /// A function is i64-specializable if it's a pure numeric recursive fn.
 pub fn is_integer_specializable(f: &Function) -> bool {
-    if f.is_async || f.is_generator {
+    if f.is_async || f.is_generator || f.was_plain_async {
         return false;
     }
     if !matches!(f.return_type, perry_hir::types::Type::Number) {
@@ -166,7 +172,7 @@ pub fn is_integer_specializable(f: &Function) -> bool {
 /// treated as int-producing at call sites, enabling the i32 fast path for
 /// `h = userImul(h, p)` style patterns.
 pub fn returns_integer(f: &Function) -> bool {
-    if f.is_async || f.is_generator {
+    if f.is_async || f.is_generator || f.was_plain_async {
         return false;
     }
     if !matches!(f.return_type, perry_hir::types::Type::Number) {
@@ -176,7 +182,7 @@ pub fn returns_integer(f: &Function) -> bool {
 }
 
 pub fn returns_i32_identity_arg(f: &Function) -> bool {
-    if f.is_async || f.is_generator || f.params.len() != 1 {
+    if f.is_async || f.is_generator || f.was_plain_async || f.params.len() != 1 {
         return false;
     }
     if !matches!(f.return_type, perry_hir::types::Type::Number) {

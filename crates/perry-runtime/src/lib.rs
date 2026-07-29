@@ -23,10 +23,12 @@
 // arm64_32: mimalloc on a 32-bit-pointer (ILP32) tier-3 target is unproven and
 // a corruption suspect; use the system allocator (libsystem_malloc, solid on
 // watchOS) on 32-bit. Keep mimalloc's speed on 64-bit.
-#[cfg(target_pointer_width = "64")]
+// `alloc-mimalloc` (default-on) can be dropped by a size-optimized rebuild
+// (`PERRY_SIZE_OPT`), trading the faster allocator for ~140 KB of binary.
+#[cfg(all(target_pointer_width = "64", feature = "alloc-mimalloc"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-#[cfg(not(target_pointer_width = "64"))]
+#[cfg(not(all(target_pointer_width = "64", feature = "alloc-mimalloc")))]
 #[global_allocator]
 static GLOBAL: std::alloc::System = std::alloc::System;
 
@@ -324,12 +326,48 @@ mod ext_pump {
 
 // Stdlib pump registration — allows perry-ui-macos pump timer to call
 // js_stdlib_process_pending without a hard link dependency on perry-stdlib.
-mod stdlib_pump {
+pub(crate) mod stdlib_pump {
     use std::ptr::null_mut;
     use std::sync::atomic::{AtomicPtr, Ordering};
     use std::sync::Mutex;
 
     static STDLIB_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+    // Runtime-internal reactor pumps (child_process, node-pty) register here
+    // when their first live handle appears, mirroring `STDLIB_PUMP_FN`. The
+    // static calls that used to sit in `js_run_stdlib_pump` pinned those
+    // subsystems (and, via the child-process emitter → cluster chain, the
+    // whole module-namespace web) into every binary; an armed slot links a
+    // reactor exactly when the program can create its handles. Slots are
+    // append-only and idempotent per function.
+    const RUNTIME_PUMP_SLOTS: usize = 4;
+    static RUNTIME_PUMP_FNS: [AtomicPtr<()>; RUNTIME_PUMP_SLOTS] = [
+        AtomicPtr::new(null_mut()),
+        AtomicPtr::new(null_mut()),
+        AtomicPtr::new(null_mut()),
+        AtomicPtr::new(null_mut()),
+    ];
+
+    /// Arm runtime pump slot `slot` with `f`. `black_box` guards against
+    /// whole-program opt speculatively devirtualizing the single-store slot
+    /// back into a direct reference (the `NM_INSTALL_ALL_HOOK` trap).
+    pub(crate) fn register_runtime_pump(slot: usize, f: extern "C" fn()) {
+        if slot >= RUNTIME_PUMP_SLOTS {
+            return;
+        }
+        RUNTIME_PUMP_FNS[slot].store(std::hint::black_box(f as *mut ()), Ordering::Release);
+    }
+
+    fn run_runtime_pumps() {
+        for slot in &RUNTIME_PUMP_FNS {
+            let p = slot.load(Ordering::Acquire);
+            if !p.is_null() {
+                // SAFETY: only `extern "C" fn()` values are ever stored.
+                let func: extern "C" fn() = unsafe { std::mem::transmute(p) };
+                func();
+            }
+        }
+    }
 
     // #2532 — auxiliary pump / has-active registries.
     //
@@ -423,15 +461,11 @@ mod stdlib_pump {
         // without importing any stdlib module still sees its callback
         // fire on SIGWINCH.
         crate::tty::js_tty_resize_drain();
-        // #1934: drive the child_process spawn reactor — emit pending
-        // spawn/data/end/exit/close for live children. Lives in perry-runtime,
-        // so it runs even when perry-stdlib isn't linked. Zero-cost (one relaxed
-        // atomic load) when there are no live children.
-        crate::child_process::reactor::cp_reactor_pump();
-        // #6563: drive the node-pty reactor — deliver pending onData/onExit
-        // for live ptys. Zero-cost (one relaxed load) when none are live.
-        #[cfg(unix)]
-        crate::pty::reactor::pty_reactor_pump();
+        // #1934/#6563: the child_process spawn reactor and node-pty reactor
+        // register themselves into the armed runtime-pump slots when their
+        // first live handle appears (see `register_runtime_pump`) — a program
+        // that never spawns links neither reactor.
+        run_runtime_pumps();
         // #4911: deliver queued UDP datagrams as `'message'` events. Lives in
         // perry-runtime so node:dgram works without perry-stdlib linked.
         // Zero-cost (one relaxed load) when no sockets are bound.

@@ -192,8 +192,19 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             && crate::symbol::js_is_symbol(key_value) == 0
         {
             if let Some(method_name) = metadata_key_to_string(key_value) {
-                let obj = extract_obj_ptr(obj_value);
+                // #6943: `js_string_coerce` allocates for every non-heap-string
+                // key and can run a user `toString` / `valueOf` for an object
+                // key, so it can trigger a GC that **evacuates**. `obj` — the
+                // receiver's header, resolved on the line above and
+                // dereferenced by `own_key_present` / `js_object_get_class_id`
+                // below — and `obj_value` (passed to `js_class_method_bind`)
+                // were raw Rust locals across the call.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
+                let obj_handle = scope.root_raw_mut_ptr(extract_obj_ptr(obj_value));
                 let key_str = crate::builtins::js_string_coerce(key_value);
+                let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+                let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
                 if !obj.is_null() && !key_str.is_null() && !own_key_present(obj, key_str) {
                     let class_id = super::js_object_get_class_id(obj as *const ObjectHeader);
                     if class_id != 0
@@ -268,7 +279,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         }
 
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+            // #6943: `addr` is the TypedArray's heap address, resolved before
+            // the GC-capable key coercion and dereferenced as a
+            // `TypedArrayHeader` after it.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
             let key_str = crate::builtins::js_string_coerce(key_value);
+            let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
             if key_str.is_null() {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
@@ -468,7 +485,14 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             if jsv.is_pointer() {
                 let ptr = jsv.as_pointer::<u8>() as usize;
                 if crate::closure::is_closure_ptr(ptr) {
+                    // #6943: `ptr` is the closure's heap address, taken from
+                    // `obj_value` above and used all through this arm (deleted-key
+                    // probe, attrs/accessor side-table lookups, `closure_length`,
+                    // the `func_ptr` read) *after* the GC-capable coercion below.
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let ptr_handle = scope.root_raw_mut_ptr(ptr as *mut u8);
                     let key_str = crate::builtins::js_string_coerce(key_value);
+                    let ptr = ptr_handle.get_raw_mut_ptr::<u8>() as usize;
                     if key_str.is_null() {
                         return f64::from_bits(crate::value::TAG_UNDEFINED);
                     }
@@ -611,8 +635,23 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if obj.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        // Extract key string
-        let key_str = crate::builtins::js_string_coerce(key_value);
+        // Extract key string.
+        //
+        // #6943: `obj` is the receiver's header, resolved on the line above and
+        // dereferenced below (`arguments_object_descriptor`, the GcHeader
+        // probe, the array/`keys_array` walks). It was a raw Rust local across
+        // the GC-capable coercion. The already-heap-string key — the
+        // overwhelmingly common `getOwnPropertyDescriptor(o, "x")` — keeps the
+        // pre-fix path: `js_string_coerce` returns that pointer unchanged
+        // without touching the allocator.
+        let (obj, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
+            (obj, crate::builtins::js_string_coerce(key_value))
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            (obj_handle.get_raw_mut_ptr::<ObjectHeader>(), key_str)
+        };
         if key_str.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
@@ -729,62 +768,14 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         }
 
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
-            if let (Some(module_name), Some(key_name)) =
-                (read_native_module_name(obj), key_rust.as_deref())
-            {
-                if native_module_has_enumerable_key(&module_name, key_name) {
-                    if module_name == "fs" {
-                        match key_name {
-                            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream"
-                            | "Utf8Stream" => {
-                                let get =
-                                    super::native_module::fs_namespace_descriptor_getter_value(
-                                        key_name,
-                                    );
-                                let set = if key_name == "Utf8Stream" {
-                                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                                } else {
-                                    super::native_module::fs_namespace_descriptor_setter_value(
-                                        key_name,
-                                    )
-                                };
-                                return build_accessor_descriptor(get, set, true, true);
-                            }
-                            "promises" => {
-                                let get =
-                                    super::native_module::fs_namespace_descriptor_getter_value(
-                                        key_name,
-                                    );
-                                return build_accessor_descriptor(
-                                    get,
-                                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                                    true,
-                                    true,
-                                );
-                            }
-                            "constants" => {
-                                let value = js_object_get_field_by_name(obj, key_str);
-                                return build_data_descriptor(
-                                    f64::from_bits(value.bits()),
-                                    false,
-                                    true,
-                                    false,
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                    let value = js_object_get_field_by_name(obj, key_str);
-                    if matches!(
-                        module_name.as_str(),
-                        "process" | "process.namespace" | "process.default"
-                    ) && key_name == "permission"
-                    {
-                        let value = crate::process::process_metadata_property("permission")
-                            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                        return build_data_descriptor(value, false, true, false);
-                    }
-                    return build_data_descriptor(f64::from_bits(value.bits()), true, true, true);
+            // Namespace-object descriptors route through the armed ops table
+            // (see `nm_namespace_hooks`) so binaries without module imports
+            // don't statically link the namespace/exports web. Unarmed +
+            // matching class_id is unreachable: only the bootstrap that arms
+            // the table ever assigns NATIVE_MODULE_CLASS_ID.
+            if let Some(ops) = super::nm_namespace_ops() {
+                if let Some(desc) = (ops.get_own_descriptor)(obj, key_str, key_rust.as_deref()) {
+                    return desc;
                 }
             }
         }
@@ -995,7 +986,16 @@ pub(crate) unsafe fn build_accessor_descriptor(
 /// descriptor (writable:false, enumerable:false, configurable:false). Any
 /// other key is absent → undefined.
 unsafe fn string_primitive_descriptor(str_value: f64, key_value: f64) -> f64 {
+    // #6943: the receiver here is itself a heap value — `str_value` is the
+    // boxed/primitive string whose bytes are read below via
+    // `str_bytes_from_jsvalue`. It was a raw Rust local across the GC-capable
+    // key coercion, so an evacuating collection left it pointing at a
+    // forwarding stub and the index/`length` descriptor was computed from
+    // moved-out bytes.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let str_handle = scope.root_heap_word_u64(str_value.to_bits());
     let key_str = crate::builtins::js_string_coerce(key_value);
+    let str_value = f64::from_bits(str_handle.get_heap_word_u64());
     if key_str.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -1077,7 +1077,11 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         if obj_jv.is_pointer() {
             let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as *const ObjectHeader;
             if !obj_ptr.is_null() {
-                if let Some(arr) = super::native_module::vt_own_keys_array(obj_ptr) {
+                // Armed ops table (see `nm_namespace_hooks`): namespace key
+                // enumeration links only when a namespace can exist.
+                if let Some(arr) = super::nm_namespace_ops()
+                    .and_then(|ops| unsafe { (ops.own_keys_array)(obj_ptr) })
+                {
                     return f64::from_bits((arr as u64) | 0x7FFD_0000_0000_0000);
                 }
             }
@@ -1398,54 +1402,112 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
             crate::value::js_nanbox_get_pointer(names_value) as *const crate::array::ArrayHeader;
 
         // Fresh result object that collects { key: descriptor } entries.
-        // Like js_object_entries / js_object_get_own_property_names above, the
-        // intermediate allocations aren't rooted — Perry's builder helpers
-        // follow this convention.
-        let result = js_object_alloc(0, 0);
+        //
+        // #6943: this loop is the family's worst shape — the receiver (`result`)
+        // and the value being stored *into* it (`desc`) were both raw Rust
+        // locals across the GC-capable key coercion, so a stale `result`
+        // dropped the write onto a forwarding stub and a stale `desc` planted a
+        // dangling pointer inside a live object, where it outlives the call.
+        // `names_arr` is the key source the loop keeps re-reading. Root all
+        // three for the duration of the loop and read them back through their
+        // handles after every step that can allocate. The two per-entry handles
+        // are allocated ONCE and rewritten per iteration (`set_*`) so a
+        // 10k-key receiver doesn't push 20k slots onto the handle stack.
+        // `names_arr` is rooted BEFORE the result allocation: `js_object_alloc`
+        // is itself GC-capable, so rooting the key array after it would root an
+        // already-stale pointer.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let names_handle = scope.root_raw_mut_ptr(names_arr as *mut crate::array::ArrayHeader);
+        // The ENUMERATED receiver is re-entered on every iteration of both
+        // loops below, across descriptor allocation, a key coercion that can
+        // run user `toString`, and `js_object_set_field_by_name`. It needs a
+        // root just as much as the result object does.
+        let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+        let result_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let key_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+        let desc_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
 
-        if !names_arr.is_null() {
-            let len = crate::array::js_array_length(names_arr) as usize;
+        if !names_handle
+            .get_raw_const_ptr::<crate::array::ArrayHeader>()
+            .is_null()
+        {
+            let len = crate::array::js_array_length(
+                names_handle.get_raw_const_ptr::<crate::array::ArrayHeader>(),
+            ) as usize;
             for i in 0..len {
+                let names_arr = names_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
                 let key_val = crate::array::js_array_get(names_arr, i as u32);
-                let key_f64 = f64::from_bits(key_val.bits());
-                let desc = js_object_get_own_property_descriptor(obj_value, key_f64);
+                key_handle.set_nanbox_u64(key_val.bits());
+                let desc = js_object_get_own_property_descriptor(
+                    f64::from_bits(obj_handle.get_heap_word_u64()),
+                    key_handle.get_nanbox_f64(),
+                );
                 // Spec step: only add the entry when the descriptor is not
                 // undefined (the key was removed between key-collection and the
                 // descriptor read, e.g. by a Proxy trap).
                 if desc.to_bits() == crate::value::TAG_UNDEFINED {
                     continue;
                 }
-                let key_str = crate::builtins::js_string_coerce(key_f64);
+                desc_handle.set_nanbox_f64(desc);
+                let key_str = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
                 if !key_str.is_null() {
-                    js_object_set_field_by_name(result, key_str, desc);
+                    js_object_set_field_by_name(
+                        result_handle.get_raw_mut_ptr::<ObjectHeader>(),
+                        key_str,
+                        desc_handle.get_nanbox_f64(),
+                    );
                 }
             }
         }
-
         // [[OwnPropertyKeys]] includes symbol keys after the string keys, and
         // `Object.getOwnPropertyDescriptors` must report a descriptor for each
         // (including non-enumerable ones). `getOwnPropertyNames` above only
         // covers the string subset, so enumerate the symbol keys separately and
         // install each descriptor under its symbol key on the result object.
         // (test262 getOwnPropertyDescriptors/symbols-included, order-after-*.)
-        let result_value = f64::from_bits((result as u64) | POINTER_TAG);
-        let sym_arr_raw = crate::symbol::js_object_get_own_property_symbols(obj_value);
+        //
+        // The result object stays rooted through this loop too (`result_handle`
+        // is still live), so `result_value` is re-derived from the handle on
+        // each use rather than captured once before the allocating symbol
+        // enumeration.
+        let result_value = |handle: &crate::gc::RuntimeHandle<'_>| -> f64 {
+            f64::from_bits((handle.get_raw_mut_ptr::<ObjectHeader>() as u64) | POINTER_TAG)
+        };
+        let sym_arr_raw = crate::symbol::js_object_get_own_property_symbols(f64::from_bits(
+            obj_handle.get_heap_word_u64(),
+        ));
         if sym_arr_raw != 0 {
-            let sym_arr = sym_arr_raw as *const crate::array::ArrayHeader;
-            if !sym_arr.is_null() {
-                let slen = crate::array::js_array_length(sym_arr) as usize;
+            let sym_handle = scope.root_raw_mut_ptr(sym_arr_raw as *mut crate::array::ArrayHeader);
+            if !sym_handle
+                .get_raw_const_ptr::<crate::array::ArrayHeader>()
+                .is_null()
+            {
+                let slen = crate::array::js_array_length(
+                    sym_handle.get_raw_const_ptr::<crate::array::ArrayHeader>(),
+                ) as usize;
                 for i in 0..slen {
-                    let sym_val = crate::array::js_array_get(sym_arr, i as u32);
-                    let sym_f64 = f64::from_bits(sym_val.bits());
-                    let desc = js_object_get_own_property_descriptor(obj_value, sym_f64);
+                    let sym_val = crate::array::js_array_get(
+                        sym_handle.get_raw_const_ptr::<crate::array::ArrayHeader>(),
+                        i as u32,
+                    );
+                    key_handle.set_nanbox_u64(sym_val.bits());
+                    let desc = js_object_get_own_property_descriptor(
+                        f64::from_bits(obj_handle.get_heap_word_u64()),
+                        key_handle.get_nanbox_f64(),
+                    );
                     if desc.to_bits() == crate::value::TAG_UNDEFINED {
                         continue;
                     }
-                    crate::symbol::js_object_set_symbol_property(result_value, sym_f64, desc);
+                    desc_handle.set_nanbox_f64(desc);
+                    crate::symbol::js_object_set_symbol_property(
+                        result_value(&result_handle),
+                        key_handle.get_nanbox_f64(),
+                        desc_handle.get_nanbox_f64(),
+                    );
                 }
             }
         }
-        result_value
+        result_value(&result_handle)
     }
 }
 
@@ -1486,5 +1548,71 @@ pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64
     result
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_OBJECT_CREATE_WITH_PROPS: extern "C" fn(f64, f64) -> f64 = js_object_create_with_props;
+
+/// `Object.getOwnPropertyDescriptor` handling for native-module namespace
+/// objects (extracted verbatim from the former inline branch). Reached ONLY
+/// through `NmNamespaceOps::get_own_descriptor` — the sole reference lives in
+/// the ops static on the native-module side, so binaries without module
+/// imports link neither this nor the fs/exports machinery it references.
+/// Returns `None` to fall through to the generic own-property handling.
+pub(crate) unsafe fn nm_get_own_descriptor(
+    obj: *mut ObjectHeader,
+    key_str: *const crate::string::StringHeader,
+    key_name: Option<&str>,
+) -> Option<f64> {
+    let module_name = read_native_module_name(obj)?;
+    let key_name = key_name?;
+    if !native_module_has_enumerable_key(&module_name, key_name) {
+        return None;
+    }
+    if module_name == "fs" {
+        match key_name {
+            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream" | "Utf8Stream" => {
+                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
+                let set = if key_name == "Utf8Stream" {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                } else {
+                    super::native_module::fs_namespace_descriptor_setter_value(key_name)
+                };
+                return Some(build_accessor_descriptor(get, set, true, true));
+            }
+            "promises" => {
+                let get = super::native_module::fs_namespace_descriptor_getter_value(key_name);
+                return Some(build_accessor_descriptor(
+                    get,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                    true,
+                    true,
+                ));
+            }
+            "constants" => {
+                let value = js_object_get_field_by_name(obj, key_str);
+                return Some(build_data_descriptor(
+                    f64::from_bits(value.bits()),
+                    false,
+                    true,
+                    false,
+                ));
+            }
+            _ => {}
+        }
+    }
+    let value = js_object_get_field_by_name(obj, key_str);
+    if matches!(
+        module_name.as_str(),
+        "process" | "process.namespace" | "process.default"
+    ) && key_name == "permission"
+    {
+        let value = crate::process::process_metadata_property("permission")
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        return Some(build_data_descriptor(value, false, true, false));
+    }
+    Some(build_data_descriptor(
+        f64::from_bits(value.bits()),
+        true,
+        true,
+        true,
+    ))
+}

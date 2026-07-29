@@ -5,6 +5,8 @@
 mod commands;
 mod compat_reports;
 mod telemetry;
+#[cfg(test)]
+mod test_env_lock;
 mod update_checker;
 
 use anyhow::Result;
