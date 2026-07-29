@@ -94,8 +94,10 @@ pub extern "C" fn js_child_process_validate_args(value: f64) -> f64 {
 /// referenced only from generated `.o`, so the bitcode internalizer would
 /// otherwise drop them there; the classic link keeps them via the program's
 /// own undefined references and builds without the anchors.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_CP_VALIDATE_COMMAND: unsafe extern "C" fn(f64, *const u8, u32) -> f64 =
     js_child_process_validate_command;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_CP_VALIDATE_ARGS: extern "C" fn(f64) -> f64 = js_child_process_validate_args;

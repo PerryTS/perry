@@ -322,7 +322,8 @@ pub extern "C" fn js_event_subclass_init(
 
 /// Keepalive anchor for the auto-optimize whole-program build —
 /// `js_event_subclass_init` is a generated-code-only callee.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_EVENT_SUBCLASS_INIT: extern "C" fn(f64, f64, f64, u32, u32) -> f64 =
     js_event_subclass_init;
 

@@ -450,23 +450,32 @@ pub fn scan_iter_result_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>
     }
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_SET: extern "C" fn(f64, i32) -> f64 = js_iter_result_set;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_SET_F64: extern "C" fn(f64, i32) -> f64 = js_iter_result_set_f64;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_SET_I32: extern "C" fn(i32, i32) -> f64 = js_iter_result_set_i32;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_SET_I1: extern "C" fn(i32, i32) -> f64 = js_iter_result_set_i1;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_GET_VALUE: extern "C" fn() -> f64 = js_iter_result_get_value;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_GET_VALUE_F64: extern "C" fn() -> f64 = js_iter_result_get_value_f64;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_GET_VALUE_I32: extern "C" fn() -> i32 = js_iter_result_get_value_i32;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_GET_VALUE_I1: extern "C" fn() -> i32 = js_iter_result_get_value_i1;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ITER_RESULT_GET_DONE: extern "C" fn() -> f64 = js_iter_result_get_done;
 
 /// Promise state

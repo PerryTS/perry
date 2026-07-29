@@ -485,9 +485,10 @@ pub unsafe extern "C" fn js_function_bind(
 
 /// Keepalive anchor for the `js_function_bind` symbol. The auto-optimize
 /// whole-program LLVM rebuild dead-strips `#[no_mangle]` fns that are only
-/// referenced from generated `.o` / other crates; this `#[cfg_attr(feature = "keepalive-anchors", used)]` static
+/// referenced from generated `.o` / other crates; this `#[used]` static
 /// survives the bitcode pipeline. See project_auto_optimize_keepalive_3320.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_FUNCTION_BIND: unsafe extern "C" fn(f64, *const f64, usize) -> f64 =
     js_function_bind;
 

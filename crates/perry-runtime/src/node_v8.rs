@@ -33,46 +33,65 @@ use crate::value::JSValue;
 // Symbol retention: these `#[no_mangle]` entry points are emitted only by
 // codegen's `node:v8` dispatch — no Rust caller references them, so the
 // auto-optimize whole-program-LLVM build would dead-strip them without an
-// anchor (see node_stream_keepalive.rs). Pin each via a `#[cfg_attr(feature = "keepalive-anchors", used)]` static.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+// anchor (see node_stream_keepalive.rs). Pin each via a `#[used]` static.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_SERIALIZE: extern "C" fn(f64) -> f64 = js_v8_serialize;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_DESERIALIZE: extern "C" fn(f64) -> f64 = js_v8_deserialize;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_HEAP_STATS: extern "C" fn() -> f64 = js_v8_get_heap_statistics;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_CODE_STATS: extern "C" fn() -> f64 = js_v8_get_heap_code_statistics;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_SPACE_STATS: extern "C" fn() -> f64 = js_v8_get_heap_space_statistics;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_VERSION_TAG: extern "C" fn() -> f64 = js_v8_cached_data_version_tag;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_GET_HEAP_SNAPSHOT: extern "C" fn(f64) -> f64 = js_v8_get_heap_snapshot;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_WRITE_HEAP_SNAPSHOT: extern "C" fn(f64, f64) -> f64 = js_v8_write_heap_snapshot;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_GC_PROFILER_NEW: extern "C" fn() -> f64 = js_v8_gc_profiler_new;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_GC_PROFILER_START: extern "C" fn(f64) -> f64 = js_v8_gc_profiler_start;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_GC_PROFILER_STOP: extern "C" fn(f64) -> f64 = js_v8_gc_profiler_stop;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_GC_PROFILER_REPORT: extern "C" fn() -> f64 = js_v8_gc_profiler_report;
 // #3680: Serializer / Deserializer class constructors.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_SERIALIZER_NEW: extern "C" fn(f64) -> f64 = js_v8_serializer_new;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_DESERIALIZER_NEW: extern "C" fn(f64) -> f64 = js_v8_deserializer_new;
 // #3679: lifecycle / diagnostic-control surface.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_NOOP_UNDEFINED: extern "C" fn() -> f64 = js_v8_noop_undefined;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_IS_BUILDING_SNAPSHOT: extern "C" fn() -> f64 = js_v8_is_building_snapshot;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_NAMESPACE: extern "C" fn(*const u8, usize) -> f64 = js_v8_namespace;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_THROW_NOT_BUILDING: extern "C" fn() -> f64 = js_v8_throw_not_building_snapshot;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_V8_PROMISE_HOOK_REGISTER: extern "C" fn() -> f64 = js_v8_promise_hook_register;
 
 const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;

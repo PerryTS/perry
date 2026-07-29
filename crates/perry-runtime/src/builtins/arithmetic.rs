@@ -460,15 +460,19 @@ pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
 
 // The `js_rel_*` helpers are reached only from Perry-emitted LLVM (the relational
 // fallthrough in codegen), so a bitcode/auto-optimize link can dead-strip them
-// and leave `undefined _js_rel_lt …`. Pin them with `#[cfg_attr(feature = "keepalive-anchors", used)]` statics — same
+// and leave `undefined _js_rel_lt …`. Pin them with `#[used]` statics — same
 // pattern as the write-barrier roots in `gc/barrier.rs`.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REL_LT: extern "C" fn(f64, f64) -> f64 = js_rel_lt;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REL_GT: extern "C" fn(f64, f64) -> f64 = js_rel_gt;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REL_LE: extern "C" fn(f64, f64) -> f64 = js_rel_le;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REL_GE: extern "C" fn(f64, f64) -> f64 = js_rel_ge;
 
 #[no_mangle]

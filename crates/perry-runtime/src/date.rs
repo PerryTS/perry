@@ -790,8 +790,9 @@ pub extern "C" fn js_date_utc(args_ptr: *const f64, argc: i32) -> f64 {
 
 /// Keepalive anchor for `js_date_utc` — codegen-only `#[no_mangle]` symbols
 /// get dead-stripped by the auto-optimize whole-program LLVM bitcode rebuild
-/// without a `#[cfg_attr(feature = "keepalive-anchors", used)]` reference (see project_auto_optimize_keepalive_3320).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+/// without a `#[used]` reference (see project_auto_optimize_keepalive_3320).
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_DATE_UTC: extern "C" fn(*const f64, i32) -> f64 = js_date_utc;
 
 /// Coerce a NaN-boxed JS value to a number (ECMAScript ToNumber, restricted
@@ -1001,7 +1002,8 @@ pub extern "C" fn js_date_apply_setter(
     }
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_DATE_APPLY_SETTER: extern "C" fn(f64, i32, i32, *const f64, i32) -> f64 =
     js_date_apply_setter;
 

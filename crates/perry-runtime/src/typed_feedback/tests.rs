@@ -995,15 +995,15 @@ fn assert_lto_keepalive_anchor(src: &str, static_name: &str, signature: &str, ta
     let static_pos = src
         .find(static_name)
         .unwrap_or_else(|| panic!("missing keepalive static {static_name} for {target}"));
-    // Lookback must cover the full gated attribute line above the static
-    // (`#[cfg_attr(feature = "keepalive-anchors", used)]` + newline).
+    // Lookback must cover both gated keepalive attributes above the static.
     let start = static_pos.saturating_sub(96);
     let end = (static_pos + 512).min(src.len());
     let window = &src[start..end];
     assert!(
-        window.contains(r#"#[cfg_attr(feature = "keepalive-anchors", used)]"#),
-        "keepalive static {static_name} for {target} lacks the feature-gated #[used] \
-         (cfg_attr keepalive-anchors) attribute"
+        window.contains(r#"#[cfg(feature = "keepalive-anchors")]"#)
+            && window.contains(r#"#[used]"#),
+        "keepalive static {static_name} for {target} lacks the keepalive-anchors \
+         gate and #[used] attribute"
     );
     assert!(
         window.contains(signature),

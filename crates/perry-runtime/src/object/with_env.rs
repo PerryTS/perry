@@ -124,9 +124,11 @@ pub extern "C" fn js_with_implicit_unset() -> f64 {
 }
 
 // #1561-style force-keep: only generated IR calls these.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_WITH_IMPLICIT_UNSET: extern "C" fn() -> f64 = js_with_implicit_unset;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_WITH_IMPLICIT_READ: extern "C" fn(f64, f64) -> f64 = js_with_implicit_read;
 
 /// `name` arrives as a NaN-boxed string (codegen lowers `Expr::String` args

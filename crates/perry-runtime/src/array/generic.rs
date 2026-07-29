@@ -1120,7 +1120,8 @@ fn clamp_index(v: f64, len: i64) -> i64 {
 // Keep the generic entry points anchored against dead-strip in the default
 // (codegen-only reference) compile path (see #3320 — `#[no_mangle]` alone is
 // not enough once the bitcode is re-linked).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_CB: [extern "C" fn(f64, f64, f64) -> f64; 9] = [
     js_arraylike_forEach,
     js_arraylike_map,
@@ -1132,20 +1133,25 @@ static KEEP_ARRAYLIKE_CB: [extern "C" fn(f64, f64, f64) -> f64; 9] = [
     js_arraylike_findLast,
     js_arraylike_findLastIndex,
 ];
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_REDUCE: [extern "C" fn(f64, f64, i32, f64) -> f64; 2] =
     [js_arraylike_reduce, js_arraylike_reduceRight];
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_SEARCH: [extern "C" fn(f64, f64, f64, i32) -> f64; 3] = [
     js_arraylike_indexOf,
     js_arraylike_lastIndexOf,
     js_arraylike_includes,
 ];
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_AT: extern "C" fn(f64, f64) -> f64 = js_arraylike_at;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_JOIN: extern "C" fn(f64, f64) -> f64 = js_arraylike_join;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_SLICE: extern "C" fn(f64, f64, i32, f64, i32) -> f64 = js_arraylike_slice;
 
 // ---------------------------------------------------------------------------
@@ -1636,9 +1642,11 @@ pub extern "C" fn js_arraylike_splice(recv: f64, args_ptr: *const f64, count: i3
     object_splice(o, args_ptr, count)
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_SORT: extern "C" fn(f64, f64) -> f64 = js_arraylike_sort;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAYLIKE_VARIADIC: [extern "C" fn(f64, *const f64, i32) -> f64; 2] =
     [js_arraylike_concat, js_arraylike_splice];
 

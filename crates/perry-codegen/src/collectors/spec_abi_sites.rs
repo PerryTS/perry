@@ -126,6 +126,7 @@ pub(crate) fn reassigned_locals(stmts: &[Stmt]) -> HashSet<u32> {
 }
 
 /// Single-id convenience over [`reassigned_locals`].
+#[cfg(test)]
 pub(crate) fn local_is_reassigned(stmts: &[Stmt], id: u32) -> bool {
     reassigned_locals(stmts).contains(&id)
 }

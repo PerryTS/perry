@@ -840,12 +840,21 @@ const LEGACY_URL_KEYS: [&str; 12] = [
 ];
 
 fn create_legacy_url_object(values: [f64; 12]) -> *mut ObjectHeader {
-    let obj = js_object_alloc(0, LEGACY_URL_KEYS.len() as u32);
-    let mut keys = js_array_alloc(LEGACY_URL_KEYS.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handles = scope.root_nanbox_f64_slice(&values);
+    let obj_handle = scope.root_raw_mut_ptr(js_object_alloc(0, LEGACY_URL_KEYS.len() as u32));
+    let keys_handle = scope.root_raw_mut_ptr(js_array_alloc(LEGACY_URL_KEYS.len() as u32));
     for (index, key) in LEGACY_URL_KEYS.iter().enumerate() {
-        keys = js_array_push_f64(keys, create_string_f64(key));
-        js_object_set_field_f64(obj, index as u32, values[index]);
+        let keys = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        keys_handle.set_raw_mut_ptr(js_array_push_f64(keys, create_string_f64(key)));
+        js_object_set_field_f64(
+            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+            index as u32,
+            value_handles[index].get_nanbox_f64(),
+        );
     }
+    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let keys = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
     js_object_set_keys(obj, keys);
     obj
 }

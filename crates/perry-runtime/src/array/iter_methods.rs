@@ -1044,7 +1044,8 @@ pub extern "C" fn js_array_join_value(
 // The feature-gated `#[used]` static pins the symbol for the bitcode-LTO
 // link (`keepalive-anchors`); the classic link keeps it via the program's
 // own undefined reference. Same pattern as `node_stream_keepalive.rs`.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAY_JOIN_VALUE: extern "C" fn(
     *const ArrayHeader,
     f64,
@@ -1109,7 +1110,8 @@ pub extern "C" fn js_array_to_locale_string(
     crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32)
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAY_TO_LOCALE_STRING: extern "C" fn(
     *const ArrayHeader,
     f64,
@@ -1232,7 +1234,8 @@ pub extern "C" fn js_validate_array_callback(cb_boxed: f64) -> i64 {
     throw_not_a_function(render_callback_typeof(cb_boxed));
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_VALIDATE_ARRAY_CALLBACK: extern "C" fn(f64) -> i64 = js_validate_array_callback;
 
 /// Validate a `map` callback (#4091). Identical to
@@ -1253,6 +1256,7 @@ pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64
     throw_not_a_function(rendered);
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_VALIDATE_ARRAY_MAP_CALLBACK: extern "C" fn(i64, f64) -> i64 =
     js_validate_array_map_callback;

@@ -913,15 +913,20 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
     (ai >> bi) as f64
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_DYNAMIC_POW: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_pow;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_DYNAMIC_USHR: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_ushr;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_DYNAMIC_BITNOT: unsafe extern "C" fn(f64) -> f64 = js_dynamic_bitnot;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_TO_NUMERIC: unsafe extern "C" fn(f64) -> f64 = js_to_numeric;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_NUMERIC_STEP: unsafe extern "C" fn(f64, i32) -> f64 = js_numeric_step;
 
 #[cfg(test)]

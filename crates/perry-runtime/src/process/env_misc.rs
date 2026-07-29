@@ -879,7 +879,8 @@ pub extern "C" fn js_process_pending_exit_code() -> i32 {
 // runtime is `js_process_exit`'s nullish fallback. Anchor the symbol so the
 // auto-optimize whole-program dead-strip cannot drop it (same guard the
 // unhandled-rejection reporter uses, #4876).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_PROCESS_PENDING_EXIT_CODE: extern "C" fn() -> i32 = js_process_pending_exit_code;
 
 /// Set an environment variable. Backs `process.env.X = v` (#1344).
@@ -957,60 +958,80 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
 // trips the runtime through whole-program LLVM bitcode and is free to
 // internalize + dead-strip an unreferenced symbol — leaving the codegen call
 // dangling (`Undefined symbols: _js_setenv` at final link, which is exactly
-// how #1344's acceptance test still failed on main). The `#[cfg_attr(feature = "keepalive-anchors", used)]` statics
+// how #1344's acceptance test still failed on main). The `#[used]` statics
 // below pin a retained reference edge so both survive every link mode. See
 // the same pattern in `value/dyn_index.rs`.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_SETENV: extern "C" fn(*const StringHeader, f64) = js_setenv;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
 // #3120: codegen emits `js_module_find_package_json` only from generated `.o`,
 // so pin a retained reference edge for the auto-optimize whole-program build.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
     js_module_find_package_json;
 // node:module helper-state APIs are codegen-emitted from generated `.o`, so pin
 // retained reference edges for the auto-optimize whole-program build.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_ENABLE_COMPILE_CACHE: extern "C" fn(f64) -> f64 =
     js_module_enable_compile_cache;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_FLUSH_COMPILE_CACHE: extern "C" fn() -> f64 = js_module_flush_compile_cache;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_GET_COMPILE_CACHE_DIR: extern "C" fn() -> f64 =
     js_module_get_compile_cache_dir;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_GET_SOURCE_MAPS_SUPPORT: extern "C" fn() -> f64 =
     js_module_get_source_maps_support;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_SET_SOURCE_MAPS_SUPPORT: extern "C" fn(f64, f64) -> f64 =
     js_module_set_source_maps_support;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_STRIP_TYPESCRIPT_TYPES: extern "C" fn(f64, f64) -> f64 =
     js_module_strip_typescript_types;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_REGISTER: extern "C" fn(f64, f64, f64) -> f64 = js_module_register;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_REGISTER_HOOKS: extern "C" fn(f64) -> f64 = js_module_register_hooks;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_DYNAMIC_IMPORT_APPLY_HOOKS: extern "C" fn(f64) -> f64 =
     js_module_dynamic_import_apply_hooks;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_MODULE_NEW: extern "C" fn(f64) -> f64 = js_module_module_new;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_FIND_PATH: extern "C" fn(f64, f64, f64) -> f64 = js_module_find_path;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_INIT_PATHS: extern "C" fn() -> f64 = js_module_init_paths;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_LOAD: extern "C" fn(f64, f64, f64) -> f64 = js_module_load;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_NODE_MODULE_PATHS: extern "C" fn(f64) -> f64 = js_module_node_module_paths;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_PRELOAD_MODULES: extern "C" fn(f64) -> f64 = js_module_preload_modules;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_RESOLVE_FILENAME: extern "C" fn(f64, f64, f64, f64) -> f64 =
     js_module_resolve_filename;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MODULE_RESOLVE_LOOKUP_PATHS: extern "C" fn(f64, f64) -> f64 =
     js_module_resolve_lookup_paths;
 
@@ -1759,12 +1780,16 @@ fn read_js_string_lossy(value: f64) -> String {
 // process native table). Pin retained-reference edges so the auto-optimize
 // whole-program build doesn't internalize + dead-strip them. Same rationale
 // as KEEP_JS_SETENV above.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_PROCESS_SOURCE_MAPS_ENABLED: extern "C" fn() -> f64 = js_process_source_maps_enabled;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_PROCESS_SET_SOURCE_MAPS_ENABLED: extern "C" fn(f64) -> f64 =
     js_process_set_source_maps_enabled;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_PROCESS_REF: extern "C" fn(f64) -> f64 = js_process_ref;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_PROCESS_UNREF: extern "C" fn(f64) -> f64 = js_process_unref;

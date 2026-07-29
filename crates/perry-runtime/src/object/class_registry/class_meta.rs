@@ -326,6 +326,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     None
 }
 
+#[cfg(feature = "global-text")]
 pub(crate) fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     let jsval = crate::value::JSValue::from_bits(options.to_bits());
     if !jsval.is_pointer() {

@@ -248,7 +248,6 @@ pub(super) unsafe fn dispatch_common(
             let key_value = crate::object::js_to_property_key(key_value);
             let key_value = root_scope.root_nanbox_f64(key_value).get_nanbox_f64();
             let object = object_handle.get_nanbox_f64();
-            let jsval = JSValue::from_bits(object.to_bits());
             // Symbol keys must not be string-coerced — route through the
             // canonical entry, which consults the SYMBOL_PROPERTIES side
             // table (mirrors hasOwnProperty's symbol arm).

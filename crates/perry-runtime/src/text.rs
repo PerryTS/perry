@@ -602,18 +602,23 @@ fn throw_invalid_encoded_data(encoding: &str) -> ! {
 
 /// Keepalive anchors — these `#[no_mangle]` fns are only called from
 /// generated `.o`, so the auto-optimize whole-program bitcode rebuild
-/// would dead-strip them without `#[cfg_attr(feature = "keepalive-anchors", used)]` retention (see
+/// would dead-strip them without `#[used]` retention (see
 /// [[project_auto_optimize_keepalive_3320]]).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_TEXT_DECODER_NEW: extern "C" fn(f64, f64, f64) -> i64 = js_text_decoder_new;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_TEXT_DECODER_DECODE: extern "C" fn(f64, f64) -> i64 = js_text_decoder_decode_llvm;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_TEXT_DECODER_ENCODING: extern "C" fn(f64) -> *mut StringHeader =
     js_text_decoder_encoding;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_TEXT_DECODER_FATAL: extern "C" fn(f64) -> f64 = js_text_decoder_fatal;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder_ignore_bom;
 
 /// TextDecoder / TextEncoder registry-handle property surface for VALUE

@@ -900,22 +900,30 @@ pub(super) fn resolve_exports_candidates(
                     collect(entry, subpath, out);
                     return;
                 }
-                for (key, entry) in map.iter() {
-                    if key.contains('*') {
-                        let parts: Vec<&str> = key.splitn(2, '*').collect();
-                        if parts.len() == 2 {
-                            let (prefix, suffix) = (parts[0], parts[1]);
-                            if subpath.starts_with(prefix) && subpath.ends_with(suffix) {
-                                let matched = &subpath[prefix.len()..subpath.len() - suffix.len()];
-                                let mut templates = Vec::new();
-                                collect(entry, subpath, &mut templates);
-                                for template in templates {
-                                    let resolved = template.replace('*', matched);
-                                    if !out.contains(&resolved) {
-                                        out.push(resolved);
-                                    }
-                                }
-                            }
+                let mut patterns: Vec<_> = map
+                    .iter()
+                    .filter_map(|(key, entry)| {
+                        let (prefix, suffix) = key.split_once('*')?;
+                        let end = subpath.len().checked_sub(suffix.len())?;
+                        (subpath.starts_with(prefix)
+                            && subpath.ends_with(suffix)
+                            && prefix.len() <= end)
+                            .then_some((prefix, suffix, end, entry))
+                    })
+                    .collect();
+                patterns.sort_by(|a, b| {
+                    b.0.len()
+                        .cmp(&a.0.len())
+                        .then_with(|| (b.0.len() + b.1.len()).cmp(&(a.0.len() + a.1.len())))
+                });
+                for (prefix, _, end, entry) in patterns {
+                    let matched = &subpath[prefix.len()..end];
+                    let mut templates = Vec::new();
+                    collect(entry, subpath, &mut templates);
+                    for template in templates {
+                        let resolved = template.replace('*', matched);
+                        if !out.contains(&resolved) {
+                            out.push(resolved);
                         }
                     }
                 }

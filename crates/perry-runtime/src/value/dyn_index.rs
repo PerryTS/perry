@@ -641,9 +641,12 @@ pub extern "C" fn js_is_undefined_or_bare_nan(value: f64) -> i32 {
 // link keeps these exports via the program's own undefined references, so
 // the anchors compile out there. Function-pointer types are `Sync`, so no
 // wrapper is needed.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_DYN_INDEX_GET: extern "C" fn(f64, f64) -> f64 = js_dyn_index_get;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_DYN_INDEX_SET: extern "C" fn(f64, f64, f64) -> f64 = js_dyn_index_set;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_IS_UNDEFINED_OR_BARE_NAN: extern "C" fn(f64) -> i32 = js_is_undefined_or_bare_nan;

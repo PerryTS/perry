@@ -171,7 +171,8 @@ pub extern "C" fn js_tagged_template_get_or_init(
     cooked_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_TAGGED_TEMPLATE_GET_OR_INIT: extern "C" fn(
     u64,
     *mut ArrayHeader,
@@ -1485,22 +1486,28 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
 
 // These raw numeric-array helpers are called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` exports.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern "C" fn(f64) -> f64 =
     js_array_numeric_value_to_raw_f64;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_mark_numeric_f64_layout;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern "C" fn(*mut ArrayHeader) =
     js_array_clear_numeric_layout;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
     js_array_note_numeric_write;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) -> i32 =
     js_array_is_numeric_f64_layout;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_REFRESH_LOCAL_HEAD: extern "C" fn(f64) -> f64 = js_array_refresh_local_head;
 
 /// Calculate the byte size for an array with N elements capacity
