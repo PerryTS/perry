@@ -207,6 +207,72 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_val
     });
 }
 
+fn throw_zstd_error(err: &std::io::Error) -> ! {
+    perry_ffi::throw_with_code(&format!("zstd: {}", err), "Z_DATA_ERROR", ErrorKind::Error)
+}
+
+/// `zlib.zstdCompressSync(data)` -> Buffer. `_opts` is accepted (codegen
+/// passes the options slot through) but zstd params are not wired up —
+/// matches perry-stdlib's copy.
+///
+/// # Safety
+/// `data_value` is the raw NaN-boxed data argument (string or Buffer).
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_compress_sync(
+    data_value: f64,
+    _opts: f64,
+) -> *mut BufferHeader {
+    let data_bits = data_value.to_bits() as i64;
+    js_zlib_validate_buffer_arg(data_bits);
+    match read_input_from_bits(data_bits)
+        .map(|d| zstd::stream::encode_all(d.as_slice(), ZSTD_DEFAULT_LEVEL))
+    {
+        Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(e)) => throw_zstd_error(&e),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// `zlib.zstdDecompressSync(data)` -> Buffer.
+///
+/// # Safety
+/// `data_value` is the raw NaN-boxed data argument (string or Buffer).
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_decompress_sync(
+    data_value: f64,
+    _opts: f64,
+) -> *mut BufferHeader {
+    let data_bits = data_value.to_bits() as i64;
+    js_zlib_validate_buffer_arg(data_bits);
+    match read_input_from_bits(data_bits).map(|d| zstd::stream::decode_all(d.as_slice())) {
+        Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(e)) => throw_zstd_error(&e),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// `zlib.zstdCompress(data, callback)` -> undefined.
+///
+/// # Safety
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_compress(data_value: f64, callback_value: f64) {
+    queue_one_shot_callback(data_value, callback_value, "ZstdCompress", |b| {
+        zstd::stream::encode_all(b, ZSTD_DEFAULT_LEVEL)
+    });
+}
+
+/// `zlib.zstdDecompress(data, callback)` -> undefined.
+///
+/// # Safety
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_decompress(data_value: f64, callback_value: f64) {
+    queue_one_shot_callback(data_value, callback_value, "ZstdDecompress", |b| {
+        zstd::stream::decode_all(b)
+    });
+}
+
 // ── stream codec ─────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
@@ -220,7 +286,14 @@ enum Codec {
     Unzip,
     BrotliCompress,
     BrotliDecompress,
+    ZstdCompress,
+    ZstdDecompress,
 }
+
+/// Node's `zlib` zstd default (matches perry-stdlib's copy). zstd levels run
+/// 1..=22 and don't share the deflate 0..=9 scale, so the `{ level }` option
+/// resolved by `js_zlib_resolve_level` is not applied to zstd codecs.
+const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
 fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -253,6 +326,8 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
         }
         Codec::BrotliCompress => out = brotli_compress_bytes(input),
         Codec::BrotliDecompress => out = brotli_decompress_bytes(input)?,
+        Codec::ZstdCompress => out = zstd::stream::encode_all(input, ZSTD_DEFAULT_LEVEL)?,
+        Codec::ZstdDecompress => out = zstd::stream::decode_all(input)?,
     }
     Ok(out)
 }
@@ -275,6 +350,8 @@ enum CodecState {
     DeflateDec(flate2::write::DeflateDecoder<Vec<u8>>),
     BrotliEnc(brotli::CompressorWriter<Vec<u8>>),
     BrotliDec(brotli::DecompressorWriter<Vec<u8>>),
+    ZstdEnc(zstd::stream::write::Encoder<'static, Vec<u8>>),
+    ZstdDec(zstd::stream::write::Decoder<'static, Vec<u8>>),
 }
 
 impl CodecState {
@@ -288,6 +365,8 @@ impl CodecState {
             CodecState::DeflateDec(w) => w.write_all(data),
             CodecState::BrotliEnc(w) => w.write_all(data),
             CodecState::BrotliDec(w) => w.write_all(data),
+            CodecState::ZstdEnc(w) => w.write_all(data),
+            CodecState::ZstdDec(w) => w.write_all(data),
         }
     }
 
@@ -301,6 +380,8 @@ impl CodecState {
             CodecState::DeflateDec(w) => w.flush(),
             CodecState::BrotliEnc(w) => w.flush(),
             CodecState::BrotliDec(w) => w.flush(),
+            CodecState::ZstdEnc(w) => w.flush(),
+            CodecState::ZstdDec(w) => w.flush(),
         }
     }
 
@@ -315,6 +396,8 @@ impl CodecState {
             CodecState::DeflateDec(w) => std::mem::take(w.get_mut()),
             CodecState::BrotliEnc(w) => std::mem::take(w.get_mut()),
             CodecState::BrotliDec(w) => std::mem::take(w.get_mut()),
+            CodecState::ZstdEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::ZstdDec(w) => std::mem::take(w.get_mut()),
         }
     }
 
@@ -331,6 +414,11 @@ impl CodecState {
             // DecompressorWriter::into_inner returns Result<W, W> (Err on an
             // unterminated stream); take the decoded bytes either way.
             CodecState::BrotliDec(w) => Ok(w.into_inner().unwrap_or_else(|v| v)),
+            // Encoder::finish writes the zstd frame epilogue then hands back
+            // the inner Vec; Decoder::into_inner is tolerant of an
+            // unterminated frame (same stance as BrotliDec above).
+            CodecState::ZstdEnc(w) => w.finish(),
+            CodecState::ZstdDec(w) => Ok(w.into_inner()),
         }
     }
 }
@@ -357,6 +445,15 @@ fn make_codec_state_with_level(codec: Codec, level: Compression) -> Option<Codec
         }
         Codec::BrotliDecompress => {
             CodecState::BrotliDec(brotli::DecompressorWriter::new(Vec::new(), 4096))
+        }
+        // zstd context allocation is fallible; `None` falls back to the same
+        // buffer-until-end `run_codec` path `createUnzip` uses, so a failed
+        // allocation degrades to one-shot semantics instead of erroring.
+        Codec::ZstdCompress => CodecState::ZstdEnc(
+            zstd::stream::write::Encoder::new(Vec::new(), ZSTD_DEFAULT_LEVEL).ok()?,
+        ),
+        Codec::ZstdDecompress => {
+            CodecState::ZstdDec(zstd::stream::write::Decoder::new(Vec::new()).ok()?)
         }
         // Unzip auto-detects the header — kept buffer-until-end (run_codec).
         Codec::Unzip => return None,
@@ -523,6 +620,8 @@ factory!(js_zlib_create_inflate_raw, Codec::InflateRaw, 8);
 factory!(js_zlib_create_unzip, Codec::Unzip, 8);
 factory!(js_zlib_create_brotli_compress, Codec::BrotliCompress, 0);
 factory!(js_zlib_create_brotli_decompress, Codec::BrotliDecompress, 0);
+factory!(js_zlib_create_zstd_compress, Codec::ZstdCompress, 0);
+factory!(js_zlib_create_zstd_decompress, Codec::ZstdDecompress, 0);
 
 // ── chunk / buffer helpers ─────────────────────────────────────────────────────
 

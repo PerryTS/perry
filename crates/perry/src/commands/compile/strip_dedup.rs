@@ -747,13 +747,34 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
     let abs_staticlib = std::fs::canonicalize(lib_path)?;
     let symbols_by_member = collect_archive_symbols_by_member(&nm, &abs_staticlib)
         .ok_or_else(|| anyhow::anyhow!("failed to inspect archive symbols"))?;
+    // Undefined (U) symbols per member. Localizing a PANIC-runtime definition
+    // that a SIBLING member of the same archive still references severs an
+    // intra-archive edge: the wrapper's kept `std` cgu defines
+    // `__rust_drop_panic`, its kept `panic_unwind` cgu references it, and a
+    // panic=abort stdlib provides no replacement — the final link dies on
+    // exactly that symbol. Skip localizing those. ALLOCATOR shims are
+    // deliberately NOT guarded this way: every member references
+    // `__rust_alloc`, so the guard would always skip them — and leaving the
+    // wrapper's system-malloc shim global lets it beat the runtime's mimalloc
+    // shim at link, which breaks the runtime's pointer classification
+    // (console output silently vanishes). Allocator references always have
+    // the runtime's global copy to bind to; unwind-flavor panic internals may
+    // not.
+    let undefined_by_member = collect_archive_undefined_by_member(&nm, &abs_staticlib)
+        .ok_or_else(|| anyhow::anyhow!("failed to inspect archive undefined symbols"))?;
     let forced_symbols_by_member: std::collections::BTreeMap<String, Vec<String>> =
         symbols_by_member
             .iter()
             .filter_map(|(member, symbols)| {
                 let mut forced_symbols: Vec<String> = symbols
                     .iter()
-                    .filter(|symbol| force_localize_symbol(symbol))
+                    .filter(|symbol| {
+                        force_localize_symbol(symbol)
+                            && !(is_panic_unwind_symbol(symbol)
+                                && undefined_by_member
+                                    .iter()
+                                    .any(|(m, undef)| m != member && undef.contains(*symbol)))
+                    })
                     .cloned()
                     .collect();
                 if forced_symbols.is_empty() {
@@ -1251,7 +1272,21 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
     let stdlib_members = list_members(&abs_stdlib)?;
     let candidates: std::collections::BTreeSet<String> = members
         .iter()
-        .filter(|m| stdlib_members.iter().any(|s| s.contains(m.as_str())))
+        .filter(|m| {
+            stdlib_members.iter().any(|s| s.contains(m.as_str()))
+                // std's bundled panic runtime. The wrapper (built
+                // panic=unwind) bundles `panic_unwind-*`; a panic=abort
+                // stdlib bundles `panic_abort-*` under a DIFFERENT member
+                // name, so the name-containment rule above never nominates
+                // it — the stale unwind copy survives, and its reference to
+                // std's `__rustc` shim (`__rust_drop_panic`), whose object
+                // WAS dropped as stdlib-provided, fails the link. Nominate
+                // it here; the fixed-point loop below protects it (keeps it)
+                // whenever a kept sibling needs a symbol only it defines and
+                // the stdlib doesn't provide — i.e. removal happens exactly
+                // when the stdlib's own panic runtime covers the link.
+                || m.contains("panic_unwind")
+        })
         .cloned()
         .collect();
     if candidates.is_empty() {

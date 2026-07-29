@@ -384,6 +384,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "Response"
                             | "Event"
                             | "CustomEvent"
+                            | "DOMException"
                     ) || (is_stream_family_name
                         && !has_extends_expr)
                         || is_other_builtin_constructor_name(parent_name.as_str()))
@@ -699,6 +700,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I32, &argc),
                                 (I32, &is_custom),
                             ],
+                        );
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
+                    // `class X extends DOMException` (undici's WebSocketError
+                    // and its module-init inheritability probe): `super(message,
+                    // name)` stamps the DOMException surface (`message`/`name`/
+                    // `code`) onto `this`. The X → DOMException registry edge
+                    // (registered at class-definition time) keeps `instanceof`.
+                    if parent_name.as_str() == "DOMException" {
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
+                        for a in super_args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        let arg0 = lowered.first().cloned().unwrap_or_else(|| undef.clone());
+                        let arg1 = lowered.get(1).cloned().unwrap_or_else(|| undef.clone());
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => undef.clone(),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_dom_exception_subclass_init",
+                            &[(DOUBLE, &this_box), (DOUBLE, &arg0), (DOUBLE, &arg1)],
                         );
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();

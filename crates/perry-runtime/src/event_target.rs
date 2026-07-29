@@ -326,6 +326,45 @@ pub extern "C" fn js_event_subclass_init(
 static KEEP_JS_EVENT_SUBCLASS_INIT: extern "C" fn(f64, f64, f64, u32, u32) -> f64 =
     js_event_subclass_init;
 
+/// `class X extends DOMException` — `super(message, name)` initializer
+/// (undici's `WebSocketError`, and its module-init `class Test extends
+/// DOMException` capability probe). The subclass instance is a registry-class
+/// object, not the ErrorHeader `new DOMException(...)` allocates, so stamp the
+/// DOMException surface onto `this`: `message`, `name` (default `"Error"`,
+/// matching `js_dom_exception_new`), and the legacy numeric `code` for that
+/// name.
+#[no_mangle]
+pub extern "C" fn js_dom_exception_subclass_init(this_value: f64, message: f64, name: f64) -> f64 {
+    let Some(exception) = value_as_ptr::<ObjectHeader>(this_value) else {
+        return undefined_value();
+    };
+    let message_ptr = optional_string_from_value(message, b"");
+    let name_ptr = optional_string_from_value(name, b"Error");
+    let name_string = unsafe {
+        let len = (*name_ptr).byte_len as usize;
+        let data = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    };
+    set_event_field(
+        exception,
+        b"message",
+        crate::value::js_nanbox_string(message_ptr as i64),
+    );
+    set_event_field(
+        exception,
+        b"name",
+        crate::value::js_nanbox_string(name_ptr as i64),
+    );
+    set_event_field(exception, b"code", dom_exception_code(&name_string));
+    undefined_value()
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build —
+/// `js_dom_exception_subclass_init` is a generated-code-only callee.
+#[used]
+static KEEP_JS_DOM_EXCEPTION_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
+    js_dom_exception_subclass_init;
+
 fn is_event_instance(event: *const ObjectHeader) -> bool {
     if event.is_null() {
         return false;
