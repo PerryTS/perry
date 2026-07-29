@@ -503,7 +503,7 @@ extern "C" fn depd_wrapfunction_outer_thunk(
     fn_v
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C" fn(*const f64, usize) -> f64 =
     js_function_ctor_from_strings;
 

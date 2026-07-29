@@ -1335,6 +1335,20 @@ unsafe fn try_native_static_method_in_proto_chain(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    // NOTE: deliberately NOT routed through `NmNamespaceOps` — a
+    // `class X extends Buffer` registers the parent value before the lazy
+    // callable-exports closure would arm the table (probe-verified: the
+    // hooked form broke `MyBuf.from`), so this probe must stay static.
+    nm_static_buffer_proto_chain(class_id, name, args_ptr, args_len)
+}
+
+/// Body of the Buffer-subclass static-dispatch probe (#1788 family).
+pub(crate) unsafe fn nm_static_buffer_proto_chain(
+    class_id: u32,
+    name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
     let mut cid = class_id;
     let mut depth = 0u32;
     while cid != 0 && depth < 64 {

@@ -60,6 +60,7 @@ pub(crate) mod map_set_subclass;
 mod namespace_create;
 mod native_call_method;
 mod native_module;
+mod nm_namespace_hooks;
 pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
@@ -137,6 +138,7 @@ pub use native_call_method::*;
 pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
+pub(crate) use nm_namespace_hooks::{arm_nm_namespace_ops, nm_namespace_ops, NmNamespaceOps};
 pub use object_literal_ops::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;
@@ -395,12 +397,201 @@ fn keys_index_insert(
 // obtaining `&mut Vec` and caching its address.
 // (Storage: `ObjectHotTables::overflow_last`.)
 
+// ---------------------------------------------------------------------------
+// #6812: object-owned overflow storage ("spill").
+//
+// Default-on replacement for the thread-local `overflow_fields` side table:
+// values past the inline alloc_limit live in a `GC_TYPE_ARRAY` buffer hung
+// off the object's `ObjectMeta` record ([`ObjectMeta::spill`]). Reads are two
+// dependent loads instead of a TLS fetch + RefCell + PtrHashMap probe, and
+// GC integration is structural — the buffer is a traced child edge (object →
+// meta → buffer → elements), so marking, evacuation rewriting, owner moves,
+// and death all ride the ordinary object graph. The legacy side-table code
+// below stays compiled for one release as a bisection escape hatch
+// (`PERRY_OBJECT_SPILL=0`/`off`/`false`); its GC hooks are no-ops while the
+// map stays empty.
+
+#[inline]
+fn object_spill_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_OBJECT_SPILL").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Raw in-range element access for the spill buffer. The buffer is a plain
+/// `GC_TYPE_ARRAY` this module allocated itself, so the user-facing
+/// `js_array_get`/`js_array_set` — which classify the receiver against the
+/// typed-array/buffer/SAB registries on EVERY call (three TLS probes,
+/// measured as the hot leaves of round-robin overflow writes) — are the
+/// wrong tool. Store = raw slot write + layout note + generational barrier,
+/// the exact triple the retired side-table Vec store performed.
+#[inline]
+unsafe fn spill_elements(spill: *const crate::array::ArrayHeader) -> *mut u64 {
+    (spill as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
+}
+
+#[inline]
+unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, vbits: u64) {
+    let slot = spill_elements(spill).add(index);
+    *slot = vbits;
+    // Length is the buffer's high-water mark: `js_array_alloc_with_length`
+    // sets length = REQUESTED capacity while the physical capacity rounds up
+    // (MIN_ARRAY_CAPACITY), and the in-capacity fast path stores past the
+    // current length. Everything keys off length — `spill_get`'s bounds
+    // check, the GC element range (a value past length is invisible to
+    // marking/rewriting), and the growth copy — so extend it here. Slots
+    // between the old and new length are TAG_HOLE from allocation.
+    if index >= (*spill).length as usize {
+        (*spill).length = (index + 1) as u32;
+    }
+    crate::gc::layout_note_slot(spill as usize, index, vbits);
+    crate::gc::runtime_write_barrier_slot(spill as usize, slot as usize, vbits);
+}
+
+/// Only genuine shaped objects carry a meta record at the ObjectHeader
+/// offset. Exotic GC_TYPE_OBJECT aliases (RegExpHeader) and every other
+/// GC type (errors, maps, ...) have unrelated bytes there — the legacy
+/// side table was address-keyed and safe for ANY owner, so those owners
+/// keep it (in both modes) instead of deref'ing garbage. Classification
+/// via the canonical header probe, mirroring `gc_object_meta_slot`.
+#[inline]
+unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
+    if obj_ptr == 0 {
+        return false;
+    }
+    match crate::value::addr_class::try_read_gc_header(obj_ptr) {
+        Some(h) => {
+            h.obj_type == crate::gc::GC_TYPE_OBJECT
+                && !crate::regex::regex_header_has_magic(
+                    obj_ptr as *const crate::regex::RegExpHeader,
+                )
+        }
+        None => false,
+    }
+}
+
+fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
+    unsafe {
+        let obj = obj_ptr as *mut ObjectHeader;
+        if (*obj).meta.is_null() {
+            return None;
+        }
+        let spill = (*(*obj).meta).spill as *const crate::array::ArrayHeader;
+        if spill.is_null() || field_index >= (*spill).length as usize {
+            return None;
+        }
+        let bits = *spill_elements(spill).add(field_index);
+        // Never-written positions are TAG_HOLE from allocation (or
+        // TAG_UNDEFINED via the legacy-parity fillers); both report as
+        // absent, matching the side-table Vec's TAG_UNDEFINED semantics.
+        (bits != crate::value::TAG_UNDEFINED && bits != crate::value::TAG_HOLE).then_some(bits)
+    }
+}
+
+fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
+    unsafe {
+        let obj = obj_ptr as *mut ObjectHeader;
+        // Learn the class's true width so FUTURE instances allocate it
+        // inline (same hook as the legacy path).
+        note_learned_inline_fields((*obj).class_id, (field_index as u32).saturating_add(1));
+        // Hot path: meta and buffer already exist with capacity — the
+        // in-range barriered store cannot allocate or move anything, so no
+        // handle scope is needed. This is every write after the first to a
+        // given width (e.g. round-robin updates across an object array).
+        let meta = (*obj).meta;
+        if !meta.is_null() {
+            let spill = (*meta).spill as *mut crate::array::ArrayHeader;
+            if !spill.is_null() && ((*spill).capacity as usize) > field_index {
+                spill_store_slot(spill, field_index, vbits);
+                return;
+            }
+        }
+        spill_set_slow(obj_ptr, field_index, vbits);
+    }
+}
+
+/// Allocation path: ensure the meta record and a buffer wide enough for
+/// `field_index`, then store. Roots the owner across the allocations.
+#[cold]
+fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
+    unsafe {
+        let obj = obj_ptr as *mut ObjectHeader;
+        // Root the owner: meta/buffer allocation below can trigger a moving
+        // minor GC. Reload through the handle after every allocation.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        object_meta_ensure(obj);
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let meta = (*obj).meta;
+        let spill = (*meta).spill as *mut crate::array::ArrayHeader;
+        let needed = field_index + 1;
+        if spill.is_null() || ((*spill).capacity as usize) < needed {
+            // In range by the SPILL_MAX_FIELD_INDEX dispatch gate, so the
+            // conversion is exact (2^24 max); arena allocation panics on
+            // genuine OOM (after one emergency reclaim) and never returns
+            // null, so the store below always has a live buffer.
+            let new_cap =
+                u32::try_from(needed.next_power_of_two().max(8)).expect("bounded by dispatch gate");
+            // length == capacity and every slot TAG_HOLE from birth, so the
+            // GC element range covers the whole buffer and in-range
+            // `js_array_set` can never trigger array growth/forwarding —
+            // `meta.spill` always points at the live block (GC rewrites it
+            // as a child edge on evacuation).
+            let new_spill = crate::array::js_array_alloc_with_length(new_cap);
+            let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            let meta = (*obj).meta;
+            let old = (*meta).spill as *const crate::array::ArrayHeader;
+            if !old.is_null() {
+                let old_len = (*old).length as usize;
+                let elements = (old as *const u8)
+                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                    as *const u64;
+                for i in 0..old_len {
+                    let bits = *elements.add(i);
+                    if bits != crate::value::TAG_HOLE && bits != crate::value::TAG_UNDEFINED {
+                        // In range by construction (old_len <= old cap < new_cap).
+                        spill_store_slot(new_spill, i, bits);
+                    }
+                }
+            }
+            // GC_STORE_AUDIT(BARRIERED): meta-record slot store + barrier,
+            // mirroring the `header.meta` edge install.
+            (*meta).spill = new_spill as u64;
+            crate::gc::runtime_write_barrier_slot(
+                meta as usize,
+                &(*meta).spill as *const _ as usize,
+                new_spill as u64,
+            );
+        }
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let meta = (*obj).meta;
+        let spill = (*meta).spill as *mut crate::array::ArrayHeader;
+        spill_store_slot(spill, field_index, vbits);
+    }
+}
+
 /// Read the u64 bits stored at `field_index` for `obj`, or `None` if absent.
 /// Positions never written are stored as `TAG_UNDEFINED`; this helper reports
 /// them as `None` so callers can return JS `undefined` uniformly with the
 /// "no Vec entry at all" case.
+/// Spill indices share the runtime's canonical 16M field ceiling (the
+/// same cap `layout_note_slot` and the write-loop guard enforce); a larger
+/// index would need a >128MB buffer for one property, so it stays on the
+/// address-keyed legacy table like exotic owners do.
+const SPILL_MAX_FIELD_INDEX: usize = 16_000_000;
+
 #[inline]
 fn overflow_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
+    if object_spill_enabled()
+        && field_index < SPILL_MAX_FIELD_INDEX
+        && unsafe { spill_capable_owner(obj_ptr) }
+    {
+        return spill_get(obj_ptr, field_index);
+    }
     crate::state::state()
         .object_hot
         .overflow_fields
@@ -482,6 +673,12 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
 /// overflow slots fill in sequence.
 #[inline]
 fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
+    if object_spill_enabled()
+        && field_index < SPILL_MAX_FIELD_INDEX
+        && unsafe { spill_capable_owner(obj_ptr) }
+    {
+        return spill_set(obj_ptr, field_index, vbits);
+    }
     // Learn the class's true width so FUTURE instances allocate it inline.
     unsafe {
         let hdr = obj_ptr as *const ObjectHeader;
@@ -1390,6 +1587,14 @@ pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
 
 #[cfg(test)]
 pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
+    // Mode-aware probe: overflow values live in the spill buffer by default
+    // and in the legacy side table under PERRY_OBJECT_SPILL=0.
+    if object_spill_enabled()
+        && index < SPILL_MAX_FIELD_INDEX
+        && unsafe { spill_capable_owner(owner) }
+    {
+        return spill_get(owner, index).unwrap_or(0);
+    }
     crate::state::state()
         .object_hot
         .overflow_fields
@@ -1397,6 +1602,23 @@ pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
         .get(&owner)
         .and_then(|fields| fields.get(index).copied())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+pub(crate) fn test_object_spill_enabled() -> bool {
+    object_spill_enabled()
+}
+
+/// Test probe: address of the owner's spill buffer allocation (0 = none).
+#[cfg(test)]
+pub(crate) fn test_spill_buffer_addr(owner: usize) -> usize {
+    unsafe {
+        let obj = owner as *const ObjectHeader;
+        if (*obj).meta.is_null() {
+            return 0;
+        }
+        (*(*obj).meta).spill as usize
+    }
 }
 
 #[cfg(test)]
@@ -1625,9 +1847,26 @@ pub struct ObjectMeta {
     /// it for prototype divergence made every typed-layout object appear to
     /// have a custom prototype.
     pub flags: u64,
+    /// #6812: object-owned overflow storage — a `GC_TYPE_ARRAY` buffer
+    /// (`*mut ArrayHeader` bits, 0 = none) holding the NaN-boxed values of
+    /// properties whose field index is at or past the inline alloc_limit,
+    /// indexed by ABSOLUTE field index (the inline region's entries stay
+    /// hole/undefined, mirroring the retired side-table Vec's fillers).
+    /// A traced child edge exactly like `prototype`: the buffer lives and
+    /// moves with this record, which lives and moves with its owner — no
+    /// pointer-keyed side state, no owner re-keying on evacuation, no
+    /// per-object finalization.
+    pub spill: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
+
+// #6812 spill lanes: the versioned write-loop emitter
+// (perry-codegen/src/stmt/loops.rs) addresses `meta.spill` at word 4 of the
+// ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
+// codegen and these structs in lock-step.
+const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
+const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
 /// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
@@ -1658,6 +1897,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).attr_key_bits = 0;
     (*meta).accessor_key_bits = 0;
     (*meta).flags = 0;
+    (*meta).spill = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;
@@ -1702,6 +1942,19 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
         && shapes::is_shape_id((*obj).parent_class_id)
     {
         (*obj).parent_class_id = 0;
+    }
+    // #6893: the object's typed-shape layout descriptor is keyed by its
+    // keys_array (shared per shape via SHAPE_LAYOUTS). A keys_array pointer
+    // change is a shape change (add/delete key), so the exact typed layout no
+    // longer applies to THIS object. Pre-#6893 the per-object store-validation
+    // (`layout_note_slot`, keyed by the object address) caught this implicitly
+    // during the field shuffle; the shared descriptor lookup now misses on the
+    // NEW keys_array, so that trigger is lost — invalidate explicitly here.
+    // Gated: `mark_object_dynamic_shape_unknown` early-returns for objects that
+    // carry no typed layout, so plain/growing objects and initial construction
+    // (INTACT not yet set) pay nothing.
+    if (*obj).keys_array != keys_array {
+        mark_object_dynamic_shape_unknown(obj);
     }
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;

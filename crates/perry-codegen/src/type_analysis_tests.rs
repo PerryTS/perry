@@ -214,6 +214,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     };
     let widget = perry_hir::Class {
@@ -284,6 +285,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        alloc_width_hint: 0,
         aliases: Vec::new(),
     };
     let classes = HashMap::from([("Base".to_string(), &base), ("Widget".to_string(), &widget)]);

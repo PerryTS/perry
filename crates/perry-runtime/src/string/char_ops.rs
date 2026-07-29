@@ -118,6 +118,42 @@ fn utf16_unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
     None
 }
 
+/// SSO-safe `s[key]`: takes the receiver as a **NaN-boxed JSValue** rather than
+/// an already-unboxed `StringHeader*`.
+///
+/// Codegen's `s[i]` fast path used to `unbox_to_i64` the receiver — masking off
+/// the low 48 bits — and hand that to [`js_string_index_get`]. That is only
+/// correct for a heap `STRING_TAG` value. A short string is an inline
+/// `SHORT_STRING_TAG` value whose payload IS the characters, not an address, so
+/// masking produced a garbage pointer and the read segfaulted. Concatenation is
+/// the common way to produce one (`"ab" + "c"`), which made plain
+/// `for (const ch of a + b)` / `(a + b)[0]` crash while the same operations on a
+/// string literal or a `join()` result were fine.
+///
+/// Short receivers are materialized to a heap `StringHeader` and delegated, so
+/// the CanonicalNumericIndexString key semantics below stay in exactly one
+/// place. That costs a small arena allocation per index on an SSO receiver;
+/// worth revisiting if it shows up hot, but the alternative was a crash.
+#[no_mangle]
+pub extern "C" fn js_string_index_get_boxed(value: f64, key: f64) -> f64 {
+    const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_short_string() {
+        let hdr = crate::string::js_string_materialize_to_heap(value);
+        if hdr.is_null() {
+            return UNDEFINED;
+        }
+        return js_string_index_get(hdr, key);
+    }
+    // Heap strings and every non-string receiver keep the existing behavior:
+    // `js_string_index_get` already guards invalid pointers and delegates
+    // non-string heap objects to the polymorphic index path.
+    js_string_index_get(
+        (value.to_bits() & crate::value::POINTER_MASK) as *const StringHeader,
+        key,
+    )
+}
+
 /// `s[key]` indexed read with ECMAScript CanonicalNumericIndexString semantics
 /// (#3987): returns the single-UTF-16-code-unit string at `key` only when `key`
 /// is a canonical array index — a non-negative integer (or a numeric string

@@ -492,7 +492,7 @@ pub extern "C" fn js_module_ambient_require() -> f64 {
 
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code-only
 /// callee; see project_auto_optimize_keepalive_3320).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_MODULE_AMBIENT_REQUIRE: extern "C" fn() -> f64 = js_module_ambient_require;
 
 /// Synchronous ambient `require(spec)` resolution for the #5389 Tier 2 codegen
@@ -510,7 +510,7 @@ pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
 
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code-only
 /// callee; see project_auto_optimize_keepalive_3320).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_MODULE_AMBIENT_REQUIRE_APPLY: extern "C" fn(f64) -> f64 =
     js_module_ambient_require_apply;
 
@@ -571,7 +571,7 @@ pub extern "C" fn js_module_dynamic_import_fallback(spec: f64) -> f64 {
 }
 
 /// Keepalive anchor (same pattern as the ambient-require anchors above).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_MODULE_DYNAMIC_IMPORT_FALLBACK: extern "C" fn(f64) -> f64 =
     js_module_dynamic_import_fallback;
 
@@ -592,7 +592,7 @@ pub extern "C" fn js_module_dynamic_import_deferred(spec: f64, msg: f64) -> f64 
 }
 
 /// Keepalive anchor (same pattern as the ambient-require anchors above).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED: extern "C" fn(f64, f64) -> f64 =
     js_module_dynamic_import_deferred;
 

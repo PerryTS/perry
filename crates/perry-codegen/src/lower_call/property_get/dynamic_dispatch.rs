@@ -451,13 +451,8 @@ pub(crate) fn try_lower_instance_method_call(
             // method of the same name.
             ctx.current_block = default_idx;
             let key_idx = ctx.strings.intern(property);
-            let entry = ctx.strings.entry(key_idx);
-            let key_handle_global = format!("@{}", entry.handle_global);
-            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-            let method_id = ctx
-                .block()
-                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+            let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+            let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
             let (fb_args_ptr, fb_args_len) = if static_user_args.is_empty() {
                 ("null".to_string(), "0".to_string())
             } else {
@@ -741,7 +736,11 @@ pub(crate) fn try_lower_instance_method_call(
                         .iter()
                         .find(|method| method.name.as_str() == property)
                         .and_then(|method| {
-                            crate::codegen::typed_f64_receiver_method_info(class, method)
+                            crate::codegen::typed_f64_receiver_method_info(
+                                class,
+                                method,
+                                ctx.classes,
+                            )
                         })
                 });
                 let typed_receiver_direct_name = if typed_receiver_info.is_some()
@@ -853,6 +852,102 @@ pub(crate) fn try_lower_instance_method_call(
                         .cloned()
                         .map(|reps| (name.as_str(), reps))
                 });
+                // Representation-selection Phase 3b: shape-proven Ptr<Shape>
+                // receiver (collectors/ptr_shape.rs) — direct call with NO
+                // shape guard and NO own-override probe. Provenance proves
+                // the receiver's dynamic class is exactly `class_name`
+                // (subclass overrides cannot apply), the eligibility walk
+                // vetted every method called on the local (chain-resolvable,
+                // `this`-flow safe), no own-property write can shadow the
+                // method (non-declared-field writes disqualify), and
+                // `prototype_is_stable` held for the chain.
+                // Phase 5a additionally admits `this` inside a `__pshape`
+                // clone, so a proven receiver's `this.other()` chain stays
+                // guard-free instead of falling back to the dispatch tower.
+                let ptr_shape_receiver = ctx
+                    .ptr_shape_receiver_fact(object)
+                    .map(|fact| fact.class_name == class_name)
+                    .unwrap_or(false);
+                if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
+                    // Prefer the typed-receiver clone (bare gep+load field
+                    // access inside the body) when one exists: the receiver
+                    // is proven, so only the ARGUMENT value classes need
+                    // vetting — an inline plain-finite check per argument (no
+                    // calls, no header loads). Any non-plain-double argument
+                    // (NaN-box tag, INT32-boxed, NaN/Inf) falls to the
+                    // generic direct call — still guard-free.
+                    if let Some((typed_fn, typed_formal_count, _info)) = typed_receiver_direct {
+                        let arg_values: Vec<String> = arg_slices
+                            .iter()
+                            .skip(1)
+                            .take(typed_formal_count)
+                            .map(|(_, v)| (*v).to_string())
+                            .collect();
+                        let obj_handle = {
+                            let blk = ctx.block();
+                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                            blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64)
+                        };
+                        let mut all_plain: Option<String> = None;
+                        for v in &arg_values {
+                            let blk = ctx.block();
+                            let bits = blk.bitcast_double_to_i64(v);
+                            let ok = crate::expr::class_field_inline_guard::
+                                emit_plain_finite_number_check(blk, &bits);
+                            all_plain = Some(match all_plain {
+                                Some(prev) => ctx.block().and(crate::types::I1, &prev, &ok),
+                                None => ok,
+                            });
+                        }
+                        let typed_idx = ctx.new_block("ptr_shape_method.typed");
+                        let generic_idx = ctx.new_block("ptr_shape_method.generic");
+                        let merge_idx = ctx.new_block("ptr_shape_method.merge");
+                        let typed_label = ctx.block_label(typed_idx);
+                        let generic_label = ctx.block_label(generic_idx);
+                        let merge_label = ctx.block_label(merge_idx);
+                        match all_plain {
+                            Some(cond) => ctx.block().cond_br(&cond, &typed_label, &generic_label),
+                            None => ctx.block().br(&typed_label),
+                        }
+                        ctx.current_block = typed_idx;
+                        let mut typed_args: Vec<(crate::types::LlvmType, &str)> =
+                            vec![(I64, obj_handle.as_str())];
+                        for v in &arg_values {
+                            typed_args.push((DOUBLE, v.as_str()));
+                        }
+                        let v_typed = ctx.block().call(DOUBLE, typed_fn, &typed_args);
+                        let typed_end = ctx.block().label.clone();
+                        ctx.block().br(&merge_label);
+                        ctx.current_block = generic_idx;
+                        let v_generic = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                        let generic_end = ctx.block().label.clone();
+                        ctx.block().br(&merge_label);
+                        ctx.current_block = merge_idx;
+                        let merged = ctx.block().phi(
+                            DOUBLE,
+                            &[
+                                (v_typed.as_str(), &typed_end),
+                                (v_generic.as_str(), &generic_end),
+                            ],
+                        );
+                        return Ok(Some(merged));
+                    }
+                    // Representation-selection Phase 5a: route to the
+                    // proven-`this` clone when one exists. The receiver is
+                    // already proven here (no guard is emitted on this path at
+                    // all), and a `pshape_methods` hit additionally proves
+                    // `class_name` DECLARES `property` — so the clone's `this`
+                    // is exactly the class it was compiled for and cannot be a
+                    // subclass instance. Same ABI, so the call is unchanged
+                    // apart from the callee name.
+                    let pshape_target = ctx
+                        .pshape_methods
+                        .contains_key(&(class_name.clone(), property.to_string()))
+                        .then(|| crate::collectors::pshape_method_name(&fallback_fn));
+                    let target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
+                    let direct = ctx.block().call(DOUBLE, target, &arg_slices);
+                    return Ok(Some(direct));
+                }
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,

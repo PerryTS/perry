@@ -1,0 +1,1 @@
+Fix `Array.prototype` mutators (`push`/`pop`/`shift`/`unshift`) on Proxy receivers reaching the dynamic dispatch path: the mutation was silently dropped (no trap fired, `undefined` returned) — immer's `draft.list.push(x)` shape. `array_proto_mutator` now routes Proxy receivers through spec-ordered `get`/`set`/`deleteProperty` trap sequences, byte-identical to Node.

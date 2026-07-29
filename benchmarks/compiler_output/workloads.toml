@@ -625,24 +625,39 @@ write_barriers_traced = 16
 boxed_number_allocations_static = 0
 buffer_slow_path_accesses_static = 0
 
+# Repsel 4a.1 (#6904): a canonical-numeric push lowers to the inline store +
+# length bump; the guarded raw-f64 helper tier (js_typed_feedback_numeric_
+# array_push_guard + js_array_numeric_push_f64_unboxed) is gone from this
+# shape. js_array_push_f64 legitimately remains in the forwarded/realloc arms.
 [[workloads.numeric_arrays.ir_checks]]
-name = "numeric_array_uses_unboxed_push"
-contains = "js_array_numeric_push_f64_unboxed"
-detail = "numeric Array.push uses the guarded raw-f64 helper"
+name = "numeric_array_push_inlines_store"
+regex = '''apush\.inbounds\.\d+:[\s\S]*?store double [^\n]+\n[\s\S]*?store i32 %\w+, ptr %\w+[^\n]*\n[\s\S]*?br label %apush\.merge'''
+regex_none = [
+  "call i64 @js_array_numeric_push_f64_unboxed",
+  "call i32 @js_typed_feedback_numeric_array_push_guard",
+]
+detail = "canonical numeric Array.push takes the inline store + length bump (repsel 4a.1; guarded helper tier elided)"
 
+# Repsel 4a.1/4a.2: the numeric read has an inline guard tier; the fast arm
+# loads the raw slot and canonicalizes any NaN payload to the quiet NaN
+# (proof-gated under raw-f64(-or-holes); bit-exact with ToNumber semantics).
+# The out-of-line guard remains as the cold arm.
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_get"
 contains = "js_typed_feedback_numeric_array_index_get_guard"
-regex = '''bidx\.num\.fast\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = load double, ptr %\w+[^\n]*\n\s*br label %bidx\.num\.merge'''
+regex = '''bidx\.num\.fast\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = load double, ptr %\w+[^\n]*\n\s*%\w+ = fcmp ord double %\w+, (?:%\w+|0\.000000e\+00)\s*\n\s*%\w+ = select i1 %\w+, double %\w+, double 0x7FF8000000000000\s*\n\s*br label %bidx\.num\.merge'''
 regex_none = ["call double @js_array_numeric_get_f64_unboxed"]
-detail = "numeric indexed read takes the guarded raw-f64 fast path and loads the slot inline (inttoptr + load double in bidx.num.fast; helper call elided)"
+detail = "numeric indexed read takes the inline raw-f64 fast arm (load + proof-gated NaN canonicalization; helper call elided)"
 
+# Repsel 4a.1: a canonical-raw-f64 RHS stores verbatim — no
+# js_array_numeric_value_to_raw_f64 call on the write fast arm. The
+# out-of-line set guard remains as the cold arm.
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_set"
 contains = "js_typed_feedback_numeric_array_index_set_guard"
-regex = '''idxset\.(?:bounded_numeric_fast|inbounds)\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr[\s\S]*?call double @js_array_numeric_value_to_raw_f64\(double %\w+\)\s*\n\s*store double %\w+, ptr %\w+[^\n]*\n\s*br label %idxset\.(?:bounded_numeric_merge|merge)'''
+regex = '''idxset\.(?:bounded_numeric_fast|inbounds)\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*store double %\w+, ptr %\w+[^\n]*\n\s*br label %idxset\.(?:bounded_numeric_merge|merge)'''
 regex_none = ["call i32 @js_array_numeric_set_f64_unboxed"]
-detail = "numeric indexed write takes the guarded raw-f64 fast path, canonicalizes the value, and stores the raw slot inline"
+detail = "numeric indexed write takes the inline raw-f64 fast arm and stores the canonical value verbatim (canonicalization call elided for canonical RHS)"
 
 [[workloads.numeric_arrays.stdout_checks]]
 name = "numeric_arrays_checksum"
@@ -652,58 +667,13 @@ detail = "numeric-array fixture stdout checksum"
 [workloads.numeric_arrays.native_rep_checks]
 allow_materialization_reasons = ["runtime_api"]
 
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_push_fast_f64"
-expr_kind = "NumericArrayPush"
-consumer = "js_array_numeric_push_f64_unboxed"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "raw_f64_layout"
-consumed_fact_state = "consumed"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_push_guard_consumed"
-expr_kind = "NumericArrayPush"
-consumer = "js_array_numeric_push_f64_unboxed"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "bounds"
-consumed_fact_state = "consumed"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_push_dynamic_fallback"
-expr_kind = "NumericArrayPush"
-consumer = "js_array_push_f64"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "rejected"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_push_dynamic_fallback_invalidates_layout"
-expr_kind = "NumericArrayPush"
-consumer = "js_array_push_f64"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_push_materialization_hazard_invalidated"
-expr_kind = "NumericArrayPush"
-consumer = "js_array_push_f64"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "materialization_hazard"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
+# Repsel 4a.1 (#6904): the five NumericArrayPush record requirements that
+# pinned the guarded helper tier (js_array_numeric_push_f64_unboxed fast/
+# guard-consumed + the js_array_push_f64 dynamic-fallback trio) are gone —
+# a canonical-numeric push now lowers through the record-free inline store
+# tier (asserted structurally by numeric_array_push_inlines_store above).
+# Non-canonical numeric pushes still take the recorded guarded tier; this
+# fixture's pushes are literal (canonical) by design.
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_get_fast_f64"

@@ -106,10 +106,9 @@ pub(crate) fn is_primitive_proto_method(key: &[u8]) -> bool {
     )
 }
 
-/// Static-name lowering should traffic in interned property ids instead of
-/// raw name bytes. The first representation is the interned heap string
-/// pointer already emitted by the StringPool; the wrapper preserves the
-/// existing by-name semantics while giving codegen a by-id ABI to target.
+/// Static-name lowering traffics in immutable AOT descriptors instead of
+/// thread-local heap pointers. APIs below this wrapper still consume a
+/// `StringHeader*`, so descriptors are lazily interned once per runtime thread.
 #[no_mangle]
 pub extern "C" fn js_object_get_field_by_property_id_f64(
     obj: *const ObjectHeader,
@@ -120,18 +119,12 @@ pub extern "C" fn js_object_get_field_by_property_id_f64(
     else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    let key = if key_ref.heap.is_null() {
-        crate::string::js_string_from_bytes(key_ref.ptr, key_ref.len as u32)
-            as *const crate::StringHeader
-    } else {
-        key_ref.heap
-    };
+    let key = crate::string::materialize_dispatch_key(key_ref);
     js_object_get_field_by_name_f64(obj, key)
 }
 
 /// By-id sibling of `js_object_set_field_by_name`. See
-/// `js_object_get_field_by_property_id_f64` for why the initial id
-/// representation is the interned StringHeader pointer.
+/// `js_object_get_field_by_property_id_f64` for descriptor materialization.
 #[no_mangle]
 pub extern "C" fn js_object_set_field_by_property_id(
     obj: *mut ObjectHeader,
@@ -143,12 +136,7 @@ pub extern "C" fn js_object_set_field_by_property_id(
     else {
         return;
     };
-    let key = if key_ref.heap.is_null() {
-        crate::string::js_string_from_bytes(key_ref.ptr, key_ref.len as u32)
-            as *const crate::StringHeader
-    } else {
-        key_ref.heap
-    };
+    let key = crate::string::materialize_dispatch_key(key_ref);
     js_object_set_field_by_name(obj, key, value);
 }
 

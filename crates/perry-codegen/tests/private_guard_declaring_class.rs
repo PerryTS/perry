@@ -55,6 +55,7 @@ fn class(id: u32, name: &str) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     }
 }
 

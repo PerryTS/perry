@@ -498,44 +498,44 @@ pub extern "C" fn js_suppressed_error_new(error: f64, suppressed: f64, message: 
 // Keepalive anchors — these `#[no_mangle]` fns are only ever called from
 // generated code (the codegen `new` arm + the native-module dispatch table),
 // so the whole-program-LLVM auto-optimize bitcode rebuild would otherwise
-// dead-strip them (see project_auto_optimize_keepalive_3320). `#[used]`
+// dead-strip them (see project_auto_optimize_keepalive_3320). `#[cfg_attr(feature = "keepalive-anchors", used)]`
 // survives the bitcode pipeline.
 // ---------------------------------------------------------------------------
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_NEW: extern "C" fn() -> *mut ObjectHeader = js_disposable_stack_new;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ASYNC_DISPOSABLE_STACK_NEW: extern "C" fn() -> *mut ObjectHeader =
     js_async_disposable_stack_new;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_DISPOSED: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_disposable_stack_disposed;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_DEFER: extern "C" fn(*mut ObjectHeader, f64) -> f64 =
     js_disposable_stack_defer;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_USE: extern "C" fn(*mut ObjectHeader, f64) -> f64 =
     js_disposable_stack_use;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ASYNC_DISPOSABLE_STACK_USE: extern "C" fn(*mut ObjectHeader, f64) -> f64 =
     js_async_disposable_stack_use;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_ADOPT: extern "C" fn(*mut ObjectHeader, f64, f64) -> f64 =
     js_disposable_stack_adopt;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_DISPOSE: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_disposable_stack_dispose;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_SYMBOL_DISPOSE: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_disposable_stack_symbol_dispose;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_DISPOSABLE_STACK_MOVE: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_disposable_stack_move;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ASYNC_DISPOSABLE_STACK_DISPOSE_ASYNC: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_async_disposable_stack_dispose_async;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ASYNC_DISPOSABLE_STACK_SYMBOL_ASYNC_DISPOSE: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_async_disposable_stack_symbol_async_dispose;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SUPPRESSED_ERROR_NEW: extern "C" fn(f64, f64, f64) -> f64 = js_suppressed_error_new;
