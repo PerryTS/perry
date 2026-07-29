@@ -499,13 +499,26 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
 
         // #6943: root the receiver across the GC-capable key coercion — see
         // `js_object_has_own` above for the full reasoning.
-        let (obj_value, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
-            (obj_value, crate::builtins::js_string_coerce(key_value))
+        // `obj_jv` must be re-derived alongside `obj_value`: it is the tag view
+        // taken at the top of this function, and the arms below both TEST it
+        // (`is_any_string`) and DEREFERENCE it (`as_pointer`), so leaving it on
+        // pre-coercion bits reintroduces exactly the hazard this change closes.
+        let (obj_value, obj_jv, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
+            (
+                obj_value,
+                obj_jv,
+                crate::builtins::js_string_coerce(key_value),
+            )
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
             let key_str = crate::builtins::js_string_coerce(key_value);
-            (f64::from_bits(obj_handle.get_heap_word_u64()), key_str)
+            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            (
+                obj_value,
+                crate::JSValue::from_bits(obj_value.to_bits()),
+                key_str,
+            )
         };
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);

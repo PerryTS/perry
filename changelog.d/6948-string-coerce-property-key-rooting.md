@@ -41,8 +41,15 @@ through its handle after the coercion — across:
   `ToNumeric`/step, and a write-back.
 
 New shared predicate `builtins::string_coerce_is_inert(value)`, the `js_string_coerce` analogue of
-#6941's `property_key_coercion_is_inert`, justified by `js_string_coerce`'s own `is_string()` early
-return. Hot surfaces are gated on it so an already-heap-string key pays nothing.
+the `property_key_coercion_is_inert` predicate from #6941, justified by `js_string_coerce`'s own
+`is_string()` early return. Hot surfaces are gated on it so an already-heap-string key pays nothing.
+
+Also rooted, from review of the first pass: the property KEY itself at the `ordinary_set_with_receiver`
+store lane (an object key is a heap value and is exactly the shape whose user `toString` can evacuate
+it); `own_set_descriptor`'s receiver, whose raw address keys the descriptor side tables; the `obj_jv`
+tag view in `js_object_property_is_enumerable`; the enumerated receiver across both loops of
+`getOwnPropertyDescriptors`; and `key_value` where `js_object_define_property`'s fallback re-coerces
+it through `obj_value_has_own_key`.
 
 `proxy.rs`'s `target_set` was audited and is provably inert (its argument is always a
 `js_to_property_key` result, i.e. an already-heap string); a comment now records that so the next

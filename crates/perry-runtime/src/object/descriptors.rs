@@ -1418,6 +1418,11 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
         // already-stale pointer.
         let scope = crate::gc::RuntimeHandleScope::new();
         let names_handle = scope.root_raw_mut_ptr(names_arr as *mut crate::array::ArrayHeader);
+        // The ENUMERATED receiver is re-entered on every iteration of both
+        // loops below, across descriptor allocation, a key coercion that can
+        // run user `toString`, and `js_object_set_field_by_name`. It needs a
+        // root just as much as the result object does.
+        let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
         let result_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
         let key_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
         let desc_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -1433,8 +1438,10 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
                 let names_arr = names_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
                 let key_val = crate::array::js_array_get(names_arr, i as u32);
                 key_handle.set_nanbox_u64(key_val.bits());
-                let desc =
-                    js_object_get_own_property_descriptor(obj_value, key_handle.get_nanbox_f64());
+                let desc = js_object_get_own_property_descriptor(
+                    f64::from_bits(obj_handle.get_heap_word_u64()),
+                    key_handle.get_nanbox_f64(),
+                );
                 // Spec step: only add the entry when the descriptor is not
                 // undefined (the key was removed between key-collection and the
                 // descriptor read, e.g. by a Proxy trap).
@@ -1466,7 +1473,9 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
         let result_value = |handle: &crate::gc::RuntimeHandle<'_>| -> f64 {
             f64::from_bits((handle.get_raw_mut_ptr::<ObjectHeader>() as u64) | POINTER_TAG)
         };
-        let sym_arr_raw = crate::symbol::js_object_get_own_property_symbols(obj_value);
+        let sym_arr_raw = crate::symbol::js_object_get_own_property_symbols(f64::from_bits(
+            obj_handle.get_heap_word_u64(),
+        ));
         if sym_arr_raw != 0 {
             let sym_handle = scope.root_raw_mut_ptr(sym_arr_raw as *mut crate::array::ArrayHeader);
             if !sym_handle
@@ -1483,7 +1492,7 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
                     );
                     key_handle.set_nanbox_u64(sym_val.bits());
                     let desc = js_object_get_own_property_descriptor(
-                        obj_value,
+                        f64::from_bits(obj_handle.get_heap_word_u64()),
                         key_handle.get_nanbox_f64(),
                     );
                     if desc.to_bits() == crate::value::TAG_UNDEFINED {

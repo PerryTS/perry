@@ -1027,11 +1027,29 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         return Some(OwnSetDescriptor::Data { writable });
     }
 
+    // The null-receiver guard stays BEFORE the coercion: `key_to_rust_string`
+    // can run a user `toString`, and moving it earlier would make that side
+    // effect observable on a path that previously short-circuited.
+    if extract_pointer(target.to_bits()) as usize == 0 {
+        return None;
+    }
+    // #6943: `key_to_rust_string` runs the GC-capable `js_string_coerce`, and
+    // `obj_ptr` is BOTH a dereferenced heap address (the typed-array probe) and
+    // the raw ADDRESS KEY of the `ACCESSOR_DESCRIPTORS` /
+    // `PROPERTY_DESCRIPTORS` side tables. A stale one does not crash: it
+    // silently misses, so a non-writable own property or a setter-less accessor
+    // reads back as "no descriptor" and the [[Set]] that should have been
+    // rejected goes through. Root the receiver across the coercion and derive
+    // the address afterwards. (Found in the same review pass as the `key` gap
+    // below.)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_heap_word_u64(target.to_bits());
+    let key_name = key_to_rust_string(key)?;
+    let target = f64::from_bits(target_handle.get_heap_word_u64());
     let obj_ptr = extract_pointer(target.to_bits()) as usize;
     if obj_ptr == 0 {
         return None;
     }
-    let key_name = key_to_rust_string(key)?;
     // A typed array keeps its ordinary (non-index) own expando properties and
     // their descriptors in the typed-array side tables, which the generic
     // address-keyed lookups below skip (`object_has_descriptors` is
@@ -1339,13 +1357,27 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         // key materializes onto the heap, a numeric key builds
                         // its stringification, and an object key runs a user
                         // `toString` / `valueOf`. Any of those can trigger a GC
-                        // that **evacuates**, and `addr` (the receiver,
-                        // dereferenced for `plan_eligible` and passed to
-                        // `class_instance_set_may_intercept`), `target` and the
-                        // `value` about to be written INTO it were all raw Rust
-                        // locals across it. The heap-string key — what
-                        // `obj.field = v` lowers to for any name past the SSO
-                        // bound — takes no scope and keeps the pre-fix path.
+                        // that **evacuates**.
+                        //
+                        // The rule is: when the coercion is NOT inert, every
+                        // operand that outlives it must be rooted and re-read
+                        // afterwards. That is four of them, not three —
+                        // `addr` (the receiver, dereferenced for `plan_eligible`
+                        // and passed to `class_instance_set_may_intercept`),
+                        // `target` and the `value` about to be written INTO it,
+                        // and **`key` itself**, which is re-used at the
+                        // interception check and again at `target_set`. An
+                        // object key is a `POINTER_TAG` heap value and is
+                        // exactly the shape that runs the user JS which can
+                        // evacuate it. (`key` was missed in the first pass of
+                        // this fix; caught in review.)
+                        //
+                        // Only an already-heap `STRING_TAG` key is inert — it
+                        // is handed straight back with no allocation — so that
+                        // one shape takes no scope. Every other shape does: an
+                        // SSO short key materializes onto the heap, a numeric
+                        // key builds its stringification, and an object key
+                        // runs a user `toString` / `valueOf`.
                         let scope = (!crate::builtins::string_coerce_is_inert(key))
                             .then(crate::gc::RuntimeHandleScope::new);
                         let roots = scope.as_ref().map(|s| {
@@ -1353,8 +1385,27 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 s.root_heap_word_u64(target.to_bits()),
                                 s.root_nanbox_f64(value),
                                 s.root_raw_mut_ptr(addr as *mut u8),
+                                s.root_nanbox_f64(key),
                             )
                         });
+                        // Re-read an operand through its handle (or pass the
+                        // original through untouched on the inert path).
+                        let cur_target = || match &roots {
+                            Some((t, ..)) => f64::from_bits(t.get_heap_word_u64()),
+                            None => target,
+                        };
+                        let cur_value = || match &roots {
+                            Some((_, v, ..)) => v.get_nanbox_f64(),
+                            None => value,
+                        };
+                        let cur_addr = || match &roots {
+                            Some((_, _, a, _)) => a.get_raw_mut_ptr::<u8>() as usize,
+                            None => addr,
+                        };
+                        let cur_key = || match &roots {
+                            Some((_, _, _, k)) => k.get_nanbox_f64(),
+                            None => key,
+                        };
                         let fast_safe = if class_id == 0 {
                             // Plain object: prototype is exactly Object.prototype, and
                             // Object.prototype doesn't intercept this key (per-key, not
@@ -1379,7 +1430,10 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             ) && property_key_to_rust_string(key)
                                 .as_deref()
                                 == Some("disposed")
-                                && own_set_descriptor(target, key).is_none();
+                                // #6943: `property_key_to_rust_string` runs
+                                // `ToPropertyKey` + `js_string_coerce`, so both
+                                // operands must be re-read before this probe.
+                                && own_set_descriptor(cur_target(), cur_key()).is_none();
                             if inherited_disposed_readonly {
                                 return false;
                             }
@@ -1400,14 +1454,12 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // class chain — SLOW_FLAGS above already excluded
                             // frozen/sealed/descriptor bits; add the per-instance
                             // divergence flags (setPrototypeOf override / null proto).
-                            let key_ptr = crate::builtins::js_string_coerce(key)
+                            let key_ptr = crate::builtins::js_string_coerce(cur_key())
                                 as *const crate::StringHeader;
-                            // #6943: re-read the receiver through its handle —
-                            // everything below dereferences it.
-                            let addr = match &roots {
-                                Some((_, _, a)) => a.get_raw_mut_ptr::<u8>() as usize,
-                                None => addr,
-                            };
+                            // #6943: re-read the receiver AND the key through
+                            // their handles — everything below uses both.
+                            let addr = cur_addr();
+                            let key = cur_key();
                             let interned = crate::object::interned_key_ptr(key_ptr);
                             // #6595: a per-evaluation CLASS OBJECT (what a
                             // capture-carrying class materializes as,
@@ -1446,17 +1498,11 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             };
                             verdict
                         };
-                        // #6943: the store itself takes the refreshed receiver
-                        // and payload — both were rooted across whichever
-                        // coercion the arm above performed.
-                        let (target, value) = match &roots {
-                            Some((t, v, _)) => {
-                                (f64::from_bits(t.get_heap_word_u64()), v.get_nanbox_f64())
-                            }
-                            None => (target, value),
-                        };
+                        // #6943: the store itself takes the refreshed receiver,
+                        // KEY and payload — all three were rooted across
+                        // whichever coercion the arm above performed.
                         if fast_safe {
-                            target_set(target, key, value);
+                            target_set(cur_target(), cur_key(), cur_value());
                             return true;
                         }
                     }

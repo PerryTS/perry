@@ -334,7 +334,9 @@ check("gopd-typed-array-oob", Object.getOwnPropertyDescriptor(ta, heavyKey("99")
 
 // --- string primitive arm (`string_primitive_descriptor`, whose `str_value`
 // receiver is itself a movable heap string) ---
-const s: any = "abcdef" + String(keepalive.length % 1);
+// Built at runtime (join defeats constant folding) so the receiver is a real
+// heap string rather than a static one: exactly 6 chars, "abcdef".
+const s: any = ["a", "b", "c", "d", "e", "f"].join("");
 keepalive.push(s);
 churnAndCollect();
 const dChar = Object.getOwnPropertyDescriptor(s, heavyKey("2"));
@@ -503,6 +505,22 @@ checkPayload("class-instance-store-k0", h.k0, 30);
 checkPayload("class-instance-store-k1", h.k1, 31);
 checkPayload("class-instance-store-k2", h.k2, 32);
 checkPayload("class-instance-ctor-field", h.v, 27);
+
+// An OBJECT key on the same store lane: `js_string_coerce` runs the user
+// `toString`, so the KEY itself — a POINTER_TAG heap value — can be evacuated
+// mid-coercion, alongside the receiver and the payload. This is the operand the
+// first pass of the #6943 fix missed at `ordinary_set_with_receiver`.
+h[heavyKey("objKeyed")] = payload(34);
+churnAndCollect();
+checkPayload("class-instance-store-object-key", h.objKeyed, 34);
+check("class-instance-store-object-key-name", Object.hasOwn(h, "objKeyed"), true);
+
+// Same on a plain (class_id == 0) receiver, which reaches the coercion through
+// `object_proto_may_intercept_key` rather than the store-plan key.
+const plain: any = receiver();
+plain[heavyKey("plainObjKeyed")] = payload(35);
+churnAndCollect();
+checkPayload("plain-store-object-key", plain.plainObjKeyed, 35);
 
 // --- class static computed field with a NON-symbol key
 // (js_class_register_static_symbol's string arm stores `value` across the

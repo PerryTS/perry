@@ -929,10 +929,16 @@ pub extern "C" fn js_object_define_property(
         let obj_handle = scope.root_raw_mut_ptr(obj);
         let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
         let desc_handle = scope.root_nanbox_f64(descriptor_value);
+        // `key_value` is rooted too: the non-indexable fallback far below
+        // passes it RAW into `obj_value_has_own_key`, which re-coerces it. An
+        // object / BigInt key evacuated by the coercion on the next line would
+        // be dereferenced again there.
+        let key_handle = scope.root_nanbox_f64(key_value);
         let key_str = crate::builtins::js_string_coerce(key_value);
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
         let descriptor_value = desc_handle.get_nanbox_f64();
+        let key_value = key_handle.get_nanbox_f64();
         if key_str.is_null() {
             return obj_value;
         }
