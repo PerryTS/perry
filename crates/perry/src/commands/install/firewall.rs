@@ -140,15 +140,20 @@ fn probe(bin: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn explicit_sfw_path(value: std::ffi::OsString) -> Option<PathBuf> {
+    if value.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(value);
+    path.is_absolute().then_some(path)
+}
+
 /// Resolve a usable sfw binary: `PERRY_SFW` if set, else the first `sfw` on
 /// `PATH` that answers `--version`. Never consults `$HOME` or the current
 /// directory — see the module docs.
 pub fn resolve_sfw() -> Option<PathBuf> {
     if let Some(explicit) = env::var_os(SFW_PATH_ENV) {
-        if explicit.is_empty() {
-            return None;
-        }
-        let explicit = PathBuf::from(explicit);
+        let explicit = explicit_sfw_path(explicit)?;
         // An explicit request is honored or reported, never quietly replaced
         // by a different binary: falling through to PATH here would mean the
         // user asked for one firewall and silently got another.
@@ -330,6 +335,17 @@ mod tests {
     #[test]
     fn path_candidates_without_a_path_var_are_empty() {
         assert!(path_candidates("sfw", None, None).is_empty());
+    }
+
+    #[test]
+    fn explicit_sfw_path_rejects_empty_and_relative_values() {
+        assert!(explicit_sfw_path(OsString::new()).is_none());
+        assert!(explicit_sfw_path(OsString::from("./sfw")).is_none());
+        assert!(explicit_sfw_path(OsString::from("tools/sfw")).is_none());
+        assert_eq!(
+            explicit_sfw_path(OsString::from("/tools/bin/sfw")),
+            Some(PathBuf::from("/tools/bin/sfw"))
+        );
     }
 
     #[test]
