@@ -1028,9 +1028,11 @@ pub(crate) unsafe fn get_native_module_constant(
     }
 }
 
-/// Sorted zlib constant table (172 entries) — replaces the compiled
-/// match ladder (the single largest closure in this file). Value expressions
-/// verbatim from the reference.
+/// Sorted table for `zlib_const`: block-level `#[cfg]` predicates mirrored
+/// verbatim as per-platform tables; per-arm cfg chains composed with
+/// `not(any(..))` so first-match-wins semantics survive; value exprs
+/// verbatim. The verbatim reference + literal-universe oracle below runs on
+/// EVERY platform in CI, covering the sides not testable locally.
 static ZLIB_CONST_TABLE: &[(&str, i64)] = &[
     ("BROTLI_DECODE", 8),
     ("BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES", -30),
@@ -1206,6 +1208,7 @@ static ZLIB_CONST_TABLE: &[(&str, i64)] = &[
     ("Z_VERSION_ERROR", -6),
 ];
 
+#[allow(clippy::unnecessary_cast)]
 fn zlib_const_lookup(prop: &str) -> Option<f64> {
     let i = ZLIB_CONST_TABLE
         .binary_search_by(|(n, _)| (*n).cmp(prop))
@@ -1213,7 +1216,6 @@ fn zlib_const_lookup(prop: &str) -> Option<f64> {
     Some(ZLIB_CONST_TABLE[i].1 as f64)
 }
 
-/// Test-only verbatim reference for the oracle test.
 #[cfg(test)]
 fn zlib_const_reference(prop: &str) -> Option<f64> {
     let v: i64 = match prop {
@@ -1416,7 +1418,7 @@ mod zlib_const_table_tests {
     #[test]
     fn sorted() {
         for w in ZLIB_CONST_TABLE.windows(2) {
-            assert!(w[0].0 < w[1].0);
+            assert!(w[0].0 < w[1].0, "{} vs {}", w[0].0, w[1].0);
         }
     }
     #[test]
@@ -1439,8 +1441,11 @@ mod zlib_const_table_tests {
     }
 }
 
-/// Sorted table for `crypto_const` (value exprs + per-arm cfg attrs verbatim;
-/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+/// Sorted table for `crypto_const`: block-level `#[cfg]` predicates mirrored
+/// verbatim as per-platform tables; per-arm cfg chains composed with
+/// `not(any(..))` so first-match-wins semantics survive; value exprs
+/// verbatim. The verbatim reference + literal-universe oracle below runs on
+/// EVERY platform in CI, covering the sides not testable locally.
 static CRYPTO_CONST_TABLE: &[(&str, f64)] = &[
     ("DH_CHECK_P_NOT_PRIME", 1.0),
     ("DH_CHECK_P_NOT_SAFE_PRIME", 2.0),
@@ -1596,8 +1601,11 @@ mod crypto_const_table_tests {
     }
 }
 
-/// Sorted table for `os_errno_const` (value exprs + per-arm cfg attrs verbatim;
-/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+/// Sorted table for `os_errno_const`: block-level `#[cfg]` predicates mirrored
+/// verbatim as per-platform tables; per-arm cfg chains composed with
+/// `not(any(..))` so first-match-wins semantics survive; value exprs
+/// verbatim. The verbatim reference + literal-universe oracle below runs on
+/// EVERY platform in CI, covering the sides not testable locally.
 #[cfg(unix)]
 static OS_ERRNO_CONST_TABLE: &[(&str, i32)] = &[
     ("E2BIG", libc::E2BIG),
@@ -1681,7 +1689,30 @@ static OS_ERRNO_CONST_TABLE: &[(&str, i32)] = &[
     ("EXDEV", libc::EXDEV),
 ];
 #[cfg(not(unix))]
-static OS_ERRNO_CONST_TABLE: &[(&str, i32)] = &[];
+static OS_ERRNO_CONST_TABLE: &[(&str, i32)] = &[
+    ("EACCES", 13.0),
+    ("EAGAIN", 11.0),
+    ("EBADF", 9.0),
+    ("EBUSY", 16.0),
+    ("EEXIST", 17.0),
+    ("EFAULT", 14.0),
+    ("EINTR", 4.0),
+    ("EINVAL", 22.0),
+    ("EIO", 5.0),
+    ("EISDIR", 21.0),
+    ("EMFILE", 24.0),
+    ("ENFILE", 23.0),
+    ("ENODEV", 19.0),
+    ("ENOENT", 2.0),
+    ("ENOMEM", 12.0),
+    ("ENOSPC", 28.0),
+    ("ENOTDIR", 20.0),
+    ("ENOTEMPTY", 41.0),
+    ("EPERM", 1.0),
+    ("EPIPE", 32.0),
+    ("ERANGE", 34.0),
+    ("EROFS", 30.0),
+];
 
 #[allow(clippy::unnecessary_cast)]
 fn os_errno_const_lookup(prop: &str) -> Option<f64> {
@@ -1838,8 +1869,11 @@ mod os_errno_const_table_tests {
     }
 }
 
-/// Sorted table for `os_signal_const` (value exprs + per-arm cfg attrs verbatim;
-/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+/// Sorted table for `os_signal_const`: block-level `#[cfg]` predicates mirrored
+/// verbatim as per-platform tables; per-arm cfg chains composed with
+/// `not(any(..))` so first-match-wins semantics survive; value exprs
+/// verbatim. The verbatim reference + literal-universe oracle below runs on
+/// EVERY platform in CI, covering the sides not testable locally.
 #[cfg(unix)]
 static OS_SIGNAL_CONST_TABLE: &[(&str, i32)] = &[
     ("SIGABRT", libc::SIGABRT),
@@ -1882,7 +1916,17 @@ static OS_SIGNAL_CONST_TABLE: &[(&str, i32)] = &[
     ("SIGXFSZ", libc::SIGXFSZ),
 ];
 #[cfg(not(unix))]
-static OS_SIGNAL_CONST_TABLE: &[(&str, i32)] = &[];
+static OS_SIGNAL_CONST_TABLE: &[(&str, i32)] = &[
+    ("SIGABRT", 22.0),
+    ("SIGBREAK", 21.0),
+    ("SIGFPE", 8.0),
+    ("SIGHUP", 1.0),
+    ("SIGILL", 4.0),
+    ("SIGINT", 2.0),
+    ("SIGKILL", 9.0),
+    ("SIGSEGV", 11.0),
+    ("SIGTERM", 15.0),
+];
 
 #[allow(clippy::unnecessary_cast)]
 fn os_signal_const_lookup(prop: &str) -> Option<f64> {
@@ -1985,41 +2029,73 @@ mod os_signal_const_table_tests {
     }
 }
 
-/// Sorted table for `fs_const_tail` (value exprs + per-arm cfg attrs verbatim;
-/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+/// Sorted table for `fs_const_tail`: block-level `#[cfg]` predicates mirrored
+/// verbatim as per-platform tables; per-arm cfg chains composed with
+/// `not(any(..))` so first-match-wins semantics survive; value exprs
+/// verbatim. The verbatim reference + literal-universe oracle below runs on
+/// EVERY platform in CI, covering the sides not testable locally.
 static FS_CONST_TAIL_TABLE: &[(&str, i64)] = &[
     #[cfg(target_os = "linux")]
     ("O_DIRECT", libc::O_DIRECT as i64),
     #[cfg(unix)]
     ("O_DIRECTORY", libc::O_DIRECTORY as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("O_DIRECTORY", 0x10000),
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     ("O_DSYNC", 0x400000),
+    #[cfg(all(
+        all(unix, not(any(target_os = "macos", target_os = "ios"))),
+        not(any(any(target_os = "macos", target_os = "ios")))
+    ))]
+    ("O_DSYNC", libc::O_DSYNC as i64),
     #[cfg(target_os = "linux")]
     ("O_NOATIME", libc::O_NOATIME as i64),
     #[cfg(unix)]
     ("O_NOCTTY", libc::O_NOCTTY as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("O_NOCTTY", 0),
     #[cfg(unix)]
     ("O_NONBLOCK", libc::O_NONBLOCK as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("O_NONBLOCK", 0x800),
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     ("O_SYMLINK", 0x200000),
     #[cfg(unix)]
     ("O_SYNC", libc::O_SYNC as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("O_SYNC", 0x101000),
     #[cfg(unix)]
     ("S_IFBLK", libc::S_IFBLK as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFBLK", 0x6000),
     #[cfg(unix)]
     ("S_IFCHR", libc::S_IFCHR as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFCHR", 0x2000),
     #[cfg(unix)]
     ("S_IFDIR", libc::S_IFDIR as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFDIR", 0x4000),
     #[cfg(unix)]
     ("S_IFIFO", libc::S_IFIFO as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFIFO", 0x1000),
     #[cfg(unix)]
     ("S_IFLNK", libc::S_IFLNK as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFLNK", 0xA000),
     #[cfg(unix)]
     ("S_IFMT", libc::S_IFMT as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFMT", 0xF000),
     #[cfg(unix)]
     ("S_IFREG", libc::S_IFREG as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFREG", 0x8000),
     #[cfg(unix)]
     ("S_IFSOCK", libc::S_IFSOCK as i64),
+    #[cfg(all(not(unix), not(any(unix))))]
+    ("S_IFSOCK", 0xC000),
     ("S_IRWXG", 0o070),
     ("S_IRWXO", 0o007),
     ("S_IRWXU", 0o700),
@@ -2036,7 +2112,7 @@ static FS_CONST_TAIL_TABLE: &[(&str, i64)] = &[
     ("UV_FS_COPYFILE_FICLONE_FORCE", 4),
     #[cfg(windows)]
     ("UV_FS_O_FILEMAP", 0x2000_0000),
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(any(windows))))]
     ("UV_FS_O_FILEMAP", 0),
     ("UV_FS_SYMLINK_DIR", 1),
     ("UV_FS_SYMLINK_JUNCTION", 2),
@@ -2175,8 +2251,11 @@ mod fs_const_tail_table_tests {
     }
 }
 
-/// Sorted table for `sqlite_const` (value exprs + per-arm cfg attrs verbatim;
-/// cfg(unix)/cfg(windows) blocks mirrored as per-cfg tables).
+/// Sorted table for `sqlite_const`: block-level `#[cfg]` predicates mirrored
+/// verbatim as per-platform tables; per-arm cfg chains composed with
+/// `not(any(..))` so first-match-wins semantics survive; value exprs
+/// verbatim. The verbatim reference + literal-universe oracle below runs on
+/// EVERY platform in CI, covering the sides not testable locally.
 static SQLITE_CONST_TABLE: &[(&str, f64)] = &[
     ("SQLITE_ALTER_TABLE", 26.0),
     ("SQLITE_ANALYZE", 28.0),
