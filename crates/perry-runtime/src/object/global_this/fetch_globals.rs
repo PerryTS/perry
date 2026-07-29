@@ -589,6 +589,10 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // and construct it with `new.target` set, re-homing the instance's brand +
     // methods onto `this`. `parent_val` can arrive stale for an aliased heritage
     // (`const L = Intl.Locale; class X extends L`); recover the decl-time parent.
+    // Behind `intl-namespace`: with the feature off no Intl constructor value
+    // exists, so this probe can never match — and skipping it keeps this
+    // always-live construct path from pinning the Intl web.
+    #[cfg(feature = "intl-namespace")]
     {
         let intl_parent = if crate::intl::is_intl_constructor_value(parent_val) {
             parent_val
