@@ -13607,7 +13607,7 @@ fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
     );
     assert!(
         ir.contains("call double @js_put_value_set_dyn_ic("),
-        "the rejected static PIC case must retain complete strict/sloppy semantics through the \
+        "the rejected static PIC case must retain sloppy-mode semantics through the \
          dynamic-key fallback:\n{ir}"
     );
 }
