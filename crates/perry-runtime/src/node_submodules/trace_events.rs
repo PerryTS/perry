@@ -25,6 +25,8 @@ struct TraceState {
 struct TraceOutput {
     initialized: bool,
     enabled: bool,
+    legacy_enabled: bool,
+    explicit_categories: bool,
     categories: BTreeSet<String>,
     file_pattern: Option<String>,
     wrote: bool,
@@ -486,8 +488,10 @@ fn trace_options_from_args(args: impl IntoIterator<Item = String>) -> TraceOutpu
         let arg = &args[index];
         if arg == "--trace-events-enabled" {
             output.enabled = true;
+            output.legacy_enabled = true;
         } else if arg == "--trace-event-categories" {
             output.enabled = true;
+            output.explicit_categories = true;
             if let Some(value) = args.get(index + 1) {
                 output
                     .categories
@@ -496,6 +500,7 @@ fn trace_options_from_args(args: impl IntoIterator<Item = String>) -> TraceOutpu
             }
         } else if let Some(value) = arg.strip_prefix("--trace-event-categories=") {
             output.enabled = true;
+            output.explicit_categories = true;
             output
                 .categories
                 .extend(value.split(',').map(str::to_owned));
@@ -512,12 +517,23 @@ fn trace_options_from_args(args: impl IntoIterator<Item = String>) -> TraceOutpu
     output
 }
 
+fn seed_legacy_categories(output: &mut TraceOutput) {
+    if output.legacy_enabled && !output.explicit_categories {
+        output.categories.extend(
+            ["node", "node.async_hooks", "v8"]
+                .into_iter()
+                .map(str::to_owned),
+        );
+    }
+}
+
 pub(crate) fn init_trace_events_runtime() {
     TRACE_OUTPUT.with(|slot| {
         if slot.borrow().initialized {
             return;
         }
         let mut output = trace_options_from_args(std::env::args());
+        seed_legacy_categories(&mut output);
         output.initialized = true;
         TRACE_ENABLED_COUNTS.with(|counts| {
             let mut counts = counts.borrow_mut();
@@ -602,7 +618,7 @@ fn emit_enabled_trace_warning() {
 
 #[cfg(test)]
 mod tests {
-    use super::trace_options_from_args;
+    use super::{seed_legacy_categories, trace_options_from_args};
 
     #[test]
     fn parses_trace_file_options() {
@@ -628,5 +644,32 @@ mod tests {
                 Some("trace-${pid}-${rotation}.json")
             );
         }
+    }
+
+    #[test]
+    fn legacy_enabled_flag_seeds_node_default_categories() {
+        let mut output =
+            trace_options_from_args(["perry", "--trace-events-enabled"].map(str::to_owned));
+        seed_legacy_categories(&mut output);
+
+        assert!(output.enabled);
+        assert_eq!(
+            output.categories.into_iter().collect::<Vec<_>>(),
+            ["node", "node.async_hooks", "v8"]
+        );
+
+        let mut explicit = trace_options_from_args(
+            [
+                "perry",
+                "--trace-events-enabled",
+                "--trace-event-categories=custom",
+            ]
+            .map(str::to_owned),
+        );
+        seed_legacy_categories(&mut explicit);
+        assert_eq!(
+            explicit.categories.into_iter().collect::<Vec<_>>(),
+            ["custom"]
+        );
     }
 }
