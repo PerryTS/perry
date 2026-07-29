@@ -1182,14 +1182,24 @@ fn ensure_export_singleton(
             f64::from_bits(JSValue::pointer(yield_fn as *const u8).bits()),
         );
     }
-    if submod.key == "trace_events" {
-        crate::object::set_bound_native_closure_name(allocated, export.name);
+    let allocated = if submod.key == "trace_events" {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let allocated_handle = scope.root_raw_mut_ptr(allocated);
+        crate::object::set_bound_native_closure_name(
+            allocated_handle.get_raw_mut_ptr(),
+            export.name,
+        );
         crate::object::set_builtin_closure_length(
-            allocated as usize,
+            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
             export_rest_fixed_arity(submod.key, export.name).unwrap_or(export.thunk.arity()),
         );
-        crate::object::set_builtin_closure_non_constructable(allocated as usize);
-    }
+        crate::object::set_builtin_closure_non_constructable(
+            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
+        );
+        allocated_handle.get_raw_mut_ptr()
+    } else {
+        allocated
+    };
     if submod.key == "test"
         && matches!(
             export.name,
