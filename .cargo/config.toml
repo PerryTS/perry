@@ -1,0 +1,13 @@
+# Supply-chain soak for cargo's own dependency resolution — the same
+# soak-window rule the npm side applies via minimumReleaseAge /
+# min-release-age: crate versions younger than the window are skipped by
+# the resolver unless already in Cargo.lock. min-publish-age is an
+# [unstable] cargo feature, so these keys bite only under a nightly
+# toolchain; on perry's stable toolchain they are inert and the automated
+# window rides dependabot's cooldown (.github/dependabot.yml) instead.
+# Managed by scripts/soak/soak.mts (`npm run soak` / `npm run soak:fix`).
+[unstable]
+min-publish-age = true
+
+[registry]
+global-min-publish-age = "7 days"

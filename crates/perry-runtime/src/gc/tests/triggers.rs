@@ -157,6 +157,15 @@ fn test_gc_bump_medium_parse_allows_one_arena_bump_per_gc_cycle() {
 
 #[test]
 fn test_gc_bump_never_lowers_existing_arena_trigger() {
+    // The "never lower" invariant is asserted against the RAW trigger cell, whose
+    // relationship to the bump target only holds under legacy pacing: with moving
+    // mode on, `effective_next_arena_trigger` is clamped to the small nursery cap,
+    // so a bump target above that cap legitimately re-arms the cell (without ever
+    // lowering the EFFECTIVE, capped trigger). Pin legacy to keep asserting the
+    // raw-cell arithmetic this test was written for. (The new nursery-cap value
+    // itself is asserted under the default by
+    // `test_effective_arena_trigger_respects_armed_values`.)
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let existing_trigger = GC_TRIGGER_ABSOLUTE_CEILING + (32 * 1024 * 1024);
     let _guard = GcBumpTriggerTestGuard::new(existing_trigger, GC_THRESHOLD_INITIAL_BYTES);
     let bytes_now = GC_TRIGGER_ABSOLUTE_CEILING + (16 * 1024 * 1024);
@@ -248,26 +257,49 @@ fn test_budget_scaled_clamps_only_under_budget() {
 fn test_effective_arena_trigger_respects_armed_values() {
     use super::super::heap_budget::gc_trigger_absolute_ceiling_bytes;
     use super::super::policy::{
-        effective_next_arena_trigger, GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
+        effective_next_arena_trigger, gc_moving_loop_polls_enabled, gc_scavenge_nursery_cap_bytes,
+        GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
     };
+    // `effective_next_arena_trigger` additionally clamps to the small nursery cap
+    // whenever moving mode is active (the default-on evacuating scavenge) or the
+    // PERRY_GC_SCAVENGE de-risking flag is set; otherwise it clamps only the
+    // UN-armed cell to the device ceiling and lets an armed trigger exceed it.
+    // Assert the value correct for the mode this process runs in, so the NEW
+    // nursery-cap behavior is exercised under the default and the legacy ceiling
+    // behavior under the PERRY_GC_MOVING_LOOP_POLLS=0 kill switch. This mirrors
+    // the gate in `effective_next_arena_trigger` exactly.
+    let nursery_capped = super::super::gc_scavenge_enabled() || gc_moving_loop_polls_enabled();
+    let ceiling = gc_trigger_absolute_ceiling_bytes();
+    let nursery_cap = gc_scavenge_nursery_cap_bytes();
+
     let prev_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
     let prev_armed = GC_TRIGGER_ARMED.with(|c| c.get());
 
     GC_TRIGGER_ARMED.with(|c| c.set(false));
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(usize::MAX / 2));
+    let expected_unarmed = if nursery_capped {
+        ceiling.min(nursery_cap)
+    } else {
+        ceiling
+    };
     assert_eq!(
         effective_next_arena_trigger(),
-        gc_trigger_absolute_ceiling_bytes(),
-        "un-armed trigger must clamp to the device ceiling"
+        expected_unarmed,
+        "un-armed trigger must clamp to the device ceiling (further to the nursery cap when moving)"
     );
 
     GC_TRIGGER_ARMED.with(|c| c.set(true));
-    let above_ceiling = gc_trigger_absolute_ceiling_bytes() * 3;
+    let above_ceiling = ceiling * 3;
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(above_ceiling));
+    let expected_armed = if nursery_capped {
+        above_ceiling.min(nursery_cap)
+    } else {
+        above_ceiling
+    };
     assert_eq!(
         effective_next_arena_trigger(),
-        above_ceiling,
-        "armed triggers above the ceiling are legitimate and must survive"
+        expected_armed,
+        "armed triggers above the ceiling survive under legacy pacing and clamp to the nursery cap when moving"
     );
 
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(prev_trigger));

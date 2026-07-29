@@ -122,6 +122,7 @@ fn module_with_recursive_constructor_return() -> Module {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            alloc_width_hint: 0,
         }],
         interfaces: Vec::new(),
         type_aliases: Vec::new(),

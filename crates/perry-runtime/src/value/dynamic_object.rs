@@ -463,14 +463,17 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     let object_type = *(ptr as *const u32);
 
     // Handle native module namespace objects (e.g., `const fn = fs.lstatSync`)
-    // Create a bound method closure so the method reference can be called later
+    // Create a bound method closure so the method reference can be called
+    // later. Routed through the armed ops table (see `nm_namespace_hooks`) so
+    // binaries with no module imports don't link the bind/dispatch machinery;
+    // unarmed + matching class_id is unreachable (only the arming bootstrap
+    // assigns NATIVE_MODULE_CLASS_ID).
     let obj_header = ptr as *const crate::object::ObjectHeader;
     if (*obj_header).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
-        return crate::object::js_native_module_bind_method(
-            obj_value,
-            property_name.as_ptr(),
-            property_name.len(),
-        );
+        return match crate::object::nm_namespace_ops() {
+            Some(ops) => (ops.bind_method)(obj_value, property_name.as_ptr(), property_name.len()),
+            None => f64::from_bits(TAG_UNDEFINED),
+        };
     }
 
     // Handle Error objects specially

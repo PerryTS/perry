@@ -1230,3 +1230,90 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
     clear_marks();
     remembered_set_clear();
 }
+
+/// #6892 — a MINOR sweep must not finalize an unmarked OLD-generation object.
+///
+/// Minor traces never mark the old generation (old-gen parents are black
+/// leaves, reached only through dirty remembered-set pages), so "unmarked" in
+/// a minor means "unvisited", not "dead". Treating such an object as garbage
+/// ran `finalize_dead_arena_payload` on a live object, whose
+/// `layout_clear_for_ptr` wiped its GC slot-layout mask. The next
+/// `layout_note_slot` then rebuilt the mask from a single slot, so the
+/// following trace stopped visiting the object's other pointer slots and swept
+/// children that were still referenced.
+#[test]
+fn test_minor_sweep_keeps_unmarked_old_object_layout_mask() {
+    let _isolation = copying_nursery_isolation_lock();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    // A live old-gen object with one pointer slot, plus the slot-layout mask
+    // the collector reads to find that pointer.
+    let old_obj = crate::arena::arena_alloc_gc_old(3 * 8, 8, GC_TYPE_OBJECT) as usize;
+    unsafe {
+        std::ptr::write_bytes(old_obj as *mut u8, 0, 3 * 8);
+        // A freshly allocated payload starts pointer-free; the first pointer
+        // store is what promotes it to a side mask.
+        crate::gc::layout_init_pointer_free(old_obj as *mut u8);
+    }
+    let child = crate::arena::arena_alloc_gc_old(16, 8, GC_TYPE_STRING) as usize;
+    layout_note_slot(old_obj, 0, string_bits(child));
+    assert_eq!(
+        test_layout_pointer_slot_count(old_obj, 3),
+        Some(1),
+        "precondition: the old object starts with a one-pointer slot mask"
+    );
+
+    // A minor sweep. `old_obj` is deliberately left UNMARKED — that is exactly
+    // the state a minor trace leaves every old-gen object in.
+    let mut sweep = IncrementalSweepState::new(true, false, None, false, true);
+    let _ = sweep.finish_unbounded();
+
+    assert_eq!(
+        test_layout_pointer_slot_count(old_obj, 3),
+        Some(1),
+        "#6892: minor sweep wiped the slot-layout mask of a live old-gen object"
+    );
+
+    clear_marks();
+    remembered_set_clear();
+}
+
+/// Converse of `test_minor_sweep_keeps_unmarked_old_object_layout_mask`: a FULL
+/// trace does visit every live parent, so unmarked really does mean dead there
+/// and old-gen reclamation must still happen. Guards the #6892 fix against
+/// being widened into "never reclaim the old generation".
+#[test]
+fn test_full_sweep_still_finalizes_unmarked_old_object() {
+    let _isolation = copying_nursery_isolation_lock();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    let old_obj = crate::arena::arena_alloc_gc_old(3 * 8, 8, GC_TYPE_OBJECT) as usize;
+    unsafe {
+        std::ptr::write_bytes(old_obj as *mut u8, 0, 3 * 8);
+        // A freshly allocated payload starts pointer-free; the first pointer
+        // store is what promotes it to a side mask.
+        crate::gc::layout_init_pointer_free(old_obj as *mut u8);
+    }
+    let child = crate::arena::arena_alloc_gc_old(16, 8, GC_TYPE_STRING) as usize;
+    layout_note_slot(old_obj, 0, string_bits(child));
+    assert_eq!(test_layout_pointer_slot_count(old_obj, 3), Some(1));
+
+    // Full trace (`minor_sweep = false`): unmarked is provably dead.
+    let mut sweep = IncrementalSweepState::new(false, true, None, false, false);
+    let _ = sweep.finish_unbounded();
+
+    assert_eq!(
+        test_layout_pointer_slot_count(old_obj, 3),
+        None,
+        "a full sweep must still finalize genuinely dead old-gen objects"
+    );
+
+    clear_marks();
+    remembered_set_clear();
+}

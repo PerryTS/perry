@@ -74,6 +74,81 @@ pub(super) fn shadow_stack_enabled() -> bool {
     })
 }
 
+/// Inline-hot-small gate. Default ON. When enabled, small functions
+/// (`INLINE_HOT_SMALL_MIN ..= SIZE_CAP` statements) that have ≥1 call site
+/// inside a loop get LLVM's `inlinehint` — a *bounded* nudge that raises the
+/// inline threshold for that callee while LLVM's `-O3` growth budget stays the
+/// backstop (unlike `alwaysinline`, which is unconditional). Disable with
+/// `PERRY_INLINE_HOT_SMALL=0`/`off`/`false` for bisection / binary-size A/B.
+pub(crate) fn inline_hot_small_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_INLINE_HOT_SMALL").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// LLVM `-inlinehint-threshold` used for `inlinehint`-marked callees when the
+/// feature is on. The default hint threshold (325) is too low for Perry's
+/// NaN-boxed kernels — a ~10-statement bit-mixer costs ~800 in LLVM's inline
+/// model once GC shadow-frame calls + typed-array reads + double↔i32 marshaling
+/// are counted — so we raise it. Critically this only affects functions Perry
+/// stamped `inlinehint` (the small + in-loop-callsite gate); every other
+/// function keeps the base `-O3` threshold, so cold code is untouched.
+/// Overridable via `PERRY_INLINE_HOT_SMALL_THRESHOLD` for the binary-size A/B.
+pub(crate) fn inline_hot_small_hint_threshold() -> u32 {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<u32> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::env::var("PERRY_INLINE_HOT_SMALL_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(850)
+    })
+}
+
+/// Smallest body-statement count eligible for `inlinehint`. Functions of `<= 8`
+/// statements already get unconditional `alwaysinline`, so the hint window
+/// starts one above that.
+pub(super) const INLINE_HOT_SMALL_MIN: usize = 9;
+
+/// Largest body-statement count eligible for `inlinehint`. Chosen
+/// conservatively and validated against the binary-size regression gate (a
+/// larger cap duplicates more code at each hinted site). Overridable via
+/// `PERRY_INLINE_HOT_SMALL_CAP` for tuning experiments.
+pub(super) fn inline_hot_small_size_cap() -> usize {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<usize> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::env::var("PERRY_INLINE_HOT_SMALL_CAP")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(20)
+    })
+}
+
+/// Maximum total (module-wide) direct call sites a function may have and still
+/// be hinted. This is the anti-bloat backstop: the raised `-inlinehint-threshold`
+/// lifts LLVM's ceiling for a hinted callee at *every* one of its call sites, so
+/// without this cap a small hot kernel that is also called from many cold sites
+/// would be duplicated at all of them. Capping call sites bounds the added code
+/// (≤ this many inlined copies). A tight bit-mixer kernel has 1–2 sites and
+/// still qualifies; a broadly-shared helper does not. Overridable via
+/// `PERRY_INLINE_HOT_SMALL_MAX_SITES`.
+pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<u32> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::env::var("PERRY_INLINE_HOT_SMALL_MAX_SITES")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(4)
+    })
+}
+
 pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
@@ -110,6 +185,30 @@ pub(crate) fn write_barriers_enabled() -> bool {
 
 thread_local! {
     static FULL_OUTLINE_IC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static JSCVT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// FEAT_JSCVT (`fjcvtzs`) availability for the CURRENT module's target: the
+/// single-instruction, spec-exact ECMAScript `ToInt32` on ARMv8.3+. Only
+/// arm64 macOS triples opt in — every Apple Silicon Mac (M1+) is ≥ ARMv8.4,
+/// while iOS/tvOS device targets can still cover A7–A11 chips (ARMv8.0–8.2,
+/// no JSCVT — `fjcvtzs` would be an illegal instruction) and generic aarch64
+/// (Graviton2/Neoverse-N1) lacks it too. `PERRY_JSCVT=0/off/false` reverts
+/// `toint32_wrap` to the branchless shift/select tower (A/B bisection; keyed
+/// into the object cache). Same thread-local per-module discipline as
+/// `FULL_OUTLINE_IC` above.
+pub(crate) fn jscvt_enabled() -> bool {
+    JSCVT.with(|c| c.get())
+}
+
+pub(crate) fn set_jscvt_for_target(triple: &str) {
+    let env_off = matches!(
+        std::env::var("PERRY_JSCVT").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
+    let target_has_jscvt = (triple.starts_with("arm64") || triple.starts_with("aarch64"))
+        && (triple.contains("apple-macosx") || triple.contains("apple-darwin"));
+    JSCVT.with(|c| c.set(target_has_jscvt && !env_off));
 }
 
 /// Lever B (#5334) full-outline gate for class-field IC diamonds. Set ONCE per

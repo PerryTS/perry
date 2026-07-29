@@ -109,6 +109,7 @@ pub(crate) fn lower_namespace_as_class(
                 is_exported,
                 aliases: Vec::new(),
                 is_nested: false,
+                alloc_width_hint: 0,
             });
         }
     };
@@ -407,5 +408,6 @@ pub(crate) fn lower_namespace_as_class(
         is_exported,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     })
 }

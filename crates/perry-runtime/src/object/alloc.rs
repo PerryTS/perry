@@ -249,7 +249,17 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         register_class(class_id, parent_class_id);
     }
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+    // #6812 (w16): honor the learned high-water width for this class so
+    // builder-pattern instances allocate their true field count inline
+    // instead of spilling writes to the overflow side-table. The stored
+    // field_count must be the widened count too — read/write paths derive
+    // alloc_limit as max(field_count, INLINE_SLOT_FLOOR) — mirroring the
+    // dynamic-construct path, which already passes
+    // `learned_inline_field_count` as the field count (capacity semantics;
+    // enumeration follows keys_array, not field_count).
+    let learned = crate::object::learned_inline_field_count(class_id) as usize;
+    let logical_field_count = std::cmp::max(field_count as usize, learned);
+    let alloc_field_count = std::cmp::max(logical_field_count, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
@@ -259,7 +269,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
-        (*ptr).field_count = field_count;
+        (*ptr).field_count = logical_field_count as u32;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         set_object_keys_array(ptr, keys_array);
@@ -559,7 +569,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
 /// Keepalive anchor — `js_object_alloc_class_dynamic_parent` is a
 /// generated-code-only callee, so the auto-optimize whole-program build would
 /// otherwise dead-strip it (see the FFI-symbol-link-break class).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_OBJECT_ALLOC_CLASS_DYNAMIC_PARENT: extern "C" fn(
     u32,
     u32,

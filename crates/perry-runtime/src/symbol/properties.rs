@@ -514,7 +514,15 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
         // is a TypeError per ClassDefinitionEvaluation; anything else
         // becomes an ordinary own static data property (numeric keys, a
         // computed "constructor", drizzle-style `static [name] = v`).
+        // #6943: `js_string_coerce` allocates for every non-heap-string key and
+        // runs a user `toString` / `valueOf` for an object key, so it can
+        // trigger a GC that **evacuates**. `value` is the static field's stored
+        // payload — it goes straight into `class_dynamic_prop_root_store`
+        // below, so a stale one plants a dangling pointer in a live side table.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_handle = scope.root_nanbox_f64(value);
         let key_str = crate::builtins::js_string_coerce(sym);
+        let value = value_handle.get_nanbox_f64();
         if key_str.is_null() {
             return;
         }

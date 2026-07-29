@@ -190,6 +190,23 @@ pub(super) fn emit_string_pool(
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
         llmod.add_named_string_constant(&entry.bytes_global, entry.byte_len + 1, &entry.escaped_ir);
+        if entry.dispatch_used {
+            // AOT-stable property/method dispatch id. Unlike `handle_global`,
+            // this descriptor never points into a thread-local GC arena, so
+            // compiled worker closures can resolve static names without
+            // sharing a main-thread StringHeader. Carrying the precomputed
+            // content hash lets the runtime's per-thread materialization cache
+            // avoid re-hashing the name on every property access.
+            llmod.add_raw_global(format!(
+                "@{} = private unnamed_addr constant {{ i32, i32, i64, ptr }} \
+                 {{ i32 {}, i32 {}, i64 {}, ptr @{} }}",
+                entry.dispatch_global,
+                entry.byte_len,
+                i32::from(entry.is_wtf8),
+                crate::nanbox::i64_literal(entry.dispatch_hash),
+                entry.bytes_global
+            ));
+        }
         llmod.add_internal_global(&entry.handle_global, DOUBLE, "0.0");
     }
 

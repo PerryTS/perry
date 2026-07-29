@@ -117,6 +117,7 @@ fn class_with_static(id: u32, value: f64) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        alloc_width_hint: 0,
     }
 }
 

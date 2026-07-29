@@ -176,6 +176,81 @@ thread_local! {
 }
 
 // ---------------------------------------------------------------------------
+// GC root scanner for readline / stdin listener closures.
+//
+// The stdin listener lists (DATA/KEYPRESS/READABLE_CALLBACKS) and the readline
+// interface callbacks (line/close/question) hold JS closure pointers as raw
+// `i64` in native storage. Under the non-moving collector this was harmless —
+// the closures stay live via the JS listener graph and are never relocated —
+// so historically "no GC scanner ever visited these" (see the DATA_CALLBACKS
+// note above). But the MOVING copying minor RELOCATES a young closure and
+// leaves these native slots pointing at the stale from-space address; the next
+// `js_readline_process_pending` then dispatches through the stale pointer and
+// reads forwarding bytes → "value is not a function". Registering a mutable
+// root scanner makes the moving collector REWRITE these slots (and mark them),
+// matching the EventEmitter listener scanner (stdlib:events) and net.Socket
+// (issue #35). Runs at a GC safepoint on the main thread; the dispatch path
+// clones each list and drops the lock before invoking callbacks, so no lock or
+// borrow is ever held across an allocation that could re-enter this scanner.
+// ---------------------------------------------------------------------------
+
+static READLINE_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+
+fn ensure_gc_scanner_registered() {
+    READLINE_GC_REGISTERED.call_once(|| {
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:readline",
+            scan_readline_roots_mut,
+        );
+    });
+}
+
+fn scan_readline_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    // Shared cross-thread stdin listener lists. Recover from a poisoned lock so
+    // a rewrite is never silently skipped (a skipped rewrite = the stale-ref
+    // crash this scanner exists to prevent).
+    for cbs in [&DATA_CALLBACKS, &KEYPRESS_CALLBACKS, &READABLE_CALLBACKS] {
+        let mut list = cbs.lock().unwrap_or_else(|p| p.into_inner());
+        for cb in list.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
+    }
+    // Main-thread one-shot / persistent readline callbacks. `try_borrow_mut`
+    // is defensive: at the moving safepoint (wait-entry) no dispatch is in
+    // flight so it always succeeds; if a non-moving GC ever re-enters mid-borrow
+    // the skip is harmless (non-moving never relocates).
+    for cell in [&QUESTION_CALLBACK, &LINE_CALLBACK, &CLOSE_CALLBACK] {
+        cell.with(|c| {
+            if let Ok(mut b) = c.try_borrow_mut() {
+                if let Some(v) = b.as_mut() {
+                    visitor.visit_i64_slot(v);
+                }
+            }
+        });
+    }
+    READLINE_INTERFACES.with(|ifaces| {
+        if let Ok(mut b) = ifaces.try_borrow_mut() {
+            for st in b.iter_mut().flatten() {
+                visitor.visit_nanbox_f64_slot(&mut st.input);
+                visitor.visit_nanbox_f64_slot(&mut st.output);
+                if let Some(v) = st.line_callback.as_mut() {
+                    visitor.visit_i64_slot(v);
+                }
+                if let Some(v) = st.close_callback.as_mut() {
+                    visitor.visit_i64_slot(v);
+                }
+                if let Some(v) = st.question_callback.as_mut() {
+                    visitor.visit_i64_slot(v);
+                }
+                if st.pending_next != 0 {
+                    visitor.visit_usize_slot(&mut st.pending_next);
+                }
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Pump-registration shim. The async_bridge module is gated on the
 // `async-runtime` feature; without it, `ensure_pump_registered` doesn't
 // exist. We still want a project to compile when it imports `readline`
@@ -221,6 +296,7 @@ extern "C" fn stdin_listeners_provider(name_ptr: *const u8, name_len: usize) -> 
 /// Registered with the runtime so both that form and codegen's direct
 /// `process.stdin.on(...)` extern land in this one registry.
 extern "C" fn stdin_on_op(name_ptr: *const u8, name_len: usize, cb: i64, _once: i32) {
+    ensure_gc_scanner_registered();
     let name = if name_ptr.is_null() {
         ""
     } else {
@@ -1097,6 +1173,7 @@ pub extern "C" fn js_readline_question(
     prompt_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
+    ensure_gc_scanner_registered();
     let prompt = string_header_to_string(prompt_ptr);
     if with_interface_mut(handle, |state| {
         if state.uses_custom_stream {
@@ -1131,6 +1208,7 @@ pub extern "C" fn js_readline_on(
     event_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
+    ensure_gc_scanner_registered();
     if event_ptr.is_null() {
         return undefined();
     }

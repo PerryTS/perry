@@ -736,6 +736,26 @@ pub(crate) fn build_optimized_libs(
         // duration of this invocation.
         rustflags.push("-C panic=abort".to_string());
     }
+    // PERRY_SIZE_OPT=z|s — rebuild the auto-optimized runtime/stdlib at
+    // `-C opt-level=z`/`s` instead of the profile's `3`. RUSTFLAGS is
+    // appended after cargo's profile-derived flags, and rustc takes the
+    // last `-C opt-level`, so this cleanly overrides the per-package
+    // `opt-level = 3` without a custom profile. Trades some runtime speed
+    // for a substantially smaller binary; keyed into the auto-opt cache
+    // dir hash (see `auto_optimized_cache_key`) so size-optimized and
+    // speed-optimized archives never serve each other's builds.
+    if let Some(level) = size_opt_level() {
+        rustflags.push(format!("-C opt-level={level}"));
+    }
+    // PERRY_SIZE_LTO=fat — whole-archive fat LTO on top of the size opt
+    // level. Must go through cargo's profile override (env form) rather
+    // than RUSTFLAGS: `-C lto` in RUSTFLAGS reaches every rlib dep too,
+    // and rustc rejects `-C lto` for rlib crate types. The env override
+    // lets cargo do it properly (deps keep embedding bitcode, only the
+    // leaf staticlib runs the fat-LTO pass).
+    if size_lto_fat() {
+        cargo_cmd.env("CARGO_PROFILE_RELEASE_LTO", "fat");
+    }
     // #6125: pin the Rust-side CPU baseline to the same PERRY_TARGET_CPU
     // knob codegen's clang invocation honors, so the rebuilt runtime/stdlib
     // (which is what runs before the app's first print — exactly where the
@@ -901,6 +921,13 @@ pub(crate) fn build_optimized_libs(
         let mut bc_rustflags = String::new();
         if panic_abort_safe {
             bc_rustflags.push_str("-C panic=abort ");
+        }
+        // Mirror the size-optimized opt level into the bitcode emission so
+        // the merged whole-program module is built from the same tuning as
+        // the staticlib archives (last `-C opt-level` wins over the
+        // profile's, same as the archive rebuild above).
+        if let Some(level) = size_opt_level() {
+            bc_rustflags.push_str(&format!("-C opt-level={level} "));
         }
         bc_rustflags.push_str("-C codegen-units=1");
         // #6125: the bitcode-LTO path must obey the same CPU baseline as the

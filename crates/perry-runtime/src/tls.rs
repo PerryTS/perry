@@ -567,18 +567,18 @@ pub extern "C" fn js_tls_check_server_identity(hostname: f64, cert: f64) -> f64 
 // Keep-alive anchors so the auto-optimize bitcode rebuild does not dead-strip
 // these codegen-emitted `#[no_mangle]` runtime helpers (referenced from the
 // native dispatch table in perry-codegen).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TLS_GET_CIPHERS: extern "C" fn() -> f64 = js_tls_get_ciphers;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TLS_GET_CA_CERTIFICATES: extern "C" fn(f64) -> f64 = js_tls_get_ca_certificates;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TLS_SET_DEFAULT_CA_CERTIFICATES: extern "C" fn(f64) -> f64 =
     js_tls_set_default_ca_certificates;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TLS_CREATE_SECURE_CONTEXT: extern "C" fn(f64) -> f64 = js_tls_create_secure_context;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TLS_SECURE_CONTEXT_NEW: extern "C" fn(f64) -> f64 = js_tls_secure_context_new;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_TLS_CHECK_SERVER_IDENTITY: extern "C" fn(f64, f64) -> f64 =
     js_tls_check_server_identity;
 

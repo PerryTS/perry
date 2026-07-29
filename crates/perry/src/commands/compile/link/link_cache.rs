@@ -30,6 +30,10 @@ const LINK_ENV_VARS: &[&str] = &[
     "ANDROID_NDK_HOME",
     "OHOS_SDK_HOME",
     "HARMONYOS_SDK_HOME",
+    // Appended verbatim to the link line after cache-status is prepared, so a
+    // changed value must miss the cache or diagnostic flags (`-why_live`) get
+    // a stale cached binary back with no linker run at all.
+    "PERRY_EXTRA_LINK_ARGS",
 ];
 
 #[derive(Debug, Clone)]

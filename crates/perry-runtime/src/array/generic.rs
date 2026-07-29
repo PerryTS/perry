@@ -1120,7 +1120,7 @@ fn clamp_index(v: f64, len: i64) -> i64 {
 // Keep the generic entry points anchored against dead-strip in the default
 // (codegen-only reference) compile path (see #3320 — `#[no_mangle]` alone is
 // not enough once the bitcode is re-linked).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_CB: [extern "C" fn(f64, f64, f64) -> f64; 9] = [
     js_arraylike_forEach,
     js_arraylike_map,
@@ -1132,20 +1132,20 @@ static KEEP_ARRAYLIKE_CB: [extern "C" fn(f64, f64, f64) -> f64; 9] = [
     js_arraylike_findLast,
     js_arraylike_findLastIndex,
 ];
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_REDUCE: [extern "C" fn(f64, f64, i32, f64) -> f64; 2] =
     [js_arraylike_reduce, js_arraylike_reduceRight];
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_SEARCH: [extern "C" fn(f64, f64, f64, i32) -> f64; 3] = [
     js_arraylike_indexOf,
     js_arraylike_lastIndexOf,
     js_arraylike_includes,
 ];
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_AT: extern "C" fn(f64, f64) -> f64 = js_arraylike_at;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_JOIN: extern "C" fn(f64, f64) -> f64 = js_arraylike_join;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_SLICE: extern "C" fn(f64, f64, i32, f64, i32) -> f64 = js_arraylike_slice;
 
 // ---------------------------------------------------------------------------
@@ -1636,9 +1636,9 @@ pub extern "C" fn js_arraylike_splice(recv: f64, args_ptr: *const f64, count: i3
     object_splice(o, args_ptr, count)
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_SORT: extern "C" fn(f64, f64) -> f64 = js_arraylike_sort;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_ARRAYLIKE_VARIADIC: [extern "C" fn(f64, *const f64, i32) -> f64; 2] =
     [js_arraylike_concat, js_arraylike_splice];
 
@@ -1752,6 +1752,21 @@ pub fn dispatch_arraylike_read_method(
 /// engine; any other receiver yields `undefined`. `recv` is the call-site
 /// `this` (IMPLICIT_THIS) the thunk read.
 pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_len: usize) -> f64 {
+    // A Proxy receiver reaches this generic path whenever the eager HIR array
+    // fold bails (untyped receiver — #6397) and the dispatcher resolves the
+    // method through `Get(proxy, name)` → prototype thunk → here. Neither
+    // normalization below can represent it: `as_real_array` rightly rejects
+    // handle-band ids (deref = the #6279 segfault class) and
+    // `run_object_mutator` only accepts plain objects — so the mutation was
+    // silently DROPPED (immer's `draft.list.push(x)` returned undefined and
+    // mutated nothing). Route the traps instead.
+    if crate::proxy::js_proxy_is_proxy(recv) == 1 {
+        if let Some(r) = super::push_pop::proxy_array_mutator(recv, method, args_ptr, args_len) {
+            return r;
+        }
+        // Mutators not yet trap-routed (reverse/sort/splice/fill/copyWithin)
+        // keep the pre-existing fall-through.
+    }
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { real_array_mutator(arr, method, args_ptr, args_len) };

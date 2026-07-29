@@ -737,6 +737,14 @@ pub(crate) struct CrossModuleCtx {
     pub returns_int_functions: std::collections::HashSet<u32>,
     /// Single-argument integer helpers that return the argument coerced to i32.
     pub i32_identity_functions: std::collections::HashSet<u32>,
+    /// Representation-selection Phase 2 (`codegen/spec_abi.rs`): FuncId →
+    /// specialization plan for functions with an emitted full-body specialized
+    /// entry (internal linkage, named by `spec_function_name`). Mutually
+    /// exclusive with the typed_abi clone families and `i64_specialized`.
+    pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// Phase 2 pre-pass: LocalIds proven to permanently hold one specific
+    /// non-view typed array (see `collectors/spec_abi_sites.rs`).
+    pub spec_ta_bindings: std::collections::HashMap<u32, crate::collectors::SpecTaBinding>,
     /// User functions that have a generated internal typed-f64 clone. The
     /// public wrapper keeps the JSValue ABI; direct numeric call sites may call
     /// the clone.
@@ -789,6 +797,15 @@ pub(crate) struct CrossModuleCtx {
     /// calling the clone.
     pub typed_f64_receiver_methods:
         std::collections::HashMap<(String, String), super::typed_abi::TypedReceiverMethodInfo>,
+    /// Representation-selection Phase 5a: `(class, method)` pairs that have a
+    /// generated `internal` proven-`this` clone
+    /// (`collectors/proven_this.rs`). Keys are OWN declarations of
+    /// module-local classes only, which is precisely the condition the two
+    /// routing sites rely on: a hit means the receiver's proven exact class is
+    /// the class the clone was compiled for, so `this` cannot be a subclass
+    /// instance with a different chain.
+    pub pshape_methods:
+        std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
     /// Inline closure bodies that have a generated internal typed-f64 clone.
     /// Only statically-known local closure calls may select these clones after
     /// closure identity/arity and numeric argument guards pass.
@@ -911,4 +928,12 @@ pub(crate) struct CrossModuleCtx {
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`
     /// is empty (side-effect-only modules with no `export`s).
     pub is_dynamic_import_target: bool,
+    /// Inline-hot-small pre-pass result: `FuncId`s in THIS module that have
+    /// ≥1 direct call site inside a loop (`for`/`while`/`do-while`). Consumed
+    /// by `compile_function` to decide whether a small callee earns LLVM's
+    /// `inlinehint`. Built once per module via
+    /// `collectors::collect_hot_loop_callees`. Empty when
+    /// `PERRY_INLINE_HOT_SMALL` is off (the flag is checked at the decision
+    /// site, so the set is still populated but simply not consulted).
+    pub hot_loop_callees: std::collections::HashSet<u32>,
 }

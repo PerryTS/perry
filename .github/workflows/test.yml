@@ -169,6 +169,12 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # The gap-suite ratchet decides whether conformance-smoke goes red, so
+      # its own logic is unit-checked on the cheap job rather than only being
+      # exercised 8 shards deep.
+      - name: Gap snapshot checker self-test
+        run: python3 scripts/gap_snapshot.py --self-test
+
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
@@ -752,18 +758,34 @@ jobs:
   # poor fit for the blocking per-PR `cargo-test` gate (one flake blocked
   # every unrelated PR). They are `#[ignore]`d there and run here instead.
   #
-  # Opt-in + informational: `continue-on-error` so a flake never fails the
-  # workflow; triggered by the `run-extended-tests` PR label, a
-  # `workflow_dispatch` with `run_extended_tests=true`, or a tag push.
+  # The write-barrier stress tests stay opt-in + informational
+  # (`continue-on-error` on THEIR step, so a flake never fails the workflow).
+  #
+  # The job itself is no longer informational. It also runs the GC x
+  # representation-selection stress matrix (`scripts/gc_repsel_matrix.sh`),
+  # which IS a gate: until it existed, a representation could regress GC
+  # correctness and no CI job would say a word. Three weaknesses were fixed
+  # deliberately, and re-introducing any of them re-opens that hole:
+  #   1. job-level `continue-on-error: true` is gone (a gate that cannot fail
+  #      is not a gate); it now sits on the legacy write-barrier step only;
+  #   2. the `if:` no longer requires a `run-extended-tests` label, which is
+  #      why this job "skipped" on the representation PRs (#6911, #6925);
+  #   3. it no longer runs write-barrier stress *only* — nothing about the
+  #      representation corpus was covered before.
+  #
+  # Cost split: a PR runs the 4-arm subset, whose arms all share one
+  # compile-time environment, so the corpus is compiled ONCE and run four
+  # times. push / workflow_dispatch run the full arm list (19 arms, 9 compile
+  # groups) as the deeper net. NOTE: this job is not yet in branch protection's
+  # required contexts — adding it there is what makes the gate blocking.
   # ---------------------------------------------------------------------------
   gc-stress:
-    continue-on-error: true
     if: >-
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -780,12 +802,53 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          # Single source of truth: .node-version at the repo root. Node is the
+          # matrix oracle (we byte-diff against it), so the version is a
+          # correctness input. scripts/gc_repsel_matrix.sh refuses to run when
+          # the running node disagrees with the pin — a test the oracle cannot
+          # run would drop out of the gate silently.
+          node-version-file: .node-version
+
+      - name: Build perry + runtime staticlibs (release)
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+
+      # GATING. Fails the job on any new untriaged red cell. Cells whose GC arm
+      # was measurably inert are reported UNVERIFIED, never green (#6942,
+      # #6946, #6950) — the script asserts liveness from the collector's own
+      # PERRY_GC_TRACE / PERRY_GC_DIAG output rather than trusting the env var.
+      - name: GC x representation-selection matrix (PR subset)
+        if: github.event_name == 'pull_request'
+        run: ./scripts/gc_repsel_matrix.sh --no-build --arms pr --json gc-repsel-matrix.json
+
+      - name: GC x representation-selection matrix (full)
+        if: github.event_name != 'pull_request'
+        run: ./scripts/gc_repsel_matrix.sh --no-build --arms all --json gc-repsel-matrix.json
+
       - name: Run GC write-barrier stress tests
+        # Informational: these are ~200s nondeterministic corruption-window
+        # hunts (#5029). Kept out of the gate so a flake never blocks a PR.
+        continue-on-error: true
         env:
           # Match the cargo-test gate's linker workaround (lld SIGBUS on the
           # shared runner during large test links).
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
         run: cargo test -p perry --test gc_write_barrier_stress -- --ignored
+
+      - name: Upload matrix report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-repsel-matrix
+          path: gc-repsel-matrix.json
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # Compiler-output regression gate

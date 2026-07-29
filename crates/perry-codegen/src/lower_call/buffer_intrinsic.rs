@@ -569,6 +569,7 @@ mod shadow_scan_tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            alloc_width_hint: 0,
         }
     }
 
