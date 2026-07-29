@@ -464,6 +464,98 @@ fn test_typed_shape_descriptor_tracks_raw_numeric_slots() {
     clear_mark_seeds();
 }
 
+/// #6957 regression guard: the typed descriptor of a **shape-keyed** object must
+/// be visible to the layout query helpers.
+///
+/// #6893 keys the canonical descriptor by the shared `keys_array` (`SHAPE_LAYOUTS`)
+/// and deletes the per-object `TYPED_LAYOUTS` entry — so every class instance
+/// (the only objects that carry a keys_array) moved to the shared map. Every
+/// other test in this file allocates with `js_object_alloc` (class 0, no
+/// keys_array), which still takes the per-object path; that is precisely why the
+/// query helpers could go blind on real class instances with the whole layout
+/// suite green.
+#[test]
+fn test_typed_shape_descriptor_visible_for_shape_keyed_objects() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let packed = b"x\0y\0";
+    let keys = crate::object::js_build_class_keys_array(
+        0x6957_01,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    let first = crate::object::js_object_alloc_class_inline_keys(0x6957_01, 0, 2, keys);
+    let second = crate::object::js_object_alloc_class_inline_keys(0x6957_01, 0, 2, keys);
+    unsafe {
+        assert_eq!(
+            (*first).keys_array,
+            (*second).keys_array,
+            "same-shape objects must share one canonical keys array"
+        );
+    }
+
+    let raw_mask = [0b01u64];
+    for object in [first, second] {
+        crate::object::js_object_set_unboxed_f64_field(object, 0, 1.5);
+        crate::object::js_object_set_field(object, 1, crate::value::JSValue::number(2.5));
+        js_gc_init_typed_shape_layout(
+            object as u64,
+            2,
+            raw_mask.as_ptr(),
+            raw_mask.len() as u32,
+            std::ptr::null(),
+            0,
+        );
+    }
+
+    for object in [first, second] {
+        let user = object as usize;
+        assert!(
+            layout_typed_intact_for_user(user),
+            "the shared shape install must set the intact bit"
+        );
+        assert!(
+            layout_typed_raw_f64_slot_for_user(user, 0),
+            "slot 0 is raw-f64 in the shape descriptor"
+        );
+        assert!(!layout_typed_raw_f64_slot_for_user(user, 1));
+        assert!(
+            layout_slot_is_raw_f64_typed(user, 0),
+            "the store fast path must agree with layout_note_slot's own resolution"
+        );
+        assert!(
+            layout_typed_accepts_finite_number_slot_for_user(user, 1),
+            "an ordinary JSValue slot of an intact descriptor accepts finite numbers"
+        );
+    }
+
+    // A contradicting store downgrades ONLY the object that made it. The shared
+    // entry cannot be removed (it still describes every sibling), so the intact
+    // bit is what separates the two — assert both halves.
+    let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
+    crate::object::js_object_set_field(first, 0, crate::value::JSValue::string_ptr(payload));
+
+    assert!(
+        !layout_typed_raw_f64_slot_for_user(first as usize, 0),
+        "a boxed store into a raw-f64 slot must evict this object's descriptor"
+    );
+    assert!(!layout_slot_is_raw_f64_typed(first as usize, 0));
+    assert!(
+        !layout_typed_accepts_finite_number_slot_for_user(first as usize, 0),
+        "a downgraded object must not keep reading its shape's stale descriptor"
+    );
+    assert!(
+        layout_typed_raw_f64_slot_for_user(second as usize, 0),
+        "the sibling never diverged and must keep the shared shape descriptor"
+    );
+    assert!(layout_slot_is_raw_f64_typed(second as usize, 0));
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
 #[test]
 fn test_typed_shape_raw_numeric_slots_accept_pointer_like_f64_bits() {
     clear_marks();

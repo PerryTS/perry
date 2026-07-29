@@ -51,7 +51,29 @@ pub(crate) fn typed_feedback_active() -> bool {
 }
 
 #[cfg(test)]
-pub(crate) static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Serializes the typed-feedback unit tests, which all drive the one
+/// process-global site registry.
+///
+/// Recovers from poisoning **on purpose**. The mutex guards no invariant of its
+/// own: every test re-initializes the shared state with
+/// `reset_typed_feedback_for_tests()` as its next statement, so a lock left
+/// poisoned by an earlier test's assertion failure is still perfectly usable.
+///
+/// #6957: with a plain `.unwrap()`, the first genuine failure in the module
+/// poisoned the lock and turned all 31 subsequent tests into `PoisonError`
+/// panics. That reported two real regressions as 33 red tests, hid which two
+/// were real, and made the module's result depend on `--test-threads` (32 red
+/// serially, 33 in parallel — purely a function of how many tests ran *after*
+/// the poisoning one). Recovering keeps a failure count equal to the number of
+/// actual failures.
+#[cfg(test)]
+pub(crate) fn typed_feedback_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TYPED_FEEDBACK_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
