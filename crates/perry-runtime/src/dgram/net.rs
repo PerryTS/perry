@@ -213,6 +213,10 @@ pub(crate) fn dgram_emit_message(
 /// Extract the raw bytes to transmit from a `send()` message argument
 /// (string → UTF-8, Buffer, or TypedArray/DataView).
 pub(crate) fn message_bytes(value: f64) -> Option<Vec<u8>> {
+    message_bytes_inner(value, true)
+}
+
+fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
     if let Some(text) = string_to_rust(value) {
         return Some(text.into_bytes());
     }
@@ -232,10 +236,20 @@ pub(crate) fn message_bytes(value: f64) -> Option<Vec<u8>> {
         };
     }
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        // Node accepts one top-level buffer list, but each list element must
+        // itself be a string or ArrayBuffer view. Besides matching that
+        // contract, rejecting nested lists prevents cycles from recursing
+        // until the native stack overflows.
+        if !allow_list {
+            return None;
+        }
         let array = raw as *const crate::array::ArrayHeader;
         let mut bytes = Vec::new();
         for index in 0..crate::array::js_array_length(array) {
-            bytes.extend(message_bytes(crate::array::js_array_get_f64(array, index))?);
+            bytes.extend(message_bytes_inner(
+                crate::array::js_array_get_f64(array, index),
+                false,
+            )?);
         }
         return Some(bytes);
     }

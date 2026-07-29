@@ -15,7 +15,8 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
 use crate::closure::{
-    js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
+    js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -102,6 +103,8 @@ pub(crate) const KEY_SEND_BUFFER_SIZE: &[u8] = b"__perryDgramSendBufferSize";
 pub(crate) const KEY_LOOKUP: &[u8] = b"__perryDgramLookup";
 pub(crate) const KEY_SEND_BLOCK_LIST: &[u8] = b"__perryDgramSendBlockList";
 pub(crate) const KEY_BIND_ATTEMPTED: &[u8] = b"__perryDgramBindAttempted";
+pub(crate) const KEY_ABORT_SIGNAL: &[u8] = b"__perryDgramAbortSignal";
+pub(crate) const KEY_ABORT_LISTENER: &[u8] = b"__perryDgramAbortListener";
 /// Reactor id for the live OS socket (real mode only); links a JS socket back
 /// to its `UdpSocket` + recv thread in [`crate::dgram_reactor`].
 pub(crate) const KEY_REACTOR_ID: &[u8] = b"__perryDgramReactorId";
@@ -361,6 +364,9 @@ pub(crate) fn get_prop(value: f64, name: &str) -> Option<f64> {
 }
 
 pub(crate) fn dynamic_prop(value: f64, name: &[u8]) -> Option<f64> {
+    // `js_get_property` may invoke user code and allocate. Callers that reuse
+    // the receiver or result across another runtime call must keep them in
+    // `RuntimeHandleScope` roots and read the refreshed values from the handles.
     let result =
         unsafe { crate::value::js_get_property(value, name.as_ptr() as i64, name.len() as i64) };
     (result.to_bits() != TAG_UNDEFINED).then_some(result)

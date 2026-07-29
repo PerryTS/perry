@@ -9,6 +9,92 @@ use super::*;
 
 use std::net::Ipv4Addr;
 
+extern "C" fn dgram_abort_close_task(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return undefined_value();
+    }
+    close_impl(js_closure_get_capture_f64(closure, 0), &[]);
+    undefined_value()
+}
+
+fn schedule_abort_close(socket: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    crate::closure::js_register_closure_arity(dgram_abort_close_task as *const u8, 0);
+    let task = js_closure_alloc(dgram_abort_close_task as *const u8, 1);
+    js_closure_set_capture_f64(task, 0, socket.get_nanbox_f64());
+    crate::builtins::js_queue_microtask(task as i64);
+}
+
+extern "C" fn dgram_abort_listener(closure: *const ClosureHeader) -> f64 {
+    if !closure.is_null() {
+        schedule_abort_close(js_closure_get_capture_f64(closure, 0));
+    }
+    undefined_value()
+}
+
+fn attach_abort_signal(socket: f64, signal: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    let signal = scope.root_nanbox_f64(signal);
+    let signal_ptr = crate::url::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
+    if signal_ptr.is_null() {
+        throw_invalid_arg_type("options.signal", "AbortSignal", signal.get_nanbox_f64());
+    }
+    if crate::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+        schedule_abort_close(socket.get_nanbox_f64());
+        return;
+    }
+
+    crate::closure::js_register_closure_arity(dgram_abort_listener as *const u8, 0);
+    let listener = js_closure_alloc(dgram_abort_listener as *const u8, 1);
+    js_closure_set_capture_f64(listener, 0, socket.get_nanbox_f64());
+    let listener = scope.root_nanbox_f64(boxed_pointer(listener as *const u8));
+    let abort_event = scope.root_nanbox_f64(str_value("abort"));
+    let signal_ptr = crate::url::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
+    crate::url::js_abort_signal_add_listener(
+        signal_ptr,
+        abort_event.get_nanbox_f64(),
+        listener.get_nanbox_f64(),
+    );
+    set_hidden_value(
+        socket.get_nanbox_f64(),
+        KEY_ABORT_SIGNAL,
+        signal.get_nanbox_f64(),
+    );
+    set_hidden_value(
+        socket.get_nanbox_f64(),
+        KEY_ABORT_LISTENER,
+        listener.get_nanbox_f64(),
+    );
+}
+
+fn detach_abort_signal(socket: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    let Some(signal) = get_hidden_value(socket.get_nanbox_f64(), KEY_ABORT_SIGNAL) else {
+        return;
+    };
+    let signal = scope.root_nanbox_f64(signal);
+    let Some(listener) = get_hidden_value(socket.get_nanbox_f64(), KEY_ABORT_LISTENER) else {
+        return;
+    };
+    let listener = scope.root_nanbox_f64(listener);
+    let abort_event = scope.root_nanbox_f64(str_value("abort"));
+    let signal_ptr = crate::url::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
+    crate::url::js_abort_signal_remove_listener(
+        signal_ptr,
+        abort_event.get_nanbox_f64(),
+        listener.get_nanbox_f64(),
+    );
+    set_hidden_value(socket.get_nanbox_f64(), KEY_ABORT_SIGNAL, undefined_value());
+    set_hidden_value(
+        socket.get_nanbox_f64(),
+        KEY_ABORT_LISTENER,
+        undefined_value(),
+    );
+}
+
 pub(crate) fn create_socket_impl(args: &[f64]) -> f64 {
     let first = args.first().copied().unwrap_or_else(undefined_value);
     let socket_type = if let Some(kind) = string_to_rust(first) {
@@ -31,22 +117,20 @@ pub(crate) fn create_socket_impl(args: &[f64]) -> f64 {
             set_hidden_value(socket, KEY_LOOKUP, lookup);
         }
         if let Some(signal) = get_prop(options, "signal") {
-            if get_prop(signal, "aborted").is_none() {
-                throw_invalid_arg_type("options.signal", "AbortSignal", signal);
-            }
+            attach_abort_signal(socket, signal);
         }
         if let Some(size) = get_prop(options, "recvBufferSize") {
             set_hidden_value(
                 socket,
                 KEY_RECV_BUFFER_SIZE,
-                validate_option_buffer_size(size).max(1.0),
+                validate_option_buffer_size(size, "options.recvBufferSize").max(1.0),
             );
         }
         if let Some(size) = get_prop(options, "sendBufferSize") {
             set_hidden_value(
                 socket,
                 KEY_SEND_BUFFER_SIZE,
-                validate_option_buffer_size(size).max(1.0),
+                validate_option_buffer_size(size, "options.sendBufferSize").max(1.0),
             );
         }
         if let Some(block_list) = get_prop(options, "sendBlockList") {
@@ -131,6 +215,7 @@ pub(crate) fn close_impl(socket: f64, args: &[f64]) -> f64 {
     } else if let Some(id) = reactor_id(socket) {
         crate::dgram_reactor::unregister(id);
     }
+    detach_abort_signal(socket);
     set_hidden_value(socket, KEY_BOUND, bool_value(false));
     set_hidden_value(socket, KEY_CONNECTED, bool_value(false));
     set_hidden_value(socket, KEY_CLOSED, bool_value(true));
@@ -206,24 +291,25 @@ pub(crate) fn remote_address_impl(socket: f64) -> f64 {
 }
 
 pub(crate) fn send_destination(socket: f64, args: &[f64]) -> (u16, String) {
-    if is_truthy_hidden(socket, KEY_CONNECTED)
-        && (args.len() <= 1 || args.get(1).copied().is_some_and(is_callable_value))
-    {
+    if is_truthy_hidden(socket, KEY_CONNECTED) {
+        let uses_slice = send_uses_offset_length(socket, args);
+        let port = args.get(3).copied();
+        let address = args.get(4).copied();
+        let has_port = port.is_some_and(|value| {
+            crate::value::js_is_truthy(value) != 0 && !(uses_slice && is_callable_value(value))
+        });
+        let has_address = address.is_some_and(|value| crate::value::js_is_truthy(value) != 0);
+        if has_port || has_address {
+            crate::fs::validate::throw_error_with_code(
+                "Already connected",
+                "ERR_SOCKET_DGRAM_IS_CONNECTED",
+            );
+        }
         let address = hidden_string(socket, KEY_REMOTE_ADDRESS)
             .unwrap_or_else(|| default_loopback_address(socket));
         return (hidden_port(socket, KEY_REMOTE_PORT), address);
     }
-    if is_truthy_hidden(socket, KEY_CONNECTED) && args.len() >= 4 {
-        crate::fs::validate::throw_error_with_code(
-            "Already connected",
-            "ERR_SOCKET_DGRAM_IS_CONNECTED",
-        );
-    }
-    if args.len() >= 4
-        && is_number_like(args[1])
-        && is_number_like(args[2])
-        && is_number_like(args[3])
-    {
+    if send_uses_offset_length(socket, args) {
         let port = port_from_value(args[3], false);
         let address = send_address(socket, args.get(4).copied());
         return (port, address);
@@ -238,7 +324,7 @@ pub(crate) fn send_destination(socket: f64, args: &[f64]) -> (u16, String) {
 }
 
 pub(crate) fn send_impl(socket: f64, args: &[f64]) -> f64 {
-    let (message, size, bytes) = send_message(args);
+    let (message, size, bytes) = send_message(socket, args);
     let (port, address) = send_destination(socket, args);
     if send_blocked(socket, &address) {
         return finish_send(
@@ -307,16 +393,34 @@ fn send_address(socket: f64, value: Option<f64>) -> String {
     }
 }
 
-fn send_message(args: &[f64]) -> (f64, usize, Vec<u8>) {
+fn send_uses_offset_length(socket: f64, args: &[f64]) -> bool {
+    if is_truthy_hidden(socket, KEY_CONNECTED) {
+        return args.get(2).copied().is_some_and(is_number_like);
+    }
+    args.get(4)
+        .copied()
+        .is_some_and(|value| crate::value::js_is_truthy(value) != 0)
+        || args.get(3).copied().is_some_and(|value| {
+            crate::value::js_is_truthy(value) != 0 && !is_callable_value(value)
+        })
+}
+
+fn send_message(socket: f64, args: &[f64]) -> (f64, usize, Vec<u8>) {
     let value = args.first().copied().unwrap_or_else(undefined_value);
     let mut bytes = message_bytes(value).unwrap_or_else(|| throw_invalid_message(value));
-    if args.len() >= 4 && is_number_like(args[1]) && is_number_like(args[2]) {
-        let offset = number_value(args[1]).unwrap() as usize;
-        let length = number_value(args[2]).unwrap() as usize;
-        if !number_value(args[1]).unwrap().is_finite()
-            || !number_value(args[2]).unwrap().is_finite()
-            || number_value(args[1]).unwrap() < 0.0
-            || number_value(args[2]).unwrap() < 0.0
+    if send_uses_offset_length(socket, args) {
+        let offset_value = args.get(1).copied().unwrap_or_else(undefined_value);
+        let length_value = args.get(2).copied().unwrap_or_else(undefined_value);
+        let offset_number = number_value(offset_value)
+            .unwrap_or_else(|| throw_invalid_arg_type("offset", "number", offset_value));
+        let length_number = number_value(length_value)
+            .unwrap_or_else(|| throw_invalid_arg_type("length", "number", length_value));
+        let offset = offset_number as usize;
+        let length = length_number as usize;
+        if !offset_number.is_finite()
+            || !length_number.is_finite()
+            || offset_number < 0.0
+            || length_number < 0.0
             || offset.saturating_add(length) > bytes.len()
         {
             crate::fs::validate::throw_range_error_named(
@@ -331,21 +435,27 @@ fn send_message(args: &[f64]) -> (f64, usize, Vec<u8>) {
 }
 
 fn send_blocked(socket: f64, address: &str) -> bool {
-    let Some(list) = get_hidden_value(socket, KEY_SEND_BLOCK_LIST) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    let Some(list) = get_hidden_value(socket.get_nanbox_f64(), KEY_SEND_BLOCK_LIST) else {
         return false;
     };
-    let Some(check) = dynamic_prop(list, b"check") else {
+    let list = scope.root_nanbox_f64(list);
+    let Some(check) = dynamic_prop(list.get_nanbox_f64(), b"check") else {
         return false;
     };
+    let check = scope.root_nanbox_f64(check);
     let family = if address.contains(':') {
         "ipv6"
     } else {
         "ipv4"
     };
+    let address = scope.root_nanbox_f64(str_value(address));
+    let family = scope.root_nanbox_f64(str_value(family));
     crate::value::js_is_truthy(call_function(
-        check,
-        list,
-        &[str_value(address), str_value(family)],
+        check.get_nanbox_f64(),
+        list.get_nanbox_f64(),
+        &[address.get_nanbox_f64(), family.get_nanbox_f64()],
     )) != 0
 }
 
@@ -538,9 +648,9 @@ pub(crate) fn validate_buffer_size(value: f64) -> f64 {
     size
 }
 
-fn validate_option_buffer_size(value: f64) -> f64 {
+fn validate_option_buffer_size(value: f64, name: &'static str) -> f64 {
     if number_value(value).is_none() {
-        throw_invalid_arg_type("options.recvBufferSize", "number", value);
+        throw_invalid_arg_type(name, "number", value);
     }
     validate_buffer_size(value)
 }
