@@ -32,6 +32,7 @@ fn budgeted_step_until_phase(target: GcCyclePhase) -> JsGcStepResult {
 
 #[test]
 fn arena_threshold_debt_starts_bounded_assist_without_monolithic_collection() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -74,6 +75,7 @@ fn arena_threshold_debt_starts_bounded_assist_without_monolithic_collection() {
 
 #[test]
 fn malloc_threshold_debt_reclaims_dead_churn_after_host_drain() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -131,6 +133,7 @@ fn malloc_threshold_debt_reclaims_dead_churn_after_host_drain() {
 
 #[test]
 fn active_cycle_gc_check_trigger_calls_pay_bounded_assist_work() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -181,6 +184,7 @@ fn active_cycle_gc_check_trigger_calls_pay_bounded_assist_work() {
 /// covered separately in `incremental_sweep_reclaim.rs`.
 #[test]
 fn allocation_assists_complete_finalize_sweep_and_reclaim() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -271,6 +275,7 @@ fn noop_copy_only_root_scanner(_visit: &mut dyn FnMut(f64)) {}
 /// bounded live set that never made progress.
 #[test]
 fn direct_arena_minor_rebaselines_trigger_above_live_set() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _nursery = CopyingNurseryTestGuard::new(1);
     // A registered copy-only scanner makes the budgeted stepper ineligible, so
     // gc_check_trigger takes the direct synchronous-minor arm.
@@ -318,6 +323,7 @@ fn direct_arena_minor_rebaselines_trigger_above_live_set() {
 /// re-arms a full synchronous minor.
 #[test]
 fn direct_malloc_minor_rebaselines_trigger_above_survivors() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _nursery = CopyingNurseryTestGuard::new(1);
     let _scanners = ScopedRootScannerRegistryGuard::new();
     gc_register_root_scanner(noop_copy_only_root_scanner);
@@ -407,6 +413,7 @@ fn mutator_assist_work_units_scale_with_debt() {
 /// supply but 300 debt-scaled assists comfortably can.
 #[test]
 fn debt_scaled_assists_cannot_be_outrun_by_allocation() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -457,6 +464,7 @@ fn debt_scaled_assists_cannot_be_outrun_by_allocation() {
 /// the barrier window), and birth flags reset once the cycle completes.
 #[test]
 fn budgeted_cycle_allocations_are_born_marked_for_the_whole_cycle() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -500,6 +508,7 @@ fn budgeted_cycle_allocations_are_born_marked_for_the_whole_cycle() {
 /// objects (measured as the #6224 stress SIGSEGV).
 #[test]
 fn manual_gc_drains_parked_budgeted_cycle_first() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -747,6 +756,13 @@ fn test_arena_debt_measured_against_effective_trigger_not_raw_cell() {
     use super::super::policy::{
         effective_next_arena_trigger, GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
     };
+
+    // Asserts the legacy pre-first-collection trigger arithmetic (un-armed cell
+    // reads as the 128 MiB device ceiling). Under default-on moving the effective
+    // trigger is nursery-capped (16 MiB); pin legacy to keep testing the raw-vs-
+    // effective debt mechanism this test was written for. (The nursery-cap value
+    // is asserted under the default by triggers::test_effective_arena_trigger_respects_armed_values.)
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
 
     let prev_total = crate::arena::ARENA_TOTAL_BYTES.with(|c| c.get());
     let prev_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());

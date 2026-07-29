@@ -269,6 +269,7 @@ fn test_copying_minor_sweeps_malloc_when_due_on_arena_trigger() {
 
 #[test]
 fn test_gc_check_trigger_copied_minor_malloc_sweep_rebaselines_trigger() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let live_malloc = gc_malloc(
@@ -340,6 +341,7 @@ fn test_gc_check_trigger_copied_minor_malloc_sweep_rebaselines_trigger() {
 
 #[test]
 fn test_gc_check_trigger_copied_minor_without_malloc_sweep_preserves_malloc_trigger() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     deactivate_malloc_registry_for_tests();
@@ -407,6 +409,7 @@ fn test_gc_check_trigger_copied_minor_without_malloc_sweep_preserves_malloc_trig
 
 #[test]
 fn test_copied_minor_malloc_scaling_no_roots_skips_registry_walk() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     deactivate_malloc_registry_for_tests();
@@ -488,6 +491,7 @@ fn test_copied_minor_malloc_scaling_live_root_with_active_registry() {
 
 #[test]
 fn test_copied_minor_malloc_scaling_falls_back_when_registry_unavailable() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let live_malloc = gc_malloc(

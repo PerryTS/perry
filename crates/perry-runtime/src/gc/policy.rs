@@ -367,6 +367,15 @@ pub(crate) fn gc_incremental_enabled() -> bool {
 /// deferral and the polls that drain it stay coherent — a runtime default-on with
 /// a codegen default-off (or vice versa) would defer collections that never drain.
 pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
+    // Test-only mode override (see `force_legacy_gc_pacing`). Consulted BEFORE
+    // the process-wide OnceLock so a single test can pin legacy (non-moving,
+    // budgeted/direct, 128 MiB-ceiling) pacing for its duration even though the
+    // process default is moving-on. Compiled out entirely in release builds.
+    #[cfg(test)]
+    if let Some(forced) = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(Cell::get) {
+        return forced;
+    }
+
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
         !matches!(
@@ -374,6 +383,50 @@ pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for [`gc_moving_loop_polls_enabled`]. When `Some(v)`,
+    /// the getter returns `v` before consulting the process-wide OnceLock. This
+    /// is the ONLY way a unit test can select GC pacing mode per-test: the
+    /// OnceLock caches the env-derived default once for the whole process, so
+    /// the entire test binary otherwise runs in a single mode. Because the
+    /// nursery-cap in `effective_next_arena_trigger`, the alloc-point routing in
+    /// `gc_check_trigger`, and the eager malloc-registry build in
+    /// `CopyingPointerSet::new` all consult `gc_moving_loop_polls_enabled()`
+    /// (and `gc_scavenge_enabled()` is env-gated OFF by default in tests), this
+    /// single override flips all of the moving-mode behavior coherently.
+    static GC_MOVING_LOOP_POLLS_TEST_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// RAII guard that pins LEGACY (non-moving, budgeted/direct, 128 MiB-ceiling) GC
+/// pacing for the tests that assert the budgeted/direct pacer + trigger
+/// arithmetic — the mechanism that, since the moving-nursery default-on flip,
+/// lives behind the `PERRY_GC_MOVING_LOOP_POLLS=0` kill switch rather than the
+/// default path. Restores the previous override state on drop. Test-only.
+#[cfg(test)]
+pub(super) struct LegacyGcPacingGuard {
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl Drop for LegacyGcPacingGuard {
+    fn drop(&mut self) {
+        GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Pin legacy GC pacing (moving-loop polls OFF) for the duration of the returned
+/// guard. See [`LegacyGcPacingGuard`] and [`gc_moving_loop_polls_enabled`].
+#[cfg(test)]
+pub(super) fn force_legacy_gc_pacing() -> LegacyGcPacingGuard {
+    let previous = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| {
+        let previous = cell.get();
+        cell.set(Some(false));
+        previous
+    });
+    LegacyGcPacingGuard { previous }
 }
 
 pub(super) fn gc_trace_enabled() -> bool {
