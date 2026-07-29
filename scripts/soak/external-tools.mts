@@ -6,7 +6,7 @@
  *   way those tools reach a machine: nothing here trusts "latest".
  *
  *   - `--check`            validate every pin (shape, SRI prefix, soak
- *                          annotations on any soakBypass) — CI gate, no network
+ *                          age and any soakBypass) — CI gate, no network
  *   - `--fix`              prune soakBypass annotations whose window has
  *                          cleared, then run the same checks (the scheduled
  *                          soak-autofix workflow commits the result so the
@@ -62,6 +62,7 @@ interface PlatformPin {
 interface ToolPin {
   description?: string
   version?: string
+  published?: string
   repository?: string
   release?: string
   binaryName?: string
@@ -97,6 +98,7 @@ function sriSha512(buf: Buffer): string {
 
 export function checkPins(tools: Record<string, ToolPin>): string[] {
   const out: string[] = []
+  const today = todayIso()
   for (const [name, pin] of Object.entries(tools)) {
     if (!pin.version && !pin.purl) {
       out.push(`${name}: no version or purl pin`)
@@ -113,23 +115,41 @@ export function checkPins(tools: Record<string, ToolPin>): string[] {
         out.push(`${name}: integrity is not a sha512 SRI: ${sri}`)
       }
     }
+    const published = pin.published
+    if (!published) {
+      out.push(`${name}: no published release date — every pin must prove its soak age`)
+    } else if (!isValidIsoDate(published)) {
+      out.push(`${name}: published is not a real YYYY-MM-DD calendar date`)
+    } else if (published > today) {
+      out.push(`${name}: published ${published} is in the future (today is ${today})`)
+    } else if (today < addDaysIso(published, SOAK_DAYS) && !pin.soakBypass) {
+      out.push(
+        `${name}: published ${published} is younger than ${SOAK_DAYS} days and has no soakBypass`,
+      )
+    }
     if (pin.soakBypass) {
-      const { published, removable } = pin.soakBypass
+      const { published: bypassPublished, removable } = pin.soakBypass
+      const pinnedVersion = pin.version ?? /@([^@]+)$/.exec(pin.purl ?? '')?.[1]
       // A bypass names the version it was granted for. Bump the pin and
       // leave the annotation behind and it now vouches for a version that
       // is no longer installed — the ledger says "1.13.1 was adopted early"
       // while 1.14.0 ships unreviewed. Mismatch is a hard finding, not a
       // stale-annotation warning.
-      if (pin.soakBypass.version !== pin.version) {
+      if (pin.soakBypass.version !== pinnedVersion) {
         out.push(
-          `${name}: soakBypass is for ${pin.soakBypass.version} but the pin is ${pin.version} — re-date the annotation for the version actually pinned, or drop it`,
+          `${name}: soakBypass is for ${pin.soakBypass.version} but the pin is ${pinnedVersion ?? '(unknown)'} — re-date the annotation for the version actually pinned, or drop it`,
         )
       }
-      if (!isValidIsoDate(published) || !isValidIsoDate(removable)) {
+      if (bypassPublished !== pin.published) {
+        out.push(
+          `${name}: soakBypass published ${bypassPublished} does not match pin published ${pin.published ?? '(missing)'}`,
+        )
+      }
+      if (!isValidIsoDate(bypassPublished) || !isValidIsoDate(removable)) {
         out.push(`${name}: soakBypass dates are not real YYYY-MM-DD calendar dates`)
         continue
       }
-      const expected = addDaysIso(published, SOAK_DAYS)
+      const expected = addDaysIso(bypassPublished, SOAK_DAYS)
       if (removable !== expected) {
         out.push(`${name}: soakBypass removable ${removable}, wanted ${expected} (published + ${SOAK_DAYS}d)`)
       }
@@ -499,9 +519,11 @@ function installDeps(name: string, pkgDir: string): number {
     if (res.error) {
       continue
     }
-    return res.status ?? 1
+    if (res.status === 0) {
+      return 0
+    }
   }
-  console.error(`[external-tools] ${name}: no package manager available for deps`)
+  console.error(`[external-tools] ${name}: no package manager completed dependency installation`)
   return 1
 }
 

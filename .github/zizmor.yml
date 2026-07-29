@@ -29,13 +29,62 @@ rules:
         # action — must be pinned to a commit SHA.
         "*": hash-pin
 
-  # 49 findings, all audit-confidence Low: Swatinem/rust-cache in workflows
-  # that also publish artifacts. The release workflows are tag-gated and
-  # caches are keyed per-workflow; restructuring cache scope is a workflow
-  # redesign, not a lint fix. Revisit if zizmor's confidence rises or the
-  # release pipeline changes.
+  # 49 findings, all audit-confidence Low: existing cache restores in
+  # workflows that also publish artifacts. The release workflows are
+  # tag-gated and caches are keyed per-workflow; restructuring cache scope
+  # is a workflow redesign, not a lint fix. Keep these line-specific so a
+  # new cache site anywhere in the repo is still audited.
   cache-poisoning:
-    disable: true
+    ignore:
+      - benchmark.yml:48
+      - benchmark.yml:58
+      - benchmark.yml:68
+      - benchmark.yml:269
+      - container-tests.yml:100
+      - container-tests.yml:173
+      - container-tests.yml:214
+      - container-tests.yml:256
+      - release-hono-server.yml:37
+      - release-packages.yml:324
+      - release-packages.yml:987
+      - release-packages.yml:1904
+      - simctl-tests.yml:41
+      - test.yml:98
+      - test.yml:119
+      - test.yml:202
+      - test.yml:207
+      - test.yml:214
+      - test.yml:271
+      - test.yml:280
+      - test.yml:287
+      - test.yml:381
+      - test.yml:390
+      - test.yml:397
+      - test.yml:640
+      - test.yml:644
+      - test.yml:651
+      - test.yml:732
+      - test.yml:773
+      - test.yml:825
+      - test.yml:834
+      - test.yml:841
+      - test.yml:971
+      - test.yml:974
+      - test.yml:981
+      - test.yml:1061
+      - test.yml:1067
+      - test.yml:1151
+      - test.yml:1157
+      - test.yml:1291
+      - test.yml:1668
+      - test.yml:1729
+      - test.yml:1735
+      - test.yml:1795
+      - test.yml:1801
+      - test.yml:1848
+      - test.yml:1854
+      - test.yml:2078
+      - test.yml:2146
 
   excessive-permissions:
     ignore:

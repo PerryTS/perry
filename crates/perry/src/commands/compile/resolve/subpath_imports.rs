@@ -361,6 +361,14 @@ fn resolve_target_string(
                  (it must not escape the package directory)",
             ));
         }
+        if pattern && !captured.is_empty() && has_invalid_path_segment(captured) {
+            return Err(SubpathImportError::InvalidSpecifier {
+                specifier: key.replacen('*', captured, 1),
+                reason: "matched wildcard text must not contain \".\", \"..\", or \
+                         \"node_modules\" path segments"
+                    .to_string(),
+            });
+        }
         let substituted = if pattern {
             target.replace('*', captured)
         } else {
@@ -652,6 +660,23 @@ mod tests {
         assert_eq!(
             outcome,
             SubpathImportOutcome::External("@scope/vendored/util".to_string())
+        );
+    }
+
+    #[test]
+    fn bare_package_wildcard_capture_cannot_smuggle_dotdot() {
+        let dir = tempfile::tempdir().unwrap();
+        let importer = fixture(
+            dir.path(),
+            r##"{ "#vendored/*": "@scope/vendored/*" }"##,
+            &[],
+        );
+        let err =
+            resolve_subpath_import("#vendored/../../etc/passwd", &importer, DEFAULT_CONDITIONS)
+                .unwrap_err();
+        assert!(
+            matches!(err, SubpathImportError::InvalidSpecifier { .. }),
+            "{err}"
         );
     }
 

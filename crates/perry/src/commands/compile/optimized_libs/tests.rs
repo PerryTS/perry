@@ -646,7 +646,7 @@ fn retain_workspace_declared_features_drops_unknown_names() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_file(
         &dir.path().join("crates/perry-runtime/Cargo.toml"),
-        b"[package]\nname = \"perry-runtime\"\n\n[features]\nfull = []\nregex-engine = []\n\n[dependencies]\nmimalloc = { version = \"0.1\", optional = true }\n",
+        b"[package]\nname = \"perry-runtime\"\n\n[features]\nfull = [\"dep:hidden-allocator\"]\nregex-engine = []\n\n[dependencies]\nmimalloc = { version = \"0.1\", optional = true }\nhidden-allocator = { version = \"0.1\", optional = true }\n",
     );
     write_file(
         &dir.path().join("crates/perry-stdlib/Cargo.toml"),
@@ -657,14 +657,15 @@ fn retain_workspace_declared_features_drops_unknown_names() {
         "perry-runtime/full".to_string(),
         "perry-runtime/alloc-mimalloc".to_string(),
         "perry-runtime/mimalloc".to_string(),
+        "perry-runtime/hidden-allocator".to_string(),
         "perry-stdlib/crypto".to_string(),
         "perry-stdlib/web-fetch".to_string(),
     ];
     let dropped = retain_workspace_declared_features(dir.path(), &mut cross_features);
 
     // `full` and `crypto` are declared features; `mimalloc` is an optional
-    // dep (implicit feature). Only the names the checkout has never heard of
-    // go.
+    // dep with an implicit feature. `hidden-allocator` is referenced through
+    // `dep:`, so Cargo does not expose an implicit same-named feature.
     assert_eq!(
         cross_features,
         vec![
@@ -677,6 +678,7 @@ fn retain_workspace_declared_features_drops_unknown_names() {
         dropped,
         vec![
             "perry-runtime/alloc-mimalloc".to_string(),
+            "perry-runtime/hidden-allocator".to_string(),
             "perry-stdlib/web-fetch".to_string(),
         ]
     );

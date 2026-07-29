@@ -193,26 +193,30 @@ pub(crate) fn auto_optimized_cross_features(
 
 /// Feature names a workspace crate's `Cargo.toml` can satisfy in a
 /// `--features <crate>/<name>` request: the `[features]` table keys plus every
-/// optional dependency (an optional dep implicitly defines a same-named
-/// feature unless all its `dep:` references say otherwise — over-including
-/// those keeps this fail-open). `None` when the manifest is missing or
+/// optional dependency whose implicit same-named feature has not been hidden
+/// by a `dep:<name>` reference. `None` when the manifest is missing or
 /// unparseable, so callers skip filtering rather than dropping features a
 /// manifest they couldn't read might well declare.
 fn declared_feature_names(workspace_root: &Path, krate: &str) -> Option<BTreeSet<String>> {
     let manifest_path = workspace_root.join("crates").join(krate).join("Cargo.toml");
     let manifest: toml::Value = toml::from_str(&fs::read_to_string(manifest_path).ok()?).ok()?;
-    let mut names: BTreeSet<String> = manifest
-        .get("features")?
-        .as_table()?
-        .keys()
-        .cloned()
+    let feature_table = manifest.get("features")?.as_table()?;
+    let mut names: BTreeSet<String> = feature_table.keys().cloned().collect();
+    let hidden_implicit_features: BTreeSet<&str> = feature_table
+        .values()
+        .filter_map(|value| value.as_array())
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .filter_map(|feature| feature.strip_prefix("dep:"))
         .collect();
     let mut collect_optional = |deps: Option<&toml::Value>| {
         let Some(table) = deps.and_then(|d| d.as_table()) else {
             return;
         };
         for (name, spec) in table {
-            if spec.get("optional").and_then(|o| o.as_bool()) == Some(true) {
+            if spec.get("optional").and_then(|o| o.as_bool()) == Some(true)
+                && !hidden_implicit_features.contains(name.as_str())
+            {
                 names.insert(name.clone());
             }
         }

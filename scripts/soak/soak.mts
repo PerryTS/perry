@@ -145,6 +145,51 @@ export function checkNpmrc(body: string, file: string): Finding[] {
   return out
 }
 
+interface NpmrcExcludeEntry {
+  spec: string
+  line: number
+  annotation?: { published: string; removable: string }
+}
+
+function parseNpmrcExcludeEntries(body: string): NpmrcExcludeEntry[] {
+  const lines = body.split('\n')
+  const out: NpmrcExcludeEntry[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^min-release-age-exclude\[\]\s*=\s*(\S+)\s*$/.exec(lines[i]!)
+    if (!match) {
+      continue
+    }
+    const annotation = ANNOTATION_RE.exec(lines[i - 1]?.trim() ?? '')
+    out.push({
+      spec: match[1]!,
+      line: i,
+      ...(annotation
+        ? { annotation: { published: annotation[1]!, removable: annotation[2]! } }
+        : {}),
+    })
+  }
+  return out
+}
+
+function isStaleNpmrcExclude(entry: NpmrcExcludeEntry, today: string): boolean {
+  const annotation = entry.annotation
+  return Boolean(
+    VERSION_PIN_RE.test(entry.spec) &&
+      annotation &&
+      isValidIsoDate(annotation.published) &&
+      isValidIsoDate(annotation.removable) &&
+      annotation.removable === addDaysIso(annotation.published, SOAK_DAYS) &&
+      annotation.removable < today,
+  )
+}
+
+export function staleNpmrcExcludes(body: string): string[] {
+  const today = todayIso()
+  return parseNpmrcExcludeEntries(body)
+    .filter(entry => isStaleNpmrcExclude(entry, today))
+    .map(entry => entry.spec)
+}
+
 export function checkWorkspaceYaml(body: string, file: string): Finding[] {
   const out: Finding[] = []
   const minutes = /^minimumReleaseAge:\s*(\d+)\s*$/m.exec(body)?.[1]
@@ -500,10 +545,25 @@ export function fixCargoConfig(body: string): string {
 export function fixNpmrc(body: string): string {
   // [ \t] not \s: `\s` matches newlines, so `\s*$` under /m swallowed the
   // blank lines that follow the key (silent reformatting of the file).
-  if (/^min-release-age=\d+[ \t]*$/m.test(body)) {
-    return body.replace(/^min-release-age=\d+[ \t]*$/m, `min-release-age=${SOAK_DAYS}`)
+  let out = body
+  if (/^min-release-age=\d+[ \t]*$/m.test(out)) {
+    out = out.replace(/^min-release-age=\d+[ \t]*$/m, `min-release-age=${SOAK_DAYS}`)
+  } else {
+    out = `${out.trimEnd()}\nmin-release-age=${SOAK_DAYS}\n`
   }
-  return `${body.trimEnd()}\nmin-release-age=${SOAK_DAYS}\n`
+  const lines = out.split('\n')
+  const drop = new Set<number>()
+  const today = todayIso()
+  for (const entry of parseNpmrcExcludeEntries(out)) {
+    if (!isStaleNpmrcExclude(entry, today)) {
+      continue
+    }
+    drop.add(entry.line)
+    if (ANNOTATION_RE.test(lines[entry.line - 1]?.trim() ?? '')) {
+      drop.add(entry.line - 1)
+    }
+  }
+  return drop.size > 0 ? lines.filter((_, i) => !drop.has(i)).join('\n') : out
 }
 
 export function fixWorkspaceYaml(body: string): string {
@@ -603,8 +663,16 @@ export function main(argv: string[] = process.argv.slice(2)): number {
   }
 
   // Catalog <-> package.json lockstep for the package next to the yaml.
+  const npmrcAbs = path.join(REPO_ROOT, SURFACES.npmrc)
   const yamlAbs = path.join(REPO_ROOT, SURFACES.workspaceYaml)
   const pkgAbs = path.join(path.dirname(yamlAbs), 'package.json')
+  if (existsSync(npmrcAbs)) {
+    for (const name of staleNpmrcExcludes(readFileSync(npmrcAbs, 'utf8'))) {
+      console.warn(
+        `[soak] warn: npm exclude '${name}' has soaked — stale pin, pruned by --fix / the soak-autofix workflow`,
+      )
+    }
+  }
   if (existsSync(yamlAbs)) {
     for (const name of staleExcludes(readFileSync(yamlAbs, 'utf8'))) {
       console.warn(

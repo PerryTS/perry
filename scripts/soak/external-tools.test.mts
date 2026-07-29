@@ -29,9 +29,35 @@ test('the repo external-tools.json passes checkPins', () => {
 })
 
 test('checkPins flags missing pins, bad SRIs, and asset entries with no integrity', () => {
-  assert.equal(checkPins({ a: {} }).length, 1)
-  assert.equal(checkPins({ a: { version: '1.0.0', integrity: 'sha256-abc' } }).length, 1)
-  assert.equal(checkPins({ a: { version: '1.0.0', release: 'asset' } }).length, 1)
+  const old = addDaysIso(todayIso(), -SOAK_DAYS)
+  assert.ok(checkPins({ a: {} }).some(problem => /no version or purl/.test(problem)))
+  assert.equal(
+    checkPins({ a: { version: '1.0.0', published: old, integrity: 'sha256-abc' } }).length,
+    1,
+  )
+  assert.equal(
+    checkPins({ a: { version: '1.0.0', published: old, release: 'asset' } }).length,
+    1,
+  )
+})
+
+test('checkPins requires real, non-future publication dates and a bypass while young', () => {
+  const old = addDaysIso(todayIso(), -SOAK_DAYS)
+  const young = addDaysIso(todayIso(), -1)
+  assert.ok(
+    checkPins({ a: { version: '1.0.0' } }).some(problem => /no published release date/.test(problem)),
+  )
+  assert.ok(
+    checkPins({ a: { version: '1.0.0', published: addDaysIso(todayIso(), 1) } }).some(problem =>
+      /in the future/.test(problem),
+    ),
+  )
+  assert.ok(
+    checkPins({ a: { version: '1.0.0', published: young } }).some(problem =>
+      /has no soakBypass/.test(problem),
+    ),
+  )
+  assert.deepEqual(checkPins({ a: { version: '1.0.0', published: old } }), [])
 })
 
 test('checkPins validates soakBypass dates and arithmetic; expiry is a warning, not a failure', () => {
@@ -39,6 +65,7 @@ test('checkPins validates soakBypass dates and arithmetic; expiry is a warning, 
   const good = {
     a: {
       version: '1.0.0',
+      published: pub,
       integrity: GOOD_SRI,
       soakBypass: { version: '1.0.0', published: pub, removable: addDaysIso(pub, SOAK_DAYS) },
     },
@@ -51,10 +78,16 @@ test('checkPins validates soakBypass dates and arithmetic; expiry is a warning, 
   // Expired-but-valid is STALE, not unsafe: checkPins exits clean, the
   // stale list reports it, and --fix / soak-autofix prunes it.
   const expired = structuredClone(good)
-  expired.a.soakBypass = { version: '1.0.0', published: '2020-01-01', removable: '2020-01-08' }
+  expired.a.published = '2020-01-01'
+  expired.a.soakBypass = {
+    version: '1.0.0',
+    published: expired.a.published,
+    removable: addDaysIso(expired.a.published, SOAK_DAYS),
+  }
   assert.deepEqual(checkPins(expired), [])
   assert.deepEqual(staleBypasses(expired), ['a'])
   const impossible = structuredClone(good)
+  impossible.a.published = '2026-13-45'
   impossible.a.soakBypass = { version: '1.0.0', published: '2026-13-45', removable: '2026-13-52' }
   assert.match(checkPins(impossible)[0]!, /calendar/)
   assert.deepEqual(staleBypasses(impossible), [])
@@ -72,7 +105,11 @@ test('pruneExpiredSoakBypasses prunes only valid, expired annotations', () => {
       expired: {
         version: '1.0.0',
         integrity: GOOD_SRI,
-        soakBypass: { version: '1.0.0', published: '2020-01-01', removable: '2020-01-08' },
+        soakBypass: {
+          version: '1.0.0',
+          published: '2020-01-01',
+          removable: addDaysIso('2020-01-01', SOAK_DAYS),
+        },
       },
       // Malformed dates stay findings for a human — never silently pruned.
       malformed: {
@@ -325,11 +362,23 @@ test('installTool resolves the sfw flavor from SOCKET_SECURITY_KEY', async t => 
   )
 })
 
-test('installTool prints the uvx line for uv-project pins without installing', async () => {
+test('installTool prints the pinned uvx line for uv-project pins without installing', async t => {
   const tools = JSON.parse(readFileSync(EXTERNAL_TOOLS_JSON, 'utf8')).tools
   const uv = Object.keys(tools).find(name => tools[name].release === 'uv-project')
   assert.ok(uv, 'the manifest is expected to pin at least one uv project')
+  const lines: string[] = []
+  t.mock.method(console, 'log', (...args: unknown[]) => {
+    lines.push(args.join(' '))
+  })
   await installTool(uv!, tools)
+  const pin = tools[uv!]
+  const repo = pin.repository.replace(/^github:/, '')
+  assert.ok(
+    lines.some(line =>
+      line.includes(`uvx --from git+https://github.com/${repo}@${pin.version} ${uv}`),
+    ),
+    `missing pinned uvx command in: ${lines.join('\n')}`,
+  )
 })
 
 // Glue: main's read-only CLI paths against the tracked manifest — the same

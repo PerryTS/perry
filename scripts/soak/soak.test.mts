@@ -22,6 +22,7 @@ import {
   parseDependabotBlocks,
   parseExcludeEntries,
   staleExcludes,
+  staleNpmrcExcludes,
 } from './soak.mts'
 
 // A pin published yesterday is inside its window; one published long ago
@@ -79,6 +80,27 @@ test('npmrc excludes: version pins need dated annotations, globs do not', () => 
   assert.match(checkNpmrcExcludes(wrongMath, 'n')[0]!.what, /removable date/)
   const badDates = `# published: 2026-13-45 | removable: 2026-13-52\nmin-release-age-exclude[]=lodash@4.17.21\n`
   assert.match(checkNpmrcExcludes(badDates, 'n')[0]!.what, /annotation dates/)
+})
+
+test('npmrc excludes: expired version pins are warned and pruned, standing trust remains', () => {
+  const published = '2020-01-01'
+  const removable = addDaysIso(published, SOAK_DAYS)
+  const body = [
+    `min-release-age=${SOAK_DAYS}`,
+    `# published: ${published} | removable: ${removable}`,
+    'min-release-age-exclude[]=old@1.0.0',
+    'min-release-age-exclude[]=@trusted/*',
+    '',
+  ].join('\n')
+  assert.deepEqual(staleNpmrcExcludes(body), ['old@1.0.0'])
+  const fixed = fixNpmrc(body)
+  assert.ok(!fixed.includes('old@1.0.0'))
+  assert.ok(!fixed.includes(published))
+  assert.ok(fixed.includes('min-release-age-exclude[]=@trusted/*'))
+
+  const fresh = `# published: ${FRESH_PUB} | removable: ${FRESH_REM}\nmin-release-age-exclude[]=fresh@1.0.0\n`
+  assert.deepEqual(staleNpmrcExcludes(fresh), [])
+  assert.ok(fixNpmrc(fresh).includes('fresh@1.0.0'))
 })
 
 test('workspace yaml: clean fixture passes', () => {
