@@ -500,14 +500,14 @@ pub extern "C" fn js_promise_any_iterable(value: f64) -> *mut Promise {
 
 /// #2822/#3320: keepalive anchors so the whole-program LLVM (auto-optimize)
 /// build does not dead-strip these codegen-only `#[no_mangle]` entry points.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROMISE_ALL_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_all_iterable;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROMISE_RACE_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_race_iterable;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROMISE_ALL_SETTLED_ITERABLE: extern "C" fn(f64) -> *mut Promise =
     js_promise_all_settled_iterable;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PROMISE_ANY_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_any_iterable;
 
 // Queue for scheduled promise resolutions

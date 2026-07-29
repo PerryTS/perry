@@ -716,7 +716,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
 /// Uses the O(1) hash index side-table.
 /// C-ABI: current elements-array index of `value` (SameValueZero), or `-1.0` if
 /// absent. Companion to `js_map_find_key_index` for the delete-safe Set `for-of`
-/// fast path (#6075). Only invoked from generated IR, so `#[used]` keeps it.
+/// fast path (#6075). Only invoked from generated IR, so `#[cfg_attr(feature = "keepalive-anchors", used)]` keeps it.
 #[no_mangle]
 pub extern "C" fn js_set_find_value_index(set_boxed: f64, value: f64) -> f64 {
     let set = clean_set_ptr(crate::value::js_nanbox_get_pointer(set_boxed) as *const SetHeader);
@@ -725,7 +725,7 @@ pub extern "C" fn js_set_find_value_index(set_boxed: f64, value: f64) -> f64 {
     }
     unsafe { find_value_index(set, normalize_zero(value)) as f64 }
 }
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_value_index;
 
 pub(crate) unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
@@ -1178,47 +1178,47 @@ pub extern "C" fn js_set_delete_bool(set: *mut SetHeader, value: i32) -> i32 {
 // Codegen emits these string-key typed lowering helpers directly from
 // generated LLVM IR. Keep roots prevent whole-program LTO/dead-strip from
 // removing the exported symbols when the Rust crate graph has no caller.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_ADD_STRING: extern "C" fn(
     *mut SetHeader,
     *const StringHeader,
 ) -> *mut SetHeader = js_set_add_string;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_ADD_NUMBER: extern "C" fn(*mut SetHeader, f64) -> *mut SetHeader =
     js_set_add_number;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_HAS_STRING: extern "C" fn(*const SetHeader, *const StringHeader) -> i32 =
     js_set_has_string;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_HAS_NUMBER: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_has_number;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_DELETE_STRING: extern "C" fn(*mut SetHeader, *const StringHeader) -> i32 =
     js_set_delete_string;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_DELETE_NUMBER: extern "C" fn(*mut SetHeader, f64) -> i32 = js_set_delete_number;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_ADD_I32: extern "C" fn(*mut SetHeader, i32) -> *mut SetHeader = js_set_add_i32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_HAS_I32: extern "C" fn(*const SetHeader, i32) -> i32 = js_set_has_i32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_DELETE_I32: extern "C" fn(*mut SetHeader, i32) -> i32 = js_set_delete_i32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_ADD_U32: extern "C" fn(*mut SetHeader, u32) -> *mut SetHeader = js_set_add_u32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_HAS_U32: extern "C" fn(*const SetHeader, u32) -> i32 = js_set_has_u32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_DELETE_U32: extern "C" fn(*mut SetHeader, u32) -> i32 = js_set_delete_u32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_ADD_F32: extern "C" fn(*mut SetHeader, f32) -> *mut SetHeader = js_set_add_f32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_HAS_F32: extern "C" fn(*const SetHeader, f32) -> i32 = js_set_has_f32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_DELETE_F32: extern "C" fn(*mut SetHeader, f32) -> i32 = js_set_delete_f32;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_ADD_BOOL: extern "C" fn(*mut SetHeader, i32) -> *mut SetHeader = js_set_add_bool;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_HAS_BOOL: extern "C" fn(*const SetHeader, i32) -> i32 = js_set_has_bool;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SET_DELETE_BOOL: extern "C" fn(*mut SetHeader, i32) -> i32 = js_set_delete_bool;
 
 /// Clear all elements from the set
@@ -1803,22 +1803,22 @@ pub extern "C" fn js_set_is_disjoint_from(set: *const SetHeader, other: f64) -> 
 // #2872: keepalive anchors so the auto-optimize whole-program-LLVM-bitcode
 // rebuild doesn't dead-strip these codegen-only `#[no_mangle]` entry points
 // (see project_auto_optimize_keepalive_3320 / PR #3320).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_UNION: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader = js_set_union;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_INTERSECTION: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
     js_set_intersection;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_DIFFERENCE: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
     js_set_difference;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_SYMDIFF: extern "C" fn(*const SetHeader, f64) -> *mut SetHeader =
     js_set_symmetric_difference;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_IS_SUBSET: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_subset_of;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_IS_SUPERSET: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_superset_of;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_SET_IS_DISJOINT: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_is_disjoint_from;
 
 #[cfg(test)]

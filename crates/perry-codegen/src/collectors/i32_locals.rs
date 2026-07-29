@@ -47,6 +47,7 @@ pub fn is_strictly_i32_bounded_expr(
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    int_ta_views: &HashMap<u32, i64>,
     on_dep: &mut dyn FnMut(u32),
 ) -> bool {
     use perry_hir::{BinaryOp, Expr};
@@ -118,11 +119,23 @@ pub fn is_strictly_i32_bounded_expr(
         }
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true,
+        // Repsel Phase 1 widening (gated by the caller passing a non-empty
+        // view map, itself behind `PERRY_CANONICAL_I32_LOCALS`): a proven
+        // in-window element load from a const int-typed-array view is an i32
+        // by construction — the element kind fits i32 and the static index
+        // window is inside the literal length, so no OOB `undefined` and no
+        // out-of-range value can appear. This is the same judgment that
+        // seeds `integer_locals` (`collect_int_ta_load_let_ids`); admitting
+        // it as a STRICT write lets `let l = P[0]; l = (l ^ P[i & 7]) | 0`
+        // qualify for the canonical-i32 slot.
         Expr::IndexGet { object, .. } => match object.as_ref() {
             Expr::IndexGet { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
-            Expr::LocalGet(id) => flat_row_alias_ids.contains(id),
+            Expr::LocalGet(id) => {
+                flat_row_alias_ids.contains(id)
+                    || super::integer_locals::is_proven_int_ta_load(int_ta_views, e)
+            }
             _ => false,
         },
         _ => false,
@@ -140,6 +153,13 @@ pub struct StrictWriteFacts {
     pub saw_any: HashSet<u32>,
     pub disqualified: HashSet<u32>,
     copy_deps: HashMap<u32, Vec<u32>>,
+    /// INPUT (repsel Phase 1): const int-typed-array views (`id → length`)
+    /// whose proven in-window element loads are i32 by construction. Carried
+    /// on the facts struct so the two recursive write-walkers don't need an
+    /// extra threaded parameter. Empty unless `PERRY_CANONICAL_I32_LOCALS`
+    /// is on (the caller decides), keeping the flag-off strictness judgment
+    /// bit-identical to the pre-phase one.
+    int_ta_views: HashMap<u32, i64>,
 }
 
 /// Judge one write to `id` against the oracle and fold the verdict into `out`.
@@ -152,7 +172,6 @@ fn record_strict_write(
     clamp_fn_ids: &HashSet<u32>,
     out: &mut StrictWriteFacts,
 ) {
-    out.saw_any.insert(id);
     let mut deps: Vec<u32> = Vec::new();
     let strict = is_strictly_i32_bounded_expr(
         value,
@@ -160,8 +179,10 @@ fn record_strict_write(
         flat_const_ids,
         flat_row_alias_ids,
         clamp_fn_ids,
+        &out.int_ta_views,
         &mut |d| deps.push(d),
     );
+    out.saw_any.insert(id);
     if !strict {
         out.disqualified.insert(id);
         return;
@@ -220,6 +241,7 @@ pub fn collect_strictly_i32_bounded_locals(
     integer_locals: &HashSet<u32>,
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    int_ta_views: HashMap<u32, i64>,
 ) -> HashSet<u32> {
     let mut flat_row_alias_ids: HashSet<u32> = HashSet::new();
     collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
@@ -227,7 +249,10 @@ pub fn collect_strictly_i32_bounded_locals(
     // Optimistic seed: assume every integer-valued local is also i32-ranged,
     // then let the walk record which writes actually prove it and which merely
     // borrowed the assumption.
-    let mut out = StrictWriteFacts::default();
+    let mut out = StrictWriteFacts {
+        int_ta_views,
+        ..StrictWriteFacts::default()
+    };
     walk_writes_for_strict(
         stmts,
         integer_locals,

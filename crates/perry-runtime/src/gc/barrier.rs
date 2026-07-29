@@ -854,35 +854,14 @@ pub(super) fn incremental_mark_barrier_active() -> bool {
 }
 
 #[inline]
+/// The address an incremental-mark barrier must shade for a stored word,
+/// NaN-boxed or bare.
+///
+/// Shares [`decode_root_word`] with the mark and rewrite paths (#6910): a
+/// word form the barrier shades but root marking skips (or vice versa) is
+/// exactly the kind of drift that module exists to prevent.
 pub(super) fn heap_word_candidate_addr(bits: u64) -> Option<usize> {
-    let tag = bits & TAG_MASK;
-    if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        let payload = bits & POINTER_MASK;
-        // arm64_32 (ILP32): a real heap pointer fits in 32 bits, so `payload as
-        // usize` is lossless only when the high 16 payload bits are zero. A
-        // mistagged/immediate value with a >32-bit payload would otherwise
-        // truncate to a garbage 32-bit address that the GC marks/derefs,
-        // corrupting unrelated heap memory. Reject it.
-        #[cfg(not(target_pointer_width = "64"))]
-        if payload > 0xFFFF_FFFF {
-            return None;
-        }
-        let ptr = payload as usize;
-        return (ptr != 0).then_some(ptr);
-    }
-    if tag >= 0x7FF8_0000_0000_0000 {
-        return None;
-    }
-    if (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
-        // Same ILP32 guard for the raw-f64 pointer path.
-        #[cfg(not(target_pointer_width = "64"))]
-        if bits > 0xFFFF_FFFF {
-            return None;
-        }
-        Some(bits as usize)
-    } else {
-        None
-    }
+    decode_root_word(bits).map(RootWord::addr)
 }
 
 #[inline]
@@ -1362,6 +1341,46 @@ pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, c
     js_write_barrier_slot(parent_addr as u64, slot_addr as u64, child_bits);
 }
 
+/// Canonicalize an **INT32-boxed** numeric store into a raw-f64-masked slot of
+/// an intact typed-shape descriptor (`0x7FFE…` → the plain IEEE bits of the same
+/// number). The object twin of `canonicalize_array_numeric_store_bits`
+/// (`array/header.rs`), and needed for the same reason.
+///
+/// `layout_note_slot` treats any non-raw-f64 bit pattern landing in a raw-f64
+/// slot as a representation change and calls `layout_set_typed_unknown`, which
+/// evicts the object's `TypedLayoutDescriptor` **permanently and one-way**.
+/// INT32 boxes genuinely reach object fields from FFI / native modules (sqlite
+/// row columns, `v8` deserialization, …), and unlike codegen's guarded class-
+/// field store — which canonicalizes inline behind a plain-finite check — this
+/// runtime choke point wrote the bits verbatim. One FFI integer therefore cost
+/// the object its typed fast path forever.
+///
+/// There is no observable behavior change: an INT32 box and its f64 are `===`
+/// and print identically. `value_bits_to_number` supplies the class-ref
+/// exclusion (a `ClassRef` shares INT32_TAG and must keep its tag), so a class
+/// value still downgrades the descriptor rather than being stripped to a bare
+/// number.
+///
+/// Ordered tag-first so the (hot) non-INT32 store never pays the thread-local
+/// descriptor probe.
+#[inline]
+fn canonicalize_typed_slot_store_bits(
+    parent_user: usize,
+    slot_index: usize,
+    value_bits: u64,
+) -> u64 {
+    if value_bits & TAG_MASK != crate::value::INT32_TAG {
+        return value_bits;
+    }
+    if !crate::gc::layout_slot_is_raw_f64_typed(parent_user, slot_index) {
+        return value_bits;
+    }
+    match crate::array::value_bits_to_number(value_bits) {
+        Some(number) => number.to_bits(),
+        None => value_bits,
+    }
+}
+
 #[inline]
 pub(crate) fn runtime_store_jsvalue_slot(
     parent_user: usize,
@@ -1369,6 +1388,7 @@ pub(crate) fn runtime_store_jsvalue_slot(
     slot_index: usize,
     value_bits: u64,
 ) {
+    let value_bits = canonicalize_typed_slot_store_bits(parent_user, slot_index, value_bits);
     unsafe {
         std::ptr::write(slot_addr as *mut u64, value_bits);
     }
@@ -1514,11 +1534,11 @@ pub extern "C" fn js_write_barrier_root_nanbox(value_bits: u64) {
 // the runtime through whole-program LLVM bitcode and is free to internalize and
 // dead-strip an unreferenced `#[no_mangle]` symbol — which broke the default
 // `perry file.ts -o out` link with `undefined _js_write_barrier_root_*`. The
-// `#[used]` statics pin retained reference edges so both survive every link mode.
+// `#[cfg_attr(feature = "keepalive-anchors", used)]` statics pin retained reference edges so both survive every link mode.
 // Same pattern as `node_stream_keepalive.rs` / `typedarray.rs`.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_WRITE_BARRIER_ROOT_HEAP_WORD: extern "C" fn(u64) = js_write_barrier_root_heap_word;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_WRITE_BARRIER_ROOT_NANBOX: extern "C" fn(u64) = js_write_barrier_root_nanbox;
 
 #[inline]

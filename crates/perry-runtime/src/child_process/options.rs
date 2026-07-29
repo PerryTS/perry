@@ -294,6 +294,29 @@ fn cp_default_shell() -> String {
     }
 }
 
+/// Whether a self-launch uses a Node CLI mode that evaluates source text.
+fn cp_should_use_node_interpreter(cmd: &str, args: &[String]) -> bool {
+    let is_self = std::env::args().next().as_deref() == Some(cmd)
+        || std::env::current_exe().is_ok_and(|current| current == std::path::Path::new(cmd));
+    is_self
+        && args
+            .iter()
+            .take_while(|arg| arg.as_str() != "--" && arg.starts_with('-'))
+            .any(|arg| {
+                matches!(arg.as_str(), "-e" | "--eval" | "-p" | "--print")
+                    || arg.starts_with("--eval=")
+                    || arg.starts_with("--print=")
+            })
+}
+
+/// Node interpreter used for source-evaluating self-launches.
+fn cp_default_node_interpreter() -> String {
+    std::env::var("PERRY_FORK_EXECPATH")
+        .ok()
+        .filter(|path| !path.is_empty())
+        .unwrap_or_else(|| "node".to_string())
+}
+
 /// Build a `Command` for `spawn(cmd, args, opts)`, honoring the `shell` option
 /// (Node joins `cmd` + `args` into a single line passed to `<shell> -c`) and
 /// then applying `cwd`/`env`. With no `shell` the file is run directly. #1780.
@@ -304,13 +327,22 @@ pub(crate) fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Com
         cp_undefined()
     };
 
+    // A compiled Perry program is not a Node CLI, so relaunching itself with
+    // `-e` would rerun its AOT entry point. Use the same configurable Node
+    // interpreter as `fork()` for any eval source passed through execPath.
+    let program = if cp_should_use_node_interpreter(cmd, args) {
+        cp_default_node_interpreter()
+    } else {
+        cmd.to_string()
+    };
+
     let mut command = if crate::value::js_is_truthy(shell) != 0 {
         // `shell: "<path>"` picks the binary; `shell: true` uses the default.
         let shell_bin = match cp_value_to_string(shell) {
             Some(s) if !s.is_empty() => s,
             _ => cp_default_shell(),
         };
-        let mut line = String::from(cmd);
+        let mut line = program.clone();
         for a in args {
             line.push(' ');
             line.push_str(a);
@@ -322,7 +354,7 @@ pub(crate) fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Com
         c.arg("-c").arg(line);
         c
     } else {
-        let mut c = Command::new(cmd);
+        let mut c = Command::new(program);
         c.args(args);
         c
     };
@@ -331,4 +363,50 @@ pub(crate) fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Com
     cp_apply_options(&mut command, opts_val);
     cp_apply_detached(&mut command, opts_val);
     command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cp_should_use_node_interpreter;
+
+    #[test]
+    fn self_exec_node_cli_eval_modes_use_node_interpreter() {
+        let current = std::env::current_exe().expect("current executable");
+        let current = current.to_string_lossy();
+
+        assert!(cp_should_use_node_interpreter(
+            &current,
+            &["-e".to_string(), "console.log(42)".to_string()],
+        ));
+        assert!(cp_should_use_node_interpreter(
+            &current,
+            &["--eval=console.log(43)".to_string()],
+        ));
+        assert!(cp_should_use_node_interpreter(
+            &current,
+            &[
+                "--no-warnings".to_string(),
+                "--eval".to_string(),
+                "console.log(44)".to_string(),
+            ],
+        ));
+        for flag in ["-p", "--print"] {
+            assert!(cp_should_use_node_interpreter(
+                &current,
+                &[flag.to_string(), "40 + 2".to_string()],
+            ));
+        }
+        assert!(cp_should_use_node_interpreter(
+            &current,
+            &["--print=40 + 2".to_string()],
+        ));
+        assert!(!cp_should_use_node_interpreter(
+            &current,
+            &["ordinary-argument".to_string()],
+        ));
+        assert!(!cp_should_use_node_interpreter(
+            "some-other-program",
+            &["-e".to_string(), "console.log(45)".to_string()],
+        ));
+    }
 }

@@ -74,6 +74,8 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_axios_create", DOUBLE, &[I64]);
     module.declare_function("js_axios_delete", I64, &[I64]);
     module.declare_function("js_axios_get", I64, &[I64]);
+    module.declare_function("js_axios_head", I64, &[I64]);
+    module.declare_function("js_axios_options", I64, &[I64]);
     // #598: body arg is a NaN-boxed f64 (DOUBLE) so the runtime can
     // distinguish strings from objects via the tag and JSON.stringify
     // non-string bodies. Pre-fix this was I64 (raw unboxed pointer)

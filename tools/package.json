@@ -1,0 +1,8 @@
+{
+  "name": "perry-tools",
+  "private": true,
+  "description": "pnpm-soak domain: dev tooling governed by tools/pnpm-workspace.yaml (catalog + minimumReleaseAge). Kept OUT of the repo root so the workspace yaml never marks the npm-managed root (parity-test fixtures, package-lock.json) as a pnpm workspace.",
+  "devDependencies": {
+    "taze": "catalog:"
+  }
+}
