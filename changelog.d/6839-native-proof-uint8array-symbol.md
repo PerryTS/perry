@@ -13,6 +13,5 @@
   a regression that took the slow path would have gone unnoticed. It now
   forbids both helpers.
 
-  Integration suites under `crates/*/tests/` don't run per-PR (#5960), which is
-  why this sat red — it surfaces only when a PR touches perry-codegen and pulls
-  the suite into `e2e-scoped`.
+  The PR workflow now uses diff-based selection in `e2e-scoped`, so changing
+  this integration test pulls its suite into the per-PR run.
