@@ -42,11 +42,23 @@
   because a local can be pointer-valued with no shadow slot and therefore no
   precise root at all (that is #6968).
 
+  A temp root buys two things — liveness, and a location the collector rewrites
+  — and the suppressions only give up the first. A suppressed operand reads a
+  registered root, so it can never be *swept*; but evacuation **rewrites that
+  storage**, leaving the pre-collection register pointing at where the object
+  used to be. `operand_is_reloadable` therefore re-emits the load at the
+  re-read point instead of reusing the register: correct under relocation, and
+  a plain `load` rather than a runtime call. This is the same staleness #6981
+  reports one layer in, for a raw typed-array pointer under the specialized
+  ABI.
+
   Cost: on a probe of already-safe shapes (`"user_" + i`, `[1,2,3]`,
   `{a:i,b:total}`, all-local argument lists, `m.set(k, 1)`, `m.get(k)`,
   `label.slice(1,3)`, `new Pair(label, i)`) the emitted LLVM IR is
   **byte-identical** to `main`, md5 included. The three protected shapes add 11
-  runtime calls and 14 IR lines in total.
+  runtime calls and 14 IR lines in total. Where a real allocation does intervene
+  over a registered-root operand, the cost is one extra `load` per operand and
+  no runtime call.
 
   Verification: each issue's reproducer is byte-exact over 4 runs under
   `PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_HEAP_LIMIT=8` with the arm
