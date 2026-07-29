@@ -121,9 +121,7 @@ fn expr_alloc_free(e: &Expr) -> bool {
         // Element READS never allocate — they return an existing element / a
         // number. Recurse so the object and index are themselves alloc-free.
         Expr::IndexGet { object, index } => expr_alloc_free(object) && expr_alloc_free(index),
-        Expr::BufferIndexGet { buffer, index } => {
-            expr_alloc_free(buffer) && expr_alloc_free(index)
-        }
+        Expr::BufferIndexGet { buffer, index } => expr_alloc_free(buffer) && expr_alloc_free(index),
         Expr::Uint8ArrayGet { array, index } => expr_alloc_free(array) && expr_alloc_free(index),
         // `arr[i]++` / `--`: read-modify-write of an existing numeric slot, no
         // growth, no allocation.
