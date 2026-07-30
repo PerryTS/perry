@@ -126,24 +126,64 @@ fn grow_for(s: &mut ShadowStackState, need: usize) {
     s.slots.reserve(need.max(SHADOW_STACK_GROW_RESERVE));
 }
 
-/// Zero `n` freshly-claimed entries.
+/// Slots a push always zeroes, whether or not the frame declares that many.
 ///
-/// The small arms are spelled out rather than left to a loop so the frame
-/// sizes codegen actually emits (1–4 pointer-typed locals covers the vast
-/// majority of functions) lower to a few `stp`s instead of a `memset` call.
+/// A *constant*-size clear is the point, and it took three attempts to get one
+/// that survived the optimizer. Every length-dependent form — a `match` on `n`
+/// with a spelled-out arm per size, a bounded loop, `write_bytes` with a
+/// runtime `n` — is re-formed by LLVM into a compare chain that computes a byte
+/// count and **calls `memset`**, which is the per-activation call this rewrite
+/// exists to delete. Even the constant store below was tail-merged with the
+/// large-frame `write_bytes` into a single `csel`-the-length-then-`bl memset`
+/// until the large path moved behind `#[inline(never)]`. All three shapes were
+/// read out of the linked archive's disassembly, not assumed.
+///
+/// Four covers the frame sizes codegen actually emits and still lowers to a
+/// pair of `stp q0, q0`.
+const SHADOW_FRAME_ZERO_MIN: usize = 4;
+
+/// Zero the `n` freshly-claimed slot entries of a new frame.
+///
+/// # Safety
+/// `p` must point at `max(n, SHADOW_FRAME_ZERO_MIN)` writable, correctly
+/// aligned `ShadowEntry`s. `js_shadow_frame_push` guarantees this by sizing
+/// its capacity check with [`frame_zero_span`]; the entries past `n` are
+/// inside the buffer's spare capacity and are re-zeroed by whichever push
+/// claims them next.
+#[inline(always)]
+unsafe fn clear_slots(p: *mut ShadowEntry, n: usize) {
+    if n <= SHADOW_FRAME_ZERO_MIN {
+        std::ptr::write(
+            p.cast::<[ShadowEntry; SHADOW_FRAME_ZERO_MIN]>(),
+            [ShadowEntry::EMPTY; SHADOW_FRAME_ZERO_MIN],
+        );
+    } else {
+        clear_large_frame_slots(p, n);
+    }
+}
+
+/// Out-of-line so LLVM cannot tail-merge this variable-length `memset` with the
+/// constant-length store in [`clear_slots`]. Frames this wide are rare enough
+/// that the call is irrelevant to them and fatal to everything else.
 ///
 /// # Safety
 /// `p` must point at `n` writable, correctly-aligned `ShadowEntry`s.
+#[cold]
+#[inline(never)]
+unsafe fn clear_large_frame_slots(p: *mut ShadowEntry, n: usize) {
+    std::ptr::write_bytes(p, 0, n);
+}
+
+/// Entries a push must have room for: the header, the declared slots, and the
+/// over-zeroed tail [`clear_slots`] writes for small frames.
 #[inline(always)]
-unsafe fn clear_slots(p: *mut ShadowEntry, n: usize) {
-    match n {
-        0 => {}
-        1 => std::ptr::write(p, ShadowEntry::EMPTY),
-        2 => std::ptr::write(p.cast::<[ShadowEntry; 2]>(), [ShadowEntry::EMPTY; 2]),
-        3 => std::ptr::write(p.cast::<[ShadowEntry; 3]>(), [ShadowEntry::EMPTY; 3]),
-        4 => std::ptr::write(p.cast::<[ShadowEntry; 4]>(), [ShadowEntry::EMPTY; 4]),
-        _ => std::ptr::write_bytes(p, 0, n),
-    }
+fn frame_zero_span(slot_count: usize) -> usize {
+    SHADOW_STACK_HEADER_SLOTS
+        + if slot_count < SHADOW_FRAME_ZERO_MIN {
+            SHADOW_FRAME_ZERO_MIN
+        } else {
+            slot_count
+        }
 }
 
 /// Encode a bound compiled-local address into a live [`ShadowEntry::meta`].
@@ -224,8 +264,8 @@ pub extern "C" fn js_shadow_frame_push(slot_count: u32) -> u64 {
         let s = &mut *cell.get();
         let base = s.slots.len();
         let need = SHADOW_STACK_HEADER_SLOTS + slot_count as usize;
-        if need > s.slots.capacity() - base {
-            grow_for(s, need);
+        if frame_zero_span(slot_count as usize) > s.slots.capacity() - base {
+            grow_for(s, frame_zero_span(slot_count as usize));
         }
         let header = s.slots.as_mut_ptr().add(base);
         std::ptr::write(
