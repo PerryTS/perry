@@ -114,13 +114,31 @@ fn async_hooks_static_method_value(
     length: u32,
 ) -> f64 {
     crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let name_string = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name_handle = scope.root_string_ptr(name_string);
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    set_bound_native_closure_name(closure, name);
-    set_builtin_closure_length(closure as usize, length);
-    crate::value::js_nanbox_pointer(closure as i64)
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    crate::closure::closure_set_dynamic_prop(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+        "name",
+        f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits()),
+    );
+    super::super::set_builtin_property_attrs(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+        "name".to_string(),
+        super::super::PropertyAttrs::new(false, false, true),
+    );
+    set_builtin_closure_length(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+        length,
+    );
+    crate::value::js_nanbox_pointer(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    )
 }
 
 extern "C" fn fs_namespace_descriptor_getter_thunk(
@@ -1683,45 +1701,59 @@ pub(crate) unsafe fn nm_attach_perf_hooks(
 pub(crate) unsafe fn nm_attach_async_hooks(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor_handle = scope.root_nanbox_f64(value);
     if property_name == "AsyncLocalStorage" {
-        super::async_hooks_exports::attach_async_local_storage_prototype(value);
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "bind",
-            async_hooks_static_method_value(
-                crate::async_hooks::js_async_local_storage_static_bind_method as *const u8,
-                "bind",
-                1,
-                1,
+        constructor_handle.set_nanbox_f64(
+            super::async_hooks_exports::attach_async_local_storage_prototype(
+                constructor_handle.get_nanbox_f64(),
             ),
         );
+        let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
+            crate::async_hooks::js_async_local_storage_static_bind_method as *const u8,
+            "bind",
+            1,
+            1,
+        ));
         crate::closure::closure_set_dynamic_prop(
-            closure_addr,
+            crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
+            "bind",
+            bind.get_nanbox_f64(),
+        );
+        let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
+            crate::async_hooks::js_async_local_storage_static_snapshot_method as *const u8,
             "snapshot",
-            async_hooks_static_method_value(
-                crate::async_hooks::js_async_local_storage_static_snapshot_method as *const u8,
-                "snapshot",
-                0,
-                0,
-            ),
+            0,
+            0,
+        ));
+        crate::closure::closure_set_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
+            "snapshot",
+            snapshot.get_nanbox_f64(),
         );
     }
 
     if property_name == "AsyncResource" {
-        super::async_hooks_exports::attach_async_resource_prototype(value);
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "bind",
-            async_hooks_static_method_value(
-                crate::async_hooks::js_async_resource_static_bind_method as *const u8,
-                "bind",
-                3,
-                3,
+        constructor_handle.set_nanbox_f64(
+            super::async_hooks_exports::attach_async_resource_prototype(
+                constructor_handle.get_nanbox_f64(),
             ),
         );
+        let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
+            crate::async_hooks::js_async_resource_static_bind_method as *const u8,
+            "bind",
+            3,
+            3,
+        ));
+        crate::closure::closure_set_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
+            "bind",
+            bind.get_nanbox_f64(),
+        );
     }
+    value = constructor_handle.get_nanbox_f64();
     value
 }
 

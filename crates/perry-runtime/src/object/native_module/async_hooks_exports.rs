@@ -4,7 +4,7 @@
 //! elsewhere. This module supplies the ordinary JS prototype objects so
 //! reflection and method-as-value reads see the same functions Node exposes.
 
-use super::callable_exports::{set_bound_native_closure_name, set_builtin_closure_length};
+use super::callable_exports::set_builtin_closure_length;
 use super::*;
 
 const ASYNC_LOCAL_STORAGE_METHODS: &[(&str, u32)] = &[
@@ -43,8 +43,8 @@ extern "C" fn async_hooks_prototype_method_thunk(
         if matches!(name, b"enterWith" | b"disable") {
             let receiver_value = JSValue::from_bits(receiver.to_bits());
             if receiver_value.is_pointer()
-                && !crate::value::addr_class::is_handle_band(
-                    receiver_value.as_pointer::<u8>() as usize
+                && crate::value::addr_class::is_plausible_heap_addr(
+                    receiver_value.as_pointer::<u8>() as usize,
                 )
             {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -56,29 +56,45 @@ extern "C" fn async_hooks_prototype_method_thunk(
     }
 }
 
-fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) {
+fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
     let constructor_js = JSValue::from_bits(constructor_value.to_bits());
     if !constructor_js.is_pointer() {
-        return;
+        return constructor_value;
     }
     let constructor = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
     if constructor == 0 {
-        return;
+        return constructor_value;
     }
 
+    // Every allocation below can evacuate the constructor, prototype, method
+    // closures, and strings. Keep raw pointers only in updateable roots and
+    // reload them immediately before each use.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor_handle =
+        scope.root_raw_mut_ptr(constructor as *mut crate::closure::ClosureHeader);
     let prototype = js_object_alloc(0, 0);
     if prototype.is_null() {
-        return;
+        return crate::value::js_nanbox_pointer(
+            constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        );
     }
+    let prototype_handle = scope.root_raw_mut_ptr(prototype);
 
     let constructor_name = "constructor";
     let constructor_key = crate::string::js_string_from_bytes(
         constructor_name.as_ptr(),
         constructor_name.len() as u32,
     );
-    js_object_set_field_by_name(prototype, constructor_key, constructor_value);
+    let constructor_key_handle = scope.root_string_ptr(constructor_key);
+    js_object_set_field_by_name(
+        prototype_handle.get_raw_mut_ptr(),
+        constructor_key_handle.get_raw_mut_ptr(),
+        crate::value::js_nanbox_pointer(
+            constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        ),
+    );
     super::super::set_builtin_property_attrs(
-        prototype as usize,
+        prototype_handle.get_raw_mut_ptr::<ObjectHeader>() as usize,
         constructor_name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -86,45 +102,72 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) {
     let thunk = async_hooks_prototype_method_thunk as *const u8;
     crate::closure::js_register_closure_rest(thunk, 0);
     for &(name, length) in methods {
-        let leaked: &'static [u8] = name.as_bytes().to_vec().leak();
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
             continue;
         }
-        crate::closure::js_closure_set_capture_ptr(method, 0, leaked.as_ptr() as i64);
-        crate::closure::js_closure_set_capture_ptr(method, 1, leaked.len() as i64);
-        set_bound_native_closure_name(method, name);
-        set_builtin_closure_length(method as usize, length);
+        let method_handle = scope.root_raw_mut_ptr(method);
+        crate::closure::js_closure_set_capture_ptr(
+            method_handle.get_raw_mut_ptr(),
+            0,
+            name.as_ptr() as i64,
+        );
+        crate::closure::js_closure_set_capture_ptr(
+            method_handle.get_raw_mut_ptr(),
+            1,
+            name.len() as i64,
+        );
 
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        js_object_set_field_by_name(
-            prototype,
-            key,
-            crate::value::js_nanbox_pointer(method as i64),
+        let name_string = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let name_handle = scope.root_string_ptr(name_string);
+        crate::closure::closure_set_dynamic_prop(
+            method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+            "name",
+            f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits()),
         );
         super::super::set_builtin_property_attrs(
-            prototype as usize,
+            method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+            "name".to_string(),
+            super::super::PropertyAttrs::new(false, false, true),
+        );
+        set_builtin_closure_length(
+            method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+            length,
+        );
+
+        js_object_set_field_by_name(
+            prototype_handle.get_raw_mut_ptr(),
+            name_handle.get_raw_mut_ptr(),
+            crate::value::js_nanbox_pointer(
+                method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+            ),
+        );
+        super::super::set_builtin_property_attrs(
+            prototype_handle.get_raw_mut_ptr::<ObjectHeader>() as usize,
             name.to_string(),
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
 
     crate::closure::closure_set_dynamic_prop(
-        constructor,
+        constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
         "prototype",
-        crate::value::js_nanbox_pointer(prototype as i64),
+        crate::value::js_nanbox_pointer(prototype_handle.get_raw_mut_ptr::<ObjectHeader>() as i64),
     );
     super::super::set_builtin_property_attrs(
-        constructor,
+        constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
         "prototype".to_string(),
         super::super::PropertyAttrs::new(false, false, false),
     );
+    crate::value::js_nanbox_pointer(
+        constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    )
 }
 
-pub(super) fn attach_async_local_storage_prototype(constructor_value: f64) {
-    attach_prototype(constructor_value, ASYNC_LOCAL_STORAGE_METHODS);
+pub(super) fn attach_async_local_storage_prototype(constructor_value: f64) -> f64 {
+    attach_prototype(constructor_value, ASYNC_LOCAL_STORAGE_METHODS)
 }
 
-pub(super) fn attach_async_resource_prototype(constructor_value: f64) {
-    attach_prototype(constructor_value, ASYNC_RESOURCE_METHODS);
+pub(super) fn attach_async_resource_prototype(constructor_value: f64) -> f64 {
+    attach_prototype(constructor_value, ASYNC_RESOURCE_METHODS)
 }
