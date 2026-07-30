@@ -72,6 +72,11 @@ use oldgen::*;
 mod cycle;
 use cycle::*;
 mod verify;
+
+/// #7035: whole-heap from-space scan — verification that does NOT depend on
+/// the rewrite pass own root enumeration. Debug-only
+/// (`PERRY_GC_FROMSPACE_SCAN=1`).
+mod fromspace_scan;
 pub use verify::*;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
