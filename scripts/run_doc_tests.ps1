@@ -17,9 +17,19 @@ cargo build --release `
     -p perry `
     -p perry-runtime `
     -p perry-stdlib `
+    -p perry-runtime-static `
+    -p perry-stdlib-static `
     -p perry-ui-windows `
     -p perry-doc-tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Host doc-tests can reuse the full prebuilt runtime/stdlib archives above.
+# This mirrors run_doc_tests.sh and avoids a feature-specialized Cargo rebuild
+# for each of ~90 examples. Cross-compile runs must leave auto-optimization on
+# because it is what produces target-specific archives.
+if ($Args -notcontains '--xcompile-only') {
+    $env:PERRY_NO_AUTO_OPTIMIZE = '1'
+}
 
 $ReportDir = Join-Path $RepoRoot 'docs\examples\_reports'
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null

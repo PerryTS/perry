@@ -36,6 +36,12 @@ pub(super) fn add_system_libs(cmd: &mut Command) {
         .arg("msimg32.lib")
         .arg("kernel32.lib")
         .arg("shell32.lib")
+        // shlwapi.lib exports SHCreateMemStream, used by the Windows Image
+        // widget to hand downloaded bytes to GDI+. Like WinHTTP below, the
+        // windows-rs #[link] metadata is lost through perry-ui-windows's
+        // staticlib boundary; omitting this import library made every UI
+        // doc-test fail with LNK2019.
+        .arg("shlwapi.lib")
         .arg("ole32.lib")
         .arg("comctl32.lib")
         .arg("advapi32.lib")
@@ -67,6 +73,23 @@ pub(super) fn add_system_libs(cmd: &mut Command) {
         // through perry-ui-windows's `staticlib` crate-type to perry's final
         // link line. Closes #732.
         .arg("winhttp.lib");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_widget_system_imports_survive_the_staticlib_boundary() {
+        let mut command = Command::new("link.exe");
+        add_system_libs(&mut command);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.iter().any(|arg| arg == "shlwapi.lib"));
+        assert!(args.iter().any(|arg| arg == "winhttp.lib"));
+    }
 }
 
 /// Embed the comctl32 v6 application manifest into a UI executable so common

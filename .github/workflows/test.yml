@@ -2091,20 +2091,22 @@ jobs:
           #   cmd_xcompile_blocking: "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm --xcompile-only-target=ios-simulator"
           #   cmd_xcompile_advisory: "./scripts/run_doc_tests.sh --verbose --xcompile-only"
           #   gallery_advisory: false
-          # windows-2022 doc-tests for perry-ui-windows temporarily disabled:
-          # 30+ doc-test snippets COMPILE_FAIL on the Windows runner with
-          # perry exit 1 (mix of platform-banner gaps and #463-unimplemented
-          # node:* surface). Tracked separately; re-enable once the snippet
-          # set + perry-ui-windows compile paths are reconciled. macOS
-          # doc-tests still gate the release.
-          # - os: windows-2022
-          #   ui_backend: perry-ui-windows
-          #   shell: pwsh
-          #   cmd_exclude_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts"
-          #   cmd_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter ui/gallery.ts"
-          #   cmd_xcompile_blocking: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm --xcompile-only-target=ios-simulator"
-          #   cmd_xcompile_advisory: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only"
-          #   gallery_advisory: false
+          # Re-enabled for #6624. The old 30+ COMPILE_FAIL cluster was mostly
+          # one staticlib-boundary link gap: WinHTTP + SHCreateMemStream import
+          # metadata did not reach Perry's final MSVC link. The compiler now
+          # supplies winhttp.lib + shlwapi.lib explicitly, while later API
+          # work closed the stale #463/WebView failures from that run.
+          - os: windows-2022
+            ui_backend: perry-ui-windows
+            shell: pwsh
+            # The well-known HTTP aggregate remains excluded on every host
+            # while its no-auto ext-archive routing issue is tracked.
+            cmd_exclude_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts"
+            cmd_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter ui/gallery.ts"
+            cmd_xcompile_blocking: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm"
+            cmd_xcompile_advisory: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only"
+            # Baseline captured from run #24735151417 (900x788).
+            gallery_advisory: false
     runs-on: ${{ matrix.os }}
     defaults:
       run:
