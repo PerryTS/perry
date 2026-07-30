@@ -115,9 +115,31 @@ unsafe extern "system" fn window_default_wnd_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CTLCOLORBTN => {
-            use windows::Win32::Graphics::Gdi::HDC;
+            use windows::Win32::Graphics::Gdi::{SetBkColor, SetBkMode, HDC, TRANSPARENT};
             let hdc = HDC(wparam.0 as *mut _);
-            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+            let mut walk = HWND(lparam.0 as *mut _);
+            for _ in 0..10 {
+                if let Ok(parent_hwnd) = GetParent(walk) {
+                    if parent_hwnd.0.is_null() {
+                        break;
+                    }
+                    let parent_handle = crate::widgets::find_handle_by_hwnd(parent_hwnd);
+                    if parent_handle > 0 {
+                        if let (Some(color), Some(brush)) = (
+                            crate::widgets::get_bg_color(parent_handle),
+                            crate::widgets::get_bg_brush(parent_handle),
+                        ) {
+                            SetBkColor(hdc, COLORREF(color));
+                            SetBkMode(hdc, TRANSPARENT);
+                            return LRESULT(brush.0 as isize);
+                        }
+                    }
+                    walk = parent_hwnd;
+                } else {
+                    break;
+                }
+            }
+            if let Some(result) = crate::theme::handle_control_color(hdc, true) {
                 return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)

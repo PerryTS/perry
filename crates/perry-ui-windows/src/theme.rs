@@ -149,9 +149,10 @@ pub unsafe fn handle_container_message(
         return Some(erase_background(hwnd, hdc));
     }
 
-    let editable = msg == 0x0133 || msg == WM_CTLCOLORLISTBOX; // WM_CTLCOLOREDIT / LISTBOX
-    let color_message =
-        matches!(msg, WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX) || editable;
+    let control_surface_message =
+        msg == 0x0133 || matches!(msg, WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX); // EDIT / BTN / LISTBOX
+    let color_message = matches!(msg, WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX)
+        || control_surface_message;
     let forwarded = matches!(msg, WM_COMMAND | WM_CONTEXTMENU | WM_DRAWITEM) || color_message;
     if !forwarded {
         return None;
@@ -167,14 +168,14 @@ pub unsafe fn handle_container_message(
     }
 
     if color_message {
-        return handle_control_color(HDC(wparam.0 as *mut _), editable);
+        return handle_control_color(HDC(wparam.0 as *mut _), control_surface_message);
     }
     None
 }
 
 /// Default fallback for `WM_CTLCOLORSTATIC` / `BTN` / `EDIT` after a widget's
 /// explicit foreground/background styling has had the first chance to answer.
-pub fn handle_control_color(hdc: HDC, editable: bool) -> Option<LRESULT> {
+pub fn handle_control_color(hdc: HDC, control_surface: bool) -> Option<LRESULT> {
     if !is_dark_mode() {
         return None;
     }
@@ -182,14 +183,14 @@ pub fn handle_control_color(hdc: HDC, editable: bool) -> Option<LRESULT> {
         SetTextColor(hdc, text_color());
         SetBkColor(
             hdc,
-            if editable {
+            if control_surface {
                 control_background_color()
             } else {
                 COLORREF(DARK_BACKGROUND)
             },
         );
     }
-    let brush = if editable {
+    let brush = if control_surface {
         control_brush()
     } else {
         background_brush()

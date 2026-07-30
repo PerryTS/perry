@@ -1389,7 +1389,7 @@ unsafe extern "system" fn wnd_proc(
                     break;
                 }
             }
-            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+            if let Some(result) = crate::theme::handle_control_color(hdc, true) {
                 return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)

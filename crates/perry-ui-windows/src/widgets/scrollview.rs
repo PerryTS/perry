@@ -151,12 +151,12 @@ unsafe extern "system" fn scroll_wnd_proc(
                 }
             }
             let hdc = HDC(wparam.0 as *mut _);
-            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+            if let Some(result) = crate::theme::handle_control_color(hdc, msg == WM_CTLCOLORBTN) {
                 return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
-        x if x == 0x0133 /* WM_CTLCOLOREDIT */ => {
+        x if x == 0x0133 /* WM_CTLCOLOREDIT */ || x == WM_CTLCOLORLISTBOX => {
             if let Ok(parent) = GetParent(hwnd) {
                 let result = SendMessageW(parent, msg, Some(wparam), Some(lparam));
                 if result.0 != 0 {

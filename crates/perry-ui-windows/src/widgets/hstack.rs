@@ -57,8 +57,8 @@ unsafe extern "system" fn container_wnd_proc(
                     return result;
                 }
             }
-            if let Some(color) = super::get_hwnd_bg_color(hwnd)
-                .or_else(|| super::find_ancestor_hwnd_bg_color(hwnd))
+            if let Some(color) =
+                super::get_hwnd_bg_color(hwnd).or_else(|| super::find_ancestor_hwnd_bg_color(hwnd))
             {
                 let hdc = HDC(wparam.0 as *mut _);
                 unsafe {
@@ -68,7 +68,7 @@ unsafe extern "system" fn container_wnd_proc(
                 return LRESULT(brush.0 as isize);
             }
             let hdc = HDC(wparam.0 as *mut _);
-            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+            if let Some(result) = crate::theme::handle_control_color(hdc, msg == WM_CTLCOLORBTN) {
                 return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -79,7 +79,7 @@ unsafe extern "system" fn container_wnd_proc(
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
-        x if x == 0x0133 /* WM_CTLCOLOREDIT */ => {
+        x if x == 0x0133 /* WM_CTLCOLOREDIT */ || x == WM_CTLCOLORLISTBOX => {
             if let Ok(parent) = GetParent(hwnd) {
                 let result = SendMessageW(parent, msg, Some(wparam), Some(lparam));
                 if result.0 != 0 {
@@ -105,7 +105,8 @@ unsafe extern "system" fn container_wnd_proc(
                 // WM_PAINT — check if gradient exists before BeginPaint
                 let mut rect = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rect);
-                let has_gradient = crate::widgets::GRADIENT_MAP.lock()
+                let has_gradient = crate::widgets::GRADIENT_MAP
+                    .lock()
                     .map(|map| map.iter().any(|(k, _)| *k == hwnd.0 as isize))
                     .unwrap_or(false);
                 if has_gradient {
@@ -117,8 +118,8 @@ unsafe extern "system" fn container_wnd_proc(
                 }
             }
             // Fall through to solid color fill
-            let color = super::get_hwnd_bg_color(hwnd)
-                .or_else(|| super::find_ancestor_hwnd_bg_color(hwnd));
+            let color =
+                super::get_hwnd_bg_color(hwnd).or_else(|| super::find_ancestor_hwnd_bg_color(hwnd));
             if let Some(color) = color {
                 let brush = windows::Win32::Graphics::Gdi::CreateSolidBrush(COLORREF(color));
                 if msg == WM_ERASEBKGND {
