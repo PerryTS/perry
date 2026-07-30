@@ -109,8 +109,8 @@ struct MessagePortState {
     peer: u64,
     /// NaN-boxed MessagePort object value, used as MessageEvent target.
     object_bits: u64,
-    /// Queue of delivered messages as JSON strings (oldest first).
-    inbox: VecDeque<String>,
+    /// Queue of delivered structured-clone snapshots (oldest first).
+    inbox: VecDeque<SerializedMessage>,
     /// `message` event listener (NaN-boxed closure value bits), if registered.
     message_cb: Option<u64>,
     /// `close` event listener (NaN-boxed closure value bits), if registered.
@@ -136,8 +136,8 @@ struct BroadcastChannelState {
     name: String,
     /// NaN-boxed BroadcastChannel object value, used as MessageEvent target.
     object_bits: u64,
-    /// Queue of delivered messages as JSON strings (oldest first).
-    inbox: VecDeque<String>,
+    /// Queue of delivered structured-clone snapshots (oldest first).
+    inbox: VecDeque<SerializedMessage>,
     /// `message` listeners registered through addEventListener().
     message_event_cbs: Vec<u64>,
     /// Whether `close()` has detached this BroadcastChannel.
@@ -508,19 +508,146 @@ extern "C" fn worker_threads_channels_microtask(_closure: *const ClosureHeader) 
     js_undefined()
 }
 
-/// JSON-serialize a JSValue into a String (structured-clone-like deep copy).
-fn serialize_message(value: f64) -> String {
-    let str_ptr = unsafe { js_json_stringify(value, 0) };
-    string_header_to_string(str_ptr).unwrap_or_else(|| "undefined".to_string())
+/// Same-agent message snapshot. JSON remains the fallback for ordinary
+/// values; typed arrays retain their element kind and are reconstructed as a
+/// fresh typed array rather than degrading to a plain JSON object (#6763).
+#[derive(Clone)]
+enum SerializedMessage {
+    Json(String),
+    ArrayBuffer(Vec<u8>),
+    TypedArray { kind: u8, elements: Vec<f64> },
 }
 
-/// JSON-deserialize a stored message string back into a JSValue.
-fn deserialize_message(msg: &str) -> f64 {
-    if msg == "undefined" || msg.is_empty() {
-        return js_undefined();
+fn serialize_message(value: f64) -> SerializedMessage {
+    let raw = perry_runtime::value::js_nanbox_get_pointer(value) as usize;
+    // Perry's Uint8Array constructor is BufferHeader-backed rather than a
+    // TypedArrayHeader, so preserve that branded representation too.
+    if perry_runtime::buffer::is_uint8array_buffer(raw) {
+        let buffer = raw as *const perry_runtime::buffer::BufferHeader;
+        let len = perry_runtime::buffer::js_buffer_length(buffer).max(0);
+        let elements = (0..len)
+            .map(|index| perry_runtime::buffer::js_buffer_get(buffer, index) as f64)
+            .collect();
+        return SerializedMessage::TypedArray {
+            kind: perry_runtime::typedarray::KIND_UINT8,
+            elements,
+        };
     }
-    let str_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    f64::from_bits(unsafe { js_json_parse(str_ptr) })
+    if perry_runtime::buffer::is_array_buffer(raw) {
+        let buffer = raw as *const perry_runtime::buffer::BufferHeader;
+        let len = perry_runtime::buffer::js_buffer_length(buffer).max(0);
+        let bytes = (0..len)
+            .map(|index| perry_runtime::buffer::js_buffer_get(buffer, index) as u8)
+            .collect();
+        return SerializedMessage::ArrayBuffer(bytes);
+    }
+    if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
+        let typed = raw as *const perry_runtime::typedarray::TypedArrayHeader;
+        let len = perry_runtime::typedarray::js_typed_array_length(typed).max(0);
+        let elements = (0..len)
+            .map(|index| perry_runtime::typedarray::js_typed_array_get(typed, index))
+            .collect();
+        return SerializedMessage::TypedArray { kind, elements };
+    }
+
+    let str_ptr = unsafe { js_json_stringify(value, 0) };
+    SerializedMessage::Json(
+        string_header_to_string(str_ptr).unwrap_or_else(|| "undefined".to_string()),
+    )
+}
+
+fn deserialize_message(msg: &SerializedMessage) -> f64 {
+    match msg {
+        SerializedMessage::ArrayBuffer(bytes) => {
+            let buffer = perry_runtime::buffer::js_array_buffer_new(bytes.len() as i32);
+            for (index, value) in bytes.iter().enumerate() {
+                perry_runtime::buffer::js_buffer_set(buffer, index as i32, *value as i32);
+            }
+            f64::from_bits(JSValue::pointer(buffer as *const u8).bits())
+        }
+        SerializedMessage::TypedArray { kind, elements } => {
+            if *kind == perry_runtime::typedarray::KIND_UINT8 {
+                let buffer = perry_runtime::buffer::js_uint8array_alloc(elements.len() as i32);
+                for (index, value) in elements.iter().enumerate() {
+                    perry_runtime::buffer::js_buffer_set(buffer, index as i32, *value as i32);
+                }
+                return f64::from_bits(JSValue::pointer(buffer as *const u8).bits());
+            }
+            let typed = perry_runtime::typedarray::js_typed_array_new_empty(
+                *kind as i32,
+                elements.len() as i32,
+            );
+            for (index, value) in elements.iter().enumerate() {
+                perry_runtime::typedarray::js_typed_array_set(typed, index as i32, *value);
+            }
+            f64::from_bits(JSValue::pointer(typed as *const u8).bits())
+        }
+        SerializedMessage::Json(json) => {
+            if json == "undefined" || json.is_empty() {
+                return js_undefined();
+            }
+            let str_ptr = js_string_from_bytes(json.as_ptr(), json.len() as u32);
+            f64::from_bits(unsafe { js_json_parse(str_ptr) })
+        }
+    }
+}
+
+/// Reject functions, symbols, marked values, and MessagePorts anywhere in a
+/// submitted message graph. The visited set makes cyclic graphs terminate;
+/// JSON remains the ordinary-object snapshot fallback.
+fn message_value_is_uncloneable(value: f64, visited: &mut HashSet<usize>) -> bool {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return false;
+    }
+    let raw = perry_runtime::value::js_nanbox_get_pointer(value) as usize;
+    // Node deliberately ignores markAsUncloneable(ArrayBuffer): backing
+    // stores remain cloneable (and transferable) even when marked.
+    if UNCLONEABLE_OBJECTS.with(|set| set.borrow().contains(&value.to_bits()))
+        && !perry_runtime::buffer::is_array_buffer(raw)
+    {
+        return true;
+    }
+    if raw < 0x10000
+        || perry_runtime::buffer::is_registered_buffer(raw)
+        || perry_runtime::set::is_registered_set(raw)
+        || perry_runtime::shared_sab::is_shared_sab(raw)
+    {
+        return false;
+    }
+    if perry_runtime::closure::is_closure_ptr(raw)
+        || perry_runtime::symbol::is_registered_symbol(raw)
+        || port_id_from_object(value).is_some()
+    {
+        return true;
+    }
+    if !visited.insert(raw) {
+        return false;
+    }
+
+    if let Some(array) = array_ptr_from_value(value) {
+        let len = perry_runtime::array::js_array_length(array);
+        return (0..len).any(|index| {
+            message_value_is_uncloneable(
+                perry_runtime::array::js_array_get_f64(array, index),
+                visited,
+            )
+        });
+    }
+    let Some(object) = object_ptr_from_value(value) else {
+        return false;
+    };
+    let field_count = unsafe {
+        if (*object).keys_array.is_null() {
+            (*object).field_count
+        } else {
+            perry_runtime::array::js_array_length((*object).keys_array)
+        }
+    };
+    (0..field_count).any(|index| {
+        let field = perry_runtime::object::js_object_get_field(object, index);
+        message_value_is_uncloneable(f64::from_bits(field.bits()), visited)
+    })
 }
 
 fn call_callback0(callback_bits: u64, this_bits: u64) {
@@ -680,8 +807,9 @@ extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _tran
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
         return js_worker_threads_post_message(value);
     }
-    // Reject values flagged uncloneable (#3159). Match Node's DataCloneError.
-    if UNCLONEABLE_OBJECTS.with(|set| set.borrow().contains(&value.to_bits())) {
+    // Validate the full submitted graph: a marked object nested inside an
+    // otherwise cloneable container rejects the whole message.
+    if message_value_is_uncloneable(value, &mut HashSet::new()) {
         throw_data_clone_error("object could not be cloned.");
     }
     let serialized = serialize_message(value);
@@ -854,9 +982,17 @@ extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
 /// worker_threads DataCloneError: matches Node's message for postMessage
 /// rejections of marked-uncloneable / marked-untransferable values (#3159).
 fn throw_data_clone_error(detail: &str) -> ! {
-    let msg = format!("DataCloneError: {detail}");
-    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = perry_runtime::error::js_error_new_with_message(msg_ptr);
+    throw_dom_exception("DataCloneError", detail)
+}
+
+fn throw_invalid_state_error(detail: &str) -> ! {
+    throw_dom_exception("InvalidStateError", detail)
+}
+
+fn throw_dom_exception(name: &str, detail: &str) -> ! {
+    let message = string_value(detail);
+    let name = string_value(name);
+    let err = perry_runtime::event_target::js_dom_exception_new(message, name);
     perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
 }
 
@@ -1227,10 +1363,6 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
 
 extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) -> f64 {
     let channel_id = port_id_from_closure(closure);
-    if UNCLONEABLE_OBJECTS.with(|set| set.borrow().contains(&value.to_bits())) {
-        throw_data_clone_error("object could not be cloned.");
-    }
-    let serialized = serialize_message(value);
     let channel_name = BROADCAST_CHANNELS.with(|channels| {
         channels
             .borrow()
@@ -1238,8 +1370,12 @@ extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) 
             .and_then(|state| (!state.closed).then(|| state.name.clone()))
     });
     let Some(channel_name) = channel_name else {
-        return js_undefined();
+        throw_invalid_state_error("BroadcastChannel is closed");
     };
+    if message_value_is_uncloneable(value, &mut HashSet::new()) {
+        throw_data_clone_error("object could not be cloned.");
+    }
+    let serialized = serialize_message(value);
     BROADCAST_CHANNELS.with(|channels| {
         for (id, state) in channels.borrow_mut().iter_mut() {
             if *id != channel_id && !state.closed && state.name == channel_name {

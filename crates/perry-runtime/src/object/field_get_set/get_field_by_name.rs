@@ -541,6 +541,34 @@ pub extern "C" fn js_object_get_field_by_name(
                         }
                         _ => {}
                     }
+
+                    // A typed array reached through an `any`-typed value uses
+                    // this generic property getter instead of codegen's typed
+                    // method path. Resolve inherited methods/accessors through
+                    // the instance's actual prototype, preserving custom
+                    // `Reflect.construct` prototypes before the intrinsic
+                    // per-kind prototype fallback. Without this,
+                    // structured-cloned views had the right brand and bytes
+                    // but reads such as `cloned.join` returned `undefined`.
+                    let proto = match super::super::prototype_chain::object_static_prototype(addr) {
+                        Some(crate::value::TAG_NULL) => None,
+                        Some(bits) => Some(f64::from_bits(bits)),
+                        None => Some(crate::object::builtin_prototype_value(
+                            crate::typedarray::name_for_kind(kind),
+                        )),
+                    };
+                    if let Some(proto) = proto {
+                        let proto_value = JSValue::from_bits(proto.to_bits());
+                        if proto_value.is_pointer() {
+                            let inherited = super::super::js_object_get_field_by_name(
+                                proto_value.as_pointer::<ObjectHeader>(),
+                                key,
+                            );
+                            if !inherited.is_undefined() {
+                                return inherited;
+                            }
+                        }
+                    }
                 } else {
                     let buf = addr as *const crate::buffer::BufferHeader;
                     match key_bytes {
@@ -579,6 +607,28 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::from_bits(ctor.to_bits());
                         }
                         _ => {}
+                    }
+
+                    // Buffer-backed Uint8Arrays share the intrinsic
+                    // Uint8Array prototype. Like the TypedArrayHeader branch
+                    // above, this is required when the receiver's static type
+                    // has been erased (for example by structured clone).
+                    let proto = match super::super::prototype_chain::object_static_prototype(addr) {
+                        Some(crate::value::TAG_NULL) => None,
+                        Some(bits) => Some(f64::from_bits(bits)),
+                        None => Some(crate::object::builtin_prototype_value("Uint8Array")),
+                    };
+                    if let Some(proto) = proto {
+                        let proto_value = JSValue::from_bits(proto.to_bits());
+                        if proto_value.is_pointer() {
+                            let inherited = super::super::js_object_get_field_by_name(
+                                proto_value.as_pointer::<ObjectHeader>(),
+                                key,
+                            );
+                            if !inherited.is_undefined() {
+                                return inherited;
+                            }
+                        }
                     }
                 }
             }

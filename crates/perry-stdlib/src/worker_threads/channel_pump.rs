@@ -7,7 +7,7 @@
 
 use super::{
     call_callback0, call_callback1, deserialize_message, event_object, object_event_handler,
-    BROADCAST_CHANNELS, MESSAGE_PORTS,
+    SerializedMessage, BROADCAST_CHANNELS, MESSAGE_PORTS,
 };
 
 /// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
@@ -25,7 +25,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         raw_cb: Option<u64>,
         event_cbs: Vec<u64>,
         handler_cb: Option<u64>,
-        msg: String,
+        msg: SerializedMessage,
     }
 
     loop {
@@ -87,7 +87,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         target_bits: u64,
         event_cbs: Vec<u64>,
         handler_cb: Option<u64>,
-        msg: String,
+        msg: SerializedMessage,
     }
 
     loop {
