@@ -23,11 +23,21 @@ fn perry_bin() -> PathBuf {
 fn embeds_assets_and_reads_them_back() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
+    std::fs::create_dir_all(root.join("src")).expect("mkdir src");
     std::fs::create_dir_all(root.join("dist/assets")).expect("mkdir dist/assets");
     std::fs::write(root.join("dist/index.html"), b"HELLO_EMBED").expect("write index.html");
     std::fs::write(root.join("dist/assets/app.js"), b"console.log(1)").expect("write app.js");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"embed-regression","private":true}"#,
+    )
+    .expect("write package.json");
 
-    let entry = root.join("main.ts");
+    // Keep the entry below the package root. The original regression used
+    // `src/embed_probe.ts` with `--embed ./drizzle/**`: resolving patterns
+    // relative to the entry directory silently searched `src/drizzle` and
+    // embedded zero files.
+    let entry = root.join("src/main.ts");
     std::fs::write(
         &entry,
         r#"

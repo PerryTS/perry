@@ -5219,7 +5219,11 @@ pub fn run_with_parse_cache(
     // `perry.embed` / `[compile] embed`, expand globs/directories relative to
     // the project root, and emit a registration object linked alongside the
     // user objects. The runtime serves these via `perry` / node:fs at runtime.
-    let embedded_assets = embed::resolve_embedded_assets(&args.embed, &project_root)?;
+    // `project_root` above is the entry file's directory. Embed patterns and
+    // config are package/project-root-relative, so use the same walked-up root
+    // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
+    // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
+    let embedded_assets = embed::resolve_embedded_assets(&args.embed, &ctx.cache_root)?;
     if !embedded_assets.is_empty() {
         if let Some(obj) =
             embed::generate_embedded_asset_object(&embedded_assets, &object_output_dir)?
