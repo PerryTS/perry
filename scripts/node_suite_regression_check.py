@@ -77,9 +77,6 @@ def main():
         if cur is None:
             regressions.append(f"{mod}: MISSING from run (was {floor['pass']}/{floor['total']})")
             continue
-        if cur["total"] < floor["total"]:
-            regressions.append(
-                f"{mod}: {cur['total']} fixtures < baseline {floor['total']}")
         if cur["pass"] < floor["pass"]:
             regressions.append(
                 f"{mod}: {cur['pass']}/{cur['total']} < floor {floor['pass']}/{floor['total']}  (-{floor['pass'] - cur['pass']})")

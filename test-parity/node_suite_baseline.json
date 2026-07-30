@@ -109,7 +109,13 @@
     },
     "net": {
       "pass": 16,
-      "total": 47
+      "total": 47,
+      "outcomes": {
+        "diff": 31,
+        "node_err": 0,
+        "compile_fail": 0,
+        "perry_err": 0
+      }
     },
     "node-core": {
       "pass": 2,

@@ -123,7 +123,8 @@ net  16  47  34.0  diff=31
 
 Both runs had 16 passes, 31 stable output differences, 0 compile failures, 0
 Perry runtime errors, 0 crashes, and 0 timeouts. The committed `net` floor is
-therefore 16/47.
+therefore 16/47, with zero-error ceilings for Node, compile, and Perry runtime
+failures.
 
 The differences diagnose missing or divergent Perry support for `BoundSocket`,
 descriptors and prototypes, `SocketAddress` defaults and validation, `BlockList`
