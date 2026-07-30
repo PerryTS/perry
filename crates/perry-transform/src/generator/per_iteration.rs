@@ -74,7 +74,6 @@
 //! would lose its value on resume, which is a worse bug than the one being
 //! fixed.
 
-use super::hoist_yields::expr_contains_yield;
 use crate::unroll::escape_analysis::{
     count_local_refs_expr, count_local_refs_stmt, count_local_refs_stmts,
 };
@@ -150,7 +149,7 @@ fn analyze_loop(
                 ..
             } = init.as_ref()
             {
-                if !init_expr.as_ref().is_some_and(expr_contains_yield) && block_scoped(*id) {
+                if !init_expr.as_ref().is_some_and(expr_contains_suspend) && block_scoped(*id) {
                     out.insert(*id);
                 }
             }
@@ -176,7 +175,7 @@ fn classify_block(
             // A `let __tmp = yield …;` IS the state split: the linearizer
             // assigns it in the resumed state, so it must stay a boxed
             // cross-state local.
-            let splits_state = init.as_ref().is_some_and(expr_contains_yield);
+            let splits_state = init.as_ref().is_some_and(expr_contains_suspend);
             if !splits_state && block_scoped(*id) && !used_after_suspend(*id, &block[i + 1..]) {
                 out.insert(*id);
             }
@@ -243,12 +242,12 @@ fn loop_contains_suspend(stmt: &Stmt) -> bool {
             body,
         } => {
             init.as_ref().is_some_and(|i| stmt_contains_suspend(i))
-                || condition.as_ref().is_some_and(expr_contains_yield)
-                || update.as_ref().is_some_and(expr_contains_yield)
+                || condition.as_ref().is_some_and(expr_contains_suspend)
+                || update.as_ref().is_some_and(expr_contains_suspend)
                 || body.iter().any(stmt_contains_suspend)
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_contains_yield(condition) || body.iter().any(stmt_contains_suspend)
+            expr_contains_suspend(condition) || body.iter().any(stmt_contains_suspend)
         }
         _ => false,
     }
@@ -257,12 +256,12 @@ fn loop_contains_suspend(stmt: &Stmt) -> bool {
 /// Conservative "does this statement suspend?" — scans every expression it
 /// owns (not just the normalized `yield` statement shapes `body_contains_yield`
 /// recognizes) and recurses through all nested blocks, including nested loops.
-/// `expr_contains_yield` stops at `Expr::Closure`, so a nested async arrow's
+/// `expr_contains_suspend` stops at `Expr::Closure`, so a nested async arrow's
 /// own `await`s correctly do not count as a suspend of THIS function.
 fn stmt_contains_suspend(stmt: &Stmt) -> bool {
     let mut found = false;
     each_expr(stmt, &mut |e| {
-        if !found && expr_contains_yield(e) {
+        if !found && expr_contains_suspend(e) {
             found = true;
         }
     });
@@ -276,6 +275,22 @@ fn stmt_contains_suspend(stmt: &Stmt) -> bool {
         }
     });
     nested
+}
+
+fn expr_contains_suspend(expr: &Expr) -> bool {
+    if matches!(expr, Expr::Yield { .. } | Expr::Await(_)) {
+        return true;
+    }
+    if matches!(expr, Expr::Closure { .. }) {
+        return false;
+    }
+    let mut found = false;
+    walk_expr_children(expr, &mut |child| {
+        if !found && expr_contains_suspend(child) {
+            found = true;
+        }
+    });
+    found
 }
 
 /// Invoke `f` on each expression directly owned by `stmt` (not those inside
@@ -903,7 +918,7 @@ fn classify_written_block(
 ) {
     for (i, stmt) in block.iter().enumerate() {
         if let Stmt::Let { id, init, .. } = stmt {
-            let splits_state = init.as_ref().is_some_and(expr_contains_yield);
+            let splits_state = init.as_ref().is_some_and(expr_contains_suspend);
             if !splits_state
                 && mutably_captured.contains(id)
                 && block_scoped(*id)
@@ -1053,4 +1068,30 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
         _ => {}
     }
     walk_expr_children_mut(e, &mut |child| rewrite_cells_in_expr(child, cells));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loop_local_used_after_await_stays_hoisted() {
+        let id = 1;
+        let body = vec![Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![
+                Stmt::Let {
+                    id,
+                    name: "value".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::String("x".into())),
+                },
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+                Stmt::Expr(Expr::LocalGet(id)),
+            ],
+        }];
+
+        assert!(!collect_per_iteration_ids(&body).contains(&id));
+    }
 }

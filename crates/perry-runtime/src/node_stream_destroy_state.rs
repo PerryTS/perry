@@ -19,9 +19,7 @@ pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeade
     if bits != TAG_UNDEFINED && bits != TAG_NULL {
         set_hidden_value(stream, hidden_error_key(), err);
         let error = super::string_value(b"error");
-        if super::event_emitter::stream_listener_count_for_event(stream, error) > 0 {
-            let _ = super::event_emitter::emit_stream_event(stream, error, &[err]);
-        }
+        let _ = super::event_emitter::emit_stream_event(stream, error, &[err]);
     }
     super::mark_stream_closed_and_emit_close(stream);
     f64::from_bits(TAG_UNDEFINED)

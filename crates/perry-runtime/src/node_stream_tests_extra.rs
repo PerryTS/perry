@@ -920,7 +920,15 @@ fn writable_lifecycle_flags_reflect_end_and_finish() {
     WRITABLE_FINISH_COUNT.with(|count| *count.borrow_mut() = 0);
     WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() = 0);
 
-    let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let opts = crate::object::js_object_alloc(0, 1);
+    let closure = js_closure_alloc(write_capture as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+    );
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
     let handle = raw_ptr_from_value(stream) as i64;
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
 
@@ -1033,16 +1041,16 @@ fn readable_auto_destroy_false_does_not_close_after_end() {
 #[test]
 fn stream_destroy_with_error_marks_errored_state() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
     let destroy = js_object_get_field_by_name_f64(
         raw_ptr_from_value(stream) as *const ObjectHeader,
         hidden_key(b"destroy"),
     );
     let err = string_value("boom");
+    let error_listener = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("error"), error_listener);
 
-    assert_eq!(
-        js_node_stream_method_errored(raw_ptr_from_value(stream) as i64).to_bits(),
-        TAG_NULL
-    );
+    assert_eq!(js_node_stream_method_errored(handle).to_bits(), TAG_NULL);
     let ret = unsafe { crate::closure::js_native_call_value(destroy, &err, 1) };
 
     assert_eq!(ret.to_bits(), stream.to_bits());
@@ -1050,7 +1058,7 @@ fn stream_destroy_with_error_marks_errored_state() {
     let _ = crate::promise::js_promise_run_microtasks();
     assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_TRUE);
     assert_eq!(
-        js_node_stream_method_errored(raw_ptr_from_value(stream) as i64).to_bits(),
+        js_node_stream_method_errored(handle).to_bits(),
         err.to_bits()
     );
 }
@@ -1090,6 +1098,8 @@ fn readable_aborted_reflects_destroy_before_end() {
     let handle = raw_ptr_from_value(stream) as i64;
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
     let err = string_value("abort");
+    let error_listener = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("error"), error_listener);
 
     assert_eq!(
         js_node_stream_method_readable_aborted(handle).to_bits(),
@@ -1117,6 +1127,8 @@ fn readable_aborted_reflects_destroy_before_end() {
 
     let ended = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let ended_handle = raw_ptr_from_value(ended) as i64;
+    let error_listener = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(ended_handle, string_value("error"), error_listener);
     let _ = js_node_stream_method_push(ended_handle, f64::from_bits(TAG_NULL));
     let _ = js_node_stream_method_destroy(ended_handle, err);
     assert_eq!(
@@ -1146,6 +1158,8 @@ fn stream_native_receiver_methods_update_hidden_state() {
 
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
+    let cb = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("error"), cb);
     let _ = js_node_stream_method_destroy(handle, err);
     assert!(readable_hidden_error(stream).is_none());
     let _ = crate::promise::js_promise_run_microtasks();

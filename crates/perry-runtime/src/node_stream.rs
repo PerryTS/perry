@@ -531,6 +531,16 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let Some(chunk) = decode_readable_chunk_for_encoding(stream, chunk) else {
         return f64::from_bits(TAG_TRUE);
     };
+    let chunk = if !readable_object_mode(stream)
+        && readable_encoding_tag(stream).is_none()
+        && JSValue::from_bits(chunk.to_bits()).is_any_string()
+    {
+        let mut bytes = Vec::new();
+        append_chunk_bytes(chunk, &mut bytes, 0);
+        buffer_value_from_bytes(&bytes)
+    } else {
+        chunk
+    };
     push_chunk_backpressure_result(stream, append_readable_output_chunk(stream, chunk))
 }
 
@@ -819,7 +829,7 @@ extern "C" fn pipe_unpipe_callback(closure: *const ClosureHeader, src: f64) -> f
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn pipe_error_callback(closure: *const ClosureHeader, _err: f64) -> f64 {
+extern "C" fn pipe_error_callback(closure: *const ClosureHeader, err: f64) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -827,6 +837,9 @@ extern "C" fn pipe_error_callback(closure: *const ClosureHeader, _err: f64) -> f
     let dest = js_closure_get_capture_f64(closure, 1);
     if !unpipe_destination(src, dest) {
         cleanup_pipe_listeners_from_closure(closure);
+    }
+    if stream_listener_count_for_event(dest, string_value(b"error")) == 0 {
+        crate::exception::js_throw(err);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1086,7 +1099,7 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
         }
         crate::object::js_implicit_this_set(prev_this);
     } else {
-        complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
+        throw_missing_stream_method("The _write() method is not implemented");
     }
 }
 
@@ -1146,8 +1159,15 @@ fn invoke_transform_write(stream: f64, chunk: f64, enc: f64, len: f64, callback:
         crate::object::js_implicit_this_set(prev_this);
         return;
     }
-    emit_writable_chunk(stream, chunk);
-    complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
+    throw_missing_stream_method("The _transform() method is not implemented");
+}
+
+#[cold]
+fn throw_missing_stream_method(message: &str) -> ! {
+    let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_METHOD_NOT_IMPLEMENTED");
+    let err = crate::error::js_error_new_with_message(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 #[cold]
@@ -1160,12 +1180,12 @@ fn throw_writable_null_chunk() -> ! {
 }
 
 #[cold]
-fn throw_readable_from_invalid_iterable() -> ! {
-    let msg = b"The \"iterable\" argument must be an instance of Iterable.";
-    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+fn throw_readable_from_invalid_iterable(value: f64) -> ! {
+    let message = format!(
+        "The \"iterable\" argument must be an instance of Iterable. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
 fn normalize_write_args(stream: f64, chunk: f64, enc: f64, cb: f64) -> (f64, f64, f64) {

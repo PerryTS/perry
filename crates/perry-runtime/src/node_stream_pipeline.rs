@@ -400,6 +400,15 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
         TAG_UNDEFINED | TAG_NULL => return Ok(pipeline_empty_chunks()),
         _ => {}
     }
+    if !readable_chunks_nonempty(value) {
+        if let Some(source_iterator) =
+            get_hidden_value(value, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
+        {
+            if let Some(chunks) = collect_pipeline_iterator_chunks(source_iterator)? {
+                return Ok(chunks);
+            }
+        }
+    }
     if let Some(result) = js_node_stream_collect_chunks_result(value) {
         return result;
     }
@@ -468,6 +477,11 @@ pub(super) fn call_pipeline_function_stage(
     stage: f64,
     source: f64,
 ) -> Result<PipelineSettledValue, f64> {
+    let source = if is_array_like_value(source) {
+        js_node_stream_readable_from(source)
+    } else {
+        source
+    };
     let args = [source];
     let result = catch_pipeline_throw(|| unsafe {
         crate::closure::js_native_call_value(stage, args.as_ptr(), args.len())
@@ -517,6 +531,24 @@ pub(super) fn fail_collected_pipeline(stages: &[f64], callback: f64, err: f64) {
     }
 }
 
+extern "C" fn collected_pipeline_error_noop(_closure: *const ClosureHeader, _err: f64) -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn install_collected_pipeline_error_guards(stages: &[f64]) {
+    crate::closure::js_register_closure_arity(collected_pipeline_error_noop as *const u8, 1);
+    for stage in stages {
+        if is_pipeline_stream(*stage) {
+            let listener = js_closure_alloc(collected_pipeline_error_noop as *const u8, 0);
+            add_stream_listener_for_event(
+                *stage,
+                string_value(b"error"),
+                box_pointer(listener as *const u8),
+            );
+        }
+    }
+}
+
 pub(super) fn complete_collected_pipeline(callback: f64, value: f64) {
     if is_callable_value(callback) {
         call_listener_args(
@@ -542,6 +574,7 @@ pub(super) fn run_collected_pipeline(
     callback: f64,
     options: PipelineOptions,
 ) -> f64 {
+    install_collected_pipeline_error_guards(stages);
     let last = *stages.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED));
     let first = stages[0];
     let mut chunks = if is_callable_value(first) {
@@ -818,6 +851,14 @@ fn fail_composed_duplex(composite: f64, source: f64, stages: f64, err: f64) {
     if stream_destroyed(composite) {
         return;
     }
+    if has_truthy_hidden(composite, hidden_key(b"__perryStreamComposePriming")) {
+        set_hidden_value(
+            composite,
+            hidden_key(b"__perryStreamComposePendingError"),
+            err,
+        );
+        return;
+    }
     compose_destroy_stage_list(stages, err);
     if is_pipeline_stream(source) {
         destroy_stream(source, err);
@@ -972,6 +1013,12 @@ fn install_compose_source_listeners(composite: f64, source: f64, stages: f64) {
     js_closure_set_capture_f64(end, 0, composite);
     add_stream_listener_for_event(source, string_value(b"end"), box_pointer(end as *const u8));
 
+    install_compose_source_error_listener(composite, source, stages);
+
+    start_pipeline_readable(source);
+}
+
+fn install_compose_source_error_listener(composite: f64, source: f64, stages: f64) {
     let error = js_closure_alloc(compose_source_error_callback as *const u8, 3);
     js_closure_set_capture_f64(error, 0, composite);
     js_closure_set_capture_f64(error, 1, source);
@@ -981,8 +1028,6 @@ fn install_compose_source_listeners(composite: f64, source: f64, stages: f64) {
         string_value(b"error"),
         box_pointer(error as *const u8),
     );
-
-    start_pipeline_readable(source);
 }
 
 fn install_composed_duplex_callbacks(composite: f64, stages: f64, source: f64, writable: bool) {
@@ -1050,13 +1095,31 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
     let source_value = source.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
     install_composed_duplex_callbacks(composite, stages_value, source_value, writable);
     if let Some(source) = source {
+        install_compose_stage_error_listeners(composite, source_value, stages_value);
         if !compose_source_has_snapshot(source) {
-            install_compose_stage_error_listeners(composite, source_value, stages_value);
             install_compose_source_listeners(composite, source, stages_value);
         } else {
+            install_compose_source_error_listener(composite, source, stages_value);
+            set_hidden_value(
+                composite,
+                hidden_key(b"__perryStreamComposePriming"),
+                f64::from_bits(TAG_TRUE),
+            );
             prime_composed_duplex_from_source(composite, source, stages_value);
-            if !stream_destroyed(composite) {
-                install_compose_stage_error_listeners(composite, source_value, stages_value);
+            set_hidden_value(
+                composite,
+                hidden_key(b"__perryStreamComposePriming"),
+                f64::from_bits(TAG_FALSE),
+            );
+            if let Some(err) =
+                get_hidden_value(composite, hidden_key(b"__perryStreamComposePendingError"))
+            {
+                set_hidden_value(
+                    composite,
+                    hidden_key(b"__perryStreamComposePendingError"),
+                    f64::from_bits(TAG_UNDEFINED),
+                );
+                fail_composed_duplex(composite, source, stages_value, err);
             }
         }
     } else {
@@ -1091,16 +1154,32 @@ pub(super) fn build_node_stream_compose(args: Vec<f64>) -> f64 {
 
 #[cold]
 pub(super) fn throw_pipeline_missing_streams() -> ! {
-    crate::node_submodules::diagnostics::throw_type_error_no_code(
-        b"The \"streams\" argument must be specified",
+    crate::fs::validate::throw_type_error_with_code(
+        "The \"streams\" argument must be specified",
+        "ERR_MISSING_ARGS",
     )
 }
 
 #[cold]
-pub(super) fn throw_pipeline_callback_required() -> ! {
-    crate::node_submodules::diagnostics::throw_type_error_no_code(
-        b"The \"streams[stream.length - 1]\" property must be of type function",
-    )
+pub(super) fn throw_pipeline_callback_required(callback: f64) -> ! {
+    let received = ["PassThrough", "Transform", "Duplex", "Writable", "Readable"]
+        .into_iter()
+        .find(|name| is_classic_stream_instance_of(callback, name))
+        .map(|name| format!("an instance of {name}"))
+        .unwrap_or_else(|| crate::fs::validate::describe_received(callback));
+    let message = format!(
+        "The \"streams[stream.length - 1]\" property must be of type function. Received {received}"
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+#[cold]
+pub(super) fn throw_pipeline_invalid_body(body: f64) -> ! {
+    let message = format!(
+        "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or {{ readable, writable }} pair. Received {}",
+        crate::fs::validate::describe_received(body)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
 #[cold]

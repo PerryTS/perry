@@ -234,6 +234,9 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
             if !prev.trap_next.is_null() {
                 js_promise_reject(prev.trap_next, exc);
                 ran += 1;
+            } else {
+                crate::node_submodules::diagnostics::schedule_uncaught(exc);
+                ran += 1;
             }
         }
     }
@@ -826,6 +829,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     }
 
     crate::exception::js_try_end();
+    crate::node_submodules::diagnostics_channel_drain_uncaught();
 
     let _ = crate::gc::gc_runtime_safepoint();
 

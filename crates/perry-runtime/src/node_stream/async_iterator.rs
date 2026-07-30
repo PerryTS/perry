@@ -66,6 +66,43 @@ extern "C" fn ns_readable_iterator_chunk_rejected(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn ns_readable_source_iterator_fulfilled(
+    closure: *const ClosureHeader,
+    result: f64,
+) -> f64 {
+    let iterator = js_closure_get_capture_f64(closure, 0);
+    let done = object_ptr_from_value(result).is_none_or(|obj| {
+        crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(
+            obj as *const crate::object::ObjectHeader,
+            hidden_key(b"done"),
+        )) != 0
+    });
+    if done {
+        iterator_mark_done(iterator);
+        iterator_set_stream_ended(iterator);
+        if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+            mark_stream_ended(stream);
+        }
+    } else {
+        note_yield(iterator);
+    }
+    result
+}
+
+extern "C" fn ns_readable_source_iterator_rejected(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let iterator = js_closure_get_capture_f64(closure, 0);
+    iterator_mark_done(iterator);
+    iterator_set_stream_ended(iterator);
+    if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+        call_source_iterator_return(stream);
+        destroy_stream(stream, reason);
+    }
+    rejected_promise(reason)
+}
+
 /// Wrap a yielded chunk in a resolved `{value,done:false}` promise. A chunk that
 /// is itself a Promise (e.g. `Readable.from([Promise.resolve(x)])` whose element
 /// reached the queue unresolved) is awaited so the consumer sees the settled
@@ -285,6 +322,9 @@ extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64
     } else {
         iterator_enqueue(iterator, chunk);
     }
+    if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+        pause_readable_stream(stream);
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -384,9 +424,11 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
 
     // Already-terminal-before-attach: no future event will reach our listeners,
     // so seed the terminal state directly.
-    if let Some(err) = readable_hidden_error(stream) {
-        iterator_set_error(iterator, err);
-        return;
+    if !readable_chunks_nonempty(stream) {
+        if let Some(err) = readable_hidden_error(stream) {
+            iterator_set_error(iterator, err);
+            return;
+        }
     }
     if has_truthy_hidden(stream, hidden_end_emitted_key()) || stream_destroyed(stream) {
         iterator_set_stream_ended(iterator);
@@ -451,7 +493,7 @@ fn settle_iterator_return_value(value: f64) {
     }
 }
 
-fn call_source_iterator_return(stream: f64) {
+pub(super) fn call_source_iterator_return(stream: f64) {
     let Some(source_iterator) = get_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
     else {
         return;
@@ -477,6 +519,42 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
         return readable_iterator_done();
     };
 
+    if !readable_chunks_nonempty(stream) {
+        if let Some(source_iterator) =
+            get_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
+        {
+            let next = match catch_pipeline_throw(|| unsafe {
+                crate::object::js_native_call_method(
+                    source_iterator,
+                    b"next".as_ptr() as *const i8,
+                    4,
+                    std::ptr::null(),
+                    0,
+                )
+            }) {
+                Ok(next) => next,
+                Err(reason) => {
+                    iterator_mark_done(iterator);
+                    call_source_iterator_return(stream);
+                    destroy_stream(stream, reason);
+                    return rejected_promise(reason);
+                }
+            };
+            let promise = if crate::promise::js_value_is_promise(next) != 0 {
+                crate::value::js_nanbox_get_pointer(next) as *mut crate::promise::Promise
+            } else {
+                crate::promise::js_promise_resolved(next)
+            };
+            let fulfilled = js_closure_alloc(ns_readable_source_iterator_fulfilled as *const u8, 1);
+            let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
+            js_closure_set_capture_f64(fulfilled, 0, iterator);
+            js_closure_set_capture_f64(rejected, 0, iterator);
+            return box_pointer(
+                crate::promise::js_promise_then(promise, fulfilled, rejected) as *const u8,
+            );
+        }
+    }
+
     // First pull: attach persistent listeners + start flow. Listeners deliver
     // asynchronously (resume schedules microtasks), so nothing arrives
     // synchronously here — no event-loop re-entrancy.
@@ -486,6 +564,14 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     if let Some(chunk) = iterator_dequeue(iterator) {
         note_yield(iterator);
         return readable_iterator_chunk_result(chunk);
+    }
+
+    if !readable_chunks_nonempty(stream) {
+        if let Some(err) = readable_hidden_error(stream) {
+            iterator_mark_done(iterator);
+            iterator_remove_listeners(iterator);
+            return rejected_promise(err);
+        }
     }
 
     // A stored error surfaces (once) as a rejection, then the iterator is done.
@@ -507,6 +593,7 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     // their own promise (FIFO) — none is overwritten or dropped.
     let promise = crate::promise::js_promise_new();
     iterator_push_pending(iterator, promise);
+    resume_readable_stream(stream);
     box_pointer(promise as *const u8)
 }
 
@@ -660,6 +747,11 @@ pub(super) fn register_arities() {
     crate::closure::js_register_closure_arity(ns_readable_iterator_self as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_readable_iterator_chunk_fulfilled as *const u8, 1);
     crate::closure::js_register_closure_arity(ns_readable_iterator_chunk_rejected as *const u8, 1);
+    crate::closure::js_register_closure_arity(
+        ns_readable_source_iterator_fulfilled as *const u8,
+        1,
+    );
+    crate::closure::js_register_closure_arity(ns_readable_source_iterator_rejected as *const u8, 1);
     crate::closure::js_register_closure_arity(ns_readable_iter_on_data as *const u8, 1);
     crate::closure::js_register_closure_arity(ns_readable_iter_on_end as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_readable_iter_on_error as *const u8, 1);
@@ -759,5 +851,24 @@ mod fifo_pending_tests {
             crate::promise::PromiseState::Fulfilled
         );
         assert!(crate::value::js_is_truthy(result_field(p2, b"done")) != 0);
+    }
+
+    #[test]
+    fn retained_source_rejection_finishes_iterator_and_destroys_stream() {
+        let chunks = crate::array::js_array_alloc(0);
+        let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+        let iterator = build_readable_async_iterator(stream, true);
+        let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
+        js_closure_set_capture_f64(rejected, 0, iterator);
+
+        let result = ns_readable_source_iterator_rejected(rejected, 7.0);
+        let promise = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
+        assert!(iterator_is_done(iterator));
+        assert!(stream_destroyed(stream));
+        assert_eq!(
+            unsafe { (*promise).state },
+            crate::promise::PromiseState::Rejected
+        );
+        assert_eq!(unsafe { (*promise).reason }, 7.0);
     }
 }

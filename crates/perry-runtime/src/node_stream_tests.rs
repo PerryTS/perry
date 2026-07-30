@@ -3,6 +3,7 @@
 
 use super::*;
 use std::cell::RefCell;
+use std::os::raw::c_int;
 
 thread_local! {
     pub(super) static WRITE_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
@@ -27,6 +28,21 @@ thread_local! {
     pub(super) static PENDING_WRITE_CALLBACK: RefCell<Option<f64>> = const { RefCell::new(None) };
     static TRANSFORM_THIS_HAS_STREAM_STATE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static TRANSFORM_FLUSH_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static UNCAUGHT_STREAM_ERROR_COUNT: RefCell<usize> = const { RefCell::new(0) };
+}
+
+fn catches_runtime_throw(f: impl FnOnce()) -> bool {
+    let env = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
+    if jumped == 0 {
+        f();
+        crate::exception::js_try_end();
+        false
+    } else {
+        crate::exception::js_try_end();
+        crate::exception::js_clear_exception();
+        true
+    }
 }
 
 pub(super) fn string_value(s: &str) -> f64 {
@@ -45,6 +61,123 @@ fn buffer_value(bytes: &[u8]) -> f64 {
         );
     }
     box_pointer(buf as *const u8)
+}
+
+#[test]
+fn readable_from_validation_rejects_promises_and_functions() {
+    let promise = crate::promise::js_promise_new();
+    let function = crate::closure::js_closure_alloc(write_capture as *const u8, 0);
+
+    assert!(is_invalid_readable_from_input(box_pointer(
+        promise as *const u8
+    )));
+    assert_eq!(
+        crate::fs::validate::describe_received(box_pointer(promise as *const u8)),
+        "an instance of Promise"
+    );
+    assert!(is_invalid_readable_from_input(box_pointer(
+        function as *const u8
+    )));
+}
+
+#[test]
+fn bare_writable_and_transform_reject_missing_methods() {
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let chunk = string_value("x");
+    let writable = js_node_stream_writable_new(undefined);
+    let transform = js_node_stream_transform_new(undefined);
+
+    assert!(catches_runtime_throw(|| {
+        write_writable_chunk(writable, chunk, undefined, undefined);
+    }));
+    assert!(catches_runtime_throw(|| {
+        write_writable_chunk(transform, chunk, undefined, undefined);
+    }));
+}
+
+extern "C" fn capture_uncaught_stream_error(_closure: *const ClosureHeader, _error: f64) -> f64 {
+    UNCAUGHT_STREAM_ERROR_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[test]
+fn destroy_with_unhandled_error_reaches_process_uncaught_exception() {
+    crate::os::test_clear_process_event_listeners();
+    UNCAUGHT_STREAM_ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
+    let listener = js_closure_alloc(capture_uncaught_stream_error as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_uncaught_stream_error as *const u8, 1);
+    let event = string_value("uncaughtException");
+    let listener = box_pointer(listener as *const u8);
+    let _ = crate::os::js_process_on(event.to_bits() as i64, listener.to_bits() as i64);
+
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let message = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
+    let error =
+        crate::value::js_nanbox_pointer(crate::error::js_error_new_with_message(message) as i64);
+
+    destroy_stream(stream, error);
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    UNCAUGHT_STREAM_ERROR_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    crate::os::test_clear_process_event_listeners();
+}
+
+#[test]
+fn pipe_cleanup_does_not_swallow_destination_error() {
+    crate::os::test_clear_process_event_listeners();
+    UNCAUGHT_STREAM_ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
+    let listener = js_closure_alloc(capture_uncaught_stream_error as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_uncaught_stream_error as *const u8, 1);
+    let event = string_value("uncaughtException");
+    let listener = box_pointer(listener as *const u8);
+    let _ = crate::os::js_process_on(event.to_bits() as i64, listener.to_bits() as i64);
+
+    let source = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let destination = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let _ = js_node_stream_method_pipe(
+        raw_ptr_from_value(source) as i64,
+        destination,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    let message = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
+    let error =
+        crate::value::js_nanbox_pointer(crate::error::js_error_new_with_message(message) as i64);
+    destroy_stream(destination, error);
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    UNCAUGHT_STREAM_ERROR_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    crate::os::test_clear_process_event_listeners();
+}
+
+extern "C" fn return_pipeline_source(_closure: *const ClosureHeader, source: f64) -> f64 {
+    source
+}
+
+#[test]
+fn pipeline_function_stage_receives_async_iterable_stream() {
+    let mut chunks = crate::array::js_array_alloc(1);
+    chunks = crate::array::js_array_push_f64(chunks, string_value("x"));
+    let stage = js_closure_alloc(return_pipeline_source as *const u8, 0);
+    crate::closure::js_register_closure_arity(return_pipeline_source as *const u8, 1);
+
+    let result = call_pipeline_function_stage(
+        box_pointer(stage as *const u8),
+        box_pointer(chunks as *const u8),
+    )
+    .unwrap();
+
+    assert!(is_pipeline_stream(result.value));
+    assert!(!is_array_like_value(result.value));
+}
+
+#[test]
+fn synchronous_iteration_rejects_async_only_readable() {
+    let chunks = crate::array::js_array_alloc(0);
+    let readable = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+
+    assert!(catches_runtime_throw(|| {
+        let _ = crate::array::js_for_of_to_array(readable);
+    }));
 }
 
 fn string_contents(value: f64) -> String {
@@ -355,6 +488,19 @@ extern "C" fn transform_identity_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn transform_error_callback(
+    closure: *const ClosureHeader,
+    _chunk: f64,
+    _enc: f64,
+    cb: f64,
+) -> f64 {
+    let err = crate::closure::js_closure_get_capture_f64(closure, 0);
+    unsafe {
+        let _ = crate::closure::js_native_call_value(cb, [err].as_ptr(), 1);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn transform_push_pair_callback(
     _closure: *const ClosureHeader,
     _chunk: f64,
@@ -645,6 +791,56 @@ fn compose_source_transform_applies_stage_snapshot() {
     assert_eq!(js_node_stream_collect_bytes(composed), b"AB".to_vec());
     TRANSFORM_THIS_HAS_STREAM_STATE
         .with(|matches| assert_eq!(matches.borrow().as_slice(), &[true]));
+}
+
+#[test]
+fn compose_snapshot_stage_error_reaches_only_composite_listener() {
+    crate::os::test_clear_process_event_listeners();
+    ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
+    UNCAUGHT_STREAM_ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
+    let uncaught = js_closure_alloc(capture_uncaught_stream_error as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_uncaught_stream_error as *const u8, 1);
+    let _ = crate::os::js_process_on(
+        string_value("uncaughtException").to_bits() as i64,
+        box_pointer(uncaught as *const u8).to_bits() as i64,
+    );
+
+    let mut chunks = crate::array::js_array_alloc(1);
+    chunks = crate::array::js_array_push_f64(chunks, string_value("x"));
+    let source = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+
+    let message = crate::string::js_string_from_bytes(b"compose-fail".as_ptr(), 12);
+    let error =
+        crate::value::js_nanbox_pointer(crate::error::js_error_new_with_message(message) as i64);
+    let options = crate::object::js_object_alloc(0, 1);
+    let transform = js_closure_alloc(transform_error_callback as *const u8, 1);
+    crate::closure::js_register_closure_arity(transform_error_callback as *const u8, 3);
+    crate::closure::js_closure_set_capture_f64(transform, 0, error);
+    js_object_set_field_by_name(
+        options,
+        hidden_key(b"transform"),
+        box_pointer(transform as *const u8),
+    );
+    let stage = js_node_stream_transform_new(box_pointer(options as *const u8));
+
+    let mut args = crate::array::js_array_alloc(2);
+    args = crate::array::js_array_push_f64(args, source);
+    args = crate::array::js_array_push_f64(args, stage);
+    let composite = js_node_stream_compose_args(args);
+
+    let listener = js_closure_alloc(capture_error_listener as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_error_listener as *const u8, 1);
+    let _ = js_node_stream_method_on(
+        raw_ptr_from_value(composite) as i64,
+        string_value("error"),
+        box_pointer(listener as *const u8),
+    );
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    let errors = ERROR_COUNT.with(|count| *count.borrow());
+    let uncaught = UNCAUGHT_STREAM_ERROR_COUNT.with(|count| *count.borrow());
+    assert_eq!((errors, uncaught), (1, 0));
+    crate::os::test_clear_process_event_listeners();
 }
 
 #[test]
