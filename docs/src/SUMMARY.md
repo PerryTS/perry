@@ -25,6 +25,7 @@
   - [Authoring a Native Binding](native-libraries/authoring-guide.md)
   - [`perry-ffi` ABI Reference](native-libraries/abi.md)
   - [Manifest Schema (spec v1)](native-libraries/manifest-v1.md)
+  - [Upstream Provenance Pins](native-libraries/upstream-pins.md)
 
 # Multi-Threading
 

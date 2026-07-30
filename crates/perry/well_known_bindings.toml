@@ -41,55 +41,125 @@ lib = "perry_ext_dotenv"
 # when the bundled .a is missing at link time.
 tracking = "#466"
 
+[bindings.dotenv.upstream]
+version = "17.4.2"
+sha256 = "8648852be8209110b34dca75dcc3ed12ce7fae9fcc8edd1ef9e180e708af1398"
+repo = "https://github.com/motdotla/dotenv"
+ref = "a61f616a3160bb6e6f22ff55f08b7eba3a3fab68"
+ported-at = "17.4.2"
+date = "2026-07-30"
 [bindings.nanoid]
 crate = "perry-ext-nanoid"
 lib = "perry_ext_nanoid"
 tracking = "#466"
 
+[bindings.nanoid.upstream]
+version = "6.0.0"
+sha256 = "5cade80a39ccf4fd174c8e412eca13accfce36c9c2a0982b4ea23403d729a8d8"
+repo = "https://github.com/ai/nanoid"
+ref = "4dacb107b54ffd0e1abfe91b7ef452e0fd5a8e12"
+ported-at = "6.0.0"
+date = "2026-07-30"
 [bindings.uuid]
 crate = "perry-ext-uuid"
 lib = "perry_ext_uuid"
 tracking = "#466"
 
+[bindings.uuid.upstream]
+version = "14.0.1"
+sha256 = "e062c57ed120ea135478f305da04802bf69eab23fbc0ca2bae6989b6855390c4"
+repo = "https://github.com/uuidjs/uuid"
+ref = "70177807e9229dfacde2038dc1e722f1828f358a"
+ported-at = "14.0.1"
+date = "2026-07-30"
 [bindings.slugify]
 crate = "perry-ext-slugify"
 lib = "perry_ext_slugify"
 tracking = "#466"
 
+[bindings.slugify.upstream]
+version = "1.6.9"
+sha256 = "19ab247286f687aa8803b3615eab0779f517904ec96298e5005ff4de77ff9948"
+repo = "https://github.com/simov/slugify"
+ref = "78c6ee658d61d81a3a33bc1f558b50013be9ccf6"
+ported-at = "1.6.9"
+date = "2026-07-30"
 [bindings.bcrypt]
 crate = "perry-ext-bcrypt"
 lib = "perry_ext_bcrypt"
 tracking = "#466"
 
+[bindings.bcrypt.upstream]
+version = "6.0.0"
+sha256 = "3b2478cda06f066c744e06cd0b68f55e14cc546c19ee2b80be600dfc65b5ae20"
+repo = "https://github.com/kelektiv/node.bcrypt.js"
+ported-at = "6.0.0"
+date = "2026-07-30"
 [bindings.argon2]
 crate = "perry-ext-argon2"
 lib = "perry_ext_argon2"
 tracking = "#466"
 
+[bindings.argon2.upstream]
+version = "0.45.1"
+sha256 = "4acffbd5e5a87fe8fad926afc9a9ac450d69b7082686dd2836be0d8309dbd8aa"
+repo = "https://github.com/ranisalt/node-argon2"
+ref = "786de7152f95881b0683aea1d2ca60ed0d6d9e2f"
+ported-at = "0.45.1"
+date = "2026-07-30"
 [bindings.jsonwebtoken]
 crate = "perry-ext-jsonwebtoken"
 lib = "perry_ext_jsonwebtoken"
 tracking = "#466"
 
+[bindings.jsonwebtoken.upstream]
+version = "9.0.3"
+sha256 = "d9af2628a7a4dda25acf1e19c7ecc2468e1e9e8d4619fe2cae829e89d96f6b82"
+repo = "https://github.com/auth0/node-jsonwebtoken"
+ref = "ed59e76ea37a80f54b833668c02a5271984dcba3"
+ported-at = "9.0.3"
+date = "2026-07-30"
 [bindings.validator]
 crate = "perry-ext-validator"
 lib = "perry_ext_validator"
 tracking = "#466"
 
+[bindings.validator.upstream]
+version = "13.15.35"
+sha256 = "f9a6b506bd9eda8df9d2a4120613426948d9f66cde1b6d5fad3406758d2f81f4"
+repo = "https://github.com/validatorjs/validator.js"
+ref = "7a8079709cd4cb27b2a1846e6f6508d68c9d928f"
+ported-at = "13.15.35"
+date = "2026-07-30"
 [bindings.lru-cache]
 crate = "perry-ext-lru-cache"
 lib = "perry_ext_lru_cache"
 tracking = "#466"
 
+[bindings.lru-cache.upstream]
+version = "11.5.2"
+sha256 = "e46c8eaafc64f168603aebd39cfd0e987bec39a93ade280653e2331fd2516a22"
+repo = "https://github.com/isaacs/node-lru-cache"
+ref = "16b3a916662ab449d496b7b4b4f04132565d1d28"
+ported-at = "11.5.2"
+date = "2026-07-30"
 [bindings.better-sqlite3]
 crate = "perry-ext-better-sqlite3"
 lib = "perry_ext_better_sqlite3"
 tracking = "#466"
 
+[bindings.better-sqlite3.upstream]
+version = "13.0.2"
+sha256 = "785493c44913bd6415eb4ef244f97b4774a8ba1ee7c45137f05c3ad09282bc75"
+repo = "https://github.com/WiseLibs/better-sqlite3"
+ref = "569e85ad031515d665c18c601da20d1915675ee5"
+ported-at = "13.0.2"
+date = "2026-07-30"
 [bindings.zlib]
 crate = "perry-ext-zlib"
 lib = "perry_ext_zlib"
 tracking = "#466"
+node-builtin = true
 
 [bindings.exponential-backoff]
 crate = "perry-ext-exponential-backoff"
@@ -108,140 +178,319 @@ tracking = "#466"
 # its job: bundling the wrappers that *port* perry-stdlib's existing
 # in-tree implementations, not net-new functionality.
 
+[bindings.exponential-backoff.upstream]
+version = "3.1.3"
+sha256 = "2ede00f3e458fa991d304dd8a1fed812d686ac5d213c1d6704963c3674913526"
+repo = "https://github.com/coveooss/exponential-backoff"
+ref = "5622170828bd91dc149585bfa3d82c8972a75ac5"
+ported-at = "3.1.3"
+date = "2026-07-30"
 [bindings.axios]
 crate = "perry-ext-axios"
 lib = "perry_ext_axios"
 tracking = "#466"
 
+[bindings.axios.upstream]
+version = "1.19.0"
+sha256 = "a511049fdaec40a320368b3ee965079b3e14481f82d052584f746bbdc3f01ede"
+repo = "https://github.com/axios/axios"
+ref = "311fcc5c8d989b7248f05d390bb83bfbfb009977"
+ported-at = "1.19.0"
+date = "2026-07-30"
 [bindings.events]
 crate = "perry-ext-events"
 lib = "perry_ext_events"
 tracking = "#466"
+node-builtin = true
 
 [bindings."decimal.js"]
 crate = "perry-ext-decimal"
 lib = "perry_ext_decimal"
 tracking = "#466"
 
+[bindings."decimal.js".upstream]
+version = "10.6.0"
+sha256 = "433210122e8149972f64054c54b0ce0872e5f15a3c5835aab57ff1a8e6d071b1"
+repo = "https://github.com/MikeMcl/decimal.js"
+ref = "f1ee2f404d6bf96d59c04db80c1f404742afa3fa"
+ported-at = "10.6.0"
+date = "2026-07-30"
 [bindings."bignumber.js"]
 crate = "perry-ext-decimal"
 lib = "perry_ext_decimal"
 tracking = "#466"
 
+[bindings."bignumber.js".upstream]
+version = "11.1.5"
+sha256 = "b98a3d093fdbd8854b32a631229dfb68366f29ad5496c680434a64f762aad321"
+repo = "https://github.com/MikeMcl/bignumber.js"
+ref = "275cd85181041d7b6bebf8ef9b70ee0b1bf056b0"
+ported-at = "11.1.5"
+date = "2026-07-30"
 [bindings.dayjs]
 crate = "perry-ext-dayjs"
 lib = "perry_ext_dayjs"
 tracking = "#466"
 
+[bindings.dayjs.upstream]
+version = "1.11.21"
+sha256 = "290ec8bf81878ae4927581d9be74125f07722ea8bbea2ff77a2226dce12df876"
+repo = "https://github.com/iamkun/dayjs"
+ref = "a25f01e8154290b203ab480ffeedc60c80bd0710"
+ported-at = "1.11.21"
+date = "2026-07-30"
 [bindings."date-fns"]
 crate = "perry-ext-dayjs"
 lib = "perry_ext_dayjs"
 tracking = "#466"
 
+[bindings.date-fns.upstream]
+version = "4.4.0"
+sha256 = "eb106d1e9276213d6144b221c103e4abb7d92186734f7505f5a3860427b41a06"
+repo = "https://github.com/date-fns/date-fns"
+ported-at = "4.4.0"
+date = "2026-07-30"
 [bindings.moment]
 crate = "perry-ext-moment"
 lib = "perry_ext_moment"
 tracking = "#466"
 
+[bindings.moment.upstream]
+version = "2.30.1"
+sha256 = "52219a9fee5e1faade4c72536c173c54cedd5e2619272dd0c251a30aeafcde8c"
+repo = "https://github.com/moment/moment"
+ported-at = "2.30.1"
+date = "2026-07-30"
 [bindings.cheerio]
 crate = "perry-ext-cheerio"
 lib = "perry_ext_cheerio"
 tracking = "#466"
 
+[bindings.cheerio.upstream]
+version = "1.2.0"
+sha256 = "56024eb0f315c373a4be57b26f3d956e9618cd2778ad283960c09cc1d4e820ab"
+repo = "https://github.com/cheeriojs/cheerio"
+ref = "e3c7aaf9ed64fe3cb9a181e58a41c0fdd6dbfbfc"
+ported-at = "1.2.0"
+date = "2026-07-30"
 [bindings.sharp]
 crate = "perry-ext-sharp"
 lib = "perry_ext_sharp"
 tracking = "#466"
 
+[bindings.sharp.upstream]
+version = "0.35.3"
+sha256 = "53637f5503f81d10b02097eca6f94c44e69d92ba7ef759f268a0c4ea1d06ae54"
+repo = "https://github.com/lovell/sharp"
+ref = "1018449164723ba0203c1beffaba0e21f7829c18"
+ported-at = "0.35.3"
+date = "2026-07-30"
 [bindings."rate-limiter-flexible"]
 crate = "perry-ext-ratelimit"
 lib = "perry_ext_ratelimit"
 tracking = "#466"
 
+[bindings.rate-limiter-flexible.upstream]
+version = "11.2.0"
+sha256 = "db92ca4b73bea8ccac0ed67b37b6970170dea15a063f539a5b354bb2a36661d0"
+repo = "https://github.com/animir/node-rate-limiter-flexible"
+ref = "2c12f60043c4bc2d0a7b7d05392824027d810b75"
+ported-at = "11.2.0"
+date = "2026-07-30"
 [bindings.commander]
 crate = "perry-ext-commander"
 lib = "perry_ext_commander"
 tracking = "#466"
 
+[bindings.commander.upstream]
+version = "15.0.0"
+sha256 = "632c1e039b31e98fa79c4fae5b10a5ffbbf9df0f21c9ffb3d74e95734b30696f"
+repo = "https://github.com/tj/commander.js"
+ref = "ba6d13ddb4243e5913367734f8c159089ffe7834"
+ported-at = "15.0.0"
+date = "2026-07-30"
 [bindings.ethers]
 crate = "perry-ext-ethers"
 lib = "perry_ext_ethers"
 tracking = "#466"
 
+[bindings.ethers.upstream]
+version = "6.17.0"
+sha256 = "17355f81284ba8431953c77af803b122baf4670cdbf84907adf7cafcd745052b"
+repo = "https://github.com/ethers-io/ethers.js"
+ref = "b48bfe34b11e059c4418718f9cad4e6cbe4c0680"
+ported-at = "6.17.0"
+date = "2026-07-30"
 [bindings.cron]
 crate = "perry-ext-cron"
 lib = "perry_ext_cron"
 tracking = "#466"
 
+[bindings.cron.upstream]
+version = "4.4.0"
+sha256 = "868d5acfd1ff068de40d25a8d78cc1678305c7bc9192edd7e2b0d083346bcbdf"
+repo = "https://github.com/kelektiv/node-cron"
+ref = "d2f18cf7c56721913607c8159abe9f18c72decba"
+ported-at = "4.4.0"
+date = "2026-07-30"
 [bindings."node-cron"]
 crate = "perry-ext-cron"
 lib = "perry_ext_cron"
 tracking = "#466"
 
+[bindings.node-cron.upstream]
+version = "4.6.0"
+sha256 = "78766bf4f4de32b009259e4e780a9ac8cd7155da970052427e68518cbeecfd32"
+repo = "https://github.com/node-cron/node-cron"
+ref = "0be2ca03ffebc79fa823081b8a44bff6f731a583"
+ported-at = "4.6.0"
+date = "2026-07-30"
 [bindings.ioredis]
 crate = "perry-ext-ioredis"
 lib = "perry_ext_ioredis"
 tracking = "#466"
 
+[bindings.ioredis.upstream]
+version = "5.11.1"
+sha256 = "56b4e71ea1c54d22161a83c5d941f22c9ea53f23ecfbf332e33b7a1157b0f22b"
+repo = "https://github.com/luin/ioredis"
+ref = "fb224a7609b6d25959e06e31fdab2460d1f75691"
+ported-at = "5.11.1"
+date = "2026-07-30"
+
+# iovalkey is the Valkey project's fork of ioredis (valkey-io/iovalkey) — same
+# RESP client API, separately published and versioned. It shares the ioredis
+# wrapper crate (same `js_ioredis_*` surface) but is a distinct npm package, so
+# it carries its own provenance pin, exactly like the `redis` row below.
+[bindings.iovalkey]
+crate = "perry-ext-ioredis"
+lib = "perry_ext_ioredis"
+tracking = "#466"
+
+[bindings.iovalkey.upstream]
+version = "0.4.0"
+sha256 = "466e118e5a069cec6625fb66cb4a2af7e7019581d038f8d99de6b3d4c2a487f2"
+repo = "https://github.com/valkey-io/iovalkey"
+ref = "96aa5a84b8e72da784445066c2765a555976d3eb"
+ported-at = "0.4.0"
+date = "2026-07-30"
 [bindings.redis]
 crate = "perry-ext-ioredis"
 lib = "perry_ext_ioredis"
 tracking = "#466"
 
+[bindings.redis.upstream]
+version = "6.1.0"
+sha256 = "44bf885feeaf6ac356acfb315227999dfaa58aa7c5da226493c25bf7926fd2e5"
+repo = "https://github.com/redis/node-redis"
+ref = "d400bc9c1e7b17013c53015f098274a25aa70640"
+ported-at = "6.1.0"
+date = "2026-07-30"
 [bindings.pg]
 crate = "perry-ext-pg"
 lib = "perry_ext_pg"
 tracking = "#466"
 
+[bindings.pg.upstream]
+version = "8.22.0"
+sha256 = "2f8b273b9b93b8712251cbe2b0f05378f4da2187eab5348c3c6c34d02622a55e"
+repo = "https://github.com/brianc/node-postgres"
+ref = "b617619f9fb6fbd231731823e2732a2927ded4be"
+ported-at = "8.22.0"
+date = "2026-07-30"
 [bindings.mysql2]
 crate = "perry-ext-mysql2"
 lib = "perry_ext_mysql2"
 tracking = "#466"
 
+[bindings.mysql2.upstream]
+version = "3.23.2"
+sha256 = "5ebc7c22dd90fe3c7c69b9b1343208d71cc8e9395b433d16eb8be63306218a78"
+repo = "https://github.com/sidorares/node-mysql2"
+ref = "a98730277381005777f70aabfcefa017c1b970a3"
+ported-at = "3.23.2"
+date = "2026-07-30"
 [bindings."mysql2/promise"]
 crate = "perry-ext-mysql2"
 lib = "perry_ext_mysql2"
 tracking = "#466"
+# Subpath of the mysql2 package — not separately published, so it carries no
+# pin of its own; its provenance is mysql2's.
+alias-of = "mysql2"
 
 [bindings.nodemailer]
 crate = "perry-ext-nodemailer"
 lib = "perry_ext_nodemailer"
 tracking = "#466"
 
+[bindings.nodemailer.upstream]
+version = "9.0.3"
+sha256 = "f3da7499531fec3e8d7c59c9b1f240832c501b7a1e2ac01935c64baa66df52b4"
+repo = "https://github.com/nodemailer/nodemailer"
+ref = "1f61eb49b4316589045576752c721bd89918ef21"
+ported-at = "9.0.3"
+date = "2026-07-30"
 [bindings.mongodb]
 crate = "perry-ext-mongodb"
 lib = "perry_ext_mongodb"
 tracking = "#466"
 
+[bindings.mongodb.upstream]
+version = "7.5.0"
+sha256 = "4d93c312a54bcfcc8f858f3f92de329b807fca53b4f1a456cea2b95e1cb1cdaa"
+repo = "https://github.com/mongodb/node-mongodb-native"
+ref = "c4368315b2ab08789f8ae505fce6721549f3bf9d"
+ported-at = "7.5.0"
+date = "2026-07-30"
 [bindings."node-fetch"]
 crate = "perry-ext-fetch"
 lib = "perry_ext_fetch"
 tracking = "#466"
 
+[bindings.node-fetch.upstream]
+version = "3.3.2"
+sha256 = "615af90e363f8f276b4b54f8e6c163cf3686dce1d8867dd7e52cbed4d38d2dab"
+repo = "https://github.com/node-fetch/node-fetch"
+ref = "8b3320d2a7c07bce4afc6b2bf6c3bbddda85b01f"
+ported-at = "3.3.2"
+date = "2026-07-30"
 [bindings.fetch]
 crate = "perry-ext-fetch"
 lib = "perry_ext_fetch"
 tracking = "#466"
+# Bare `fetch` is an alias for the node-fetch surface (same wrapper crate); it
+# is not itself an npm package, so it inherits node-fetch's provenance.
+alias-of = "node-fetch"
 
 [bindings.ws]
 crate = "perry-ext-ws"
 lib = "perry_ext_ws"
 tracking = "#466"
 
+[bindings.ws.upstream]
+version = "8.21.1"
+sha256 = "bb0f7e58ba1f64746672734d36175fe185f226491e336abc0743e2a8f4472ec1"
+repo = "https://github.com/websockets/ws"
+ref = "ae1de54330cef77e487548890fabfeb9aae1d83d"
+ported-at = "8.21.1"
+date = "2026-07-30"
 [bindings.net]
 crate = "perry-ext-net"
 lib = "perry_ext_net"
 tracking = "#466"
+node-builtin = true
 
 [bindings.http]
 crate = "perry-ext-http"
 lib = "perry_ext_http"
 tracking = "#466"
+node-builtin = true
 
 [bindings.https]
 crate = "perry-ext-http"
 lib = "perry_ext_http"
 tracking = "#466"
+node-builtin = true
 
 # Server-side `node:http2` lives in perry-ext-http's internal server
 # module, so the staticlib binding stays uniform across http/https/http2.
@@ -249,11 +498,13 @@ tracking = "#466"
 crate = "perry-ext-http"
 lib = "perry_ext_http"
 tracking = "#577"
+node-builtin = true
 
 [bindings.streams]
 crate = "perry-ext-streams"
 lib = "perry_ext_streams"
 tracking = "#466"
+node-builtin = true
 
 [bindings.fastify]
 crate = "perry-ext-fastify"
@@ -275,6 +526,14 @@ tracking = "#466"
 # function FFI: createPdf / pdfAddText / pdfAddLine / pdfNewPage /
 # pdfSave. Page units = PDF points (1/72"), origin = bottom-left
 # per the PDF standard.
+
+[bindings.fastify.upstream]
+version = "5.10.0"
+sha256 = "765b9bbdc03029d65b2fc544306ce950029c3470806d2ddee47a454dec0a67dc"
+repo = "https://github.com/fastify/fastify"
+ref = "c47975e8a4c0cb1cb066749b948c0e6e22c97663"
+ported-at = "5.10.0"
+date = "2026-07-30"
 [bindings."@perryts/pdf"]
 crate = "perry-ext-pdf"
 lib = "perry_ext_pdf"

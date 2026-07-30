@@ -28,6 +28,55 @@ pub struct WellKnownBinding {
     /// GitHub issue tracking the migration. Surfaced in error
     /// messages when the bundled `.a` is absent.
     pub tracking: Option<String>,
+    /// Upstream provenance pin — which release of the npm package this
+    /// wrapper ports, and when it was last reviewed against it. See
+    /// `docs/src/native-libraries/upstream-pins.md` and the lock-step
+    /// gate in `scripts/binding_pins.mjs`. `None` for entries exempt
+    /// from pinning (`node_builtin`, `alias_of`, and perry-owned
+    /// packages).
+    pub upstream: Option<UpstreamPin>,
+    /// `true` when this binding ports a Node.js **builtin** module
+    /// (`node:zlib`/`net`/`http`/…) rather than a third-party npm
+    /// package. Its upstream is Node core, not an npm dist, so it
+    /// carries no npm provenance pin.
+    pub node_builtin: bool,
+    /// When set, this row is an **alias** for another binding (a
+    /// package subpath like `mysql2/promise`, or a bare-name alias like
+    /// `fetch` → `node-fetch`) and shares that binding's provenance
+    /// instead of carrying its own pin.
+    pub alias_of: Option<String>,
+}
+
+/// Provenance pin for a binding's upstream npm package — the same record
+/// shape as an upstream reference submodule's `.gitmodules` block
+/// (pinned release + content hash + review stamp), carried as toml
+/// fields since the upstream here is an npm dist, not a vendored tree.
+///
+/// The **lock-step rule**: `ported_at` must equal `version`. Re-pinning
+/// an upstream release without re-reviewing the wrapper against the
+/// upstream diff reds the `binding_pins.mjs --check` gate until
+/// `ported_at` advances with the review — an upstream release can never
+/// go silently stale, and a pin bump can never outrun its port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamPin {
+    /// Pinned upstream npm release (an immutable published version,
+    /// e.g. `"17.4.2"`) — the analogue of a release-tag pin.
+    pub version: String,
+    /// SHA-256 of the npm registry tarball for `version` — the
+    /// content hash of record (npm's own `dist.integrity` is sha512;
+    /// this is computed from the tarball bytes at pin time so it can
+    /// be independently re-verified with `shasum -a 256`).
+    pub sha256: String,
+    /// Upstream source repository URL, when the package declares one.
+    pub repo: Option<String>,
+    /// Upstream git commit for the release (`gitHead` from the npm
+    /// registry when the publisher recorded it) — empty when unknown.
+    pub git_ref: Option<String>,
+    /// Release the wrapper was last **reviewed** against. Lock-step:
+    /// must equal `version`.
+    pub ported_at: String,
+    /// ISO date (YYYY-MM-DD) of that review.
+    pub date: String,
 }
 
 /// Parse the embedded toml on first call; reuse on subsequent ones.
@@ -157,6 +206,57 @@ fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>
             .and_then(|v| v.as_str())
             .map(String::from);
 
+        let node_builtin = entry_table
+            .get("node-builtin")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let alias_of = entry_table
+            .get("alias-of")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let upstream = match entry_table.get("upstream") {
+            None => None,
+            Some(value) => {
+                let up = value
+                    .as_table()
+                    .ok_or_else(|| format!("[bindings.{}.upstream] is not a table", pkg_name))?;
+                let required = |field: &str| -> Result<String, String> {
+                    up.get(field)
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .ok_or_else(|| {
+                            format!(
+                                "[bindings.{}.upstream] missing required `{}` field",
+                                pkg_name, field
+                            )
+                        })
+                };
+                let version = required("version")?;
+                let ported_at = required("ported-at")?;
+                // Parse-time lock-step backstop. The authoritative gate is
+                // `scripts/binding_pins.mjs --check` (CI); failing here too
+                // means a skewed pin can't even ship inside the binary.
+                if ported_at != version {
+                    return Err(format!(
+                        "[bindings.{}.upstream] lock-step violation: ported-at ({}) \
+                         != version ({}) — re-review the wrapper against the \
+                         upstream diff and advance ported-at with the review",
+                        pkg_name, ported_at, version
+                    ));
+                }
+                Some(UpstreamPin {
+                    version,
+                    sha256: required("sha256")?,
+                    repo: up.get("repo").and_then(|v| v.as_str()).map(String::from),
+                    git_ref: up.get("ref").and_then(|v| v.as_str()).map(String::from),
+                    ported_at,
+                    date: required("date")?,
+                })
+            }
+        };
+
         out.insert(
             pkg_name.clone(),
             WellKnownBinding {
@@ -164,6 +264,9 @@ fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>
                 krate,
                 lib,
                 tracking,
+                upstream,
+                node_builtin,
+                alias_of,
             },
         );
     }
@@ -348,5 +451,107 @@ mod tests {
              Add \"stdlib\" to the perry-runtime `features` list:\n{}",
             missing_stdlib.join("\n")
         );
+    }
+
+    #[test]
+    fn upstream_pin_parses() {
+        let raw = r#"
+            [bindings.foo]
+            crate = "perry-ext-foo"
+            lib = "perry_ext_foo"
+
+            [bindings.foo.upstream]
+            version = "1.2.3"
+            sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            repo = "https://github.com/example/foo"
+            ref = "0123456789012345678901234567890123456789"
+            ported-at = "1.2.3"
+            date = "2026-07-29"
+        "#;
+        let parsed = parse_well_known_toml(raw).expect("pinned entry must parse");
+        let pin = parsed["foo"]
+            .upstream
+            .as_ref()
+            .expect("upstream pin present");
+        assert_eq!(pin.version, "1.2.3");
+        assert_eq!(pin.ported_at, "1.2.3");
+        assert_eq!(pin.date, "2026-07-29");
+        assert_eq!(pin.repo.as_deref(), Some("https://github.com/example/foo"));
+    }
+
+    /// The lock-step rule enforced at parse time: a pin bump
+    /// (`version`) that outruns its review (`ported-at`) must refuse
+    /// to load — the authoritative CI gate is binding_pins.mjs
+    /// --check, but a skewed pin must not even ship inside the binary.
+    #[test]
+    fn upstream_pin_rejects_lock_step_violation() {
+        let raw = r#"
+            [bindings.foo]
+            crate = "perry-ext-foo"
+            lib = "perry_ext_foo"
+
+            [bindings.foo.upstream]
+            version = "2.0.0"
+            sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ported-at = "1.2.3"
+            date = "2026-07-29"
+        "#;
+        let err = parse_well_known_toml(raw).expect_err("skewed pin must reject");
+        assert!(err.contains("lock-step"), "got: {}", err);
+        assert!(err.contains("ported-at"), "got: {}", err);
+    }
+
+    #[test]
+    fn upstream_pin_rejects_missing_required_field() {
+        let raw = r#"
+            [bindings.foo]
+            crate = "perry-ext-foo"
+            lib = "perry_ext_foo"
+
+            [bindings.foo.upstream]
+            version = "1.2.3"
+            ported-at = "1.2.3"
+            date = "2026-07-29"
+        "#;
+        let err = parse_well_known_toml(raw).expect_err("missing sha256 must reject");
+        assert!(err.contains("sha256"), "got: {}", err);
+    }
+
+    /// Every shipped binding must carry an upstream pin — the port map
+    /// is TOTAL, so a new binding can't land silently unpinned. (Same
+    /// rule as `every_entry_references_a_workspace_crate` above.)
+    #[test]
+    fn every_entry_carries_an_upstream_pin() {
+        let unpinned: Vec<&str> = iter_well_known()
+            .filter(|b| b.upstream.is_none())
+            // Exempt: Node builtins (upstream is Node core, not npm), aliases
+            // (share the aliased binding's pin), and perry-owned packages.
+            .filter(|b| !b.node_builtin && b.alias_of.is_none())
+            .filter(|b| !b.package.starts_with("@perryts/") && !b.package.starts_with("perry/"))
+            .map(|b| b.package.as_str())
+            .collect();
+        assert!(
+            unpinned.is_empty(),
+            "bindings without an [bindings.<name>.upstream] pin — provision one with \
+             `node scripts/binding_pins.mjs --set <name>`:\n  {}",
+            unpinned.join("\n  ")
+        );
+    }
+
+    /// Every `alias-of` must point at a binding that actually exists —
+    /// a dangling alias would resolve to a real crate (via its own
+    /// crate/lib fields) but claim provenance from a phantom parent.
+    #[test]
+    fn alias_of_targets_exist() {
+        for b in iter_well_known() {
+            if let Some(target) = &b.alias_of {
+                assert!(
+                    lookup_well_known(target).is_some(),
+                    "binding `{}` is alias-of `{}`, which is not a known binding",
+                    b.package,
+                    target
+                );
+            }
+        }
     }
 }

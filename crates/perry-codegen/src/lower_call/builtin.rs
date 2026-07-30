@@ -48,7 +48,7 @@ pub(super) fn lower_builtin_new(
         "Client" | "Pool" => Some(&["pg"]),
         "Database" => Some(&["better-sqlite3"]),
         "DatabaseSync" | "Session" | "StatementSync" => Some(&["sqlite", "node:sqlite"]),
-        "Redis" => Some(&["ioredis", "redis"]),
+        "Redis" => Some(&["ioredis", "redis", "iovalkey"]),
         "MongoClient" => Some(&["mongodb"]),
         "Decimal" => Some(&["decimal.js"]),
         "RateLimiterMemory" => Some(&["rate-limiter-flexible"]),

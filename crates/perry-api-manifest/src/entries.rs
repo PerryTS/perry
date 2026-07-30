@@ -28,123 +28,132 @@ use crate::{ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec};
 /// answer module-resolution questions without depending on
 /// `perry-hir`. Order matches the original list to keep diffs minimal.
 pub const NATIVE_MODULES: &[&str] = &[
-    "mysql2",
-    "mysql2/promise",
-    "pg",
-    "uuid",
-    "bcrypt",
-    "argon2",
-    "ioredis",
-    "axios",
-    "node-fetch",
-    "ws",
-    "zlib",
-    "crypto",
-    "dotenv",
-    "dotenv/config",
-    "jsonwebtoken",
-    "nanoid",
-    "slugify",
-    "validator",
-    "ethers",
-    "mongodb",
-    "better-sqlite3",
-    "sqlite",
-    "tursodb",
-    "iroh",
+    // ── Third-party npm packages (native wrappers; see well_known_bindings.toml) ──
+    "mysql2",         // MySQL/MariaDB client
+    "mysql2/promise", // mysql2's promise-API subpath
+    "pg",             // PostgreSQL client
+    "uuid",           // RFC-4122 UUID generation
+    "bcrypt",         // bcrypt password hashing (replaces the N-API addon)
+    "argon2",         // Argon2 password hashing (replaces the N-API addon)
+    "ioredis",        // Redis/Valkey client
+    // iovalkey: the Valkey fork of ioredis (valkey-io/iovalkey), served by the
+    // same perry-ext-ioredis surface — see well_known_bindings.toml.
+    "iovalkey",
+    "axios",          // HTTP client (routes onto the native fetch/http stack)
+    "node-fetch",     // WHATWG fetch client
+    "ws",             // WebSocket client/server
+    "zlib",           // (Node builtin) gzip/deflate/brotli/zstd compression
+    "crypto",         // (Node builtin) hashing, HMAC, cipher, sign/verify, WebCrypto
+    "dotenv",         // .env file loader
+    "dotenv/config",  // dotenv's auto-load-on-import subpath
+    "jsonwebtoken",   // JWT sign/verify
+    "nanoid",         // compact URL-safe ID generation
+    "slugify",        // string → URL slug
+    "validator",      // string validators/sanitizers
+    "ethers",         // Ethereum library (utils/wallet/ABI)
+    "mongodb",        // MongoDB driver
+    "better-sqlite3", // synchronous SQLite (replaces the N-API addon)
+    "sqlite",         // node:sqlite builtin surface
+    "tursodb",        // Turso/libSQL client (legacy in-tree; now @perryts/tursodb)
+    "iroh",           // iroh p2p (legacy in-tree; now @perryts/iroh)
     // #6562: Bun FFI (C-ABI). The `bun:` prefix is part of the specifier
     // (unlike `node:`, which is stripped) — `import { dlopen } from "bun:ffi"`.
     "bun:ffi",
-    "node-cron",
-    "nodemailer",
-    "http",
-    "https",
-    "http2",
-    "inspector",
-    "inspector/promises",
-    "events",
-    "domain",
-    "os",
-    "buffer",
-    "assert",
-    "assert/strict",
-    "test",
-    "child_process",
-    "dns",
-    "dns/promises",
-    "dgram",
-    "net",
-    "tls",
-    "stream",
-    "streams",
-    "fs",
-    "module",
-    "path",
-    "path/posix",
-    "path/win32",
-    "console",
-    "constants",
-    "util",
-    "util/types",
-    "dns",
-    "dns/promises",
-    "url",
-    "lru-cache",
-    "commander",
-    "decimal.js",
-    "bignumber.js",
-    "exponential-backoff",
-    "lodash",
-    "dayjs",
-    "date-fns",
-    "moment",
-    "sharp",
-    "cheerio",
-    "cron",
-    "fastify",
-    "async_hooks",
+    "node-cron",  // cron-style scheduler (npm node-cron; aliases `cron`)
+    "nodemailer", // SMTP email sending
+    // ── Node.js builtin modules ──
+    "http",               // HTTP client + server
+    "https",              // HTTPS client + server
+    "http2",              // HTTP/2 client + server
+    "inspector",          // V8 inspector protocol
+    "inspector/promises", // inspector's promise-API subpath
+    "events",             // EventEmitter
+    "domain",             // (legacy) error-domain grouping
+    "os",                 // OS info (platform, cpus, hostname, …)
+    "buffer",             // Buffer / Blob
+    "assert",             // assertions
+    "assert/strict",      // assert in strict mode
+    "test",               // node:test runner surface
+    "child_process",      // spawn/exec subprocesses
+    "dns",                // DNS resolution
+    "dns/promises",       // dns promise-API subpath
+    "dgram",              // UDP sockets
+    "net",                // TCP sockets + servers
+    "tls",                // TLS/SSL sockets
+    "stream",             // streams (Readable/Writable/Transform)
+    "streams",            // WHATWG web-streams surface
+    "fs",                 // filesystem
+    "module",             // module system introspection (createRequire, …)
+    "path",               // path manipulation (host flavor)
+    "path/posix",         // path, POSIX semantics
+    "path/win32",         // path, Windows semantics
+    "console",            // console.* logging
+    "constants",          // (legacy) OS/fs/crypto constant tables
+    "util",               // promisify, inspect, TextEncoder, …
+    "util/types",         // runtime type predicates (isDate, …)
+    "dns",                // (duplicate of the dns entry above — kept for parity)
+    "dns/promises",       // (duplicate — kept for parity)
+    "url",                // URL / URLSearchParams
+    // ── More third-party npm packages ──
+    "lru-cache",           // LRU cache
+    "commander",           // CLI argument parser
+    "decimal.js",          // arbitrary-precision decimals
+    "bignumber.js",        // arbitrary-precision big numbers
+    "exponential-backoff", // retry-with-backoff helper
+    "lodash",              // general utility library
+    "dayjs",               // date/time library
+    "date-fns",            // functional date utilities
+    "moment",              // (legacy) date/time library
+    "sharp",               // image processing (replaces the N-API addon)
+    "cheerio",             // server-side jQuery-style HTML parsing
+    "cron",                // cron scheduler (aliases node-cron)
+    "fastify",             // HTTP server framework
+    // ── Node.js builtins (cont.) ──
+    "async_hooks", // async context tracking
     // #2875: internal module backing DisposableStack/AsyncDisposableStack
     // instance-method dispatch (no JS import surface).
     "__disposable__",
-    "readline",
-    "repl",
-    "sea",
-    "string_decoder",
-    "querystring",
-    "cluster",
-    "tty",
-    "wasi",
-    "perf_hooks",
-    "v8",
-    "vm",
-    "process",
+    "readline",       // line-by-line stdin reading
+    "repl",           // REPL surface
+    "sea",            // single-executable-application API
+    "string_decoder", // incremental byte→string decoding
+    "querystring",    // (legacy) query-string encode/decode
+    "cluster",        // worker-process clustering
+    "tty",            // terminal I/O
+    "wasi",           // WebAssembly System Interface
+    "perf_hooks",     // performance measurement
+    "v8",             // V8-compat introspection surface
+    "vm",             // script compilation/eval sandboxes
+    "process",        // the process object as an importable module
+    // ── perry-owned builtins (Perry-native; don't resolve under Node/Bun) ──
     // Bare `perry` builtin — embedded-asset introspection (#5731):
     // `embeddedFiles`, `readEmbedded`, `isStandaloneExecutable`.
     "perry",
-    "perry/tui",
-    "perry/yoga",
-    "perry/ui",
-    "perry/system",
-    "perry/plugin",
-    "perry/widget",
-    "perry/i18n",
-    "worker_threads",
-    "perry/thread",
+    "perry/tui",      // terminal-UI framework
+    "perry/yoga",     // Yoga flexbox layout
+    "perry/ui",       // native UI (AppKit/UIKit/Win32/GTK4/…)
+    "perry/system",   // OS integration (keychain, notifications, …)
+    "perry/plugin",   // compile-time plugin surface
+    "perry/widget",   // home-screen widgets (WidgetKit/Glance)
+    "perry/i18n",     // internationalization runtime
+    "worker_threads", // (Node builtin) OS-thread workers
+    "perry/thread",   // perry-native threading (parallelMap/spawn)
     // `perry/gc` — explicit GC control (collect / minor / idleHint).
     // Served entirely by perry-runtime; a no-op-style Perry-native
     // surface like `perry/thread` (doesn't resolve under Node/Bun).
     "perry/gc",
-    "perry/updater",
-    "perry/container",
-    "perry/container-compose",
-    "perry/compose",
-    "perry/workloads",
-    "perry/media",
-    "perry/audio",
-    "perry/background",
-    "redis",
-    "rate-limiter-flexible",
-    "fetch",
+    "perry/updater",           // auto-update client (@perry/updater signer side)
+    "perry/container",         // container runtime surface
+    "perry/container-compose", // docker-compose-style orchestration
+    "perry/compose",           // compose helpers
+    "perry/workloads",         // workload scheduling
+    "perry/media",             // media (video/image) surface
+    "perry/audio",             // audio surface
+    "perry/background",        // background-task surface
+    // ── More third-party npm packages ──
+    "redis",                 // npm `redis` client (aliases ioredis)
+    "rate-limiter-flexible", // rate limiting
+    "fetch",                 // bare-name alias for the node-fetch surface
     // `@perryts/pdf` — official PDF creation package (#516).
     // Bundled wrapper lives in `crates/perry-ext-pdf`; the producer
     // side companion to the existing PdfView widget. d.ts at
@@ -167,7 +176,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // the API-identical @lydell fork (opencode's static import) resolve to
     // the one perry-runtime implementation — no N-API addon involved.
     "node-pty",
-    "@lydell/node-pty",
+    "@lydell/node-pty", // API-identical node-pty fork (see above)
 ];
 
 /// Node built-in submodules that Perry routes through the

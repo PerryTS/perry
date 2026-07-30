@@ -36,7 +36,10 @@ pub fn native_module_lookup(
     // here so call-site lookups find the right runtime fns regardless
     // of which alias the user imported from.
     let normalized = match module {
-        "redis" => "ioredis",
+        // `redis` and `iovalkey` (the Valkey fork of ioredis) share the
+        // perry-ext-ioredis staticlib and its `js_ioredis_*` dispatch rows;
+        // normalize both to `ioredis` so call-site lookups resolve.
+        "redis" | "iovalkey" => "ioredis",
         "sys" => "util",
         // #6563: @lydell/node-pty is an API-identical fork of node-pty
         // (opencode imports the fork, kimi-code the original); both route to

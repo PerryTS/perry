@@ -147,6 +147,15 @@ jobs:
       - name: File size limit
         run: ./scripts/check_file_size.sh
 
+      # Well-known binding provenance pins: every third-party binding in
+      # well_known_bindings.toml must carry an [bindings.<name>.upstream]
+      # pin, and the lock-step rule (ported-at == version) must hold, so a
+      # pin bump can't outrun the wrapper review it demands. Offline/CI-safe
+      # (no network); the weekly update runs `--check --refresh` to surface
+      # newly-soaked upstream releases as advisories.
+      - name: Binding upstream pins (lock-step)
+        run: node scripts/binding_pins.mjs --check
+
       # GC write-barrier store-site inventory: every raw heap-slot store in
       # perry-codegen / perry-runtime / perry-stdlib must be barriered or
       # carry a justified GC_STORE_AUDIT(...) marker (or a justified entry
