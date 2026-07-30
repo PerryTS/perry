@@ -248,10 +248,29 @@ bundled-jsonwebtoken = ["dep:jsonwebtoken", "dep:p256", "dep:rsa", "dep:spki"]
 # routes to perry-ext-ethers when `import 'ethers'` is detected.
 bundled-ethers = []
 
-# Compression (zlib + brotli)
-# `brotli` rides under the same `compression` umbrella; needed by
-# axios's `zlib.createBrotliDecompress` feature-check (#axios e2e).
-compression = ["dep:flate2", "dep:brotli", "dep:zstd"]
+# Compression (node:zlib) — per-codec split (stdlib cherry-pick).
+# `compression-gzip` is the base codec family (gzip/deflate/inflate/
+# unzip/crc32 via flate2) and gates `pub mod zlib` itself; the Brotli
+# and zstd codecs layer on top and imply it (the zlib module's stream
+# framework, options validation and pump are shared). The auto-optimize
+# feature computation maps `import 'node:zlib'` to `compression-gzip`
+# and adds `compression-brotli` / `compression-zstd` only when the HIR
+# references a Brotli / zstd API token (see
+# `collect_modules/feature_detect.rs`), falling back to the full
+# umbrella when deferred dynamic code could call codecs by runtime
+# strings. The `compression` umbrella stays as the union for
+# backwards compatibility (`--features compression` and the default
+# `full` build are byte-identical to the pre-split archive).
+# `async-runtime` is explicit here (not inherited): zlib's deferred
+# stream/one-shot events are queued through `common::async_bridge`'s
+# pump, which only compiles under `async-runtime`. Historically the
+# auto-optimize path always enabled it transitively (the force-added
+# `crypto` feature implied it), so `--features compression` never
+# compiled standalone — now it does.
+compression-gzip = ["dep:flate2", "async-runtime"]
+compression-brotli = ["compression-gzip", "dep:brotli"]
+compression-zstd = ["compression-gzip", "dep:zstd"]
+compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
 
 # Email (nodemailer) — `email` umbrella retained for
 # backwards-compat; v0.5.558's well-known flip toggles

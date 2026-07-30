@@ -416,7 +416,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Gated on the registry AND the method vocabulary so a handle-id reused
     // across another subsystem's registry can't misroute (handle id-spaces
     // aren't unified — see the long comment above).
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "compression-gzip")]
     if matches!(
         method_name,
         "write"

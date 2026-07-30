@@ -82,15 +82,17 @@ fn build_optimized_libs_reuses_fresh_auto_archives_without_cargo() {
     // the archives we plant (instead of hardcoding a key string that drifts
     // whenever the cache-key inputs change).
     // Mirror build_optimized_libs's feature derivation for this import-free
-    // ctx: it always force-adds `crypto` (perry-stdlib's crypto module is
-    // unconditionally linked into the auto-optimize rebuild), and the
-    // import-/fetch-driven unions don't fire for a fresh ctx.
+    // ctx: since the stdlib cherry-pick, `crypto` is no longer force-added
+    // (it only joins via imports, `uses_crypto_builtins`, or the codegen
+    // `js_crypto_*` prefix net); only the `async-runtime` floor (required
+    // by the always-on worker_threads/readline async bridge) is forced, and
+    // the import-/fetch-driven unions don't fire for a fresh ctx.
     let mut features = compute_required_features(
         &ctx.native_module_imports,
         ctx.uses_fetch,
         ctx.uses_crypto_builtins,
     );
-    features.insert("crypto");
+    features.insert("async-runtime");
     let feature_arg = features_to_cargo_arg(&features);
     let panic_abort_safe =
         !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
