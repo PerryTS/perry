@@ -29,3 +29,7 @@
   diagnostics and temporal are off. Those items are gated at the item, not
   suppressed. The cross-host UI crates (ios/tvos/watchOS/visionos/android/
   windows/gtk4) cannot be checked from a macOS or Linux host and are untouched.
+
+- Restore `perry-container-compose` to the workspace default build set. This
+  keeps the container feature's auto-optimized archive available and satisfies
+  the workspace invariant exercised by the hermetic test tier.
