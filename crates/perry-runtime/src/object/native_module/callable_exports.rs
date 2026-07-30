@@ -1551,7 +1551,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
     super::super::set_builtin_property_attrs(
         constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
         "prototype".to_string(),
-        super::super::PropertyAttrs::new(false, false, false),
+        super::super::PropertyAttrs::new(true, false, false),
     );
     crate::value::js_nanbox_pointer(
         constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,

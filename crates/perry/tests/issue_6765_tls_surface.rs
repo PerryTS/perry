@@ -32,6 +32,15 @@ console.log(
   tls.TLSSocket.prototype.getX509Certificate.length,
   tls.TLSSocket.prototype.getPeerX509Certificate.length,
 );
+for (const constructor of [tls.Server, tls.TLSSocket]) {
+  const descriptor = Object.getOwnPropertyDescriptor(constructor, "prototype")!;
+  console.log(
+    "prototype descriptor:",
+    descriptor.writable,
+    descriptor.enumerable,
+    descriptor.configurable,
+  );
+}
 
 const out: any = {};
 tls.convertALPNProtocols(["h2", "http/1.1"], out);
@@ -82,6 +91,8 @@ try {
         concat!(
             "surface: function function function function function\n",
             "lengths: 1 0 0 0\n",
+            "prototype descriptor: true false false\n",
+            "prototype descriptor: true false false\n",
             "array: true 02683208687474702f312e31\n",
             "copy: 026832\n",
             "range: true ERR_OUT_OF_RANGE\n",
