@@ -602,9 +602,15 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     } else {
         std::collections::HashMap::new()
     };
-    if is_win_lib && (provided_symbols.is_empty() || staticlib_member_symbols.is_empty()) {
+    if is_win_lib && staticlib_member_symbols.is_empty() {
         return Err(anyhow::anyhow!(
-            "llvm-nm could not read the COFF archive symbol tables"
+            "llvm-nm could not read the COFF archive symbol tables of {lib_name}"
+        ));
+    }
+    if is_win_lib && provided_symbols.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no evidence sources found for {lib_name}: {stdlib_name}/{runtime_name} (and no rlib) \
+             were not located, so COFF archive dedup has nothing to compare against"
         ));
     }
 

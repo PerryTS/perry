@@ -873,7 +873,15 @@ jobs:
           }
 
       - name: Test COFF duplicate-symbol archive trimming
-        run: cargo test --profile perry-dev -p perry --bin perry coff_archive_dedup_drops_only_fully_provided_members
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --profile perry-dev -p perry --bin perry \
+            coff_archive_dedup_drops_only_fully_provided_members 2>&1 | tee test-output.log
+          grep -q 'test result: ok. 1 passed; 0 failed' test-output.log || {
+            echo "::error::expected COFF dedup test did not run exactly once"
+            exit 1
+          }
 
   # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
