@@ -102,3 +102,17 @@ fn md_sub_namespace_call_flattens() {
         native_call_in_inits(&module, "create").expect("md.sha256.create should lower natively");
     assert_eq!(call.0, "node-forge");
 }
+
+#[test]
+fn unsupported_md_namespace_does_not_flatten_to_sha256_create() {
+    let module = lower(
+        r#"
+        import forge from "node-forge";
+        const md = forge.md.md5.create();
+    "#,
+    );
+    assert!(
+        native_call_in_inits(&module, "create").is_none(),
+        "forge.md.md5.create must not dispatch to the SHA-256 native marker"
+    );
+}

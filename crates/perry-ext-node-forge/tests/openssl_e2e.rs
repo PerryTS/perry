@@ -3,7 +3,8 @@
 //! the chain with the real `openssl` CLI. This is the acceptance bar for
 //! the wrapper's fidelity — a cert real TLS clients accept.
 //!
-//! Skips (does not fail) when `openssl` is not on PATH.
+//! Set `PERRY_SKIP_OPENSSL_E2E=1` to explicitly skip when OpenSSL is not
+//! available in an intentionally minimal environment.
 
 use std::io::Write;
 use std::process::Command;
@@ -23,10 +24,12 @@ fn ca_attrs() -> Vec<Attr> {
         Attr {
             key: "commonName".into(),
             value: "Socket Security CA".into(),
+            value_tag: None,
         },
         Attr {
             key: "organizationName".into(),
             value: "Socket Security".into(),
+            value_tag: None,
         },
     ]
 }
@@ -34,17 +37,25 @@ fn ca_attrs() -> Vec<Attr> {
 #[test]
 fn ca_and_leaf_verify_with_openssl() {
     if !openssl_available() {
-        eprintln!("openssl not found on PATH — skipping e2e verification");
-        return;
+        if std::env::var("PERRY_SKIP_OPENSSL_E2E").as_deref() == Ok("1") {
+            eprintln!("PERRY_SKIP_OPENSSL_E2E=1 — skipping OpenSSL verification");
+            return;
+        }
+        panic!("openssl not found on PATH (set PERRY_SKIP_OPENSSL_E2E=1 to explicitly skip)");
     }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
 
     // ── CA (mirrors src/lib/util/genCaKeyPair.ts) ──────────────────
     let (ca_priv_pem, ca_pub_pem) = generate_key_pair(2048).unwrap();
     let ca_spec = CertSpec {
         public_key_pem: ca_pub_pem,
         serial_hex: "01".into(),
-        not_before_unix: 1_700_000_000,
-        not_after_unix: 1_900_000_000,
+        not_before_unix: now - 60,
+        not_after_unix: now + 2 * 365 * 24 * 60 * 60,
         subject: ca_attrs(),
         issuer: ca_attrs(),
         extensions: ExtSet {
@@ -71,11 +82,12 @@ fn ca_and_leaf_verify_with_openssl() {
     let leaf_spec = CertSpec {
         public_key_pem: leaf_pub_pem,
         serial_hex: "02".into(),
-        not_before_unix: 1_700_000_000,
-        not_after_unix: 1_800_000_000,
+        not_before_unix: now - 60,
+        not_after_unix: now + 365 * 24 * 60 * 60,
         subject: vec![Attr {
             key: "commonName".into(),
             value: "example.com".into(),
+            value_tag: None,
         }],
         issuer: ca_subject_attrs,
         extensions: ExtSet {

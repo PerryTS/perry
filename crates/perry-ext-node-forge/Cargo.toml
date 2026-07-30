@@ -13,6 +13,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # RustCrypto PKI stack — all already present in the workspace Cargo.lock.
@@ -47,4 +48,3 @@ perry-ffi = { workspace = true, features = ["runtime-link"] }
 # with the real perry-stdlib, so drop the bundled no-op stdlib_stubs that would
 # otherwise shadow perry-stdlib's real symbols (#6314). `default`: keep the copy
 # feature-identical to the shipped runtime so gated dispatchers behave (#6303).
-perry-runtime = { workspace = true, features = ["default", "stdlib"] }

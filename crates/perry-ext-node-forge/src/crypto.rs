@@ -19,7 +19,7 @@ use std::str::FromStr;
 use const_oid::ObjectIdentifier;
 use der::asn1::{Ia5String, OctetString, SetOfVec, Utf8StringRef};
 use der::flagset::FlagSet;
-use der::{Any, Decode, DecodePem, EncodePem};
+use der::{Any, Decode, DecodePem, Encode, EncodePem};
 use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey};
 use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::{DecodePublicKey, EncodePublicKey};
@@ -32,6 +32,7 @@ use x509_cert::ext::pkix::name::{GeneralName, GeneralNames};
 use x509_cert::ext::pkix::{
     ExtendedKeyUsage, KeyUsage, KeyUsages, SubjectAltName, SubjectKeyIdentifier,
 };
+use x509_cert::ext::AsExtension;
 use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::SubjectPublicKeyInfoOwned;
@@ -54,6 +55,38 @@ pub struct Attr {
     /// forge `name` (e.g. `commonName`) or `shortName` (e.g. `CN`).
     pub key: String,
     pub value: String,
+    /// Original ASN.1 string type when the attribute came from a certificate.
+    ///
+    /// node-forge preserves this information internally. Carrying it through
+    /// the forge-shaped JS object keeps a parsed CA subject byte-identical when
+    /// it is reused as a leaf issuer.
+    pub value_tag: Option<DnValueTag>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnValueTag {
+    Utf8,
+    Printable,
+    Ia5,
+}
+
+impl DnValueTag {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Utf8 => "utf8",
+            Self::Printable => "printable",
+            Self::Ia5 => "ia5",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "utf8" => Some(Self::Utf8),
+            "printable" => Some(Self::Printable),
+            "ia5" => Some(Self::Ia5),
+            _ => None,
+        }
+    }
 }
 
 /// The forge extension descriptors this wrapper supports.
@@ -181,7 +214,7 @@ fn name_for(oid: &ObjectIdentifier) -> String {
         OID_C => "countryName",
         OID_ST => "stateOrProvinceName",
         OID_L => "localityName",
-        _ => "unknown",
+        _ => return oid.to_string(),
     }
     .to_string()
 }
@@ -195,7 +228,15 @@ fn build_name(attrs: &[Attr]) -> Result<Name, String> {
     let mut rdns = Vec::with_capacity(attrs.len());
     for a in attrs {
         let oid = oid_for(&a.key)?;
-        let value = Any::from(Utf8StringRef::new(&a.value).map_err(|e| e.to_string())?);
+        let value = match a.value_tag.unwrap_or(DnValueTag::Utf8) {
+            DnValueTag::Utf8 => Any::from(Utf8StringRef::new(&a.value).map_err(|e| e.to_string())?),
+            DnValueTag::Printable => {
+                Any::from(der::asn1::PrintableStringRef::new(&a.value).map_err(|e| e.to_string())?)
+            }
+            DnValueTag::Ia5 => {
+                Any::from(der::asn1::Ia5StringRef::new(&a.value).map_err(|e| e.to_string())?)
+            }
+        };
         let atv = AttributeTypeAndValue { oid, value };
         let set = SetOfVec::try_from(vec![atv]).map_err(|e| e.to_string())?;
         rdns.push(RelativeDistinguishedName(set));
@@ -208,25 +249,27 @@ pub fn parse_name(name: &Name) -> Vec<Attr> {
     let mut out = Vec::new();
     for rdn in name.0.iter() {
         for atv in rdn.0.iter() {
-            let value = atv
+            let decoded = atv
                 .value
                 .decode_as::<Utf8StringRef<'_>>()
-                .map(|s| s.as_str().to_string())
+                .map(|s| (s.as_str().to_string(), DnValueTag::Utf8))
                 .or_else(|_| {
                     atv.value
                         .decode_as::<der::asn1::PrintableStringRef<'_>>()
-                        .map(|s| s.as_str().to_string())
+                        .map(|s| (s.as_str().to_string(), DnValueTag::Printable))
                 })
                 .or_else(|_| {
                     atv.value
                         .decode_as::<der::asn1::Ia5StringRef<'_>>()
-                        .map(|s| s.as_str().to_string())
-                })
-                .unwrap_or_default();
-            out.push(Attr {
-                key: name_for(&atv.oid),
-                value,
-            });
+                        .map(|s| (s.as_str().to_string(), DnValueTag::Ia5))
+                });
+            if let Ok((value, value_tag)) = decoded {
+                out.push(Attr {
+                    key: name_for(&atv.oid),
+                    value,
+                    value_tag: Some(value_tag),
+                });
+            }
         }
     }
     out
@@ -306,6 +349,33 @@ fn subject_alt_name_ext(hosts: &[String]) -> Result<SubjectAltName, String> {
 
 // ── build + sign ────────────────────────────────────────────────────
 
+/// Preserve node-forge's caller-supplied `critical` bit instead of accepting
+/// x509-cert's policy default for an extension.
+struct ExtensionWithCritical<'a, E> {
+    value: &'a E,
+    critical: bool,
+}
+
+impl<E: const_oid::AssociatedOid> const_oid::AssociatedOid for ExtensionWithCritical<'_, E> {
+    const OID: ObjectIdentifier = E::OID;
+}
+
+impl<E: Encode> Encode for ExtensionWithCritical<'_, E> {
+    fn encoded_len(&self) -> der::Result<der::Length> {
+        self.value.encoded_len()
+    }
+
+    fn encode(&self, writer: &mut impl der::Writer) -> der::Result<()> {
+        self.value.encode(writer)
+    }
+}
+
+impl<E: const_oid::AssociatedOid + Encode> AsExtension for ExtensionWithCritical<'_, E> {
+    fn critical(&self, _subject: &Name, _extensions: &[x509_cert::ext::Extension]) -> bool {
+        self.critical
+    }
+}
+
 /// Build and sign a certificate. `signer_private_key_pem` is the
 /// ISSUER's private key (for a self-signed CA it is the same key whose
 /// public half is in `spec.public_key_pem`).
@@ -340,16 +410,24 @@ pub fn build_and_sign(spec: &CertSpec, signer_private_key_pem: &str) -> Result<S
 
     let exts = &spec.extensions;
     if let Some(bc) = &exts.basic_constraints {
+        let extension = BasicConstraints {
+            ca: bc.ca,
+            path_len_constraint: None,
+        };
         builder
-            .add_extension(&BasicConstraints {
-                ca: bc.ca,
-                path_len_constraint: None,
+            .add_extension(&ExtensionWithCritical {
+                value: &extension,
+                critical: bc.critical,
             })
             .map_err(|e| e.to_string())?;
     }
     if let Some(ku) = &exts.key_usage {
+        let extension = key_usage_ext(ku);
         builder
-            .add_extension(&key_usage_ext(ku))
+            .add_extension(&ExtensionWithCritical {
+                value: &extension,
+                critical: ku.critical,
+            })
             .map_err(|e| e.to_string())?;
     }
     if let Some(eku) = &exts.ext_key_usage {
@@ -401,6 +479,7 @@ pub fn cert_subject_attrs(pem: &str) -> Result<Vec<Attr>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use const_oid::AssociatedOid;
     use der::Encode;
     use rsa::pkcs1::EncodeRsaPrivateKey;
 
@@ -414,20 +493,24 @@ mod tests {
                 Attr {
                     key: "commonName".into(),
                     value: "Socket Security CA".into(),
+                    value_tag: None,
                 },
                 Attr {
                     key: "organizationName".into(),
                     value: "Socket Security".into(),
+                    value_tag: None,
                 },
             ],
             issuer: vec![
                 Attr {
                     key: "commonName".into(),
                     value: "Socket Security CA".into(),
+                    value_tag: None,
                 },
                 Attr {
                     key: "organizationName".into(),
                     value: "Socket Security".into(),
+                    value_tag: None,
                 },
             ],
             extensions: ExtSet {
@@ -492,5 +575,52 @@ mod tests {
             ca.tbs_certificate.subject.to_der().unwrap(),
             "rebuilt issuer DN must match CA subject DN exactly"
         );
+    }
+
+    #[test]
+    fn dn_round_trip_preserves_string_tags_and_unknown_oids() {
+        let original = build_name(&[
+            Attr {
+                key: "countryName".into(),
+                value: "US".into(),
+                value_tag: Some(DnValueTag::Printable),
+            },
+            Attr {
+                key: "1.2.840.113549.1.9.1".into(),
+                value: "ca@example.com".into(),
+                value_tag: Some(DnValueTag::Ia5),
+            },
+        ])
+        .unwrap();
+
+        let parsed = parse_name(&original);
+        assert_eq!(parsed[0].value_tag, Some(DnValueTag::Printable));
+        assert_eq!(parsed[1].key, "1.2.840.113549.1.9.1");
+        assert_eq!(parsed[1].value_tag, Some(DnValueTag::Ia5));
+        assert_eq!(
+            build_name(&parsed).unwrap().to_der().unwrap(),
+            original.to_der().unwrap()
+        );
+    }
+
+    #[test]
+    fn requested_extension_critical_flags_are_preserved() {
+        let (priv_pem, pub_pem) = generate_key_pair(2048).unwrap();
+        let mut spec = ca_spec(&pub_pem);
+        spec.extensions.basic_constraints.as_mut().unwrap().critical = false;
+        spec.extensions.key_usage.as_mut().unwrap().critical = false;
+        let pem = build_and_sign(&spec, &priv_pem).unwrap();
+        let cert = x509_cert::Certificate::from_pem(&pem).unwrap();
+        let extensions = cert.tbs_certificate.extensions.as_ref().unwrap();
+        let basic_constraints = extensions
+            .iter()
+            .find(|ext| ext.extn_id == BasicConstraints::OID)
+            .unwrap();
+        let key_usage = extensions
+            .iter()
+            .find(|ext| ext.extn_id == KeyUsage::OID)
+            .unwrap();
+        assert!(!basic_constraints.critical);
+        assert!(!key_usage.critical);
     }
 }

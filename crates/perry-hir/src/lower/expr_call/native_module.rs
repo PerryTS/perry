@@ -224,30 +224,29 @@ fn detect_bundled_mysql2_create(
     mysql2_config_signature(method_name, &keys)
 }
 
-/// True when `receiver` is a (possibly nested) member-access chain whose root
-/// identifier resolves to native module `module_name` as a whole-module
-/// reference (default/namespace import, `native_method == None`). Used to
-/// recognize deeply-namespaced native APIs like node-forge's
-/// `forge.pki.rsa.generateKeyPair` whose receiver is `forge.pki.rsa`, a chain
-/// of `Member`s rather than the bare module `Ident` the ordinary arms expect.
-/// Only string (`Ident`) property segments are walked — a computed
-/// (`forge["pki"]`) segment isn't a static namespace path and returns false.
-fn member_chain_roots_at_native_module(
+/// Return the complete static member path whose root identifier resolves to
+/// `module_name` as a whole-module reference. Computed properties are not
+/// accepted because they are not a statically known namespace path.
+fn native_module_member_path(
     ctx: &LoweringContext,
-    receiver: &ast::Expr,
+    expr: &ast::Expr,
     module_name: &str,
-) -> bool {
-    match unwrap_ts_wrappers(receiver) {
-        ast::Expr::Ident(ident) => {
-            matches!(
-                ctx.lookup_native_module(ident.sym.as_ref()),
-                Some((m, None)) if m == module_name
-            )
+) -> Option<Vec<String>> {
+    match unwrap_ts_wrappers(expr) {
+        ast::Expr::Ident(ident) => matches!(
+            ctx.lookup_native_module(ident.sym.as_ref()),
+            Some((m, None)) if m == module_name
+        )
+        .then(Vec::new),
+        ast::Expr::Member(member) => {
+            let ast::MemberProp::Ident(prop) = &member.prop else {
+                return None;
+            };
+            let mut path = native_module_member_path(ctx, member.obj.as_ref(), module_name)?;
+            path.push(prop.sym.to_string());
+            Some(path)
         }
-        ast::Expr::Member(member) if matches!(member.prop, ast::MemberProp::Ident(_)) => {
-            member_chain_roots_at_native_module(ctx, member.obj.as_ref(), module_name)
-        }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -261,10 +260,10 @@ fn member_chain_roots_at_native_module(
 /// `pki`) and defers a throw. Collapse any member chain rooted at the
 /// node-forge default import down to its LAST segment, which is exactly the
 /// method key the codegen `NATIVE_MODULE_TABLE` rows use (`generateKeyPair`,
-/// `createCertificate`, `create`, `privateKeyToPem`, …). The intermediate
-/// `pki`/`rsa`/`md`/`sha256` path segments are dropped: within node-forge those
-/// method names are unambiguous, and an unknown method simply has no table row
-/// and surfaces as unresolved, exactly as before. `createCertificate` is typed
+/// `createCertificate`, `create`, `privateKeyToPem`, …). Only the exact
+/// implemented paths are flattened; in particular, `forge.md.md5.create()`
+/// must not accidentally dispatch to the SHA-256 marker just because its final
+/// segment is also `create`. `createCertificate` is typed
 /// back to a `Certificate` instance by the factory map in
 /// `js_transform/local_natives.rs`, so `cert.setSubject(...)` etc. dispatch
 /// through the normal single-level instance path.
@@ -278,20 +277,28 @@ pub(super) fn try_node_forge_namespace(
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Expr, Vec<Expr>> {
-    if let ast::Expr::Member(member) = expr {
-        if let ast::MemberProp::Ident(method_ident) = &member.prop {
-            if member_chain_roots_at_native_module(ctx, member.obj.as_ref(), "node-forge") {
-                return Ok(Expr::NativeMethodCall {
-                    module: "node-forge".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: method_ident.sym.to_string(),
-                    args,
-                });
-            }
-        }
-    }
-    Err(args)
+    let Some(path) = native_module_member_path(ctx, expr, "node-forge") else {
+        return Err(args);
+    };
+    let method = match path
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["pki", "rsa", "generateKeyPair"] => "generateKeyPair",
+        ["pki", method @ ("createCertificate" | "certificateFromPem" | "certificateToPem"
+        | "privateKeyFromPem" | "privateKeyToPem" | "publicKeyToPem")] => method,
+        ["md", "sha256", "create"] => "create",
+        _ => return Err(args),
+    };
+    return Ok(Expr::NativeMethodCall {
+        module: "node-forge".to_string(),
+        class_name: None,
+        object: None,
+        method: method.to_string(),
+        args,
+    });
 }
 
 pub(super) fn try_native_module_methods(

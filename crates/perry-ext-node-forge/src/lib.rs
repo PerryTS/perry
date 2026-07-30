@@ -35,7 +35,9 @@ use perry_ffi::{
 };
 use serde::Deserialize;
 
-use crypto::{Attr, BasicConstraintsSpec, CertSpec, ExtKeyUsageSpec, ExtSet, KeyUsageSpec};
+use crypto::{
+    Attr, BasicConstraintsSpec, CertSpec, DnValueTag, ExtKeyUsageSpec, ExtSet, KeyUsageSpec,
+};
 
 // Fixed field layout of the certificate builder object. `create_certificate`
 // allocates this shape; the setter FFIs write by index; `sign` /
@@ -99,6 +101,8 @@ struct AttrJson {
     #[serde(rename = "type")]
     type_oid: Option<String>,
     value: Option<serde_json::Value>,
+    #[serde(rename = "valueTag")]
+    value_tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -193,6 +197,7 @@ fn attrs_from(json: &[AttrJson]) -> Vec<Attr> {
             Some(Attr {
                 key,
                 value: value_to_string(&a.value),
+                value_tag: a.value_tag.as_deref().and_then(DnValueTag::from_str),
             })
         })
         .collect()
@@ -200,15 +205,19 @@ fn attrs_from(json: &[AttrJson]) -> Vec<Attr> {
 
 /// Parse a validity endpoint. `JSON.stringify(Date)` yields an ISO-8601
 /// string; we also accept an epoch-milliseconds number as a fallback.
-fn parse_time(v: &Option<serde_json::Value>) -> i64 {
+fn parse_time(v: &Option<serde_json::Value>, field: &str) -> Result<i64, String> {
     match v {
         Some(serde_json::Value::String(s)) => {
             time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
                 .map(|dt| dt.unix_timestamp())
-                .unwrap_or(0)
+                .map_err(|e| format!("node-forge: invalid cert.validity.{field}: {e}"))
         }
-        Some(serde_json::Value::Number(n)) => (n.as_f64().unwrap_or(0.0) / 1000.0) as i64,
-        _ => 0,
+        Some(serde_json::Value::Number(n)) => n
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(|value| (value / 1000.0) as i64)
+            .ok_or_else(|| format!("node-forge: invalid cert.validity.{field}")),
+        _ => Err(format!("node-forge: cert.validity.{field} is not set")),
     }
 }
 
@@ -265,11 +274,19 @@ fn cert_spec_from_json(cert_json: &str) -> Result<CertSpec, String> {
         .and_then(|k| k.pem)
         .ok_or("node-forge: cert.publicKey is not set")?;
     let validity = c.validity.unwrap_or_default();
+    let not_before_unix = parse_time(&validity.not_before, "notBefore")?;
+    let not_after_unix = parse_time(&validity.not_after, "notAfter")?;
+    if not_after_unix <= not_before_unix {
+        return Err(
+            "node-forge: cert.validity.notAfter must be later than cert.validity.notBefore"
+                .to_string(),
+        );
+    }
     Ok(CertSpec {
         public_key_pem,
         serial_hex: value_to_string(&c.serial_number),
-        not_before_unix: parse_time(&validity.not_before),
-        not_after_unix: parse_time(&validity.not_after),
+        not_before_unix,
+        not_after_unix,
         subject: c
             .subject
             .as_ref()
@@ -407,13 +424,15 @@ pub unsafe extern "C" fn js_node_forge_certificate_from_pem(
         Ok(a) => a,
         Err(_) => return JsValue::NULL,
     };
-    // Build `subject.attributes = [{ name, value }, …]`.
+    // Build `subject.attributes = [{ name, value, valueTag }, …]`. The
+    // valueTag metadata preserves the certificate's ASN.1 DN string encoding
+    // when callers reuse these attributes as an issuer.
     let attrs_arr = {
         let arr = perry_ffi::js_array_alloc(attrs.len() as u32);
         let mut arr = arr;
         for a in &attrs {
-            let (packed, shape_id) = build_object_shape(&["name", "value"]);
-            let o = js_object_alloc_with_shape(shape_id, 2, packed.as_ptr(), packed.len() as u32);
+            let (packed, shape_id) = build_object_shape(&["name", "value", "valueTag"]);
+            let o = js_object_alloc_with_shape(shape_id, 3, packed.as_ptr(), packed.len() as u32);
             js_object_set_field(
                 o,
                 0,
@@ -423,6 +442,13 @@ pub unsafe extern "C" fn js_node_forge_certificate_from_pem(
                 o,
                 1,
                 JsValue::from_string_ptr(alloc_string(&a.value).as_raw()),
+            );
+            js_object_set_field(
+                o,
+                2,
+                a.value_tag
+                    .map(|tag| JsValue::from_string_ptr(alloc_string(tag.as_str()).as_raw()))
+                    .unwrap_or(JsValue::NULL),
             );
             arr = perry_ffi::js_array_push(arr, JsValue::from_object_ptr(o));
         }
@@ -481,9 +507,16 @@ pub extern "C" fn js_node_forge_create_certificate() -> JsValue {
 /// and it is re-wrapped here, keeping both DN fields uniform for
 /// `certificateToPem`.
 unsafe fn wrap_dn_attributes(attrs_bits: f64) -> JsValue {
+    let attrs = JsValue::from_bits(attrs_bits.to_bits());
+    if json_stringify(attrs)
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .is_some_and(|value| value.get("attributes").is_some())
+    {
+        return attrs;
+    }
     let (packed, shape_id) = build_object_shape(&["attributes"]);
     let dn = js_object_alloc_with_shape(shape_id, 1, packed.as_ptr(), packed.len() as u32);
-    js_object_set_field(dn, 0, JsValue::from_bits(attrs_bits.to_bits()));
+    js_object_set_field(dn, 0, attrs);
     JsValue::from_object_ptr(dn)
 }
 
@@ -543,28 +576,56 @@ pub unsafe extern "C" fn js_node_forge_cert_sign(cert: i64, key_bits: f64, _md_b
     }
     let cert_value = JsValue::from_object_ptr(obj);
     let Some(cert_json) = json_stringify(cert_value) else {
-        return;
+        perry_ffi::throw_with_code(
+            "node-forge: unable to serialize certificate",
+            "ERR_NODE_FORGE_CERT_SIGN",
+            perry_ffi::ErrorKind::Error,
+        );
     };
     let Some(key_json) = stringify_arg(key_bits) else {
-        return;
+        perry_ffi::throw_with_code(
+            "node-forge: unable to serialize signing key",
+            "ERR_NODE_FORGE_CERT_SIGN",
+            perry_ffi::ErrorKind::Error,
+        );
     };
-    let Ok(key) = serde_json::from_str::<KeyObj>(&key_json) else {
-        return;
+    let key = match serde_json::from_str::<KeyObj>(&key_json) {
+        Ok(key) => key,
+        Err(err) => perry_ffi::throw_with_code(
+            &format!("node-forge: invalid signing key: {err}"),
+            "ERR_NODE_FORGE_CERT_SIGN",
+            perry_ffi::ErrorKind::Error,
+        ),
     };
     let Some(signer_pem) = key.pem else {
-        return;
-    };
-    let Ok(spec) = cert_spec_from_json(&cert_json) else {
-        return;
-    };
-    if let Ok(pem) = crypto::build_and_sign(&spec, &signer_pem) {
-        let pem_str = alloc_string(&pem);
-        js_object_set_field(
-            obj,
-            FIELD_SIGNATURE_PEM,
-            JsValue::from_string_ptr(pem_str.as_raw()),
+        perry_ffi::throw_with_code(
+            "node-forge: signing key PEM is not set",
+            "ERR_NODE_FORGE_CERT_SIGN",
+            perry_ffi::ErrorKind::Error,
         );
-    }
+    };
+    let spec = match cert_spec_from_json(&cert_json) {
+        Ok(spec) => spec,
+        Err(err) => perry_ffi::throw_with_code(
+            &err,
+            "ERR_NODE_FORGE_CERT_SIGN",
+            perry_ffi::ErrorKind::Error,
+        ),
+    };
+    let pem = match crypto::build_and_sign(&spec, &signer_pem) {
+        Ok(pem) => pem,
+        Err(err) => perry_ffi::throw_with_code(
+            &format!("node-forge: certificate signing failed: {err}"),
+            "ERR_NODE_FORGE_CERT_SIGN",
+            perry_ffi::ErrorKind::Error,
+        ),
+    };
+    let pem_str = alloc_string(&pem);
+    js_object_set_field(
+        obj,
+        FIELD_SIGNATURE_PEM,
+        JsValue::from_string_ptr(pem_str.as_raw()),
+    );
 }
 
 /// `forge.md.sha256.create()` — a small marker object. `sign` reads the
