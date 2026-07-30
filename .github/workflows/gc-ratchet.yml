@@ -38,11 +38,16 @@ jobs:
     # a linux runner would turn the gate red, not silently weaken it.
     runs-on: macos-14
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # Read-only listing of the PR's changed files, to decide whether this
+      # change can touch the collector. Same approach `changeset-gate` uses, and
+      # it avoids a fetch-depth: 0 clone of a large history.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
-          # Needed to diff against the PR base when deciding relevance.
-          fetch-depth: 0
+          persist-credentials: false
 
       # Fast structural failure first: a broken harness or a tampered artifact
       # should not cost a 20-minute compiler build to discover.
@@ -54,21 +59,25 @@ jobs:
       - name: Decide whether this change can affect the collector
         id: relevance
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Not a pull request; measuring."
             exit 0
           fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
           # Anything under crates/ can move the collector: a codegen change
           # alters what is allocated, a transform change alters what escapes,
           # and a dependency bump can change allocator behaviour. The filter is
           # deliberately broad; it exists only to spare docs-only PRs a build.
-          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-             | grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/gc-ratchet\.yml$|tests/test_gc_ratchet\.py$)'; then
+          # If the listing is empty or the API failed, `set -e` already aborted
+          # — the job does not silently fall through to "not relevant".
+          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/gc-ratchet\.yml$|tests/test_gc_ratchet\.py$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; measuring."
           else
