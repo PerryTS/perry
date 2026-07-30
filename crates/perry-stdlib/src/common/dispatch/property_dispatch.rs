@@ -36,16 +36,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return value;
     }
 
-    #[cfg(feature = "http-client")]
-    if let Some(value) = crate::http::dispatch_agent_property(handle, property_name) {
-        return value;
-    }
-
-    #[cfg(feature = "http-client")]
-    if let Some(value) = crate::http::dispatch_client_request_property(handle, property_name) {
-        return value;
-    }
-
     #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
     if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
         return value;

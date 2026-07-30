@@ -4,7 +4,7 @@ use super::*;
 
 use perry_ffi::{get_handle, get_handle_mut, iter_handle_ids_of, JsValue};
 
-use crate::types::{jsvalue_to_body_bytes, TAG_UNDEFINED};
+use crate::server::types::{jsvalue_to_body_bytes, TAG_UNDEFINED};
 
 pub(crate) fn numeric_value(value: f64) -> Option<f64> {
     let v = JsValue::from_bits(value.to_bits());

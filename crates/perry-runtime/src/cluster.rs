@@ -116,8 +116,8 @@ pub fn worker_shared_reuseport_bind(
 /// over the fork IPC channel so it can emit `cluster.on('listening')`
 /// (#4914). No-op outside cluster workers or when the channel is gone.
 /// `#[no_mangle]` because the HTTP/HTTPS/HTTP2 listen sites live in
-/// `perry-ext-http-server`, which has no Cargo dep on perry-runtime — the
-/// symbol resolves at final link (same pattern as perry-ffi's helpers).
+/// `perry-ext-http`. The C ABI remains the stable interface used by the
+/// HTTP listen sites and perry-ffi helpers.
 #[no_mangle]
 pub extern "C" fn perry_cluster_worker_listening(
     addr_ptr: *const u8,

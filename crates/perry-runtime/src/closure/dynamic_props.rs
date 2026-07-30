@@ -422,7 +422,7 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
 /// raw bits) is a closure/function — a `POINTER_TAG` value whose pointee
 /// carries `CLOSURE_MAGIC` — and 0 for objects, arrays, strings, numbers, and
 /// everything else. Exposed for external wrapper crates that link the runtime
-/// only by C ABI (e.g. perry-ext-http-server's `parse_listen_args`, #2041),
+/// only by C ABI (e.g. perry-ext-http's `parse_listen_args`, #2041),
 /// which need to tell a callback argument apart from an options-object
 /// argument without a Cargo dependency on perry-runtime.
 #[no_mangle]

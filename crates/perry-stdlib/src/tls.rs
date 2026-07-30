@@ -758,7 +758,7 @@ unsafe fn build_server_config_from_options(
     // the X.509 v1 certs in Node's test fixtures (`UnsupportedCertVersion`).
     // Node serves whatever cert/key the user supplies; load the signing
     // key directly and install a fixed-cert resolver. (Mirrors
-    // `perry-ext-http-server::tls::build_server_config`.)
+    // `perry-ext-http::tls::build_server_config`.)
     let signing_key = rustls::crypto::ring::default_provider()
         .key_provider
         .load_private_key(key)

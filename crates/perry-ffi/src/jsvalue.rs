@@ -32,7 +32,7 @@
 //! These tag values are part of perry-ffi's stable API — a
 //! perry-runtime renumbering bumps perry-ffi major.
 
-use crate::{ArrayHeader, ObjectHeader, StringHeader};
+use crate::{alloc_string, ArrayHeader, ObjectHeader, StringHeader};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
@@ -259,6 +259,12 @@ impl JsValue {
             std::ptr::null_mut()
         }
     }
+
+    /// True when this is a tagged heap pointer or a legacy bare pointer.
+    #[inline]
+    pub const fn is_pointer_or_raw(self) -> bool {
+        self.is_pointer() || (self.0 >> 48 == 0 && self.0 >= 0x10000)
+    }
 }
 
 impl std::fmt::Debug for JsValue {
@@ -322,6 +328,11 @@ extern "C" {
 
     /// Write the field at `field_index`.
     pub fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, value: JsValue);
+
+    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
+    fn js_object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader;
+    fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader);
+    fn js_object_get_field_by_name(obj: *const ObjectHeader, key: *const StringHeader) -> JsValue;
 }
 
 /// Compute `(packed_keys_bytes, shape_id)` for use with
@@ -336,6 +347,56 @@ extern "C" {
 /// the same key list, which improves shape sharing across
 /// crates. `0x4646_0000` ("FF" prefix) namespaces perry-ffi-built
 /// shapes from perry-stdlib's hand-rolled ones.
+/// Allocate an empty ordinary object.
+pub fn alloc_object() -> JsValue {
+    let object = unsafe { js_object_alloc(0, 0) };
+    if object.is_null() {
+        JsValue::UNDEFINED
+    } else {
+        JsValue::from_object_ptr(object)
+    }
+}
+
+/// Allocate a null-prototype object with the given fields.
+///
+/// Use this for Node objects such as request headers where inherited keys must
+/// not be visible. Field order is preserved in the runtime keys array.
+pub fn alloc_null_proto_object(fields: &[(&str, JsValue)]) -> JsValue {
+    let obj = unsafe { js_object_alloc_null_proto(0, fields.len() as u32) };
+    if obj.is_null() {
+        return JsValue::UNDEFINED;
+    }
+    let mut keys = unsafe { js_array_alloc(fields.len() as u32) };
+    for (index, (key, value)) in fields.iter().enumerate() {
+        unsafe { js_object_set_field(obj, index as u32, *value) };
+        keys = unsafe { js_array_push(keys, JsValue::from_string_ptr(alloc_string(key).as_raw())) };
+    }
+    unsafe { js_object_set_keys(obj, keys) };
+    JsValue::from_object_ptr(obj)
+}
+
+/// Read an own or inherited named field from an object value.
+///
+/// Untagged legacy pointers are accepted because older generated call paths
+/// can still pass them. Non-object values return `undefined`.
+pub fn object_field_by_name(value: JsValue, key: &str) -> JsValue {
+    let bits = value.bits();
+    let obj = if value.is_pointer() {
+        value.as_pointer::<ObjectHeader>()
+    } else if bits >> 48 == 0 && bits >= 0x10000 {
+        bits as *mut ObjectHeader
+    } else {
+        std::ptr::null_mut()
+    };
+    if obj.is_null() {
+        return JsValue::UNDEFINED;
+    }
+    let key = alloc_string(key);
+    unsafe { js_object_get_field_by_name(obj, key.as_raw()) }
+}
+
+/// Compute `(packed_keys_bytes, shape_id)` for use with
+/// [`js_object_alloc_with_shape`].
 pub fn build_object_shape(keys: &[&str]) -> (Vec<u8>, u32) {
     let mut packed: Vec<u8> = Vec::new();
     let mut shape_id: u32 = 0x4646_0000;
@@ -372,6 +433,14 @@ mod tests {
             assert!(v.is_number(), "{} should be number, got {:?}", n, v);
             assert_eq!(v.to_number(), n);
         }
+    }
+
+    #[cfg(feature = "runtime-link")]
+    #[test]
+    fn null_proto_object_field_round_trips() {
+        let object = alloc_null_proto_object(&[("status", JsValue::from_int32(204))]);
+        assert_eq!(object_field_by_name(object, "status").to_int32(), 204);
+        assert!(object_field_by_name(object, "missing").is_undefined());
     }
 
     #[test]

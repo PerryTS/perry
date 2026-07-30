@@ -16,12 +16,14 @@ use perry_ffi::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::request::{
+use crate::server::request::{
     alloc_incoming_message, handle_to_pointer_f64, with_implicit_this, IncomingMessage,
 };
-use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
-use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest};
-use crate::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
+use crate::server::response::{
+    alloc_server_response_for_request, HyperResponseShape, ResponseBody,
+};
+use crate::server::server::{synthesize_default_response_if_needed, HttpPendingRequest};
+use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
 
 pub(crate) async fn handle_h2_request(
     server_handle: i64,
@@ -162,9 +164,9 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
     // The HTTP/2 stream handle is recycled from the same pool, so clear it too
     // (no-op when `h2_stream_handle == 0`).
     unsafe {
-        crate::types::js_handle_clear_side_tables(pending.request_handle);
-        crate::types::js_handle_clear_side_tables(pending.response_handle);
-        crate::types::js_handle_clear_side_tables(pending.h2_stream_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.request_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.response_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.h2_stream_handle);
     }
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
@@ -244,7 +246,7 @@ fn synthesize_default_h2_stream_response(stream_handle: i64) {
             status_message: None,
             headers,
             trailers: Vec::new(),
-            body: crate::response::ShapeBody::Full(Vec::new()),
+            body: crate::server::response::ShapeBody::Full(Vec::new()),
         };
         if let Some(tx) = stream.response_tx.take() {
             let _ = tx.send(shape);

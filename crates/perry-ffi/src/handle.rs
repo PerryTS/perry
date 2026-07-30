@@ -94,7 +94,7 @@ static NEXT_HANDLE: AtomicI64 = AtomicI64::new(FFI_HANDLE_ID_START);
 ///
 /// Without this, [`register_handle`] only ever bumps [`NEXT_HANDLE`], so a
 /// long-lived process that allocates a handle per unit of work — e.g.
-/// `perry-ext-http-server`, which registers a request + response handle per
+/// `perry-ext-http`, which registers a request + response handle per
 /// request and `drop_handle`s both once the response flushes — burns through
 /// the visible id band (`1 .. 0x40000`) and eventually panics in
 /// [`next_fresh_handle_id`], even though only a handful of handles are live at
@@ -126,7 +126,7 @@ const FREE_HANDLES_CAP: usize = 64 * 1024;
 /// is fixed and published — a generation cannot be packed into the id). A
 /// consumer that resolves an object purely by id therefore cannot distinguish
 /// "the object I was given" from "a *different* object that happens to occupy
-/// the same recycled id now." `perry-ext-http-server` hits this: a request
+/// the same recycled id now." `perry-ext-http` hits this: a request
 /// handler can return before `res.end()`, leaving a stale JS-side `res` value
 /// (a bare tagged id) outstanding; once that request is finalized its id is
 /// freed. If the id were recycled *immediately*, the very next
@@ -732,7 +732,7 @@ where
 /// pattern is to snapshot ids into a `Vec` first, then act on each
 /// id outside the iteration.
 ///
-/// perry-ext-http-server's main-thread pump walks every registered
+/// perry-ext-http's main-thread pump walks every registered
 /// HttpServer / HttpsServer / Http2SecureServer handle each tick to
 /// drain pending requests.
 pub fn iter_handle_ids_of<T, F>(mut f: F)
@@ -831,7 +831,7 @@ pub fn gc_register_mutable_root_scanner(scanner: GcMutableRootScanner) {
 /// Register a source-attributed mutable GC root scanner with Perry's runtime.
 ///
 /// `source` should be a short, stable package or subsystem name such as
-/// `perry-ext-http-server`. It is copied into runtime GC diagnostics and
+/// `perry-ext-http`. It is copied into runtime GC diagnostics and
 /// verifier errors so native roots do not collapse behind `perry-ffi`'s shared
 /// dispatcher.
 pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: GcMutableRootScanner) {
@@ -1078,7 +1078,7 @@ mod tests {
     fn freed_id_is_not_reusable_until_drained_no_cross_request_bleed() {
         // The ABA / use-after-recycle regression. Models the HTTP cross-request
         // body bleed in handle-registry terms (the layer where the hazard lives,
-        // independent of perry-ext-http-server's reaper plumbing): a response R1
+        // independent of perry-ext-http's reaper plumbing): a response R1
         // is registered under id `h`; the handler returns before `res.end()` and
         // the request is later finalized, freeing `h`; within the SAME tick a new
         // request registers its response R2; then a stale `res.write`/`res.end`
