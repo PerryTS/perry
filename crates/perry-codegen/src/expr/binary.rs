@@ -26,6 +26,17 @@ use super::temp_root::{lower_operand_pair_rooted, temp_root_release};
 use super::{is_known_finite, lower_expr, FnCtx};
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
+    // #6884: a statically typed numeric TypedArray read is Number|undefined,
+    // not an unconditional raw f64. In arithmetic context the OOB `undefined`
+    // must become canonical NaN. Sink that conversion into the OOB/cold arms
+    // so the in-bounds hot path remains a guard plus native load.
+    if let Expr::IndexGet { object, index } = expr {
+        if let Some(value) =
+            super::ta_param_f64_read::try_lower_ta_f64_read_for_number_context(ctx, object, index)?
+        {
+            return Ok((value, true));
+        }
+    }
     // Repsel Phase 4a.0 (#6904): a numeric-proven `a || b` / `a && b` /
     // `a ?? b` consumed as an arithmetic operand lowers with BOTH sides in
     // number context, so the selection is a real-double diamond (`fcmp one` +

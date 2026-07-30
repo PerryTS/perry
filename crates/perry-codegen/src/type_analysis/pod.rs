@@ -413,9 +413,14 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             .and_then(|class_name| class_field_declared_type(ctx, &class_name, property))
             .as_ref()
             .is_some_and(crate::typed_shape::type_is_raw_f64_candidate),
-        Expr::IndexGet { object, .. } => static_type_of(ctx, object)
-            .as_ref()
-            .is_some_and(type_has_numeric_pointer_free_array_layout_for_fallback),
+        Expr::IndexGet { object, .. } => {
+            receiver_class_name(ctx, object)
+                .as_deref()
+                .is_some_and(crate::type_analysis::is_numeric_typed_array_class)
+                || static_type_of(ctx, object)
+                    .as_ref()
+                    .is_some_and(type_has_numeric_pointer_free_array_layout_for_fallback)
+        }
         // Repsel Phase 4a.0: `a || b` / `a && b` / `a ?? b` pass ONE operand
         // value through, so the result carries the boxed-fallback hazard when
         // EITHER operand does (`counts[v] || 0` can surface the read's boxed

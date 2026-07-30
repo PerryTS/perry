@@ -117,8 +117,9 @@ pub(crate) fn try_lower_ta_param_f64_read(
     let Some((kind, elem_ty, elem_size, conv)) = checked_typed_array_f64_kind(ctx, object) else {
         return Ok(None);
     };
-    let value =
-        lower_checked_typed_array_f64_load(ctx, object, index, kind, elem_ty, elem_size, conv)?;
+    let value = lower_checked_typed_array_f64_load(
+        ctx, object, index, kind, elem_ty, elem_size, conv, false,
+    )?;
     let lowered = LoweredValue::js_value(value.clone());
     ctx.record_lowered_value_with_access_mode(
         "TypedArrayGet",
@@ -138,6 +139,26 @@ pub(crate) fn try_lower_ta_param_f64_read(
     Ok(Some(value))
 }
 
+/// Number-context sibling of [`try_lower_ta_param_f64_read`].
+///
+/// The in-bounds hot path is the same guard + native load. Only the OOB and
+/// cold fallback arms apply `ToNumber`, keeping arithmetic call-free for the
+/// common case while making `1000 + ta[99]` produce canonical `NaN` (#6884).
+pub(crate) fn try_lower_ta_f64_read_for_number_context(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+) -> Result<Option<String>> {
+    if !ta_param_f64_read_enabled() || !numeric_index_has_integer_array_index_proof(ctx, index) {
+        return Ok(None);
+    }
+    let Some((kind, elem_ty, elem_size, conv)) = checked_typed_array_f64_kind(ctx, object) else {
+        return Ok(None);
+    };
+    lower_checked_typed_array_f64_load(ctx, object, index, kind, elem_ty, elem_size, conv, true)
+        .map(Some)
+}
+
 /// Emit the checked inline f64 element load. Same runtime-fact guard and header
 /// bounds check as [`super::i32_fast_path`]'s `lower_checked_typed_array_i32_load`
 /// (pointer + inline-storage `PERRY_TA_VIEW_GUARD == 0` + kind-cache addr/kind),
@@ -152,6 +173,7 @@ fn lower_checked_typed_array_f64_load(
     elem_ty: crate::types::LlvmType,
     elem_size: u32,
     conv: F64Conv,
+    number_context: bool,
 ) -> Result<String> {
     let obj_box = lower_expr(ctx, object)?;
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
@@ -231,27 +253,43 @@ fn lower_checked_typed_array_f64_load(
         (val, end)
     };
 
-    // ---- oob: in-kind out-of-bounds -> TAG_UNDEFINED (== js_typed_array_get) --
+    // ---- oob --------------------------------------------------------------
+    // Value context preserves the typed-array read (`undefined`). Arithmetic
+    // context applies ToNumber at the read boundary, yielding a canonical NaN
+    // instead of allowing TAG_UNDEFINED's NaN payload to leak through fadd
+    // and remain observably `undefined` (#6884).
     ctx.current_block = oob_idx;
     let (oob_val, oob_end) = {
         let blk = ctx.block();
         let end = blk.label.clone();
         blk.br(&merge_label);
-        (double_literal(f64::from_bits(TAG_UNDEFINED)), end)
+        (
+            if number_context {
+                double_literal(f64::NAN)
+            } else {
+                double_literal(f64::from_bits(TAG_UNDEFINED))
+            },
+            end,
+        )
     };
 
     // ---- slow: view / detached / wrong-kind / non-TA -> memory-safe helper ---
     ctx.current_block = slow_idx;
     let (slow_val, slow_end) = {
         let blk = ctx.block();
-        let v = blk.call(
+        let value = blk.call(
             DOUBLE,
             "js_typed_array_read_f64",
             &[(I64, &raw), (I32, &idx_i32)],
         );
+        let value = if number_context {
+            blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &value)])
+        } else {
+            value
+        };
         let end = blk.label.clone();
         blk.br(&merge_label);
-        (v, end)
+        (value, end)
     };
 
     // ---- merge ----

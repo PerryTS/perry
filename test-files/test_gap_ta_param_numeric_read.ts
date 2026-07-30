@@ -93,10 +93,9 @@ function readAdd(S: Int32Array, i: number): number {
 }
 console.log("inb", readAdd(i32, 3)); // 1000 + 7
 
-// ---- OOB / negative / fractional reads observed in SAFE contexts (the read
-// itself yields `undefined`; we avoid `+` here because a separate, pre-existing
-// codegen issue mishandles `number + <oob typed-array read>` — tracked apart
-// from this fast path, which is bit-exact with the runtime getter). ----
+// ---- OOB / negative / fractional reads ------------------------------------
+// Value context preserves `undefined`; arithmetic context applies ToNumber
+// and therefore yields NaN (#6884).
 function eqUndef(S: Int32Array, i: number): boolean {
   return S[i] === undefined;
 }
@@ -105,8 +104,11 @@ function strOf(S: Int32Array, i: number): string {
 }
 console.log("oob-eq", eqUndef(i32, 8), eqUndef(i32, -1), eqUndef(i32, 3)); // true true false
 console.log("oob-str", strOf(i32, 8), strOf(i32, -1), strOf(i32, 3)); // undefined undefined 7
+console.log("oob-add", readAdd(i32, 99), readAdd(i32, -1), 1000 + i32[99]);
+console.log("oob-arith", 1000 - i32[99], 2 * i32[99], i32[99] / 2);
 // Fractional index reads `undefined` (must NOT round to element 3 via ToInt32).
 console.log("frac-eq", eqUndef(i32, 3.9), eqUndef(i32, 3)); // true false
+console.log("frac-add", readAdd(i32, 3.9)); // NaN
 
 // ---- view over an ArrayBuffer (non-inline storage -> slow fallback) ----
 function viewSum(S: Int32Array, n: number): number {
