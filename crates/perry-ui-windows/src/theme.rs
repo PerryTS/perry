@@ -173,8 +173,9 @@ pub unsafe fn handle_container_message(
     None
 }
 
-/// Default fallback for `WM_CTLCOLORSTATIC` / `BTN` / `EDIT` after a widget's
-/// explicit foreground/background styling has had the first chance to answer.
+/// Default fallback for `WM_CTLCOLORSTATIC` / `BTN` / `EDIT` / `LISTBOX` after
+/// a widget's explicit foreground/background styling has had the first chance
+/// to answer.
 pub fn handle_control_color(hdc: HDC, control_surface: bool) -> Option<LRESULT> {
     if !is_dark_mode() {
         return None;
