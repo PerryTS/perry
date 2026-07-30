@@ -1,67 +1,88 @@
 import * as http2 from "node:http2";
 
-function runWarmup(): Promise<void> {
-  return new Promise((resolve) => {
-    const server = http2.createServer();
+async function runWarmup(): Promise<void> {
+  const server = http2.createServer();
+  let client: any;
+  try {
+    server.on("session", () => {});
     server.on("stream", (stream: any) => {
       stream.respond({ ":status": 204 });
       stream.end();
     });
-    server.listen(0, "127.0.0.1", () => {
-      const client = http2.connect(`http://127.0.0.1:${server.address().port}`);
-      client.on("connect", () => {
-        const req = client.request({ ":path": "/warmup", ":method": "GET" });
-        req.resume();
-        req.on("end", () => {
-          client.close(() => {
-            server.close(() => resolve());
-          });
-        });
-        req.end();
-      });
+    await new Promise<void>((resolve, reject) => {
+      server.on("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
     });
-  });
+    client = http2.connect(
+      `http://127.0.0.1:${(server.address() as any).port}`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      client.on("error", reject);
+      client.on("connect", resolve);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const request = client.request({ ":path": "/warmup" });
+      request.on("error", reject);
+      request.on("end", resolve);
+      request.resume();
+      request.end();
+    });
+    await new Promise<void>((resolve) => client.close(resolve));
+  } finally {
+    client?.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 }
 
-function runProbe(): Promise<void> {
-  return new Promise((resolve) => {
-    const server = http2.createServer();
-    const order: string[] = [];
-    let closed = false;
-
-    function closeBoth(client: any) {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      client.close(() => {
-        server.close(() => resolve());
-      });
-    }
-
-    server.on("session", (session: any) => {
-      order.push("server");
-      session.on("remoteSettings", () => {});
-    });
+async function runProbe(): Promise<void> {
+  const server = http2.createServer();
+  let client: any;
+  try {
+    server.on("session", () => {});
     server.on("stream", (stream: any) => {
       stream.respond({ ":status": 200 });
       stream.end("ok");
     });
-    server.listen(0, "127.0.0.1", () => {
-      const client = http2.connect(`http://127.0.0.1:${server.address().port}`);
+    await new Promise<void>((resolve, reject) => {
+      server.on("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    client = http2.connect(
+      `http://127.0.0.1:${(server.address() as any).port}`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      client.on("error", reject);
       client.on("connect", () => {
-        order.push("client");
-        console.log("probe order:", order.join(">"));
-        client.settings({ initialWindowSize: 65535 }, (err: any, settings: any) => {
-          console.log("probe settings cb:", err === null, settings.initialWindowSize);
-          const req = client.request({ ":path": "/probe", ":method": "GET" });
-          req.resume();
-          req.on("end", () => closeBoth(client));
-          req.end();
-        });
+        console.log("probe order: client");
+        resolve();
       });
     });
-  });
+    await new Promise<void>((resolve, reject) => {
+      client.settings(
+        { initialWindowSize: 65535 },
+        (error: any, settings: any) => {
+          if (error) return reject(error);
+          console.log(
+            "probe settings cb:",
+            error === null,
+            settings.initialWindowSize,
+          );
+          resolve();
+        },
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      const request = client.request({ ":path": "/probe" });
+      request.on("error", reject);
+      request.on("end", resolve);
+      request.resume();
+      request.end();
+    });
+    await new Promise<void>((resolve) => client.close(resolve));
+  } finally {
+    client?.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 }
 
 await runWarmup();

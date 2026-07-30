@@ -10,27 +10,33 @@ Perry compiles TypeScript to native binaries by linking with your system's C too
 
 > **clang ≥ 15 on Linux.** Perry's LLVM backend emits opaque-pointer IR (`ptr`) and compiles it with `clang -c`. clang 14 and older reject it with `error: expected type`. Ubuntu 22.04's default `clang` is 14 — install a newer one (`sudo apt install clang-15`) and point Perry at it if it isn't the default: `export PERRY_LLVM_CLANG=/usr/bin/clang-15`. Ubuntu 24.04, Debian 13, Fedora 39+ and Arch all ship a new enough clang.
 
-Linux C toolchain by distribution:
+Linux C toolchain by distribution. Each line installs **both** the linker
+toolchain and `clang` — Perry needs the linker to produce the executable and
+clang to compile the LLVM IR it emits, so installing only `gcc`/`build-essential`
+leaves you with a working linker and a compiler that can't run codegen:
 
 ```bash
 # Debian / Ubuntu / Pop!_OS / Mint
-sudo apt install build-essential
+sudo apt install build-essential clang
 
 # Arch / Manjaro / CachyOS / EndeavourOS
-sudo pacman -S base-devel gcc
+sudo pacman -S base-devel gcc clang
 
 # Fedora / RHEL / CentOS Stream
-sudo dnf install gcc gcc-c++ glibc-devel
+sudo dnf install gcc gcc-c++ glibc-devel clang
 
 # openSUSE
-sudo zypper install -t pattern devel_basis
+sudo zypper install -t pattern devel_basis && sudo zypper install clang
 
 # Alpine / musl-based
-sudo apk add build-base
+sudo apk add build-base clang
 
 # Void Linux
-sudo xbps-install -S base-devel
+sudo xbps-install -S base-devel clang
 ```
+
+Run `perry doctor` afterwards — it prints the clang it resolved (or tells you
+how to point `PERRY_LLVM_CLANG` at one).
 
 The source install additionally needs the **Rust toolchain** via [rustup](https://rustup.rs/).
 

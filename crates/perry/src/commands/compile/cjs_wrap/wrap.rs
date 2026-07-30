@@ -59,6 +59,13 @@ fn is_global_value_builtin_name(name: &str) -> bool {
             | "Float64Array"
             | "BigInt64Array"
             | "BigUint64Array"
+            // `exports.globalThis = capturedGlobalThis` (a rolldown-bundled
+            // primordials capture) — an
+            // `export const globalThis = _cjs.globalThis;` binding shadows
+            // the real global for EVERY `globalThis.<prop>` read in the
+            // body, which all evaluate before the IIFE returns, so the
+            // module read `undefined.atob` at init.
+            | "globalThis"
     )
 }
 
