@@ -189,7 +189,7 @@ pub(crate) async fn run_request(
         custom_headers,
     } = inputs;
     let request_future = async move {
-        let client = super::HTTP_CLIENT.clone();
+        let client = super::fetch_client();
         let mut request = match method.to_uppercase().as_str() {
             "POST" => client.post(&url),
             "PUT" => client.put(&url),

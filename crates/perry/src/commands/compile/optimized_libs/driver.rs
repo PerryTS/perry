@@ -282,6 +282,18 @@ pub(crate) fn build_optimized_libs(
             }) {
                 features.insert("async-runtime");
             }
+            // `undici` (#466): perry-ext-undici is thin glue over the
+            // native Web Fetch stack. Its `setGlobalDispatcher` writes
+            // the proxy config through `js_fetch_set_global_proxy`,
+            // defined in perry-stdlib's `web-fetch` module (and mirrored
+            // by perry-ext-fetch). A ProxyAgent-only program never calls
+            // `fetch()` in a way `uses_fetch` detects, so re-assert
+            // `web-fetch` here or the wrapper's extern reference dangles
+            // at link time. (`web-fetch` implies `async-runtime`, which
+            // the wrapper's JsPromise surface needs anyway.)
+            if module_normalized == "undici" {
+                features.insert("web-fetch");
+            }
             // v0.5.579 — when the flip strips `bundled-net`, activate
             // `external-net-pump` so perry-stdlib's
             // `js_stdlib_process_pending` knows to call into

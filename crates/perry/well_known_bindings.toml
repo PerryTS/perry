@@ -550,3 +550,15 @@ tracking = "#516"
 crate = "perry-ext-ads"
 lib = "perry_ext_ads"
 tracking = "#867"
+
+# `undici` — Node's HTTP client library, served by perry's NATIVE
+# fetch/http stack instead of AOT-compiling undici's ~50k lines of JS.
+# Subset binding: ProxyAgent / Agent / setGlobalDispatcher /
+# getGlobalDispatcher are real; `fetch` re-uses the native Web Fetch
+# lowering; `request` and the pool/mock/stream surface are not
+# implemented. Targets undici's stable dispatcher API (unchanged
+# across 6.x → 7.x).
+[bindings.undici]
+crate = "perry-ext-undici"
+lib = "perry_ext_undici"
+tracking = "#466"

@@ -299,6 +299,24 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     class("node-fetch", "Response"),
     class("node-fetch", "Blob"),
     class("node-fetch", "FormData"),
+    // --- undici (perry-ext-undici, #466) — dispatcher subset served
+    //     by perry's native fetch stack. `fetch` lowers through the
+    //     name-keyed Expr::FetchWithOptions arm (no dispatch row);
+    //     constructors route via the bare-ident `new` arm in
+    //     perry-hir's expr_new.rs. `request` exists but rejects with a
+    //     clear "use fetch" error. ---
+    class("undici", "ProxyAgent"),
+    class("undici", "Agent"),
+    method("undici", "ProxyAgent", false, None),
+    method("undici", "Agent", false, None),
+    method("undici", "setGlobalDispatcher", false, None),
+    method("undici", "getGlobalDispatcher", false, None),
+    method("undici", "fetch", false, None),
+    method("undici", "request", false, None),
+    method("undici", "close", true, Some("ProxyAgent")),
+    method("undici", "close", true, Some("Agent")),
+    method("undici", "destroy", true, Some("ProxyAgent")),
+    method("undici", "destroy", true, Some("Agent")),
     // --- bignumber.js — alias surface for decimal.js. The wrapper
     //     dispatches to the same perry-ext-decimal implementation. ---
     class("bignumber.js", "BigNumber"),

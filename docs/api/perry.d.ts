@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1981 entries across 119 modules
+// Coverage: 1989 entries across 120 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3884,6 +3884,25 @@ declare module "tty" {
 declare module "tursodb" {
   /** stdlib */
   export function open(...args: any[]): any;
+}
+
+declare module "undici" {
+  /** stdlib */
+  export class Agent { [key: string]: any; }
+  /** stdlib */
+  export class ProxyAgent { [key: string]: any; }
+  /** stdlib */
+  export function Agent(...args: any[]): any;
+  /** stdlib */
+  export function ProxyAgent(...args: any[]): any;
+  /** stdlib */
+  export function fetch(...args: any[]): any;
+  /** stdlib */
+  export function getGlobalDispatcher(...args: any[]): any;
+  /** stdlib */
+  export function request(...args: any[]): any;
+  /** stdlib */
+  export function setGlobalDispatcher(...args: any[]): any;
 }
 
 declare module "url" {
