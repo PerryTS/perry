@@ -99,6 +99,8 @@ impl DirtyHeaderSlotScan {
                 }
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                // Preserve single-slot scan semantics for every dirty range
+                // entry: weak-target skip, layout tracking, accounting, visit.
                 for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
                     work.push(DirtySlotWork::Range(DirtySlotRangeWork {
                         slots: range.slots(),

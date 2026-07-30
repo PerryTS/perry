@@ -469,7 +469,7 @@ fn throw_invalid_language_tag(tag: &str) -> ! {
 }
 
 #[allow(dead_code)] // used only in the #[cfg(not(feature = "intl-locale"))] fallback branch
-fn canonical_locale(tag: &str) -> Option<String> {
+pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return None;
     }

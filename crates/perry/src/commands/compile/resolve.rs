@@ -338,6 +338,33 @@ pub(super) fn find_node_modules(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Every `node_modules` directory on the ancestor chain of `start`, nearest
+/// first. Node's resolution algorithm consults each one until the package is
+/// found — not only the nearest. pnpm layouts hit the difference constantly:
+/// a package's own `node_modules` usually holds only `.bin`, while its real
+/// dependencies live in the `.pnpm/<pkg>@<version>/node_modules` sibling one
+/// level further up. Stopping at the first directory made every transitive
+/// dependency of a compiled pnpm package unresolvable, so their call sites
+/// lowered to raw extern symbols and the link failed (undefined `_toNumber` /
+/// `_isUnsafe` across the fast-xml-parser graph).
+pub(super) fn ancestor_node_modules_dirs(start: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut current = start.to_path_buf();
+    loop {
+        // A dir literally named `node_modules` hosts packages itself; its
+        // `node_modules/node_modules` join below would never exist.
+        if current.file_name().is_some_and(|n| n != "node_modules") {
+            let node_modules = current.join("node_modules");
+            if node_modules.is_dir() {
+                dirs.push(node_modules);
+            }
+        }
+        if !current.pop() {
+            return dirs;
+        }
+    }
+}
+
 /// Look up a bare package name in the nearest package.json's `dependencies` /
 /// `devDependencies` sections and, if the entry has a `file:` prefix, return the
 /// resolved directory path (NOT canonicalized — caller does that).
@@ -1304,63 +1331,62 @@ pub(super) fn resolve_import(
     };
 
     for start in search_paths.iter().flatten() {
-        if let Some(node_modules) = find_node_modules(start) {
+        for node_modules in ancestor_node_modules_dirs(start) {
             let package_dir = node_modules.join(&package_name);
-            if package_dir.is_dir() {
-                if let Some(entry) = resolve_package_entry(&package_dir, subpath.as_deref()) {
-                    // Packages with perry.nativeLibrary are compiled natively (Rust FFI)
-                    if has_perry_native_library(&package_dir) {
-                        return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
-                    }
-                    // Packages with perry.nativeModule: true contain Perry-compatible
-                    // TypeScript that must be compiled natively (e.g. perry-react).
-                    if has_perry_native_module(&package_dir) {
-                        return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
-                    }
-                    // Packages listed in perry.compilePackages are compiled natively
-                    if compile_packages.contains(&package_name) {
-                        // Deduplicate: if we've already resolved this package from a
-                        // different node_modules location, use the first-found directory
-                        // to avoid duplicate symbols from identical package copies
-                        let effective_dir = compile_package_dirs
-                            .get(&package_name)
-                            .unwrap_or(&package_dir);
-                        // Prefer TypeScript source over compiled JS
-                        if let Some(src_entry) =
-                            resolve_package_source_entry(effective_dir, subpath.as_deref())
-                        {
-                            return Some((
-                                src_entry.canonicalize().ok()?,
-                                ModuleKind::NativeCompiled,
-                            ));
-                        }
-                        // Fall back to normal resolution but still mark as NativeCompiled
-                        if let Some(fallback_entry) =
-                            resolve_package_entry(effective_dir, subpath.as_deref())
-                        {
-                            return Some((
-                                fallback_entry.canonicalize().ok()?,
-                                ModuleKind::NativeCompiled,
-                            ));
-                        }
-                        // If effective_dir failed (shouldn't happen), try the local dir
-                        return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
-                    }
-                    // For other node_modules packages, classify by file
-                    // extension. `.ts` / `.tsx` sources are compiled natively.
-                    // `.js` / `.mjs` / `.cjs` and other shapes stay Interpreted;
-                    // since runtime-JS (V8) support was removed, reaching one of
-                    // these is a hard error surfaced by the V8-free gate after
-                    // module collection.
-                    let canonical = entry.canonicalize().ok()?;
-                    let kind = if is_ts_file(&canonical) {
-                        ModuleKind::NativeCompiled
-                    } else {
-                        ModuleKind::Interpreted
-                    };
-                    return Some((canonical, kind));
-                }
+            if !package_dir.is_dir() {
+                continue;
             }
+            let Some(entry) = resolve_package_entry(&package_dir, subpath.as_deref()) else {
+                continue;
+            };
+            // Packages with perry.nativeLibrary are compiled natively (Rust FFI)
+            if has_perry_native_library(&package_dir) {
+                return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+            }
+            // Packages with perry.nativeModule: true contain Perry-compatible
+            // TypeScript that must be compiled natively (e.g. perry-react).
+            if has_perry_native_module(&package_dir) {
+                return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+            }
+            // Packages listed in perry.compilePackages are compiled natively
+            if compile_packages.contains(&package_name) {
+                // Deduplicate: if we've already resolved this package from a
+                // different node_modules location, use the first-found directory
+                // to avoid duplicate symbols from identical package copies
+                let effective_dir = compile_package_dirs
+                    .get(&package_name)
+                    .unwrap_or(&package_dir);
+                // Prefer TypeScript source over compiled JS
+                if let Some(src_entry) =
+                    resolve_package_source_entry(effective_dir, subpath.as_deref())
+                {
+                    return Some((src_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                }
+                // Fall back to normal resolution but still mark as NativeCompiled
+                if let Some(fallback_entry) =
+                    resolve_package_entry(effective_dir, subpath.as_deref())
+                {
+                    return Some((
+                        fallback_entry.canonicalize().ok()?,
+                        ModuleKind::NativeCompiled,
+                    ));
+                }
+                // If effective_dir failed (shouldn't happen), try the local dir
+                return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+            }
+            // For other node_modules packages, classify by file
+            // extension. `.ts` / `.tsx` sources are compiled natively.
+            // `.js` / `.mjs` / `.cjs` and other shapes stay Interpreted;
+            // since runtime-JS (V8) support was removed, reaching one of
+            // these is a hard error surfaced by the V8-free gate after
+            // module collection.
+            let canonical = entry.canonicalize().ok()?;
+            let kind = if is_ts_file(&canonical) {
+                ModuleKind::NativeCompiled
+            } else {
+                ModuleKind::Interpreted
+            };
+            return Some((canonical, kind));
         }
     }
 

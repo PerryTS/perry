@@ -198,8 +198,10 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             receiver,
             ..
         } => {
-            record_receiver_use(target, depth, scan);
-            record_receiver_use(receiver, depth, scan);
+            // Ordinary [[Set]] can invoke proxies/accessors and otherwise
+            // expose either object, so neither position is length-safe.
+            record_expr_use(target, depth, scan);
+            record_expr_use(receiver, depth, scan);
             record_expr_use(key, depth, scan);
             record_expr_use(value, depth, scan);
         }

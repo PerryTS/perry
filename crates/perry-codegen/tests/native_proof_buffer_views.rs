@@ -1656,6 +1656,13 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
         !ir.contains("call i32 @js_uint8array_get"),
         "inline Uint8Array get should not call the runtime helper:\n{ir}"
     );
+    // The JS-value getter is the other way this could fall back after
+    // #6088/#6092; without naming it here the negative assertion above would
+    // miss a regression that took the slow path.
+    assert!(
+        !ir.contains("call double @js_uint8array_index_get_value"),
+        "inline Uint8Array get should not call the JS-value runtime helper:\n{ir}"
+    );
 }
 
 #[test]

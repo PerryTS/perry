@@ -273,7 +273,7 @@ def _function_text_containing(text: str, fragment: str) -> str:
         current.append(line)
         if line == "}":
             body = "\n".join(current)
-            if fragment in body:
+            if fragment in current[0]:
                 matches.append(body)
             current = None
     return "\n\n".join(matches)

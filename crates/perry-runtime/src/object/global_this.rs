@@ -61,6 +61,10 @@ pub(crate) use bigint_promise::{
     object_is_sealed_thunk, object_is_thunk, object_keys_thunk, object_prevent_extensions_thunk,
     object_seal_thunk, object_set_prototype_of_thunk, object_values_thunk,
     promise_static_function_spec, reflect_apply_thunk, reflect_construct_thunk,
+    reflect_define_property_thunk, reflect_delete_property_thunk,
+    reflect_get_own_property_descriptor_thunk, reflect_get_prototype_of_thunk, reflect_get_thunk,
+    reflect_has_thunk, reflect_is_extensible_thunk, reflect_own_keys_thunk,
+    reflect_prevent_extensions_thunk, reflect_set_prototype_of_thunk, reflect_set_thunk,
     string_from_char_code_static, string_from_code_point_static, string_raw_static,
     symbol_for_thunk, symbol_key_for_thunk, typed_array_from_thunk, typed_array_of_thunk,
 };

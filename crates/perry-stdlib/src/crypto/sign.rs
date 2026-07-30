@@ -221,7 +221,7 @@ pub unsafe extern "C" fn js_crypto_public_encrypt(
         None => return alloc_buffer_from_slice(&[]),
     };
     let data = bytes_from_ptr(data_ptr);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_core_06::OsRng;
     match public_key.encrypt(&mut rng, Oaep::new::<rsa_sha1::Sha1>(), &data) {
         Ok(ciphertext) => alloc_buffer_from_slice(&ciphertext),
         Err(_) => alloc_buffer_from_slice(&[]),
@@ -246,7 +246,7 @@ pub unsafe extern "C" fn js_crypto_private_decrypt(
         None => return alloc_buffer_from_slice(&[]),
     };
     let ciphertext = bytes_from_ptr(data_ptr);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_core_06::OsRng;
     match private_key.decrypt_blinded(&mut rng, Oaep::new::<rsa_sha1::Sha1>(), &ciphertext) {
         Ok(plaintext) => alloc_buffer_from_slice(&plaintext),
         Err(_) => alloc_buffer_from_slice(&[]),
@@ -411,7 +411,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_rsa(
 ) -> *mut ObjectHeader {
     use rsa::pkcs8::EncodePrivateKey;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_core_06::OsRng;
     let private_key = match RsaPrivateKey::new(&mut rng, 2048) {
         Ok(key) => key,
         Err(_) => return js_object_alloc(0, 0),
@@ -524,7 +524,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_ed25519(
     _options_bits: f64,
 ) -> *mut ObjectHeader {
     let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
+    rand::rng().fill_bytes(&mut seed);
     let private_key = ed25519_dalek::SigningKey::from_bytes(&seed);
     let public_key = private_key.verifying_key();
     let private_surrogate = ed25519_private_surrogate(&private_key);
@@ -548,7 +548,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_x25519(
     _options_bits: f64,
 ) -> *mut ObjectHeader {
     let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
+    rand::rng().fill_bytes(&mut seed);
     let private_key = x25519_dalek::StaticSecret::from(seed);
     let public_key = x25519_dalek::PublicKey::from(&private_key);
     let private_surrogate = x25519_private_surrogate(&private_key.to_bytes());
@@ -626,7 +626,7 @@ pub unsafe extern "C" fn js_crypto_encapsulate(key_val: f64) -> *mut ObjectHeade
         None => return js_object_alloc(0, 0),
     };
     let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
+    rand::rng().fill_bytes(&mut seed);
     let private = x25519_dalek::StaticSecret::from(seed);
     let ephemeral_public = x25519_dalek::PublicKey::from(&private);
     let peer_public = x25519_dalek::PublicKey::from(public);

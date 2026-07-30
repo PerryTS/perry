@@ -426,6 +426,100 @@ pub(crate) extern "C" fn reflect_construct_thunk(
     crate::proxy::js_reflect_construct(target, args_like, new_target)
 }
 
+/// The remaining `Reflect` members reified as REAL values (the same #5989
+/// story as `construct`): rolldown/esbuild-bundled "primordials" captures —
+/// `exports.ReflectOwnKeys = Reflect.ownKeys` — call these through a stored
+/// binding, and the noop stub silently returned `undefined`
+/// (a hardened-primordials library froze `Reflect.ownKeys(obj)`'s result at
+/// class-static-init time and threw on destructuring the `undefined`).
+pub(crate) extern "C" fn reflect_own_keys_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+) -> f64 {
+    crate::proxy::js_reflect_own_keys(target)
+}
+
+pub(crate) extern "C" fn reflect_get_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    key: f64,
+    receiver: f64,
+) -> f64 {
+    crate::proxy::js_reflect_get(target, key, receiver)
+}
+
+pub(crate) extern "C" fn reflect_set_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    key: f64,
+    value: f64,
+    receiver: f64,
+) -> f64 {
+    crate::proxy::js_reflect_set(target, key, value, receiver)
+}
+
+pub(crate) extern "C" fn reflect_has_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    key: f64,
+) -> f64 {
+    crate::proxy::js_reflect_has(target, key)
+}
+
+pub(crate) extern "C" fn reflect_delete_property_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    key: f64,
+) -> f64 {
+    crate::proxy::js_reflect_delete(target, key)
+}
+
+pub(crate) extern "C" fn reflect_define_property_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    key: f64,
+    descriptor: f64,
+) -> f64 {
+    crate::proxy::js_reflect_define_property(target, key, descriptor)
+}
+
+pub(crate) extern "C" fn reflect_get_own_property_descriptor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    key: f64,
+) -> f64 {
+    crate::proxy::js_reflect_get_own_property_descriptor(target, key)
+}
+
+pub(crate) extern "C" fn reflect_get_prototype_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+) -> f64 {
+    crate::proxy::js_reflect_get_prototype_of(target)
+}
+
+pub(crate) extern "C" fn reflect_set_prototype_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    proto: f64,
+) -> f64 {
+    crate::proxy::js_reflect_set_prototype_of(target, proto)
+}
+
+pub(crate) extern "C" fn reflect_is_extensible_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+) -> f64 {
+    crate::proxy::js_reflect_is_extensible(target)
+}
+
+pub(crate) extern "C" fn reflect_prevent_extensions_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+) -> f64 {
+    crate::proxy::js_reflect_prevent_extensions(target)
+}
+
 pub(crate) extern "C" fn symbol_for_thunk(
     _closure: *const crate::closure::ClosureHeader,
     key: f64,

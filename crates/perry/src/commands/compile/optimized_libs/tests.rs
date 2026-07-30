@@ -94,7 +94,9 @@ fn build_optimized_libs_reuses_fresh_auto_archives_without_cargo() {
     let feature_arg = features_to_cargo_arg(&features);
     let panic_abort_safe =
         !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
-    let key_input = auto_optimized_cache_key(&feature_arg, panic_abort_safe, None, &ctx);
+    let panic_immediate = effective_size_panic_immediate_abort(panic_abort_safe);
+    let key_input =
+        auto_optimized_cache_key(&feature_arg, panic_abort_safe, panic_immediate, None, &ctx);
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
@@ -388,11 +390,11 @@ fn http2_import_changes_optimized_libs_cache_key() {
     let dir = tempfile::tempdir().expect("tempdir");
 
     let base = CompilationContext::new(dir.path().to_path_buf());
-    let key_without = auto_optimized_cache_key("", true, None, &base);
+    let key_without = auto_optimized_cache_key("", true, false, None, &base);
 
     let mut with_http2 = CompilationContext::new(dir.path().to_path_buf());
     with_http2.native_module_imports.insert("http2".to_string());
-    let key_with = auto_optimized_cache_key("", true, None, &with_http2);
+    let key_with = auto_optimized_cache_key("", true, false, None, &with_http2);
 
     assert_ne!(
         key_without, key_with,
@@ -403,9 +405,34 @@ fn http2_import_changes_optimized_libs_cache_key() {
     dynamic.uses_get_builtin_module = true;
     assert_ne!(
         key_without,
-        auto_optimized_cache_key("", true, None, &dynamic),
+        auto_optimized_cache_key("", true, false, None, &dynamic),
         "getBuiltinModule must change the auto-optimized cache key"
     );
+}
+
+#[test]
+fn immediate_abort_requires_unwind_safe_reachability_and_changes_cache_identity() {
+    let _guard = env_lock();
+    let old_size_opt = std::env::var("PERRY_SIZE_OPT").ok();
+    let old_size_panic = std::env::var("PERRY_SIZE_PANIC").ok();
+    set_env_var("PERRY_SIZE_OPT", Some("z"));
+    set_env_var("PERRY_SIZE_PANIC", Some("abort-immediate"));
+
+    let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
+    let safe_mode = effective_size_panic_immediate_abort(true);
+    let unsafe_mode = effective_size_panic_immediate_abort(false);
+    let ordinary_key = auto_optimized_cache_key("", true, false, None, &ctx);
+    let immediate_key = auto_optimized_cache_key("", true, safe_mode, None, &ctx);
+    let unsafe_key = auto_optimized_cache_key("", false, unsafe_mode, None, &ctx);
+
+    set_env_var("PERRY_SIZE_OPT", old_size_opt.as_deref());
+    set_env_var("PERRY_SIZE_PANIC", old_size_panic.as_deref());
+
+    assert!(safe_mode);
+    assert!(!unsafe_mode);
+    assert_ne!(ordinary_key, immediate_key);
+    assert!(immediate_key.contains("+panicimm"));
+    assert!(!unsafe_key.contains("+panicimm"));
 }
 
 #[test]

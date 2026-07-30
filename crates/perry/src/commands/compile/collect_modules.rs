@@ -766,8 +766,9 @@ fn collect_module_one(
         }
     };
     *next_class_id = new_next_class_id; // Update the global class_id counter
-                                        // Preserve native result types before async lowering splits awaited values
-                                        // across synthetic locals. The later global fixup remains for inlined code.
+
+    // Preserve native result types before async lowering splits awaited values
+    // across synthetic locals. The later global fixup remains for inlined code.
     perry_hir::fix_local_native_instances(&mut hir_module);
 
     // #2309 Stage 2: fold build-time `process.env` branches BEFORE dynamic

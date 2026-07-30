@@ -14,7 +14,8 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
 use crate::closure::{
-    js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
+    js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -39,10 +40,11 @@ pub use ffi::{
     js_dgram_socket_get_recv_buffer_size, js_dgram_socket_get_send_buffer_size,
     js_dgram_socket_listener_count, js_dgram_socket_noop, js_dgram_socket_on, js_dgram_socket_once,
     js_dgram_socket_ref, js_dgram_socket_remote_address, js_dgram_socket_remove_listener,
-    js_dgram_socket_send, js_dgram_socket_set_broadcast, js_dgram_socket_set_multicast_interface,
-    js_dgram_socket_set_multicast_loopback, js_dgram_socket_set_multicast_ttl,
-    js_dgram_socket_set_recv_buffer_size, js_dgram_socket_set_send_buffer_size,
-    js_dgram_socket_set_ttl, js_dgram_socket_unref, js_dgram_socket_zero,
+    js_dgram_socket_send, js_dgram_socket_sendto, js_dgram_socket_set_broadcast,
+    js_dgram_socket_set_multicast_interface, js_dgram_socket_set_multicast_loopback,
+    js_dgram_socket_set_multicast_ttl, js_dgram_socket_set_recv_buffer_size,
+    js_dgram_socket_set_send_buffer_size, js_dgram_socket_set_ttl, js_dgram_socket_unref,
+    js_dgram_socket_zero,
 };
 
 // Listener storage / emit (used by trunk SOCKET_METHODS thunks + FFI siblings).
@@ -55,14 +57,15 @@ pub(crate) use listeners::{
 // `crate::dgram_reactor`).
 pub(crate) use net::{
     bind_socket, build_address_info, build_rinfo, deterministic, dgram_emit_message, ensure_bound,
-    live_udp, lookup_bound_socket, message_value, parse_multicast_v4, parse_multicast_v6,
-    reactor_id, real_bind, real_send, ref_impl, remove_bound_socket, with_udp,
+    finish_send, live_udp, lookup_bound_socket, make_buffer, message_bytes, parse_multicast_v4,
+    parse_multicast_v6, reactor_id, real_bind, real_send_bytes, ref_impl, remove_bound_socket,
+    socket_error_value, with_udp,
 };
 
 // Socket operation implementations (used by thunks + FFI siblings).
 pub(crate) use ops::{
     address_impl, bind_impl, close_impl, connect_impl, create_socket_impl, disconnect_impl,
-    get_buffer_size_impl, membership_impl, remote_address_impl, send_destination, send_impl,
+    get_buffer_size_impl, membership_impl, remote_address_impl, send_impl, sendto_impl,
     set_broadcast_impl, set_buffer_size_impl, set_multicast_interface_impl,
     set_multicast_loopback_impl, set_multicast_ttl_impl, set_ttl_impl, source_membership_impl,
 };
@@ -74,7 +77,7 @@ pub(crate) use thunks::{
     dgram_drop_membership_thunk, dgram_drop_source_membership_thunk, dgram_emit_thunk,
     dgram_event_names_thunk, dgram_get_recv_buffer_size_thunk, dgram_get_send_buffer_size_thunk,
     dgram_listener_count_thunk, dgram_on_thunk, dgram_once_thunk, dgram_ref_thunk,
-    dgram_remote_address_thunk, dgram_remove_listener_thunk, dgram_send_thunk,
+    dgram_remote_address_thunk, dgram_remove_listener_thunk, dgram_send_thunk, dgram_sendto_thunk,
     dgram_set_broadcast_thunk, dgram_set_multicast_interface_thunk,
     dgram_set_multicast_loopback_thunk, dgram_set_multicast_ttl_thunk,
     dgram_set_recv_buffer_size_thunk, dgram_set_send_buffer_size_thunk, dgram_set_ttl_thunk,
@@ -96,6 +99,11 @@ pub(crate) const KEY_REMOTE_FAMILY: &[u8] = b"__perryDgramRemoteFamily";
 pub(crate) const KEY_REMOTE_PORT: &[u8] = b"__perryDgramRemotePort";
 pub(crate) const KEY_RECV_BUFFER_SIZE: &[u8] = b"__perryDgramRecvBufferSize";
 pub(crate) const KEY_SEND_BUFFER_SIZE: &[u8] = b"__perryDgramSendBufferSize";
+pub(crate) const KEY_LOOKUP: &[u8] = b"__perryDgramLookup";
+pub(crate) const KEY_SEND_BLOCK_LIST: &[u8] = b"__perryDgramSendBlockList";
+pub(crate) const KEY_BIND_ATTEMPTED: &[u8] = b"__perryDgramBindAttempted";
+pub(crate) const KEY_ABORT_SIGNAL: &[u8] = b"__perryDgramAbortSignal";
+pub(crate) const KEY_ABORT_LISTENER: &[u8] = b"__perryDgramAbortListener";
 /// Reactor id for the live OS socket (real mode only); links a JS socket back
 /// to its `UdpSocket` + recv thread in [`crate::dgram_reactor`].
 pub(crate) const KEY_REACTOR_ID: &[u8] = b"__perryDgramReactorId";
@@ -111,6 +119,10 @@ const SOCKET_METHODS: &[MethodSpec] = &[
     MethodSpec {
         name: "send",
         thunk: dgram_send_thunk,
+    },
+    MethodSpec {
+        name: "sendto",
+        thunk: dgram_sendto_thunk,
     },
     MethodSpec {
         name: "bind",
@@ -350,6 +362,15 @@ pub(crate) fn get_prop(value: f64, name: &str) -> Option<f64> {
     }
 }
 
+pub(crate) fn dynamic_prop(value: f64, name: &[u8]) -> Option<f64> {
+    // `js_get_property` may invoke user code and allocate. Callers that reuse
+    // the receiver or result across another runtime call must keep them in
+    // `RuntimeHandleScope` roots and read the refreshed values from the handles.
+    let result =
+        unsafe { crate::value::js_get_property(value, name.as_ptr() as i64, name.len() as i64) };
+    (result.to_bits() != TAG_UNDEFINED).then_some(result)
+}
+
 pub(crate) fn string_to_rust(value: f64) -> Option<String> {
     let jsval = JSValue::from_bits(value.to_bits());
     if !jsval.is_any_string() {
@@ -448,7 +469,30 @@ pub(crate) fn socket_object(socket_type: &str) -> f64 {
             method_value(socket, method.name, method.thunk),
         );
     }
+    let async_dispose = crate::symbol::well_known_symbol("asyncDispose");
+    if !async_dispose.is_null() {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                socket,
+                boxed_pointer(async_dispose as *const u8),
+                async_dispose_method(socket),
+            );
+        }
+    }
     socket
+}
+
+extern "C" fn dgram_async_dispose(closure: *const ClosureHeader) -> f64 {
+    close_impl(this_value(closure), &[]);
+    let promise = crate::promise::js_promise_resolved(undefined_value());
+    boxed_pointer(promise as *const u8)
+}
+
+fn async_dispose_method(socket: f64) -> f64 {
+    crate::closure::js_register_closure_arity(dgram_async_dispose as *const u8, 0);
+    let closure = js_closure_alloc(dgram_async_dispose as *const u8, 1);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, socket.to_bits() as i64);
+    boxed_pointer(closure as *const u8)
 }
 
 pub(crate) fn family_for_type(socket_type: &str) -> &'static str {

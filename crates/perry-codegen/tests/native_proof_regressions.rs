@@ -1,7 +1,5 @@
 // See native_proof_buffer_views.rs — shared HIR builder toolkit, each file in
 // this family drives a different subset.
-#![allow(dead_code)]
-
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{
@@ -418,6 +416,7 @@ fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
     }
 }
 
+#[allow(dead_code)] // shared HIR-builder vocabulary retained for sibling regressions
 fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr) -> Stmt {
     Stmt::Let {
         id,
@@ -564,6 +563,7 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
     })
 }
 
+#[allow(dead_code)] // shared HIR-builder vocabulary retained for sibling regressions
 fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
     call(
         Expr::PropertyGet {
@@ -6771,6 +6771,28 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
             "generated boxed capture traffic should not use old f64 helper edge {old_helper}:\n{ir}"
         );
     }
+}
+
+#[test]
+fn tdz_numeric_const_read_is_not_constant_folded() {
+    let mut fixture = module("tdz_numeric_const.ts", Vec::new());
+    fixture.init = vec![
+        Stmt::PreallocateTdzBoxes(vec![9]),
+        Stmt::Expr(Expr::LocalGet(9)),
+        Stmt::Let {
+            id: 9,
+            name: "value".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Number(42.0)),
+        },
+    ];
+
+    let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call i64 @js_box_get_bits(i64 "),
+        "the pre-declaration read must retain the TDZ box check:\n{ir}"
+    );
 }
 
 #[test]
@@ -13607,8 +13629,8 @@ fn mutable_string_key_rejects_static_write_pic() {
         "a mutable key must retain dynamic PropertyKey semantics:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set("),
-        "a mutable key must use the complete generic PutValue path:\n{ir}"
+        ir.contains("call double @js_put_value_set_dyn_ic("),
+        "a mutable key must use the dynamic-key PutValue path:\n{ir}"
     );
 }
 
@@ -13635,8 +13657,9 @@ fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
         "an allocating RHS must stay on the rooted generic PutValue path"
     );
     assert!(
-        ir.contains("call double @js_put_value_set("),
-        "the rejected PIC case must retain the complete strict/sloppy runtime semantics:\n{ir}"
+        ir.contains("call double @js_put_value_set_dyn_ic("),
+        "the rejected static PIC case must retain sloppy-mode semantics through the \
+         dynamic-key fallback:\n{ir}"
     );
 }
 
@@ -13752,14 +13775,37 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
                 && ir.contains("object_array_write.loop.slow.preheader"),
             "the proof must retain distinct call-free and semantic fallback clones:\n{ir}"
         );
-        let fast_body = ir
-            .split("\nobject_array_write.loop.fast.inner.body")
-            .nth(1)
-            .and_then(|tail| {
-                tail.split("\nobject_array_write.loop.fast.inner.exit")
-                    .next()
-            })
-            .expect("fast inner-loop block");
+        // Collect EVERY basic block of the fast clone rather than slicing the
+        // single `fast.inner.body` block. #6812's spill lanes made the inner
+        // body end in a `br` to `fast.store.spill.*` / `fast.store.inline.*`
+        // successors, so the numeric stores no longer live in the block the
+        // old `inner.body`..`inner.exit` slice captured — the assertions below
+        // then read a store-free body and failed even though the emitted code
+        // was correct. Keying on the `object_array_write.loop.fast.` label
+        // prefix keeps both invariants (call-free, N direct stores) checked
+        // across the whole fast region and is stable under block reordering.
+        let fast_body = {
+            let mut collected = String::new();
+            let mut in_fast_block = false;
+            for line in ir.lines() {
+                if let Some(label) = line.strip_suffix(':') {
+                    if !label.starts_with(char::is_whitespace) && !label.contains(' ') {
+                        in_fast_block = label.starts_with("object_array_write.loop.fast.");
+                        continue;
+                    }
+                }
+                if in_fast_block {
+                    collected.push_str(line);
+                    collected.push('\n');
+                }
+            }
+            assert!(
+                !collected.is_empty(),
+                "expected at least one object_array_write.loop.fast.* block:\n{ir}"
+            );
+            collected
+        };
+        let fast_body = fast_body.as_str();
         assert!(
             !fast_body.contains("call "),
             "the successful raw-pointer clone must stay call/GC-free:\n{fast_body}"
