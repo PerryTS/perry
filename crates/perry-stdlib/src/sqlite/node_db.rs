@@ -1,6 +1,10 @@
 use super::*;
 use crate::common::{get_handle, register_handle, Handle};
 use perry_runtime::{
+    buffer::{
+        buffer_alloc, buffer_data, buffer_data_mut, is_any_array_buffer, is_data_view,
+        is_registered_buffer, is_uint8array_buffer, mark_as_uint8array, BufferHeader,
+    },
     js_get_string_pointer_unified, js_nanbox_pointer, js_promise_rejected, js_promise_resolved,
     JSValue, Promise, StringHeader,
 };
@@ -100,8 +104,8 @@ pub unsafe extern "C" fn js_node_sqlite_backup(
     }
 }
 
-/// Validate the `DatabaseSync` `path` argument per Node: a string,
-/// Uint8Array/Buffer, or `file:` URL, none of which may contain null
+/// Validate the `DatabaseSync` `path` argument per Node: a string or `file:` URL,
+/// neither of which may contain null
 /// bytes — with Node's exact `ERR_INVALID_ARG_TYPE` message (#6561).
 pub(crate) unsafe fn node_sqlite_database_path(value: f64) -> String {
     const PATH_TYPE_MSG: &str =
@@ -110,7 +114,7 @@ pub(crate) unsafe fn node_sqlite_database_path(value: f64) -> String {
     let path = if js.is_any_string() {
         let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
         string_from_header(ptr).unwrap_or_else(|| throw_type(PATH_TYPE_MSG))
-    } else if let Some(bytes) = bytes_from_path_like(value) {
+    } else if let Some(bytes) = node_sqlite_path_bytes(value) {
         if bytes.contains(&0) {
             throw_type(PATH_TYPE_MSG);
         }
@@ -131,6 +135,28 @@ pub(crate) unsafe fn node_sqlite_database_path(value: f64) -> String {
         throw_type(PATH_TYPE_MSG);
     }
     path
+}
+
+unsafe fn node_sqlite_path_bytes(value: f64) -> Option<Vec<u8>> {
+    let raw = raw_addr_from_value(value);
+    if raw < 0x1000 {
+        return None;
+    }
+    if is_registered_buffer(raw) && is_uint8array_buffer(raw) {
+        let buffer = raw as *const BufferHeader;
+        return Some(
+            std::slice::from_raw_parts(buffer_data(buffer), (*buffer).length as usize).to_vec(),
+        );
+    }
+    if perry_runtime::typedarray::lookup_typed_array_kind(raw)
+        == Some(perry_runtime::typedarray::KIND_UINT8)
+    {
+        return perry_runtime::typedarray::typed_array_bytes(
+            raw as *const perry_runtime::typedarray::TypedArrayHeader,
+        )
+        .map(ToOwned::to_owned);
+    }
+    None
 }
 
 #[no_mangle]
@@ -161,6 +187,13 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_new(
         sessions: Mutex::new(HashSet::new()),
         statements: Mutex::new(HashSet::new()),
     });
+    let type_symbol =
+        perry_runtime::symbol::js_symbol_for(f64_from_jsvalue(string_value("sqlite-type")));
+    perry_runtime::symbol::js_object_set_symbol_property(
+        js_nanbox_pointer(handle),
+        type_symbol,
+        f64_from_jsvalue(string_value("node:sqlite")),
+    );
     if open {
         js_node_sqlite_database_sync_open(handle);
     }
@@ -191,6 +224,9 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_open(db_handle: Handle) ->
     };
     if let Err(err) = configure_node_sqlite_defensive(&opened, db.defensive.load(Ordering::Relaxed))
     {
+        throw_sqlite_error(&err);
+    }
+    if let Err(err) = configure_node_sqlite_dqs(&opened, db.enable_dqs) {
         throw_sqlite_error(&err);
     }
     if let Err(err) = configure_node_sqlite_load_extension(
@@ -317,7 +353,15 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_prepare(
     options_value: f64,
 ) -> Handle {
     ensure_open_node_database(db_handle);
-    let sql = string_from_value(sql_value, "sql");
+    let sql = {
+        let js = value_from_f64(sql_value);
+        if !js.is_any_string() {
+            throw_type("The \"sql\" argument must be of type string");
+        }
+        let ptr = js_get_string_pointer_unified(sql_value) as *const StringHeader;
+        string_from_header(ptr)
+            .unwrap_or_else(|| throw_type("The \"sql\" argument must be of type string"))
+    };
     let db = get_handle::<NodeSqliteDbHandle>(db_handle)
         .unwrap_or_else(|| throw_invalid_state("database is not open"));
     let options = parse_statement_options(db, options_value);
@@ -338,6 +382,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_prepare(
         db_handle,
         sql,
         finalized: AtomicBool::new(false),
+        iteration_epoch: std::sync::atomic::AtomicU64::new(0),
         read_bigints: AtomicBool::new(options.read_bigints),
         return_arrays: AtomicBool::new(options.return_arrays),
         allow_bare_named_parameters: AtomicBool::new(options.allow_bare_named_parameters),
@@ -348,6 +393,88 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_prepare(
         statements.insert(handle);
     }
     handle
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_database_sync_serialize(
+    db_handle: Handle,
+    schema_value: f64,
+) -> *mut BufferHeader {
+    ensure_open_node_database(db_handle);
+    let schema = if value_from_f64(schema_value).is_undefined() {
+        "main".to_string()
+    } else {
+        string_from_value(schema_value, "attachedDb")
+    };
+    let schema = CString::new(schema)
+        .unwrap_or_else(|_| throw_type("The \"attachedDb\" argument must be a string"));
+    with_open_node_connection(db_handle, |conn| {
+        let mut size = 0;
+        let image = ffi::sqlite3_serialize(conn.handle(), schema.as_ptr(), &mut size, 0);
+        if image.is_null() || size < 0 {
+            throw_sqlite_error_from_conn(conn);
+        }
+        let len = size as usize;
+        let buffer = buffer_alloc(len as u32);
+        (*buffer).length = len as u32;
+        mark_as_uint8array(buffer as usize);
+        if len > 0 {
+            std::ptr::copy_nonoverlapping(image, buffer_data_mut(buffer), len);
+        }
+        ffi::sqlite3_free(image.cast());
+        buffer
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_database_sync_deserialize(
+    db_handle: Handle,
+    image_value: f64,
+) -> i32 {
+    ensure_open_node_database(db_handle);
+    let raw = raw_addr_from_value(image_value);
+    let bytes = if perry_runtime::typedarray::lookup_typed_array_kind(raw)
+        == Some(perry_runtime::typedarray::KIND_UINT8)
+    {
+        perry_runtime::typedarray::typed_array_bytes(
+            raw as *const perry_runtime::typedarray::TypedArrayHeader,
+        )
+        .map(ToOwned::to_owned)
+    } else if raw >= 0x1000
+        && is_registered_buffer(raw)
+        && !is_any_array_buffer(raw)
+        && !is_data_view(raw)
+    {
+        let buffer = raw as *const BufferHeader;
+        Some(std::slice::from_raw_parts(buffer_data(buffer), (*buffer).length as usize).to_vec())
+    } else {
+        None
+    }
+    .unwrap_or_else(|| throw_type("The \"data\" argument must be a Uint8Array."));
+    if bytes.is_empty() {
+        throw_arg_value("The \"data\" argument must not be empty.");
+    }
+    with_open_node_connection(db_handle, |conn| {
+        let allocation = ffi::sqlite3_malloc64(bytes.len() as u64).cast::<u8>();
+        if allocation.is_null() {
+            throw_sqlite_error("out of memory");
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), allocation, bytes.len());
+        let schema = b"main\0";
+        let rc = ffi::sqlite3_deserialize(
+            conn.handle(),
+            schema.as_ptr().cast(),
+            allocation,
+            bytes.len() as i64,
+            bytes.len() as i64,
+            ffi::SQLITE_DESERIALIZE_FREEONCLOSE | ffi::SQLITE_DESERIALIZE_RESIZEABLE,
+        );
+        if rc != ffi::SQLITE_OK {
+            ffi::sqlite3_free(allocation.cast());
+            throw_sqlite_error_from_conn(conn);
+        }
+    });
+    1
 }
 
 pub(crate) fn sqlite_function_name(name: String) -> CString {
@@ -444,6 +571,10 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_aggregate(
     ensure_open_node_database(db_handle);
     let name = sqlite_function_name(string_from_value(name_value, "name"));
 
+    if value_from_f64(options_value).is_null() || !is_object_like(options_value) {
+        throw_plain_type("The \"options\" argument must be an object.");
+    }
+
     let start = object_field(options_value, "start");
     if start.is_undefined() {
         throw_type("The \"options.start\" argument must be a function or a primitive value.");
@@ -533,6 +664,27 @@ pub(crate) unsafe fn configure_node_sqlite_defensive(
     Err(CStr::from_ptr(ffi::sqlite3_errmsg(conn.handle()))
         .to_string_lossy()
         .into_owned())
+}
+
+pub(crate) unsafe fn configure_node_sqlite_dqs(
+    conn: &Connection,
+    enabled: bool,
+) -> Result<(), String> {
+    for option in [ffi::SQLITE_DBCONFIG_DQS_DDL, ffi::SQLITE_DBCONFIG_DQS_DML] {
+        let mut current = 0;
+        let rc = ffi::sqlite3_db_config(
+            conn.handle(),
+            option,
+            if enabled { 1 } else { 0 },
+            &mut current,
+        );
+        if rc != ffi::SQLITE_OK {
+            return Err(CStr::from_ptr(ffi::sqlite3_errmsg(conn.handle()))
+                .to_string_lossy()
+                .into_owned());
+        }
+    }
+    Ok(())
 }
 
 #[no_mangle]

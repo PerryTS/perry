@@ -98,6 +98,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "close"
             | "exec"
             | "prepare"
+            | "serialize"
+            | "deserialize"
             // `function`/`aggregate`/`enableDefensive`/`setAuthorizer` were
             // missing from this gate (#6561): an any-typed
             // `db.function(...)` / `db.aggregate(...)` fell through the
