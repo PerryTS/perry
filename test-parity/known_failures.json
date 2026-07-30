@@ -5,7 +5,8 @@
       "issue": "Open GitHub issue number tracking this failure (e.g. \"793\"), or null when the failure is environmental / pending triage. Closed issues must be re-evaluated — flag the entry as `category: bug-stale` until a new tracking issue is filed.",
       "added": "ISO date (YYYY-MM-DD) when the test was first skip-listed. Use 2026-05-15 for entries inherited from the pre-audit format where the historical date is unknown.",
       "category": "ci-env | module-inventory | bug-open | bug-stale | gap-categorical | gap-bisect — see test-parity/README.md for definitions.",
-      "reason": "Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change)."
+      "reason": "Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change).",
+      "platforms": "Optional non-empty array of linux, macos, windows, or other. Omit when the failure is accepted on every platform."
     },
     "scope": "Consumed by the TAG-GATED `parity` job (full test-files/*.ts suite) only. The per-PR gap-suite gate moved to test-parity/gap_snapshot.json, which is generated and checked in BOTH directions (see test-parity/README.md); the test_gap_* entries below are redundant with it and kept only so the tag-gated job keeps passing. Migrating this file to a generated snapshot needs a full-suite baseline from a tag run — follow-up to #797."
   },

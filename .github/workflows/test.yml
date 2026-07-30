@@ -184,6 +184,9 @@ jobs:
       - name: Gap snapshot checker self-test
         run: python3 scripts/gap_snapshot.py --self-test
 
+      - name: Platform-aware parity allowlist self-test
+        run: python3 scripts/parity_known_failures.py --self-test
+
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
@@ -811,6 +814,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "${{ runner.os }}-perry"
@@ -819,10 +827,25 @@ jobs:
       # perry-dev (see Cargo.toml [profile.perry-dev]) trades peak optimization
       # for build speed. The package set covers the compiler binary (link
       # gate), the runtime/stdlib pair (the usual source of cfg(windows)
-      # externs), and both Windows UI crates — the ones cargo-test's ubuntu
+      # externs), their static-library wrappers (used by the parity smoke
+      # below), and both Windows UI crates — the ones cargo-test's ubuntu
       # runner must exclude and therefore never compiles.
       - name: Build compiler + runtime + Windows UI crates (perry-dev)
-        run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-ui-windows -p perry-ui-windows-winui
+        run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ui-windows -p perry-ui-windows-winui
+
+      # Small deterministic subset: verifies the Git Bash driver itself,
+      # `.exe`/`.lib` discovery, native TEMP paths, compilation, execution,
+      # and Node/Perry comparison on a real Windows host.
+      - name: Windows parity harness smoke
+        shell: bash
+        run: |
+          PERRY_SKIP_BUILD=1 \
+          PERRY_BIN="$PWD/target/perry-dev/perry.exe" \
+          PERRY_RUNTIME_DIR="$PWD/target/perry-dev" \
+          ./run_parity_tests.sh \
+            --suite node-suite \
+            --module process \
+            --filter process/env/access
 
   # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
@@ -1320,44 +1343,10 @@ jobs:
           exit "$status"
 
       - name: Check for new failures
-        run: |
-          REPORT="test-parity/reports/latest.json"
-          KNOWN="test-parity/known_failures.json"
-
-          # Filter empty strings — `run_parity_tests.sh` emits `compile: [""]`
-          # when there are zero compile failures (a printf+sed quirk in the
-          # JSON generator), and that empty entry would propagate to a
-          # spurious "NEW FAILURES:  - " line and fail this gate.
-          jq -r '(.failures.parity // []) + (.failures.compile // []) | .[] | select(. != "")' "$REPORT" | sort -u > /tmp/all_fails.txt
-          if [[ -f "$KNOWN" ]]; then
-            # Issue #797 — known_failures.json moved from flat strings to
-            # structured records. Keep the audit metadata (the `_schema`
-            # key at the top of the file) out of the test-name set so
-            # CI doesn't try to match a real test against it.
-            jq -r 'keys[] | select(. != "_schema")' "$KNOWN" | sort -u > /tmp/known.txt
-
-            # Schema sanity check — every non-_schema entry must be an
-            # object with non-empty `category` and `reason`. Fails the
-            # build on malformed entries so the format doesn't silently
-            # drift back to the legacy flat-string shape.
-            bad="$(jq -r 'to_entries | map(select(.key != "_schema")) | .[] | select((.value | type) != "object" or (.value.category // "") == "" or (.value.reason // "") == "") | .key' "$KNOWN")"
-            if [[ -n "$bad" ]]; then
-              echo "Malformed known_failures.json entries (missing category/reason or not an object):"
-              echo "$bad" | sed 's/^/  - /'
-              exit 1
-            fi
-          else
-            : > /tmp/known.txt
-          fi
-
-          TOTAL=$(wc -l < /tmp/all_fails.txt | tr -d ' ')
-          comm -23 /tmp/all_fails.txt /tmp/known.txt > /tmp/new.txt
-          if [[ -s /tmp/new.txt ]]; then
-            echo "NEW FAILURES (not in known_failures.json):"
-            sed 's/^/  - /' /tmp/new.txt
-            exit 1
-          fi
-          echo "All ${TOTAL} failures are known/triaged."
+        run: >-
+          python3 scripts/parity_known_failures.py
+          --report test-parity/reports/latest.json
+          --known test-parity/known_failures.json
 
       - name: Generate parity matrix trend
         run: |

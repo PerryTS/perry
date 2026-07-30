@@ -160,7 +160,9 @@ def merge(
     return {test_id: entry for test_id, entry in merged.items() if exists(test_id)}
 
 
-def report_diffs(diffs: list[tuple[str, str, str, str]]) -> None:
+def report_diffs(
+    diffs: list[tuple[str, str, str, str]], snapshot_path: Path = DEFAULT_SNAPSHOT
+) -> None:
     order = {"regression": 0, "changed": 1, "improvement": 2}
     headers = {
         "regression": "REGRESSIONS — these were expected to pass:",
@@ -176,7 +178,7 @@ def report_diffs(diffs: list[tuple[str, str, str, str]]) -> None:
     print(
         "\nFix the regressions, then accept the rest with:\n"
         "  UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh\n"
-        "and commit test-parity/gap_snapshot.json.",
+        f"and commit {snapshot_path}.",
         file=sys.stderr,
     )
 
@@ -257,10 +259,10 @@ def main() -> int:
 
     diffs = diff(report, tests)
     if diffs:
-        report_diffs(diffs)
+        report_diffs(diffs, args.snapshot)
         return 1
     print(
-        f"Gap snapshot OK — {len(report)} tests match test-parity/gap_snapshot.json "
+        f"Gap snapshot OK — {len(report)} tests match {args.snapshot} "
         f"({len(tests)} known non-passing)."
     )
     return 0

@@ -26,7 +26,7 @@
 # Requirements:
 #   - a Rust toolchain (the wrapped run_parity_tests.sh builds target/release/perry)
 #   - node with --experimental-strip-types, at the .node-version pin
-#   - jq, python3
+#   - jq, Python 3 (`python3` or `python`)
 #
 # Usage: scripts/run_gap_tests.sh [--shard N/M]
 #        UPDATE_SNAPSHOT=1 scripts/run_gap_tests.sh   # accept current state
@@ -36,10 +36,52 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
+if [[ -n "${PERRY_HOST_PLATFORM:-}" ]]; then
+  host_platform="$PERRY_HOST_PLATFORM"
+else
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) host_platform=windows ;;
+    Darwin) host_platform=macos ;;
+    Linux) host_platform=linux ;;
+    *) host_platform=other ;;
+  esac
+fi
+case "$host_platform" in
+  windows|macos|linux|other) ;;
+  *)
+    echo "Invalid PERRY_HOST_PLATFORM '$host_platform'" >&2
+    exit 2
+    ;;
+esac
+if command -v python3 &>/dev/null; then
+  PYTHON_CMD=python3
+elif command -v python &>/dev/null; then
+  PYTHON_CMD=python
+else
+  echo "Python 3 is required by the gap snapshot checker" >&2
+  exit 2
+fi
+TEMP_ROOT="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}"
+if [[ "$host_platform" == "windows" ]] && command -v cygpath &>/dev/null; then
+  TEMP_ROOT="$(cygpath -u "$TEMP_ROOT")"
+fi
+mkdir -p "$TEMP_ROOT"
+
+# The committed legacy snapshot is the Linux baseline used by required CI.
+# Other hosts get their own file so accepting a Windows-only divergence never
+# changes Linux's ratchet (and vice versa). The first run on a new platform is
+# expected to request UPDATE_SNAPSHOT=1 to establish that platform's baseline.
+if [[ "$host_platform" == "linux" ]]; then
+  default_snapshot="test-parity/gap_snapshot.json"
+else
+  default_snapshot="test-parity/gap_snapshot.${host_platform}.json"
+fi
+GAP_SNAPSHOT="${GAP_SNAPSHOT:-$default_snapshot}"
+
 # Run-scoped temp dir — fixed /tmp names would let concurrent runs (a second
 # PR, local + CI on the same box, or the future node-suite-guard alongside)
 # clobber each other's failure lists and produce a false gate result.
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/perry-gap.XXXXXX")"
+WORK="$(mktemp -d "$TEMP_ROOT/perry-gap.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "==> Running gap suite (test-files/test_gap_*.ts) via run_parity_tests.sh --filter test_gap_"
@@ -85,6 +127,6 @@ fi
 # Snapshot ratchet. UPDATE_SNAPSHOT=1 accepts the current state instead of
 # gating on it; commit the resulting test-parity/gap_snapshot.json diff.
 if [[ "${UPDATE_SNAPSHOT:-0}" == "1" ]]; then
-  exec python3 scripts/gap_snapshot.py update --report "$REPORT"
+  exec "$PYTHON_CMD" scripts/gap_snapshot.py update --report "$REPORT" --snapshot "$GAP_SNAPSHOT"
 fi
-exec python3 scripts/gap_snapshot.py check --report "$REPORT"
+exec "$PYTHON_CMD" scripts/gap_snapshot.py check --report "$REPORT" --snapshot "$GAP_SNAPSHOT"

@@ -24,6 +24,14 @@ UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
 then commit the diff. New entries land as `category: untriaged` with a null
 issue — fill those in, that is the triage step the gate is asking for.
 
+The required CI baseline remains `gap_snapshot.json` on Linux. The gap wrapper
+selects `gap_snapshot.windows.json`, `gap_snapshot.macos.json`, or
+`gap_snapshot.other.json` on other hosts, so platform-only results do not
+pollute Linux's ratchet. Bootstrap a missing platform file on that host with
+the same `UPDATE_SNAPSHOT=1` command, triage its generated entries, and commit
+it. `GAP_SNAPSHOT=/path/to/file` can override the selection for an explicit
+comparison.
+
 The snapshot records `node_fail` and `skipped` explicitly instead of dropping
 them. A test the oracle stopped covering is a visible diff, not a silent hole:
 CI sat on Node 22 while the suite grew Node 24/26 features and hid 14 tests
@@ -39,6 +47,26 @@ it only catches new failures. Migrating it to a generated snapshot needs a
 full-suite baseline from a tag run and is a follow-up; until then its gap-suite
 entries are redundant with `gap_snapshot.json` and are kept only so the
 tag-gated job keeps passing.
+
+Entries apply on every host by default. A failure that is specific to one or
+more operating systems can add a `platforms` array containing `linux`, `macos`,
+`windows`, or `other`; `scripts/parity_known_failures.py` compares it with the
+`platform` recorded by `run_parity_tests.sh`. For example:
+
+```json
+"test_windows_only_gap": {
+  "issue": "1234",
+  "added": "2026-07-30",
+  "category": "bug-open",
+  "reason": "Fails only with the Windows runtime.",
+  "platforms": ["windows"]
+}
+```
+
+The parity runner also supports Git Bash on Windows. It uses the native
+`TEMP`/`TMP` directory, selects `.exe`/`.lib` artifacts, and does not require
+Unix-only `bc` or process-limit support. The remaining documented prerequisites
+(`cargo`, Node.js, Python, and the Windows linker toolchain) must be on `PATH`.
 
 ## Category definitions
 

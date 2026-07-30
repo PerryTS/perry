@@ -82,11 +82,40 @@ def diff_line_count(node_lines: list[str] | None, perry_lines: list[str] | None)
     return count
 
 
-def known_failures(path: Path) -> set[str]:
+def normalize_platform(value: str) -> str:
+    folded = value.strip().lower()
+    if folded in {"win32", "windows", "cygwin", "msys", "mingw"}:
+        return "windows"
+    if folded in {"darwin", "macos"}:
+        return "macos"
+    if folded == "linux":
+        return "linux"
+    return "other"
+
+
+def known_failures(path: Path, platform: str | None = None) -> set[str]:
     if not path.exists():
         return set()
     data = load_json(path)
-    return {key for key in data if key != "_schema"}
+    selected_platform = normalize_platform(platform or sys.platform)
+    selected = set()
+    for key, record in data.items():
+        if key == "_schema":
+            continue
+        if not isinstance(record, dict):
+            continue
+        platforms = record.get("platforms")
+        if platforms is None or (
+            isinstance(platforms, list)
+            and selected_platform
+            in {
+                normalize_platform(item)
+                for item in platforms
+                if isinstance(item, str)
+            }
+        ):
+            selected.add(key)
+    return selected
 
 
 def report_results(report: dict) -> list[dict[str, str]]:
@@ -245,11 +274,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--output-json", type=Path, default=DEFAULT_JSON)
     parser.add_argument("--output-md", type=Path, default=DEFAULT_MARKDOWN)
+    parser.add_argument(
+        "--platform",
+        help="Override the report platform (linux, macos, windows, or other).",
+    )
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
 
     report = load_json(args.report)
-    known = known_failures(args.known)
+    report_platform = report.get("platform")
+    platform = args.platform or (report_platform if isinstance(report_platform, str) else None)
+    known = known_failures(args.known, platform)
     baseline = load_baseline(args.baseline)
     records = build_records(report, known, args.output_dir)
     problems = check_records(records, baseline) if args.check else []
