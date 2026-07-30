@@ -4,16 +4,27 @@ import * as net from "node:net";
 // [0, 65536) with RangeError [ERR_SOCKET_BAD_PORT], matching Node. A string
 // first argument is a pipe path and is NOT range-checked.
 const badPorts: any[] = [-1, 65536, 100000, NaN, 3.5, Infinity, -Infinity];
+const cleanup: Promise<void>[] = [];
 
 for (const port of badPorts) {
+  const server = net.createServer();
+  cleanup.push(
+    new Promise((resolve) => {
+      server.once("error", () => resolve());
+      server.once("listening", () => server.close(() => resolve()));
+    }),
+  );
   try {
-    const server = net.createServer();
     server.listen(port);
     console.log("listen", String(port), "=> NO THROW");
   } catch (err: any) {
-    console.log("listen", String(port), "=>", err.name, err.code, "|", err.message);
+    console.log("listen", String(port), "=>", err.name, err.code);
+    server.removeAllListeners();
+    cleanup.pop();
   }
 }
+
+await Promise.all(cleanup);
 
 // createServer() returns a Server object without performing any I/O.
 console.log("createServer typeof:", typeof net.createServer());

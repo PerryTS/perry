@@ -240,7 +240,7 @@ dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 thiserror.workspace = true
 anyhow.workspace = true
 libc.workspace = true
-rand = "0.8"
+rand = "0.10"
 regex = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.

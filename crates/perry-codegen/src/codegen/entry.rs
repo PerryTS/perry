@@ -649,6 +649,11 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
+        // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _opt_report_scope = crate::opt_report::enter_region(
+            "module_init",
+            crate::opt_report::RegionKind::ModuleInit,
+        );
         let main_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
             &[],
@@ -1090,6 +1095,7 @@ pub(super) fn compile_module_entry(
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
+                ctx.block().call_void("js_trace_events_flush_output", &[]);
                 // After the event loop drains, surface any still-unhandled
                 // promise rejection (Node exits non-zero; this matches the
                 // oracle for `Promise.reject`/combinator-reject programs).
@@ -1272,6 +1278,11 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
+        // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _opt_report_scope = crate::opt_report::enter_region(
+            "module_init",
+            crate::opt_report::RegionKind::ModuleInit,
+        );
         let init_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
             &[],

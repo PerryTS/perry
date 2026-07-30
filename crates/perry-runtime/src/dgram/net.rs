@@ -213,6 +213,10 @@ pub(crate) fn dgram_emit_message(
 /// Extract the raw bytes to transmit from a `send()` message argument
 /// (string → UTF-8, Buffer, or TypedArray/DataView).
 pub(crate) fn message_bytes(value: f64) -> Option<Vec<u8>> {
+    message_bytes_inner(value, true)
+}
+
+fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
     if let Some(text) = string_to_rust(value) {
         return Some(text.into_bytes());
     }
@@ -230,6 +234,24 @@ pub(crate) fn message_bytes(value: f64) -> Option<Vec<u8>> {
             crate::typedarray::typed_array_bytes(raw as *const crate::typedarray::TypedArrayHeader)
                 .map(<[u8]>::to_vec)
         };
+    }
+    if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        // Node accepts one top-level buffer list, but each list element must
+        // itself be a string or ArrayBuffer view. Besides matching that
+        // contract, rejecting nested lists prevents cycles from recursing
+        // until the native stack overflows.
+        if !allow_list {
+            return None;
+        }
+        let array = raw as *const crate::array::ArrayHeader;
+        let mut bytes = Vec::new();
+        for index in 0..crate::array::js_array_length(array) {
+            bytes.extend(message_bytes_inner(
+                crate::array::js_array_get_f64(array, index),
+                false,
+            )?);
+        }
+        return Some(bytes);
     }
     None
 }
@@ -308,12 +330,13 @@ pub(crate) fn real_bind(socket: f64, port: u16, address: &str) -> Result<(), f64
 
 /// Real `send()`: transmit over the OS socket. Errors go to the callback when
 /// one is supplied, otherwise to an `'error'` event (Node semantics).
-pub(crate) fn real_send(socket: f64, args: &[f64]) -> f64 {
-    let msg = args.first().copied().unwrap_or_else(undefined_value);
-    let Some(bytes) = message_bytes(msg) else {
-        throw_invalid_message(msg);
-    };
-    let (port, address) = send_destination(socket, args);
+pub(crate) fn real_send_bytes(
+    socket: f64,
+    args: &[f64],
+    bytes: Vec<u8>,
+    port: u16,
+    address: String,
+) -> f64 {
     if let Some(err) = ensure_bound_real(socket) {
         return finish_send(socket, args, Err(err));
     }
@@ -335,17 +358,36 @@ pub(crate) fn real_send(socket: f64, args: &[f64]) -> f64 {
 pub(crate) fn finish_send(socket: f64, args: &[f64], outcome: Result<usize, f64>) -> f64 {
     match (outcome, callback_from_args(args)) {
         (Ok(size), Some(callback)) => {
-            call_function(callback, socket, &[null_value(), size as f64]);
+            defer_send_callback(callback, socket, null_value(), size as f64);
         }
         (Ok(_), None) => {}
         (Err(error), Some(callback)) => {
-            call_function(callback, socket, &[error]);
+            defer_send_callback(callback, socket, error, undefined_value());
         }
         (Err(error), None) => {
             emit_event(socket, "error", &[error]);
         }
     }
     undefined_value()
+}
+
+extern "C" fn deferred_send_callback(closure: *const crate::closure::ClosureHeader) -> f64 {
+    let callback = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let socket = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let error = crate::closure::js_closure_get_capture_f64(closure, 2);
+    let bytes = crate::closure::js_closure_get_capture_f64(closure, 3);
+    call_function(callback, socket, &[error, bytes]);
+    undefined_value()
+}
+
+fn defer_send_callback(callback: f64, socket: f64, error: f64, bytes: f64) {
+    crate::closure::js_register_closure_arity(deferred_send_callback as *const u8, 0);
+    let closure = crate::closure::js_closure_alloc(deferred_send_callback as *const u8, 4);
+    crate::closure::js_closure_set_capture_f64(closure, 0, callback);
+    crate::closure::js_closure_set_capture_f64(closure, 1, socket);
+    crate::closure::js_closure_set_capture_f64(closure, 2, error);
+    crate::closure::js_closure_set_capture_f64(closure, 3, bytes);
+    crate::builtins::js_queue_microtask(closure as i64);
 }
 
 /// Implicit bind on first `send`/`connect` (real mode). Returns an error value

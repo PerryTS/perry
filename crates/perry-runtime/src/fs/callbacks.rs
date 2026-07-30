@@ -849,6 +849,9 @@ pub extern "C" fn js_fs_rmdir_callback(path_value: f64, arg1: f64, arg2: f64) ->
     };
     let cb = callback_or_arg2(arg1, arg2);
     unsafe {
+        if let Err(err_val) = crate::fs::validate_rmdir_options(options) {
+            crate::exception::js_throw(err_val);
+        }
         match crate::fs::js_fs_rmdir_result(path_value, options) {
             Ok(()) => call_cb0(cb),
             Err(err_val) => call_cb_err1(cb, err_val),

@@ -245,6 +245,27 @@ fn builtin_prototype_methods_reject_dynamic_new() {
 }
 
 #[test]
+fn recorded_prototype_constructor_overrides_plain_object_constructor() {
+    unsafe {
+        let prototype = js_object_alloc(0, 1);
+        let class_id = 9_999_999;
+        js_register_class_id(class_id);
+        let instance = js_object_alloc(class_id, 0);
+        let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+        js_object_set_field_by_name(prototype, constructor_key, 42.0);
+        crate::object::prototype_chain::object_set_static_prototype(
+            instance as usize,
+            crate::value::js_nanbox_pointer(prototype as i64).to_bits(),
+        );
+
+        assert_eq!(
+            js_object_get_field_by_name(instance, constructor_key).as_number(),
+            42.0
+        );
+    }
+}
+
+#[test]
 fn closure_name_and_length_ignore_plain_assignment() {
     crate::closure::test_clear_closure_side_tables();
     unsafe {

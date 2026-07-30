@@ -239,7 +239,7 @@ bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:x509-cert", "dep:ml-kem", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
+crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:x509-cert", "dep:ml-kem", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-runtime"]
 bundled-argon2 = ["dep:argon2", "async-runtime"]
 bundled-jsonwebtoken = ["dep:jsonwebtoken", "dep:p256", "dep:rsa", "dep:spki"]
@@ -338,7 +338,8 @@ ryu.workspace = true
 once_cell.workspace = true
 lazy_static.workspace = true
 chrono = { workspace = true, features = ["serde"] }
-rand = "0.8"  # Required by lodash (core module)
+rand = "0.10"  # Required by lodash (core module)
+rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 
 # === OPTIONAL DEPENDENCIES ===
 
@@ -397,7 +398,8 @@ rsa = { version = "0.9", optional = true, default-features = false, features = [
 x509-cert = { version = "0.2", optional = true, default-features = false, features = ["pem"] }
 spki = { version = "0.7", optional = true, default-features = false, features = ["pem", "alloc"] }
 aes = { version = "0.8", optional = true }
-cbc = { version = "0.1", optional = true }
+aes_09 = { package = "aes", version = "0.9", optional = true }
+cbc = { version = "0.2", optional = true }
 ecb = { version = "0.1", optional = true }
 ctr = { version = "0.9", optional = true }
 scrypt = { version = "0.11", optional = true }
