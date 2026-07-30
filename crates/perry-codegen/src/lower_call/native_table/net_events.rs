@@ -758,7 +758,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     // perry-codegen/src/expr.rs (not this table); the instance methods
     // dispatch here once the let-binding gets registered as
     // `("net", "Server")` in HIR lowering. Shape mirrors
-    // `js_node_http_server_*` from perry-ext-http-server (signatures
+    // `js_node_http_server_*` from perry-ext-http (signatures
     // are deliberately parallel so the codegen side reads the same).
     NativeModSig {
         module: "net",

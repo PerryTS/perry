@@ -10,7 +10,7 @@
 //! `ERR_OUT_OF_RANGE`). Throwing unwinds through the codegen call site back
 //! to the JS `try` / `assert.throws` frame.
 
-use perry_runtime::fs::validate::throw_type_error_with_code;
+use perry_ffi::{throw_with_code, ErrorKind};
 
 /// Node HTTP token bytes (RFC 7230 `tchar`, mirrored from
 /// `lib/_http_common.js` `tokenRegExp`). Used for both method names and
@@ -38,7 +38,7 @@ pub(crate) fn validate_client_url_string(raw: &str) {
         Err(_) => true,
     };
     if invalid {
-        throw_type_error_with_code("Invalid URL", "ERR_INVALID_URL");
+        throw_with_code("Invalid URL", "ERR_INVALID_URL", ErrorKind::TypeError);
     }
 }
 
@@ -55,9 +55,10 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
     // `validateBoolean(insecureHTTPParser, 'options.insecureHTTPParser')`).
     if let Some(v) = obj.get("insecureHTTPParser") {
         if !v.is_boolean() && !v.is_null() {
-            throw_type_error_with_code(
+            throw_with_code(
                 "The \"options.insecureHTTPParser\" property must be of type boolean.",
                 "ERR_INVALID_ARG_TYPE",
+                ErrorKind::TypeError,
             );
         }
     }
@@ -66,9 +67,10 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
     // `validateNumber(timeout, 'timeout')`). `timeout: null` throws.
     if let Some(v) = obj.get("timeout") {
         if !v.is_number() {
-            throw_type_error_with_code(
+            throw_with_code(
                 "The \"timeout\" argument must be of type number.",
                 "ERR_INVALID_ARG_TYPE",
+                ErrorKind::TypeError,
             );
         }
     }
@@ -81,9 +83,10 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
         let normalized = format!("{}:", proto.trim_end_matches(':'));
         let expected = format!("{default_protocol}:");
         if normalized != expected {
-            throw_type_error_with_code(
+            throw_with_code(
                 &format!("Protocol \"{normalized}\" not supported. Expected \"{expected}\""),
                 "ERR_INVALID_PROTOCOL",
+                ErrorKind::TypeError,
             );
         }
     }
@@ -96,9 +99,10 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
     // default instead of throwing (#4970).
     if let Some(method) = obj.get("method").and_then(|v| v.as_str()) {
         if !method.is_empty() && !is_valid_token(method) {
-            throw_type_error_with_code(
+            throw_with_code(
                 &format!("Method must be a valid HTTP token [\"{method}\"]"),
                 "ERR_INVALID_HTTP_TOKEN",
+                ErrorKind::TypeError,
             );
         }
     }
@@ -110,9 +114,10 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
             let cp = c as u32;
             !(0x21..=0xff).contains(&cp)
         }) {
-            throw_type_error_with_code(
+            throw_with_code(
                 "Request path contains unescaped characters",
                 "ERR_UNESCAPED_CHARACTERS",
+                ErrorKind::TypeError,
             );
         }
     }
@@ -122,15 +127,17 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
     if let Some(headers) = obj.get("headers").and_then(|v| v.as_object()) {
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("host") && value.is_array() {
-                throw_type_error_with_code(
+                throw_with_code(
                     "The \"options.headers.host\" property must be of type string.",
                     "ERR_INVALID_ARG_TYPE",
+                    ErrorKind::TypeError,
                 );
             }
             if !is_valid_token(name) {
-                throw_type_error_with_code(
+                throw_with_code(
                     &format!("Header name must be a valid HTTP token [\"{name}\"]"),
                     "ERR_INVALID_HTTP_TOKEN",
+                    ErrorKind::TypeError,
                 );
             }
         }

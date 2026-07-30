@@ -388,6 +388,11 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.explain_lowering {
         return Err("explain-lowering".to_string());
     }
+    // #6952: a cached build reuses the finished binary and never runs codegen,
+    // so the report would be empty. Same reasoning as explain-lowering above.
+    if args.opt_report.is_some() || std::env::var("PERRY_OPT_REPORT").is_ok() {
+        return Err("opt-report".to_string());
+    }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());
     }

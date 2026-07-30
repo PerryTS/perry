@@ -75,6 +75,7 @@ PERRY = sys.argv[1]
 ROOT = sys.argv[2]
 MODS = sys.argv[3].split(",") if len(sys.argv) > 3 and sys.argv[3] else None
 NODE = os.environ.get("NODE_BIN", "node")
+COMPILE_TIMEOUT = int(os.environ.get("PERRY_NODE_SUITE_COMPILE_TIMEOUT", "120"))
 
 # Modules that must run one-at-a-time (port binding / process spawn / event-loop
 # or timer ordering). Parallelism corrupts their results.
@@ -103,24 +104,29 @@ def run_one(args):
     try:
         n = subprocess.run([NODE, path], capture_output=True, text=True, timeout=30)
     except Exception:
-        return (mod, "node_err")
+        return (mod, "node_err", path)
     # A non-zero node exit can be intentional (the test exercises an error path),
     # so we don't bucket it as node_err; we require Perry to match BOTH stdout and
     # the exit code below, which keeps genuine error-path parity counted as pass.
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, "o")
         try:
-            c = subprocess.run([PERRY, path, "-o", out], capture_output=True, text=True, timeout=120)
+            c = subprocess.run(
+                [PERRY, path, "-o", out],
+                capture_output=True,
+                text=True,
+                timeout=COMPILE_TIMEOUT,
+            )
             if c.returncode != 0:
-                return (mod, "compile_fail")
+                return (mod, "compile_fail", path)
             p = subprocess.run([out], capture_output=True, text=True, timeout=30)
         except Exception:
-            return (mod, "perry_err")
+            return (mod, "perry_err", path)
     # Match stdout byte-for-byte (ignore only trailing-newline noise, not leading
     # whitespace) AND exit code — so a Perry crash that happened to print matching
     # output before dying is a diff, not a false pass.
     ok = (normalize(n.stdout.rstrip("\n")) == normalize(p.stdout.rstrip("\n"))) and (n.returncode == p.returncode)
-    return (mod, "pass" if ok else "diff")
+    return (mod, "pass" if ok else "diff", path)
 
 
 # --- pre-warm one test per module serially ---
@@ -144,11 +150,15 @@ res = defaultdict(lambda: defaultdict(int))
 sys.stderr.write(f"fast lane: {len(fast)} tests @6, slow lane: {len(slow)} tests @1\n")
 sys.stderr.flush()
 with ThreadPoolExecutor(max_workers=6) as ex:
-    for mod, outcome in ex.map(run_one, fast):
+    for mod, outcome, path in ex.map(run_one, fast):
         res[mod][outcome] += 1
+        if outcome not in {"pass", "diff"}:
+            sys.stderr.write(f"{outcome}: {os.path.relpath(path, ROOT)}\n")
 for t in slow:
-    mod, outcome = run_one(t)
+    mod, outcome, path = run_one(t)
     res[mod][outcome] += 1
+    if outcome not in {"pass", "diff"}:
+        sys.stderr.write(f"{outcome}: {os.path.relpath(path, ROOT)}\n")
 
 # --- report ---
 tot_p = tot = 0

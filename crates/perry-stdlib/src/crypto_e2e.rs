@@ -10,7 +10,7 @@ use aes_gcm::{
 use base64::Engine as _;
 use hkdf::Hkdf;
 use perry_runtime::{js_string_from_bytes, StringHeader};
-use rand::RngCore;
+use rand::Rng;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -49,7 +49,7 @@ fn return_hex(bytes: &[u8]) -> *mut StringHeader {
 /// scalar multiplication of the secret with the base point.
 #[no_mangle]
 pub extern "C" fn js_crypto_x25519_keypair() -> *mut StringHeader {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut secret_bytes = [0u8; 32];
     rng.fill_bytes(&mut secret_bytes);
 
@@ -208,7 +208,7 @@ pub unsafe extern "C" fn js_crypto_aes256_gcm_decrypt(
 #[no_mangle]
 pub extern "C" fn js_crypto_random_nonce() -> *mut StringHeader {
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
     return_hex(&nonce_bytes)
 }
 

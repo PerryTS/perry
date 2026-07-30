@@ -260,7 +260,7 @@ pub unsafe extern "C" fn js_jwt_sign_dyn(
 }
 
 /// Coerce a NaN-boxed JSValue (`f64`) into a raw `*const ObjectHeader`
-/// pointer. Mirrors the upper-bits sniff used in `perry-stdlib/src/http.rs`.
+/// pointer. Mirrors the upper-bits sniff used by the native HTTP bindings.
 /// Returns null when the value isn't pointer-shaped.
 unsafe fn jsvalue_to_object_ptr(obj_f64: f64) -> *const ObjectHeader {
     let obj_bits = obj_f64.to_bits();

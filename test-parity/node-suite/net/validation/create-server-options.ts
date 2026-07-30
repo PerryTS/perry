@@ -10,7 +10,13 @@ for (const value of badFirst) {
     net.createServer(value);
     console.log("createServer", JSON.stringify(value), "=> NO THROW");
   } catch (err: any) {
-    console.log("createServer", JSON.stringify(value), "=>", err.name, err.code, "|", err.message);
+    console.log(
+      "createServer",
+      JSON.stringify(value),
+      "=>",
+      err.name,
+      err.code,
+    );
   }
 }
 
@@ -25,5 +31,8 @@ try {
 // Accepted forms: a listener function, an options object, or nothing.
 console.log("createServer(fn):", typeof net.createServer(() => {}));
 console.log("createServer({}):", typeof net.createServer({}));
-console.log("createServer(fn, fn):", typeof net.createServer(() => {}, () => {}));
+console.log(
+  "createServer(fn, fn):",
+  typeof net.createServer(() => {}, () => {}),
+);
 console.log("createServer():", typeof net.createServer());

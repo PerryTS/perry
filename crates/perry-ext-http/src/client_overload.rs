@@ -22,7 +22,7 @@ use super::{
 
 /// Resolved positional arguments for `request()` / `get()` after Node's
 /// type-directed overload handling. Mirrors `parse_listen_args` in
-/// `perry-ext-http-server`: codegen packs every user argument into a
+/// `perry-ext-http`: codegen packs every user argument into a
 /// single JS array (`NA_VARARGS`) and we resolve each slot by value
 /// type so the callback is picked up wherever it floats.
 pub(crate) struct ClientArgs {

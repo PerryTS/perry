@@ -83,7 +83,23 @@ PY
 }
 
 echo "Building Perry at $(git rev-parse HEAD)..."
-cargo build --release -p perry-runtime -p perry-stdlib -p perry
+# The `-static` wrappers are NOT optional (#7012). `perry-runtime` and
+# `perry-stdlib` are `crate-type = ["rlib"]`, so building them alone leaves
+# `target/release/` with the `perry` binary and no `libperry_runtime.a` /
+# `libperry_stdlib.a` -- every `perry compile` in the measurement legs below
+# then dies with "Could not find libperry_runtime.a".
+#
+# This is invisible on a long-lived working copy, which already has the
+# archives from unrelated builds; it only bites a clean checkout, which is
+# exactly the situation someone regenerating the published artifact is in.
+cargo build --release \
+    -p perry-runtime -p perry-stdlib -p perry \
+    -p perry-runtime-static -p perry-stdlib-static
+
+for archive in libperry_runtime.a libperry_stdlib.a; do
+    [[ -f "target/release/$archive" ]] \
+        || fail "build did not produce target/release/$archive -- the -static wrapper crates are required (#7012)"
+done
 wait_for_quiet
 
 echo "=== suite ==="

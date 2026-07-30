@@ -564,7 +564,7 @@ pub(crate) unsafe fn nm_dispatch_tls(ctx: &NmCtx, module_name: &str, method_name
         // method-call form (`http.createServer(...)`) already lowers through a
         // dedicated codegen NATIVE_MODULE_TABLE path; the value-read form yields
         // a bound-method closure (see `is_native_module_callable_export`) that
-        // lands here when invoked. The impls live in perry-ext-http-server, so
+        // lands here when invoked. The impls live in perry-ext-http, so
         // route through the dispatcher perry-stdlib registers at startup under
         // `external-http-server-pump` (enabled whenever http/https/http2 is
         // imported). Null when the http ext crate isn't linked → undefined. The

@@ -12,7 +12,9 @@ const output = new Writable({
 
 const rl = createInterface({ input, output, terminal: false });
 const controller = new AbortController();
-const pending = rl.question("abort> ", { signal: controller.signal }).catch((err) => err);
+const pending = rl.question("abort> ", { signal: controller.signal }).catch((
+  err,
+) => err);
 controller.abort();
 const result = await pending;
 await new Promise<void>((resolve) => setImmediate(resolve));
@@ -26,3 +28,5 @@ console.log(
   result.message,
 );
 console.log("writes:", JSON.stringify(writes.join("")));
+input.destroy();
+output.destroy();

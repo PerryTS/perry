@@ -2,7 +2,7 @@
 // `res.write(buf)` / `res.end(buf)` and emitted the correct `Content-Length`,
 // but the wire body was zeroed.
 //
-// Root cause: `crates/perry-ext-http-server/src/types.rs::jsvalue_to_body_bytes`
+// Root cause: `crates/perry-ext-http/src/server/types.rs::jsvalue_to_body_bytes`
 // (lines 121–160) cast every POINTER_TAG pointer straight to
 // `*mut StringHeader` and read `byte_len` + `data_after_StringHeader` from it.
 // But `BufferHeader` is `{ length: u32, capacity: u32 }` (8 bytes, data

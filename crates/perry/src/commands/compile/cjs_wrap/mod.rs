@@ -645,6 +645,33 @@ module.exports = inner;
     }
 
     #[test]
+    fn wrap_does_not_shadow_global_this_named_export() {
+        // Regression (a rolldown-bundled primordials capture in a
+        // hardened-runtime helper package):
+        // `exports.globalThis = capturedGlobalThis;`. Emitting
+        // `export const globalThis = _cjs.globalThis;` shadows the REAL
+        // `globalThis` for every `globalThis.<prop>` read in the body — all
+        // of which evaluate before the IIFE returns — so module init read
+        // `undefined.atob` and threw.
+        let src = "const capturedGlobalThis = globalThis;\n\
+                   const atob = globalThis.atob;\n\
+                   exports.atob = atob;\n\
+                   exports.globalThis = capturedGlobalThis;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/globals.js"));
+        assert!(
+            !wrapped.contains("export const globalThis = _cjs.globalThis;"),
+            "must NOT emit a shadowing `export const globalThis`, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("const __cjsexp_globalThis = _cjs.globalThis;")
+                && wrapped.contains("export { __cjsexp_globalThis as globalThis };"),
+            "expected mangled re-export of the globalThis-named export, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn wrap_keeps_export_const_for_builtin_name_declared_in_body() {
         // A name that collides with a builtin but IS a real module binding
         // (`function Error() {}`) is a genuine local export — keep the ordinary

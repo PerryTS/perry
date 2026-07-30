@@ -506,12 +506,12 @@ pub(super) fn aes_ocb_decrypt(
     }
 }
 
-pub(super) type Aes128CbcEnc = Encryptor<Aes128>;
-pub(super) type Aes192CbcEnc = Encryptor<Aes192>;
-pub(super) type Aes256CbcEnc = Encryptor<Aes256>;
-pub(super) type Aes128CbcDec = Decryptor<Aes128>;
-pub(super) type Aes192CbcDec = Decryptor<Aes192>;
-pub(super) type Aes256CbcDec = Decryptor<Aes256>;
+pub(super) type Aes128CbcEnc = Encryptor<Aes128CbcCipher>;
+pub(super) type Aes192CbcEnc = Encryptor<Aes192CbcCipher>;
+pub(super) type Aes256CbcEnc = Encryptor<Aes256CbcCipher>;
+pub(super) type Aes128CbcDec = Decryptor<Aes128CbcCipher>;
+pub(super) type Aes192CbcDec = Decryptor<Aes192CbcCipher>;
+pub(super) type Aes256CbcDec = Decryptor<Aes256CbcCipher>;
 
 pub(super) fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     if iv.len() != 16 {
@@ -523,15 +523,15 @@ pub(super) fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Option
     let out = match key.len() {
         16 => Aes128CbcEnc::new_from_slices(key, iv)
             .ok()?
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+            .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
             .ok()?,
         24 => Aes192CbcEnc::new_from_slices(key, iv)
             .ok()?
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+            .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
             .ok()?,
         32 => Aes256CbcEnc::new_from_slices(key, iv)
             .ok()?
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+            .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
             .ok()?,
         _ => return None,
     };
@@ -546,15 +546,15 @@ pub(super) fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Optio
     let out = match key.len() {
         16 => Aes128CbcDec::new_from_slices(key, iv)
             .ok()?
-            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .decrypt_padded::<Pkcs7>(&mut buf)
             .ok()?,
         24 => Aes192CbcDec::new_from_slices(key, iv)
             .ok()?
-            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .decrypt_padded::<Pkcs7>(&mut buf)
             .ok()?,
         32 => Aes256CbcDec::new_from_slices(key, iv)
             .ok()?
-            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .decrypt_padded::<Pkcs7>(&mut buf)
             .ok()?,
         _ => return None,
     };
@@ -1228,6 +1228,30 @@ mod tests {
 
     fn key_128() -> [u8; 16] {
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    }
+
+    #[test]
+    fn aes_cbc_matches_node_vector_and_round_trips_all_key_sizes() {
+        let iv = [0x11u8; 16];
+        let plaintext = b"hello aes-cbc";
+        let key128 = key_128();
+        let ciphertext = aes_cbc_encrypt(&key128, &iv, plaintext).expect("encrypt AES-128-CBC");
+        assert_eq!(hex::encode(&ciphertext), "81ee3d6835ee08e3faca1be9355b30e1");
+        assert_eq!(
+            aes_cbc_decrypt(&key128, &iv, &ciphertext).expect("decrypt AES-128-CBC"),
+            plaintext
+        );
+
+        for key in [vec![0x22; 24], vec![0x33; 32]] {
+            let ciphertext = aes_cbc_encrypt(&key, &iv, plaintext).expect("encrypt CBC");
+            assert_eq!(
+                aes_cbc_decrypt(&key, &iv, &ciphertext).expect("decrypt CBC"),
+                plaintext
+            );
+        }
+
+        assert!(aes_cbc_encrypt(&key128, &iv[..15], plaintext).is_none());
+        assert!(aes_cbc_decrypt(&key128, &iv, b"not a full block").is_none());
     }
 
     #[test]

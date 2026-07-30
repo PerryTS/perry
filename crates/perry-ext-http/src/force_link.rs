@@ -1,11 +1,9 @@
-//! Linker-retention anchors for perry-ext-http-server's `#[no_mangle]` FFI
+//! Linker-retention anchors for perry-ext-http server module's `#[no_mangle]` FFI
 //! symbols. Split out of lib.rs (#4975) to stay under the 2000-line CI cap;
 //! see the `#[used] FORCE_LINK_HTTP_SERVER` table below for the mechanism.
 
-// #1652: force the linker to retain perry-ext-http-server's `#[no_mangle]`
-// FFI symbols. The `extern crate perry_ext_http_server as _server_link`
-// at the top of this file pulls the rlib into the dependency graph, but
-// the server functions are referenced only by codegen-generated callsites
+// #1652: force the linker to retain perry-ext-http server module's `#[no_mangle]`
+// FFI symbols. The server functions are referenced only by codegen-generated callsites
 // in the *user* program — never by this crate's Rust. Under LTO / staticlib
 // emission they can therefore be dead-stripped, and the final link then
 // fails with `Undefined symbols: _js_node_http_create_server` for any
@@ -28,7 +26,7 @@
 // so retention there is unaffected. Nothing cargo-depends on this crate, so
 // gating on `test` is sufficient.
 #[cfg(not(test))]
-#[allow(dead_code)]
+#[allow(dead_code, clashing_extern_declarations)]
 mod force_link_http_server {
     extern "C" {
         // http server + IncomingMessage + ServerResponse entry points.

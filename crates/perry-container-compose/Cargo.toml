@@ -26,7 +26,7 @@ hex.workspace = true
 dotenvy = { workspace = true }
 indexmap = { version = "2.2", features = ["serde"] }
 dashmap.workspace = true
-rand = "0.8"
+rand = "0.10"
 regex.workspace = true
 atty = "0.2"
 dialoguer = "0.11"

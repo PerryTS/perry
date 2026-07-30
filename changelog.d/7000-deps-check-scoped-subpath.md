@@ -1,0 +1,1 @@
+fix(deps-check): resolve scoped subpath-exports specifiers — `--check-deps` treated the full specifier (`@scope/pkg/sub/path`) as a node_modules directory and emitted a false R003 "package not found" for every subpath-exports import; the package name is now the first two segments of a scoped specifier, matching what `perry compile` already resolves through the `exports` map.

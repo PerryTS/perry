@@ -72,6 +72,11 @@ use oldgen::*;
 mod cycle;
 use cycle::*;
 mod verify;
+
+/// #7035: whole-heap from-space scan — verification that does NOT depend on
+/// the rewrite pass own root enumeration. Debug-only
+/// (`PERRY_GC_FROMSPACE_SCAN=1`).
+mod fromspace_scan;
 pub use verify::*;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
@@ -624,6 +629,7 @@ pub extern "C" fn js_gc_init() {
         unsafe { libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_os_tag, 240) };
     }
     crate::node_submodules::diagnostics_channel_init_main_thread();
+    crate::node_submodules::init_trace_events_runtime();
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:
     //   - typed-feedback tracing is on (the guard observes every access), or
