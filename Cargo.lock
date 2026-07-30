@@ -6110,6 +6110,7 @@ dependencies = [
  "anyhow",
  "perry-api-manifest",
  "perry-diagnostics",
+ "perry-dispatch",
  "perry-parser",
  "perry-ui-model",
  "serde",

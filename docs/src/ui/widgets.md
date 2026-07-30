@@ -5,10 +5,12 @@ Every example on this page is a real runnable program verified by CI
 (`scripts/run_doc_tests.sh`) — the snippet you read is the same source that's
 compiled and launched.
 
-The widget API is **free functions**, not methods. A widget is a 64-bit
-opaque handle; you pass it into helpers like `textSetFontSize(widget, 18)`
-rather than calling `widget.setFontSize(18)`. That's the only shape perry/ui
-supports — no fluent chain, no prototype methods.
+Most widget operations use **free functions**. A widget is a 64-bit opaque
+handle; pass it into helpers like `textSetFontSize(widget, 18)` rather than
+calling `widget.setFontSize(18)`. The small method surface declared by
+`WidgetMethods` is cross-backend too: it includes animations plus
+`parent.addChild(child)` and `parent.removeAllChildren()` compatibility aliases
+for `widgetAddChild` and `widgetClearChildren`.
 
 ## Text
 

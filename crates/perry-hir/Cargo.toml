@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 perry-diagnostics.workspace = true
 perry-api-manifest.workspace = true
+perry-dispatch.workspace = true
 perry-ui-model.workspace = true
 # #1679: HIR lowering parses synthesized function-literal source for
 # const-foldable `new Function(...)` bodies, so the parser is a regular

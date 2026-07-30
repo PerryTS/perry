@@ -36,6 +36,7 @@
 //   property access, assignment, and `new C()` constructor calls.
 pub(crate) mod builder_fold;
 mod context;
+pub(crate) use context::perry_ui_factory_returns_handle;
 pub(crate) mod expr_assign;
 mod expr_call;
 pub(crate) mod expr_function;

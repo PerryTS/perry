@@ -13,8 +13,8 @@
 //! row in the centralised tables resolves via the public lookup helper.
 
 use perry_dispatch::{
-    ui_method_to_runtime, PERRY_I18N_TABLE, PERRY_SYSTEM_TABLE, PERRY_UI_INSTANCE_TABLE,
-    PERRY_UI_TABLE,
+    perry_ui_instance_lookup, ui_method_to_runtime, PERRY_I18N_TABLE, PERRY_SYSTEM_TABLE,
+    PERRY_UI_INSTANCE_TABLE, PERRY_UI_TABLE,
 };
 
 #[test]
@@ -54,6 +54,18 @@ fn perry_ui_instance_table_is_resolvable_via_helper() {
             row.method
         );
     }
+}
+
+#[test]
+fn widget_compat_methods_use_native_abi_symbols() {
+    assert_eq!(
+        perry_ui_instance_lookup("addChild").map(|row| row.runtime),
+        Some("perry_ui_widget_add_child")
+    );
+    assert_eq!(
+        perry_ui_instance_lookup("removeAllChildren").map(|row| row.runtime),
+        Some("perry_ui_widget_clear_children")
+    );
 }
 
 #[test]

@@ -11,6 +11,10 @@ declare const __canvasImage: unique symbol;
  * `perry_ui_widget_*` FFI entries.
  */
 export interface WidgetMethods {
+    /** Append a child widget. Equivalent to `widgetAddChild(this, child)`. */
+    addChild(child: Widget): void;
+    /** Remove every child widget. Equivalent to `widgetClearChildren(this)`. */
+    removeAllChildren(): void;
     /**
      * Animate the widget's opacity to `target` over `durationSecs` seconds.
      * The animation starts from the widget's current opacity.

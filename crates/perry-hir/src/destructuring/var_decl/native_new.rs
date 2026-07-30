@@ -365,19 +365,14 @@ pub(crate) fn register_native_from_new_and_calls(
                         .lookup_native_module(func_name)
                         .and_then(|(m, mm)| mm.map(|x| (m.to_string(), x.to_string())));
                     if let Some((module_name, method_name)) = mod_method {
-                        if module_name == "perry/ui" {
-                            match method_name.as_str() {
-                                "Canvas" | "State" | "Sheet" | "Toolbar" | "Window"
-                                | "LazyVStack" | "NavigationStack" | "Picker" | "Table"
-                                | "TabBar" => {
-                                    ctx.register_native_instance(
-                                        name.to_string(),
-                                        module_name.clone(),
-                                        method_name.clone(),
-                                    );
-                                }
-                                _ => {}
-                            }
+                        if module_name == "perry/ui"
+                            && crate::lower::perry_ui_factory_returns_handle(&method_name)
+                        {
+                            ctx.register_native_instance(
+                                name.to_string(),
+                                module_name.clone(),
+                                method_name.clone(),
+                            );
                         }
                         // perry/tui state(initial) — register the receiver as a
                         // "State" native instance so subsequent .get()/.set()

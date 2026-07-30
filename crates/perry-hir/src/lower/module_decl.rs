@@ -823,20 +823,16 @@ pub(crate) fn lower_module_decl(
                                         if let Some((module_name, Some(method_name))) =
                                             ctx.lookup_native_module(func_name)
                                         {
-                                            if module_name == "perry/ui" {
-                                                match method_name {
-                                                    "Canvas" | "State" | "Sheet" | "Toolbar"
-                                                    | "Window" | "LazyVStack"
-                                                    | "NavigationStack" | "Picker" | "Table"
-                                                    | "TabBar" => {
-                                                        ctx.register_native_instance(
-                                                            name.clone(),
-                                                            module_name.to_string(),
-                                                            method_name.to_string(),
-                                                        );
-                                                    }
-                                                    _ => {}
-                                                }
+                                            if module_name == "perry/ui"
+                                                && super::context::perry_ui_factory_returns_handle(
+                                                    method_name,
+                                                )
+                                            {
+                                                ctx.register_native_instance(
+                                                    name.clone(),
+                                                    module_name.to_string(),
+                                                    method_name.to_string(),
+                                                );
                                             }
                                         }
                                         // node:http server (issue #577) — named-import factory:

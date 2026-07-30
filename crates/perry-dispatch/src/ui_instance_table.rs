@@ -3,6 +3,19 @@
 use super::*;
 
 pub const PERRY_UI_INSTANCE_TABLE: &[MethodRow] = &[
+    // ---- Generic Widget compatibility methods ----
+    MethodRow {
+        method: "addChild",
+        runtime: "perry_ui_widget_add_child",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "removeAllChildren",
+        runtime: "perry_ui_widget_clear_children",
+        args: &[],
+        ret: ReturnKind::Void,
+    },
     // ---- Window instance methods ----
     MethodRow {
         method: "show",

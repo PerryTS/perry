@@ -1697,7 +1697,8 @@ impl LoweringContext {
 pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
     matches!(
         name,
-        "Canvas"
+        "Widget"
+            | "Canvas"
             | "State"
             | "Sheet"
             | "Toolbar"
@@ -1708,4 +1709,18 @@ pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
             | "Table"
             | "TabBar"
     )
+}
+
+/// True when a named `perry/ui` function returns an opaque handle that can
+/// dispatch receiver methods through `PERRY_UI_INSTANCE_TABLE`.
+///
+/// Keep factory classification tied to the shared dispatch table rather than
+/// maintaining another constructor allowlist in HIR. `VStack`, `HStack`, and
+/// `Button` are the only exceptions: their overloaded argument shapes have
+/// dedicated native-codegen branches, so they intentionally have no generic
+/// dispatch-table rows.
+pub(crate) fn perry_ui_factory_returns_handle(name: &str) -> bool {
+    matches!(name, "VStack" | "HStack" | "Button")
+        || perry_dispatch::perry_ui_lookup(name)
+            .is_some_and(|row| row.ret == perry_dispatch::ReturnKind::Widget)
 }
