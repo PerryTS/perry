@@ -1,0 +1,164 @@
+name: GC Ratchet
+
+# Regression gate for GC retention, evacuation accounting, and memory against
+# the pinned baseline in benchmarks/gc_ratchet/baseline/gc-ratchet-v1.json.
+#
+# THIS JOB IS DESIGNED TO BE ABLE TO FAIL. There is no `continue-on-error`, no
+# `|| true`, and no pipe between the checker and the shell's exit status. That
+# is deliberate and load-bearing: `gc-stress` in test.yml is
+# `continue-on-error: true`, which is why a regression sat behind it through
+# three merges. A gate that cannot fail is not a gate.
+#
+# NOT the public benchmark baseline. benchmarks/run_public_baseline.sh produces
+# benchmarks/results/public-node-bun-v1.json (published Node/Bun evidence, gates
+# `lint`). This is the internal Perry-vs-Perry GC ratchet. Do not conflate them.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gc-ratchet-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  gc-ratchet:
+    # macos-14 is arm64, which matches the `darwin-arm64` platform key the
+    # baseline was captured under. The checker refuses a platform mismatch
+    # rather than comparing numbers that are not comparable, so moving this to
+    # a linux runner would turn the gate red, not silently weaken it.
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Needed to diff against the PR base when deciding relevance.
+          fetch-depth: 0
+
+      # Fast structural failure first: a broken harness or a tampered artifact
+      # should not cost a 20-minute compiler build to discover.
+      - name: Harness unit tests and artifact validation
+        run: |
+          python3 -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
+          python3 benchmarks/gc_ratchet/gc_ratchet.py validate
+
+      - name: Decide whether this change can affect the collector
+        id: relevance
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; measuring."
+            exit 0
+          fi
+          # Anything under crates/ can move the collector: a codegen change
+          # alters what is allocated, a transform change alters what escapes,
+          # and a dependency bump can change allocator behaviour. The filter is
+          # deliberately broad; it exists only to spare docs-only PRs a build.
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+             | grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/gc-ratchet\.yml$|tests/test_gc_ratchet\.py$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches collector-relevant paths; measuring."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No collector-relevant paths changed; the pinned baseline still holds."
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        if: steps.relevance.outputs.run == 'true'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Setup Node oracle
+        if: steps.relevance.outputs.run == 'true'
+        uses: actions/setup-node@v7
+        with:
+          # Single source of truth: .node-version at the repo root. Node is a
+          # correctness input here, not a peer benchmark: every probe's stdout
+          # is diffed against it, because a probe that silently stops
+          # allocating exits 0 and reports a beautifully small retained heap.
+          node-version-file: .node-version
+
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only. libperry_runtime.a and
+          # libperry_stdlib.a come from the -static wrapper crates; building
+          # without them links a stale archive and makes the whole measurement
+          # vacuous. The package set is fixed here so cargo feature unification
+          # is identical to the set used to capture the baseline.
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      - name: Verify the Node oracle version
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          expected="v$(tr -d 'v \n' < .node-version)"
+          actual="$(node --version)"
+          test "$expected" = "$actual" \
+            || { echo "::error::expected Node $expected, found $actual"; exit 1; }
+
+      - name: Measure
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+          # Deterministic link: use the prebuilt full stdlib rather than letting
+          # the auto-optimizer rebuild a workload-specific archive mid-run.
+          PERRY_NO_AUTO_OPTIMIZE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .bench-results
+          uptime
+          python3 benchmarks/gc_ratchet/gc_ratchet.py measure \
+            --perry target/release/perry \
+            --repeats 7 \
+            --output .bench-results/gc-ratchet-current.json
+
+      # No pipe, no `|| true`, no continue-on-error: this step's exit status is
+      # the gate. The `shared_ci` profile gates retention and the evacuation
+      # counters, which are semantic and transfer across machine classes, and
+      # explicitly does not gate RSS or wall time, which do not. See
+      # benchmarks/gc_ratchet/tolerances.json for every band and its reasoning.
+      - name: Check against the pinned baseline
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          python3 benchmarks/gc_ratchet/gc_ratchet.py check \
+            --current .bench-results/gc-ratchet-current.json \
+            --profile shared_ci
+
+      - name: Upload measurement
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-ratchet-${{ github.sha }}
+          path: |
+            .bench-results/gc-ratchet-current.json
+            benchmarks/gc_ratchet/baseline/gc-ratchet-v1.json
+          retention-days: 90

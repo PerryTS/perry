@@ -1,0 +1,195 @@
+{
+  "_readme": [
+    "Regression bands for the GC ratchet, one set per profile. Every band states",
+    "the run-to-run variance it was derived from. The measurements behind these",
+    "numbers are 3 independent sessions x 7 repeats (21 runs) per probe on the",
+    "pinned quiet host, plus 5 traced runs per probe for the GC counters; the",
+    "observed spreads are recorded in the artifact next to every number.",
+    "",
+    "allowance = max(|baseline| * pct/100, abs). direction 'increase' means only",
+    "growth is a regression; 'either' means any drift beyond the band is, which",
+    "is correct for the evacuation counters because they are a behavioural",
+    "fingerprint of the collector rather than a score.",
+    "",
+    "Profiles exist because the metric families do not share noise floors.",
+    "'shared_ci' runs on a GitHub-hosted runner, which is a different machine",
+    "class from the host the baseline was captured on: retention and GC counters",
+    "transfer because they are semantic, memory and time do not. 'pinned_host' is",
+    "for a maintainer re-running the suite on the same quiet box, where memory and",
+    "time are comparable and are gated."
+  ],
+
+  "shared_ci": {
+    "heap_used_bytes": {
+      "pct": 2.0,
+      "abs": 65536,
+      "direction": "increase",
+      "gating": true,
+      "rationale": "Observed spread 0.000% over 21 runs on all 8 probes: bit-identical. The band is therefore pure anti-brittleness margin for incidental churn (a new runtime global, an extra interned string), not a noise allowance. The 64 KiB floor keeps the smallest probe (457,872 B retained) from being gated on sub-kilobyte drift while staying 16x below the smallest interesting regression, which is one falsely retained 1 MiB nursery block."
+    },
+    "heap_total_bytes": {
+      "pct": 2.0,
+      "abs": 1048576,
+      "direction": "increase",
+      "gating": true,
+      "rationale": "Observed spread 0.000%. Arena capacity moves in 1 MiB block quanta, so any floor below one block turns this into a strict equality gate that a single extra block would trip. The floor tolerates exactly one extra block and fails at two."
+    },
+    "minor_cycles": {
+      "pct": 5.0,
+      "abs": 1,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Observed spread 0.000% over 5 traced runs per probe (baselines 14-104 cycles). One extra or missing collection is churn; two is a change in when the collector fires."
+    },
+    "step_cycles": {
+      "pct": 5.0,
+      "abs": 1,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Observed spread 0.000%. Same reasoning as minor_cycles; tracked separately because a change that splits or merges collection phases moves one without the other."
+    },
+    "copied_objects": {
+      "pct": 5.0,
+      "abs": 16,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Observed spread 0.000% (baselines 18k-43k). This is the metric that collapses if objects start being pinned instead of evacuated, which is the primary predicted effect of replacing precise roots with a conservative scan plus per-object pinning."
+    },
+    "copied_bytes": {
+      "pct": 5.0,
+      "abs": 65536,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Observed spread 0.000% (baselines 1.1 MB-24.4 MB). Pairs with copied_objects: a change in mean evacuated object size moves this without moving the count."
+    },
+    "promoted_objects": {
+      "pct": 5.0,
+      "abs": 16,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Observed spread 0.000%. Baselines range from 15 to 4,796, so on the smallest probe the 16-object floor dominates and this cell is effectively ungated; the other seven probes carry the signal. Stated rather than hidden."
+    },
+    "promoted_bytes": {
+      "pct": 5.0,
+      "abs": 65536,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Observed spread 0.000%. Rises when the collector starts tenuring garbage, which is how false retention from a conservative scan reaches old-gen and stops being reclaimable by a minor collection at all."
+    },
+    "freed_bytes": {
+      "pct": 5.0,
+      "abs": 1048576,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Observed spread 0.000% (baselines 29 MB-124 MB). A drop means the collector reclaimed less from the same allocation sequence, which is the definition of the regression this campaign risks. Floor is one arena block."
+    },
+    "rss_bytes": {
+      "pct": 15.0,
+      "abs": 8388608,
+      "direction": "increase",
+      "gating": false,
+      "rationale": "NOT GATED HERE. Observed spread on the pinned host is 0.408%, but a GitHub-hosted runner is a different machine class with a different allocator arena layout and a different baseline RSS, so a band tight enough to catch a real regression would fire on the host difference alone. Recorded and reported so a large shift is still visible; gated in the pinned_host profile instead."
+    },
+    "peak_rss_bytes": {
+      "pct": 15.0,
+      "abs": 8388608,
+      "direction": "increase",
+      "gating": false,
+      "rationale": "NOT GATED HERE, for the same reason as rss_bytes. Observed spread on the pinned host is 0.113%."
+    },
+    "wall_ms": {
+      "pct": 30.0,
+      "abs": 100,
+      "direction": "increase",
+      "gating": false,
+      "rationale": "EXCLUDED FROM THE SHARED-CI GATE. Wall time on a shared runner is dominated by neighbour noise; no band both survives that and catches a real GC slowdown. Rather than widen it until it cannot fire, it is marked non-gating and reported. The GC-work dimension is covered on this runner by the deterministic counters (minor_cycles, copied_objects, freed_bytes), which measure how much work the collector did without measuring how fast the machine was."
+    }
+  },
+
+  "pinned_host": {
+    "heap_used_bytes": {
+      "pct": 2.0,
+      "abs": 65536,
+      "direction": "increase",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "heap_total_bytes": {
+      "pct": 2.0,
+      "abs": 1048576,
+      "direction": "increase",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "minor_cycles": {
+      "pct": 5.0,
+      "abs": 1,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "step_cycles": {
+      "pct": 5.0,
+      "abs": 1,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "copied_objects": {
+      "pct": 5.0,
+      "abs": 16,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "copied_bytes": {
+      "pct": 5.0,
+      "abs": 65536,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "promoted_objects": {
+      "pct": 5.0,
+      "abs": 16,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "promoted_bytes": {
+      "pct": 5.0,
+      "abs": 65536,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "freed_bytes": {
+      "pct": 5.0,
+      "abs": 1048576,
+      "direction": "either",
+      "gating": true,
+      "rationale": "Same band as shared_ci; observed spread 0.000%."
+    },
+    "rss_bytes": {
+      "pct": 3.0,
+      "abs": 524288,
+      "direction": "increase",
+      "gating": true,
+      "rationale": "GATED HERE. Worst cross-session spread of medians was 0.408% and worst within-session spread was 0.73%, so 3% is roughly 7x the observed noise and 4x the worst single-session spread. On the 23-38 MB baselines the percentage dominates the 512 KiB floor, which exists only so a future smaller probe is not gated on page-granularity jitter."
+    },
+    "peak_rss_bytes": {
+      "pct": 3.0,
+      "abs": 524288,
+      "direction": "increase",
+      "gating": true,
+      "rationale": "GATED HERE. Worst cross-session spread of medians was 0.113%, worst within-session 0.72%. Same band as rss_bytes; peak is the number that decides whether a workload fits in memory."
+    },
+    "wall_ms": {
+      "pct": 10.0,
+      "abs": 15,
+      "direction": "increase",
+      "gating": true,
+      "rationale": "GATED HERE ONLY. Worst cross-session spread of medians-of-7 was 0.751% on an idle box (load 1.7-2.0); worst raw within-session spread was 5.3%, which the median-of-7 damps out. 10% is ~13x the cross-session figure and ~2x the worst raw spread, so it will not fire on scheduler jitter but will catch the tens-of-percent slowdown a whole-stack conservative scan would introduce. The 15 ms floor covers the fastest probe (126 ms)."
+    }
+  }
+}
