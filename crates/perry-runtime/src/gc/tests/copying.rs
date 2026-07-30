@@ -1310,7 +1310,13 @@ fn large_object_old_born_array_slot_write_keeps_young_child_alive() {
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     assert_ne!(rewritten, child);
     assert!(crate::arena::pointer_in_nursery(rewritten));
-    assert_eq!(trace.copying_nursery.copied_objects, 1);
+    assert!(
+        trace.copying_nursery.copied_objects >= 1,
+        "minor must copy at least the young child; copied_objects is a whole-process \
+         count and host startup can leave other young objects reachable through the \
+         dirtied old page (4249 observed on macOS arm64, #7060) — the child-specific \
+         relocation is pinned by the `rewritten` asserts above"
+    );
     assert!(
         remembered_set_size() > 0,
         "old-to-survivor edge must remain remembered after copied minor"
