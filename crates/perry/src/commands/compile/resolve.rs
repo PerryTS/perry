@@ -32,6 +32,7 @@ use perry_hir::ModuleKind;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use super::CompilationContext;
 #[cfg(test)]
@@ -750,12 +751,27 @@ fn original_source_via_map(entry: &Path) -> Option<PathBuf> {
 /// declarations inside an IIFE. Node loads the emitted JS entry, so keep that
 /// entry instead of following its source map for this narrow shape (#6586).
 fn is_hybrid_cjs_emit_input(path: &Path) -> bool {
-    let Ok(source) = fs::read_to_string(path) else {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+
+    let Ok(path) = fs::canonicalize(path) else {
+        return false;
+    };
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().expect("hybrid source cache").get(&path) {
+        return *cached;
+    }
+
+    let Ok(source) = fs::read_to_string(&path) else {
         return false;
     };
     let stripped = super::cjs_wrap::detect::strip_comments_and_strings(&source);
-    super::cjs_wrap::detect::has_top_level_esm(&stripped)
-        && super::cjs_wrap::detect::has_top_level_module_exports_assignment(&stripped)
+    let hybrid = super::cjs_wrap::detect::has_top_level_esm(&stripped)
+        && super::cjs_wrap::detect::has_top_level_module_exports_assignment(&stripped);
+    cache
+        .lock()
+        .expect("hybrid source cache")
+        .insert(path, hybrid);
+    hybrid
 }
 
 /// If a package's root TypeScript source is a hybrid CJS-emit input, keep the

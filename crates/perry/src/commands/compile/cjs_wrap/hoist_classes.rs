@@ -294,6 +294,12 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
         );
         let unsafe_to_duplicate = class_body_references_any(&decl.block_text, &blockers)
             || super::extract_requires::identifier_is_reassigned(source, &decl.name)
+            || identifier_used_as_value_outside(
+                source,
+                &decl.name,
+                decl.source_start,
+                decl.source_end,
+            )
             || exported_names.contains(&decl.name);
         if unsafe_to_duplicate {
             unsafe_function_names.push(decl.name.clone());
@@ -882,6 +888,8 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
 struct TopLevelFunctionDecl {
     name: String,
     block_text: String,
+    source_start: usize,
+    source_end: usize,
 }
 
 /// Collect depth-zero function declarations from a CommonJS source, including
@@ -1002,11 +1010,76 @@ fn collect_top_level_function_decls(source: &str) -> Vec<TopLevelFunctionDecl> {
             decls.push(TopLevelFunctionDecl {
                 name,
                 block_text: source[i..end].to_string(),
+                source_start: i,
+                source_end: end,
             });
         }
         i = end;
     }
     decls
+}
+
+/// Returns true when a function declaration's binding is used as a value
+/// elsewhere in the module rather than only called directly.
+///
+/// Duplicating a capture-free helper is safe for `helper(...)` calls, but not
+/// when the IIFE mutates the original function object (`helper.cache = ...`),
+/// aliases it (`const cb = helper`), compares its identity, or passes it to
+/// another function. In those cases a module-scope duplicate would diverge
+/// from the original. Member property names such as `obj.helper()` are
+/// unrelated bindings and are ignored.
+fn identifier_used_as_value_outside(
+    source: &str,
+    name: &str,
+    excluded_start: usize,
+    excluded_end: usize,
+) -> bool {
+    fn is_ident_byte(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+
+    let stripped = super::detect::strip_comments_and_strings(source);
+    let bytes = stripped.as_bytes();
+    let name_bytes = name.as_bytes();
+    let mut i = 0usize;
+    while i + name_bytes.len() <= bytes.len() {
+        if i >= excluded_start && i < excluded_end && excluded_end <= bytes.len() {
+            i = excluded_end;
+            continue;
+        }
+        if &bytes[i..i + name_bytes.len()] != name_bytes {
+            i += 1;
+            continue;
+        }
+
+        let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+        let after = i + name_bytes.len();
+        let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
+        if !before_ok || !after_ok {
+            i = after;
+            continue;
+        }
+
+        let mut before = i;
+        while before > 0 && bytes[before - 1].is_ascii_whitespace() {
+            before -= 1;
+        }
+        // `obj.helper` / `obj?.helper` names a property, not this binding.
+        if before > 0 && bytes[before - 1] == b'.' {
+            i = after;
+            continue;
+        }
+
+        let mut cursor = after;
+        while bytes.get(cursor).is_some_and(|b| b.is_ascii_whitespace()) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'(') {
+            return true;
+        }
+        i = cursor + 1;
+    }
+    false
 }
 
 /// Issue #4933 — collect the names of every **top-level** `class <Name>`

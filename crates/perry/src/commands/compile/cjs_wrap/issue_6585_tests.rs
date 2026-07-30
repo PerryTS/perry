@@ -58,3 +58,22 @@ exports.Formatter = Formatter;
     assert!(rest.contains("class Formatter"));
     assert!(rest.contains("function format"));
 }
+
+#[test]
+fn class_stays_wrapped_when_later_function_object_is_decorated() {
+    let src = r#"class CodeGen {
+  run() { return addNames({}).cache.size; }
+}
+function addNames(names) { return names; }
+addNames.cache = new Map();
+exports.CodeGen = CodeGen;
+"#;
+    let (blocks, names, rest) = extract_top_level_class_decls(src);
+    assert!(
+        blocks.is_empty(),
+        "decorated helper and dependent class must remain wrapped:\n{blocks}"
+    );
+    assert!(names.is_empty());
+    assert!(rest.contains("class CodeGen"));
+    assert!(rest.contains("addNames.cache = new Map()"));
+}
