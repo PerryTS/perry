@@ -18,6 +18,11 @@ pub extern "C" fn js_dgram_socket_send(handle: i64, args: *const ArrayHeader) ->
 }
 
 #[no_mangle]
+pub extern "C" fn js_dgram_socket_sendto(handle: i64, args: *const ArrayHeader) -> f64 {
+    sendto_impl(socket_value_from_handle(handle), &collect_args(args))
+}
+
+#[no_mangle]
 pub extern "C" fn js_dgram_socket_bind(handle: i64, args: *const ArrayHeader) -> f64 {
     bind_impl(socket_value_from_handle(handle), &collect_args(args))
 }

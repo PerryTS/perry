@@ -21,6 +21,27 @@ try {
   }
 }
 
+const preAbortedController = new AbortController();
+preAbortedController.abort();
+const preAbortedSocket = dgram.createSocket({
+  type: "udp4",
+  signal: preAbortedController.signal,
+});
+await new Promise<void>((resolve) => preAbortedSocket.once("close", resolve));
+console.log("pre-aborted signal: closed");
+
+const activeController = new AbortController();
+const activeSocket = dgram.createSocket({
+  type: "udp4",
+  signal: activeController.signal,
+});
+const activeClosed = new Promise<void>((resolve) =>
+  activeSocket.once("close", resolve)
+);
+activeController.abort();
+await activeClosed;
+console.log("active signal: closed");
+
 const controller = new AbortController();
 const socket = dgram.createSocket({ type: "udp4", signal: controller.signal });
 let closes = 0;

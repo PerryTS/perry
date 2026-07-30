@@ -42,6 +42,12 @@ try {
     "bad list member:",
     codeOf(() => socket.send([buffer, 23] as never, 12345, "127.0.0.1")),
   );
+  const cyclicList: unknown[] = [buffer];
+  cyclicList.push(cyclicList);
+  console.log(
+    "cyclic list:",
+    codeOf(() => socket.send(cyclicList as never, 12345, "127.0.0.1")),
+  );
   console.log("port zero:", codeOf(() => socket.send(buffer, 0, "127.0.0.1")));
   console.log(
     "port high:",
