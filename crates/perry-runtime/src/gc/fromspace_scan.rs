@@ -86,6 +86,12 @@ pub(crate) struct FromSpaceScanReport {
     /// Offending slots whose page IS currently dirty -> the remembered set had
     /// it and the scan still missed the slot.
     pub(crate) dirty_but_missed: usize,
+    /// Offending slots whose page was NOT in this cycle's dirty snapshot, so
+    /// the in-cycle remembered-set scan never looked at them.
+    pub(crate) not_in_snapshot: usize,
+    /// Offending slots whose page WAS in the snapshot -- the scan looked at the
+    /// page and still did not rewrite the slot.
+    pub(crate) in_snapshot: usize,
     pub(crate) distinct_owners: crate::fast_hash::PtrHashSet<usize>,
     pub(crate) samples: Vec<FromSpaceRef>,
 }
@@ -172,6 +178,14 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
         let slot_addr = words.add(i) as usize;
         let dirty_now = super::barrier::dirty_now_for_addr(slot_addr);
         let ever_dirty = super::barrier::ever_dirty_for_addr(slot_addr);
+        if SNAPSHOT_PAGES.with(|c| {
+            c.borrow()
+                .contains(&crate::arena::generation_page_for_addr(slot_addr))
+        }) {
+            report.in_snapshot += 1;
+        } else {
+            report.not_in_snapshot += 1;
+        }
         if !ever_dirty {
             report.never_dirty += 1;
         } else if !dirty_now {
@@ -285,6 +299,10 @@ pub(super) fn emit_report(report: &FromSpaceScanReport, phase: &str) {
         report.lost_dirty,
         report.dirty_but_missed
     );
+    eprintln!(
+        "[gc-fromspace-scan {}]   in_snapshot={} not_in_snapshot={}",
+        phase, report.in_snapshot, report.not_in_snapshot
+    );
     for sample in &report.samples {
         eprintln!("{}", describe(sample));
     }
@@ -292,14 +310,22 @@ pub(super) fn emit_report(report: &FromSpaceScanReport, phase: &str) {
 
 /// Entry point called from the copying minor, after the rewrite pass and before
 /// `copying_reset_from_spaces_and_flip`.
-pub(super) fn run_fromspace_scan() {
+pub(super) fn run_fromspace_scan(snapshot: &super::RememberedDirtySnapshot) {
     if !fromspace_scan_enabled() {
         return;
     }
+    SNAPSHOT_PAGES.with(|c| {
+        *c.borrow_mut() = snapshot.dirty_old_pages.iter().copied().collect();
+    });
     let report = scan_heap_for_fromspace_refs();
     if report.missing_rewrites > 0 || report.dangling > 0 {
         emit_report(&report, "OFFENDERS");
     } else {
         emit_report(&report, "clean");
     }
+}
+
+thread_local! {
+    static SNAPSHOT_PAGES: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
