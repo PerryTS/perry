@@ -93,7 +93,10 @@ pub use self::indexing::{
     js_array_numeric_set_f64_unboxed, js_array_set_f64, js_array_set_f64_extend,
     js_array_set_f64_extend_strict, js_array_set_f64_unchecked, js_array_set_index_or_string,
     js_array_set_index_or_string_strict, js_array_set_string_key,
+    scan_prototype_addr_cache_roots_mut,
 };
+#[cfg(test)]
+pub(crate) use self::indexing::{test_array_proto_addr_cache, test_object_proto_addr_cache};
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
 pub use self::iter_methods::{

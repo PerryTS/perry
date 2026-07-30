@@ -48,6 +48,24 @@ fn throw_array_not_extensible_add(index: u32) -> ! {
 /// real code nobody adds numeric indices to `Array.prototype`, so the hot OOB
 /// path stays a single relaxed atomic load until the (rare) write flips the
 /// flag. `usize::MAX` marks the address as not-yet-computed.
+///
+/// ***THIS IS A RAW ADDRESS OF A MOVABLE OBJECT*** (#6981). `Array.prototype`
+/// relocates two different ways, and BOTH leave this cache pointing at a
+/// `GC_FLAG_FORWARDED` stub while every reader resolves its own receiver
+/// through `clean_arr_ptr` (which follows forwarding):
+///
+///   1. `js_array_grow` — an indexed write past the dense capacity
+///      (`Array.prototype[300] = v`) reallocates and forwards the old head;
+///   2. the copying young-gen minor — it evacuates the prototype and forwards.
+///
+/// A stale cache is not merely a wrong value: `array_oob_prototype_get`'s
+/// self-recursion guard is `proto != receiver`, and after a move those are two
+/// different addresses **for the same object**, so the guard stops firing and
+/// `js_array_get_f64` ⇄ `array_oob_prototype_get` recurse until the stack guard
+/// page (SIGSEGV, "excessive recursion"). Hence the two defences below:
+/// `array_prototype_addr` resolves the forwarding chain and self-heals, and
+/// `scan_prototype_addr_cache_roots_mut` lets the collector rewrite the slot so
+/// the address stays live even once the from-space stub is recycled.
 static ARRAY_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
@@ -72,10 +90,74 @@ pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
 }
 
+/// GC root scanner for the two memoized prototype addresses (#6981).
+///
+/// `ARRAY_PROTO_ADDR` / `OBJECT_PROTO_ADDR` hold raw addresses of movable
+/// objects, so a relocating cycle must REWRITE them exactly like the other
+/// address-holding side tables (`CLASS_PROTOTYPE_OBJECTS`,
+/// `TYPED_ARRAY_VIEW_META`, …). Forwarding-chain healing alone is not
+/// sufficient: once the from-space stub is swept and its block recycled the
+/// `GC_FLAG_FORWARDED` bit is gone, and the cache would then name an unrelated
+/// live object. Both intrinsics are reachable from `globalThis`, so the marking
+/// half of this visit is redundant; the rewriting half is the point.
+pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    for cache in [&ARRAY_PROTO_ADDR, &OBJECT_PROTO_ADDR] {
+        let cached = cache.load(Ordering::Relaxed);
+        if cached == usize::MAX || cached == 0 {
+            continue;
+        }
+        let mut addr = cached;
+        if visitor.visit_usize_slot(&mut addr) {
+            cache.store(addr, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Test-only handles on the two memoized prototype addresses, so the #6981
+/// regression tests can install a synthetic forwarded stub without touching the
+/// realm's real intrinsics.
+#[cfg(test)]
+pub(crate) fn test_array_proto_addr_cache() -> &'static AtomicUsize {
+    &ARRAY_PROTO_ADDR
+}
+
+#[cfg(test)]
+pub(crate) fn test_object_proto_addr_cache() -> &'static AtomicUsize {
+    &OBJECT_PROTO_ADDR
+}
+
+/// Re-read a memoized prototype address through the GC forwarding chain and
+/// write the healed address back, so every caller compares (and dereferences)
+/// the object's CURRENT location. See the `ARRAY_PROTO_ADDR` doc for why an
+/// unresolved cache is a hang, not just a wrong answer (#6981).
+///
+/// `note_array_index_write` calls this on every indexed array write until the
+/// prototype is polluted, so the not-forwarded case must stay call-free: the
+/// `try_read_gc_header` probe is `#[inline(always)]` and reduces to two range
+/// compares plus one load of a `gc_flags` byte at a fixed, permanently-hot
+/// address. It also classifies the address band before dereferencing, so the
+/// not-yet-resolved sentinel (`usize::MAX`) and any non-heap value fall
+/// straight through.
+#[inline]
+fn heal_prototype_addr(cache: &AtomicUsize, cached: usize) -> usize {
+    let forwarded = unsafe {
+        crate::value::addr_class::try_read_gc_header(cached)
+            .is_some_and(|header| header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0)
+    };
+    if !forwarded {
+        return cached;
+    }
+    let resolved = crate::value::resolve_forwarding(cached);
+    if resolved != cached {
+        cache.store(resolved, Ordering::Relaxed);
+    }
+    resolved
+}
+
 pub(crate) fn object_prototype_addr() -> usize {
     let cached = OBJECT_PROTO_ADDR.load(Ordering::Relaxed);
     if cached != usize::MAX {
-        return cached;
+        return heal_prototype_addr(&OBJECT_PROTO_ADDR, cached);
     }
     let ctor = crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
     let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
@@ -149,7 +231,7 @@ pub(crate) fn array_proto_iterator_modified() -> bool {
 pub(crate) fn array_prototype_addr() -> usize {
     let cached = ARRAY_PROTO_ADDR.load(Ordering::Relaxed);
     if cached != usize::MAX {
-        return cached;
+        return heal_prototype_addr(&ARRAY_PROTO_ADDR, cached);
     }
     let ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
     let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
@@ -190,6 +272,13 @@ pub(crate) fn note_array_index_write(arr: usize) {
 /// prototype has indexed properties (see `ARRAY_PROTO_HAS_INDEX`). Returns the
 /// inherited value, or `undefined` if absent. Skipped entirely when the
 /// receiver IS `Array.prototype` (avoids self-recursion) or the flag is unset.
+///
+/// #6981: the `proto != receiver` self-recursion guard is an OBJECT IDENTITY
+/// test, so both sides must be forwarding-resolved. `js_array_get_f64` resolves
+/// its receiver through `clean_arr_ptr`; the prototype address comes from a
+/// memoized cache, so it is healed here too. Comparing a stale address against
+/// a resolved one makes the guard silently stop firing and
+/// `js_array_get_f64` ⇄ this function recurse without bound.
 #[inline]
 unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
@@ -204,7 +293,7 @@ unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
     }
     if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
         let proto = array_prototype_addr();
-        if proto != 0 && proto != receiver {
+        if proto != 0 && proto != crate::value::resolve_forwarding(receiver) {
             let proto_arr = proto as *const ArrayHeader;
             if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
                 return js_array_get_f64(proto_arr, index);

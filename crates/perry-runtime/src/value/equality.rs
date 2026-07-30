@@ -188,7 +188,7 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
 /// callers can compare resolved addresses for object identity. `try_read_gc_-
 /// header` performs the band/heap classification (never dereferencing a
 /// non-heap id). Depth-capped to defend against corrupted GC cycles.
-fn resolve_forwarding(mut addr: usize) -> usize {
+pub(crate) fn resolve_forwarding(mut addr: usize) -> usize {
     unsafe {
         let mut steps = 0u32;
         while let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {

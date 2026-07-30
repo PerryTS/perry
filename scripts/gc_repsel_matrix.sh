@@ -206,18 +206,21 @@ ARMS=(
 # and the %E% arms could produce before. #6981's redness now reaches the arm
 # named after the shipped configuration.
 #
-# `evac_minor` / `force_verify` stay out for the original reason, unchanged:
-# they are RED for a real, filed reason (#6981), and per-PR redness on an
-# unrelated PR is how a gate stops being read. They ARE in `--arms all`, which
-# push / workflow_dispatch runs.
-#
-# WHEN #6981 CLOSES, PUT `evac_minor` AND `force_verify` BACK IN THIS LIST.
-# That is the point at which "a representation regressed GC correctness under
-# relocation" becomes a per-PR signal, which is the whole reason this matrix
-# exists. Do not instead add triage entries for those cells:
-# test-parity/gc_repsel_triage.txt is for redness that is provably NOT a
-# representation defect, and #6981's redness may well be exactly that.
-PR_ARMS="default,verify_evac,cons_scan_off,shipped_default"
+# `evac_minor` AND `force_verify` ARE BACK IN, as the previous revision of this
+# comment instructed. They were held out only while #6981 was red. It is fixed:
+# the memoized `Array.prototype` address is a raw pointer to a MOVABLE object,
+# so a relocation (`js_array_grow` or the copying minor) left the hole-read
+# fallback's `proto != receiver` self-recursion guard comparing a from-space
+# address against a forwarding-resolved one; the guard stopped firing and the
+# mutator recursed until the stack guard page. Measured on the fix,
+# `--arms all --pressure 8`: PASS=339 UNVER=100 XFAIL=1 FAIL=0 over 440 cells,
+# with both arms at copy-minor 21/22 (was PASS=325 … FAIL=14). So "a
+# representation regressed GC correctness under relocation" is now a per-PR
+# signal on the arms that actually relocate, which is the whole reason this
+# matrix exists. The single XFAIL is the pre-existing
+# `repsel_ptr_shape_locals x rep_ptr_shape_off` entry (#6976), not in this
+# subset.
+PR_ARMS="default,evac_minor,verify_evac,force_verify,cons_scan_off,shipped_default"
 
 arm_field() { # $1 = arm record, $2 = 1..5
     printf '%s' "$1" | cut -d'|' -f"$2"

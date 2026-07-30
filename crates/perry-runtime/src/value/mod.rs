@@ -123,6 +123,7 @@ pub use to_string::{
 };
 
 // ----- Equality, comparison, SameValueZero, dynamic string equality -----
+pub(crate) use equality::resolve_forwarding;
 pub use equality::{
     js_dynamic_string_equals, js_jsvalue_compare, js_jsvalue_equals, js_jsvalue_loose_equals,
     js_jsvalue_same_value_zero,
