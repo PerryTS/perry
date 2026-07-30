@@ -137,7 +137,22 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 #
 # NOTE this is a MEASUREMENT configuration, not the shipped one. It says the
 # collector's evacuating path is exercised; it does not say the shipped default
-# reaches that path. It does not -- see #6978.
+# reaches that path.
+#
+# ***AS OF #7024 THE SHIPPED DEFAULT DOES REACH IT*** -- by the sound route,
+# which is not this one. `default` (pressure knob only, no GC env) now defers
+# the alloc-point trigger to a precise-root safepoint and runs the copying
+# minor there. Measured on this corpus at `--pressure 8`:
+#
+#   arm            copy-minor before #7024   after
+#   default              0/22                12/22
+#   verify_evac          0/22                12/22
+#
+# The difference between `default` and %E% is now WHERE the relocation happens:
+# `default` relocates at a real safepoint (the JS stack has unwound, roots are
+# precise by construction), %E% forces it at the register-imprecise allocation
+# point. Both belong in the matrix; only the first is a configuration anyone
+# ships.
 #
 # ***AND IT IS RED.*** The first `--arms all` run in which anything actually
 # moved failed 14 of the 20 corpus files: 5 crashes and 9 output mismatches
@@ -149,18 +164,18 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # arms stay configured to keep producing it. Do not quiet them down.
 # ---------------------------------------------------------------------------
 ARMS=(
-"default||%P%|collect|as-shipped GC configuration under allocation pressure"
+"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. Since #7024 this is a RELOCATING arm with no env override at all beyond the pressure knob: the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise, rewritable roots. requires=scavenge, not collect: before #7024 it collected on 13/22 rows while running ZERO copying minors, so a collect requirement certified the pre-#7019 non-moving path under a name that says otherwise."
 "evac_minor||%P% %E%|move|THE evacuating arm: the automatic alloc-point collection as a precise-rooted COPYING minor that relocates survivors. No stress knob -- this is the collector's own moving path."
 "force_evac||%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|stress-copy every marked non-pinned nursery object"
-"verify_evac||%P% PERRY_GC_VERIFY_EVACUATION=1|collect|panic if a live slot still points at a forwarded object"
+"verify_evac||%P% PERRY_GC_VERIFY_EVACUATION=1|scavenge|panic if a live slot still points at a forwarded object. requires=scavenge: a verifier that runs over zero relocations verifies nothing, which is what it did on all 22 rows before #7024."
 "force_verify||%P% %E% PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|move|force + verify"
 "gen_gc_off||%P% PERRY_GEN_GC=0|collect|full mark-sweep only; no nursery => no evacuation by construction"
 "wb_off|PERRY_WRITE_BARRIERS=0|%P% PERRY_WRITE_BARRIERS=0|collect|no codegen write barriers => copying nursery ineligible by construction"
 "gen_off_verify||%P% PERRY_GEN_GC=0 PERRY_GC_VERIFY_EVACUATION=1|collect|full mark-sweep + evacuation verifier"
 "wb_off_force|PERRY_WRITE_BARRIERS=0|%P% PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1|collect|force-evacuate is a documented no-op without barriers (barriers_inactive)"
 "all_four|PERRY_WRITE_BARRIERS=0|%P% PERRY_GEN_GC=0 PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|collect|every escape hatch at once"
-"cons_scan_off||%P% PERRY_CONSERVATIVE_STACK_SCAN=off|collect|PRECISE ROOTS ONLY -- removes the conservative-stack pinning that every automatic collection otherwise forces (ManualGcScanGuard::force_full_scan). The only arm that can observe a missing shadow-slot binding."
-"cons_scan_off_force||%P% PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|collect|precise roots + force/verify evacuation"
+"cons_scan_off||%P% PERRY_CONSERVATIVE_STACK_SCAN=off|scavenge|PRECISE ROOTS ONLY -- removes the conservative-stack pinning that the alloc-point fallback otherwise forces (ManualGcScanGuard::force_full_scan). An arm that can observe a missing shadow-slot binding."
+"cons_scan_off_force||%P% PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|scavenge|precise roots + force/verify evacuation"
 "loop_polls|PERRY_GC_MOVING_LOOP_POLLS=1|%P% %E% PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_FORCE_EVACUATE=1|move|defer the alloc-point collection to a loop back-edge precise-root safepoint, where the copying minor may MOVE survivors"
 "rep_i32_off|PERRY_CANONICAL_I32_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 1 OFF x evacuation"
 "rep_str_off|PERRY_CANONICAL_STR_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 3a OFF x evacuation"
@@ -175,17 +190,26 @@ ARMS=(
 # as-shipped under pressure, the evacuation verifier, precise-roots-only, and
 # the untouched shipped configuration as a control.
 #
-# ***THE EVACUATING ARMS ARE DELIBERATELY NOT IN THIS SUBSET, AND THAT IS A
-# TEMPORARY STATE WITH AN EXPIRY.*** They are not omitted because they are
-# noisy: they are omitted because they are RED, and they are red for a real
-# reason that is filed, reproduced and minimised in #6981 -- a relocating minor
-# with precise roots breaks 14 of the 20 corpus files (5 crashes, 9 output
-# mismatches), while the SAME relocation with the conservative stack scan on
-# passes 19/20. Putting them in the per-PR gate today would paint every
-# unrelated PR red from the first commit, which is how a gate stops being read.
+# ***THIS SUBSET CAN NOW REPRODUCE THE RELOCATING-MINOR DEFECT CLASS (#6993).***
+# Until #7024 it could not, and that was the hole: `default` and `verify_evac`
+# ran the NON-moving alloc-point minor (the deferral to the precise-root
+# safepoint was unreachable whenever the pressure knob was set, because the
+# deferral cap and the trigger ceiling shared a formula), and `cons_scan_off`
+# relocated only with incremental mode still on. So the whole "raw reference
+# held across a relocating collection" class -- #6951, #6972, #6982, #6991,
+# #6992 -- was invisible per PR and could only go red after merge, on push.
 #
-# They ARE in `--arms all`, which is what push / workflow_dispatch runs, so the
-# failures are visible and measured on every push to main -- not hidden.
+# The proof that the hole is closed is a cell that changed colour, not an
+# argument: `default x test_gap_repsel_p4a3_numarray_barriers` was PASS
+# (`cycles=1 scavenged=0` -- it collected, and relocated nothing) and is now
+# FAIL (`exit=139 scavenged=3594`) -- the same SIGSEGV that only `cons_scan_off`
+# and the %E% arms could produce before. #6981's redness now reaches the arm
+# named after the shipped configuration.
+#
+# `evac_minor` / `force_verify` stay out for the original reason, unchanged:
+# they are RED for a real, filed reason (#6981), and per-PR redness on an
+# unrelated PR is how a gate stops being read. They ARE in `--arms all`, which
+# push / workflow_dispatch runs.
 #
 # WHEN #6981 CLOSES, PUT `evac_minor` AND `force_verify` BACK IN THIS LIST.
 # That is the point at which "a representation regressed GC correctness under
