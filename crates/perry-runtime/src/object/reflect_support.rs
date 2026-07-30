@@ -136,6 +136,9 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         if key_str.is_null() {
             return false;
         }
+        if let Some(present) = crate::process::process_env_has_field(obj, key_str) {
+            return present;
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() || (keys as usize) < 0x10000 {
             return false;

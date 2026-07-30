@@ -15,6 +15,7 @@ mod credentials;
 mod env_misc;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
+    process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
 };
 mod finalization;
 pub(crate) mod ipc;

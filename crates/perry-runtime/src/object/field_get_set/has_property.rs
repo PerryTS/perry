@@ -926,6 +926,16 @@ unsafe fn object_string_key_has_property(
     let nanbox_false = f64::from_bits(0x7FFC_0000_0000_0003u64); // TAG_FALSE
     let nanbox_true = f64::from_bits(0x7FFC_0000_0000_0004u64); // TAG_TRUE
 
+    let env_key = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    if let Some(present) = crate::process::process_env_has_field(obj_ptr, env_key) {
+        if present {
+            return nanbox_true;
+        }
+        // An absent environment key can still be inherited from
+        // Object.prototype (`"toString" in process.env`), so only the positive
+        // OS-backed result is terminal here.
+    }
+
     // `class X extends Request/Response` instances forward native members
     // (`body`/`method`/…) through their stashed fetch handle. Gated: programs
     // that never construct a fetch subclass skip the per-call key alloc +

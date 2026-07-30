@@ -34,6 +34,9 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
+    if let Some(result) = crate::process::process_env_delete_field(obj, key) {
+        return result;
+    }
     // A delete can rewrite key→slot mappings in place (same keys_array
     // address), so cached (keys_array, key)→index plans must be flushed
     // (`object::prop_plan` read-plan cache).

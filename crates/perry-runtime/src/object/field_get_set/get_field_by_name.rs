@@ -39,6 +39,13 @@ pub extern "C" fn js_object_get_field_by_name(
     if key.is_null() {
         return JSValue::undefined();
     }
+    // `process.env` is a live OS-backed exotic object. Direct reads are
+    // codegen-specialized, but an alias (`const env = process.env; env.X`)
+    // reaches this generic path. On Windows the OS lookup also supplies the
+    // required case-insensitivity (`env.Path === env.PATH`).
+    if let Some(value) = crate::process::process_env_get_field(obj, key) {
+        return value;
+    }
     // #2846: the receiver may be a Proxy value that arrived through a generic
     // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
     // Proxies are encoded as small fake pointers; deref-ing one as an

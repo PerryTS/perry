@@ -6,8 +6,24 @@ process.env.PERRY_NUM = 42 as any;
 console.log("coerced:", process.env.PERRY_NUM, typeof process.env.PERRY_NUM);
 const computedKey = "PERRY_COMPUTED";
 process.env[computedKey] = true as any;
-console.log("computed:", process.env[computedKey], typeof process.env[computedKey]);
+console.log(
+  "computed:",
+  process.env[computedKey],
+  typeof process.env[computedKey],
+);
 delete process.env.PERRY_RT;
 console.log("after delete:", process.env.PERRY_RT);
 delete process.env[computedKey];
 console.log("after computed delete:", process.env[computedKey]);
+
+const envAlias = process.env;
+envAlias.PERRY_ALIAS = "via alias";
+console.log(
+  "alias set/get/has:",
+  process.env.PERRY_ALIAS,
+  "PERRY_ALIAS" in envAlias,
+  Object.hasOwn(envAlias, "PERRY_ALIAS"),
+);
+console.log("alias prototype:", typeof envAlias.toString);
+delete envAlias.PERRY_ALIAS;
+console.log("alias delete:", process.env.PERRY_ALIAS);

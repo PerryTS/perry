@@ -12,6 +12,8 @@ use crate::closure::{
 };
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
+#[cfg(windows)]
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET: AtomicBool = AtomicBool::new(false);
@@ -755,18 +757,9 @@ pub extern "C" fn js_process_constrained_memory() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader {
     unsafe {
-        if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
-            return std::ptr::null_mut();
-        }
-
-        let len = (*name_ptr).byte_len as usize;
-        let data_ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-
-        // Convert to Rust string
-        let name_bytes = std::slice::from_raw_parts(data_ptr, len);
-        let name = match std::str::from_utf8(name_bytes) {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
+        let name = match env_name_from_header(name_ptr) {
+            Some(name) => name,
+            None => return std::ptr::null_mut(),
         };
 
         match std::env::var(name) {
@@ -901,15 +894,9 @@ static KEEP_PROCESS_PENDING_EXIT_CODE: extern "C" fn() -> i32 = js_process_pendi
 pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
     use crate::value::js_jsvalue_to_string;
     unsafe {
-        if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
-            return;
-        }
-        let len = (*name_ptr).byte_len as usize;
-        let data_ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let name_bytes = std::slice::from_raw_parts(data_ptr, len);
-        let name = match std::str::from_utf8(name_bytes) {
-            Ok(s) => s,
-            Err(_) => return,
+        let name = match env_name_from_header(name_ptr) {
+            Some(name) => name,
+            None => return,
         };
         if !env_name_is_settable(name) {
             return;
@@ -935,6 +922,11 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
             Ok(s) => s,
             Err(_) => return,
         };
+        // Windows treats names case-insensitively but preserves one spelling
+        // in the environment block. Keep the materialized object's first-seen
+        // spelling instead of appending an enumerable alias such as both
+        // `Path` and `PATH`.
+        let cache_name = env_cache_name_for_set(name);
         std::env::set_var(name, v_str);
         // Keep the cached `process.env` object in step so enumeration
         // (`Object.keys(process.env)`, `for…in`, spread) sees the new key —
@@ -943,10 +935,12 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
         if cached != 0.0 {
             let obj = crate::value::js_nanbox_get_pointer(cached) as *mut crate::ObjectHeader;
             if !obj.is_null() {
-                let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let key = js_string_from_bytes(cache_name.as_ptr(), cache_name.len() as u32);
                 let val = js_string_from_bytes(v_str.as_ptr(), v_str.len() as u32);
                 let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
-                crate::object::js_object_set_field_by_name(obj, key, val_f64);
+                with_env_cache_mutation(|| {
+                    crate::object::js_object_set_field_by_name(obj, key, val_f64);
+                });
             }
         }
     }
@@ -1040,17 +1034,26 @@ static KEEP_JS_MODULE_RESOLVE_LOOKUP_PATHS: extern "C" fn(f64, f64) -> f64 =
 #[no_mangle]
 pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
     unsafe {
-        if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
+        let name = match env_name_from_header(name_ptr) {
+            Some(name) => name,
+            None => return,
+        };
+        if !env_name_is_settable(name) {
             return;
         }
-        let len = (*name_ptr).byte_len as usize;
-        let data_ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let name_bytes = std::slice::from_raw_parts(data_ptr, len);
-        let name = match std::str::from_utf8(name_bytes) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
+        let cache_name = env_cache_name_for_remove(name);
         std::env::remove_var(name);
+
+        let cached = CACHED_ENV.with(|c| c.get());
+        if cached != 0.0 {
+            let obj = crate::value::js_nanbox_get_pointer(cached) as *mut crate::ObjectHeader;
+            if !obj.is_null() {
+                let key = js_string_from_bytes(cache_name.as_ptr(), cache_name.len() as u32);
+                with_env_cache_mutation(|| {
+                    crate::object::js_object_delete_field(obj, key);
+                });
+            }
+        }
     }
 }
 
@@ -1071,6 +1074,87 @@ pub extern "C" fn js_process_env() -> f64 {
 
 thread_local! {
     static CACHED_ENV: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    /// Prevent the cached object's internal mirror update from re-entering the
+    /// `process.env` object hooks and calling `set_var` / `remove_var` again.
+    static ENV_CACHE_MUTATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(windows)]
+thread_local! {
+    /// Folded Windows name -> first spelling exposed through Object.keys().
+    static ENV_KEY_CASING: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+unsafe fn env_name_from_header<'a>(name_ptr: *const StringHeader) -> Option<&'a str> {
+    if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let len = unsafe { (*name_ptr).byte_len as usize };
+    let data_ptr = unsafe { (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
+    std::str::from_utf8(unsafe { std::slice::from_raw_parts(data_ptr, len) }).ok()
+}
+
+fn with_env_cache_mutation<R>(f: impl FnOnce() -> R) -> R {
+    ENV_CACHE_MUTATION.with(|active| {
+        let previous = active.replace(true);
+        let result = f();
+        active.set(previous);
+        result
+    })
+}
+
+fn env_cache_mutation_active() -> bool {
+    ENV_CACHE_MUTATION.with(|active| active.get())
+}
+
+#[cfg(any(windows, test))]
+fn windows_env_key_identity(name: &str) -> String {
+    name.to_uppercase()
+}
+
+#[cfg(windows)]
+fn existing_windows_env_name(name: &str) -> Option<String> {
+    let identity = windows_env_key_identity(name);
+    std::env::vars()
+        .find(|(candidate, _)| windows_env_key_identity(candidate) == identity)
+        .map(|(candidate, _)| candidate)
+}
+
+#[cfg(windows)]
+fn env_cache_name_for_set(name: &str) -> String {
+    let identity = windows_env_key_identity(name);
+    ENV_KEY_CASING.with(|casing| {
+        let mut casing = casing.borrow_mut();
+        if let Some(existing) = casing.get(&identity) {
+            return existing.clone();
+        }
+        let display = existing_windows_env_name(name).unwrap_or_else(|| name.to_string());
+        casing.insert(identity, display.clone());
+        display
+    })
+}
+
+#[cfg(not(windows))]
+fn env_cache_name_for_set(name: &str) -> String {
+    name.to_string()
+}
+
+#[cfg(windows)]
+fn env_cache_name_for_remove(name: &str) -> String {
+    let identity = windows_env_key_identity(name);
+    ENV_KEY_CASING.with(|casing| {
+        casing
+            .borrow_mut()
+            .remove(&identity)
+            .or_else(|| existing_windows_env_name(name))
+            .unwrap_or_else(|| name.to_string())
+    })
+}
+
+#[cfg(not(windows))]
+fn env_cache_name_for_remove(name: &str) -> String {
+    name.to_string()
 }
 
 /// Is `value` the live `process.env` object? Writes to it must reach the real
@@ -1095,7 +1179,74 @@ pub fn is_process_env_ptr(addr: usize) -> bool {
     if cached == 0.0 {
         return false;
     }
+    let addr = if (addr as u64) >> 48 == 0x7FFD {
+        addr & crate::value::POINTER_MASK as usize
+    } else {
+        addr
+    };
     crate::value::js_nanbox_get_pointer(cached) as usize == addr
+}
+
+/// Intercept a generic property read on an aliased `process.env` object.
+///
+/// Direct `process.env.KEY` reads are lowered to `js_getenv_value`, but reads
+/// through `const env = process.env` use the ordinary object getter. Routing
+/// both through the OS is what supplies Windows' case-insensitive semantics.
+pub(crate) fn process_env_get_field(
+    obj: *const crate::ObjectHeader,
+    key: *const StringHeader,
+) -> Option<JSValue> {
+    if !is_process_env_ptr(obj as usize) {
+        return None;
+    }
+    let value = js_getenv(key);
+    if value.is_null() {
+        // Node's environment interceptor declines an absent key so inherited
+        // Object.prototype properties (for example `env.toString`) can still
+        // resolve through the ordinary path.
+        None
+    } else {
+        Some(JSValue::string_ptr(value))
+    }
+}
+
+/// Intercept a generic property write on an aliased `process.env` object.
+pub(crate) fn process_env_set_field(
+    obj: *mut crate::ObjectHeader,
+    key: *const StringHeader,
+    value: f64,
+) -> bool {
+    if env_cache_mutation_active() || !is_process_env_ptr(obj as usize) {
+        return false;
+    }
+    js_setenv(key, value);
+    true
+}
+
+/// Intercept a generic property delete on an aliased `process.env` object.
+pub(crate) fn process_env_delete_field(
+    obj: *mut crate::ObjectHeader,
+    key: *const StringHeader,
+) -> Option<i32> {
+    if env_cache_mutation_active() || !is_process_env_ptr(obj as usize) {
+        return None;
+    }
+    js_removeenv(key);
+    Some(1)
+}
+
+/// Query an environment key without consulting the case-sensitive materialized
+/// object. `std::env` delegates to the case-insensitive OS environment block on
+/// Windows and remains byte/case-sensitive on Unix.
+pub(crate) fn process_env_has_field(
+    obj: *const crate::ObjectHeader,
+    key: *const StringHeader,
+) -> Option<bool> {
+    if !is_process_env_ptr(obj as usize) {
+        return None;
+    }
+    let name = unsafe { env_name_from_header(key) };
+    Some(name.is_some_and(|name| std::env::var_os(name).is_some()))
 }
 
 /// `std::env::set_var` PANICS — and, being called from an `extern "C"` frame,
@@ -1121,6 +1272,13 @@ fn js_process_env_impl() -> f64 {
     let alloc_limit = std::cmp::max(vars.len() as u32, crate::object::INLINE_SLOT_FLOOR as u32);
     let obj = crate::object::js_object_alloc(0, alloc_limit);
     for (k, v) in &vars {
+        #[cfg(windows)]
+        ENV_KEY_CASING.with(|casing| {
+            casing
+                .borrow_mut()
+                .entry(windows_env_key_identity(k))
+                .or_insert_with(|| k.clone());
+        });
         let key = js_string_from_bytes(k.as_ptr(), k.len() as u32);
         let val = js_string_from_bytes(v.as_ptr(), v.len() as u32);
         let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
@@ -1794,3 +1952,58 @@ static KEEP_JS_PROCESS_REF: extern "C" fn(f64) -> f64 = js_process_ref;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_PROCESS_UNREF: extern "C" fn(f64) -> f64 = js_process_unref;
+
+#[cfg(test)]
+mod env_object_tests {
+    use super::*;
+
+    const TEST_KEY: &str = "PERRY_ENV_ALIAS_RUNTIME_TEST_6622";
+
+    #[test]
+    fn windows_key_identity_is_case_insensitive() {
+        assert_eq!(windows_env_key_identity("Path"), "PATH");
+        assert_eq!(
+            windows_env_key_identity("perry_Mixed_Case"),
+            windows_env_key_identity("PERRY_mIXED_cASE")
+        );
+    }
+
+    #[test]
+    fn aliased_env_object_routes_get_set_has_and_delete_to_the_os() {
+        std::env::remove_var(TEST_KEY);
+
+        let env = js_process_env();
+        let obj = crate::value::js_nanbox_get_pointer(env) as *mut crate::ObjectHeader;
+        assert!(!obj.is_null());
+
+        let set_key = js_string_from_bytes(TEST_KEY.as_ptr(), TEST_KEY.len() as u32);
+        let value = "through-alias";
+        let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+        let value_boxed = f64::from_bits(JSValue::string_ptr(value_ptr).bits());
+        crate::object::js_object_set_field_by_name(obj, set_key, value_boxed);
+
+        let lookup_name = if cfg!(windows) {
+            TEST_KEY.to_ascii_lowercase()
+        } else {
+            TEST_KEY.to_string()
+        };
+        let lookup_key = js_string_from_bytes(lookup_name.as_ptr(), lookup_name.len() as u32);
+        let got = crate::object::js_object_get_field_by_name(obj, lookup_key);
+        assert_eq!(read_js_string_lossy(f64::from_bits(got.bits())), value);
+
+        let key_boxed = f64::from_bits(JSValue::string_ptr(lookup_key).bits());
+        assert_ne!(
+            crate::value::js_is_truthy(crate::object::js_object_has_property(env, key_boxed)),
+            0
+        );
+        assert_ne!(
+            crate::value::js_is_truthy(crate::object::js_object_has_own(env, key_boxed)),
+            0
+        );
+
+        assert_eq!(crate::object::js_object_delete_field(obj, lookup_key), 1);
+        assert!(std::env::var_os(TEST_KEY).is_none());
+        let got = crate::object::js_object_get_field_by_name(obj, set_key);
+        assert!(got.is_undefined());
+    }
+}

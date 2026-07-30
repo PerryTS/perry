@@ -237,6 +237,9 @@ pub(crate) unsafe fn own_key_present(
     if obj.is_null() || (obj as usize) < 0x10000 || (obj as usize) & 0x7 != 0 || key.is_null() {
         return false;
     }
+    if let Some(present) = crate::process::process_env_has_field(obj, key) {
+        return present;
+    }
     // Only a genuine `GC_TYPE_OBJECT` carries a `keys_array` at ObjectHeader
     // offset 16. A non-object receiver that still cleared the alignment/range
     // guard above — most importantly a real `Map`/`Set`, whose 16-byte header

@@ -422,6 +422,12 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // Aliased `process.env` writes must update the OS environment, not only the
+    // materialized object's field bag. The helper declines internal cache
+    // mirror writes so those can proceed through the ordinary setter below.
+    if crate::process::process_env_set_field(obj, key, value) {
+        return;
+    }
     // #5135: the receiver may be a Proxy id arriving with its NaN-box tag
     // already masked off (the `obj.prop++` / `PropertyUpdate` codegen path
     // hands us the bare pointer band, not the full POINTER_TAG value). A Proxy
