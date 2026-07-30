@@ -502,6 +502,10 @@ pub(super) fn compile_closure(
     // keeps its declared type at its read sites. NOT the typed-ABI capture
     // map — the typed closure clones take `module_local_types` instead.
     module_receiver_types: &HashMap<u32, perry_hir::types::Type>,
+    // Reassignments from every executable body in the module. Captured locals
+    // inherit module-wide receiver types, so their invalidation scope must be
+    // module-wide too.
+    module_reassigned_locals: &HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
 ) -> Result<()> {
@@ -778,6 +782,9 @@ pub(super) fn compile_closure(
         std::collections::HashSet::new()
     };
 
+    let mut reassigned_locals = module_reassigned_locals.clone();
+    reassigned_locals.extend(crate::collectors::reassigned_locals(body));
+
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -787,7 +794,7 @@ pub(super) fn compile_closure(
         native_facts: &native_facts,
         locals,
         local_types,
-        reassigned_locals: crate::collectors::reassigned_locals(body),
+        reassigned_locals,
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,

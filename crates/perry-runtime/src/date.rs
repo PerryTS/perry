@@ -1717,6 +1717,7 @@ mod tests {
             // The three UTC calendar getters must nevertheless keep the UTC
             // date, while the old delegation to local getters returned 19.
             let timestamp = 1_750_377_600_000.0;
+            assert_eq!(js_date_get_date(timestamp), 19.0);
             assert_eq!(js_date_get_utc_full_year(timestamp), 2025.0);
             assert_eq!(js_date_get_utc_month(timestamp), 5.0);
             assert_eq!(js_date_get_utc_date(timestamp), 20.0);

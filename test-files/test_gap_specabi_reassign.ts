@@ -21,3 +21,15 @@ console.log("plain:", first(P), P[1], P.length);
 P = new Int32Array(1);
 P[0] = 123;
 console.log("third:", first(P), P.length);
+
+// #7052 review regression: closure receiver-type facts are module-wide, so
+// reassignment invalidation must include the enclosing body too. The closure
+// must observe the replacement plain array through generic property access.
+function capturedAfterReassign(): string {
+  let captured: Int32Array = new Int32Array([5]);
+  const read = (): string => `${captured[0]}:${captured.length}`;
+  captured = [77, 88] as any;
+  return read();
+}
+
+console.log("captured:", capturedAfterReassign());

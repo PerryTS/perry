@@ -229,6 +229,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         output_type,
     };
 
+    let module_reassigned_locals = crate::collectors::reassigned_locals_in_module(hir);
+
     for (func_id, closure_expr) in closures {
         if cross_module.typed_f64_closures.contains(func_id) {
             compile_typed_f64_closure(
@@ -288,6 +290,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             module_prefix,
             module_boxed_vars,
             module_receiver_types,
+            &module_reassigned_locals,
             closure_rest_params,
             cross_module,
         )

@@ -125,6 +125,16 @@ pub(crate) fn reassigned_locals(stmts: &[Stmt]) -> HashSet<u32> {
     scan.writes
 }
 
+/// Every local reassigned in any executable body in `hir`.
+///
+/// Closure codegen seeds receiver types from module-wide declarations, so it
+/// must pair that oracle with the equally broad reassignment set. Otherwise a
+/// closure can specialize a captured receiver from its declared type even
+/// after an enclosing body has replaced the binding with another value.
+pub(crate) fn reassigned_locals_in_module(hir: &Module) -> HashSet<u32> {
+    scan_whole_module(hir).writes
+}
+
 /// Single-id convenience over [`reassigned_locals`].
 #[cfg(test)]
 pub(crate) fn local_is_reassigned(stmts: &[Stmt], id: u32) -> bool {

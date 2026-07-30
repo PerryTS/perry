@@ -78,7 +78,8 @@ pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
 pub(crate) use spec_abi_sites::{
-    collect_spec_abi_facts, reassigned_locals, SpecParamRep, SpecTaBinding,
+    collect_spec_abi_facts, reassigned_locals, reassigned_locals_in_module, SpecParamRep,
+    SpecTaBinding,
 };
 pub(crate) use this_as_value::{
     class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,
