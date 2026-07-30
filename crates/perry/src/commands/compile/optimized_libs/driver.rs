@@ -41,6 +41,18 @@ pub(crate) fn build_optimized_libs(
     let imports_fastify = iteration_set
         .iter()
         .any(|m| m.strip_prefix("node:").unwrap_or(m) == "fastify");
+    let imports_undici = iteration_set
+        .iter()
+        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "undici");
+    if imports_undici && !use_well_known {
+        eprintln!(
+            "error: `import 'undici'` requires the external perry-ext-undici wrapper, but the \
+             well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). There is no in-stdlib undici \
+             namespace fallback; unset PERRY_DISABLE_WELL_KNOWN so undici routes to \
+             perry-ext-undici."
+        );
+        std::process::exit(1);
+    }
     if imports_fastify && !use_well_known {
         eprintln!(
             "error: `import 'fastify'` requires the external perry-ext-fastify wrapper, but the \

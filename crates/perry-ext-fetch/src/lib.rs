@@ -245,8 +245,8 @@ fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client,
 }
 
 /// Install (or clear) the process-wide fetch proxy. Called by
-/// perry-ext-undici's `setGlobalDispatcher` glue. A null/empty `uri_ptr`
-/// clears the proxy (an undici `Agent` dispatcher = direct connections).
+/// perry-ext-undici's `setGlobalDispatcher` glue. A null `uri_ptr` clears
+/// the proxy (an undici `Agent` dispatcher = direct connections).
 /// Returns 1.0 on success, 0.0 when the proxy URI/token is invalid (the
 /// current proxy state is left unchanged in that case).
 ///
@@ -257,14 +257,16 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
     uri_ptr: *const StringHeader,
     token_ptr: *const StringHeader,
 ) -> f64 {
-    let uri = read_str(uri_ptr).unwrap_or_default();
-    if uri.is_empty() {
+    if uri_ptr.is_null() {
         if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
             *guard = None;
             return 1.0;
         }
         return 0.0;
     }
+    let Some(uri) = read_str(uri_ptr).filter(|uri| !uri.is_empty()) else {
+        return 0.0;
+    };
     let token = read_str(token_ptr).filter(|t| !t.is_empty());
     match build_proxy_client(&uri, token.as_deref()) {
         Ok(client) => {
