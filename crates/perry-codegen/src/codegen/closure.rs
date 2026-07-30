@@ -1266,7 +1266,7 @@ mod tests {
             .find(|f| {
                 let name_starts_here = f.starts_with("double @perry_closure_")
                     || f.starts_with("internal double @perry_closure_");
-                name_starts_here && f.contains("@js_shadow_frame_push")
+                name_starts_here && f.contains("@js_shadow_frame_enter")
             })
             .unwrap_or_else(|| panic!("no shadow-framed closure body in IR:\n{ir}"));
 

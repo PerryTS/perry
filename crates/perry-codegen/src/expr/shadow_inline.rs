@@ -292,3 +292,283 @@ fn emit_inline_root_shading_barrier(ctx: &mut FnCtx<'_>, value_bits: &str, done_
         .call_void("js_write_barrier_root_nanbox", &[(I64, value_bits)]);
     ctx.block().br(done_label);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Function, Module as HirModule, Param, Stmt};
+
+    /// A function with one pointer-typed local, reassigned first from another
+    /// pointer-typed local (forcing a root bind) and then from a number
+    /// (forcing the "dead from here" clear).
+    fn rooted_local_ir() -> String {
+        let mut hir = HirModule::new("inline_shadow_slot_test");
+        hir.functions.push(Function {
+            id: 0,
+            name: "roots".to_string(),
+            type_params: Vec::new(),
+            params: vec![Param {
+                id: 0,
+                name: "o".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            }],
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 1,
+                    name: "a".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::LocalGet(0)),
+                },
+                // pointer-capable store -> root bind
+                Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(0)))),
+                // proven-non-pointer store -> root clear
+                Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(1.0)))),
+                Stmt::Return(Some(Expr::LocalGet(1))),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let opts = crate::CompileOptions {
+            emit_ir_only: true,
+            ..Default::default()
+        };
+        let bytes = crate::compile_module(&hir, opts).expect("test module compiles");
+        String::from_utf8(bytes).expect("LLVM IR is UTF-8")
+    }
+
+    fn roots_body(ir: &str) -> String {
+        ir.split("\ndefine ")
+            .find(|f| f.contains("@perry_fn_inline_shadow_slot_test__roots("))
+            .unwrap_or_else(|| panic!("no `roots` body in IR:\n{ir}"))
+            .to_string()
+    }
+
+    /// Every emitted inline-store block, in order.
+    fn store_blocks(body: &str) -> Vec<String> {
+        let mut blocks: Vec<String> = Vec::new();
+        let mut current: Option<String> = None;
+        for line in body.lines() {
+            if line.starts_with("ss.store.") {
+                current = Some(String::new());
+                continue;
+            }
+            if let Some(buf) = current.as_mut() {
+                if line.trim().starts_with("br ") {
+                    blocks.push(std::mem::take(buf));
+                    current = None;
+                } else {
+                    buf.push_str(line);
+                    buf.push('\n');
+                }
+            }
+        }
+        assert!(
+            !blocks.is_empty(),
+            "no inline shadow-slot store block emitted; body:\n{body}"
+        );
+        blocks
+    }
+
+    /// The register holding the entry address in a store block: the operand of
+    /// the `shl`-indexed `getelementptr` into the entry buffer.
+    fn entry_reg(blk: &str) -> String {
+        for line in blk.lines() {
+            // `  %rN = getelementptr inbounds i8, ptr %rBUF, i64 %rSHIFTED`
+            if line.contains("getelementptr inbounds i8, ptr %") && line.trim_end().ends_with(|c: char| c.is_ascii_digit())
+                && line.contains(", i64 %")
+            {
+                if let Some(name) = line.trim().split(" = ").next() {
+                    return name.trim_start_matches('%').to_string();
+                }
+            }
+        }
+        panic!("no entry-address getelementptr in store block:\n{blk}");
+    }
+
+    /// The block that performs a *bind* (mirrors a value and sets the liveness
+    /// bit), located by content so the fixture's statement order can change
+    /// without silently testing the wrong block.
+    fn bind_block(body: &str) -> String {
+        store_blocks(body)
+            .into_iter()
+            .find(|b| b.contains("select i1 ") && b.contains("ptrtoint ptr "))
+            .unwrap_or_else(|| panic!("no inline bind block in:\n{body}"))
+    }
+
+    /// The block that performs a *clear* (zeroes the mirror, masks the
+    /// liveness bit out of meta).
+    fn clear_block(body: &str) -> String {
+        store_blocks(body)
+            .into_iter()
+            .find(|b| b.contains("store i64 0, ptr %"))
+            .unwrap_or_else(|| panic!("no inline clear block in:\n{body}"))
+    }
+
+    /// The frame push must go through `js_shadow_frame_enter` and derive the
+    /// pop handle from `frame_top`, because the state pointer — not the handle
+    /// — is what the inline stores need.
+    ///
+    /// Sabotage check: point `shadow_frame_push_line` back at
+    /// `js_shadow_frame_push` and the first two assertions fail; drop the
+    /// `sub` in `shadow_frame_handle_lines` and the last one does.
+    #[test]
+    fn frame_push_uses_frame_enter_and_derives_the_handle() {
+        let body = roots_body(&rooted_local_ir());
+        assert!(
+            body.contains("call ptr @js_shadow_frame_enter(i32 "),
+            "frame push must go through js_shadow_frame_enter; body:\n{body}"
+        );
+        assert!(
+            !body.contains("@js_shadow_frame_push("),
+            "the handle-returning push must no longer be emitted; body:\n{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "getelementptr inbounds i8, ptr %r3, i64 {}",
+                SHADOW_STATE_FRAME_TOP_OFFSET
+            )) || body.contains(&format!(", i64 {}\n", SHADOW_STATE_FRAME_TOP_OFFSET)),
+            "handle recovery must load ShadowStackState::frame_top at offset \
+             {SHADOW_STATE_FRAME_TOP_OFFSET}; body:\n{body}"
+        );
+        assert!(
+            body.contains(&format!("sub i64 %r5, {}", SHADOW_STACK_HEADER_SLOTS)),
+            "pop handle must be frame_top - {SHADOW_STACK_HEADER_SLOTS}; body:\n{body}"
+        );
+    }
+
+    /// The hot per-store root write must be a store, not a call.
+    ///
+    /// Sabotage check: make `emit_inline_slot_bind` return `false` and there is
+    /// no `ss.store` block at all.
+    #[test]
+    fn pointer_store_roots_inline_with_the_runtime_entry_layout() {
+        let body = roots_body(&rooted_local_ir());
+        let blk = bind_block(&body);
+        assert!(
+            blk.contains(&format!(", {}\n", SHADOW_ENTRY_SHIFT)) && blk.contains("shl i64 %"),
+            "entry address must index the buffer by shifting the slot index by \
+             {SHADOW_ENTRY_SHIFT}; block:\n{blk}"
+        );
+        assert!(
+            blk.contains(&format!(
+                "getelementptr inbounds i8, ptr %{}, i64 {}",
+                entry_reg(&blk),
+                SHADOW_ENTRY_META_OFFSET
+            )),
+            "meta word must sit at offset {SHADOW_ENTRY_META_OFFSET} of the \
+             entry; block:\n{blk}"
+        );
+        assert!(
+            blk.contains(&format!(", {}\n", SHADOW_SLOT_ACTIVE_BIT)) && blk.contains("or i64 %"),
+            "inline bind must set the liveness bit in meta, or the scanner \
+             skips the root; block:\n{blk}"
+        );
+        assert!(
+            blk.contains("select i1 %") && blk.contains(", i64 0\n"),
+            "inline bind must keep `bound_slot_meta`'s alignment fallback so a \
+             tag-colliding address is recorded unbound, never truncated; \
+             block:\n{blk}"
+        );
+        // Both words written, value first.
+        assert!(
+            blk.matches("store i64 %").count() == 2,
+            "inline bind must write both the mirrored value and meta; \
+             block:\n{blk}"
+        );
+    }
+
+    /// Both guards must be present. Dropping the sentinel test is not a missing
+    /// safety net but a corruption: `usize::MAX + idx` wraps to `idx - 1`,
+    /// which passes a `slot < len` test and overwrites a *live* entry of
+    /// another frame — the same wrap-around class #7079 fixed in `frame_pop`.
+    ///
+    /// Sabotage check: delete either guard from `emit_inline_slot_write`.
+    #[test]
+    fn inline_store_keeps_the_sentinel_and_bounds_guards() {
+        let body = roots_body(&rooted_local_ir());
+        assert!(
+            body.contains("ss.chk_top") && body.contains("ss.chk_len"),
+            "inline store must keep both guards; body:\n{body}"
+        );
+        assert!(
+            body.contains("icmp eq i64 %r13, -1"),
+            "frame_top must be tested against the usize::MAX no-frame sentinel; \
+             body:\n{body}"
+        );
+        assert!(
+            body.contains("icmp ult i64 %r15, %r17"),
+            "slot index must be bounds-checked against ShadowStackState::len; \
+             body:\n{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "getelementptr inbounds i8, ptr %r10, i64 {}",
+                SHADOW_STATE_LEN_OFFSET
+            )),
+            "the bounds check must read len at offset {SHADOW_STATE_LEN_OFFSET}; \
+             body:\n{body}"
+        );
+    }
+
+    /// The incremental-mark root shading barrier must survive inlining, gated
+    /// on the counter the runtime uses.
+    ///
+    /// Sabotage check: drop the `emit_inline_root_shading_barrier` call — a
+    /// pointer written into a root after the collector scanned roots is then
+    /// never shaded, and an in-flight incremental cycle frees a live object.
+    #[test]
+    fn inline_bind_keeps_the_gated_root_shading_barrier() {
+        let body = roots_body(&rooted_local_ir());
+        assert!(
+            body.contains(
+                "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst"
+            ),
+            "inline bind must gate on the incremental-mark active count; \
+             body:\n{body}"
+        );
+        assert!(
+            body.contains("call void @js_write_barrier_root_nanbox(i64 %r23)"),
+            "inline bind must shade the value it just stored when a cycle is in \
+             flight; body:\n{body}"
+        );
+    }
+
+    /// The clear must drop the liveness bit while keeping the binding, so a
+    /// later re-activation still writes through to the same compiled local.
+    ///
+    /// Sabotage check: zero the whole meta word instead of masking and the
+    /// `-2` constant disappears.
+    #[test]
+    fn dead_local_clear_is_inline_and_preserves_the_binding() {
+        let body = roots_body(&rooted_local_ir());
+        let blk = clear_block(&body);
+        let mask = !(SHADOW_SLOT_ACTIVE_BIT as i64);
+        assert!(
+            blk.contains(&format!(", {}\n", mask)) && blk.contains("and i64 %"),
+            "inline clear must AND meta with !SLOT_ACTIVE ({mask}), keeping the \
+             bound address; block:\n{blk}"
+        );
+        assert!(
+            blk.contains("store i64 0, ptr %"),
+            "inline clear must zero the mirrored value; block:\n{blk}"
+        );
+        assert!(
+            !blk.contains("@js_write_barrier_root_nanbox"),
+            "a zero value is not a heap reference and needs no shading; \
+             block:\n{blk}"
+        );
+    }
+}
