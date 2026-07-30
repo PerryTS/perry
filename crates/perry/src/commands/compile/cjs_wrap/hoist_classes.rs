@@ -266,6 +266,42 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
             iife_locals.push(injected.to_string());
         }
     }
+    // #6585: function declarations are IIFE-local too. Ajv declares
+    // `function addNames(...)` after several classes whose getters call it.
+    // Hoisting those classes out of the CJS IIFE severed the function binding,
+    // so the getters fell through to a global read and threw
+    // `ReferenceError: addNames is not defined`.
+    //
+    // Preserve class identity whenever possible: a capture-free helper can be
+    // duplicated at module scope (the original stays in the IIFE), allowing
+    // the class to keep using the established hoist path. A helper that reads
+    // any IIFE binding, sibling helper, or class cannot be duplicated safely;
+    // add only those unsafe names to `iife_locals`, which keeps their dependent
+    // classes inside the wrapper.
+    let function_decls = collect_top_level_function_decls(source);
+    let function_names: Vec<String> = function_decls.iter().map(|f| f.name.clone()).collect();
+    let class_names = top_level_class_names(source);
+    let exported_names = super::extract_exports::extract_exports_from_source(source);
+    let mut unsafe_function_names = Vec::new();
+    for decl in &function_decls {
+        let mut blockers = iife_locals.clone();
+        blockers.extend(class_names.iter().cloned());
+        blockers.extend(
+            function_names
+                .iter()
+                .filter(|name| *name != &decl.name)
+                .cloned(),
+        );
+        let unsafe_to_duplicate = class_body_references_any(&decl.block_text, &blockers)
+            || super::extract_requires::identifier_is_reassigned(source, &decl.name)
+            || exported_names.contains(&decl.name);
+        if unsafe_to_duplicate {
+            unsafe_function_names.push(decl.name.clone());
+            if !iife_locals.contains(&decl.name) {
+                iife_locals.push(decl.name.clone());
+            }
+        }
+    }
 
     let mut i = 0usize;
     while i < bytes.len() {
@@ -438,6 +474,12 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
     let mut kept: Vec<bool> = candidates.iter().map(|c| c.references_iife_local).collect();
     loop {
         let mut changed = false;
+        let kept_names: Vec<String> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| kept[*idx])
+            .map(|(_, cand)| cand.name.clone())
+            .collect();
         for idx in 0..candidates.len() {
             if kept[idx] {
                 continue;
@@ -456,20 +498,38 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
                     }
                 }
             }
+            // A class can depend on a kept sibling without extending it
+            // (`CodeGen.run()` does `new ParentNode()`). Once one class must
+            // stay in the IIFE, keep every class whose body references it,
+            // iterating to a fixpoint for longer dependency chains.
+            if !kept[idx] && class_body_references_any(candidates[idx].block_text, &kept_names) {
+                kept[idx] = true;
+                changed = true;
+            }
         }
         if !changed {
             break;
         }
     }
 
-    let mut hoisted_blocks: Vec<&str> = Vec::new();
+    let mut hoisted_blocks: Vec<String> = function_decls
+        .iter()
+        .filter(|decl| !unsafe_function_names.contains(&decl.name))
+        .filter(|decl| {
+            candidates.iter().enumerate().any(|(idx, cand)| {
+                !kept[idx]
+                    && class_body_references_any(cand.block_text, std::slice::from_ref(&decl.name))
+            })
+        })
+        .map(|decl| decl.block_text.clone())
+        .collect();
     let mut hoisted_names: Vec<String> = Vec::new();
     let mut elided: Vec<(usize, usize)> = Vec::new();
     for (idx, cand) in candidates.iter().enumerate() {
         if kept[idx] {
             continue;
         }
-        hoisted_blocks.push(cand.block_text);
+        hoisted_blocks.push(cand.block_text.to_string());
         hoisted_names.push(cand.name.clone());
         elided.push((cand.line_start, cand.end));
     }
@@ -817,6 +877,136 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
     }
 
     names
+}
+
+struct TopLevelFunctionDecl {
+    name: String,
+    block_text: String,
+}
+
+/// Collect depth-zero function declarations from a CommonJS source, including
+/// their exact source blocks. The comment/string/regex masker preserves byte
+/// positions, letting this scan balance braces without mistaking literal
+/// contents for code.
+fn collect_top_level_function_decls(source: &str) -> Vec<TopLevelFunctionDecl> {
+    fn is_ident_byte(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+    fn skip_horizontal_space(bytes: &[u8], mut i: usize) -> usize {
+        while bytes.get(i).is_some_and(|b| matches!(b, b' ' | b'\t')) {
+            i += 1;
+        }
+        i
+    }
+
+    let stripped = super::detect::strip_comments_and_strings(source);
+    let bytes = stripped.as_bytes();
+    let mut decls = Vec::new();
+    let mut depth: i32 = 0;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let at_line_start = i == 0 || bytes[i - 1] == b'\n';
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        if !at_line_start || depth != 0 {
+            i += 1;
+            continue;
+        }
+
+        let mut cursor = skip_horizontal_space(bytes, i);
+        if bytes.get(cursor..cursor + 5) == Some(b"async")
+            && bytes
+                .get(cursor + 5)
+                .is_some_and(|b| matches!(b, b' ' | b'\t'))
+        {
+            cursor = skip_horizontal_space(bytes, cursor + 5);
+        }
+        if bytes.get(cursor..cursor + 8) != Some(b"function")
+            || bytes.get(cursor + 8).is_some_and(|b| is_ident_byte(*b))
+        {
+            i += 1;
+            continue;
+        }
+        cursor = skip_horizontal_space(bytes, cursor + 8);
+        if bytes.get(cursor) == Some(&b'*') {
+            cursor = skip_horizontal_space(bytes, cursor + 1);
+        }
+        let start = cursor;
+        while bytes.get(cursor).is_some_and(|b| is_ident_byte(*b)) {
+            cursor += 1;
+        }
+        if cursor == start {
+            i += 1;
+            continue;
+        }
+        let name = String::from_utf8_lossy(&bytes[start..cursor]).into_owned();
+
+        // Find the body opener, ignoring braces in destructured/default
+        // parameters while the parameter list is still open.
+        let mut paren_depth: i32 = 0;
+        let mut body_start = None;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'(' | b'[' => paren_depth += 1,
+                b')' | b']' => paren_depth -= 1,
+                b'{' if paren_depth == 0 => {
+                    body_start = Some(cursor);
+                    break;
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        let Some(body_start) = body_start else {
+            i += 1;
+            continue;
+        };
+
+        let mut body_depth: i32 = 0;
+        let mut end = body_start;
+        while end < bytes.len() {
+            match bytes[end] {
+                b'{' => body_depth += 1,
+                b'}' => {
+                    body_depth -= 1;
+                    if body_depth == 0 {
+                        end += 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            end += 1;
+        }
+        if body_depth != 0 || end <= body_start {
+            i += 1;
+            continue;
+        }
+
+        if !name.is_empty()
+            && !decls
+                .iter()
+                .any(|decl: &TopLevelFunctionDecl| decl.name == name)
+        {
+            decls.push(TopLevelFunctionDecl {
+                name,
+                block_text: source[i..end].to_string(),
+            });
+        }
+        i = end;
+    }
+    decls
 }
 
 /// Issue #4933 — collect the names of every **top-level** `class <Name>`

@@ -99,6 +99,121 @@ fn source_map_redirects_when_no_declaration_map() {
 }
 
 #[test]
+fn hybrid_cjs_emit_input_keeps_published_javascript_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package_dir = write_dist_package(dir.path());
+    let original = package_dir.join("internal/entry.ts");
+    fs::create_dir_all(original.parent().expect("source parent")).expect("mkdir source parent");
+    fs::write(
+        &original,
+        "class Ajv {}\nmodule.exports = exports = Ajv\nexport default Ajv\n",
+    )
+    .expect("write hybrid source");
+    fs::write(
+        package_dir.join("dist/index.js.map"),
+        serde_json::json!({
+            "version": 3,
+            "file": "index.js",
+            "sources": ["../internal/entry.ts"],
+            "names": [],
+            "mappings": ""
+        })
+        .to_string(),
+    )
+    .expect("write js.map");
+
+    assert_eq!(resolve_package_source_entry(&package_dir, None), None);
+}
+
+#[test]
+fn hybrid_src_index_convention_keeps_published_javascript_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package_dir = write_dist_package(dir.path());
+    fs::create_dir_all(package_dir.join("src")).expect("mkdir src");
+    fs::write(
+        package_dir.join("src/index.ts"),
+        "const plugin = () => {}\nmodule.exports = exports = plugin\nexport default plugin\n",
+    )
+    .expect("write hybrid source");
+
+    assert_eq!(resolve_package_source_entry(&package_dir, None), None);
+}
+
+#[test]
+fn hybrid_package_root_keeps_subpaths_on_published_javascript() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package_dir = write_dist_package(dir.path());
+    let root_source = write_source(&package_dir, "internal/root.ts");
+    fs::write(
+        &root_source,
+        "class Ajv {}\nmodule.exports = exports = Ajv\nexport default Ajv\n",
+    )
+    .expect("write hybrid root");
+    fs::write(
+        package_dir.join("dist/index.js.map"),
+        serde_json::json!({
+            "version": 3,
+            "file": "index.js",
+            "sources": ["../internal/root.ts"],
+            "names": [],
+            "mappings": ""
+        })
+        .to_string(),
+    )
+    .expect("write root map");
+
+    fs::write(package_dir.join("dist/helper.js"), "exports.helper = 1;\n").expect("helper js");
+    write_source(&package_dir, "internal/helper.ts");
+    fs::write(
+        package_dir.join("dist/helper.js.map"),
+        serde_json::json!({
+            "version": 3,
+            "file": "helper.js",
+            "sources": ["../internal/helper.ts"],
+            "names": [],
+            "mappings": ""
+        })
+        .to_string(),
+    )
+    .expect("write helper map");
+
+    assert_eq!(
+        resolve_package_source_entry(&package_dir, Some("dist/helper")),
+        None
+    );
+}
+
+#[test]
+fn nested_cjs_factory_does_not_defeat_esm_source_redirect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package_dir = write_dist_package(dir.path());
+    let original = package_dir.join("internal/entry.ts");
+    fs::create_dir_all(original.parent().expect("source parent")).expect("mkdir source parent");
+    fs::write(
+        &original,
+        "export function helper() {\n  module.exports = factory()\n}\n",
+    )
+    .expect("write esm source");
+    fs::write(
+        package_dir.join("dist/index.js.map"),
+        serde_json::json!({
+            "version": 3,
+            "file": "index.js",
+            "sources": ["../internal/entry.ts"],
+            "names": [],
+            "mappings": ""
+        })
+        .to_string(),
+    )
+    .expect("write js.map");
+
+    assert_eq!(
+        resolved_source(&package_dir),
+        Some(original.canonicalize().expect("canonical source"))
+    );
+}
+
+#[test]
 fn source_root_is_prepended_to_map_sources() {
     let dir = tempfile::tempdir().expect("tempdir");
     let package_dir = write_dist_package(dir.path());

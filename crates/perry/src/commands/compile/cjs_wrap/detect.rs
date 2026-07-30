@@ -359,6 +359,76 @@ pub fn has_top_level_esm(source: &str) -> bool {
     false
 }
 
+/// Returns true when a depth-zero statement assigns `module.exports`.
+///
+/// The input must already have comments and string/template contents masked by
+/// [`strip_comments_and_strings`]. This is deliberately narrower than
+/// [`is_commonjs`]: callers use it to distinguish a real top-level CommonJS
+/// epilogue from Rollup-style ESM that merely contains `module.exports` inside
+/// a nested factory.
+pub(in crate::commands::compile) fn has_top_level_module_exports_assignment(source: &str) -> bool {
+    fn is_ident_start(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphabetic()
+    }
+    fn is_ident_byte(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+    fn skip_space(bytes: &[u8], mut i: usize) -> usize {
+        while bytes
+            .get(i)
+            .is_some_and(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+        {
+            i += 1;
+        }
+        i
+    }
+
+    let bytes = source.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b if is_ident_start(b) => {
+                let start = i;
+                i += 1;
+                while i < bytes.len() && is_ident_byte(bytes[i]) {
+                    i += 1;
+                }
+                if depth != 0 || &bytes[start..i] != b"module" {
+                    continue;
+                }
+                let mut cursor = skip_space(bytes, i);
+                if bytes.get(cursor) != Some(&b'.') {
+                    continue;
+                }
+                cursor = skip_space(bytes, cursor + 1);
+                let exports_end = cursor + b"exports".len();
+                if bytes.get(cursor..exports_end) != Some(b"exports")
+                    || bytes.get(exports_end).is_some_and(|b| is_ident_byte(*b))
+                {
+                    continue;
+                }
+                cursor = skip_space(bytes, exports_end);
+                if bytes.get(cursor) == Some(&b'=')
+                    && !matches!(bytes.get(cursor + 1), Some(b'=' | b'>'))
+                {
+                    return true;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
+
 /// Returns true if `line` starts with `keyword` followed by a character
 /// that can legally begin an `import`/`export` statement's continuation:
 /// space, `{`, `*` (export only), `"`, `'`, or `(` (dynamic import). We

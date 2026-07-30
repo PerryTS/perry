@@ -3,15 +3,13 @@
 //! with their runtime `new Function` codegen evaluated by the dyn-eval
 //! interpreter.
 //!
-//! STATUS: find-my-way is now un-ignored and green (#6587: `x instanceof C`
-//! with a `null`/`undefined` LHS no longer throws — see
-//! `perry-runtime/src/object/instanceof.rs`). ajv and fast-json-stringify
-//! remain `#[ignore]`d on PRE-EXISTING perry CJS-compilation gaps at module
-//! load / library init, BEFORE any runtime-generated code runs (per-test
-//! reasons on the #[ignore] attributes). The interpreter itself is proven
-//! end-to-end against the captured generated-code shapes of these exact
-//! library versions in issue_6559_dyn_function_interpreter.rs (always-on,
-//! green). Un-ignore each remaining test as its CJS wall falls.
+//! STATUS: fast-json-stringify and find-my-way are un-ignored and green
+//! (#6586 and #6587 respectively). Ajv gets past the former CJS source-routing
+//! and `addNames` hoisting walls (#6586 / #6585), but remains `#[ignore]`d on
+//! the later generated-validator scope gap described on its attribute. The
+//! interpreter itself is proven end-to-end against the captured generated-code
+//! shapes of these exact library versions in
+//! issue_6559_dyn_function_interpreter.rs (always-on, green).
 //!
 //! Each test provisions its own tempdir project via `npm install` (pinned
 //! majors matching the versions the shapes were captured from). When npm or
@@ -194,11 +192,10 @@ fn compile_and_run(root: &Path, fixture: &str) -> (String, String) {
 /// a format (email via ajv-formats), pattern, enum, uniqueItems — compiled
 /// validators built by `new Function(self, scope, code)` at runtime.
 #[test]
-#[ignore = "blocked on a PRE-EXISTING perry CJS-compilation gap, not the #6559 interpreter: \
-ajv's dist/compile/codegen/index.js class methods call the module-level `addNames` declared \
-later in the file, which compiles to `ReferenceError: addNames is not defined` at runtime \
-(ajv imports + instantiates fine; ajv.compile() hits it before any generated code runs). \
-Run with PERRY_REQUIRE_NPM_E2E=1 -- --ignored once the CJS forward-reference hoisting gap is fixed."]
+#[ignore = "the #6586 hybrid-source routing and #6585 addNames hoisting walls are fixed; \
+ajv.compile() now reaches runtime-generated validator compilation and throws the later \
+`Error: CodeGen: ref must be passed in value` scope-binding gap. Keep this under #6559 \
+until that dynamic-code path is fixed."]
 fn real_ajv_compiled_validator() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
@@ -279,9 +276,6 @@ console.log("errors:", summary.join(";"));
 /// strings, numbers, booleans and a date-time — the serializer is generated
 /// by `new Function(validator, serializer, code)` at runtime.
 #[test]
-#[ignore = "blocked on a PRE-EXISTING perry CJS-compilation gap, not the #6559 interpreter: \
-the compiled fast-json-stringify module tree throws `ReferenceError: module is not defined` \
-at load. Run with PERRY_REQUIRE_NPM_E2E=1 -- --ignored once the CJS wrapping gap is fixed."]
 fn real_fast_json_stringify_serializer() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();

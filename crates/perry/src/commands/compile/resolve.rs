@@ -742,12 +742,54 @@ fn original_source_via_map(entry: &Path) -> Option<PathBuf> {
     original_source_from_map_file(&append_map_extension(entry))
 }
 
+/// A published CommonJS package can ship the TypeScript input to its CJS emit.
+/// Some such inputs are intentionally hybrid: normal ESM declarations for
+/// TypeScript plus a top-level `module.exports = ...` interop epilogue. The
+/// source is not a directly executable module in Perry: ESM classification
+/// leaves `module` unbound, while CJS wrapping would move its `export`
+/// declarations inside an IIFE. Node loads the emitted JS entry, so keep that
+/// entry instead of following its source map for this narrow shape (#6586).
+fn is_hybrid_cjs_emit_input(path: &Path) -> bool {
+    let Ok(source) = fs::read_to_string(path) else {
+        return false;
+    };
+    let stripped = super::cjs_wrap::detect::strip_comments_and_strings(&source);
+    super::cjs_wrap::detect::has_top_level_esm(&stripped)
+        && super::cjs_wrap::detect::has_top_level_module_exports_assignment(&stripped)
+}
+
+/// If a package's root TypeScript source is a hybrid CJS-emit input, keep the
+/// entire package graph on its published JavaScript. Mixing a `dist` root with
+/// source-mapped TypeScript subpaths creates duplicate module identities and
+/// reintroduces source-only semantics that Node never executes (Ajv's
+/// `dist/ajv.js` plus `lib/compile/codegen/index.ts` was the #6585/#6586
+/// combination).
+fn package_entry_requires_cjs_emit(package_dir: &Path) -> bool {
+    if let Some(entry) = resolve_package_entry(package_dir, None) {
+        if is_js_file(&entry) {
+            if original_source_via_map(&entry).is_some_and(|src| is_hybrid_cjs_emit_input(&src)) {
+                return true;
+            }
+        } else if is_hybrid_cjs_emit_input(&entry) {
+            return true;
+        }
+    }
+
+    let src_index = package_dir.join("src").join("index");
+    resolve_with_extensions(&src_index)
+        .is_some_and(|src| !is_js_file(&src) && is_hybrid_cjs_emit_input(&src))
+}
+
 /// Resolve package entry preferring TypeScript source over compiled JS output.
 /// Used for compile_packages where we want to compile from TS source, not bundled JS.
 pub(super) fn resolve_package_source_entry(
     package_dir: &Path,
     subpath: Option<&str>,
 ) -> Option<PathBuf> {
+    if package_entry_requires_cjs_emit(package_dir) {
+        return None;
+    }
+
     let normal_entry = resolve_package_entry(package_dir, subpath);
 
     // #2569 step 5: the most authoritative pointer to a package's original
@@ -759,7 +801,9 @@ pub(super) fn resolve_package_source_entry(
     if let Some(entry) = normal_entry.as_ref() {
         if is_js_file(entry) {
             if let Some(original) = original_source_via_map(entry) {
-                return Some(original);
+                if !is_hybrid_cjs_emit_input(&original) {
+                    return Some(original);
+                }
             }
         }
     }
@@ -768,7 +812,7 @@ pub(super) fn resolve_package_source_entry(
     if let Some(sub) = subpath {
         let src_path = package_dir.join("src").join(sub);
         if let Some(resolved) = resolve_with_extensions(&src_path) {
-            if !is_js_file(&resolved) {
+            if !is_js_file(&resolved) && !is_hybrid_cjs_emit_input(&resolved) {
                 return Some(resolved);
             }
         }
@@ -777,7 +821,7 @@ pub(super) fn resolve_package_source_entry(
     // Try src/index.ts (most common TS source entry)
     let src_index = package_dir.join("src").join("index");
     if let Some(resolved) = resolve_with_extensions(&src_index) {
-        if !is_js_file(&resolved) {
+        if !is_js_file(&resolved) && !is_hybrid_cjs_emit_input(&resolved) {
             return Some(resolved);
         }
     }
@@ -787,7 +831,7 @@ pub(super) fn resolve_package_source_entry(
     if is_js_file(&normal_entry) {
         // Try .ts equivalent of the .js entry
         let ts_path = normal_entry.with_extension("ts");
-        if ts_path.exists() {
+        if ts_path.exists() && !is_hybrid_cjs_emit_input(&ts_path) {
             return Some(ts_path);
         }
         // Check src/ directory mirror of lib/ or dist/ path
@@ -801,7 +845,7 @@ pub(super) fn resolve_package_source_entry(
                 };
                 if let Ok(rest) = stripped {
                     let src_equiv = package_dir.join("src").join(rest).with_extension("ts");
-                    if src_equiv.exists() {
+                    if src_equiv.exists() && !is_hybrid_cjs_emit_input(&src_equiv) {
                         return Some(src_equiv);
                     }
                 }

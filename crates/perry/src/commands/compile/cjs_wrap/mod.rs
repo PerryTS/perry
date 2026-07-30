@@ -42,6 +42,9 @@ mod extract_requires;
 mod hoist_classes;
 mod wrap;
 
+#[cfg(test)]
+mod issue_6585_tests;
+
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
 use detect::is_js_reserved_word;
 use extract_exports::{
