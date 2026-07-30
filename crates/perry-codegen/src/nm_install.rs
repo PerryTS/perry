@@ -48,6 +48,11 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "sea" => Some("js_nm_install_sea"),
         "sqlite" => Some("js_nm_install_sqlite"),
         "stream" => Some("js_nm_install_stream"),
+        // `node:test` is exposed as a top-level core module in HIR, but its
+        // callable exports live in the submodule registry. Value reads such as
+        // the default import must arm that registry before asking the generic
+        // native-module property dispatcher for `default` / `test`.
+        "test" => Some("js_node_submod_install_test"),
         "timers" => Some("js_nm_install_timers"),
         "tls" => Some("js_nm_install_tls"),
         "tty" => Some("js_nm_install_tty"),
@@ -164,6 +169,18 @@ pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::nm_install_symbol;
+
+    #[test]
+    fn top_level_test_module_installs_its_submodule_registry() {
+        assert_eq!(
+            nm_install_symbol("test"),
+            Some("js_node_submod_install_test")
+        );
+        assert_eq!(
+            nm_install_symbol("node:test"),
+            Some("js_node_submod_install_test")
+        );
+    }
 
     #[test]
     fn path_slash_submodules_install_the_path_dispatch_bucket() {

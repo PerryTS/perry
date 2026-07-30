@@ -1145,8 +1145,13 @@ fn ensure_export_singleton(
     submod: &'static SubmoduleSpec,
     export: &'static ExportSpec,
 ) -> *mut ClosureHeader {
-    let key_name = if submod.key == "test" && matches!(export.name, "default" | "test") {
-        find_export(submod, "test")
+    let key_name = if submod.key == "test" {
+        let canonical = match export.name {
+            "default" | "test" | "it" => "test",
+            "suite" | "describe" => "suite",
+            _ => export.name,
+        };
+        find_export(submod, canonical)
             .map(|canonical| canonical.name)
             .unwrap_or(export.name)
     } else {
@@ -1198,17 +1203,16 @@ fn ensure_export_singleton(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
         );
         allocated_handle.get_raw_mut_ptr()
-    } else {
-        allocated
-    };
-    if submod.key == "test"
+    } else if submod.key == "test"
         && matches!(
             export.name,
             "default" | "test" | "suite" | "describe" | "it"
         )
     {
-        test::decorate_test_export(allocated);
-    }
+        test::decorate_test_export(allocated, key_name == "test")
+    } else {
+        allocated
+    };
     EXPORT_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, allocated);
     });

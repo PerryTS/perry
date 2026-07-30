@@ -1128,9 +1128,14 @@ fn test_context_value(name: &str) -> f64 {
     let ctx = js_object_alloc(0, 8);
     let test_fn = closure_value(thunk_test as *const u8, 3);
     let test_fn_ptr = raw_ptr_from_value(test_fn);
-    if test_fn_ptr >= 0x10000 {
-        decorate_test_export(test_fn_ptr as *mut ClosureHeader);
-    }
+    let test_fn = if test_fn_ptr >= 0x10000 {
+        boxed_ptr(decorate_test_export(
+            test_fn_ptr as *mut ClosureHeader,
+            false,
+        ))
+    } else {
+        test_fn
+    };
     set_field(ctx, "name", string_value(name));
     set_field(ctx, "assert", boxed_ptr(assert));
     set_field(ctx, "mock", mock_object_value());
@@ -1539,23 +1544,32 @@ pub extern "C" fn js_node_test_mock_timers_reset() -> f64 {
     mock_timers_reset(std::ptr::null())
 }
 
-pub(crate) fn decorate_test_export(closure: *mut ClosureHeader) {
-    let owner = closure as usize;
-    crate::closure::closure_set_dynamic_prop(
-        owner,
-        "skip",
-        closure_value(thunk_test_skip as *const u8, 3),
-    );
-    crate::closure::closure_set_dynamic_prop(
-        owner,
-        "todo",
-        closure_value(thunk_test_todo as *const u8, 3),
-    );
-    crate::closure::closure_set_dynamic_prop(
-        owner,
-        "only",
-        closure_value(thunk_test_only as *const u8, 3),
-    );
+pub(crate) fn decorate_test_export(
+    closure: *mut ClosureHeader,
+    include_test_alias: bool,
+) -> *mut ClosureHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    if include_test_alias {
+        crate::closure::closure_set_dynamic_prop(
+            closure_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
+            "test",
+            boxed_ptr(closure_handle.get_raw_mut_ptr::<ClosureHeader>()),
+        );
+    }
+    for (name, func) in [
+        ("skip", thunk_test_skip as *const u8),
+        ("todo", thunk_test_todo as *const u8),
+        ("only", thunk_test_only as *const u8),
+    ] {
+        let method = scope.root_nanbox_f64(closure_value(func, 3));
+        crate::closure::closure_set_dynamic_prop(
+            closure_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
+            name,
+            method.get_nanbox_f64(),
+        );
+    }
+    closure_handle.get_raw_mut_ptr()
 }
 
 pub(crate) fn test_special_export_value(name: &str) -> Option<f64> {

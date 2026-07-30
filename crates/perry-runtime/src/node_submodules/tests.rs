@@ -404,6 +404,77 @@ fn stream_promises_default_export_exposes_namespace() {
 }
 
 #[test]
+fn test_default_and_named_exports_share_the_self_alias() {
+    let default = unsafe {
+        js_node_submodule_export_as_function(
+            b"test".as_ptr(),
+            "test".len() as u32,
+            b"default".as_ptr(),
+            "default".len() as u32,
+        )
+    };
+    let named = unsafe {
+        js_node_submodule_export_as_function(
+            b"test".as_ptr(),
+            "test".len() as u32,
+            b"test".as_ptr(),
+            "test".len() as u32,
+        )
+    };
+    let it = unsafe {
+        js_node_submodule_export_as_function(
+            b"test".as_ptr(),
+            "test".len() as u32,
+            b"it".as_ptr(),
+            "it".len() as u32,
+        )
+    };
+    let suite = unsafe {
+        js_node_submodule_export_as_function(
+            b"test".as_ptr(),
+            "test".len() as u32,
+            b"suite".as_ptr(),
+            "suite".len() as u32,
+        )
+    };
+    let describe = unsafe {
+        js_node_submodule_export_as_function(
+            b"test".as_ptr(),
+            "test".len() as u32,
+            b"describe".as_ptr(),
+            "describe".len() as u32,
+        )
+    };
+
+    assert_eq!(default.to_bits(), named.to_bits());
+    assert_eq!(it.to_bits(), named.to_bits());
+    assert_eq!(describe.to_bits(), suite.to_bits());
+    let closure = crate::value::js_nanbox_get_pointer(default) as usize;
+    assert_eq!(
+        crate::closure::closure_get_dynamic_prop(closure, "test").to_bits(),
+        default.to_bits()
+    );
+
+    let module_default = unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"test".as_ptr(),
+            "test".len(),
+            b"default".as_ptr(),
+            "default".len(),
+        )
+    };
+    assert_eq!(module_default.to_bits(), default.to_bits());
+    let key = js_string_from_bytes(b"test".as_ptr(), "test".len() as u32);
+    let property =
+        crate::object::js_object_get_field_by_name_f64(closure as *const ObjectHeader, key);
+    assert_eq!(property.to_bits(), default.to_bits());
+    let mut cache = [0, 0];
+    let property =
+        crate::object::js_object_get_field_ic_miss(closure as *const ObjectHeader, key, &mut cache);
+    assert_eq!(property.to_bits(), default.to_bits());
+}
+
+#[test]
 fn namespace_member_missing_export_returns_undefined() {
     let value = unsafe {
         js_node_submodule_namespace_member(
