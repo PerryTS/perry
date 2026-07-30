@@ -122,6 +122,36 @@ error — the "probe ran no collection" rule deliberately lives in
 that the largest possible regression is not misdiagnosed as "your probe is too
 small".
 
+## Cross-host evidence (why the shared-CI profile gates what it gates)
+
+The baseline is captured on an 8-core M1 with 8 GB at load ~1.2. The first
+`gc-ratchet` CI run executed on a **3-core virtualised M1 with 7 GB, macOS
+14.8.7, at load 25.6** — a different machine class under heavy load. Comparing
+that run's medians against the pinned baseline:
+
+| Metric | Cross-host result |
+|---|---|
+| `heap_used_bytes`, `heap_total_bytes` | **bit-identical on all 8 probes** |
+| `minor_cycles`, `step_cycles`, `promoted_objects`, `promoted_bytes`, `freed_bytes` | **bit-identical on all 8 probes** |
+| `copied_objects`, `copied_bytes` | drift ≤0.06% on 6 of 8 probes, identical on the rest |
+| `peak_rss_bytes` | within ±0.6% |
+| `wall_ms` | **+54% to +60%** |
+
+Three things are settled by this.
+
+Retention really is load-independent: it reproduced byte-for-byte on a box under
+load 25.6, which is the property the whole shared-CI gate rests on.
+
+The evacuation counters are *nearly* host-invariant but not exactly so —
+`copied_objects` and `copied_bytes` carry a sub-0.1% host-dependent component,
+presumably because the scavenger's trigger interacts with allocation timing.
+That is ~80× inside their 5% band, so they stay gating, but do not assume
+bit-identity across hosts the way you can for retention.
+
+Excluding `wall_ms` from the shared-CI gate was not caution, it was necessary.
+The same binary is 54–60% slower on the runner. Any wall-time band tight enough
+to catch a GC slowdown would have made every CI run red on day one.
+
 ## Direction
 
 Retention, memory and timing regress only upward, so their bands are one-sided.

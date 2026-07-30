@@ -23,8 +23,21 @@ permissions:
   contents: read
 
 concurrency:
-  group: gc-ratchet-${{ github.ref }}
-  cancel-in-progress: true
+  # Separate groups per event, and cancel ONLY pull-request runs.
+  #
+  # A shared group with unconditional cancel-in-progress looked right and was
+  # wrong: `main` is busy and the macOS runner pool is deep enough that a run
+  # can sit queued for 40+ minutes, so every new merge cancelled the previous
+  # main run before it ever got a runner. Observed on the first day this
+  # workflow existed — three consecutive main runs cancelled, zero executed.
+  # A gate that is always cancelled never fails, which is the same hole as
+  # `continue-on-error: true` wearing a different hat.
+  #
+  # Cancelling superseded PR runs is still correct: only the head commit's
+  # result gates the merge. Main-branch runs queue instead, so each merged
+  # commit eventually gets its own answer.
+  group: gc-ratchet-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
