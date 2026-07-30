@@ -277,6 +277,15 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "tls",
         has_receiver: false,
+        method: "convertALPNProtocols",
+        class_filter: None,
+        runtime: "js_tls_convert_alpn_protocols",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "tls",
+        has_receiver: false,
         method: "createSecureContext",
         class_filter: None,
         runtime: "js_tls_create_secure_context",

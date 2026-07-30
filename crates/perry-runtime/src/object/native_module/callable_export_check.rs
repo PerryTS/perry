@@ -283,6 +283,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("net", "_normalizeArgs")
             | ("net", "_createServerHandle")
             | ("tls", "connect")
+            | ("tls", "convertALPNProtocols")
             | ("tls", "createServer")
             | ("tls", "Server")
             | ("tls", "TLSSocket")
@@ -1834,6 +1835,7 @@ static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "TLSSocket",
             "checkServerIdentity",
             "connect",
+            "convertALPNProtocols",
             "createSecureContext",
             "createServer",
             "getCACertificates",

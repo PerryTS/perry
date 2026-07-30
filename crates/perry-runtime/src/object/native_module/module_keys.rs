@@ -1827,6 +1827,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "tls" => Some(&[
             b"checkServerIdentity",
             b"connect",
+            b"convertALPNProtocols",
             b"createServer",
             b"createSecureContext",
             b"getCACertificates",

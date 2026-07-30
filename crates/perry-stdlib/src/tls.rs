@@ -1885,6 +1885,78 @@ pub unsafe extern "C" fn js_tls_secure_context_constructor(options_bits: i64) ->
     make_secure_context(f64_from_raw_bits(options_bits))
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_tls_convert_alpn_protocols(protocols: f64, out: f64) -> f64 {
+    let mut encoded = Vec::new();
+    if is_array_value(protocols) {
+        let array =
+            JSValue::from_bits(protocols.to_bits()).as_pointer::<perry_runtime::ArrayHeader>();
+        let length = js_array_length(array);
+        for index in 0..length {
+            let protocol = js_array_get_f64(array, index);
+            if !JSValue::from_bits(protocol.to_bits()).is_any_string() {
+                throw_type_error(
+                    "The \"protocols\" argument must contain only strings",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            }
+            let protocol = value_to_string(protocol).unwrap_or_default();
+            if protocol.len() > u8::MAX as usize {
+                perry_runtime::fs::validate::throw_range_error_named(
+                    "ALPN protocol names must not exceed 255 bytes",
+                    "ERR_OUT_OF_RANGE",
+                );
+            }
+            encoded.push(protocol.len() as u8);
+            encoded.extend_from_slice(protocol.as_bytes());
+        }
+    } else if let Some(addr) = pointer_addr(protocols) {
+        if perry_runtime::buffer::is_registered_buffer(addr)
+            && !perry_runtime::buffer::is_any_array_buffer(addr)
+        {
+            let data = perry_runtime::buffer::js_native_buffer_data_ptr(protocols);
+            let length = perry_runtime::buffer::js_native_buffer_byte_len(protocols);
+            if !data.is_null() && length != 0 {
+                encoded.extend_from_slice(std::slice::from_raw_parts(data, length));
+            }
+        } else if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+            let mut length = 0u32;
+            let data =
+                perry_runtime::buffer::js_value_buffer_or_typedarray_data(protocols, &mut length);
+            if !data.is_null() && length != 0 {
+                encoded.extend_from_slice(std::slice::from_raw_parts(data, length as usize));
+            }
+        } else {
+            return undefined();
+        }
+    } else {
+        // Node's internal helper ignores non-array/non-view values and leaves
+        // the target object untouched.
+        return undefined();
+    }
+
+    let Some(out_addr) = pointer_addr(out) else {
+        throw_type_error(
+            "The \"out\" argument must be of type object",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    };
+    let buffer = perry_runtime::buffer::js_buffer_alloc(encoded.len() as i32, 0);
+    if !encoded.is_empty() {
+        std::ptr::copy_nonoverlapping(
+            encoded.as_ptr(),
+            perry_runtime::buffer::buffer_data_mut(buffer),
+            encoded.len(),
+        );
+    }
+    set_field(
+        out_addr as *mut ObjectHeader,
+        "ALPNProtocols",
+        js_nanbox_pointer(buffer as i64),
+    );
+    undefined()
+}
+
 pub unsafe extern "C" fn js_tls_native_dispatch(
     method_ptr: *const u8,
     method_len: usize,
@@ -1910,6 +1982,7 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
         "checkServerIdentity" => {
             js_tls_check_server_identity(arg(0).to_bits() as i64, arg(1).to_bits() as i64)
         }
+        "convertALPNProtocols" => js_tls_convert_alpn_protocols(arg(0), arg(1)),
         "connect" => {
             // Pass the args through raw — js_tls_connect resolves Node's
             // `connect(options[, cb])` / `connect(port[, host][, options][,

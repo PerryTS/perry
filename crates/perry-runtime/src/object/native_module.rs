@@ -27,9 +27,10 @@ pub(crate) use callable_exports::{
     fs_namespace_descriptor_getter_value, fs_namespace_descriptor_setter_value,
     is_buffer_constructor_value, is_cluster_emitter_method, module_cjs_cache_value,
     module_cjs_extensions_value, module_cjs_global_paths_value, module_cjs_path_cache_value,
-    native_string_value, set_bound_native_closure_name, set_builtin_closure_length,
-    set_builtin_closure_non_constructable, sqlite_session_constructor_value,
-    sqlite_statement_sync_constructor_value, timers_promises_parent_namespace,
+    native_string_value, scan_tls_derived_prototype_roots_mut, set_bound_native_closure_name,
+    set_builtin_closure_length, set_builtin_closure_non_constructable,
+    sqlite_session_constructor_value, sqlite_statement_sync_constructor_value,
+    timers_promises_parent_namespace, tls_constructor_prototype_is_instance_of,
     util_inspect_default_options_value, zlib_codes_object,
 };
 pub(crate) use constants::get_native_module_constant;
@@ -239,6 +240,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
     #[cfg(feature = "mod-http2-constants")]
     crate::node_http2_constants::scan_roots_mut(visitor);
     scan_stream_event_emitter_prototype_roots_mut(visitor);
+    scan_tls_derived_prototype_roots_mut(visitor);
 }
 
 /// Special class ID for native module namespace objects

@@ -799,6 +799,14 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     ),
     method_sig(
         "tls",
+        "convertALPNProtocols",
+        false,
+        None,
+        &[p_any("protocols"), p_any("out")],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "tls",
         "createSecureContext",
         false,
         None,
