@@ -1,4 +1,4 @@
-**Compile fixes from taking a real npm CLI (Socket Firewall) to a native binary** — four independent blockers, each fixed at its own layer:
+**Compile fixes from taking a real npm CLI (Socket Firewall) to a native binary** — five independent blockers, each fixed at its own layer:
 
 - **Auto-optimize feature skew**: cross-features the on-disk checkout's `perry-runtime`/`perry-stdlib` don't declare are now dropped (with a warning) instead of failing the whole cargo resolve and silently falling back to a link that's missing the routed ext entrypoints. The cargo-failure fallback message now explains the consequence and remedy.
 - **`perry-ext-zlib` zstd surface**: `zlib.createZstdCompress`/`createZstdDecompress`, the zstd one-shots, and the streaming write-codec are now implemented in the ext wrapper, so routing `node:zlib` no longer strips the only zstd implementation out of the link (undici's web-fetch content decoding references it unconditionally).
