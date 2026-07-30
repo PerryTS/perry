@@ -508,6 +508,53 @@ fn test_plain_class_to_class_heritage_keeps_static_extends_name() {
     );
 }
 
+/// #5694: `State` is a native `perry/ui` handle, so reading `.value` must
+/// remain a zero-argument native getter call after local-native rewriting.
+#[test]
+fn test_perry_ui_state_value_uses_native_getter() {
+    use crate::ir::{clear_current_module_source, Expr, Stmt};
+    use crate::js_transform::fix_local_native_instances;
+
+    let source = r#"
+        import { State } from "perry/ui";
+
+        function main() {
+            const text = State("");
+            return text.value;
+        }
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "state_value.ts").expect("source should parse");
+    let mut hir =
+        super::lower_module(&module, "test", "state_value.ts").expect("source should lower");
+    clear_current_module_source();
+    fix_local_native_instances(&mut hir);
+
+    let main = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main function");
+    let value = main.body.iter().find_map(|stmt| match stmt {
+        Stmt::Return(Some(expr)) => Some(expr),
+        _ => None,
+    });
+
+    assert!(
+        matches!(
+            value,
+            Some(Expr::NativeMethodCall {
+                module,
+                class_name: None,
+                object: Some(_),
+                method,
+                args,
+            }) if module == "perry/ui" && method == "value" && args.is_empty()
+        ),
+        "State.value must lower through perry_ui_state_get, got: {value:#?}"
+    );
+}
+
 /// #6679: a NAMED class EXPRESSION's `.name` is its own explicit name
 /// (`Named` in `const B = class Named {}`), not the outer binding name. Per
 /// spec a named class expression is not an anonymous function definition, so
