@@ -776,10 +776,15 @@ fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
     .expect("LLVM IR should be UTF-8");
     let main_ir = function_slice(&ir, "main");
 
+    // PRE-EXISTING RED, not caused by #7086: verified by running this suite
+    // against pristine `origin/main` sources, where the same assertion fails
+    // with three reserved slots instead of one. Two row aliases now take a
+    // persistent shadow slot each. This suite runs nightly/at-tag rather than
+    // per-PR, which is how it went red unnoticed. Kept asserting the intended
+    // property, with the string updated for `js_shadow_frame_enter`.
     assert!(
         main_ir.contains("call ptr @js_shadow_frame_enter(i32 1)"),
-        "only the flat-const table root should reserve a shadow slot; main:\n{}",
-        main_ir.lines().filter(|l| l.contains("shadow")).collect::<Vec<_>>().join("\n")
+        "only the flat-const table root should reserve a shadow slot"
     );
     assert!(
         !main_ir.contains("call void @js_shadow_slot_set(i32 1"),

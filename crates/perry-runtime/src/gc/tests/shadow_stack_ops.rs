@@ -673,31 +673,43 @@ fn inline_bound_slot_survives_and_is_rewritten_by_a_copying_minor() {
     );
 }
 
-/// The `frame_top == usize::MAX` guard is load-bearing, not defensive noise.
+/// The `frame_top == usize::MAX` sentinel guard, mirroring the one in
+/// `js_shadow_slot_set` / `js_shadow_slot_bind`.
 ///
-/// Without it `top + idx` wraps and lands on entry `idx - 1` of a *different*
-/// frame -- an in-bounds address, so a `slot < len` test alone would let the
-/// write through and corrupt a live root. This is the same wrap-around class
-/// as the `base + HEADER_SLOTS > len` bug #7079 fixed in `frame_pop`.
+/// Honest scope: in a *balanced* program the guard is unreachable, because
+/// `frame_top == usize::MAX` implies `len == 0` (the outermost pop restores
+/// both), so the bounds check alone would already skip the write. It is kept
+/// because the emitted sequence must be observably identical to the runtime
+/// function it replaces, and because if the two ever *can* diverge the failure
+/// mode is silent corruption rather than a skip: `usize::MAX + idx` wraps to
+/// `idx - 1`, which for `idx >= 1` is an in-bounds index into the frame
+/// *header* — overwriting `prev_frame_top` and `slot_count` and unlinking every
+/// outer frame from the root scan.
 ///
-/// Sabotage check: delete the sentinel test from
-/// `inline_bind_as_codegen_emits` (and from the emitter it transcribes) and
-/// the write lands instead of being skipped.
+/// So the test forces exactly that state rather than pretending a balanced
+/// program reaches it. Sabotage check: drop the sentinel test from
+/// `inline_bind_as_codegen_emits` (and from the emitter it transcribes) and the
+/// header is overwritten instead of the write being skipped.
 #[test]
 fn inline_write_with_no_frame_installed_is_skipped_not_wrapped() {
     let _guard = GcTestIsolationGuard::new();
     reset_shadow_stack();
-    // Give the buffer a live frame with a known value, then unwind it so
-    // `frame_top` is the sentinel while the buffer still holds entries.
     let state = js_shadow_frame_enter(2);
     let handle =
         unsafe { state_word(state, SHADOW_STATE_FRAME_TOP_OFFSET) } - SHADOW_STACK_HEADER_SLOTS;
-    js_shadow_frame_pop(handle as u64);
-    assert_eq!(
-        unsafe { state_word(state, SHADOW_STATE_FRAME_TOP_OFFSET) },
-        usize::MAX,
-        "no frame should be installed"
-    );
+
+    // Snapshot the frame header, then force the no-frame sentinel while the
+    // buffer still holds this frame's entries.
+    let buf = unsafe { state_word(state, SHADOW_STATE_PTR_OFFSET) } as *mut u8;
+    let header_before = unsafe { *buf.cast::<u64>() };
+    let header_meta_before =
+        unsafe { *buf.add(SHADOW_ENTRY_META_OFFSET).cast::<usize>() };
+    unsafe {
+        *(state
+            .cast::<u8>()
+            .add(SHADOW_STATE_FRAME_TOP_OFFSET)
+            .cast::<usize>()) = usize::MAX;
+    }
 
     let mut storage: u64 = 0x7FFD_0000_0000_9999;
     assert!(
@@ -708,10 +720,27 @@ fn inline_write_with_no_frame_installed_is_skipped_not_wrapped() {
         !unsafe { inline_clear_as_codegen_emits(state, 1) },
         "inline clear must be skipped when no frame is installed"
     );
-    assert!(
-        scanner_slot_values().is_empty(),
-        "a skipped write must not have produced a root"
+    assert_eq!(
+        unsafe { *buf.cast::<u64>() },
+        header_before,
+        "a skipped write must not have wrapped into the frame header's \
+         prev_frame_top word"
     );
+    assert_eq!(
+        unsafe { *buf.add(SHADOW_ENTRY_META_OFFSET).cast::<usize>() },
+        header_meta_before,
+        "a skipped write must not have wrapped into the frame header's \
+         slot_count word"
+    );
+
+    // Restore a coherent state so the frame can be popped.
+    unsafe {
+        *(state
+            .cast::<u8>()
+            .add(SHADOW_STATE_FRAME_TOP_OFFSET)
+            .cast::<usize>()) = handle + SHADOW_STACK_HEADER_SLOTS;
+    }
+    js_shadow_frame_pop(handle as u64);
 }
 
 /// An out-of-range slot index must be skipped, matching the runtime
