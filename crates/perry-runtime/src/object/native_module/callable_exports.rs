@@ -115,22 +115,14 @@ fn async_hooks_static_method_value(
 ) -> f64 {
     crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let name_string = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let name_handle = scope.root_string_ptr(name_string);
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let closure_handle = scope.root_raw_mut_ptr(closure);
-    crate::closure::closure_set_dynamic_prop(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        "name",
-        f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits()),
-    );
-    super::super::set_builtin_property_attrs(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        "name".to_string(),
-        super::super::PropertyAttrs::new(false, false, true),
+    set_bound_native_closure_name(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        name,
     );
     set_builtin_closure_length(
         closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
@@ -1465,9 +1457,16 @@ pub(crate) fn set_bound_native_closure_name(
     closure: *mut crate::closure::ClosureHeader,
     name: &str,
 ) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = scope.root_raw_mut_ptr(closure);
     let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let name_value = f64::from_bits(JSValue::string_ptr(ptr).bits());
-    crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    let name_handle = scope.root_string_ptr(ptr);
+    let name_value = f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits());
+    crate::closure::closure_set_dynamic_prop(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+        "name",
+        name_value,
+    );
     // Spec: a function's `name` property is { writable:false, enumerable:false,
     // configurable:true }. Storing it as a plain dynamic prop left it ENUMERABLE
     // by default, so `for (k in Buffer)` yielded "name" — even though
@@ -1490,7 +1489,7 @@ pub(crate) fn set_bound_native_closure_name(
     // table unconditionally, so the builtin variant preserves the
     // safe-buffer semantics above.
     crate::object::set_builtin_property_attrs(
-        closure as usize,
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
         "name".to_string(),
         crate::object::PropertyAttrs::new(false, false, true),
     );
