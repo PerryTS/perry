@@ -79,12 +79,33 @@ pub fn array_values_iter(arr_f64: f64) -> f64 {
 /// Values iterator whose done-result carries `value: null` and whose
 /// `return()` terminates it — the `node:sqlite` `iterate()` protocol
 /// (#6561). See [`KIND_VALUES_NULL_DONE`].
-pub fn array_values_iter_null_done(arr_f64: f64) -> f64 {
+pub fn array_values_iter_null_done(
+    arr_f64: f64,
+    iteration_epoch: &std::sync::atomic::AtomicU64,
+    epoch: u64,
+) -> f64 {
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    unsafe { alloc_iterator(arr_ptr, KIND_VALUES_NULL_DONE) }
+    unsafe {
+        let obj = js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 5);
+        js_object_set_field(
+            obj,
+            0,
+            JSValue::from_bits(js_nanbox_pointer(arr_ptr as i64).to_bits()),
+        );
+        js_object_set_field(obj, 1, JSValue::number(0.0));
+        js_object_set_field(obj, 2, JSValue::number(KIND_VALUES_NULL_DONE as f64));
+        js_object_set_field(
+            obj,
+            3,
+            JSValue::pointer(iteration_epoch as *const _ as *const u8),
+        );
+        js_object_set_field(obj, 4, JSValue::number(epoch as f64));
+        crate::object::attach_iterator_prototype(obj, ARRAY_ITERATOR_CLASS_ID);
+        js_nanbox_pointer(obj as i64)
+    }
 }
 
 /// `arr.keys()` iterator — yields each index `0..length`.
@@ -517,6 +538,19 @@ unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
     js_nanbox_pointer(obj as i64)
 }
 
+unsafe fn make_sqlite_iter_result(value: JSValue, done: bool) -> f64 {
+    let obj = js_object_alloc(0, 2);
+    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
+    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    let keys = crate::array::js_array_alloc(2);
+    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
+    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
+    crate::object::js_object_set_keys(obj, keys);
+    js_object_set_field(obj, 0, JSValue::bool(done));
+    js_object_set_field(obj, 1, value);
+    js_nanbox_pointer(obj as i64)
+}
+
 unsafe fn make_pair_array(idx: u32, value: f64) -> f64 {
     let pair = crate::array::js_array_alloc(2);
     (*pair).length = 2;
@@ -547,15 +581,29 @@ pub unsafe fn dispatch_array_iterator_method(
     };
     match method_name {
         "next" => {
+            if kind == KIND_VALUES_NULL_DONE {
+                let epoch_ptr =
+                    js_nanbox_get_pointer(f64::from_bits(js_object_get_field(iter_obj, 3).bits()))
+                        as *const std::sync::atomic::AtomicU64;
+                let expected = f64::from_bits(js_object_get_field(iter_obj, 4).bits()) as u64;
+                if epoch_ptr.is_null()
+                    || (*epoch_ptr).load(std::sync::atomic::Ordering::Relaxed) != expected
+                {
+                    crate::fs::validate::throw_error_with_code(
+                        "Statement iterator has been invalidated",
+                        "ERR_INVALID_STATE",
+                    );
+                }
+            }
             // Field 0: backing array pointer (NaN-boxed).
             let backing_field = js_object_get_field(iter_obj, 0);
             let backing_f64 = f64::from_bits(backing_field.bits());
-            // Once the iterator is exhausted the backing array is cleared to
-            // `undefined` (spec: `[[IteratedArrayLike]]` set to undefined), so a
-            // later `.next()` stays done even if the array grew after exhaustion
-            // (test262 Array/prototype/{values,keys,entries}/iteration-mutable:
-            // pushing AFTER the iterator reported done must not resurface).
+            // Array iterators clear their backing array at exhaustion. SQLite's
+            // statement iterator restarts a completed execution on the next call.
             if JSValue::from_bits(backing_f64.to_bits()).is_undefined() {
+                if kind == KIND_VALUES_NULL_DONE {
+                    return make_sqlite_iter_result(done_value(), true);
+                }
                 return make_iter_result(done_value(), true);
             }
             let arr_ptr = js_nanbox_get_pointer(backing_f64) as *const ArrayHeader;
@@ -570,6 +618,10 @@ pub unsafe fn dispatch_array_iterator_method(
             };
 
             if idx >= len {
+                if kind == KIND_VALUES_NULL_DONE {
+                    js_object_set_field(iter_obj, 1, JSValue::number(0.0));
+                    return make_sqlite_iter_result(done_value(), true);
+                }
                 js_object_set_field(iter_obj, 0, JSValue::undefined());
                 return make_iter_result(done_value(), true);
             }
@@ -593,7 +645,11 @@ pub unsafe fn dispatch_array_iterator_method(
                 }
                 _ => JSValue::undefined(),
             };
-            make_iter_result(value, false)
+            if kind == KIND_VALUES_NULL_DONE {
+                make_sqlite_iter_result(value, false)
+            } else {
+                make_iter_result(value, false)
+            }
         }
         // Iterators are themselves iterable — `[Symbol.iterator]()` on one
         // returns the same iterator (matches Node, and lets `js_get_iterator`
@@ -609,7 +665,11 @@ pub unsafe fn dispatch_array_iterator_method(
             if kind == KIND_VALUES_NULL_DONE {
                 js_object_set_field(iter_obj, 0, JSValue::undefined());
             }
-            make_iter_result(done_value(), true)
+            if kind == KIND_VALUES_NULL_DONE {
+                make_sqlite_iter_result(done_value(), true)
+            } else {
+                make_iter_result(done_value(), true)
+            }
         }
         _ => f64::from_bits(TAG_UNDEFINED),
     }

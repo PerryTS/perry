@@ -6,7 +6,7 @@
 use crate::common::{for_each_handle_mut_of, Handle};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Mutex, Once, OnceLock};
 
 mod backup;
@@ -142,6 +142,7 @@ pub struct NodeSqliteStmtHandle {
     pub db_handle: Handle,
     pub sql: String,
     pub finalized: AtomicBool,
+    pub iteration_epoch: AtomicU64,
     pub read_bigints: AtomicBool,
     pub return_arrays: AtomicBool,
     pub allow_bare_named_parameters: AtomicBool,
