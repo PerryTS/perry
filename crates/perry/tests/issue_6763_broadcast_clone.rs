@@ -46,6 +46,14 @@ console.log(
   cloned.join(","),
   view.join(","),
 );
+Object.defineProperty(Uint8Array.prototype, "__cloneReceiver", {
+  configurable: true,
+  get() {
+    return this === cloned;
+  },
+});
+console.log("typed-getter-this", cloned.__cloneReceiver);
+delete (Uint8Array.prototype as any).__cloneReceiver;
 
 const ints = new Int32Array([-1, 2147483647]);
 sender.postMessage(ints);
@@ -58,6 +66,14 @@ console.log(
   clonedInts.join(","),
   ints.join(","),
 );
+Object.defineProperty(Int32Array.prototype, "__cloneReceiver", {
+  configurable: true,
+  get() {
+    return this === clonedInts;
+  },
+});
+console.log("int32-getter-this", clonedInts.__cloneReceiver);
+delete (Int32Array.prototype as any).__cloneReceiver;
 
 const bigs = new BigUint64Array([
   18446744073709551615n,
@@ -138,7 +154,9 @@ channel.port2.close();
         String::from_utf8_lossy(&run.stdout),
         concat!(
             "typed true 3,1,4 9,1,4\n",
+            "typed-getter-this true\n",
             "int32 true -1,2147483647 7,2147483647\n",
+            "int32-getter-this true\n",
             "biguint64 true 18446744073709551615,9007199254740993 ",
             "1,9007199254740993\n",
             "broadcast-port DataCloneError 25\n",

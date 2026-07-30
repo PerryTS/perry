@@ -459,6 +459,12 @@ pub fn gc_init() {
     // stale address against a forwarding-resolved receiver, which defeats its
     // own self-recursion guard and drives the mutator into unbounded recursion.
     gc_register_mutable_root_scanner(crate::array::scan_prototype_addr_cache_roots_mut);
+    // #6763: inherited-property resolution retains an owner while an accessor
+    // or Proxy trap can re-enter after moving GC. Rewrite that temporary
+    // identity so malformed prototype cycles remain bounded.
+    gc_register_mutable_root_scanner(
+        crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,
+    );
     gc_register_mutable_root_scanner(crate::map::scan_map_iterator_array_roots_mut);
     gc_register_mutable_root_scanner(crate::set::scan_set_iterator_array_roots_mut);
     gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);

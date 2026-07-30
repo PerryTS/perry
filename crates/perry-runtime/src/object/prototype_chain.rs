@@ -48,8 +48,10 @@ thread_local! {
     /// Owners currently walking a recorded prototype chain. Although
     /// `Object.setPrototypeOf` normally rejects cycles, residual/native owners
     /// and custom-construction links can still expose a malformed chain. Keep
-    /// recursive property lookup bounded and stop on a repeated owner.
-    static PROTOTYPE_RESOLUTION_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// recursive property lookup bounded and stop on a repeated owner. These
+    /// are NaN-boxed root slots, not raw addresses: an accessor or Proxy trap
+    /// can collect and move an owner before re-entering property resolution.
+    static PROTOTYPE_RESOLUTION_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
 
@@ -57,12 +59,14 @@ struct PrototypeResolutionGuard;
 
 impl PrototypeResolutionGuard {
     fn enter(owner: usize) -> Option<Self> {
+        let owner_bits = crate::value::js_nanbox_pointer(owner as i64).to_bits();
         PROTOTYPE_RESOLUTION_STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
-            if stack.len() >= MAX_PROTOTYPE_RESOLUTION_DEPTH || stack.contains(&owner) {
+            if stack.len() >= MAX_PROTOTYPE_RESOLUTION_DEPTH || stack.contains(&owner_bits) {
                 return None;
             }
-            stack.push(owner);
+            crate::gc::runtime_write_barrier_root_nanbox(owner_bits);
+            stack.push(owner_bits);
             Some(Self)
         })
     }
@@ -82,6 +86,30 @@ pub(crate) fn resolution_stack_savepoint() -> usize {
 
 pub(crate) fn resolution_stack_restore(depth: usize) {
     PROTOTYPE_RESOLUTION_STACK.with(|stack| stack.borrow_mut().truncate(depth));
+}
+
+/// GC scanner for owners held across recursive inherited-property resolution.
+///
+/// Getters and Proxy traps may collect before re-entering this resolver. The
+/// scanner both keeps each active owner alive and rewrites its stack slot after
+/// evacuation so the repeated-owner check remains an identity check.
+pub(crate) fn scan_prototype_resolution_stack_roots_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+        for owner_bits in stack.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_u64_slot(owner_bits);
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize) -> bool {
+    let Some(guard) = PrototypeResolutionGuard::enter(owner) else {
+        return false;
+    };
+    std::mem::forget(guard);
+    true
 }
 
 /// Latched true by the first recorded `Object.setPrototypeOf`. Lets hot
@@ -364,8 +392,20 @@ pub(crate) fn resolve_inherited_field(
     obj_ptr: usize,
     key: *const crate::StringHeader,
 ) -> Option<crate::value::JSValue> {
-    let _guard = PrototypeResolutionGuard::enter(obj_ptr)?;
     let proto_bits = object_static_prototype(obj_ptr)?;
+    resolve_inherited_field_from_prototype(obj_ptr, proto_bits, key)
+}
+
+/// Resolve an inherited property through a known prototype while retaining
+/// `obj_ptr` as the receiver for accessors and Proxy traps. Intrinsic
+/// TypedArray prototypes are not recorded in `object_static_prototype`, so
+/// their erased-type fallback passes the builtin prototype here directly.
+pub(crate) fn resolve_inherited_field_from_prototype(
+    obj_ptr: usize,
+    proto_bits: u64,
+    key: *const crate::StringHeader,
+) -> Option<crate::value::JSValue> {
+    let _guard = PrototypeResolutionGuard::enter(obj_ptr)?;
     if proto_bits == TAG_NULL {
         return None;
     }

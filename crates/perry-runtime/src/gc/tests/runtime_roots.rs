@@ -327,6 +327,55 @@ fn test_runtime_root_visitor_marks_and_rewrites_nanbox_slot() {
 }
 
 #[test]
+fn test_prototype_resolution_stack_rewrites_owner_for_gc_reentry() {
+    let base_depth = crate::object::prototype_chain::resolution_stack_savepoint();
+    let nursery_owner = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let valid_ptrs = build_valid_pointer_set();
+    let relocated_owner = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(nursery_owner) as *mut GcHeader,
+            relocated_owner,
+        );
+    }
+
+    assert!(
+        crate::object::prototype_chain::test_resolution_stack_enter_and_forget(
+            nursery_owner as usize,
+        )
+    );
+    crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut(
+        &mut RuntimeRootVisitor::for_rewrite(&valid_ptrs),
+    );
+    let reentry_was_blocked =
+        !crate::object::prototype_chain::test_resolution_stack_enter_and_forget(
+            relocated_owner as usize,
+        );
+    crate::object::prototype_chain::resolution_stack_restore(base_depth);
+
+    assert!(
+        reentry_was_blocked,
+        "a post-GC reentrant lookup must match the rewritten active-owner slot"
+    );
+}
+
+#[test]
+fn test_prototype_resolution_stack_scanner_is_registered() {
+    crate::gc::gc_init();
+    let registered = crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow().iter().any(|entry| {
+            entry.scanner as usize
+                == crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut
+                    as MutableRootScanner as usize
+        })
+    });
+    assert!(
+        registered,
+        "the active prototype-resolution identities must be visible to moving GC"
+    );
+}
+
+#[test]
 fn test_implicit_this_root_scanner_marks_and_rewrites() {
     // Regression for #1813. The implicit-`this` cell holds the NaN-boxed
     // receiver across a dynamically-dispatched non-arrow method body. Under a

@@ -565,15 +565,14 @@ pub extern "C" fn js_object_get_field_by_name(
                             let proto = crate::object::builtin_prototype_value(
                                 crate::typedarray::name_for_kind(kind),
                             );
-                            let proto_value = JSValue::from_bits(proto.to_bits());
-                            if proto_value.is_pointer() {
-                                let inherited = super::super::js_object_get_field_by_name(
-                                    proto_value.as_pointer::<ObjectHeader>(),
+                            if let Some(inherited) = super::super::prototype_chain::
+                                resolve_inherited_field_from_prototype(
+                                    addr,
+                                    proto.to_bits(),
                                     key,
-                                );
-                                if !inherited.is_undefined() {
-                                    return inherited;
-                                }
+                                )
+                            {
+                                return inherited;
                             }
                         }
                     }
@@ -632,15 +631,14 @@ pub extern "C" fn js_object_get_field_by_name(
                         }
                         None => {
                             let proto = crate::object::builtin_prototype_value("Uint8Array");
-                            let proto_value = JSValue::from_bits(proto.to_bits());
-                            if proto_value.is_pointer() {
-                                let inherited = super::super::js_object_get_field_by_name(
-                                    proto_value.as_pointer::<ObjectHeader>(),
+                            if let Some(inherited) = super::super::prototype_chain::
+                                resolve_inherited_field_from_prototype(
+                                    addr,
+                                    proto.to_bits(),
                                     key,
-                                );
-                                if !inherited.is_undefined() {
-                                    return inherited;
-                                }
+                                )
+                            {
+                                return inherited;
                             }
                         }
                     }
