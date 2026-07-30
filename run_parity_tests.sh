@@ -51,6 +51,11 @@ if [[ -z "$PYTHON_CMD" ]]; then
     echo "Python 3 is required by the parity output normalizer" >&2
     exit 1
 fi
+PERRY_RUN_TIMEOUT="${PERRY_RUN_TIMEOUT:-10}"
+if [[ ! "$PERRY_RUN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid PERRY_RUN_TIMEOUT '$PERRY_RUN_TIMEOUT' (want a positive integer)" >&2
+    exit 1
+fi
 # Per-run scratch dir for compiled test binaries (2026-07-02 audit): the old
 # fixed /tmp/perry_parity_<test-id> paths meant two concurrent suite runs
 # (two agents / two worktrees on one machine) executed EACH OTHER'S compiler
@@ -129,13 +134,14 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Find timeout command (GNU coreutils on Linux, gtimeout on macOS via Homebrew)
+# Find a native timeout command where available. Git Bash may resolve
+# Windows' unrelated timeout.exe (or no timeout at all), so Windows always
+# uses the Python process-tree fallback in run_with_timeout.
 if command -v timeout &> /dev/null; then
     TIMEOUT_CMD="timeout"
 elif command -v gtimeout &> /dev/null; then
     TIMEOUT_CMD="gtimeout"
 else
-    # No timeout available - run without timeout
     TIMEOUT_CMD=""
 fi
 
@@ -162,11 +168,55 @@ perry_abnormal_exit() {
 run_with_timeout() {
     local seconds=$1
     shift
-    if [[ -n "$TIMEOUT_CMD" ]]; then
+    if [[ "$HOST_PLATFORM" != "windows" && -n "$TIMEOUT_CMD" ]]; then
         $TIMEOUT_CMD "$seconds" "$@"
-    else
-        "$@"
+        return
     fi
+
+    # Python is already a required harness dependency. Start the test in its
+    # own process group and kill the entire tree on expiry; returning 124
+    # matches GNU timeout so the existing crash classifier stays unchanged.
+    "$PYTHON_CMD" -c '
+import os
+import signal
+import subprocess
+import sys
+
+seconds = int(sys.argv[1])
+command = sys.argv[2:]
+options = {}
+if os.name == "nt":
+    options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    options["start_new_session"] = True
+
+process = subprocess.Popen(command, **options)
+try:
+    returncode = process.wait(timeout=seconds)
+except subprocess.TimeoutExpired:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    raise SystemExit(124)
+
+if returncode < 0:
+    raise SystemExit(128 - returncode)
+raise SystemExit(returncode)
+' "$seconds" "$@"
 }
 
 wait_for_tcp_port() {
@@ -675,6 +725,8 @@ cleanup_parity_run() {
     rm -rf "$PARITY_TMP"
 }
 
+# Supersede the scratch-only trap installed immediately after mktemp now that
+# the optional echo server also has lifecycle state to clean.
 trap cleanup_parity_run EXIT
 
 # The granular node-suite starts with deterministic module cases (path, url,
@@ -810,14 +862,14 @@ for test_file in "${TEST_FILES[@]}"; do
     # `$(...)`, so capturing the exit code requires the file detour
     # rather than a `cmd | cap_output` pipeline.
     node_tmp="$PARITY_TMP/${safe_test_id}.node-output"
-    run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+    run_with_timeout "$PERRY_RUN_TIMEOUT" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
         node --experimental-strip-types "${node_argv[@]}" "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
     if [[ $node_exit -ne 0 ]] && can_retry_node_globals_as_commonjs "$test_id" "$test_file"; then
         parity_test_file="$PARITY_TMP/${safe_test_id}.cts"
         cp "$test_file" "$parity_test_file"
         perry_compile_command=(compile)
-        run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+        run_with_timeout "$PERRY_RUN_TIMEOUT" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
             node --experimental-strip-types "${node_argv[@]}" "$parity_test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
         node_exit=$?
     fi
@@ -910,12 +962,12 @@ for test_file in "${TEST_FILES[@]}"; do
     # classified as crash rather than a wedged machine.
     if [[ "$HOST_PLATFORM" == "windows" ]]; then
         # Git Bash has no enforceable RLIMIT_NPROC (`ulimit -u`) for native
-        # Windows processes. The outer timeout still bounds the direct test;
-        # Windows CI should additionally use the job-level Actions timeout.
-        run_with_timeout 10 env PERRY_STUB_DIAG=off "${parity_env[@]}" \
+        # Windows processes. The Python-backed timeout starts a fresh process
+        # group and kills its tree, even when GNU timeout is unavailable.
+        run_with_timeout "$PERRY_RUN_TIMEOUT" env PERRY_STUB_DIAG=off "${parity_env[@]}" \
             "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     else
-        run_with_timeout 10 "$BASH" -c '
+        run_with_timeout "$PERRY_RUN_TIMEOUT" "$BASH" -c '
             if [ "$(uname -s)" = "Linux" ]; then
                 proc_list=$(ps -u "$(id -u)" -L -o lwp= 2>/dev/null)
             else

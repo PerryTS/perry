@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from parity_known_failures import normalize_platform
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_REPORT = REPO_ROOT / "test-parity" / "reports" / "latest.json"
@@ -27,7 +29,7 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "test-parity" / "output"
 DEFAULT_JSON = REPO_ROOT / "test-parity" / "reports" / "parity_matrix_latest.json"
 DEFAULT_MARKDOWN = REPO_ROOT / "test-parity" / "reports" / "parity_matrix_latest.md"
 
-FAIL_STATUSES = {"parity_fail", "compile_fail", "node_fail"}
+FAIL_STATUSES = {"parity_fail", "compile_fail", "crash", "node_fail"}
 
 
 @dataclass
@@ -82,17 +84,6 @@ def diff_line_count(node_lines: list[str] | None, perry_lines: list[str] | None)
     return count
 
 
-def normalize_platform(value: str) -> str:
-    folded = value.strip().lower()
-    if folded in {"win32", "windows", "cygwin", "msys", "mingw"}:
-        return "windows"
-    if folded in {"darwin", "macos"}:
-        return "macos"
-    if folded == "linux":
-        return "linux"
-    return "other"
-
-
 def known_failures(path: Path, platform: str | None = None) -> set[str]:
     if not path.exists():
         return set()
@@ -141,6 +132,9 @@ def report_results(report: dict) -> list[dict[str, str]]:
     for test_id in failures.get("compile", []) or []:
         if test_id:
             out.append({"id": test_id, "status": "compile_fail"})
+    for test_id in failures.get("crash", []) or []:
+        if test_id:
+            out.append({"id": test_id, "status": "crash"})
     return out
 
 

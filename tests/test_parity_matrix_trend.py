@@ -99,6 +99,23 @@ class ParityMatrixTrendTests(unittest.TestCase):
             self.assertIn("test_parity_path", result.stdout)
             self.assertIn("not listed in known_failures.json", result.stdout)
 
+    def test_new_untriaged_crash_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.write_json(root / "report.json", {
+                "results": [{"id": "test_parity_zlib", "status": "crash"}],
+                "failures": {"parity": [], "compile": [], "crash": ["test_parity_zlib"]},
+            })
+            self.write_json(root / "known_failures.json", {})
+            self.write_json(root / "baseline.json", {"modules": {}})
+            self.write_output(root, "test_parity_zlib", "node\n", "partial\n")
+
+            result = self.run_checker(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("test_parity_zlib", result.stdout)
+            self.assertIn("crash is not listed in known_failures.json", result.stdout)
+
     def test_diff_lines_regression_fails_even_for_known_failure(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

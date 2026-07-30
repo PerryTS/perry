@@ -23,6 +23,9 @@ while [ "$#" -gt 0 ]; do
     if [ "$1" = "-o" ]; then
         cat > "$2" <<'BIN'
 #!/bin/sh
+if [ "${PERRY_TEST_HANG:-0}" = "1" ]; then
+    sleep 30
+fi
 echo reuse-ok
 BIN
         chmod +x "$2"
@@ -107,6 +110,29 @@ if find "$WORK/windows-temp" -maxdepth 1 -name 'perry-parity.*' | grep -q .; the
     exit 1
 fi
 
+# Git Bash does not ship GNU timeout. Exercise the Python-backed Windows
+# process-tree timeout with a one-second test hook and require crash
+# classification rather than waiting for the mock binary's 30-second sleep.
+SECONDS=0
+set +e
+env -u TMPDIR -u TMP \
+    PERRY_HOST_PLATFORM=windows \
+    PERRY_RUN_TIMEOUT=1 \
+    PERRY_TEST_HANG=1 \
+    TEMP="$WORK/windows-temp" \
+    PERRY_SKIP_BUILD=1 \
+    PERRY_BIN="$WORK/perry.exe" \
+    PERRY_RUNTIME_DIR="$WORK" \
+    "$WORK/run_parity_tests.sh" --suite node-suite --module reuse >"$WORK/timeout-output" 2>&1
+timeout_status=$?
+set -e
+[[ "$timeout_status" -ne 0 ]]
+grep -F "TIMEOUT (killed after 1s)" "$WORK/timeout-output" >/dev/null
+if (( SECONDS > 8 )); then
+    echo "Windows timeout fallback took ${SECONDS}s" >&2
+    exit 1
+fi
+
 # The gap wrapper must select an independent Windows snapshot instead of
 # comparing the Windows result with the committed Linux baseline.
 env -u TMPDIR -u TMP \
@@ -115,7 +141,12 @@ env -u TMPDIR -u TMP \
     PERRY_SKIP_BUILD=1 \
     PERRY_BIN="$WORK/perry.exe" \
     PERRY_RUNTIME_DIR="$WORK" \
-    "$WORK/scripts/run_gap_tests.sh" --filter test_gap_reuse >"$WORK/gap-output" 2>&1
+    "$WORK/scripts/run_gap_tests.sh" --filter test_gap_reuse >"$WORK/gap-output" 2>&1 || {
+        gap_status=$?
+        echo "gap wrapper failed:" >&2
+        cat "$WORK/gap-output" >&2
+        exit "$gap_status"
+    }
 grep -F "test-parity/gap_snapshot.windows.json" "$WORK/gap-output" >/dev/null
 
 echo "PASS"

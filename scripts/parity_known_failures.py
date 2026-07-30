@@ -12,22 +12,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_REPORT = ROOT / "test-parity" / "reports" / "latest.json"
 DEFAULT_KNOWN = ROOT / "test-parity" / "known_failures.json"
-PLATFORMS = frozenset({"linux", "macos", "windows", "other"})
+PLATFORM_ALIASES = {
+    "cygwin": "windows",
+    "darwin": "macos",
+    "linux": "linux",
+    "macos": "macos",
+    "mingw": "windows",
+    "msys": "windows",
+    "other": "other",
+    "win32": "windows",
+    "windows": "windows",
+}
+PLATFORMS = frozenset(PLATFORM_ALIASES.values())
 
 
 def normalize_platform(value: str) -> str:
     folded = value.strip().lower()
-    aliases = {
-        "darwin": "macos",
-        "macos": "macos",
-        "linux": "linux",
-        "win32": "windows",
-        "windows": "windows",
-        "cygwin": "windows",
-        "msys": "windows",
-        "mingw": "windows",
-    }
-    return aliases.get(folded, "other")
+    return PLATFORM_ALIASES.get(folded, "other")
 
 
 def load_json(path: Path) -> dict:
@@ -43,7 +44,7 @@ def report_failures(report: dict) -> set[str]:
     if not isinstance(failures, dict):
         raise ValueError("parity report must contain a failures object")
     result: set[str] = set()
-    for category in ("parity", "compile"):
+    for category in ("parity", "compile", "crash"):
         values = failures.get(category) or []
         if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
             raise ValueError(f"failures.{category} must be a string array")
@@ -77,7 +78,9 @@ def known_for_platform(known: dict, platform: str) -> tuple[set[str], list[str]]
             problems.append(f"{test_id}: platforms must be a non-empty string array")
             continue
         normalized = [normalize_platform(item) for item in platforms]
-        unknown = sorted({item for item in platforms if item.strip().lower() not in PLATFORMS})
+        unknown = sorted(
+            {item for item in platforms if item.strip().lower() not in PLATFORM_ALIASES}
+        )
         if unknown:
             problems.append(f"{test_id}: unknown platforms: {', '.join(unknown)}")
             continue
@@ -102,7 +105,11 @@ def check(report: dict, known: dict, platform_override: str | None = None) -> tu
 def self_test() -> int:
     report = {
         "platform": "windows",
-        "failures": {"parity": ["all_hosts", "windows_only", "linux_only"], "compile": [""]},
+        "failures": {
+            "parity": ["all_hosts", "windows_only", "linux_only"],
+            "compile": [""],
+            "crash": ["windows_crash"],
+        },
     }
     known = {
         "_schema": {},
@@ -110,7 +117,12 @@ def self_test() -> int:
         "windows_only": {
             "category": "bug-open",
             "reason": "win",
-            "platforms": ["windows"],
+            "platforms": ["win32"],
+        },
+        "windows_crash": {
+            "category": "bug-open",
+            "reason": "crash",
+            "platforms": ["msys"],
         },
         "linux_only": {
             "category": "bug-open",
@@ -122,6 +134,7 @@ def self_test() -> int:
     assert platform == "windows"
     assert new == ["linux_only"]
     assert problems == []
+    assert normalize_platform("darwin") == "macos"
 
     malformed = {
         "bad": {"category": "", "reason": "", "platforms": ["plan9"]},
