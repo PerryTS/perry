@@ -7,7 +7,10 @@ const prefixed = process.getBuiltinModule("node:readline/promises") as any;
 console.log("named createInterface:", typeof createInterface);
 console.log("named Interface:", typeof Interface);
 console.log("named Readline:", typeof Readline);
-console.log("namespace createInterface:", typeof readlinePromises.createInterface);
+console.log(
+  "namespace createInterface:",
+  typeof readlinePromises.createInterface,
+);
 console.log("builtin type:", typeof builtin);
 console.log("builtin createInterface:", typeof builtin.createInterface);
 console.log("builtin Interface:", typeof builtin.Interface);
