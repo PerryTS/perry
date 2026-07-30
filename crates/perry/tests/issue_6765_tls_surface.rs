@@ -25,6 +25,13 @@ console.log(
   typeof tls.TLSSocket.prototype.getX509Certificate,
   typeof tls.TLSSocket.prototype.getPeerX509Certificate,
 );
+console.log(
+  "lengths:",
+  tls.TLSSocket.prototype.setKeyCert.length,
+  tls.TLSSocket.prototype.getSharedSigalgs.length,
+  tls.TLSSocket.prototype.getX509Certificate.length,
+  tls.TLSSocket.prototype.getPeerX509Certificate.length,
+);
 
 const out: any = {};
 tls.convertALPNProtocols(["h2", "http/1.1"], out);
@@ -74,6 +81,7 @@ try {
         String::from_utf8_lossy(&run.stdout),
         concat!(
             "surface: function function function function function\n",
+            "lengths: 1 0 0 0\n",
             "array: true 02683208687474702f312e31\n",
             "copy: 026832\n",
             "range: true ERR_OUT_OF_RANGE\n",
