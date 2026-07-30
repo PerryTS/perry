@@ -326,6 +326,17 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
             | "webSocketClosed"
             | "webSocketHandshakeResponseReceived",
         ) => Some(1),
+        ("inspector.NetworkResources", "put") => Some(1),
+        (
+            "inspector.DOMStorage",
+            "domStorageItemAdded"
+                | "domStorageItemRemoved"
+                | "domStorageItemUpdated"
+                | "domStorageItemsCleared"
+                | "registerStorage",
+        ) => Some(1),
+        ("inspector.Session", "connect" | "connectToMainThread" | "disconnect") => Some(0),
+        ("inspector.Session", "post") => Some(3),
         (
             "process",
             "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback",
@@ -2223,6 +2234,16 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
     ),
     ("https", &[("Agent", 1), ("get", 3), ("request", 0)]),
     (
+        "inspector.DOMStorage",
+        &[
+            ("domStorageItemAdded", 1),
+            ("domStorageItemRemoved", 1),
+            ("domStorageItemUpdated", 1),
+            ("domStorageItemsCleared", 1),
+            ("registerStorage", 1),
+        ],
+    ),
+    (
         "inspector.Network",
         &[
             ("dataReceived", 1),
@@ -2234,6 +2255,16 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("webSocketClosed", 1),
             ("webSocketCreated", 1),
             ("webSocketHandshakeResponseReceived", 1),
+        ],
+    ),
+    ("inspector.NetworkResources", &[("put", 1)]),
+    (
+        "inspector.Session",
+        &[
+            ("connect", 0),
+            ("connectToMainThread", 0),
+            ("disconnect", 0),
+            ("post", 3),
         ],
     ),
     (

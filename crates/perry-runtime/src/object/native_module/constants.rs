@@ -453,15 +453,22 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
             "console" => Some(crate::node_inspector::js_node_inspector_console_object()),
             "Network" => Some(create_sub_namespace("inspector.Network")),
-            "Session" => Some(bound_native_callable_export_value("inspector", "Session")),
+            "NetworkResources" => Some(create_sub_namespace("inspector.NetworkResources")),
+            "DOMStorage" => Some(create_sub_namespace("inspector.DOMStorage")),
+            "Session" => {
+                let value = bound_native_callable_export_value("inspector", "Session");
+                crate::node_inspector::install_session_prototype(value, false);
+                Some(value)
+            }
             _ => None,
         },
         "inspector/promises" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("inspector/promises"),
-            "Session" => Some(bound_native_callable_export_value(
-                "inspector/promises",
-                "Session",
-            )),
+            "Session" => {
+                let value = bound_native_callable_export_value("inspector/promises", "Session");
+                crate::node_inspector::install_session_prototype(value, true);
+                Some(value)
+            }
             _ => None,
         },
         "process" => crate::process::process_metadata_property(property),

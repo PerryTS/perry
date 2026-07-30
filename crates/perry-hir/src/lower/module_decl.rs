@@ -219,8 +219,10 @@ pub(crate) fn lower_module_decl(
                                     ("util.types".to_string(), None)
                                 } else if source == "punycode" && imported == "ucs2" {
                                     ("punycode.ucs2".to_string(), None)
-                                } else if source == "inspector" && imported == "Network" {
-                                    ("inspector.Network".to_string(), None)
+                                } else if source == "inspector"
+                                    && matches!(imported.as_str(), "Network" | "NetworkResources" | "DOMStorage")
+                                {
+                                    (format!("inspector.{imported}"), None)
                                 } else if matches!(source.as_str(), "fs" | "dns" | "stream")
                                     && imported == "promises"
                                 {

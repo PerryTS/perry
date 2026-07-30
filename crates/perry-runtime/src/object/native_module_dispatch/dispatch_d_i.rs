@@ -526,6 +526,19 @@ pub(crate) unsafe fn nm_dispatch_inspector(
         ("inspector/promises", "Session") => {
             crate::node_inspector::js_node_inspector_promises_session_new()
         }
+        ("inspector.Session", "connect") | ("inspector/promises.Session", "connect") => {
+            crate::node_inspector::js_node_inspector_session_connect(obj as usize as i64)
+        }
+        ("inspector.Session", "connectToMainThread")
+        | ("inspector/promises.Session", "connectToMainThread") => {
+            crate::node_inspector::js_node_inspector_session_connect_to_main_thread(obj as usize as i64)
+        }
+        ("inspector.Session", "disconnect") | ("inspector/promises.Session", "disconnect") => {
+            crate::node_inspector::js_node_inspector_session_disconnect(obj as usize as i64)
+        }
+        ("inspector.Session", "post") | ("inspector/promises.Session", "post") => {
+            crate::node_inspector::js_node_inspector_session_post(obj as usize as i64, arg(0), arg(1), arg(2))
+        }
         ("inspector.Network", "requestWillBeSent")
         | ("inspector.Network", "responseReceived")
         | ("inspector.Network", "loadingFinished")
@@ -535,6 +548,14 @@ pub(crate) unsafe fn nm_dispatch_inspector(
         | ("inspector.Network", "webSocketCreated")
         | ("inspector.Network", "webSocketClosed")
         | ("inspector.Network", "webSocketHandshakeResponseReceived") => {
+            crate::node_inspector::js_node_inspector_network_notify(arg(0))
+        }
+        ("inspector.NetworkResources", "put")
+        | ("inspector.DOMStorage", "domStorageItemAdded")
+        | ("inspector.DOMStorage", "domStorageItemRemoved")
+        | ("inspector.DOMStorage", "domStorageItemUpdated")
+        | ("inspector.DOMStorage", "domStorageItemsCleared")
+        | ("inspector.DOMStorage", "registerStorage") => {
             crate::node_inspector::js_node_inspector_network_notify(arg(0))
         }
         _ => f64::from_bits(JSValue::undefined().bits()),

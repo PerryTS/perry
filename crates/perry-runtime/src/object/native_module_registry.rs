@@ -94,7 +94,7 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "events" => Some(NmBucket::Events),
         "fs" => Some(NmBucket::Fs),
         "http" | "http2" | "https" => Some(NmBucket::Http),
-        "inspector" | "inspector.Network" | "inspector/promises" => Some(NmBucket::Inspector),
+        "inspector" | "inspector.Network" | "inspector.NetworkResources" | "inspector.DOMStorage" | "inspector.Session" | "inspector/promises" | "inspector/promises.Session" => Some(NmBucket::Inspector),
         "module" => Some(NmBucket::Module),
         "net" => Some(NmBucket::Net),
         // #6563: node-pty + the API-identical @lydell fork, one bucket.
