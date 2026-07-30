@@ -1128,7 +1128,7 @@ fn test_context_value(name: &str) -> f64 {
     let ctx = js_object_alloc(0, 8);
     let test_fn = closure_value(thunk_test as *const u8, 3);
     let test_fn_ptr = raw_ptr_from_value(test_fn);
-    let test_fn = if test_fn_ptr >= 0x10000 {
+    let test_fn = if crate::value::addr_class::is_plausible_heap_addr(test_fn_ptr) {
         boxed_ptr(decorate_test_export(
             test_fn_ptr as *mut ClosureHeader,
             false,
