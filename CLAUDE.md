@@ -202,6 +202,17 @@ Build outputs are invisible to `git status`, so a clean tree tells you nothing a
 - **`conformance-smoke` shards are flaky.** Before believing a red shard, re-run it and A/B the named tests against a pristine `main` build; several are already in `test-parity/known_failures.json`.
 - **Integration suites under `crates/*/tests/*.rs` do not run per-PR** (nightly/tag only) — a regression there can land green and sit red for days. Prefer putting acceptance coverage in `cargo-test`-visible unit tests (#5960).
 
+### ★ Four ways a gate can be unable to fail
+
+All four look fine on the Actions page. None can turn a merge red. When adding or reviewing a gate, check all four — each has bitten this repo, three of them within one week:
+
+1. **`continue-on-error: true`** — `gc-stress` carried it for months while being the only job covering GC correctness.
+2. **Not in branch protection's required contexts** — `gc-stress` again. This is why #6925's `PERRY_PTR_SHAPE_LOCALS=0` regression landed visibly red and survived three merges. A job that reports failure without blocking is documentation, not a gate.
+3. **`concurrency` with unconditional `cancel-in-progress`** — on a branch with a slow runner queue, every new merge cancels the previous run before it reaches a runner. `gc-ratchet` had three consecutive `main` runs cancelled, zero executed. Scope cancellation to `pull_request` and let `main` runs queue.
+4. **The gate runs but its subject never did** — the most dangerous, because the job is genuinely green. `PERRY_GC_FORCE_EVACUATE` was inert for every `gc()`-driven test (#6942/#6946); the matrix's `--pressure` knob disabled the very path it was measuring (#7024); its `moved=` counter summed two different collectors, so a cell could pass having run zero copying minors (#7025). **A gate must assert its subject was live**, not merely that nothing threw — e.g. `copied_objects > 0` before a green verdict.
+
+Corollary: a *new* gate has never been green, so promoting it to required immediately blocks every open PR. Run it once, then promote. Leaving that second step undone is how (2) happens.
+
 ### Known-weak areas (symptom is often not the bug)
 - **Async-to-generator transform, body locals.** It boxes every body local into a shared mutable cell typed `Any`. Two consequences seen in the wild: per-iteration `let`/`const` bindings collapse for closures created in a loop, and computed numeric-key calls (`arr[i](x)`) lose their type proof and silently resolve by *method name*, evaporating the call.
 - **Native base-class subclassing.** A native base's surface is installed at `super()` time and its parent edge lives in the class registry; keying any of that on a literal `extends` name loses it for fieldless classes, indirect subclasses, and class expressions.
