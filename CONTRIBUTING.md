@@ -55,6 +55,13 @@ the full dev/release/dist taxonomy and the slim `--features dev-cli` CLI (#5422)
 
 The full README [Development](README.md#development) section has more `cargo run` recipes (HIR dumps, per-crate rebuilds).
 
+For fixture-only parity reruns, `PERRY_SKIP_BUILD=1 ./run_parity_tests.sh`
+reuses `PERRY_BIN` and the matching runtime/stdlib archives from
+`PERRY_RUNTIME_DIR` (or the binary's directory) with auto-optimization disabled.
+Rebuild instead whenever Rust or Cargo inputs, or compiler, runtime, stdlib, or
+required extension sources differ; reuse does not prove that prebuilt artifacts
+match the checkout.
+
 ## Making changes
 
 ### What goes in a PR

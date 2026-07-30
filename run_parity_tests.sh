@@ -417,8 +417,37 @@ echo ""
 # release binary the prior step had just produced, and (b) adds cargo's own
 # per-invocation overhead × ~150 tests.
 TARGET_DIR="${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}"
-PERRY_BIN="$TARGET_DIR/release/perry"
-echo "Building compiler (release)..."
+PERRY_SKIP_BUILD="${PERRY_SKIP_BUILD:-0}"
+case "$PERRY_SKIP_BUILD" in
+    0|1) ;;
+    *)
+        echo -e "${RED}Invalid PERRY_SKIP_BUILD '$PERRY_SKIP_BUILD' (want 0 or 1)${NC}" >&2
+        exit 1
+        ;;
+esac
+
+if [[ "$PERRY_SKIP_BUILD" == "1" ]]; then
+    PERRY_BIN="${PERRY_BIN:-$TARGET_DIR/release/perry}"
+    if [[ ! -x "$PERRY_BIN" ]]; then
+        echo -e "${RED}PERRY_BIN is not executable: $PERRY_BIN${NC}" >&2
+        exit 1
+    fi
+    PERRY_RUNTIME_DIR="${PERRY_RUNTIME_DIR:-$(cd "$(dirname "$PERRY_BIN")" && pwd)}"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) runtime_lib=perry_runtime.lib; stdlib_lib=perry_stdlib.lib ;;
+        *) runtime_lib=libperry_runtime.a; stdlib_lib=libperry_stdlib.a ;;
+    esac
+    if [[ ! -f "$PERRY_RUNTIME_DIR/$runtime_lib" || ! -f "$PERRY_RUNTIME_DIR/$stdlib_lib" ]]; then
+        echo -e "${RED}PERRY_RUNTIME_DIR must contain $runtime_lib and $stdlib_lib: $PERRY_RUNTIME_DIR${NC}" >&2
+        exit 1
+    fi
+    export PERRY_RUNTIME_DIR PERRY_NO_AUTO_OPTIMIZE=1
+    echo "Using prebuilt compiler: $PERRY_BIN"
+    echo "Using prebuilt runtime archives: $PERRY_RUNTIME_DIR"
+else
+    PERRY_BIN="$TARGET_DIR/release/perry"
+    echo "Building compiler (release)..."
+fi
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
 needs_wasm_host=0
@@ -498,11 +527,11 @@ if [[ "${#BUILD_FEATURES[@]}" -gt 0 ]]; then
     feature_csv=$(IFS=,; echo "${BUILD_FEATURES[*]}")
     BUILD_FEATURE_ARGS=(--features "$feature_csv")
 fi
-if ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" 2>/dev/null; then
+if [[ "$PERRY_SKIP_BUILD" == "0" ]] && ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" 2>/dev/null; then
     echo -e "${RED}Failed to build compiler/runtime archives${NC}"
     exit 1
 fi
-if [[ "$needs_wasm_host" -eq 1 ]]; then
+if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_wasm_host" -eq 1 ]]; then
     # WebAssembly metadata fixtures exercise the real host shims. Build the
     # wasm-enabled runtime staticlib after the CLI build above; enabling this
     # feature while building the `perry` binary would make the CLI link against
@@ -513,7 +542,7 @@ if [[ "$needs_wasm_host" -eq 1 ]]; then
         exit 1
     fi
 fi
-if [[ "$needs_ext_net" -eq 1 ]]; then
+if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_ext_net" -eq 1 ]]; then
     echo "Building net extension (release)..."
     ext_net_jobs="${CARGO_BUILD_JOBS:-1}"
     if ! cargo build --release --quiet -p perry-ext-net -j "$ext_net_jobs" 2>/dev/null; then
@@ -526,7 +555,11 @@ if [[ ! -x "$PERRY_BIN" ]]; then
     exit 1
 fi
 
-echo -e "${GREEN}Compiler and runtime archives built successfully${NC}"
+if [[ "$PERRY_SKIP_BUILD" == "0" ]]; then
+    echo -e "${GREEN}Compiler and runtime archives built successfully${NC}"
+else
+    echo -e "${GREEN}Prebuilt compiler and runtime archives verified${NC}"
+fi
 echo ""
 echo "Running parity tests (backend: $BACKEND_LABEL, suite: $TEST_SUITE${MODULE_FILTER:+, module: $MODULE_FILTER})..."
 echo ""
