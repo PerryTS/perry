@@ -437,9 +437,11 @@ pub(crate) fn resolve_inherited_field_from_prototype(
             let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
             let receiver =
                 f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
+            let scope = crate::gc::RuntimeHandleScope::new();
             let previous_this = super::js_implicit_this_set(receiver);
+            let previous_this_handle = scope.root_nanbox_f64(previous_this);
             let v = crate::proxy::js_proxy_get(proto_val, key_val);
-            super::js_implicit_this_set(previous_this);
+            super::js_implicit_this_set(previous_this_handle.get_nanbox_f64());
             if v.to_bits() == crate::value::TAG_UNDEFINED {
                 return None;
             }
@@ -456,14 +458,19 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     // properties; otherwise prototype accessors would observe the prototype
     // object instead of the instance.
     let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
+    let scope = crate::gc::RuntimeHandleScope::new();
     let previous_this = super::js_implicit_this_set(receiver);
+    let previous_this_handle = scope.root_nanbox_f64(previous_this);
     // The recursive `get_field(proto, key)` re-derives the accessor receiver
     // from `proto`; stash the real instance so an inherited getter binds `this`
     // to it, not to the prototype.
     let prev_override = super::field_get_set::accessor_receiver_override_begin(receiver);
+    let prev_override_handle = prev_override.map(|value| scope.root_nanbox_f64(value));
     let v = super::js_object_get_field_by_name(proto, key);
-    super::field_get_set::accessor_receiver_override_end(prev_override);
-    super::js_implicit_this_set(previous_this);
+    super::field_get_set::accessor_receiver_override_end(
+        prev_override_handle.map(|handle| handle.get_nanbox_f64()),
+    );
+    super::js_implicit_this_set(previous_this_handle.get_nanbox_f64());
     if v.bits() == 0x7FFC_0000_0000_0001 {
         // undefined — treat as "not present" so callers fall back cleanly.
         None
