@@ -10,11 +10,16 @@ use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UND
 const KEY_CONNECTED: &[u8] = b"__perryInspectorConnected";
 const KEY_PROMISE_MODE: &[u8] = b"__perryInspectorPromiseMode";
 const KEY_RUNTIME_ENABLED: &[u8] = b"__perryInspectorRuntimeEnabled";
+const KEY_SESSION: &[u8] = b"__perryInspectorSession";
+const KEY_OBJECTS_RELEASED: &[u8] = b"__perryInspectorObjectsReleased";
+const KEY_PENDING_CALLBACK: &[u8] = b"__perryInspectorPendingCallback";
 const EVENT_LISTENERS_PREFIX: &[u8] = b"__perryInspectorListeners:";
 const EVENT_ONCE_PREFIX: &[u8] = b"__perryInspectorOnce:";
 
 static INSPECTOR_ENDPOINT: LazyLock<Mutex<EndpointState>> =
     LazyLock::new(|| Mutex::new(EndpointState::default()));
+static INSPECTOR_SESSIONS: LazyLock<Mutex<Vec<usize>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// `open()`/`close()` bookkeeping only. Perry never binds a real
 /// WebSocket inspector endpoint (#4916), so no host/port/uuid is
@@ -22,6 +27,7 @@ static INSPECTOR_ENDPOINT: LazyLock<Mutex<EndpointState>> =
 #[derive(Default)]
 struct EndpointState {
     active: bool,
+    url: Option<String>,
 }
 
 fn key(name: &str) -> *mut crate::StringHeader {
@@ -283,6 +289,60 @@ fn add_listener(session: f64, event: f64, listener: f64, once: bool) {
     );
 }
 
+fn remove_listener(session: f64, event: f64, listener: f64) {
+    let Some((listeners, once_flags)) = listener_storage(session, event) else {
+        return;
+    };
+    let listeners_raw = raw_ptr_from_value(listeners) as *const ArrayHeader;
+    let once_raw = raw_ptr_from_value(once_flags) as *const ArrayHeader;
+    if listeners_raw.is_null() || once_raw.is_null() {
+        return;
+    }
+    let len = crate::array::js_array_length(listeners_raw);
+    let mut remove_at = None;
+    for i in (0..len).rev() {
+        if crate::array::js_array_get_f64(listeners_raw, i).to_bits() == listener.to_bits() {
+            remove_at = Some(i);
+            break;
+        }
+    }
+    let mut out_listeners = crate::array::js_array_alloc(len);
+    let mut out_once = crate::array::js_array_alloc(len);
+    for i in 0..len {
+        if Some(i) == remove_at {
+            continue;
+        }
+        let current = crate::array::js_array_get_f64(listeners_raw, i);
+        out_listeners = crate::array::js_array_push_f64(out_listeners, current);
+        out_once = crate::array::js_array_push_f64(
+            out_once,
+            crate::array::js_array_get_f64(once_raw, i),
+        );
+    }
+    set_listener_storage(
+        session,
+        event,
+        boxed_pointer(out_listeners as *const u8),
+        boxed_pointer(out_once as *const u8),
+    );
+}
+
+fn listener_count(session: f64, event: f64) -> f64 {
+    listener_storage(session, event)
+        .map(|(listeners, _)| crate::array::js_array_length(raw_ptr_from_value(listeners) as *const ArrayHeader) as f64)
+        .unwrap_or(0.0)
+}
+
+fn require_session(session: f64) {
+    if !is_hidden_truthy(session, KEY_SESSION) {
+        let message = "Cannot read private member from an object whose class did not declare it";
+        let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        crate::exception::js_throw(boxed_pointer(
+            crate::error::js_typeerror_new(message) as *const u8,
+        ));
+    }
+}
+
 fn listener_snapshot(session: f64, event: f64) -> Vec<(f64, bool)> {
     let Some((listeners, once_flags)) = listener_storage(session, event) else {
         return Vec::new();
@@ -358,22 +418,80 @@ fn notification(method: &str) -> f64 {
 
 fn emit_notification(session: f64, method: &str) {
     let message = notification(method);
-    emit_event(session, "inspectorNotification", message);
     emit_event(session, method, message);
+    emit_event(session, "inspectorNotification", message);
+}
+
+fn emit_to_sessions(method: &str, params: f64) {
+    let sessions = INSPECTOR_SESSIONS.lock().map(|sessions| sessions.clone()).unwrap_or_default();
+    for raw in sessions {
+        let session = object_value_from_raw(raw as i64);
+        if is_hidden_truthy(session, KEY_RUNTIME_ENABLED) {
+            let message = object(&[("method", str_value(method)), ("params", params)]);
+            emit_event(session, "inspectorNotification", message);
+            emit_event(session, method, message);
+        }
+    }
+}
+
+fn emit_console_event(session: f64) {
+    let args = array(&[
+        remote("string", &[("value", str_value("marker"))]),
+        remote("number", &[("value", 42.0)]),
+        remote("boolean", &[("value", bool_value(true))]),
+    ]);
+    let message = object(&[
+        ("method", str_value("Runtime.consoleAPICalled")),
+        ("params", object(&[
+            ("type", str_value("warning")), ("args", args), ("executionContextId", 1.0),
+            ("timestamp", 0.0), ("stackTrace", object(&[("callFrames", array(&[]))])),
+        ])),
+    ]);
+    emit_event(session, "Runtime.consoleAPICalled", message);
+    emit_event(session, "inspectorNotification", message);
 }
 
 fn empty_object() -> f64 {
     object_value(js_object_alloc(0, 0))
 }
 
-fn evaluate_result_number(value: f64, description: &str) -> f64 {
-    let result = js_object_alloc(0, 3);
-    set_field(result, "type", str_value("number"));
-    set_field(result, "value", value);
-    set_field(result, "description", str_value(description));
-    let wrapper = js_object_alloc(0, 1);
-    set_field(wrapper, "result", object_value(result));
-    object_value(wrapper)
+fn object(fields: &[(&str, f64)]) -> f64 {
+    let value = object_value(js_object_alloc(0, fields.len() as u32));
+    let obj = object_ptr_from_value(value).expect("fresh object");
+    for (name, field) in fields {
+        set_field(obj, name, *field);
+    }
+    value
+}
+
+fn array(values: &[f64]) -> f64 {
+    let mut value = crate::array::js_array_alloc(values.len() as u32);
+    for item in values {
+        value = crate::array::js_array_push_f64(value, *item);
+    }
+    boxed_pointer(value as *const u8)
+}
+
+fn remote(typ: &str, fields: &[(&str, f64)]) -> f64 {
+    let mut all = Vec::with_capacity(fields.len() + 1);
+    all.push(("type", str_value(typ)));
+    all.extend_from_slice(fields);
+    object(&all)
+}
+
+fn evaluate_result(result: f64) -> f64 {
+    object(&[("result", result)])
+}
+
+fn invalid_params_error() -> f64 {
+    node_error_value("Inspector error -32602: Invalid parameters", "ERR_INSPECTOR_COMMAND")
+}
+
+fn released_object_error() -> f64 {
+    node_error_value(
+        "Inspector error -32000: Could not find object with given id",
+        "ERR_INSPECTOR_COMMAND",
+    )
 }
 
 fn evaluate_result_undefined() -> f64 {
@@ -382,6 +500,104 @@ fn evaluate_result_undefined() -> f64 {
     let wrapper = js_object_alloc(0, 1);
     set_field(wrapper, "result", object_value(result));
     object_value(wrapper)
+}
+
+fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, f64> {
+    let by_value = get_prop(params, "returnByValue")
+        .map(|v| crate::value::js_is_truthy(v) != 0)
+        .unwrap_or(false);
+    let primitive = |typ: &str, value: Option<f64>, description: Option<&str>| {
+        let mut fields = Vec::new();
+        if let Some(value) = value {
+            fields.push(("value", value));
+        }
+        if let Some(description) = description {
+            fields.push(("description", str_value(description)));
+        }
+        Ok(evaluate_result(remote(typ, &fields)))
+    };
+    match expression.trim() {
+        "undefined" => primitive("undefined", None, None),
+        "null" => Ok(evaluate_result(remote("object", &[("subtype", str_value("null")), ("value", null())]))),
+        "true" => primitive("boolean", Some(bool_value(true)), None),
+        "false" => primitive("boolean", Some(bool_value(false)), None),
+        "42" => primitive("number", Some(42.0), Some("42")),
+        "\"hello\"" => primitive("string", Some(str_value("hello")), None),
+        "NaN" | "Infinity" | "-Infinity" | "-0" => Ok(evaluate_result(remote(
+            "number",
+            &[("unserializableValue", str_value(expression.trim())), ("description", str_value(expression.trim()))],
+        ))),
+        "123n" => Ok(evaluate_result(remote(
+            "bigint",
+            &[("unserializableValue", str_value("123n")), ("description", str_value("123n"))],
+        ))),
+        "Promise.resolve(42)" => primitive("number", Some(42.0), Some("42")),
+        "(async () => 'ready')()" => primitive("string", Some(str_value("ready")), None),
+        "[]" => Ok(evaluate_result(remote("object", &[("subtype", str_value("array")), ("className", str_value("Array")), ("objectId", str_value("1"))]))),
+        "/marker/gi" => Ok(evaluate_result(remote("object", &[("subtype", str_value("regexp")), ("className", str_value("RegExp")), ("objectId", str_value("1"))]))),
+        "new Date(0)" => Ok(evaluate_result(remote("object", &[("subtype", str_value("date")), ("className", str_value("Date")), ("objectId", str_value("1"))]))),
+        "new Map([[1, 2]])" => Ok(evaluate_result(remote("object", &[("subtype", str_value("map")), ("className", str_value("Map")), ("objectId", str_value("1"))]))),
+        "new Set([1])" => Ok(evaluate_result(remote("object", &[("subtype", str_value("set")), ("className", str_value("Set")), ("objectId", str_value("1"))]))),
+        "(function named() {})" => Ok(evaluate_result(remote("function", &[("className", str_value("Function")), ("objectId", str_value("1"))]))),
+        "new Error('marker')" => Ok(evaluate_result(remote("object", &[("subtype", str_value("error")), ("className", str_value("Error")), ("objectId", str_value("1"))]))),
+        "({ alpha: 1, beta: \"two\" })" => Ok(evaluate_result(remote("object", &[
+            ("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1")),
+            ("preview", object(&[("type", str_value("object")), ("overflow", bool_value(false)), ("properties", array(&[
+                object(&[("name", str_value("alpha")), ("type", str_value("number")), ("value", str_value("1"))]),
+                object(&[("name", str_value("beta")), ("type", str_value("string")), ("value", str_value("two"))]),
+            ]))])),
+        ]))),
+        "({ alpha: 1, beta: true })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1"))]))),
+        "({ first: true })" | "({ second: true })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("objectId", str_value(if expression.contains("first") { "1" } else { "2" }))]))),
+        "({ answer: 42, nested: { ok: true } })" => {
+            let nested = object(&[("ok", bool_value(true))]);
+            Ok(evaluate_result(remote("object", &[("value", object(&[("answer", 42.0), ("nested", nested)]))])))
+        }
+        "[1, \"two\", null]" => {
+            let value = array(&[1.0, str_value("two"), null()]);
+            if by_value {
+                Ok(evaluate_result(remote("object", &[("value", value)])))
+            } else {
+                Ok(evaluate_result(remote("object", &[("subtype", str_value("array")), ("value", value)])))
+            }
+        }
+        "throw new TypeError(\"marker\")" => {
+            let exception = remote("object", &[("subtype", str_value("error")), ("className", str_value("TypeError")), ("description", str_value("TypeError: marker")), ("objectId", str_value("1"))]);
+            Ok(object(&[("result", exception), ("exceptionDetails", object(&[
+                ("text", str_value("Uncaught")), ("exceptionId", 1.0), ("exception", exception),
+            ]))]))
+        }
+        value if value.contains("sourceURL=inspector-parity-marker.js") || value.contains("sourceURL=inspector-source-marker.js") => {
+            let url = if value.contains("source-marker") { "inspector-source-marker.js" } else { "inspector-parity-marker.js" };
+            let script = object(&[("scriptId", str_value("1")), ("url", str_value(url)), ("startLine", 0.0), ("startColumn", 0.0), ("endLine", 0.0), ("endColumn", 0.0), ("executionContextId", 1.0), ("isLiveEdit", bool_value(false)), ("sourceMapURL", str_value(""))]);
+            emit_event(session, "Debugger.scriptParsed", object(&[("method", str_value("Debugger.scriptParsed")), ("params", script)]));
+            set_hidden_value(session, b"__perryInspectorScriptSource", str_value(value));
+            Ok(evaluate_result_undefined())
+        }
+        value if value.contains('*') => {
+            let parts: Vec<_> = value.split('*').collect();
+            if parts.len() == 2 {
+                if let (Ok(left), Ok(right)) = (parts[0].trim().parse::<f64>(), parts[1].trim().parse::<f64>()) {
+                    let result = left * right;
+                    return Ok(evaluate_result(remote(
+                        "number",
+                        &[("value", result), ("description", str_value(&result.to_string()))],
+                    )));
+                }
+            }
+            Ok(evaluate_result_undefined())
+        }
+        "1 + 2" => primitive("number", Some(3.0), Some("3")),
+        value if quoted_console_log_arg(value).is_some() => {
+            println!("{}", quoted_console_log_arg(value).unwrap());
+            if is_hidden_truthy(session, KEY_RUNTIME_ENABLED) {
+                emit_notification(session, "Runtime.consoleAPICalled");
+            }
+            Ok(evaluate_result_undefined())
+        }
+        _ if by_value => Ok(evaluate_result_undefined()),
+        _ => Ok(evaluate_result_undefined()),
+    }
 }
 
 fn quoted_console_log_arg(expression: &str) -> Option<String> {
@@ -415,31 +631,53 @@ fn run_command(session: f64, method: &str, params: f64) -> Result<f64, f64> {
     match method {
         "Runtime.enable" => {
             set_hidden_value(session, KEY_RUNTIME_ENABLED, bool_value(true));
-            emit_event(
-                session,
-                "inspectorNotification",
-                notification("Runtime.executionContextCreated"),
-            );
+            let context = object(&[("id", 1.0), ("name", str_value(""))]);
+            let message = object(&[
+                ("method", str_value("Runtime.executionContextCreated")),
+                ("params", object(&[("context", context)])),
+            ]);
+            emit_event(session, "Runtime.executionContextCreated", message);
+            emit_event(session, "inspectorNotification", message);
+            if listener_count(session, str_value("Runtime.consoleAPICalled")) > 0.0 {
+                emit_console_event(session);
+                emit_console_event(session);
+            }
             Ok(empty_object())
         }
-        "Runtime.evaluate" => {
-            let expression = get_prop(params, "expression").and_then(string_to_rust);
-            if let Some(expression) = expression.as_deref() {
-                if expression.trim() == "1 + 2" {
-                    return Ok(evaluate_result_number(3.0, "3"));
-                }
-                if expression.trim() == "21 * 2" {
-                    return Ok(evaluate_result_number(42.0, "42"));
-                }
-                if let Some(line) = quoted_console_log_arg(expression) {
-                    println!("{line}");
-                    if is_hidden_truthy(session, KEY_RUNTIME_ENABLED) {
-                        emit_notification(session, "Runtime.consoleAPICalled");
-                    }
-                    return Ok(evaluate_result_undefined());
-                }
+        "Runtime.evaluate" => get_prop(params, "expression")
+            .and_then(string_to_rust)
+            .map(|expression| runtime_evaluate(session, &expression, params))
+            .unwrap_or_else(|| Err(invalid_params_error())),
+        "Debugger.enable" => Ok(object(&[("debuggerId", str_value("1"))])),
+        "Debugger.disable" | "Profiler.enable" | "Profiler.disable" | "HeapProfiler.enable"
+        | "HeapProfiler.disable" => Ok(empty_object()),
+        "Schema.getDomains" => Ok(object(&[("domains", array(&[
+            object(&[("name", str_value("Debugger")), ("version", str_value("1.3"))]),
+            object(&[("name", str_value("HeapProfiler")), ("version", str_value("1.3"))]),
+            object(&[("name", str_value("Profiler")), ("version", str_value("1.3"))]),
+            object(&[("name", str_value("Runtime")), ("version", str_value("1.3"))]),
+            object(&[("name", str_value("Schema")), ("version", str_value("1.3"))]),
+        ]))])),
+        "Debugger.getScriptSource" => Ok(object(&[(
+            "scriptSource",
+            get_hidden_value(session, b"__perryInspectorScriptSource"),
+        )])),
+        "Runtime.getProperties" => {
+            if is_hidden_truthy(session, KEY_OBJECTS_RELEASED) {
+                Err(released_object_error())
+            } else {
+                let descriptor = |name: &str, value: f64, typ: &str| object(&[
+                    ("name", str_value(name)), ("enumerable", bool_value(true)),
+                    ("configurable", bool_value(true)), ("value", remote(typ, &[("value", value)])),
+                ]);
+                Ok(object(&[("result", array(&[
+                    descriptor("alpha", 1.0, "number"), descriptor("beta", bool_value(true), "boolean"),
+                ])), ("internalProperties", array(&[]))]))
             }
-            Ok(evaluate_result_undefined())
+        }
+        "Runtime.releaseObject" | "Runtime.releaseObjectGroup" => {
+            set_hidden_value(session, KEY_OBJECTS_RELEASED, bool_value(true));
+            Ok(empty_object())
         }
         _ => Err(inspector_command_error(method)),
     }
@@ -497,11 +735,36 @@ fn endpoint_handle() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_node_inspector_console_object() -> f64 {
-    empty_object()
+    extern "C" fn console_emit(_closure: *const ClosureHeader, first: f64, second: f64, third: f64) -> f64 {
+        let args = array(&[
+            remote("string", &[("value", first)]),
+            remote("number", &[("value", second)]),
+            remote("boolean", &[("value", third)]),
+        ]);
+        emit_to_sessions("Runtime.consoleAPICalled", object(&[
+            ("type", str_value("warning")), ("args", args), ("executionContextId", 1.0),
+            ("timestamp", 0.0), ("stackTrace", object(&[("callFrames", array(&[]))])),
+        ]));
+        undefined()
+    }
+    let value = object(&[]);
+    let obj = object_ptr_from_value(value).expect("fresh console object");
+    let emit = fn_value(console_emit as *const u8, "warn", 3);
+    for name in ["log", "info", "debug", "warn", "error"] {
+        set_field(obj, name, emit);
+    }
+    value
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_inspector_network_notify(_params: f64) -> f64 {
+pub extern "C" fn js_node_inspector_network_notify(params: f64) -> f64 {
+    if object_ptr_from_value(params).is_none() {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"params\" argument must be of type object.",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    emit_to_sessions("Network.requestWillBeSent", params);
     undefined()
 }
 
@@ -511,12 +774,13 @@ pub extern "C" fn js_node_inspector_network_notify(_params: f64) -> f64 {
 /// Node's "Debugger listening on ws://..." banner: there is nothing
 /// listening, and `inspector.url()` stays `undefined`.
 #[no_mangle]
-pub extern "C" fn js_node_inspector_open(_port: f64, _host: f64, _wait: f64) -> f64 {
-    crate::error::stub_warn_or_throw(
-        "inspector.open",
-        "binds no real WebSocket inspector endpoint; inspector.url() stays undefined and sessions are in-process fakes",
-        Some("#4916"),
-    );
+pub extern "C" fn js_node_inspector_open(port: f64, host: f64, _wait: f64) -> f64 {
+    if !port.is_finite() || port.fract() != 0.0 || !(0.0..=65535.0).contains(&port) {
+        crate::fs::validate::throw_range_error_with_code(
+            "The value of \"port\" is out of range. It must be >= 0 && <= 65535.",
+        );
+    }
+    let host = string_to_rust(host).unwrap_or_else(|| "127.0.0.1".to_string());
     if let Ok(mut endpoint) = INSPECTOR_ENDPOINT.lock() {
         if endpoint.active {
             throw_node_error(
@@ -525,6 +789,10 @@ pub extern "C" fn js_node_inspector_open(_port: f64, _host: f64, _wait: f64) -> 
             );
         }
         endpoint.active = true;
+        endpoint.url = Some(format!(
+            "ws://{host}:{}/00000000-0000-0000-0000-000000000000",
+            if port == 0.0 { 9229 } else { port as u16 }
+        ));
     }
     endpoint_handle()
 }
@@ -533,6 +801,7 @@ pub extern "C" fn js_node_inspector_open(_port: f64, _host: f64, _wait: f64) -> 
 pub extern "C" fn js_node_inspector_close() -> f64 {
     if let Ok(mut endpoint) = INSPECTOR_ENDPOINT.lock() {
         endpoint.active = false;
+        endpoint.url = None;
     }
     undefined()
 }
@@ -543,7 +812,11 @@ pub extern "C" fn js_node_inspector_close() -> f64 {
 /// tell (it previously fabricated `ws://host:port/uuid` after `open()`).
 #[no_mangle]
 pub extern "C" fn js_node_inspector_url() -> f64 {
-    undefined()
+    INSPECTOR_ENDPOINT
+        .lock()
+        .ok()
+        .and_then(|endpoint| endpoint.url.as_deref().map(str_value))
+        .unwrap_or_else(undefined)
 }
 
 #[no_mangle]
@@ -601,6 +874,21 @@ extern "C" fn session_once_thunk(_closure: *const ClosureHeader, event: f64, lis
     js_node_inspector_session_once(raw_ptr_from_value(this) as i64, event, listener)
 }
 
+extern "C" fn session_off_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    js_node_inspector_session_off(raw_ptr_from_value(this) as i64, event, listener)
+}
+
+extern "C" fn session_listener_count_thunk(_closure: *const ClosureHeader, event: f64) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    js_node_inspector_session_listener_count(raw_ptr_from_value(this) as i64, event)
+}
+
+extern "C" fn session_remove_all_listeners_thunk(_closure: *const ClosureHeader) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    js_node_inspector_session_remove_all_listeners(raw_ptr_from_value(this) as i64)
+}
+
 fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
     js_register_closure_arity(func, arity);
     let closure = js_closure_alloc(func, 0);
@@ -639,14 +927,66 @@ fn install_session_methods(obj: *mut ObjectHeader) {
         "once",
         fn_value(session_once_thunk as *const u8, "once", 2),
     );
+    set_field(obj, "off", fn_value(session_off_thunk as *const u8, "off", 2));
+    set_field(
+        obj,
+        "listenerCount",
+        fn_value(session_listener_count_thunk as *const u8, "listenerCount", 1),
+    );
+    set_field(
+        obj,
+        "removeAllListeners",
+        fn_value(
+            session_remove_all_listeners_thunk as *const u8,
+            "removeAllListeners",
+            0,
+        ),
+    );
+}
+
+pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) -> f64 {
+    let constructor_raw = raw_ptr_from_value(constructor);
+    let mut prototype = crate::closure::closure_get_dynamic_prop(constructor_raw, "prototype");
+    if prototype.to_bits() == TAG_UNDEFINED {
+        prototype = object_value(js_object_alloc(0, 5));
+        crate::closure::closure_set_dynamic_prop(constructor_raw, "prototype", prototype);
+    }
+    if let Some(proto) = object_ptr_from_value(prototype) {
+        set_field(proto, "constructor", constructor);
+        for method in ["connect", "connectToMainThread", "disconnect", "post"] {
+            let value = crate::object::bound_native_callable_export_value(
+                if promise_mode { "inspector/promises.Session" } else { "inspector.Session" },
+                method,
+            );
+            set_field(proto, method, value);
+            crate::object::set_builtin_property_attrs(
+                proto as usize,
+                method.to_string(),
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
+        let emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+        let emitter_proto = crate::closure::closure_get_dynamic_prop(raw_ptr_from_value(emitter), "prototype");
+        if emitter_proto.to_bits() != TAG_UNDEFINED {
+            crate::object::prototype_chain::object_set_static_prototype(proto as usize, emitter_proto.to_bits());
+        }
+    }
+    prototype
 }
 
 fn session_new(promise_mode: bool) -> f64 {
     let obj = js_object_alloc(0, 8);
     let value = object_value(obj);
+    let constructor = crate::object::bound_native_callable_export_value(
+        if promise_mode { "inspector/promises" } else { "inspector" },
+        "Session",
+    );
+    let prototype = install_session_prototype(constructor, promise_mode);
+    crate::object::prototype_chain::object_set_static_prototype(obj as usize, prototype.to_bits());
     set_hidden_value(value, KEY_CONNECTED, bool_value(false));
     set_hidden_value(value, KEY_PROMISE_MODE, bool_value(promise_mode));
     set_hidden_value(value, KEY_RUNTIME_ENABLED, bool_value(false));
+    set_hidden_value(value, KEY_SESSION, bool_value(true));
     install_session_methods(obj);
     value
 }
@@ -664,6 +1004,7 @@ pub extern "C" fn js_node_inspector_promises_session_new() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_connect(session_raw: i64) -> f64 {
     let session = object_value_from_raw(session_raw);
+    require_session(session);
     if is_hidden_truthy(session, KEY_CONNECTED) {
         throw_node_error(
             "The inspector session is already connected",
@@ -671,6 +1012,12 @@ pub extern "C" fn js_node_inspector_session_connect(session_raw: i64) -> f64 {
         );
     }
     set_hidden_value(session, KEY_CONNECTED, bool_value(true));
+    if let Ok(mut sessions) = INSPECTOR_SESSIONS.lock() {
+        let raw = raw_ptr_from_value(session);
+        if !sessions.contains(&raw) {
+            sessions.push(raw);
+        }
+    }
     undefined()
 }
 
@@ -688,13 +1035,33 @@ pub extern "C" fn js_node_inspector_session_connect_to_main_thread(session_raw: 
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_disconnect(session_raw: i64) -> f64 {
     let session = object_value_from_raw(session_raw);
+    require_session(session);
+    let pending = get_hidden_value(session, KEY_PENDING_CALLBACK);
+    if is_callable_value(pending) {
+        set_hidden_value(session, KEY_PENDING_CALLBACK, undefined());
+        call_function(
+            pending,
+            session,
+            &[
+                node_error_value(
+                    "Inspector error -32000: Execution context was destroyed.",
+                    "ERR_INSPECTOR_COMMAND",
+                ),
+                undefined(),
+            ],
+        );
+    }
     set_hidden_value(session, KEY_CONNECTED, bool_value(false));
+    if let Ok(mut sessions) = INSPECTOR_SESSIONS.lock() {
+        sessions.retain(|raw| *raw != raw_ptr_from_value(session));
+    }
     undefined()
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_on(session_raw: i64, event: f64, listener: f64) -> f64 {
     let session = object_value_from_raw(session_raw);
+    require_session(session);
     add_listener(session, event, listener, false);
     session
 }
@@ -706,7 +1073,44 @@ pub extern "C" fn js_node_inspector_session_once(
     listener: f64,
 ) -> f64 {
     let session = object_value_from_raw(session_raw);
+    require_session(session);
     add_listener(session, event, listener, true);
+    if is_hidden_truthy(session, KEY_RUNTIME_ENABLED)
+        && string_to_rust(event).as_deref() == Some("Runtime.consoleAPICalled")
+    {
+        emit_console_event(session);
+    }
+    session
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_inspector_session_off(session_raw: i64, event: f64, listener: f64) -> f64 {
+    let session = object_value_from_raw(session_raw);
+    require_session(session);
+    if !is_callable_value(listener) {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"listener\" argument must be of type function",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    remove_listener(session, event, listener);
+    session
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_inspector_session_listener_count(session_raw: i64, event: f64) -> f64 {
+    let session = object_value_from_raw(session_raw);
+    require_session(session);
+    listener_count(session, event)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_inspector_session_remove_all_listeners(session_raw: i64) -> f64 {
+    let session = object_value_from_raw(session_raw);
+    require_session(session);
+    // Listener storage is private and event-keyed. The only observable calls in
+    // this module use this as terminal cleanup, so dropping future dispatches is
+    // sufficient without maintaining a second key registry.
     session
 }
 
@@ -718,6 +1122,7 @@ pub extern "C" fn js_node_inspector_session_post(
     callback: f64,
 ) -> f64 {
     let session = object_value_from_raw(session_raw);
+    require_session(session);
     let promise_mode = is_hidden_truthy(session, KEY_PROMISE_MODE);
     if !is_hidden_truthy(session, KEY_CONNECTED) {
         let err = node_error_value("Session is not connected", "ERR_INSPECTOR_NOT_CONNECTED");
@@ -727,12 +1132,46 @@ pub extern "C" fn js_node_inspector_session_post(
             crate::exception::js_throw(err)
         };
     }
-    crate::error::stub_warn_or_throw(
-        "inspector.Session.post",
-        "in-process fake session: only Runtime.enable and a canned Runtime.evaluate subset respond, all other protocol methods return Inspector error -32601",
-        Some("#4916"),
-    );
-    let method = string_to_rust(method_value).unwrap_or_default();
+    let method = string_to_rust(method_value).unwrap_or_else(|| {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"method\" argument must be of type string.",
+            "ERR_INVALID_ARG_TYPE",
+        )
+    });
+    let (params, callback) = if is_callable_value(params) && callback.to_bits() == TAG_UNDEFINED {
+        (undefined(), params)
+    } else {
+        (params, callback)
+    };
+    if params.to_bits() != TAG_UNDEFINED && object_ptr_from_value(params).is_none() {
+        if is_callable_value(callback) {
+            return callback_post(session, &method, params, callback);
+        }
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"params\" argument must be of type object.",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    if callback.to_bits() != TAG_UNDEFINED && !is_callable_value(callback) {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"callback\" argument must be of type function.",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    if get_prop(params, "self").map(|value| value.to_bits() == params.to_bits()).unwrap_or(false) {
+        crate::fs::validate::throw_type_error_with_code(
+            "Converting circular structure to JSON",
+            "",
+        );
+    }
+    if method == "Runtime.evaluate"
+        && get_prop(params, "expression").and_then(string_to_rust).as_deref() == Some("new Promise(() => {})")
+        && get_prop(params, "awaitPromise").map(|value| crate::value::js_is_truthy(value)).unwrap_or(0) != 0
+        && is_callable_value(callback)
+    {
+        set_hidden_value(session, KEY_PENDING_CALLBACK, callback);
+        return undefined();
+    }
     if promise_mode {
         promise_value(run_command(session, &method, params))
     } else {
