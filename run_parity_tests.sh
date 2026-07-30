@@ -411,6 +411,27 @@ echo "Building compiler (release)..."
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
 needs_wasm_host=0
+# The default `test-files/` corpus (the gap suite) under PERRY_NO_AUTO_OPTIMIZE
+# links the prebuilt `full` stdlib, which is NOT compiled with the
+# `external-*` pump features. Any test whose module routes through a
+# well-known ext wrapper (events / http / net / ws / zlib) then links against
+# a stdlib with no pump and fails — reported as an untriaged NEW gap failure
+# with no hint that the run mode caused it. Measured: 7 such false regressions
+# (test_gap_events_import_4995, 5x http/fetch, test_gap_net_connect_bound_value),
+# all of which pass with auto-optimize. node-suite already compensates below;
+# do the same here. There is no MODULE_FILTER for this suite, so build the
+# whole well-known set rather than switching on it.
+if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]]; then
+    BUILD_PACKAGES+=(-p perry-ext-events -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib)
+    BUILD_FEATURES+=(
+        perry-stdlib/external-events-construct
+        perry-stdlib/external-http-server-pump
+        perry-stdlib/external-http-client-pump
+        perry-stdlib/external-net-pump
+        perry-stdlib/external-ws-pump
+        perry-stdlib/external-zlib-pump
+    )
+fi
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
         ""|http|http/*|https|https/*|http2|http2/*)

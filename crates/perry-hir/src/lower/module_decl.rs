@@ -221,6 +221,19 @@ pub(crate) fn lower_module_decl(
                                     ("punycode.ucs2".to_string(), None)
                                 } else if source == "inspector" && imported == "Network" {
                                     ("inspector.Network".to_string(), None)
+                                } else if matches!(source.as_str(), "fs" | "dns" | "stream")
+                                    && imported == "promises"
+                                {
+                                    // `import { promises } from "node:fs"` binds the
+                                    // promises SUBMODULE namespace — route it exactly
+                                    // like `import * as x from "node:fs/promises"`.
+                                    // The generic arm below made it a native METHOD
+                                    // (`fs.promises`), so `promises.realpath(p)`
+                                    // dispatched the callback-API `fs.realpath` and
+                                    // resolved `undefined` (the compiled CLI's file cache
+                                    // normalized every path to `undefined` and every
+                                    // later fs call threw).
+                                    (format!("{source}/promises"), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };

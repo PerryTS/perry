@@ -5,9 +5,12 @@ pub(super) use aes::cipher::{
     generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit as AesBlockKeyInit,
 };
 pub(super) use aes::{Aes128, Aes192, Aes256};
+pub(super) use aes_09::{
+    Aes128 as Aes128CbcCipher, Aes192 as Aes192CbcCipher, Aes256 as Aes256CbcCipher,
+};
 pub(super) use base64::Engine as _;
 pub(super) use cbc::{
-    cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit},
+    cipher::{block_padding::Pkcs7, BlockModeDecrypt, BlockModeEncrypt, KeyIvInit},
     Decryptor, Encryptor,
 };
 pub(super) use hmac::{Hmac, KeyInit, Mac};
