@@ -5,7 +5,7 @@
 //! silently disagree.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct AndroidTarget {
+pub(crate) struct AndroidTarget {
     pub rust_triple: &'static str,
     pub clang_target: &'static str,
     pub manifest_arch: &'static str,
@@ -23,7 +23,7 @@ const X86_64: AndroidTarget = AndroidTarget {
     manifest_arch: "x64",
 };
 
-pub(super) fn android_target(target: Option<&str>) -> Option<AndroidTarget> {
+pub(crate) fn android_target(target: Option<&str>) -> Option<AndroidTarget> {
     match target {
         // Wear OS currently uses the same arm64 NDK build as Android devices.
         Some("android") | Some("wearos") => Some(ARM64),
@@ -32,7 +32,7 @@ pub(super) fn android_target(target: Option<&str>) -> Option<AndroidTarget> {
     }
 }
 
-pub(super) fn is_android_target(target: Option<&str>) -> bool {
+pub(crate) fn is_android_target(target: Option<&str>) -> bool {
     android_target(target).is_some()
 }
 

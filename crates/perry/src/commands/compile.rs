@@ -9,7 +9,7 @@ use crate::OutputFormat;
 // `compile/` directory. The `compile.rs` orchestrator stays as the
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
-mod android_target;
+pub(crate) mod android_target;
 mod app_metadata;
 mod apple_codesign;
 mod apple_info_plist;
