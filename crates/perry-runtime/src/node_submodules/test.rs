@@ -567,6 +567,20 @@ fn mock_context_object(id: i64, calls: f64, include_call_tracking: bool) -> f64 
     boxed_ptr(obj)
 }
 
+fn mock_function_metadata(original: f64) -> (String, u32) {
+    if !is_callable_value(original) {
+        return ("mockFn".to_string(), 0);
+    }
+    let closure = raw_ptr_from_value(original) as *const ClosureHeader;
+    let dynamic_name = crate::closure::closure_get_own_dynamic_prop(closure as usize, "name")
+        .and_then(value_to_string);
+    let name = dynamic_name
+        .or_else(|| unsafe { crate::builtins::function_name_for_ptr((*closure).func_ptr as usize) })
+        .unwrap_or_default();
+    let length = crate::closure::closure_length(closure).unwrap_or(0);
+    (name, length)
+}
+
 fn create_mock_function(original: f64, implementation: f64, restore: MockRestoreTarget) -> f64 {
     if !JSValue::from_bits(original.to_bits()).is_undefined() {
         assert_callable_arg("original", original);
@@ -575,29 +589,44 @@ fn create_mock_function(original: f64, implementation: f64, restore: MockRestore
         assert_callable_arg("implementation", implementation);
     }
 
+    let (name, length) = mock_function_metadata(original);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let original = scope.root_nanbox_f64(original);
+    let implementation = scope.root_nanbox_f64(implementation);
     let id = next_mock_id();
-    let calls = boxed_ptr(crate::array::js_array_alloc(0));
-    let context = mock_context_object(id, calls, true);
-    let function = rest_closure_value_with_id(mock_function_invoke as *const u8, 0, id);
-    let closure_ptr = raw_ptr_from_value(function);
+    let calls = scope.root_nanbox_f64(boxed_ptr(crate::array::js_array_alloc(0)));
+    let context = scope.root_nanbox_f64(mock_context_object(id, calls.get_nanbox_f64(), true));
+    let function = scope.root_nanbox_f64(rest_closure_value_with_id(
+        mock_function_invoke as *const u8,
+        0,
+        id,
+    ));
+    let closure_ptr = raw_ptr_from_value(function.get_nanbox_f64());
     if closure_ptr != 0 {
-        crate::object::set_bound_native_closure_name(closure_ptr as *mut ClosureHeader, "mockFn");
-        crate::closure::closure_set_dynamic_prop(closure_ptr, "mock", context);
+        crate::object::set_bound_native_closure_name(closure_ptr as *mut ClosureHeader, &name);
+        let closure_ptr = raw_ptr_from_value(function.get_nanbox_f64());
+        crate::object::set_builtin_closure_length(closure_ptr, length);
+        crate::object::set_builtin_property_attrs(
+            closure_ptr,
+            "length".to_string(),
+            crate::object::PropertyAttrs::new(false, false, true),
+        );
+        crate::closure::closure_set_dynamic_prop(closure_ptr, "mock", context.get_nanbox_f64());
     }
 
     MOCK_STATES.with(|states| {
         states.borrow_mut().push(MockState {
             id,
-            original,
-            implementation,
+            original: original.get_nanbox_f64(),
+            implementation: implementation.get_nanbox_f64(),
             once: Vec::new(),
-            calls,
-            context,
-            function,
+            calls: calls.get_nanbox_f64(),
+            context: context.get_nanbox_f64(),
+            function: function.get_nanbox_f64(),
             restore,
         });
     });
-    function
+    function.get_nanbox_f64()
 }
 
 fn create_restore_context(restore: MockRestoreTarget) -> f64 {
@@ -703,6 +732,10 @@ fn record_mock_call(id: i64, args_value: f64, this_value: f64, result: f64, erro
         }
     });
 }
+
+#[cfg(test)]
+#[path = "test_metadata_unit_tests.rs"]
+mod metadata_tests;
 
 extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> f64 {
     let id = closure_id(closure);
