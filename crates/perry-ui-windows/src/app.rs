@@ -1285,6 +1285,11 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(0)
         }
+        WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            crate::theme::refresh_window_tree(hwnd);
+            crate::dwm::apply_titlebar_theme(hwnd);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_PAINT => {
             // Main window has no content to paint — just validate the region
             let mut ps = PAINTSTRUCT::default();
@@ -1345,6 +1350,9 @@ unsafe extern "system" fn wnd_proc(
             if let Some(result) = crate::widgets::text::handle_ctlcolor(hdc, child_hwnd) {
                 return result;
             }
+            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+                return result;
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         x if x == 0x0133 /* WM_CTLCOLOREDIT */ => {
@@ -1352,6 +1360,9 @@ unsafe extern "system" fn wnd_proc(
             let child_hwnd = HWND(lparam.0 as *mut _);
             if let Some(brush) = crate::widgets::textfield::handle_ctlcoloredit(hdc, child_hwnd) {
                 return LRESULT(brush);
+            }
+            if let Some(result) = crate::theme::handle_control_color(hdc, true) {
+                return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -1377,6 +1388,9 @@ unsafe extern "system" fn wnd_proc(
                 } else {
                     break;
                 }
+            }
+            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+                return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -1421,7 +1435,7 @@ unsafe extern "system" fn wnd_proc(
                     return LRESULT(1);
                 }
             }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            crate::theme::erase_background(hwnd, HDC(wparam.0 as *mut _))
         }
         WM_DESTROY => {
             crate::app::handle_terminate();

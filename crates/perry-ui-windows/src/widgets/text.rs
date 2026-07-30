@@ -438,14 +438,18 @@ pub fn handle_ctlcolor(hdc: HDC, child_hwnd: HWND) -> Option<LRESULT> {
     // Find the nearest ancestor brush for background
     let ancestor_brush = find_ancestor_brush(child_hwnd);
 
-    let null_brush = LRESULT(unsafe { GetStockObject(NULL_BRUSH) }.0 as isize);
-
     // With WS_CLIPCHILDREN on parent VStack/HStack, the parent doesn't paint
     // under child controls. Return the ancestor brush so the Text control fills
     // its own background with the correct color.
     let bg_brush = ancestor_brush
         .map(|b| LRESULT(b.0 as isize))
-        .unwrap_or(null_brush);
+        .unwrap_or_else(|| {
+            if crate::theme::is_dark_mode() {
+                LRESULT(crate::theme::background_brush().0 as isize)
+            } else {
+                LRESULT(unsafe { GetStockObject(NULL_BRUSH) }.0 as isize)
+            }
+        });
 
     TEXT_STYLES.with(|styles| {
         let styles = styles.borrow();
@@ -467,7 +471,7 @@ pub fn handle_ctlcolor(hdc: HDC, child_hwnd: HWND) -> Option<LRESULT> {
                 }
                 Some(bg_brush)
             } else {
-                None
+                crate::theme::handle_control_color(hdc, false)
             }
         }
     })

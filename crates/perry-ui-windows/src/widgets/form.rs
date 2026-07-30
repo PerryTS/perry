@@ -56,6 +56,11 @@ unsafe extern "system" fn form_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if let Some(result) =
+        unsafe { crate::theme::handle_container_message(hwnd, msg, wparam, lparam) }
+    {
+        return result;
+    }
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 

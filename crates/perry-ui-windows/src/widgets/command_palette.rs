@@ -21,7 +21,7 @@ use windows::core::PCWSTR;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
+use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH, HDC};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
@@ -254,6 +254,7 @@ pub fn show() {
                 None,
             )
             .unwrap();
+            crate::theme::refresh_window_tree(popup);
 
             POPUP.with(|p| *p.borrow_mut() = Some((popup, edit, list)));
             QUERY.with(|q| q.borrow_mut().clear());
@@ -314,7 +315,17 @@ unsafe extern "system" fn palette_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if let Some(result) =
+        unsafe { crate::theme::handle_container_message(hwnd, msg, wparam, lparam) }
+    {
+        return result;
+    }
     match msg {
+        WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            crate::theme::refresh_window_tree(hwnd);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_ERASEBKGND => crate::theme::erase_background(hwnd, HDC(wparam.0 as *mut _)),
         WM_COMMAND => {
             let control_id = (wparam.0 & 0xFFFF) as u16;
             let notify = ((wparam.0 >> 16) & 0xFFFF) as u16;

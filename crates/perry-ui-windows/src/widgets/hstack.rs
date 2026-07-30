@@ -67,6 +67,10 @@ unsafe extern "system" fn container_wnd_proc(
                 let brush = unsafe { CreateSolidBrush(COLORREF(color)) };
                 return LRESULT(brush.0 as isize);
             }
+            let hdc = HDC(wparam.0 as *mut _);
+            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+                return result;
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_COMMAND | WM_CONTEXTMENU | WM_DRAWITEM => {
@@ -77,7 +81,14 @@ unsafe extern "system" fn container_wnd_proc(
         }
         x if x == 0x0133 /* WM_CTLCOLOREDIT */ => {
             if let Ok(parent) = GetParent(hwnd) {
-                return SendMessageW(parent, msg, Some(wparam), Some(lparam));
+                let result = SendMessageW(parent, msg, Some(wparam), Some(lparam));
+                if result.0 != 0 {
+                    return result;
+                }
+            }
+            let hdc = HDC(wparam.0 as *mut _);
+            if let Some(result) = crate::theme::handle_control_color(hdc, true) {
+                return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -127,6 +138,12 @@ unsafe extern "system" fn container_wnd_proc(
                     windows::Win32::Graphics::Gdi::EndPaint(hwnd, &ps);
                     return LRESULT(0);
                 }
+            }
+            if msg == WM_ERASEBKGND {
+                return crate::theme::erase_background(
+                    hwnd,
+                    windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _),
+                );
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }

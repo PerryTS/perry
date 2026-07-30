@@ -181,6 +181,7 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
                 None,
             );
             let Ok(btn) = btn else { return };
+            crate::theme::apply_control_theme(btn);
 
             NAVS.with(|n| {
                 let mut navs = n.borrow_mut();

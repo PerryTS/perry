@@ -6,7 +6,7 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{FillRect, HBRUSH};
+use windows::Win32::Graphics::Gdi::{FillRect, HBRUSH, HDC};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
@@ -145,7 +145,27 @@ unsafe extern "system" fn scroll_wnd_proc(
         }
         WM_COMMAND | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CONTEXTMENU | WM_DRAWITEM => {
             if let Ok(parent) = GetParent(hwnd) {
-                return SendMessageW(parent, msg, Some(wparam), Some(lparam));
+                let result = SendMessageW(parent, msg, Some(wparam), Some(lparam));
+                if result.0 != 0 || !matches!(msg, WM_CTLCOLORSTATIC | WM_CTLCOLORBTN) {
+                    return result;
+                }
+            }
+            let hdc = HDC(wparam.0 as *mut _);
+            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+                return result;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        x if x == 0x0133 /* WM_CTLCOLOREDIT */ => {
+            if let Ok(parent) = GetParent(hwnd) {
+                let result = SendMessageW(parent, msg, Some(wparam), Some(lparam));
+                if result.0 != 0 {
+                    return result;
+                }
+            }
+            let hdc = HDC(wparam.0 as *mut _);
+            if let Some(result) = crate::theme::handle_control_color(hdc, true) {
+                return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -173,6 +193,12 @@ unsafe extern "system" fn scroll_wnd_proc(
                     windows::Win32::Graphics::Gdi::EndPaint(hwnd, &ps);
                     return LRESULT(0);
                 }
+            }
+            if msg == WM_ERASEBKGND {
+                return crate::theme::erase_background(
+                    hwnd,
+                    windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _),
+                );
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }

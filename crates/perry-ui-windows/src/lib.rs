@@ -150,6 +150,8 @@ pub mod menu;
 pub mod sheet;
 pub mod state;
 pub mod system;
+#[cfg(target_os = "windows")]
+pub mod theme;
 pub mod toolbar;
 pub mod tray;
 pub mod widgets;

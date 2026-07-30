@@ -292,8 +292,9 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
     };
 
     let text_color = BUTTON_TEXT_COLORS.with(|c| c.borrow().get(&handle).copied());
-    // Default: dark charcoal text for buttons without explicit color
-    let text_color = text_color.unwrap_or(0x00333333);
+    let text_color = text_color
+        .map(COLORREF)
+        .unwrap_or_else(crate::theme::text_color);
 
     unsafe {
         let hdc = dis.hDC;
@@ -322,10 +323,12 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
                 FillRect(hdc, &rect, brush);
             }
             let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush.into());
+        } else if crate::theme::is_dark_mode() {
+            FillRect(hdc, &rect, crate::theme::control_brush());
         }
 
         // Draw centered text
-        SetTextColor(hdc, COLORREF(text_color));
+        SetTextColor(hdc, text_color);
         SetBkMode(hdc, TRANSPARENT);
 
         let hfont = windows::Win32::Graphics::Gdi::HFONT(

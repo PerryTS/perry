@@ -266,6 +266,7 @@ pub fn alloc_control_id() -> u16 {
 /// Register a widget entry and return its 1-based handle.
 #[cfg(target_os = "windows")]
 pub fn register_widget(hwnd: HWND, kind: WidgetKind, control_id: u16) -> i64 {
+    crate::theme::apply_control_theme(hwnd);
     let handle = WIDGETS.with(|w| {
         let mut widgets = w.borrow_mut();
         widgets.push(WidgetEntry {
@@ -324,6 +325,7 @@ pub fn register_widget_with_layout(
     spacing: f64,
     insets: (f64, f64, f64, f64),
 ) -> i64 {
+    crate::theme::apply_control_theme(hwnd);
     let control_id = alloc_control_id();
     let handle = WIDGETS.with(|w| {
         let mut widgets = w.borrow_mut();

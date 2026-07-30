@@ -47,6 +47,11 @@ unsafe extern "system" fn toolbar_default_wnd_proc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
+    if let Some(result) =
+        unsafe { crate::theme::handle_container_message(hwnd, msg, wparam, lparam) }
+    {
+        return result;
+    }
     windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
@@ -100,6 +105,7 @@ pub fn create() -> i64 {
                 None,
             )
             .unwrap();
+            crate::theme::apply_control_theme(hwnd);
 
             TOOLBAR_HWNDS.with(|t| t.borrow_mut().insert(id, hwnd));
         }
@@ -149,7 +155,7 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, 
                     let x = ((item_count - 1) * 80) as i32;
                     let label_wide = to_wide(&label);
                     let btn_class = to_wide("BUTTON");
-                    let _btn = CreateWindowExW(
+                    if let Ok(btn) = CreateWindowExW(
                         WINDOW_EX_STYLE::default(),
                         PCWSTR(btn_class.as_ptr()),
                         PCWSTR(label_wide.as_ptr()),
@@ -162,7 +168,9 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, 
                         None,
                         Some(HINSTANCE::from(hinstance)),
                         None,
-                    );
+                    ) {
+                        crate::theme::apply_control_theme(btn);
+                    }
                 }
             }
         });

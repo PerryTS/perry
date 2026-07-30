@@ -79,6 +79,11 @@ unsafe extern "system" fn window_default_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            crate::theme::refresh_window_tree(hwnd);
+            crate::dwm::apply_titlebar_theme(hwnd);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_COMMAND => {
             let control_id = (wparam.0 & 0xFFFF) as u16;
             let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u16;
@@ -92,16 +97,52 @@ unsafe extern "system" fn window_default_wnd_proc(
             if let Some(result) = crate::widgets::text::handle_ctlcolor(hdc, child_hwnd) {
                 return result;
             }
+            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+                return result;
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         x if x == 0x0133 /* WM_CTLCOLOREDIT */ => {
             use windows::Win32::Graphics::Gdi::HDC;
             let hdc = HDC(wparam.0 as *mut _);
             let child_hwnd = HWND(lparam.0 as *mut _);
-            if let Some(result) = crate::widgets::text::handle_ctlcolor(hdc, child_hwnd) {
+            if let Some(brush) = crate::widgets::textfield::handle_ctlcoloredit(hdc, child_hwnd) {
+                return LRESULT(brush);
+            }
+            if let Some(result) = crate::theme::handle_control_color(hdc, true) {
                 return result;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CTLCOLORBTN => {
+            use windows::Win32::Graphics::Gdi::HDC;
+            let hdc = HDC(wparam.0 as *mut _);
+            if let Some(result) = crate::theme::handle_control_color(hdc, false) {
+                return result;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_DRAWITEM => {
+            if crate::widgets::button::handle_draw_item(lparam) {
+                return LRESULT(1);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_ERASEBKGND => {
+            use windows::Win32::Graphics::Gdi::HDC;
+            let window_id = HWND_TO_WINDOW.with(|m| m.borrow().get(&(hwnd.0 as isize)).copied());
+            if let Some(wid) = window_id {
+                if let Some(root) = WINDOW_ROOTS.with(|m| m.borrow().get(&wid).copied()) {
+                    if let Some(brush) = crate::widgets::get_bg_brush(root) {
+                        let hdc = HDC(wparam.0 as *mut _);
+                        let mut rect = RECT::default();
+                        let _ = GetClientRect(hwnd, &mut rect);
+                        windows::Win32::Graphics::Gdi::FillRect(hdc, &rect, brush);
+                        return LRESULT(1);
+                    }
+                }
+            }
+            crate::theme::erase_background(hwnd, HDC(wparam.0 as *mut _))
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
