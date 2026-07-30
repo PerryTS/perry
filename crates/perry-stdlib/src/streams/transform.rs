@@ -267,7 +267,7 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
 /// teepipe2.js shows the transform output landing one tick later than a
 /// single-job deferral produces. Re-queue once, then run the transform.
 extern "C" fn transform_write_job(closure: *const ClosureHeader) -> f64 {
-    unsafe {
+    {
         let job_fn = transform_write_job2 as *const u8;
         perry_runtime::closure::js_register_closure_arity(job_fn, 0);
         let job = perry_runtime::closure::js_closure_alloc(job_fn, 5);

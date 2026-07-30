@@ -74,7 +74,7 @@ fn build_taffy_tree(
             let style = Style {
                 size: Size {
                     width: length(cols),
-                    height: length(1.0),
+                    height: length(1.0_f32),
                 },
                 ..Default::default()
             };

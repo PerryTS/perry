@@ -696,6 +696,7 @@ pub(crate) extern "C" fn array_prototype_sort_thunk(
 /// keeps the closure call convention independent of the spec `.length`.
 macro_rules! array_proto_arraylike_cb_thunk {
     ($name:ident, $engine:path) => {
+        #[allow(non_snake_case)] // thunk name mirrors JS API surface
         pub(crate) extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
             let this = crate::object::js_implicit_this_get();
             let args = global_this_rest_array_values(rest);
@@ -732,6 +733,7 @@ array_proto_arraylike_cb_thunk!(
 
 macro_rules! array_proto_arraylike_optarg_thunk {
     ($name:ident, $engine:path) => {
+        #[allow(non_snake_case)] // thunk name mirrors JS API surface
         pub(crate) extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
             let this = crate::object::js_implicit_this_get();
             let args = global_this_rest_array_values(rest);
@@ -757,6 +759,7 @@ fn reduce_right_engine(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
 
 macro_rules! array_proto_arraylike_search_thunk {
     ($name:ident, $engine:path) => {
+        #[allow(non_snake_case)] // thunk name mirrors JS API surface
         pub(crate) extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
             let this = crate::object::js_implicit_this_get();
             let args = global_this_rest_array_values(rest);

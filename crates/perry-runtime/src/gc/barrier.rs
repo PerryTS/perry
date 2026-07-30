@@ -99,6 +99,8 @@ impl DirtyHeaderSlotScan {
                 }
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                // Preserve single-slot scan semantics for every dirty range
+                // entry: weak-target skip, layout tracking, accounting, visit.
                 for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
                     work.push(DirtySlotWork::Range(DirtySlotRangeWork {
                         slots: range.slots(),
@@ -488,134 +490,6 @@ pub(super) unsafe fn scan_dirty_slot_with_layout(
     stats.dirty_slots_scanned += 1;
     crate::arena::old_page_account_dirty_slot(slot as usize);
     visit_slot(slot, stats);
-}
-
-pub(super) unsafe fn scan_dirty_slot_range(
-    slots: *mut u64,
-    slot_count: usize,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    if slots.is_null() || slot_count == 0 || dirty_pages.is_empty() {
-        return;
-    }
-    const PAGE_SHIFT: usize = 12;
-    const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
-
-    let slots_start = slots as usize;
-    let Some(slots_bytes) = slot_count.checked_mul(std::mem::size_of::<u64>()) else {
-        return;
-    };
-    let Some(slots_end) = slots_start.checked_add(slots_bytes) else {
-        return;
-    };
-    let mut ranges = Vec::<(usize, usize)>::new();
-
-    for &page in dirty_pages {
-        let page_start = page << PAGE_SHIFT;
-        let page_end = page_start + PAGE_SIZE;
-        if page_end <= slots_start || page_start >= slots_end {
-            continue;
-        }
-        stats.dirty_slot_pages_considered += 1;
-        let start_addr = page_start.max(slots_start);
-        let end_addr = page_end.min(slots_end);
-        let start_idx = (start_addr - slots_start).div_ceil(8);
-        let end_idx = (end_addr - slots_start).div_ceil(8);
-        if start_idx < end_idx && start_idx < slot_count {
-            ranges.push((start_idx, end_idx.min(slot_count)));
-        }
-    }
-
-    if ranges.is_empty() {
-        return;
-    }
-    ranges.sort_unstable();
-    let mut merged = Vec::<(usize, usize)>::with_capacity(ranges.len());
-    for (start, end) in ranges {
-        if let Some((_, last_end)) = merged.last_mut() {
-            if start <= *last_end {
-                *last_end = (*last_end).max(end);
-                continue;
-            }
-        }
-        merged.push((start, end));
-    }
-
-    for (start, end) in merged {
-        stats.dirty_slot_ranges_scanned += 1;
-        for i in start..end {
-            stats.dirty_slots_scanned += 1;
-            let slot = slots.add(i);
-            crate::arena::old_page_account_dirty_slot(slot as usize);
-            visit_slot(slot, stats);
-        }
-    }
-}
-
-pub(super) unsafe fn scan_dirty_slot_range_with_layout(
-    range: HeapSlotRange,
-    layout_kind: HeapChildSlotReadKind,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
-    if range.slots().is_null() || range.slot_count() == 0 || dirty_pages.is_empty() {
-        return;
-    }
-    const PAGE_SHIFT: usize = 12;
-    const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
-
-    let slots = range.slots();
-    let slot_count = range.slot_count();
-    let slots_start = slots as usize;
-    let Some(slots_bytes) = slot_count.checked_mul(std::mem::size_of::<u64>()) else {
-        return;
-    };
-    let Some(slots_end) = slots_start.checked_add(slots_bytes) else {
-        return;
-    };
-    let mut ranges = Vec::<(usize, usize)>::new();
-    for &page in dirty_pages {
-        let page_start = page << PAGE_SHIFT;
-        let page_end = page_start + PAGE_SIZE;
-        let start = slots_start.max(page_start);
-        let end = slots_end.min(page_end);
-        if start >= end {
-            continue;
-        }
-        stats.dirty_slot_pages_considered += 1;
-        let first = (start - slots_start) / std::mem::size_of::<u64>();
-        let last = (end - slots_start).div_ceil(std::mem::size_of::<u64>());
-        ranges.push((first.min(slot_count), last.min(slot_count)));
-    }
-
-    if ranges.is_empty() {
-        return;
-    }
-    ranges.sort_unstable();
-    let mut merged = Vec::<(usize, usize)>::with_capacity(ranges.len());
-    for (start, end) in ranges {
-        if let Some((_, last_end)) = merged.last_mut() {
-            if start <= *last_end {
-                *last_end = (*last_end).max(end);
-                continue;
-            }
-        }
-        merged.push((start, end));
-    }
-
-    for (start, end) in merged {
-        stats.dirty_slot_ranges_scanned += 1;
-        for i in start..end {
-            stats.dirty_slots_scanned += 1;
-            let slot = slots.add(i);
-            record_layout_child_slot_read(layout_kind);
-            crate::arena::old_page_account_dirty_slot(slot as usize);
-            visit_slot(slot, stats);
-        }
-    }
 }
 
 pub(super) unsafe fn scan_dirty_object_slots(
@@ -1537,11 +1411,13 @@ pub extern "C" fn js_write_barrier_root_nanbox(value_bits: u64) {
 // the runtime through whole-program LLVM bitcode and is free to internalize and
 // dead-strip an unreferenced `#[no_mangle]` symbol — which broke the default
 // `perry file.ts -o out` link with `undefined _js_write_barrier_root_*`. The
-// `#[cfg_attr(feature = "keepalive-anchors", used)]` statics pin retained reference edges so both survive every link mode.
+// `#[used]` statics pin retained reference edges so both survive every link mode.
 // Same pattern as `node_stream_keepalive.rs` / `typedarray.rs`.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_WRITE_BARRIER_ROOT_HEAP_WORD: extern "C" fn(u64) = js_write_barrier_root_heap_word;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_WRITE_BARRIER_ROOT_NANBOX: extern "C" fn(u64) = js_write_barrier_root_nanbox;
 
 #[inline]

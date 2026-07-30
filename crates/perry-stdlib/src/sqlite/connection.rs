@@ -46,7 +46,7 @@ pub(crate) fn open_node_sqlite_connection(db: &NodeSqliteDbHandle) -> rusqlite::
             ]
             .get(idx)
             {
-                conn.set_limit(*limit, *value);
+                conn.set_limit(*limit, *value)?;
             }
         }
     }

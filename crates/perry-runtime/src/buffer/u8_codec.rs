@@ -560,17 +560,23 @@ pub extern "C" fn js_u8_set_from_hex(addr: i64, str_handle: i64) -> f64 {
 
 // Keepalive anchors: these `#[no_mangle]` symbols are only referenced from
 // generated `.o` files, so the auto-optimize whole-program-LLVM bitcode
-// rebuild would dead-strip them without an `#[cfg_attr(feature = "keepalive-anchors", used)]` reference. See
+// rebuild would dead-strip them without an `#[used]` reference. See
 // project_auto_optimize_keepalive_3320.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_U8_TO_BASE64: extern "C" fn(i64, f64) -> *mut StringHeader = js_u8_to_base64;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_U8_TO_HEX: extern "C" fn(i64) -> *mut StringHeader = js_u8_to_hex;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_U8_FROM_BASE64: extern "C" fn(i64, f64) -> *mut BufferHeader = js_u8_from_base64;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_U8_FROM_HEX: extern "C" fn(i64) -> *mut BufferHeader = js_u8_from_hex;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_U8_SET_FROM_BASE64: extern "C" fn(i64, i64, f64) -> f64 = js_u8_set_from_base64;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_U8_SET_FROM_HEX: extern "C" fn(i64, i64) -> f64 = js_u8_set_from_hex;

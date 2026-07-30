@@ -318,7 +318,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     }
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = unsafe { js_object_get_field_by_name(global_obj, key) };
+        let v = js_object_get_field_by_name(global_obj, key);
         if v.bits() == jv.bits() {
             return Some(name);
         }
@@ -326,6 +326,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     None
 }
 
+#[cfg(feature = "global-text")]
 pub(crate) fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     let jsval = crate::value::JSValue::from_bits(options.to_bits());
     if !jsval.is_pointer() {

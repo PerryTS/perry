@@ -608,7 +608,7 @@ impl GcStepSnapshot {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct GcTriggerSnapshot {
+pub(crate) struct GcTriggerSnapshot {
     pub(super) kind: GcTriggerKind,
     pub(super) steps_before: Option<GcStepSnapshot>,
 }

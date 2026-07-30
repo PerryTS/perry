@@ -58,10 +58,6 @@ impl AWeightState {
             sections: [[0.0; 4]; 3],
         }
     }
-
-    fn reset(&mut self) {
-        self.sections = [[0.0; 4]; 3];
-    }
 }
 
 // A-weighting filter coefficients for 48000 Hz sample rate.
@@ -149,14 +145,6 @@ extern "C" {
     fn js_array_create() -> i64;
 }
 
-/// ObjC type encoding for AVAudioPCMBuffer block:
-/// void (^)(AVAudioPCMBuffer *, AVAudioTime *)
-/// We use raw pointers since we access through msg_send! anyway.
-#[repr(C)]
-struct AudioBufferList {
-    _opaque: [u8; 0],
-}
-
 // =============================================================================
 // Public API
 // =============================================================================
@@ -213,9 +201,9 @@ pub fn start() -> i64 {
         let buffer_size: u32 = 1024;
         let _: () = msg_send![
             input_node,
-            installTapOnBus: 0u32
-            bufferSize: buffer_size
-            format: format
+            installTapOnBus: 0u32,
+            bufferSize: buffer_size,
+            format: format,
             block: &*tap_block
         ];
 
@@ -407,8 +395,8 @@ fn write_wav_samples(writer: &mut File, samples: &[f32]) -> std::io::Result<()> 
 // Internal: Audio processing
 // =============================================================================
 
-/// EMA (exponential moving average) state. Uses thread_local because the
-/// tap block always runs on the same audio thread.
+// EMA (exponential moving average) state. Uses thread_local because the
+// tap block always runs on the same audio thread.
 thread_local! {
     static FILTER_STATE: RefCell<AWeightState> = RefCell::new(AWeightState::new());
     static EMA_DB: RefCell<f64> = const { RefCell::new(0.0) };

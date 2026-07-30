@@ -12,16 +12,9 @@
 //! profile are no-ops after the first build.
 
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::SystemTime;
+use std::path::PathBuf;
 
-use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
-use crate::OutputFormat;
-
-use super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
-use super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
+use super::CompilationContext;
 
 mod driver;
 mod freshness;
@@ -35,9 +28,7 @@ pub(crate) use freshness::{
     effective_size_panic_immediate_abort, resolve_auto_well_known_libs,
     retain_workspace_declared_features, size_lto_fat, size_opt_level,
 };
-pub(crate) use no_auto::{
-    build_missing_prebuilt_ext_lib, resolve_no_auto_optimized_libs, resolve_prebuilt_ext_libs,
-};
+pub(crate) use no_auto::{resolve_no_auto_optimized_libs, resolve_prebuilt_ext_libs};
 pub(crate) use paths::{
     android_global_dynamic_tls_rustflag, auto_target_dir_paths, cargo_target_dir_path,
 };

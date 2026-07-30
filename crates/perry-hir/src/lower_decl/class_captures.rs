@@ -274,13 +274,6 @@ pub fn synthesize_class_captures(
     // prologue ids when the closure body references them, and a closure
     // whose ONLY reference is the appended arg gets the id added to its
     // captures list below.
-    fn append_self_new_args_expr(
-        expr: &mut Expr,
-        class_name: &str,
-        cap_args: &[(LocalId, LocalId)],
-    ) {
-        append_new_args_expr(expr, class_name, cap_args, false)
-    }
     fn append_self_new_args_stmt(
         stmt: &mut Stmt,
         class_name: &str,

@@ -76,9 +76,7 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     if jv.is_any_string() {
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let len = match crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
-            Some((ptr, blen)) if !ptr.is_null() => unsafe {
-                crate::string::compute_utf16_len(ptr, blen)
-            },
+            Some((ptr, blen)) if !ptr.is_null() => crate::string::compute_utf16_len(ptr, blen),
             _ => 0,
         };
         let arr = crate::array::js_array_alloc(len.max(1));
@@ -93,9 +91,7 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
             let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
             let len = match crate::string::str_bytes_from_jsvalue(payload, &mut scratch) {
-                Some((ptr, blen)) if !ptr.is_null() => unsafe {
-                    crate::string::compute_utf16_len(ptr, blen)
-                },
+                Some((ptr, blen)) if !ptr.is_null() => crate::string::compute_utf16_len(ptr, blen),
                 _ => 0,
             };
             let arr = crate::array::js_array_alloc(len.max(1));

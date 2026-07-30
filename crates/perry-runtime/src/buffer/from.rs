@@ -955,7 +955,7 @@ fn throw_buffer_alloc_size_out_of_range() -> ! {
         crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
     });
     let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    unsafe {
+    {
         let set = |key: &[u8], value: f64| {
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
             crate::object::js_object_set_field_by_name(obj, key_ptr, value);
@@ -1218,7 +1218,7 @@ fn throw_buffer_concat_invalid_arg_type(index: usize, element: f64) -> ! {
     });
 
     let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_TYPE_ERROR, 4);
-    unsafe {
+    {
         let set = |key: &[u8], value: f64| {
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
             crate::object::js_object_set_field_by_name(obj, key_ptr, value);

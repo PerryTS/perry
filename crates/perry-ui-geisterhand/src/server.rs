@@ -31,6 +31,7 @@ extern "C" {
 // Callback kind constants (must match perry-runtime/src/geisterhand_registry.rs)
 const CB_ON_CLICK: u8 = 0;
 const CB_ON_CHANGE: u8 = 1;
+#[allow(dead_code)] // kept in lockstep with perry-runtime geisterhand_registry callback-kind enumeration
 const CB_ON_SUBMIT: u8 = 2;
 const CB_ON_HOVER: u8 = 3;
 const CB_ON_DOUBLE_CLICK: u8 = 4;

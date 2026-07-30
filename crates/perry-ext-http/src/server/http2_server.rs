@@ -20,17 +20,14 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::header::{HeaderName, HeaderValue};
 use hyper::service::service_fn;
-use hyper::{body::Incoming, Request, Response, Version};
+use hyper::{body::Incoming, Request};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_buffer, alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of,
-    iter_handles_of_mut, register_handle, JsClosure, JsValue, ObjectHeader, RawClosureHeader,
-    StringHeader,
+    alloc_buffer, alloc_string, get_handle_mut, register_handle, JsClosure, JsValue, ObjectHeader,
+    RawClosureHeader, StringHeader,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -38,24 +35,16 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::server::ensure_gc_scanner_registered;
 use crate::server::http2_session_settings::Http2SettingsState;
-use crate::server::request::{
-    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
-    IncomingMessage,
-};
-use crate::server::response::{
-    alloc_server_response_for_request, HyperResponseShape, ResponseBody,
-};
-use crate::server::server::{
-    synthesize_default_response_if_needed, HttpPendingRequest, HttpServer,
-};
+use crate::server::request::handle_to_pointer_f64;
+use crate::server::response::HyperResponseShape;
+use crate::server::server::{HttpPendingRequest, HttpServer};
 use crate::server::tls::{
     build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
     parse_private_key,
 };
 use crate::server::types::{
-    extract_host, extract_port, js_promise_run_microtasks, js_value_is_closure,
-    jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK,
-    STRING_TAG, TAG_NULL, TAG_UNDEFINED,
+    extract_host, extract_port, js_value_is_closure, jsvalue_to_owned_string, POINTER_TAG,
+    PTR_MASK, STRING_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 
 extern "C" {
@@ -76,13 +65,13 @@ pub(crate) use controls::{
     numeric_value, queue_session_goaway, queue_session_ping, queue_session_settings,
 };
 pub(crate) use pump::{
-    has_active_h2_clients, has_pending_h2_events, process_pending_h2, process_pending_h2_events,
+    has_active_h2_clients, process_pending_h2, process_pending_h2_events,
     try_recv_pending_h2_nonblocking,
 };
 pub(crate) use session::{
-    h2_listening_server_for_authority, local_client_connect_ready, local_server_handle_for_client,
-    local_server_session_event_ready, mark_server_sessions_closed, mark_session_closed,
-    parse_headers_object, register_server_session, start_client_request,
+    local_client_connect_ready, local_server_handle_for_client, local_server_session_event_ready,
+    mark_server_sessions_closed, mark_session_closed, parse_headers_object,
+    register_server_session, start_client_request,
 };
 
 // `handle_h2_request` is consumed by `js_node_http2_server_listen` below.

@@ -58,7 +58,7 @@ const RESOLVER_RESOLVE_METHODS: &[&str] = &[
 const RESOLVER_SERVERS_FIELD: &str = "__dns_servers";
 
 #[derive(Clone, Copy)]
-enum RecordKind {
+pub(crate) enum RecordKind {
     A,
     Aaaa,
     Any,

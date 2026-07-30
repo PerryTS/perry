@@ -111,6 +111,7 @@ pub extern "C" fn js_fs_promises_rmdir(path: f64, options: f64) -> f64 {
     thunk_fs_promises_rmdir(std::ptr::null(), path, options)
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_readFile(
     _closure: *const ClosureHeader,
     path: f64,
@@ -136,6 +137,7 @@ pub(crate) extern "C" fn thunk_fs_promises_open(
     }
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_writeFile(
     _closure: *const ClosureHeader,
     path: f64,
@@ -153,6 +155,7 @@ pub(crate) extern "C" fn thunk_fs_promises_writeFile(
     }
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_appendFile(
     _closure: *const ClosureHeader,
     path: f64,
@@ -284,6 +287,7 @@ pub(crate) extern "C" fn thunk_fs_promises_rename(
     promise_from_result_undefined(|| unsafe { crate::fs::js_fs_rename_result(from, to) })
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_copyFile(
     _closure: *const ClosureHeader,
     from: f64,
@@ -373,6 +377,7 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdtemp(
     promise_from_sync_value(|| crate::fs::js_fs_mkdtemp_dispatch(prefix, options))
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_mkdtempDisposable(
     _closure: *const ClosureHeader,
     prefix: f64,
@@ -781,6 +786,7 @@ fn readline_promises_create_interface(opts: f64) -> f64 {
     obj_value
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_readline_createInterface(
     _closure: *const ClosureHeader,
     opts: f64,
@@ -788,6 +794,7 @@ pub(crate) extern "C" fn thunk_readline_createInterface(
     readline_promises_create_interface(opts)
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_readline_Interface(
     _closure: *const ClosureHeader,
     opts: f64,
@@ -960,6 +967,7 @@ pub extern "C" fn js_readline_promises_readline_new(output: f64, options: f64) -
     obj_value
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_readline_Readline(
     _closure: *const ClosureHeader,
     output: f64,

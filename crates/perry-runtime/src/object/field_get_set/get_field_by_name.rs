@@ -1423,7 +1423,7 @@ mod null_key_guard_5972 {
     /// SIGSEGV by dereferencing `(*key).byte_len` at offset 4.
     #[test]
     fn null_key_returns_undefined_not_segfault() {
-        unsafe {
+        {
             let obj = crate::object::js_object_alloc(0, 0);
             let key = crate::string::js_string_from_bytes(b"present".as_ptr(), 7);
             crate::object::js_object_set_field_by_name(obj, key, 42.0);

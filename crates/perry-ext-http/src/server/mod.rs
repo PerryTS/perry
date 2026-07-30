@@ -69,9 +69,7 @@ mod tls;
 mod types;
 mod upgrade;
 
-pub use handle_dispatch::*;
 pub use http2_server::*;
-pub use http2_settings::*;
 pub use https_server::*;
 pub use request::*;
 pub use response::*;

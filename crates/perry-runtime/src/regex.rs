@@ -1618,7 +1618,7 @@ pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHea
 pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHeader {
     let src = js_regexp_get_source(re);
     let flg = js_regexp_get_flags(re);
-    let out = unsafe { format!("/{}/{}", string_as_str(src), string_as_str(flg)) };
+    let out = format!("/{}/{}", string_as_str(src), string_as_str(flg));
     js_string_from_str(&out)
 }
 

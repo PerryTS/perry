@@ -1,10 +1,7 @@
 use super::*;
 
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
-use std::time::SystemTime;
 
 use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
 use crate::OutputFormat;

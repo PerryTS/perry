@@ -1013,7 +1013,7 @@ const SIDE_TABLE_THRESHOLD: u32 = 8;
 /// C-ABI: current entries-array index of `key` (SameValueZero), or `-1.0` if
 /// absent. Used by the delete-safe `for-of` fast path (#6075) to re-derive the
 /// cursor after a mid-iteration delete compacts the entries array. Only invoked
-/// from generated IR, so `#[cfg_attr(feature = "keepalive-anchors", used)]` keeps it linked on the default compile path.
+/// from generated IR, so `#[used]` keeps it linked on the default compile path.
 #[no_mangle]
 pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
     let map = clean_map_ptr(crate::value::js_nanbox_get_pointer(map_boxed) as *const MapHeader);
@@ -1022,7 +1022,8 @@ pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
     }
     unsafe { find_key_index(map, normalize_zero(key)) as f64 }
 }
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key_index;
 
 pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
@@ -1616,67 +1617,81 @@ pub extern "C" fn js_map_delete_number_key(map: *mut MapHeader, key: f64) -> i32
 // Codegen emits these string-key typed lowering helpers directly from
 // generated LLVM IR. Keep roots prevent whole-program LTO/dead-strip from
 // removing the exported symbols when the Rust crate graph has no caller.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_STRING_NUMBER: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     f64,
 ) -> *mut MapHeader = js_map_set_string_number;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_NUMBER_KEY: extern "C" fn(*mut MapHeader, f64, f64) -> *mut MapHeader =
     js_map_set_number_key;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_STRING_KEY: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     f64,
 ) -> *mut MapHeader = js_map_set_string_key;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_STRING_I32: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     i32,
 ) -> *mut MapHeader = js_map_set_string_i32;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_STRING_U32: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     u32,
 ) -> *mut MapHeader = js_map_set_string_u32;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_STRING_F32: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     f32,
 ) -> *mut MapHeader = js_map_set_string_f32;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_STRING_BOOL: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     i32,
 ) -> *mut MapHeader = js_map_set_string_bool;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_SET_STRING_STRING: extern "C" fn(
     *mut MapHeader,
     *const StringHeader,
     *const StringHeader,
 ) -> *mut MapHeader = js_map_set_string_string;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_GET_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> f64 =
     js_map_get_string_key;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_GET_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> f64 =
     js_map_get_number_key;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_HAS_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> i32 =
     js_map_has_string_key;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_HAS_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> i32 =
     js_map_has_number_key;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_DELETE_STRING_KEY: extern "C" fn(*mut MapHeader, *const StringHeader) -> i32 =
     js_map_delete_string_key;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_DELETE_NUMBER_KEY: extern "C" fn(*mut MapHeader, f64) -> i32 =
     js_map_delete_number_key;
 
@@ -2232,8 +2247,9 @@ pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
 // `perry-codegen/src/expr/misc_methods.rs`), so it has zero internal Rust
 // callers. The whole-program auto-optimize bitcode link would otherwise
 // internalize + dead-strip the `#[no_mangle]` export and break the default
-// compile path. The `#[cfg_attr(feature = "keepalive-anchors", used)]` anchor pins it (see project_auto_optimize_keepalive).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+// compile path. The `#[used]` anchor pins it (see project_auto_optimize_keepalive).
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_from_iterable;
 
 /// `Map.prototype.forEach(callback, thisArg)` — calls `callback` with the

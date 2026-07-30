@@ -1245,7 +1245,7 @@ fn test_array_pop_and_push() {
 }
 
 #[test]
-fn test_array_indexOf() {
+fn test_array_index_of() {
     let arr = js_array_alloc(4);
     js_array_push_f64(arr, 10.0);
     js_array_push_f64(arr, 20.0);

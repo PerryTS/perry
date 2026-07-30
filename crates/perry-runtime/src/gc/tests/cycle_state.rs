@@ -767,14 +767,12 @@ fn born_black_build_phase_object_is_traced() {
         (*ch).gc_flags &= !GC_FLAG_MARKED;
     }
     crate::object::test_seed_overflow_fields_root(child as usize, 7f64.to_bits());
-    unsafe {
-        runtime_store_jsvalue_slot(
-            parent as usize,
-            fields as usize,
-            0,
-            ptr_bits(child as usize),
-        );
-    }
+    runtime_store_jsvalue_slot(
+        parent as usize,
+        fields as usize,
+        0,
+        ptr_bits(child as usize),
+    );
 
     // Age the parent/child block out of the block-persistence window
     // (BLOCK_PERSIST_WINDOW = 5 recent general blocks get their objects
@@ -784,7 +782,7 @@ fn born_black_build_phase_object_is_traced() {
     let mut filler_blocks = 0usize;
     while filler_blocks < 7 {
         for _ in 0..64 {
-            let _ = unsafe { crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING) };
+            let _ = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING);
         }
         filler_blocks = crate::arena::general_block_count().saturating_sub(aged_from);
     }
@@ -844,14 +842,12 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
     // same way the production failure was (a swept child has its
     // OVERFLOW_FIELDS entry cleared by the dead-payload sweep arm).
     crate::object::test_seed_overflow_fields_root(child as usize, 42f64.to_bits());
-    unsafe {
-        runtime_store_jsvalue_slot(
-            parent as usize,
-            fields as usize,
-            0,
-            ptr_bits(child as usize),
-        );
-    }
+    runtime_store_jsvalue_slot(
+        parent as usize,
+        fields as usize,
+        0,
+        ptr_bits(child as usize),
+    );
 
     run_cycle_in_single_unit_steps(&mut state);
     let _ = state.take_outcome().expect("cycle should complete");
@@ -915,7 +911,7 @@ fn overflow_slots_beyond_layout_mask_are_traced() {
     let mut filler_blocks = 0usize;
     while filler_blocks < 7 {
         for _ in 0..64 {
-            let _ = unsafe { crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING) };
+            let _ = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING);
         }
         filler_blocks = crate::arena::general_block_count().saturating_sub(aged_from);
     }

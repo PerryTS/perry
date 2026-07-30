@@ -56,43 +56,6 @@ extern "C" fn zero0(_closure: *const ClosureHeader) -> f64 {
     0.0
 }
 
-extern "C" fn mock_fn_thunk(
-    _closure: *const ClosureHeader,
-    _implementation: f64,
-    _options: f64,
-) -> f64 {
-    mock_function_value()
-}
-
-extern "C" fn mock_property_thunk(
-    _closure: *const ClosureHeader,
-    _target: f64,
-    _property: f64,
-    _value: f64,
-) -> f64 {
-    object_value(crate::object::js_object_alloc(0, 0))
-}
-
-fn legacy_node_test_mock_fn(_implementation: f64, _options: f64) -> f64 {
-    mock_function_value()
-}
-
-fn legacy_node_test_mock_property(_target: f64, _property: f64, _value: f64) -> f64 {
-    object_value(crate::object::js_object_alloc(0, 0))
-}
-
-fn test_function_value(name: &str) -> f64 {
-    let value = fn_value(noop3 as *const u8, name, 3);
-    if matches!(name, "suite" | "describe" | "it") {
-        let closure_ptr = crate::value::js_nanbox_get_pointer(value) as usize;
-        for method in ["skip", "todo", "only"] {
-            let method_value = fn_value(noop3 as *const u8, method, 3);
-            crate::closure::closure_set_dynamic_prop(closure_ptr, method, method_value);
-        }
-    }
-    value
-}
-
 fn mock_context_object() -> *mut ObjectHeader {
     let obj = crate::object::js_object_alloc(CLASS_ID_MOCK_CONTEXT, 0);
     let calls = crate::array::js_array_alloc(0);
@@ -127,60 +90,6 @@ fn mock_function_value() -> f64 {
     let context = object_value(mock_context_object());
     crate::closure::closure_set_dynamic_prop(closure_ptr, "mock", context);
     value
-}
-
-fn mock_timers_object() -> *mut ObjectHeader {
-    let obj = crate::object::js_object_alloc(0, 0);
-    for name in ["enable", "reset", "tick", "runAll", "setTime"] {
-        set(obj, name, fn_value(noop1 as *const u8, name, 1));
-    }
-    let dispose_fn = fn_value(noop0 as *const u8, "[Symbol.dispose]", 0);
-    set(obj, "@@__perry_wk_dispose", dispose_fn);
-    let dispose = crate::symbol::well_known_symbol("dispose");
-    if !dispose.is_null() {
-        let obj_value = object_value(obj);
-        let symbol_value = f64::from_bits(JSValue::pointer(dispose as *const u8).bits());
-        unsafe {
-            crate::symbol::js_object_set_symbol_property(obj_value, symbol_value, dispose_fn);
-        }
-    }
-    obj
-}
-
-fn mock_tracker_object() -> *mut ObjectHeader {
-    let obj = crate::object::js_object_alloc(CLASS_ID_MOCK_TRACKER, 0);
-    set(obj, "fn", fn_value(mock_fn_thunk as *const u8, "fn", 2));
-    set(obj, "method", fn_value(noop3 as *const u8, "method", 3));
-    set(obj, "getter", fn_value(noop3 as *const u8, "getter", 3));
-    set(obj, "setter", fn_value(noop3 as *const u8, "setter", 3));
-    set(
-        obj,
-        "property",
-        fn_value(mock_property_thunk as *const u8, "property", 3),
-    );
-    set(obj, "reset", fn_value(noop0 as *const u8, "reset", 0));
-    set(
-        obj,
-        "restoreAll",
-        fn_value(noop0 as *const u8, "restoreAll", 0),
-    );
-    set(obj, "timers", object_value(mock_timers_object()));
-    obj
-}
-
-fn snapshot_object() -> *mut ObjectHeader {
-    let obj = crate::object::js_object_alloc(0, 0);
-    set(
-        obj,
-        "setDefaultSnapshotSerializers",
-        fn_value(noop1 as *const u8, "setDefaultSnapshotSerializers", 1),
-    );
-    set(
-        obj,
-        "setResolveSnapshotPath",
-        fn_value(noop1 as *const u8, "setResolveSnapshotPath", 1),
-    );
-    obj
 }
 
 pub fn property(property: &str) -> Option<f64> {

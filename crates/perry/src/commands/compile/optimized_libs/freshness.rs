@@ -1,16 +1,11 @@
-use super::*;
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::SystemTime;
 
-use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
 use crate::OutputFormat;
 
-use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
-use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
+use super::super::{rust_target_triple, CompilationContext};
 
 fn needs_http2_constants(ctx: &CompilationContext) -> bool {
     ctx.native_module_imports.contains("http2") || ctx.uses_get_builtin_module

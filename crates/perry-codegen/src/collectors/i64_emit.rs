@@ -32,7 +32,7 @@ pub fn emit_i64_function(llmod: &mut crate::module::LlModule, f: &Function, i64_
         cx.f.block_mut(cx.cur).unwrap().ret(I64, "0");
     }
 }
-struct I64Cx<'a> {
+pub(crate) struct I64Cx<'a> {
     f: &'a mut crate::function::LlFunction,
     cur: usize,
     locals: std::collections::HashMap<u32, String>,

@@ -186,7 +186,7 @@ fn request_av_capture_access_once() {
                             }
                         );
                     });
-                let _: () = msg_send![device_cls, requestAccessForMediaType: &*media_type completionHandler: &*permission_block];
+                let _: () = msg_send![device_cls, requestAccessForMediaType: &*media_type, completionHandler: &*permission_block];
             } else {
                 // Do not show the Settings alert here: WebView widgets are
                 // constructed while building the App body, before the window is

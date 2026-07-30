@@ -394,7 +394,7 @@ fn make_assertion_error(
         js_register_class_extends_error(crate::error::CLASS_ID_ASSERTION_ERROR);
     });
     let obj = js_object_alloc(crate::error::CLASS_ID_ASSERTION_ERROR, 8);
-    unsafe {
+    {
         let set = |key: &str, value: f64| {
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
             js_object_set_field_by_name(obj, key_ptr, value);
@@ -483,12 +483,6 @@ fn promise_ptr_from_value(value: f64) -> Option<*mut crate::promise::Promise> {
 
 fn promise_value_from_ptr(promise: *mut crate::promise::Promise) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
-}
-
-fn fulfilled_promise(value: f64) -> *mut crate::promise::Promise {
-    let promise = crate::promise::js_promise_new();
-    crate::promise::js_promise_resolve(promise, value);
-    promise
 }
 
 fn rejected_promise(reason: f64) -> *mut crate::promise::Promise {
@@ -1219,7 +1213,7 @@ pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    unsafe {
+    {
         let read = |key: &str| -> f64 {
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
             let obj_ptr =

@@ -70,6 +70,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
 
 /// All dispatch-install symbols + the dynamic fallback — declared so codegen can
 /// emit calls to them.
+#[allow(dead_code)] // consumed only by codegen configurations that emit dispatch declarations
 pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_assert",
     "js_nm_install_async_hooks",
@@ -139,6 +140,7 @@ pub(crate) fn nm_submod_install_symbol(key: &str) -> Option<&'static str> {
     }
 }
 
+#[allow(dead_code)] // consumed only by codegen configurations that emit dispatch declarations
 pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
     "js_node_submod_install_vm",
     "js_node_submod_install_timers",

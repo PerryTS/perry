@@ -563,7 +563,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         // (bounds) and the own/inherited members property-get can resolve.
         if crate::buffer::is_registered_buffer(obj_addr as usize) {
             let buf = obj_addr as *const crate::buffer::BufferHeader;
-            let len = unsafe { crate::buffer::js_buffer_length(buf) };
+            let len = crate::buffer::js_buffer_length(buf);
             if key_val.is_int32() {
                 let idx = key_val.as_int32();
                 return if idx >= 0 && idx < len {
@@ -1283,7 +1283,6 @@ pub(crate) unsafe fn native_module_own_field_by_key(
 // accelerator, never authoritative — and a scan hit back-fills the map so
 // interleaved appends stay amortized O(1).
 pub(crate) const WIDE_KEY_INDEX_MIN_KEYS: usize = 257;
-const WIDE_KEY_INDEX_CAPACITY: usize = 4;
 
 // #6759 C1: the wide-object key index folded into the shape records
 // (`object::shapes`, keyed on keys_array identity, unbounded — the old

@@ -635,13 +635,16 @@ pub extern "C" fn js_abort_signal_any(
 // #2582: keepalive anchors so the auto-optimize whole-program LLVM bitcode
 // rebuild doesn't internalize + dead-strip these codegen-only `#[no_mangle]`
 // entry points (see project_auto_optimize_keepalive_3320). These are only
-// referenced from generated `.o`, so without `#[cfg_attr(feature = "keepalive-anchors", used)]` they vanish.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+// referenced from generated `.o`, so without `#[used]` they vanish.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ABORT_SIGNAL_ABORT: extern "C" fn(f64) -> *mut ObjectHeader = js_abort_signal_abort;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ABORT_SIGNAL_ANY: extern "C" fn(*mut crate::array::ArrayHeader) -> *mut ObjectHeader =
     js_abort_signal_any;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ABORT_SIGNAL_THROW_IF_ABORTED: extern "C" fn(*mut ObjectHeader) -> f64 =
     js_abort_signal_throw_if_aborted;
 

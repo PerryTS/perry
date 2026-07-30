@@ -569,6 +569,7 @@ fn destroyed_readable_drops_late_push_data() {
     READABLE_DATA_CAPTURED.with(|captured| assert!(captured.borrow().is_empty()));
 }
 
+#[test]
 fn duplex_allow_half_open_defaults_true_and_honors_false_option() {
     let stream = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

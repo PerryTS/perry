@@ -1,8 +1,6 @@
 //! `map_ui_method`: maps perry/ui and perry/system method names to bridge
 //! function names. Pure code-movement from `mod.rs`.
 
-use super::*;
-
 /// Map perry/ui and perry/system method names to bridge function names.
 /// Mirrors the mapping in perry-codegen-js's emit_ui_method_call.
 pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static str {

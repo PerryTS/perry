@@ -4,6 +4,8 @@
 //! the same inherited Unix fd convention used by its `child_process.fork()`
 //! parent side and speaks newline-delimited JSON frames for this cut.
 
+#![cfg_attr(not(feature = "proc-ipc"), allow(dead_code))]
+
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
     js_register_closure_arity, js_register_closure_length, ClosureHeader,

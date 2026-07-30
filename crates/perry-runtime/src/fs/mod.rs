@@ -8,9 +8,7 @@ use std::collections::HashMap as StdHashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -1742,7 +1740,7 @@ pub extern "C" fn js_fs_readlink_sync_options(path_value: f64, options_value: f6
             let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
             encoded_string_ptr(&bytes, &enc) as i64
         }
-        Err(err_val) => unsafe { crate::exception::js_throw(err_val) },
+        Err(err_val) => crate::exception::js_throw(err_val),
     }
 }
 
@@ -1751,7 +1749,7 @@ pub extern "C" fn js_fs_readlink_dispatch(path_value: f64, options_value: f64) -
     validate::validate_path("path", path_value);
     match readlink_value_result(path_value, options_value) {
         Ok(v) => v,
-        Err(err_val) => unsafe { crate::exception::js_throw(err_val) },
+        Err(err_val) => crate::exception::js_throw(err_val),
     }
 }
 

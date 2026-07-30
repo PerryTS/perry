@@ -554,7 +554,7 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             crate::object::js_implicit_this_set(prev);
             return result;
         }
-        unsafe {
+        {
             let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
             let v = crate::object::js_object_get_field_by_name(
                 proto_ptr as *const crate::object::ObjectHeader,
@@ -589,7 +589,7 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             }
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        unsafe {
+        {
             let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
             let v = crate::object::js_object_get_field_by_name(
                 proto_ptr as *const crate::object::ObjectHeader,

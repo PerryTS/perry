@@ -1,6 +1,6 @@
+use super::no_auto::build_missing_prebuilt_ext_lib;
 use super::*;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::path::Path;
 
 use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
 use crate::OutputFormat;

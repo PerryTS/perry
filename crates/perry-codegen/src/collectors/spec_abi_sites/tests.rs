@@ -283,6 +283,32 @@ fn length_unsafe_source_use_demotes_const_len_only() {
 }
 
 #[test]
+fn put_value_set_receiver_demotes_source_const_len() {
+    let source = Expr::LocalGet(1);
+    let m = module_with_init(vec![
+        let_stmt(
+            1,
+            true,
+            Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)]),
+        ),
+        Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(source.clone()),
+            key: Box::new(Expr::Integer(0)),
+            value: Box::new(Expr::Integer(3)),
+            receiver: Box::new(source),
+            strict: false,
+        }),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1))),
+        ),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert_eq!(facts.ta_bindings.get(&2).map(|b| b.const_len), Some(None));
+}
+
+#[test]
 fn bigint_kind_binding_is_rejected() {
     // BigInt64Array elements are BigInt, not Number — never a `TaPtr` binding.
     let m = module_with_init(vec![

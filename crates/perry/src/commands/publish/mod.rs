@@ -77,6 +77,7 @@ pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u
     result
 }
 
+#[allow(unused_assignments)] // see the `done` declaration below
 async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
     let project_dir = args.project.canonicalize().unwrap_or(args.project.clone());
 
@@ -1604,6 +1605,10 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     // closed WebSocket (the hub drops connections while a job sits in the queue)
     // must RECONNECT + re-subscribe rather than silently end the publish — else
     // the command exits without ever downloading the artifact (#flaky-publish).
+    // rustc reports the `done = true` below as never read: the Complete arm
+    // breaks immediately, so both `if done { break }` guards only ever see
+    // `false`. Whether the flag still buys anything is a protocol question,
+    // not a lint one, so the store stays.
     let mut done = false;
     // `published` = the hub confirmed a server-side publish (TestFlight / App
     // Store etc.), where no local artifact is downloaded.

@@ -369,12 +369,13 @@ pub unsafe extern "C" fn js_validate_event_listener(
     throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
-/// `#[cfg_attr(feature = "keepalive-anchors", used)]` keepalive so the auto-optimize whole-program-LLVM rebuild does
+/// `#[used]` keepalive so the auto-optimize whole-program-LLVM rebuild does
 /// not dead-strip this codegen-invoked `#[no_mangle]` entry point (see
 /// project_auto_optimize_keepalive_3320). Called only from generated `.o`
 /// via the stdlib/ext events validators, so without an anchor the bitcode
 /// internalizer drops it and the default `perry file.ts -o out` link fails.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_VALIDATE_EVENT_LISTENER: unsafe extern "C" fn(i64, *const u8, u32) -> i64 =
     js_validate_event_listener;
 
@@ -624,18 +625,6 @@ pub(crate) fn validate_fs_mode(value: f64) {
     let mode = n as i64;
     if !(0..=7).contains(&mode) {
         throw_range_error_with_code("mode is out of range: >= 0 && <= 7");
-    }
-}
-
-pub(crate) fn fs_mode_value(value: f64) -> i32 {
-    validate_fs_mode(value);
-    let jv = JSValue::from_bits(value.to_bits());
-    if is_nullish(jv) {
-        0
-    } else if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        jv.as_number() as i32
     }
 }
 

@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn snapshot_has_real_nodes_and_edges() {
         // Allocate a recognizable object graph, then snapshot.
-        unsafe {
+        {
             let marker = b"__heap_snapshot_test_marker__";
             let key = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
             let obj = crate::object::js_object_alloc(0, 1);

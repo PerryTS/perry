@@ -10,7 +10,6 @@
 //! touching the network.
 
 use std::collections::HashMap;
-use std::net::ToSocketAddrs;
 use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;

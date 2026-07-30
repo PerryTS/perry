@@ -22,22 +22,6 @@ fn typed_i1_method_signature_note(reps: &[crate::codegen::TypedParamRep]) -> Str
     }
 }
 
-fn typed_i32_method_signature_note(arg_count: usize) -> String {
-    if arg_count <= 1 {
-        "typed_signature=i32(i32)->i32".to_string()
-    } else {
-        "typed_signature=i32(i32, ...)->i32".to_string()
-    }
-}
-
-fn typed_string_method_signature_note(arg_count: usize) -> String {
-    if arg_count <= 1 {
-        "typed_signature=string(string)->string".to_string()
-    } else {
-        "typed_signature=string(string, ...)->string".to_string()
-    }
-}
-
 fn typed_method_signature_note(ret: &str, reps: &[crate::codegen::TypedParamRep]) -> String {
     let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
     if reps.len() <= 1 {

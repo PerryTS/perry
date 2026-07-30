@@ -98,12 +98,12 @@ mod tests {
         assert_eq!(bits & 0xFFFF_0000_0000_0000, POINTER_TAG);
         let obj_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
 
-        let x = unsafe { js_object_get_field(obj_ptr, 0) };
-        let y = unsafe { js_object_get_field(obj_ptr, 1) };
-        let button = unsafe { js_object_get_field(obj_ptr, 2) };
+        let x = js_object_get_field(obj_ptr, 0);
+        let y = js_object_get_field(obj_ptr, 1);
+        let button = js_object_get_field(obj_ptr, 2);
         // Field 3 (pointerType) is a string — exercise only that the
         // value carries the STRING_TAG so we know we wrote *a* string.
-        let pt = unsafe { js_object_get_field(obj_ptr, 3) };
+        let pt = js_object_get_field(obj_ptr, 3);
 
         assert_eq!(f64::from_bits(x.bits()), 10.5);
         assert_eq!(f64::from_bits(y.bits()), 20.25);
@@ -125,7 +125,7 @@ mod tests {
         let pen = js_pointer_event_new(0.0, 0.0, 0, POINTER_TYPE_PEN);
         let pt = |nb: f64| {
             let obj = (nb.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
-            unsafe { js_object_get_field(obj, 3) }.bits()
+            js_object_get_field(obj, 3).bits()
         };
         let m = pt(mouse);
         let t = pt(touch);

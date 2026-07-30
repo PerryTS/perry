@@ -1144,7 +1144,7 @@ fn bigint_number_parts_exact(
 /// where both are lossy for BigInts past 2^53.
 pub(crate) fn bigint_to_locale_string(value: f64, locales: f64, options: f64) -> *mut StringHeader {
     let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
-    let negative = unsafe { crate::bigint::js_bigint_is_negative(ptr) } != 0;
+    let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;
     let digits_ptr = crate::bigint::js_bigint_to_string(ptr);
     // Copy into an owned `String` right away — `digits_ptr` is GC-managed and
     // `make_instance` below allocates, which can move/free it.

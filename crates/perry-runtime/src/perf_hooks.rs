@@ -77,7 +77,7 @@ const UV_METRICS_INFO_SHAPE: u32 = 0x7FFF_FF51;
 const UV_METRICS_INFO_KEYS: &[u8] = b"loopCount\0events\0eventsWaiting\0";
 
 #[derive(Clone)]
-struct PerfEntry {
+pub(crate) struct PerfEntry {
     name: String,
     entry_type: u8,
     start_time: f64,
@@ -234,8 +234,7 @@ pub fn performance_namespace() -> f64 {
         return f64::from_bits(cached);
     }
     let module = b"perf_hooks";
-    let ns =
-        unsafe { crate::object::js_create_native_module_namespace(module.as_ptr(), module.len()) };
+    let ns = crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
     PERFORMANCE_NS.with(|c| c.set(ns.to_bits()));
     ns
 }
@@ -1246,13 +1245,9 @@ fn entry_type_code(name: &str) -> Option<u8> {
 /// Read the registry index out of a `perf_observer` namespace object value's
 /// field[1].
 pub fn observer_id_from_value(obs_val: f64) -> usize {
-    unsafe {
-        match as_object_ptr(obs_val) {
-            Some(obj) => {
-                observer_id_from_field(crate::object::js_object_get_field(obj as *mut _, 1))
-            }
-            None => 0,
-        }
+    match as_object_ptr(obs_val) {
+        Some(obj) => observer_id_from_field(crate::object::js_object_get_field(obj as *mut _, 1)),
+        None => 0,
     }
 }
 
@@ -1424,7 +1419,7 @@ fn schedule_flush() {
         return;
     }
     FLUSH_SCHEDULED.with(|f| f.set(true));
-    unsafe {
+    {
         let closure =
             crate::closure::js_closure_alloc_singleton(js_perf_observer_flush_all as *const u8);
         crate::timer::js_set_timeout_callback(closure as i64, 0.0);
@@ -1445,7 +1440,7 @@ pub extern "C" fn js_perf_observer_flush_all(
             .collect()
     });
     for (cb_bits, obj_bits, entries) in work {
-        unsafe {
+        {
             CURRENT_LIST.with(|c| *c.borrow_mut() = entries);
             let module = b"perf_observer_list";
             let list =
@@ -1464,7 +1459,7 @@ pub extern "C" fn js_perf_observer_flush_all(
 
 /// Build an array from the in-flight observer `list` entries (for the
 /// `perf_observer_list` namespace methods).
-pub unsafe fn current_list_to_array(filter: impl Fn(&PerfEntry) -> bool) -> f64 {
+pub(crate) unsafe fn current_list_to_array(filter: impl Fn(&PerfEntry) -> bool) -> f64 {
     let mut snapshot: Vec<PerfEntry> =
         CURRENT_LIST.with(|c| c.borrow().iter().filter(|e| filter(e)).cloned().collect());
     sort_entries_by_start_time(&mut snapshot);
@@ -1496,7 +1491,7 @@ pub unsafe fn current_list_get_by_name(name_val: f64) -> f64 {
 /// Build the `PerformanceObserver.supportedEntryTypes` array.
 #[no_mangle]
 pub extern "C" fn js_perf_supported_entry_types() -> f64 {
-    unsafe {
+    {
         let mut arr = crate::array::js_array_alloc(4);
         for t in ["function", "mark", "measure", "resource"] {
             arr = crate::array::js_array_push(arr, str_value(t));
@@ -1638,7 +1633,7 @@ mod sso_tests_1781 {
     /// `"mark"` must still filter to the mark entry (site #509).
     #[test]
     fn get_entries_by_name_filters_on_sso_type() {
-        unsafe {
+        {
             let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
             let name =
                 JSValue::string_ptr(crate::string::js_string_from_bytes(b"phase".as_ptr(), 5));

@@ -9,7 +9,6 @@
 //! Pointers are NaN-boxed with POINTER_TAG (0x7FFD) and tracked in
 //! TYPED_ARRAY_REGISTRY for `instanceof` and console.log formatting.
 
-use std::alloc::Layout;
 use std::cell::RefCell;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -697,22 +696,10 @@ unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
     true
 }
 
-fn ta_layout(capacity: u32, elem_size: usize) -> Layout {
-    let total = std::mem::size_of::<TypedArrayHeader>() + (capacity as usize) * elem_size;
-    let total = total.max(std::mem::size_of::<TypedArrayHeader>() + elem_size);
-    Layout::from_size_align(total, 8).unwrap()
-}
-
 #[inline]
 fn typed_array_payload_size(capacity: u32, elem_size: usize) -> usize {
     let total = std::mem::size_of::<TypedArrayHeader>() + (capacity as usize) * elem_size;
     total.max(std::mem::size_of::<TypedArrayHeader>() + elem_size)
-}
-
-#[inline]
-fn typed_array_gc_total_size(capacity: u32, elem_size: usize) -> usize {
-    let payload = typed_array_payload_size(capacity, elem_size);
-    (crate::gc::GC_HEADER_SIZE + payload + 7) & !7
 }
 
 /// Allocate a zero-filled typed array of `length` elements.

@@ -417,7 +417,8 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
 
 // This raw numeric-array helper is called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` export.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern "C" fn(
     *mut ArrayHeader,
     f64,
@@ -559,7 +560,7 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
     if arr.is_null() {
         return;
     }
-    if unsafe { array_object_flags(arr) } & crate::gc::OBJ_FLAG_FROZEN != 0 {
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0 {
         throw_non_writable_length();
     }
     js_array_set_length(arr, new_length);
@@ -822,7 +823,8 @@ pub extern "C" fn js_array_unshift_variadic(
     }
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
     js_array_unshift_variadic;
 

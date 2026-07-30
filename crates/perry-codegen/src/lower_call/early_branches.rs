@@ -31,28 +31,12 @@ fn typed_i1_closure_signature_note(reps: &[crate::codegen::TypedParamRep]) -> St
     }
 }
 
-fn typed_string_closure_signature_note(arg_count: usize) -> String {
-    if arg_count <= 1 {
-        "typed_signature=string(i64 closure, string)->string".to_string()
-    } else {
-        "typed_signature=string(i64 closure, string, ...)->string".to_string()
-    }
-}
-
 fn typed_closure_signature_note(ret: &str, reps: &[crate::codegen::TypedParamRep]) -> String {
     let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
     if reps.len() <= 1 {
         format!("typed_signature={ret}(i64 closure, {first})->{ret}")
     } else {
         format!("typed_signature={ret}(i64 closure, {first}, ...)->{ret}")
-    }
-}
-
-fn typed_i32_closure_signature_note(arg_count: usize) -> String {
-    if arg_count <= 1 {
-        "typed_signature=i32(i64 closure, i32)->i32".to_string()
-    } else {
-        "typed_signature=i32(i64 closure, i32, ...)->i32".to_string()
     }
 }
 

@@ -13,27 +13,6 @@ use crate::value::JSValue;
 
 // ---- argument coercion ----------------------------------------------------
 
-/// `ToNumber(args[i])`, or `NaN` if the argument is absent.
-#[inline]
-pub(crate) fn num_arg(args: &[f64], i: usize) -> f64 {
-    match args.get(i) {
-        Some(&v) => JSValue::from_bits(v.to_bits()).to_number(),
-        None => f64::NAN,
-    }
-}
-
-/// `args[i]` coerced to an integer for a Temporal numeric field. Absent /
-/// non-finite → 0 (Temporal treats missing duration/time fields as 0).
-#[inline]
-pub(crate) fn int_arg(args: &[f64], i: usize) -> i64 {
-    let n = num_arg(args, i);
-    if n.is_finite() {
-        n.trunc() as i64
-    } else {
-        0
-    }
-}
-
 /// Saturate an integer Temporal time field into a `u8` slot: any value outside
 /// `0..=u8::MAX` maps to `u8::MAX`. Every `u8` time field's valid maximum is
 /// below 255, so `temporal_rs`'s range check then rejects it with a RangeError —

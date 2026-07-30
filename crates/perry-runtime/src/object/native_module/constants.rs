@@ -401,39 +401,6 @@ pub(crate) unsafe fn get_native_module_constant(
     // Required by axios for its stream wiring.
     let zlib_const = zlib_const_lookup;
 
-    let dns_const = |prop: &str| -> Option<f64> {
-        Some(match prop {
-            "ADDRCONFIG" => 1024.0,
-            "V4MAPPED" => 2048.0,
-            "ALL" => 256.0,
-            "NODATA" => str_val("ENODATA"),
-            "FORMERR" => str_val("EFORMERR"),
-            "SERVFAIL" => str_val("ESERVFAIL"),
-            "NOTFOUND" => str_val("ENOTFOUND"),
-            "NOTIMP" => str_val("ENOTIMP"),
-            "REFUSED" => str_val("EREFUSED"),
-            "BADQUERY" => str_val("EBADQUERY"),
-            "BADNAME" => str_val("EBADNAME"),
-            "BADFAMILY" => str_val("EBADFAMILY"),
-            "BADRESP" => str_val("EBADRESP"),
-            "CONNREFUSED" => str_val("ECONNREFUSED"),
-            "TIMEOUT" => str_val("ETIMEOUT"),
-            "EOF" => str_val("EOF"),
-            "FILE" => str_val("EFILE"),
-            "NOMEM" => str_val("ENOMEM"),
-            "DESTRUCTION" => str_val("EDESTRUCTION"),
-            "BADSTR" => str_val("EBADSTR"),
-            "BADFLAGS" => str_val("EBADFLAGS"),
-            "NONAME" => str_val("ENONAME"),
-            "BADHINTS" => str_val("EBADHINTS"),
-            "NOTINITIALIZED" => str_val("ENOTINITIALIZED"),
-            "LOADIPHLPAPI" => str_val("ELOADIPHLPAPI"),
-            "ADDRGETNETWORKPARAMS" => str_val("EADDRGETNETWORKPARAMS"),
-            "CANCELLED" => str_val("ECANCELLED"),
-            _ => return None,
-        })
-    };
-
     let sqlite_const = sqlite_const_lookup;
 
     match module_name {
@@ -785,10 +752,6 @@ pub(crate) unsafe fn get_native_module_constant(
             "Stream" => Some(bound_native_callable_export_value("net", "Socket")),
             _ => None,
         },
-        "timers" => match property {
-            "promises" => Some(timers_promises_parent_namespace()),
-            _ => None,
-        },
         "timers/promises" => match property {
             "setTimeout" | "setImmediate" | "setInterval" => Some(unsafe {
                 crate::node_submodules::js_node_submodule_namespace_member(
@@ -1007,7 +970,6 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         #[cfg(feature = "mod-http2-constants")]
         "http2.constants" => crate::node_http2_constants::constant(property),
-        "dns" => dns_const(property),
         // node:cluster — primary-side settings and Worker handles are backed
         // by `crate::cluster`; scheduling/identity constants remain static.
         "cluster" => crate::cluster::cluster_property(property),
@@ -1019,7 +981,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "perf_histogram" => match property {
             "mean" | "min" | "max" | "stddev" | "exceeds" | "count" => Some(0.0),
             "percentiles" | "percentilesBigInt" => {
-                let obj = unsafe { js_object_alloc(0, 0) };
+                let obj = js_object_alloc(0, 0);
                 Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
             }
             _ => None,

@@ -277,16 +277,18 @@ impl Serializer {
 
     fn write_bigint(&mut self, value: f64) {
         let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
-        let negative = unsafe { crate::bigint::js_bigint_is_negative(ptr) } != 0;
+        let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;
         // Read the magnitude as big-endian bytes (negate first if needed), then
         // reverse to the little-endian order V8's bigint digits use.
         let mag_ptr = if negative {
-            unsafe { crate::bigint::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader }
+            {
+                crate::bigint::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader
+            }
         } else {
             ptr
         };
         let nbytes = crate::bigint::BIGINT_LIMBS * 8;
-        let be_buf = unsafe { crate::bigint::js_bigint_to_buffer(mag_ptr, nbytes as i32) };
+        let be_buf = crate::bigint::js_bigint_to_buffer(mag_ptr, nbytes as i32);
         let mut le: Vec<u8> = if be_buf.is_null() {
             Vec::new()
         } else {

@@ -84,13 +84,6 @@ pub(crate) struct SpecFnPlan {
     pub dispatch: SpecDispatch,
 }
 
-impl SpecFnPlan {
-    /// Phase-2 budget: exactly ONE specialized entry per function (the
-    /// dominant tuple). Kept as an explicit constant so raising it later is a
-    /// knob, not a rewrite.
-    pub(crate) const MAX_ENTRIES_PER_FUNCTION: usize = 1;
-}
-
 /// LLVM parameter type for a rep slot.
 pub(crate) fn spec_rep_llvm_ty(rep: SpecParamRep) -> LlvmType {
     match rep {

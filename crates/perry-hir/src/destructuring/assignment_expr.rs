@@ -88,11 +88,6 @@ pub(crate) fn lower_destructuring_assignment(
                                                 value: Box::new(index_expr),
                                             });
                                         }
-                                        _ => {
-                                            return Err(anyhow!(
-                                                "Unsupported member expression in destructuring"
-                                            ));
-                                        }
                                     }
                                 }
                                 _ => {

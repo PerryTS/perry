@@ -15,24 +15,13 @@ mod yield_await;
 // `use super::*`) reference. Globs do not propagate transitively in this
 // repo, so spell every cross-module symbol explicitly.
 pub(crate) use abrupt::{
-    build_abrupt_routing, build_async_catch_route_body, build_async_throw_body,
-    build_completion_resume_stmts, build_dispatch_catch_handler, build_finally_run_stmts,
-    build_yield_star_return_routes, build_yield_star_throw_routes, catch_route_condition,
-    finally_abrupt_condition, finally_route_condition, rewrite_dispatch_continue_to_suspend,
-    wrap_dispatch_loop,
+    build_abrupt_routing, build_async_throw_body, build_completion_resume_stmts,
+    build_finally_run_stmts, build_yield_star_return_routes, build_yield_star_throw_routes,
+    catch_route_condition, wrap_dispatch_loop,
 };
-pub(crate) use async_step::{
-    build_async_catch_route_body_direct, build_async_step_driver_direct,
-    build_async_throw_body_direct,
-};
-pub(crate) use call_this::{
-    generator_body_uses_call_this, generator_expr_uses_call_this, generator_stmt_uses_call_this,
-};
-pub(crate) use resume::{
-    generator_executing_guard, generator_executing_type_error, generator_resume_rethrow,
-    prepend_executing_clear_before_returns, promise_reject, wrap_async_gen_step_body,
-    wrap_generator_resume_body,
-};
+pub(crate) use async_step::build_async_step_driver_direct;
+pub(crate) use call_this::generator_body_uses_call_this;
+pub(crate) use resume::{wrap_async_gen_step_body, wrap_generator_resume_body};
 pub(crate) use yield_await::await_async_generator_yield_operands;
 
 /// #6709: read the currently-running step closure (`Expr::CurrentStepClosure`).

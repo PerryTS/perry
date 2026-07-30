@@ -641,9 +641,7 @@ pub extern "C" fn perry_plugin_unregister_service(api_handle: i64, name: f64) ->
                 reg.services.remove(idx);
             } else {
                 drop(reg);
-                unsafe {
-                    crate::closure::js_closure_call0(stop_ptr);
-                }
+                crate::closure::js_closure_call0(stop_ptr);
                 let mut reg = REGISTRY.lock().unwrap();
                 if let Some(idx2) = reg
                     .services
@@ -1316,7 +1314,7 @@ mod unregister_tests {
         let handle = fresh_api_handle();
         let hook_name = unsafe { make_nanboxed_string("beforeSave") };
         let target_handler = f64::from_bits(0xAAAA_0001_0001_u64);
-        let _ = unsafe { perry_plugin_unregister_hook(handle, hook_name, target_handler) };
+        let _ = perry_plugin_unregister_hook(handle, hook_name, target_handler);
 
         let reg = REGISTRY.lock().unwrap();
         let hooks = reg
@@ -1330,7 +1328,7 @@ mod unregister_tests {
         // Second call with the remaining handler — bucket should now be empty
         // and the parent map entry pruned.
         let other_handler = f64::from_bits(0xAAAA_0001_0002_u64);
-        let _ = unsafe { perry_plugin_unregister_hook(handle, hook_name, other_handler) };
+        let _ = perry_plugin_unregister_hook(handle, hook_name, other_handler);
         let reg = REGISTRY.lock().unwrap();
         assert!(
             reg.hooks.get("beforeSave").is_none(),
@@ -1348,7 +1346,7 @@ mod unregister_tests {
         let hook_name = unsafe { make_nanboxed_string("beforeSave") };
         let bogus_handler = f64::from_bits(0xDEAD_BEEF_DEAD_BEEF_u64);
 
-        let _ = unsafe { perry_plugin_unregister_hook(handle, hook_name, bogus_handler) };
+        let _ = perry_plugin_unregister_hook(handle, hook_name, bogus_handler);
 
         let reg = REGISTRY.lock().unwrap();
         let hooks = reg.hooks.get("beforeSave").unwrap();
@@ -1369,7 +1367,7 @@ mod unregister_tests {
 
         let hook_name = unsafe { make_nanboxed_string("beforeSave") };
         let target = f64::from_bits(0xAAAA_0001_0001_u64);
-        let _ = unsafe { perry_plugin_unregister_hook(handle_2, hook_name, target) };
+        let _ = perry_plugin_unregister_hook(handle_2, hook_name, target);
 
         let reg = REGISTRY.lock().unwrap();
         assert_eq!(reg.hooks.get("beforeSave").unwrap().len(), 2);
@@ -1383,7 +1381,7 @@ mod unregister_tests {
         seed();
         let handle = fresh_api_handle();
         let name = unsafe { make_nanboxed_string("formatCode") };
-        let _ = unsafe { perry_plugin_unregister_tool(handle, name) };
+        let _ = perry_plugin_unregister_tool(handle, name);
 
         let reg = REGISTRY.lock().unwrap();
         assert_eq!(reg.tools.len(), 1, "only the matching tool is removed");
@@ -1398,7 +1396,7 @@ mod unregister_tests {
         seed();
         let handle = fresh_api_handle();
         let bogus = unsafe { make_nanboxed_string("doesNotExist") };
-        let _ = unsafe { perry_plugin_unregister_tool(handle, bogus) };
+        let _ = perry_plugin_unregister_tool(handle, bogus);
 
         let reg = REGISTRY.lock().unwrap();
         assert_eq!(reg.tools.len(), 2);
@@ -1412,7 +1410,7 @@ mod unregister_tests {
         seed();
         let handle = fresh_api_handle();
         let path = unsafe { make_nanboxed_string("/api/foo") };
-        let _ = unsafe { perry_plugin_unregister_route(handle, path) };
+        let _ = perry_plugin_unregister_route(handle, path);
 
         let reg = REGISTRY.lock().unwrap();
         assert_eq!(reg.routes.len(), 0);
@@ -1436,7 +1434,7 @@ mod unregister_tests {
                 svc.stop_fn = 0;
             }
         }
-        let _ = unsafe { perry_plugin_unregister_service(handle, name) };
+        let _ = perry_plugin_unregister_service(handle, name);
 
         let reg = REGISTRY.lock().unwrap();
         assert_eq!(reg.services.len(), 0, "worker service removed");
@@ -1451,7 +1449,7 @@ mod unregister_tests {
         let handle = fresh_api_handle();
         let event = unsafe { make_nanboxed_string("dataUpdated") };
         let handler = f64::from_bits(0xEEEE_0001_0001_u64);
-        let _ = unsafe { perry_plugin_off(handle, event, handler) };
+        let _ = perry_plugin_off(handle, event, handler);
 
         let reg = REGISTRY.lock().unwrap();
         assert!(
@@ -1470,14 +1468,14 @@ mod unregister_tests {
         // plugin_id_for_handle → every unregister path's body is skipped.
         let ghost_handle: i64 = 9999;
         let hook_name = unsafe { make_nanboxed_string("beforeSave") };
-        let _ = unsafe { perry_plugin_unregister_hook(ghost_handle, hook_name, 0.0) };
+        let _ = perry_plugin_unregister_hook(ghost_handle, hook_name, 0.0);
         let name = unsafe { make_nanboxed_string("formatCode") };
-        let _ = unsafe { perry_plugin_unregister_tool(ghost_handle, name) };
+        let _ = perry_plugin_unregister_tool(ghost_handle, name);
         let path = unsafe { make_nanboxed_string("/api/foo") };
-        let _ = unsafe { perry_plugin_unregister_route(ghost_handle, path) };
-        let _ = unsafe { perry_plugin_unregister_service(ghost_handle, name) };
+        let _ = perry_plugin_unregister_route(ghost_handle, path);
+        let _ = perry_plugin_unregister_service(ghost_handle, name);
         let event = unsafe { make_nanboxed_string("dataUpdated") };
-        let _ = unsafe { perry_plugin_off(ghost_handle, event, 0.0) };
+        let _ = perry_plugin_off(ghost_handle, event, 0.0);
 
         let reg = REGISTRY.lock().unwrap();
         assert_eq!(reg.hooks.get("beforeSave").unwrap().len(), 2);

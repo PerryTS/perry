@@ -140,7 +140,8 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     js_array_clone(ptr_bits as *const ArrayHeader)
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAY_FROM_VALUE: extern "C" fn(f64) -> *mut ArrayHeader = js_array_from_value;
 
 /// `Array.from(source, mapFn, thisArg)` — the mapped form. Throws for nullish
@@ -165,7 +166,8 @@ pub extern "C" fn js_array_from_mapped(
         as *mut ArrayHeader
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAY_FROM_MAPPED: extern "C" fn(f64, f64, f64) -> *mut ArrayHeader =
     js_array_from_mapped;
 
@@ -282,7 +284,8 @@ pub extern "C" fn js_array_concat_variadic(
     result
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_ARRAY_CONCAT_VARIADIC: extern "C" fn(
     *const ArrayHeader,
     *const f64,
@@ -537,12 +540,10 @@ fn items_is_iterable(items: f64) -> bool {
     }
     // A bare iterator / generator object exposes a callable `next`.
     let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
-    let next_val = unsafe {
-        crate::object::js_object_get_field_by_name(
-            raw as *const crate::object::ObjectHeader,
-            next_key,
-        )
-    };
+    let next_val = crate::object::js_object_get_field_by_name(
+        raw as *const crate::object::ObjectHeader,
+        next_key,
+    );
     if next_val.is_undefined() {
         return false;
     }

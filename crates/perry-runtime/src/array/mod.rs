@@ -155,10 +155,9 @@ pub(crate) use self::flat_clone::flattenable_array_ptr;
 pub(crate) use self::header::{
     array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_named_property_delete,
     array_named_property_get, array_named_property_get_by_name, array_named_property_has,
-    array_named_property_names, array_named_property_set, array_named_props_install_fresh,
-    array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
-    array_numeric_raw_f64_set_inbounds, array_object_flags, array_ptr_as_proxy,
-    canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
+    array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
+    array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
+    array_ptr_as_proxy, canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
     mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
     note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
@@ -166,6 +165,11 @@ pub(crate) use self::header::{
     store_array_slot, transfer_array_numeric_layout, value_bits_to_number, NumericArrayLayout,
     MIN_ARRAY_CAPACITY,
 };
+
+// Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and
+// this re-export are gated with it (same cross-gate shape as regex/utf16.rs).
+#[cfg(feature = "regex-engine")]
+pub(crate) use self::header::array_named_props_install_fresh;
 
 #[cfg(test)]
 pub(crate) use self::header::{test_seed_template_raw_roots, test_template_raw_roots};

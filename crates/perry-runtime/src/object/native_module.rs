@@ -585,7 +585,6 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             b"process".as_ptr(),
             "process".len(),
         )),
-        "module" => Some(bound_native_callable_export_value("module", "Module")),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "node-pty"
         | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl"
         | "sea" | "url" | "util" | "inspector" | "inspector/promises" => {
@@ -1099,7 +1098,8 @@ pub extern "C" fn js_class_method_bind_by_id(instance: f64, method_id: i64) -> f
     js_class_method_bind(instance, name_ref.ptr, name_ref.len)
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_CLASS_METHOD_BIND_BY_ID: extern "C" fn(f64, i64) -> f64 = js_class_method_bind_by_id;
 
 /// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the

@@ -193,6 +193,7 @@ thread_local! {
 
 /// Set (or clear) this thread's conservative-scan mode override, returning the
 /// previous value.
+#[allow(dead_code)] // test-only scaffolding: GC unit tests (gc/tests) pin the scan mode via this override
 pub(crate) fn set_conservative_stack_scan_override(
     mode: Option<ConservativeStackScanMode>,
 ) -> Option<ConservativeStackScanMode> {

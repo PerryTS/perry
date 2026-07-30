@@ -57,9 +57,6 @@ pub(crate) struct PrivateScope {
 /// synthesize a real class extending the concrete base.
 #[derive(Debug, Clone)]
 pub(crate) struct MixinFn {
-    /// The mixin function's single parameter — the name the returned class
-    /// `extends`.
-    pub(crate) param_name: String,
     /// The returned class EXPRESSION's own name, if it has one (`return class
     /// Named extends B {}`). `None` for the anonymous form, whose `.name` is
     /// the empty string per spec — a directly-returned class expression gets

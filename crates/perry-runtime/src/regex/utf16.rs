@@ -13,6 +13,7 @@
 //! dependency as #6303.)
 
 /// UTF-16 code-unit index -> byte offset.
+#[cfg(any(feature = "regex-engine", test))]
 pub(super) fn utf16_index_to_byte(s: &str, utf16_index: usize) -> usize {
     if utf16_index == 0 {
         return 0;

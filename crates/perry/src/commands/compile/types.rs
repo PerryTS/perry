@@ -596,6 +596,8 @@ pub struct CompilationContext {
     /// expanding globs/directories. The embed-relative name (e.g.
     /// `dist/index.html`) is the runtime registry key and `$perryfs/` virtual
     /// path suffix.
+    #[allow(dead_code)]
+    // #5731 embed-assets context contract; pub field populated on the embed path, not read here
     pub embedded_assets: Vec<(String, PathBuf)>,
     /// #1681 (Phase 3 of #1677): true when this is the build-time capture
     /// stage (the `current_exe` subprocess), so `precompile(EXPR)` sites
@@ -1015,6 +1017,8 @@ pub enum SideEffects {
     Unknown,
     /// `"sideEffects": ["glob", ...]` — only files matching a glob have side
     /// effects; others are droppable. Globs are relative to the package dir.
+    #[allow(dead_code)]
+    // #2309 PR1: glob list captured for future per-file matching, not yet read
     Globs(Vec<String>),
 }
 

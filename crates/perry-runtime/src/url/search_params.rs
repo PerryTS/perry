@@ -46,7 +46,7 @@ pub(crate) fn resolve_search_params_receiver(params: *mut ObjectHeader) -> *mut 
         URL_SEARCH_PARAMS_BACKING_KEY.len() as u32,
     );
     let params = params_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let backing = unsafe { crate::object::js_object_get_field_by_name(params, key) };
+    let backing = crate::object::js_object_get_field_by_name(params, key);
     if backing.is_pointer() {
         let ptr = backing.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
         if !ptr.is_null() {
@@ -79,7 +79,7 @@ pub(crate) fn url_search_params_backing_of(object: f64) -> Option<*mut ObjectHea
         URL_SEARCH_PARAMS_BACKING_KEY.len() as u32,
     );
     let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let backing = unsafe { crate::object::js_object_get_field_by_name(obj, key) };
+    let backing = crate::object::js_object_get_field_by_name(obj, key);
     if backing.is_pointer() {
         let ptr = backing.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
         if !ptr.is_null() {
@@ -121,13 +121,14 @@ pub extern "C" fn js_url_search_params_subclass_init(this: f64, init: f64) -> f6
     let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
     let backing_ptr = backing_handle.get_raw_mut_ptr::<ObjectHeader>();
     let backing_f64 = crate::value::js_nanbox_pointer(backing_ptr as i64);
-    unsafe { crate::object::js_object_set_field_by_name(this_obj, key, backing_f64) };
+    crate::object::js_object_set_field_by_name(this_obj, key, backing_f64);
     undef
 }
 
 /// Reached only from codegen-emitted IR (the `Expr::SuperCall` URLSearchParams
 /// arm); pin it so the auto-optimize bitcode rebuild's dead-strip can't drop it.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_URL_SEARCH_PARAMS_SUBCLASS_INIT: extern "C" fn(f64, f64) -> f64 =
     js_url_search_params_subclass_init;
 

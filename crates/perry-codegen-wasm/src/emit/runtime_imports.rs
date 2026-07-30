@@ -3,8 +3,6 @@
 //!
 //! Pure code-movement from `mod.rs`.
 
-use super::*;
-
 /// Import function indices (must match the order imports are added)
 /// Most fields are unused directly but their indices define the WASM import order.
 #[derive(Clone, Copy)]

@@ -471,9 +471,6 @@ fn prepare_assignment_target(
                             None,
                         ))
                     }
-                    _ => Err(anyhow!(
-                        "Unsupported member expression in destructuring assignment"
-                    )),
                 }
             }
             _ => Err(anyhow!(

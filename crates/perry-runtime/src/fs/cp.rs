@@ -432,13 +432,6 @@ pub extern "C" fn js_fs_cp_sync_options(from_value: f64, to_value: f64, options_
     }
 }
 
-pub(crate) fn js_fs_cp_async_options(from_value: f64, to_value: f64, options_value: f64) -> i32 {
-    match js_fs_cp_async_result(from_value, to_value, options_value) {
-        Ok(()) => 1,
-        Err(err) => crate::exception::js_throw(err),
-    }
-}
-
 pub(crate) fn js_fs_cp_async_result(
     from_value: f64,
     to_value: f64,

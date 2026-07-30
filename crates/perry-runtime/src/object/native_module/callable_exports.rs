@@ -370,22 +370,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         // #4904: http twins of the https entries above.
         ("http", "request") => Some(0),
         ("http", "get") => Some(3),
-        (
-            "stream",
-            "isDestroyed"
-            | "isDisturbed"
-            | "isErrored"
-            | "isReadable"
-            | "isWritable"
-            | "getDefaultHighWaterMark"
-            | "_isArrayBufferView"
-            | "_isUint8Array"
-            | "_uint8ArrayToBuffer",
-        ) => Some(1),
-        ("stream", "finished") => Some(3),
-        ("stream", "addAbortSignal" | "destroy" | "setDefaultHighWaterMark") => Some(2),
-        ("stream", "compose" | "pipeline") => Some(0),
-        ("stream", "duplexPair") => Some(1),
+        ("stream", "destroy") => Some(2),
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
@@ -431,7 +416,6 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("fs", "Stats") => Some(18),
         ("fs", "mkdtempDisposableSync") => Some(2),
         ("fs", "openAsBlob") => Some(1),
-        ("fs", "_toUnixTimestamp") => Some(1),
         ("events", "init") => Some(1),
         ("repl", "Recoverable") => Some(1),
         ("repl", "REPLServer" | "start") => Some(6),
@@ -450,7 +434,6 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("module", "flushCompileCache") => Some(0),
         ("module", "getCompileCacheDir") => Some(0),
         ("module", "getSourceMapsSupport") => Some(0),
-        ("module", "Module") => Some(0),
         ("module", "_findPath") => Some(3),
         ("module", "_initPaths") => Some(0),
         ("module", "_load") => Some(3),
@@ -1403,21 +1386,6 @@ pub(crate) fn timers_promises_parent_namespace() -> f64 {
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
         value
     })
-}
-
-extern "C" fn util_debuglog_logger_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _arg: f64,
-) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-pub(crate) fn util_debuglog_logger_value() -> f64 {
-    let func_ptr = util_debuglog_logger_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, "debuglog");
-    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {

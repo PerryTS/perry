@@ -1,12 +1,7 @@
 //! Compile command - compiles TypeScript to native executable
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use rayon::prelude::*;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 
@@ -144,9 +139,8 @@ mod run_pipeline;
 #[cfg(windows)]
 pub(crate) use helpers::is_windows_reserved_file_stem;
 pub(crate) use helpers::{
-    apply_libc_to_target, backend_disabled_msg, canonical_class_source_prefix,
-    native_object_file_stem, object_cache_project_root, print_deferred_eval_notice,
-    NativeObjectArtifact,
+    apply_libc_to_target, canonical_class_source_prefix, native_object_file_stem,
+    object_cache_project_root, print_deferred_eval_notice, NativeObjectArtifact,
 };
 pub use run_pipeline::run_with_parse_cache;
 

@@ -107,7 +107,6 @@ fn parse_iso8601(s: &str) -> Option<f64> {
     let mut minute: i64 = 0;
     let mut second: i64 = 0;
     let mut millis: i64 = 0;
-    let mut idx = year_end;
 
     // Year only ("YYYY" / "±YYYYYY").
     if s.len() == year_end {
@@ -132,7 +131,7 @@ fn parse_iso8601(s: &str) -> Option<f64> {
     if !(1..=12).contains(&month1) {
         return None;
     }
-    idx = year_end + 3;
+    let mut idx = year_end + 3;
     let mut has_day = false;
     if b.get(idx) == Some(&b'-') {
         if b.len() < idx + 3 {

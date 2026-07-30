@@ -1174,7 +1174,7 @@ mod structured_clone_tests {
     /// `{}`-born objects with no inline capacity) must survive structuredClone.
     #[test]
     fn structured_clone_keeps_overflow_properties() {
-        unsafe {
+        {
             let src = crate::object::js_object_alloc(0, 0);
             let mut names = Vec::new();
             for i in 0..50 {

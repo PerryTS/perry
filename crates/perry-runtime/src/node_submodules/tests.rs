@@ -84,7 +84,7 @@ fn find_submodule_for_unknown_key_returns_none() {
 /// expose `tracingChannel` as a callable thunk in the SUBMODULES table
 /// so the namespace singleton's field is a function (not TAG_TRUE).
 #[test]
-fn diagnostics_channel_exposes_tracingChannel_export() {
+fn diagnostics_channel_exposes_tracing_channel_export() {
     let submod =
         find_submodule("diagnostics_channel").expect("diagnostics_channel must be in SUBMODULES");
     let names: Vec<&str> = submod.exports.iter().map(|e| e.name).collect();

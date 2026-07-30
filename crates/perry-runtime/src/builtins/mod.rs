@@ -112,9 +112,6 @@ pub use numbers::{
     js_to_integer_or_infinity, reject_symbol_to_string,
 };
 
-#[cfg(test)]
-pub(crate) use numbers::parse_float_bytes;
-
 pub use table::{js_console_table, js_console_table_with_properties};
 
 #[cfg(test)]
