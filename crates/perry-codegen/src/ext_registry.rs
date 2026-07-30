@@ -116,6 +116,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_readable_stream_tee",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_pipe_to",                  OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_pipe_through",             OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_pipe_through_validate",    OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_from_blob",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_from_response",            OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_from_iterable",            OwnerKind::Stdlib { feature: Some("bundled-streams") }),

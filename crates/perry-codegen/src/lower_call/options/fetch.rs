@@ -961,16 +961,31 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     "js_transform_stream_readable",
                     &[(DOUBLE, &transform)],
                 );
-                let new_h = ctx.block().call(
+                let options = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let _ = ctx.block().call(
                     DOUBLE,
-                    "js_readable_stream_pipe_through",
+                    "js_readable_stream_pipe_through_validate",
                     &[
                         (DOUBLE, &recv_handle),
                         (DOUBLE, &writable),
                         (DOUBLE, &readable),
+                        (DOUBLE, &options),
                     ],
                 );
-                return Ok(Some(new_h));
+                let _ = ctx.block().call(
+                    I64,
+                    "js_readable_stream_pipe_to",
+                    &[
+                        (DOUBLE, &recv_handle),
+                        (DOUBLE, &writable),
+                        (DOUBLE, &options),
+                    ],
+                );
+                return Ok(Some(readable));
             }
             "locked" => {
                 let v = ctx.block().call(

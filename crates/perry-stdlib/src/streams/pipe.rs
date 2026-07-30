@@ -2,8 +2,8 @@
 
 use super::{
     box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error, transform_close,
-    writable_stream_write, ReadableState, READABLE_STREAMS, TAG_UNDEFINED, TRANSFORM_PAIRS,
-    WRITABLE_STREAMS,
+    writable_stream_write, ReadableState, WritableState, READABLE_STREAMS, TAG_UNDEFINED,
+    TRANSFORM_PAIRS, WRITABLE_STREAMS,
 };
 use perry_runtime::{
     js_nanbox_get_pointer, js_object_get_field_by_name, js_promise_new, js_promise_reject,
@@ -17,6 +17,16 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 struct PipeLockIds {
     reader_id: usize,
     writer_id: usize,
+}
+
+#[derive(Clone, Copy)]
+struct PipeState {
+    locks: PipeLockIds,
+    prevent_close: bool,
+    prevent_abort: bool,
+    prevent_cancel: bool,
+    signal: f64,
+    abort_listener: f64,
 }
 
 fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLockIds, &'static str> {
@@ -114,17 +124,26 @@ fn capture_f64(closure: *const ClosureHeader, idx: u32) -> f64 {
     f64::from_bits(bits)
 }
 
+fn pipe_state_from_capture(closure: *const ClosureHeader) -> PipeState {
+    PipeState {
+        locks: PipeLockIds {
+            reader_id: capture_f64(closure, 3) as usize,
+            writer_id: capture_f64(closure, 4) as usize,
+        },
+        prevent_close: perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0,
+        prevent_abort: perry_runtime::value::js_is_truthy(capture_f64(closure, 6)) != 0,
+        prevent_cancel: perry_runtime::value::js_is_truthy(capture_f64(closure, 7)) != 0,
+        signal: capture_f64(closure, 8),
+        abort_listener: capture_f64(closure, 9),
+    }
+}
+
 extern "C" fn readable_stream_pipe_to_microtask(closure: *const ClosureHeader) -> f64 {
     unsafe {
         let r_id = capture_f64(closure, 0) as usize;
         let w_id = capture_f64(closure, 1) as usize;
         let promise = promise_from_capture(closure, 2);
-        let locks = PipeLockIds {
-            reader_id: capture_f64(closure, 3) as usize,
-            writer_id: capture_f64(closure, 4) as usize,
-        };
-        let prevent_close = perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0;
-        pipe_step(r_id, w_id, promise, locks, prevent_close);
+        pipe_step(r_id, w_id, promise, pipe_state_from_capture(closure));
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -137,20 +156,14 @@ extern "C" fn readable_stream_pipe_to_read_fulfilled(
         let r_id = capture_f64(closure, 0) as usize;
         let w_id = capture_f64(closure, 1) as usize;
         let promise = promise_from_capture(closure, 2);
-        let locks = PipeLockIds {
-            reader_id: capture_f64(closure, 3) as usize,
-            writer_id: capture_f64(closure, 4) as usize,
-        };
-        let prevent_close = perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0;
+        let state = pipe_state_from_capture(closure);
         if perry_runtime::promise::js_promise_state(promise) != 0 {
             return f64::from_bits(TAG_UNDEFINED);
         }
         match pipe_iter_result(result) {
-            Some((true, _)) => finish_pipe(r_id, w_id, promise, locks, prevent_close),
-            Some((false, value)) => {
-                pipe_write_then_continue(r_id, w_id, promise, locks, prevent_close, value)
-            }
-            None => reject_pipe(r_id, w_id, promise, locks, result.to_bits()),
+            Some((true, _)) => finish_pipe(r_id, w_id, promise, state),
+            Some((false, value)) => pipe_write_then_continue(r_id, w_id, promise, state, value),
+            None => abort_destination_and_reject(r_id, w_id, promise, state, result.to_bits()),
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -164,12 +177,10 @@ extern "C" fn readable_stream_pipe_to_write_fulfilled(
         let r_id = capture_f64(closure, 0) as usize;
         let w_id = capture_f64(closure, 1) as usize;
         let promise = promise_from_capture(closure, 2);
-        let locks = PipeLockIds {
-            reader_id: capture_f64(closure, 3) as usize,
-            writer_id: capture_f64(closure, 4) as usize,
-        };
-        let prevent_close = perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0;
-        pipe_step(r_id, w_id, promise, locks, prevent_close);
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        pipe_step(r_id, w_id, promise, pipe_state_from_capture(closure));
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -178,28 +189,88 @@ extern "C" fn readable_stream_pipe_to_close_fulfilled(
     closure: *const ClosureHeader,
     _value: f64,
 ) -> f64 {
-    let r_id = capture_f64(closure, 0) as usize;
-    let w_id = capture_f64(closure, 1) as usize;
-    let promise = promise_from_capture(closure, 2);
-    let locks = PipeLockIds {
-        reader_id: capture_f64(closure, 3) as usize,
-        writer_id: capture_f64(closure, 4) as usize,
-    };
-    release_pipe_locks(r_id, w_id, locks);
-    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-extern "C" fn readable_stream_pipe_to_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
     unsafe {
         let r_id = capture_f64(closure, 0) as usize;
         let w_id = capture_f64(closure, 1) as usize;
         let promise = promise_from_capture(closure, 2);
-        let locks = PipeLockIds {
-            reader_id: capture_f64(closure, 3) as usize,
-            writer_id: capture_f64(closure, 4) as usize,
-        };
-        reject_pipe(r_id, w_id, promise, locks, reason.to_bits());
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let state = pipe_state_from_capture(closure);
+        cleanup_pipe_signal(state);
+        release_pipe_locks(r_id, w_id, state.locks);
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_stream_pipe_to_read_rejected(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
+    unsafe {
+        let r_id = capture_f64(closure, 0) as usize;
+        let w_id = capture_f64(closure, 1) as usize;
+        let promise = promise_from_capture(closure, 2);
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        abort_destination_and_reject(
+            r_id,
+            w_id,
+            promise,
+            pipe_state_from_capture(closure),
+            reason.to_bits(),
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_stream_pipe_to_write_rejected(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
+    unsafe {
+        let r_id = capture_f64(closure, 0) as usize;
+        let w_id = capture_f64(closure, 1) as usize;
+        let promise = promise_from_capture(closure, 2);
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        cancel_source_and_reject(
+            r_id,
+            w_id,
+            promise,
+            pipe_state_from_capture(closure),
+            reason.to_bits(),
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_stream_pipe_to_aborted(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let promise = promise_from_capture(closure, 2);
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let r_id = capture_f64(closure, 0) as usize;
+        let w_id = capture_f64(closure, 1) as usize;
+        let state = pipe_state_from_capture(closure);
+        let reason = pipe_signal_reason(state.signal);
+        let mut actions = [std::ptr::null_mut(); 2];
+        let mut action_count = 0;
+        if !state.prevent_abort && writable_can_abort(w_id) {
+            actions[action_count] =
+                super::js_writable_stream_abort_inner(w_id as f64, f64::from_bits(reason), true);
+            action_count += 1;
+        }
+        if !state.prevent_cancel && readable_can_cancel(r_id) {
+            actions[action_count] =
+                super::js_readable_stream_cancel_inner(r_id as f64, f64::from_bits(reason), true);
+            action_count += 1;
+        }
+        wait_for_shutdown_actions(r_id, w_id, promise, state, reason, &actions[..action_count]);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -233,10 +304,13 @@ unsafe fn pipe_step(
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
-    locks: PipeLockIds,
-    prevent_close: bool,
+    state: PipeState,
 ) {
     if perry_runtime::promise::js_promise_state(promise) != 0 {
+        return;
+    }
+    if let Some(reason) = writable_pipe_error(writable_id) {
+        cancel_source_and_reject(readable_id, writable_id, promise, state, reason);
         return;
     }
     let step = pipe_next_read(readable_id);
@@ -247,23 +321,16 @@ unsafe fn pipe_step(
     super::transform::transform_release_writes(readable_id);
     match step {
         PipeReadStep::Chunk(chunk) => {
-            pipe_write_then_continue(
-                readable_id,
-                writable_id,
-                promise,
-                locks,
-                prevent_close,
-                chunk,
-            );
+            pipe_write_then_continue(readable_id, writable_id, promise, state, chunk);
         }
         PipeReadStep::Done => {
-            finish_pipe(readable_id, writable_id, promise, locks, prevent_close);
+            finish_pipe(readable_id, writable_id, promise, state);
         }
         PipeReadStep::Error(reason) => {
-            reject_pipe(readable_id, writable_id, promise, locks, reason);
+            abort_destination_and_reject(readable_id, writable_id, promise, state, reason);
         }
         PipeReadStep::Pending => {
-            wait_for_next_read(readable_id, writable_id, promise, locks, prevent_close);
+            wait_for_next_read(readable_id, writable_id, promise, state);
         }
     }
 }
@@ -272,11 +339,11 @@ unsafe fn finish_pipe(
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
-    locks: PipeLockIds,
-    prevent_close: bool,
+    state: PipeState,
 ) {
-    if prevent_close {
-        release_pipe_locks(readable_id, writable_id, locks);
+    if state.prevent_close {
+        cleanup_pipe_signal(state);
+        release_pipe_locks(readable_id, writable_id, state.locks);
         js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
         return;
     }
@@ -291,23 +358,21 @@ unsafe fn finish_pipe(
         readable_id,
         writable_id,
         promise,
-        locks,
-        prevent_close,
+        state,
     );
     let rejected = pipe_closure(
-        readable_stream_pipe_to_rejected as *const u8,
+        readable_stream_pipe_to_write_rejected as *const u8,
         readable_id,
         writable_id,
         promise,
-        locks,
-        prevent_close,
+        state,
     );
     perry_runtime::closure::js_register_closure_arity(
         readable_stream_pipe_to_close_fulfilled as *const u8,
         1,
     );
     perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_rejected as *const u8,
+        readable_stream_pipe_to_write_rejected as *const u8,
         1,
     );
     let _ = perry_runtime::promise::js_promise_then(close_promise, fulfilled, rejected);
@@ -317,11 +382,173 @@ unsafe fn reject_pipe(
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
-    locks: PipeLockIds,
+    state: PipeState,
     reason: u64,
 ) {
-    release_pipe_locks(readable_id, writable_id, locks);
+    cleanup_pipe_signal(state);
+    release_pipe_locks(readable_id, writable_id, state.locks);
     js_promise_reject(promise, f64::from_bits(reason));
+}
+
+unsafe fn abort_destination_and_reject(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    state: PipeState,
+    reason: u64,
+) {
+    if !state.prevent_abort && writable_can_abort(writable_id) {
+        let action =
+            super::js_writable_stream_abort_inner(writable_id as f64, f64::from_bits(reason), true);
+        wait_for_shutdown_actions(readable_id, writable_id, promise, state, reason, &[action]);
+        return;
+    }
+    reject_pipe(readable_id, writable_id, promise, state, reason);
+}
+
+unsafe fn cancel_source_and_reject(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    state: PipeState,
+    reason: u64,
+) {
+    if !state.prevent_cancel && readable_can_cancel(readable_id) {
+        let action = super::js_readable_stream_cancel_inner(
+            readable_id as f64,
+            f64::from_bits(reason),
+            true,
+        );
+        wait_for_shutdown_actions(readable_id, writable_id, promise, state, reason, &[action]);
+        return;
+    }
+    reject_pipe(readable_id, writable_id, promise, state, reason);
+}
+
+extern "C" fn readable_stream_pipe_to_shutdown_fulfilled(
+    closure: *const ClosureHeader,
+    _value: f64,
+) -> f64 {
+    unsafe {
+        let promise = promise_from_capture(closure, 2);
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        reject_pipe(
+            capture_f64(closure, 0) as usize,
+            capture_f64(closure, 1) as usize,
+            promise,
+            pipe_state_from_capture(closure),
+            capture_f64(closure, 10).to_bits(),
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_stream_pipe_to_shutdown_rejected(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
+    unsafe {
+        let promise = promise_from_capture(closure, 2);
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        reject_pipe(
+            capture_f64(closure, 0) as usize,
+            capture_f64(closure, 1) as usize,
+            promise,
+            pipe_state_from_capture(closure),
+            reason.to_bits(),
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+unsafe fn wait_for_shutdown_actions(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    state: PipeState,
+    reason: u64,
+    actions: &[*mut Promise],
+) {
+    if actions.is_empty() {
+        reject_pipe(readable_id, writable_id, promise, state, reason);
+        return;
+    }
+    let action = if actions.len() == 1 {
+        actions[0]
+    } else {
+        let values = perry_runtime::js_array_alloc(actions.len() as u32);
+        for action in actions {
+            perry_runtime::js_array_push(values, JSValue::pointer(*action as *const u8));
+        }
+        perry_runtime::promise::js_promise_all(values)
+    };
+    let fulfilled = pipe_closure_with_reason(
+        readable_stream_pipe_to_shutdown_fulfilled as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        state,
+        reason,
+    );
+    let rejected = pipe_closure_with_reason(
+        readable_stream_pipe_to_shutdown_rejected as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        state,
+        reason,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_shutdown_fulfilled as *const u8,
+        1,
+    );
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_shutdown_rejected as *const u8,
+        1,
+    );
+    let _ = perry_runtime::promise::js_promise_then(action, fulfilled, rejected);
+}
+
+fn readable_can_cancel(readable_id: usize) -> bool {
+    READABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get(&readable_id)
+        .map(|stream| stream.state == ReadableState::Readable)
+        .unwrap_or(false)
+}
+
+fn writable_can_abort(writable_id: usize) -> bool {
+    WRITABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get(&writable_id)
+        .map(|stream| {
+            matches!(
+                stream.state,
+                WritableState::Writable | WritableState::Closing
+            )
+        })
+        .unwrap_or(false)
+}
+
+unsafe fn writable_pipe_error(writable_id: usize) -> Option<u64> {
+    let state = WRITABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get(&writable_id)
+        .map(|stream| (stream.state, stream.error_value));
+    match state {
+        Some((WritableState::Errored, reason)) => Some(reason),
+        Some((WritableState::Closing | WritableState::Closed, _)) => Some(
+            super::make_type_error_with_message("Invalid state: WritableStream is closed"),
+        ),
+        _ => None,
+    }
 }
 
 /// Queue the next pipe cycle directly as a microtask (one tick), mirroring the
@@ -330,44 +557,18 @@ unsafe fn schedule_pipe_step(
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
-    locks: PipeLockIds,
-    prevent_close: bool,
+    state: PipeState,
 ) {
-    let closure =
-        perry_runtime::closure::js_closure_alloc(readable_stream_pipe_to_microtask as *const u8, 6);
+    let closure = pipe_closure(
+        readable_stream_pipe_to_microtask as *const u8,
+        readable_id,
+        writable_id,
+        promise,
+        state,
+    );
     perry_runtime::closure::js_register_closure_arity(
         readable_stream_pipe_to_microtask as *const u8,
         0,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        0,
-        (readable_id as f64).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        1,
-        (writable_id as f64).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        2,
-        box_promise(promise).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        3,
-        (locks.reader_id as f64).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        4,
-        (locks.writer_id as f64).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        5,
-        (if prevent_close { 1.0 } else { 0.0f64 }).to_bits() as i64,
     );
     perry_runtime::builtins::js_queue_microtask(closure as i64);
 }
@@ -376,11 +577,11 @@ unsafe fn pipe_write_then_continue(
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
-    locks: PipeLockIds,
-    prevent_close: bool,
+    state: PipeState,
     chunk: u64,
 ) {
-    let write_promise = writable_stream_write(writable_id, locks.writer_id, f64::from_bits(chunk));
+    let write_promise =
+        writable_stream_write(writable_id, state.locks.writer_id, f64::from_bits(chunk));
     // Spec ReadableStreamPipeTo awaits only BACKPRESSURE (writer.ready), not
     // each write's completion. A sink that accepted the chunk synchronously
     // (write promise already fulfilled) must not cost an extra reaction tick —
@@ -404,9 +605,9 @@ unsafe fn pipe_write_then_continue(
                 .unwrap_or(false)
         };
         if park_now {
-            wait_for_next_read(readable_id, writable_id, promise, locks, prevent_close);
+            wait_for_next_read(readable_id, writable_id, promise, state);
         } else {
-            schedule_pipe_step(readable_id, writable_id, promise, locks, prevent_close);
+            schedule_pipe_step(readable_id, writable_id, promise, state);
         }
         return;
     }
@@ -415,23 +616,21 @@ unsafe fn pipe_write_then_continue(
         readable_id,
         writable_id,
         promise,
-        locks,
-        prevent_close,
+        state,
     );
     let rejected = pipe_closure(
-        readable_stream_pipe_to_rejected as *const u8,
+        readable_stream_pipe_to_write_rejected as *const u8,
         readable_id,
         writable_id,
         promise,
-        locks,
-        prevent_close,
+        state,
     );
     perry_runtime::closure::js_register_closure_arity(
         readable_stream_pipe_to_write_fulfilled as *const u8,
         1,
     );
     perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_rejected as *const u8,
+        readable_stream_pipe_to_write_rejected as *const u8,
         1,
     );
     let _ = perry_runtime::promise::js_promise_then(write_promise, fulfilled, rejected);
@@ -441,8 +640,7 @@ unsafe fn wait_for_next_read(
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
-    locks: PipeLockIds,
-    prevent_close: bool,
+    state: PipeState,
 ) {
     let read_promise = js_promise_new();
     if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&readable_id) {
@@ -465,23 +663,21 @@ unsafe fn wait_for_next_read(
         readable_id,
         writable_id,
         promise,
-        locks,
-        prevent_close,
+        state,
     );
     let rejected = pipe_closure(
-        readable_stream_pipe_to_rejected as *const u8,
+        readable_stream_pipe_to_read_rejected as *const u8,
         readable_id,
         writable_id,
         promise,
-        locks,
-        prevent_close,
+        state,
     );
     perry_runtime::closure::js_register_closure_arity(
         readable_stream_pipe_to_read_fulfilled as *const u8,
         1,
     );
     perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_rejected as *const u8,
+        readable_stream_pipe_to_read_rejected as *const u8,
         1,
     );
     let _ = perry_runtime::promise::js_promise_then(read_promise, fulfilled, rejected);
@@ -528,10 +724,32 @@ fn pipe_closure(
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
-    locks: PipeLockIds,
-    prevent_close: bool,
+    state: PipeState,
 ) -> *mut perry_runtime::ClosureHeader {
-    let closure = perry_runtime::closure::js_closure_alloc(func, 6);
+    pipe_closure_with_extra(func, readable_id, writable_id, promise, state, None)
+}
+
+fn pipe_closure_with_reason(
+    func: *const u8,
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    state: PipeState,
+    reason: u64,
+) -> *mut perry_runtime::ClosureHeader {
+    pipe_closure_with_extra(func, readable_id, writable_id, promise, state, Some(reason))
+}
+
+fn pipe_closure_with_extra(
+    func: *const u8,
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    state: PipeState,
+    reason: Option<u64>,
+) -> *mut perry_runtime::ClosureHeader {
+    let closure =
+        perry_runtime::closure::js_closure_alloc(func, if reason.is_some() { 11 } else { 10 });
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         0,
@@ -550,18 +768,37 @@ fn pipe_closure(
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         3,
-        (locks.reader_id as f64).to_bits() as i64,
+        (state.locks.reader_id as f64).to_bits() as i64,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         4,
-        (locks.writer_id as f64).to_bits() as i64,
+        (state.locks.writer_id as f64).to_bits() as i64,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         5,
-        (if prevent_close { 1.0 } else { 0.0f64 }).to_bits() as i64,
+        (if state.prevent_close { 1.0 } else { 0.0f64 }).to_bits() as i64,
     );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        6,
+        (if state.prevent_abort { 1.0 } else { 0.0f64 }).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        7,
+        (if state.prevent_cancel { 1.0 } else { 0.0f64 }).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(closure, 8, state.signal.to_bits() as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        9,
+        state.abort_listener.to_bits() as i64,
+    );
+    if let Some(reason) = reason {
+        perry_runtime::closure::js_closure_set_capture_ptr(closure, 10, reason as i64);
+    }
     closure
 }
 
@@ -579,9 +816,13 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     let promise = js_promise_new();
     let r_id = readable_handle as usize;
     let w_id = writable_handle as usize;
-    let prevent_close = pipe_option_truthy(options, b"preventClose");
-    if pipe_signal_is_aborted(options) {
-        js_promise_reject(promise, perry_runtime::url::js_abort_error_value());
+    let signal = pipe_option_value(options, b"signal");
+
+    if signal.to_bits() != TAG_UNDEFINED && pipe_signal_ptr(signal).is_none() {
+        reject_type_error(
+            promise,
+            "The options.signal property must be an AbortSignal",
+        );
         return promise;
     }
 
@@ -593,50 +834,90 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
         }
     };
 
-    let closure =
-        perry_runtime::closure::js_closure_alloc(readable_stream_pipe_to_microtask as *const u8, 6);
+    let mut state = PipeState {
+        locks,
+        prevent_close: pipe_option_truthy(options, b"preventClose"),
+        prevent_abort: pipe_option_truthy(options, b"preventAbort"),
+        prevent_cancel: pipe_option_truthy(options, b"preventCancel"),
+        signal,
+        abort_listener: f64::from_bits(TAG_UNDEFINED),
+    };
+
+    if let Some(signal_ptr) = pipe_signal_ptr(signal) {
+        let listener = pipe_closure(
+            readable_stream_pipe_to_aborted as *const u8,
+            r_id,
+            w_id,
+            promise,
+            state,
+        );
+        perry_runtime::closure::js_register_closure_arity(
+            readable_stream_pipe_to_aborted as *const u8,
+            0,
+        );
+        state.abort_listener = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
+        perry_runtime::closure::js_closure_set_capture_ptr(
+            listener,
+            9,
+            state.abort_listener.to_bits() as i64,
+        );
+        let abort = js_string_from_bytes(b"abort".as_ptr(), 5);
+        let abort_value = f64::from_bits(JSValue::string_ptr(abort).bits());
+        perry_runtime::url::js_abort_signal_add_listener(
+            signal_ptr,
+            abort_value,
+            state.abort_listener,
+        );
+        if perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+            readable_stream_pipe_to_aborted(listener);
+            return promise;
+        }
+    }
+
+    let closure = pipe_closure(
+        readable_stream_pipe_to_microtask as *const u8,
+        r_id,
+        w_id,
+        promise,
+        state,
+    );
     perry_runtime::closure::js_register_closure_arity(
         readable_stream_pipe_to_microtask as *const u8,
         0,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, (r_id as f64).to_bits() as i64);
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 1, (w_id as f64).to_bits() as i64);
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        2,
-        box_promise(promise).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        3,
-        (locks.reader_id as f64).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        4,
-        (locks.writer_id as f64).to_bits() as i64,
-    );
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        closure,
-        5,
-        (if prevent_close { 1.0 } else { 0.0f64 }).to_bits() as i64,
     );
     perry_runtime::builtins::js_queue_microtask(closure as i64);
 
     promise
 }
 
-unsafe fn pipe_signal_is_aborted(options: f64) -> bool {
-    let signal = pipe_option_value(options, b"signal");
-    let jsval = JSValue::from_bits(signal.to_bits());
-    if !jsval.is_pointer() {
-        return false;
+unsafe fn pipe_signal_ptr(signal: f64) -> Option<*mut ObjectHeader> {
+    let ptr = perry_runtime::url::js_abort_signal_resolve_ptr(signal);
+    (!ptr.is_null()).then_some(ptr)
+}
+
+unsafe fn pipe_signal_reason(signal: f64) -> u64 {
+    let reason = perry_runtime::value::js_get_property(signal, b"reason".as_ptr() as i64, 6);
+    if reason.to_bits() == TAG_UNDEFINED {
+        perry_runtime::url::js_abort_error_value().to_bits()
+    } else {
+        reason.to_bits()
     }
-    let signal_ptr = js_nanbox_get_pointer(signal) as *mut ObjectHeader;
-    if signal_ptr.is_null() {
-        return false;
+}
+
+unsafe fn cleanup_pipe_signal(state: PipeState) {
+    let Some(signal_ptr) = pipe_signal_ptr(state.signal) else {
+        return;
+    };
+    if state.abort_listener.to_bits() == TAG_UNDEFINED {
+        return;
     }
-    perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0
+    let abort = js_string_from_bytes(b"abort".as_ptr(), 5);
+    let abort_value = f64::from_bits(JSValue::string_ptr(abort).bits());
+    perry_runtime::url::js_abort_signal_remove_listener(
+        signal_ptr,
+        abort_value,
+        state.abort_listener,
+    );
 }
 
 unsafe fn pipe_option_truthy(options: f64, name: &[u8]) -> bool {
@@ -646,4 +927,152 @@ unsafe fn pipe_option_truthy(options: f64, name: &[u8]) -> bool {
 
 unsafe fn pipe_option_value(options: f64, name: &[u8]) -> f64 {
     perry_runtime::value::js_get_property(options, name.as_ptr() as i64, name.len() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::streams::{alloc_readable, alloc_writable};
+
+    extern "C" fn pending_abort_action(closure: *const ClosureHeader, _reason: f64) -> f64 {
+        let promise =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+        box_promise(promise)
+    }
+
+    #[test]
+    fn source_error_respects_prevent_abort() {
+        let _serial = crate::streams::tests::serial_guard();
+        for prevent_abort in [false, true] {
+            let readable = alloc_readable(0, 0, 0, 1.0);
+            let writable = alloc_writable(0, 0, 0, 1.0);
+            let locks = acquire_pipe_locks(readable, writable).unwrap();
+            let promise = js_promise_new();
+            let state = PipeState {
+                locks,
+                prevent_close: false,
+                prevent_abort,
+                prevent_cancel: false,
+                signal: f64::from_bits(TAG_UNDEFINED),
+                abort_listener: f64::from_bits(TAG_UNDEFINED),
+            };
+
+            unsafe {
+                abort_destination_and_reject(readable, writable, promise, state, TAG_UNDEFINED)
+            };
+
+            if prevent_abort {
+                assert_eq!(perry_runtime::promise::js_promise_state(promise), 2);
+            } else {
+                assert_eq!(perry_runtime::promise::js_promise_state(promise), 0);
+                assert_eq!(
+                    READABLE_STREAMS
+                        .lock()
+                        .unwrap()
+                        .get(&readable)
+                        .unwrap()
+                        .reader_handle,
+                    Some(locks.reader_id)
+                );
+                assert_eq!(
+                    WRITABLE_STREAMS
+                        .lock()
+                        .unwrap()
+                        .get(&writable)
+                        .unwrap()
+                        .writer_handle,
+                    Some(locks.writer_id)
+                );
+                perry_runtime::promise::js_promise_run_microtasks();
+                assert_eq!(perry_runtime::promise::js_promise_state(promise), 2);
+                assert!(READABLE_STREAMS
+                    .lock()
+                    .unwrap()
+                    .get(&readable)
+                    .unwrap()
+                    .reader_handle
+                    .is_none());
+                assert!(WRITABLE_STREAMS
+                    .lock()
+                    .unwrap()
+                    .get(&writable)
+                    .unwrap()
+                    .writer_handle
+                    .is_none());
+            }
+            let writable_state = WRITABLE_STREAMS
+                .lock()
+                .unwrap()
+                .get(&writable)
+                .unwrap()
+                .state;
+            assert!(if prevent_abort {
+                writable_state == WritableState::Writable
+            } else {
+                writable_state == WritableState::Errored
+            });
+        }
+    }
+
+    #[test]
+    fn pipe_keeps_locks_until_async_abort_settles() {
+        let _serial = crate::streams::tests::serial_guard();
+        let action = js_promise_new();
+        let callback =
+            perry_runtime::closure::js_closure_alloc(pending_abort_action as *const u8, 1);
+        perry_runtime::closure::js_register_closure_arity(pending_abort_action as *const u8, 1);
+        perry_runtime::closure::js_closure_set_capture_ptr(callback, 0, action as i64);
+        let readable = alloc_readable(0, 0, 0, 1.0);
+        let writable = alloc_writable(0, 0, callback as i64, 1.0);
+        let locks = acquire_pipe_locks(readable, writable).unwrap();
+        let promise = js_promise_new();
+        let state = PipeState {
+            locks,
+            prevent_close: false,
+            prevent_abort: false,
+            prevent_cancel: false,
+            signal: f64::from_bits(TAG_UNDEFINED),
+            abort_listener: f64::from_bits(TAG_UNDEFINED),
+        };
+
+        unsafe { abort_destination_and_reject(readable, writable, promise, state, TAG_UNDEFINED) };
+        perry_runtime::promise::js_promise_run_microtasks();
+        assert_eq!(perry_runtime::promise::js_promise_state(promise), 0);
+        assert_eq!(
+            READABLE_STREAMS
+                .lock()
+                .unwrap()
+                .get(&readable)
+                .unwrap()
+                .reader_handle,
+            Some(locks.reader_id)
+        );
+        assert_eq!(
+            WRITABLE_STREAMS
+                .lock()
+                .unwrap()
+                .get(&writable)
+                .unwrap()
+                .writer_handle,
+            Some(locks.writer_id)
+        );
+
+        js_promise_resolve(action, f64::from_bits(TAG_UNDEFINED));
+        perry_runtime::promise::js_promise_run_microtasks();
+        assert_eq!(perry_runtime::promise::js_promise_state(promise), 2);
+        assert!(READABLE_STREAMS
+            .lock()
+            .unwrap()
+            .get(&readable)
+            .unwrap()
+            .reader_handle
+            .is_none());
+        assert!(WRITABLE_STREAMS
+            .lock()
+            .unwrap()
+            .get(&writable)
+            .unwrap()
+            .writer_handle
+            .is_none());
+    }
 }

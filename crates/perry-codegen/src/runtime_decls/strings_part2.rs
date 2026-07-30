@@ -1112,6 +1112,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
+        "js_readable_stream_pipe_through_validate",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
         "js_readable_stream_controller_enqueue",
         DOUBLE,
         &[DOUBLE, DOUBLE],

@@ -1444,7 +1444,7 @@ pub(super) fn lower_builtin_new(
             // each may be a plain highWaterMark number or a strategy object;
             // the runtime parses either form.
             let mut writable_strategy = hwm;
-            let mut readable_strategy = double_literal(1.0);
+            let mut readable_strategy = double_literal(0.0);
             if args.len() >= 2 {
                 writable_strategy = lower_expr(ctx, &args[1])?;
             }

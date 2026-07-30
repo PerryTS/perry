@@ -6,7 +6,7 @@ use super::*;
 /// interleave allocations between a retire and its recycle assertion.
 static ALLOCATOR_TEST_SERIAL: Mutex<()> = Mutex::new(());
 
-fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
     ALLOCATOR_TEST_SERIAL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -213,4 +213,89 @@ fn utf8_split_prefix_tracks_incomplete_sequence() {
     assert_eq!(split_utf8_prefix(&[0x68, 0xc3]).unwrap(), (1, true));
     assert_eq!(split_utf8_prefix(&[0xc3, 0xa9]).unwrap(), (2, false));
     assert!(split_utf8_prefix(&[0xff]).is_err());
+}
+
+#[test]
+fn transform_terminate_closes_readable_and_errors_writable() {
+    let _serial = serial_guard();
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let transform =
+        unsafe { js_transform_stream_new(undefined, undefined, undefined, undefined, undefined) };
+    let readable = unsafe { js_transform_stream_readable(transform) };
+    let writable = unsafe { js_transform_stream_writable(transform) };
+
+    assert!(unsafe { dispatch_stream_method(readable, "terminate", &[]) }.is_some());
+    assert!(matches!(
+        READABLE_STREAMS
+            .lock()
+            .unwrap()
+            .get(&(readable as usize))
+            .unwrap()
+            .state,
+        ReadableState::Closed
+    ));
+    assert!(matches!(
+        WRITABLE_STREAMS
+            .lock()
+            .unwrap()
+            .get(&(writable as usize))
+            .unwrap()
+            .state,
+        WritableState::Errored
+    ));
+}
+
+#[test]
+fn enqueue_rejects_closed_readable_controller() {
+    let _serial = serial_guard();
+    let readable = alloc_closed_readable();
+
+    assert_eq!(
+        readable_controller_enqueue_error(readable),
+        Some("Invalid state: Controller is already closed")
+    );
+}
+
+#[test]
+fn pipe_through_rejects_locked_endpoints_before_starting() {
+    let _serial = serial_guard();
+    let source = alloc_readable(0, 0, 0, 1.0);
+    let output = alloc_readable(0, 0, 0, 1.0);
+    let destination = alloc_writable(0, 0, 0, 1.0);
+
+    READABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get_mut(&source)
+        .unwrap()
+        .reader_handle = Some(1);
+    assert_eq!(
+        pipe_through_validation_error(source, destination, output),
+        Some("ReadableStream is locked")
+    );
+
+    READABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get_mut(&source)
+        .unwrap()
+        .reader_handle = None;
+    WRITABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get_mut(&destination)
+        .unwrap()
+        .writer_handle = Some(2);
+    assert_eq!(
+        pipe_through_validation_error(source, destination, output),
+        Some("WritableStream is locked")
+    );
+
+    let invalid_signal = js_object_alloc(0, 0);
+    assert_eq!(
+        pipe_through_signal_error(f64::from_bits(
+            JSValue::object_ptr(invalid_signal as *mut u8).bits(),
+        )),
+        Some("The options.signal property must be an AbortSignal")
+    );
 }
