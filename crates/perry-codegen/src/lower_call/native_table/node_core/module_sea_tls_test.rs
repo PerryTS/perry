@@ -425,7 +425,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         method: "method",
         class_filter: None,
         runtime: "js_node_test_mock_method",
-        args: &[NA_F64, NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -434,7 +434,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         method: "getter",
         class_filter: None,
         runtime: "js_node_test_mock_getter",
-        args: &[NA_F64, NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -443,7 +443,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         method: "setter",
         class_filter: None,
         runtime: "js_node_test_mock_setter",
-        args: &[NA_F64, NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -537,3 +537,19 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         ret: NR_F64,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::NODE_CORE_MODULE_SEA_TLS_TEST_ROWS;
+
+    #[test]
+    fn node_test_mock_accessor_calls_keep_the_options_argument() {
+        for method in ["method", "getter", "setter"] {
+            let sig = NODE_CORE_MODULE_SEA_TLS_TEST_ROWS
+                .iter()
+                .find(|sig| sig.module == "test" && sig.method == method)
+                .unwrap_or_else(|| panic!("missing node:test mock.{method} signature"));
+            assert_eq!(sig.args.len(), 4, "mock.{method} must forward options");
+        }
+    }
+}

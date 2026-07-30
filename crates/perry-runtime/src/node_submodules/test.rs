@@ -498,6 +498,89 @@ fn accessor_function_value(bits: u64) -> f64 {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MockMethodOptions {
+    getter: bool,
+    setter: bool,
+}
+
+fn is_non_null_object(value: f64) -> bool {
+    let js = JSValue::from_bits(value.to_bits());
+    js.is_pointer() && !is_callable_value(value)
+}
+
+fn mock_option_bool(options: f64, name: &str, default: bool) -> bool {
+    let Some(value) = object_property(options, name.as_bytes()) else {
+        return default;
+    };
+    match value.to_bits() {
+        crate::value::TAG_TRUE => true,
+        crate::value::TAG_FALSE => false,
+        crate::value::TAG_UNDEFINED => default,
+        _ => throw_invalid_arg_type(&format!("options.{name}"), "boolean", value),
+    }
+}
+
+fn parse_mock_method_options(
+    options: f64,
+    default_getter: bool,
+    default_setter: bool,
+) -> MockMethodOptions {
+    if is_undefined_value(options) {
+        return MockMethodOptions {
+            getter: default_getter,
+            setter: default_setter,
+        };
+    }
+    if !is_non_null_object(options) {
+        throw_invalid_arg_type("options", "object", options);
+    }
+    MockMethodOptions {
+        getter: mock_option_bool(options, "getter", default_getter),
+        setter: mock_option_bool(options, "setter", default_setter),
+    }
+}
+
+fn normalize_mock_method_args(implementation: f64, options: f64) -> (f64, f64) {
+    if is_non_null_object(implementation) {
+        (undefined_value(), implementation)
+    } else {
+        (implementation, options)
+    }
+}
+
+fn throw_invalid_mock_option_value(arg: &str, value: f64, reason: &str) -> ! {
+    crate::validators::throw_invalid_arg_value(
+        arg,
+        reason,
+        &crate::fs::validate::describe_received(value),
+    );
+}
+
+fn validate_mock_accessor_options(options: MockMethodOptions, kind: &str) {
+    if kind == "getter" && !options.getter {
+        throw_invalid_mock_option_value(
+            "options.getter",
+            f64::from_bits(crate::value::TAG_FALSE),
+            "cannot be false",
+        );
+    }
+    if kind == "setter" && !options.setter {
+        throw_invalid_mock_option_value(
+            "options.setter",
+            f64::from_bits(crate::value::TAG_FALSE),
+            "cannot be false",
+        );
+    }
+    if options.getter && options.setter {
+        throw_invalid_mock_option_value(
+            "options.setter",
+            f64::from_bits(crate::value::TAG_TRUE),
+            "cannot be used with 'options.getter'",
+        );
+    }
+}
+
 fn install_accessor_mock(target: f64, property: &str, accessor: crate::object::AccessorDescriptor) {
     let raw = object_target_addr(target);
     let key = js_string_from_bytes(property.as_ptr(), property.len() as u32);
@@ -852,7 +935,17 @@ extern "C" fn mock_method_thunk(
     target: f64,
     property: f64,
     implementation: f64,
+    options: f64,
 ) -> f64 {
+    let (implementation, options) = normalize_mock_method_args(implementation, options);
+    let options = parse_mock_method_options(options, false, false);
+    validate_mock_accessor_options(options, "method");
+    if options.getter {
+        return create_getter_mock(target, property, implementation);
+    }
+    if options.setter {
+        return create_setter_mock(target, property, implementation);
+    }
     let property = property_name(property);
     let original = get_property_value(target, &property);
     let implementation = if is_undefined_value(implementation) {
@@ -874,12 +967,7 @@ extern "C" fn mock_method_thunk(
     function
 }
 
-extern "C" fn mock_getter_thunk(
-    _closure: *const ClosureHeader,
-    target: f64,
-    property: f64,
-    implementation: f64,
-) -> f64 {
+fn create_getter_mock(target: f64, property: f64, implementation: f64) -> f64 {
     let property = property_name(property);
     let raw = object_target_addr(target);
     let original_accessor = crate::object::get_accessor_descriptor(raw, &property);
@@ -919,12 +1007,20 @@ extern "C" fn mock_getter_thunk(
     function
 }
 
-extern "C" fn mock_setter_thunk(
+extern "C" fn mock_getter_thunk(
     _closure: *const ClosureHeader,
     target: f64,
     property: f64,
     implementation: f64,
+    options: f64,
 ) -> f64 {
+    let (implementation, options) = normalize_mock_method_args(implementation, options);
+    let options = parse_mock_method_options(options, true, false);
+    validate_mock_accessor_options(options, "getter");
+    create_getter_mock(target, property, implementation)
+}
+
+fn create_setter_mock(target: f64, property: f64, implementation: f64) -> f64 {
     let property = property_name(property);
     let raw = object_target_addr(target);
     let original_accessor = crate::object::get_accessor_descriptor(raw, &property);
@@ -962,6 +1058,19 @@ extern "C" fn mock_setter_thunk(
         },
     );
     function
+}
+
+extern "C" fn mock_setter_thunk(
+    _closure: *const ClosureHeader,
+    target: f64,
+    property: f64,
+    implementation: f64,
+    options: f64,
+) -> f64 {
+    let (implementation, options) = normalize_mock_method_args(implementation, options);
+    let options = parse_mock_method_options(options, false, true);
+    validate_mock_accessor_options(options, "setter");
+    create_setter_mock(target, property, implementation)
 }
 
 extern "C" fn mock_property_thunk(
@@ -1042,17 +1151,17 @@ fn mock_object_value() -> f64 {
         set_field(
             mock,
             "method",
-            closure_value(mock_method_thunk as *const u8, 3),
+            closure_value(mock_method_thunk as *const u8, 4),
         );
         set_field(
             mock,
             "getter",
-            closure_value(mock_getter_thunk as *const u8, 3),
+            closure_value(mock_getter_thunk as *const u8, 4),
         );
         set_field(
             mock,
             "setter",
-            closure_value(mock_setter_thunk as *const u8, 3),
+            closure_value(mock_setter_thunk as *const u8, 4),
         );
         set_field(
             mock,
@@ -1475,18 +1584,33 @@ pub extern "C" fn js_node_test_mock_fn(
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_test_mock_method(target: f64, property: f64, implementation: f64) -> f64 {
-    mock_method_thunk(std::ptr::null(), target, property, implementation)
+pub extern "C" fn js_node_test_mock_method(
+    target: f64,
+    property: f64,
+    implementation: f64,
+    options: f64,
+) -> f64 {
+    mock_method_thunk(std::ptr::null(), target, property, implementation, options)
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_test_mock_getter(target: f64, property: f64, implementation: f64) -> f64 {
-    mock_getter_thunk(std::ptr::null(), target, property, implementation)
+pub extern "C" fn js_node_test_mock_getter(
+    target: f64,
+    property: f64,
+    implementation: f64,
+    options: f64,
+) -> f64 {
+    mock_getter_thunk(std::ptr::null(), target, property, implementation, options)
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_test_mock_setter(target: f64, property: f64, implementation: f64) -> f64 {
-    mock_setter_thunk(std::ptr::null(), target, property, implementation)
+pub extern "C" fn js_node_test_mock_setter(
+    target: f64,
+    property: f64,
+    implementation: f64,
+    options: f64,
+) -> f64 {
+    mock_setter_thunk(std::ptr::null(), target, property, implementation, options)
 }
 
 #[no_mangle]
@@ -1601,6 +1725,49 @@ pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options_with_bool(name: &str, value: bool) -> f64 {
+        let options = js_object_alloc(0, 1);
+        set_field(
+            options,
+            name,
+            f64::from_bits(if value {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        );
+        boxed_ptr(options)
+    }
+
+    #[test]
+    fn mock_method_accepts_options_in_the_implementation_slot() {
+        let options = options_with_bool("getter", true);
+        let (implementation, normalized_options) =
+            normalize_mock_method_args(options, undefined_value());
+
+        assert!(is_undefined_value(implementation));
+        assert_eq!(normalized_options.to_bits(), options.to_bits());
+        let parsed = parse_mock_method_options(normalized_options, false, false);
+        assert!(parsed.getter);
+        assert!(!parsed.setter);
+    }
+
+    #[test]
+    fn mock_getter_and_setter_defaults_preserve_the_accessor_kind() {
+        let getter = parse_mock_method_options(undefined_value(), true, false);
+        assert!(getter.getter);
+        assert!(!getter.setter);
+
+        let setter = parse_mock_method_options(undefined_value(), false, true);
+        assert!(!setter.getter);
+        assert!(setter.setter);
+    }
 }
 
 fn reporter_with_kind(kind: i32, source: f64) -> f64 {
