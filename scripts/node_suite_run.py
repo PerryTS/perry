@@ -75,6 +75,7 @@ PERRY = sys.argv[1]
 ROOT = sys.argv[2]
 MODS = sys.argv[3].split(",") if len(sys.argv) > 3 and sys.argv[3] else None
 NODE = os.environ.get("NODE_BIN", "node")
+COMPILE_TIMEOUT = int(os.environ.get("PERRY_NODE_SUITE_COMPILE_TIMEOUT", "120"))
 
 # Modules that must run one-at-a-time (port binding / process spawn / event-loop
 # or timer ordering). Parallelism corrupts their results.
@@ -110,7 +111,12 @@ def run_one(args):
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, "o")
         try:
-            c = subprocess.run([PERRY, path, "-o", out], capture_output=True, text=True, timeout=120)
+            c = subprocess.run(
+                [PERRY, path, "-o", out],
+                capture_output=True,
+                text=True,
+                timeout=COMPILE_TIMEOUT,
+            )
             if c.returncode != 0:
                 return (mod, "compile_fail", path)
             p = subprocess.run([out], capture_output=True, text=True, timeout=30)
