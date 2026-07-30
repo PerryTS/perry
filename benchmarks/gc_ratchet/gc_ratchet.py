@@ -460,11 +460,13 @@ def measure(
                     f"{name}: GC counters are not deterministic across traced runs "
                     f"({', '.join(differing)}); they cannot be gated"
                 )
-            if traced[0]["minor_cycles"] < 1:
-                raise RatchetError(
-                    f"{name}: probe triggered no minor collection — it is not exercising "
-                    "the collector and must be rescaled before it can be pinned"
-                )
+            # Deliberately NOT rejecting minor_cycles == 0 here. A collector that
+            # has stopped running copying minors at all is the single largest
+            # regression this ratchet exists to catch, and it must surface as a
+            # REGRESSION row against the baseline's cycle count, not as a harness
+            # error that misdiagnoses it as "your probe is too small". The
+            # can't-pin-a-probe-that-never-collects rule lives in
+            # validate_artifact, where it belongs: pinning time, not measure time.
 
             metrics = {metric: distribution(samples[metric]) for metric in SAMPLED_METRICS}
             for metric in GC_METRICS:

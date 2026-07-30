@@ -91,6 +91,37 @@ everywhere.
 different reason: a GitHub runner is a different machine class with a different
 baseline RSS, so the comparison is not meaningful there at any band.
 
+## The gate was validated against a real collector change
+
+Unit tests prove the checker fails on injected JSON. That is necessary but not
+sufficient — it says nothing about whether the *probes* are sensitive to the
+thing the campaign will actually do. So the gate was also run end-to-end against
+`PERRY_CONSERVATIVE_STACK_SCAN=full`, the runtime's existing escape hatch for
+the legacy conservative stack scan, which is the mechanism the campaign is
+adopting.
+
+Control arm (unchanged collector) reproduced the baseline exactly on all eight
+probes and exited 0. The conservative-scan arm exited 1 with 60 regression rows:
+
+| Probe | `heap_used_bytes` baseline | with conservative scan | Δ | `minor_cycles` |
+|---|---:|---:|---:|---:|
+| `01_nursery_churn` | 807,000 | 3,742,800 | +364% | 14 → 0 |
+| `02_survivor_promotion` | 5,022,864 | 25,242,760 | +403% | 10 → 0 |
+| `03_cross_gen_writes` | 705,320 | 6,494,536 | +821% | 22 → 0 |
+| `04_dead_after_deep_stack` | 1,000,728 | 9,187,088 | +818% | 104 → 0 |
+| `05_closure_capture` | 1,040,208 | 7,336,208 | +605% | 26 → 0 |
+| `06_string_retention` | 746,056 | 4,746,240 | +536% | 64 → 0 |
+| `07_array_grow_evacuate` | 1,816,232 | 99,362,360 | +5371% | 80 → 0 |
+| `08_map_set_sidetables` | 457,872 | 6,754,560 | +1375% | 84 → 0 |
+
+Two things follow. The probes are sensitive to conservative scanning by orders
+of magnitude, not by margin. And a collector that stops running copying minors
+at all is reported as a regression on `minor_cycles` rather than as a harness
+error — the "probe ran no collection" rule deliberately lives in
+`validate_artifact` (you may not *pin* such a probe) and not in `measure`, so
+that the largest possible regression is not misdiagnosed as "your probe is too
+small".
+
 ## Direction
 
 Retention, memory and timing regress only upward, so their bands are one-sided.
