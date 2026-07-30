@@ -47,7 +47,8 @@ export interface Finding {
 
 export function checkCargoConfig(body: string, file: string): Finding[] {
   const out: Finding[] = []
-  const age = /^global-min-publish-age\s*=\s*"([^"]*)"/m.exec(body)?.[1]
+  const registry = /^\[registry\][^[]*/ms.exec(body)?.[0] ?? ''
+  const age = /^global-min-publish-age\s*=\s*"([^"]*)"/m.exec(registry)?.[1]
   const wanted = `${SOAK_DAYS} days`
   if (age !== wanted) {
     out.push({
@@ -428,10 +429,20 @@ export function fixDependabotCooldown(body: string): string {
 }
 
 export function fixCargoConfig(body: string): string {
-  return body.replace(
-    /^(global-min-publish-age\s*=\s*)"[^"]*"/m,
-    `$1"${SOAK_DAYS} days"`,
-  )
+  const registrySection = /^\[registry\][^[]*/ms
+  const key = /^(global-min-publish-age\s*=\s*)"[^"]*"/m
+  if (registrySection.test(body)) {
+    return body.replace(registrySection, section => {
+      if (key.test(section)) {
+        return section.replace(key, `$1"${SOAK_DAYS} days"`)
+      }
+      return section.replace(
+        /^\[registry\][ \t]*$/m,
+        `[registry]\nglobal-min-publish-age = "${SOAK_DAYS} days"`,
+      )
+    })
+  }
+  return `${body.trimEnd()}\n\n[registry]\nglobal-min-publish-age = "${SOAK_DAYS} days"\n`
 }
 
 export function fixNpmrc(body: string): string {
@@ -443,10 +454,10 @@ export function fixNpmrc(body: string): string {
 }
 
 export function fixWorkspaceYaml(body: string): string {
-  let out = body.replace(
-    /^(minimumReleaseAge:\s*)\d+\s*$/m,
-    `$1${SOAK_MINUTES}`,
-  )
+  const key = /^(minimumReleaseAge:\s*)\d+[ \t]*$/m
+  let out = key.test(body)
+    ? body.replace(key, `$1${SOAK_MINUTES}`)
+    : `minimumReleaseAge: ${SOAK_MINUTES}\n${body}`
   // Prune expired pins together with their annotation line.
   const today = todayIso()
   const lines = out.split('\n')

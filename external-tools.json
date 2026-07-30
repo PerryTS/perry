@@ -47,7 +47,7 @@
     },
     "npm": {
       "notes": [
-        "npm 12 (min-release-age support). ONE platform-agnostic registry tarball, single integrity",
+        "npm 11.10+ supports min-release-age; npm 11.17+ adds min-release-age-exclude. ONE platform-agnostic registry tarball, single integrity",
         "Installed from the pinned tarball only — never npm install -g npm, no self-update path"
       ],
       "description": "npm — pinned, SRI-verified registry tarball; installed without self-update",
@@ -171,7 +171,7 @@
       "integrity": "sha512-R98OO1Ujyk2lezDLb+iQmMhF6FwTJCHajy3G4FCB6x7wkSTqR9f8+eAelC5KDzYDsGSbc0sOZvjXOOPRBtMpDg=="
     },
     "skillspector": {
-      "description": "NVIDIA's third-party-skill security scanner (LangGraph-based; YARA + AST + OSV.dev CVE lookups + optional LLM analysis). No PyPI release / no GH tags upstream — pinned to a git SHA on main + installed via a locked uv project (pyproject.toml + uv.lock, `uv sync --locked`; the fleet uv pin + exclude-newer make it reproducible). Sibling to AgentShield: AgentShield audits the operator's .claude/ config; SkillSpector audits untrusted upstream skills before install.",
+      "description": "NVIDIA's third-party-skill security scanner (LangGraph-based; YARA + AST + OSV.dev CVE lookups + optional LLM analysis). No PyPI release / no GH tags upstream — pinned to a full git SHA on main; CI reads this ref directly and applies the fleet SOAK_DAYS cutoff with uv --exclude-newer. Sibling to AgentShield: AgentShield audits the operator's .claude/ config; SkillSpector audits untrusted upstream skills before install.",
       "release": "uv-project",
       "repository": "github:NVIDIA/skillspector",
       "version": "2eb844780ab163f01468ecf142c40a2ec0fcaec0",

@@ -130,10 +130,15 @@ jobs:
       - name: Scan each skill
         run: |
           set -euo pipefail
+          skillspector_ref="$(jq -er '.tools.skillspector.version' external-tools.json)"
+          soak_days="$(sed -nE 's/^export const SOAK_DAYS = ([0-9]+)$/\1/p' scripts/soak/constants.mts)"
+          test -n "$soak_days"
+          exclude_newer="$(date -u -d "${soak_days} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
           for skill in .claude/skills/*/; do
             echo "::group::skillspector ${skill}"
             uv tool run --python 3.12 \
-              --from git+https://github.com/NVIDIA/skillspector@2eb844780ab163f01468ecf142c40a2ec0fcaec0 \
+              --exclude-newer "$exclude_newer" \
+              --from "git+https://github.com/NVIDIA/skillspector@${skillspector_ref}" \
               skillspector scan "${skill}" --no-llm
             echo "::endgroup::"
           done

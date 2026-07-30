@@ -70,6 +70,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="bot/soak-autofix"
+          expected_oid=""
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+            expected_oid="$(git rev-parse "refs/remotes/origin/$BRANCH")"
+          fi
           git checkout -B "$BRANCH"
           git add -A
           git commit -m "chore(soak): prune expired soak annotations (automated)
@@ -78,7 +83,12 @@ jobs:
           external-tools.mts --fix. Windows that cleared have soaked;
           their bypass annotations are dead weight the gates would
           otherwise fail on."
-          git push -f origin "$BRANCH"
+          if [ -n "$expected_oid" ]; then
+            git push --force-with-lease="refs/heads/$BRANCH:$expected_oid" \
+              origin "HEAD:refs/heads/$BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
           if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
             gh pr create --head "$BRANCH" \
               --title "chore(soak): prune expired soak annotations (automated)" \

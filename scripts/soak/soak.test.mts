@@ -43,6 +43,14 @@ test('cargo config: wrong window and missing unstable gate are findings', () => 
   assert.equal(checkCargoConfig(good, 'c').length, 0)
   assert.equal(checkCargoConfig(good.replace('7 days', '3 days'), 'c').length, 1)
   assert.equal(checkCargoConfig('[registry]\nglobal-min-publish-age = "7 days"\n', 'c').length, 1)
+  assert.equal(
+    checkCargoConfig(
+      'global-min-publish-age = "7 days"\n\n[unstable]\nmin-publish-age = true\n',
+      'c',
+    ).length,
+    1,
+  )
+  assert.match(fixCargoConfig('[unstable]\nmin-publish-age = true\n'), /\[registry\]\n/)
 })
 
 test('npmrc: window must match SOAK_DAYS and fix writes it', () => {
@@ -62,6 +70,12 @@ test('workspace yaml: clean fixture passes', () => {
 test('workspace yaml: wrong minutes value is a finding', () => {
   const bad = CLEAN_YAML.replace('10080', '1440')
   assert.equal(checkWorkspaceYaml(bad, 'y').filter(f => f.what.includes('minimumReleaseAge')).length, 1)
+})
+
+test('workspace yaml fixer inserts a missing minimumReleaseAge key', () => {
+  const fixed = fixWorkspaceYaml('catalog:\n  taze: 19.14.1\n')
+  assert.match(fixed, /^minimumReleaseAge: 10080$/m)
+  assert.equal(checkWorkspaceYaml(fixed, 'y').length, 0)
 })
 
 test('excludes: flow-style list is rejected outright', () => {

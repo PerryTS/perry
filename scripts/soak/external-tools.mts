@@ -295,6 +295,17 @@ export function extractArchive(name: string, destDir: string, asset: string, buf
 export function linkHandle(target: string, name: string): void {
   mkdirSync(BIN_DIR, { recursive: true })
   const handle = path.join(BIN_DIR, name)
+  if (process.platform !== 'win32' && isManagedSfwShim(handle)) {
+    const body = readFileSync(handle, 'utf8')
+    const updated = body.replace(/^REAL='[^']*'$/m, `REAL='${target}'`)
+    if (updated !== body) {
+      writeFileSync(handle, updated)
+    }
+    console.warn(
+      `[external-tools] preserving managed sfw shim ${handle} while updating its rack target`,
+    )
+    return
+  }
   // force also removes a DANGLING handle (existsSync would report false
   // for one and a bare symlink would then throw EEXIST).
   rmSync(handle, { force: true })
@@ -326,6 +337,14 @@ export function linkHandle(target: string, name: string): void {
     return
   }
   symlinkSync(target, handle)
+}
+
+export function isManagedSfwShim(handle: string): boolean {
+  try {
+    return readFileSync(handle, 'utf8').includes('# sfw shim for ')
+  } catch {
+    return false
+  }
 }
 
 async function installAssetTool(name: string, pin: ToolPin): Promise<void> {

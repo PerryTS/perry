@@ -8,7 +8,8 @@
  *   - `.cargo/config.toml`        -> `global-min-publish-age = "<SOAK_DAYS> days"` (cargo -Zmin-publish-age)
  *   - `rust-toolchain.toml`       -> dated nightly adopted only once >= SOAK_DAYS old
  *   - `pnpm-workspace.yaml`  -> `minimumReleaseAge: <SOAK_MINUTES>` (aube reads minutes)
- *   - `.npmrc`               -> `min-release-age=<SOAK_DAYS>` (npm >= 11.17, days)
+ *   - `.npmrc`               -> `min-release-age=<SOAK_DAYS>` (npm >= 11.10, days;
+ *                                annotated excludes require npm >= 11.17)
  *   - `taze.config.mts`      -> `maturityPeriod: SOAK_DAYS` (imports this)
  *
  *   The data files can't import this module, so `scripts/soak/soak.mts`
