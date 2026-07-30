@@ -58,8 +58,8 @@ fn navigator_platform() -> &'static str {
 }
 
 fn normalize_navigator_locale(locale: &str) -> Option<String> {
-    let locale = locale.split('.').next()?;
     let (locale, modifier) = locale.split_once('@').unwrap_or((locale, ""));
+    let locale = locale.split('.').next()?;
     if locale.is_empty() || matches!(locale, "C" | "POSIX") {
         return None;
     }
@@ -167,6 +167,10 @@ mod tests {
     fn normalizes_posix_locale_modifiers() {
         assert_eq!(
             normalize_navigator_locale("de_DE@euro"),
+            Some("de-DE-x-lvariant-euro".into())
+        );
+        assert_eq!(
+            normalize_navigator_locale("de_DE.UTF-8@euro"),
             Some("de-DE-x-lvariant-euro".into())
         );
         assert_eq!(
