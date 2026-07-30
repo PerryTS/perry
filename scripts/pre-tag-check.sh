@@ -12,7 +12,9 @@
 #   - the 2000-line-per-file cap (scripts/check_file_size.sh)
 #   - unbarriered GC store sites / bare address-band literals
 #   - the gap-snapshot checker's own self-test
-#   - benchmark harness tests + public-artifact freshness
+#   - benchmark harness, fallback, verifier, and shell-syntax tests
+#   - workspace-architecture invariants
+#   - public-artifact freshness
 #   - untagged ```typescript fences in docs/src (Tests `doc-tests` --lint)
 #   - obvious build / type errors via `cargo check`
 #   - license + duplicate-dependency policy (cargo-deny), when installed
@@ -87,26 +89,47 @@ run_check() {
 # 1. cargo fmt --all -- --check
 run_check "cargo fmt --all --check" cargo fmt --all -- --check
 
-# 2. Benchmark harness tests + public-artifact freshness. The freshness
-#    check fingerprints the root Cargo.toml, so editing workspace deps or
-#    lints invalidates it and the artifact needs regenerating with
-#    ./benchmarks/run_public_baseline.sh.
+# 2. Benchmark harness, fallback, verifier, and shell-syntax tests.
 run_check "benchmark harness tests" \
-    python3 -m unittest discover -s tests -p 'test_benchmark_gate.py'
+    python3 -m unittest discover -s tests -p 'test_benchmark_gate.py' -v
+run_check "benchmark peer fallback tests" \
+    ./tests/test_benchmark_peer_fallback.sh
+run_check "benchmark output verifier tests" \
+    ./tests/test_benchmark_output_verifier.sh
+run_check "benchmark shell syntax" \
+    bash -n benchmarks/compare.sh benchmarks/honest_bench/run.sh \
+        benchmarks/honest_bench/harness/run_http_bench.sh \
+        tests/test_benchmark_peer_fallback.sh
+
+# 3. Workspace membership, dependency-layering, and scope invariants.
+run_check "workspace architecture self-test" \
+    python3 scripts/workspace_architecture.py --self-test
+run_check "workspace architecture audit" \
+    python3 scripts/workspace_architecture.py --check --print-summary
+
+# 4. Public-artifact freshness. The freshness check fingerprints the root
+#    Cargo.toml, so editing workspace deps or lints invalidates it and the
+#    artifact needs regenerating with ./benchmarks/run_public_baseline.sh.
+run_check "public benchmark baseline tests" \
+    env PYTHONPATH=. python3 tests/test_public_baseline.py
 run_check "public benchmark evidence freshness" \
     python3 benchmarks/ci_public_baseline_check.py
 
-# 3. File-size cap — a long doc comment is enough to trip this.
+# 5. File-size cap — a long doc comment is enough to trip this.
 run_check "file size limit" ./scripts/check_file_size.sh
 
-# 4. GC store-site inventory: every raw heap-slot store must be barriered
+# 6. GC store-site inventory: every raw heap-slot store must be barriered
 #    or carry a justified marker.
+run_check "GC store-site inventory self-test" \
+    python3 scripts/gc_store_site_inventory.py --self-test
 run_check "GC store-site inventory" python3 scripts/gc_store_site_inventory.py
 
-# 5. Handle-vs-pointer address classification.
+# 7. Handle-vs-pointer address classification.
+run_check "address-classification self-test" \
+    python3 scripts/addr_class_inventory.py --self-test
 run_check "address-classification audit" python3 scripts/addr_class_inventory.py
 
-# 6. The gap-suite ratchet's own logic. Guarded so this script works on a
+# 8. The gap-suite ratchet's own logic. Guarded so this script works on a
 #    checkout predating the snapshot ratchet (#6755).
 if [[ -f scripts/gap_snapshot.py ]]; then
     run_check "gap snapshot self-test" python3 scripts/gap_snapshot.py --self-test
@@ -116,13 +139,13 @@ fi
 # Tier 2 — anything that compiles. Skipped under --quick.
 # ---------------------------------------------------------------------------
 
-# 7. docs/src linter (Tests `doc-tests` matrix --lint pass)
+# 9. docs/src linter (Tests `doc-tests` matrix --lint pass)
 if [[ "$mode" != "quick" ]]; then
 run_check "perry-doc-tests --lint docs/src" \
     cargo run --release --quiet -p perry-doc-tests -- --lint docs/src
 fi
 
-# 8. cargo check (catches type errors fast; Tests `cargo-test` builds
+# 10. cargo check (catches type errors fast; Tests `cargo-test` builds
 #    everything anyway). Release profile on purpose — it exercises the
 #    cfg paths the shipped build takes, which the dev-profile clippy run
 #    below does not.
@@ -134,12 +157,19 @@ if [[ "$mode" != "quick" ]]; then
             --exclude perry-ui-android --exclude perry-ui-windows \
             --exclude perry-ui-gtk4
 
-    # 9. Clippy — the `clippy` CI job. Exits non-zero only on the
-    #    deny-level lints declared in [workspace.lints], so warn-level
-    #    output here is informational.
-    run_check "cargo clippy" cargo clippy
+    # 11. Clippy — mirror both explicit scopes from the `clippy` CI job.
+    #     The portable read loop works with macOS's system Bash 3.2.
+    run_check "cargo clippy (product)" cargo clippy -p perry --bins
+    clippy_args=(--workspace)
+    while IFS= read -r package; do
+        [[ -n "$package" ]] && clippy_args+=(--exclude "$package")
+    done < <(
+        python3 scripts/workspace_architecture.py \
+            --print-excluded-scope host-compatible
+    )
+    run_check "cargo clippy (host-compatible)" cargo clippy "${clippy_args[@]}"
 
-    # 10. License + duplicate-dependency policy. Optional tool: skip
+    # 12. License + duplicate-dependency policy. Optional tool: skip
     #     cleanly rather than failing a contributor who lacks it.
     if command -v cargo-deny >/dev/null 2>&1; then
         run_check "cargo deny check" cargo deny check licenses bans sources
