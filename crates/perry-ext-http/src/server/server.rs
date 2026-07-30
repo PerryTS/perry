@@ -29,15 +29,15 @@ use perry_ffi::{
     RawClosureHeader, StringHeader,
 };
 
-use crate::ensure_gc_scanner_registered;
-use crate::request::{
+use crate::server::ensure_gc_scanner_registered;
+use crate::server::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
 };
-use crate::response::{
+use crate::server::response::{
     alloc_server_response_for_request, HyperResponseShape, ResponseBody, ServerResponse,
 };
-use crate::types::{
+use crate::server::types::{
     extract_host, extract_port, js_handle_clear_side_tables, js_promise_run_microtasks,
     js_promise_state, js_value_is_closure, jsvalue_to_owned_string, read_string_header, Promise,
     POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED,
@@ -649,7 +649,7 @@ fn serve_http_connection(
             })
             .unwrap_or(false);
         let stream = if has_upgrade_listeners {
-            match crate::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
+            match crate::server::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
                 server_handle,
                 peer,
                 stream,
@@ -657,14 +657,14 @@ fn serve_http_connection(
             )
             .await
             {
-                crate::raw_upgrade::PeekResult::Handled => {
+                crate::server::raw_upgrade::PeekResult::Handled => {
                     CONNECTIONS.lock().unwrap().remove(&conn_id);
                     return;
                 }
-                crate::raw_upgrade::PeekResult::Passthrough(s) => s,
+                crate::server::raw_upgrade::PeekResult::Passthrough(s) => s,
             }
         } else {
-            crate::raw_upgrade::PrefixedStream::empty(stream)
+            crate::server::raw_upgrade::PrefixedStream::empty(stream)
         };
         let io = TokioIo::new(ReadActivity::new(stream, read_active_for_io));
         let service = service_fn(move |req: Request<Incoming>| {
@@ -723,7 +723,7 @@ fn spawn_rr_inject_loop(
     // the channel closes → fd < 0). The thread parks on `recv_fd` for the
     // server's lifetime; it ends when the IPC channel closes.
     std::thread::spawn(move || loop {
-        let fd = crate::cluster_bind::recv_fd(key_id);
+        let fd = crate::server::cluster_bind::recv_fd(key_id);
         if fd < 0 || fd_tx.blocking_send(fd).is_err() {
             break;
         }
@@ -779,7 +779,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
     // Returns `server_handle` so `createServer(...).listen(...).on(...)` chains
     // correctly. Pre-#2129 this was `-> ()` and chained sites broke at runtime
     // with `undefined.on is not a function`.
-    let parsed = crate::types::parse_listen_args(args_array);
+    let parsed = crate::server::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 3000);
     let host = parsed
@@ -809,10 +809,10 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
     // worker binds the primary-resolved port itself with SO_REUSEPORT so
     // `listen(0)` still shares one ephemeral port (#4914).
     let address_type: i32 = if host.contains(':') { 6 } else { 4 };
-    let is_worker = crate::cluster_bind::is_cluster_worker();
-    let rr = is_worker && crate::cluster_bind::worker_sched_is_rr();
+    let is_worker = crate::server::cluster_bind::is_cluster_worker();
+    let rr = is_worker && crate::server::cluster_bind::worker_sched_is_rr();
     let resolved = if is_worker {
-        crate::cluster_bind::worker_query_listen(&host, port as i32, address_type, rr)
+        crate::server::cluster_bind::worker_query_listen(&host, port as i32, address_type, rr)
     } else {
         None
     };
@@ -830,7 +830,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         #[cfg(unix)]
         {
             let actual_port = resolved.unwrap();
-            crate::cluster_bind::notify_listening(&host, actual_port);
+            crate::server::cluster_bind::notify_listening(&host, actual_port);
             let no_delay;
             if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
                 s.bound_port = actual_port;
@@ -843,7 +843,8 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
             } else {
                 return server_handle;
             }
-            let key_id = crate::cluster_bind::compute_key_id(&host, actual_port, address_type);
+            let key_id =
+                crate::server::cluster_bind::compute_key_id(&host, actual_port, address_type);
             spawn_rr_inject_loop(
                 server_handle,
                 key_id,
@@ -864,7 +865,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         };
         // #4914 — cluster workers bind with SO_REUSEPORT so N workers share
         // the port; `bind_listener` falls through to a plain bind otherwise.
-        let std_listener = match crate::cluster_bind::bind_listener(addr) {
+        let std_listener = match crate::server::cluster_bind::bind_listener(addr) {
             Ok(l) => l,
             Err(e) => {
                 eprintln!("[node:http] bind {}:{} failed: {}", host, bind_port, e);
@@ -876,7 +877,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
             eprintln!("[node:http] set_nonblocking failed: {}", e);
             return server_handle;
         }
-        crate::cluster_bind::notify_listening(&host, actual_port);
+        crate::server::cluster_bind::notify_listening(&host, actual_port);
 
         // Node applies `noDelay` (default true) to every accepted connection.
         // Capture it before the accept loop spawns so the option can be set on
@@ -1194,7 +1195,7 @@ async fn handle_request(
     // tungstenite path — keyless Upgrade requests are served Node-style by
     // the raw peek path in raw_upgrade.rs and only reach hyper when no
     // listener was attached at accept time.
-    if crate::upgrade::is_websocket_upgrade(&req) {
+    if crate::server::upgrade::is_websocket_upgrade(&req) {
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
             .map(|s| {
                 s.listeners
@@ -1421,7 +1422,7 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
     if active != 0 {
         return 1;
     }
-    iter_handles_of::<crate::https_server::HttpsServer, _>(|s| {
+    iter_handles_of::<crate::server::https_server::HttpsServer, _>(|s| {
         if server_is_active(&s.base) {
             active = 1;
         }
@@ -1429,12 +1430,12 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
     if active != 0 {
         return 1;
     }
-    iter_handles_of::<crate::http2_server::Http2SecureServer, _>(|s| {
+    iter_handles_of::<crate::server::http2_server::Http2SecureServer, _>(|s| {
         if server_is_active(&s.base) {
             active = 1;
         }
     });
-    if active == 0 && crate::http2_server::has_active_h2_clients() {
+    if active == 0 && crate::server::http2_server::has_active_h2_clients() {
         active = 1;
     }
     // #4728 — a request parked awaiting an async handler keeps the loop
@@ -1576,7 +1577,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         let listeners = get_handle::<HttpServer>(server_handle)
             .and_then(|s| s.listeners.get("connection").cloned())
             .or_else(|| {
-                get_handle::<crate::https_server::HttpsServer>(server_handle)
+                get_handle::<crate::server::https_server::HttpsServer>(server_handle)
                     .and_then(|s| s.base.listeners.get("connection").cloned())
             })
             .unwrap_or_default();
@@ -1616,14 +1617,14 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
                 // dispatch extensions + GC scanner are registered on the
                 // main thread before user code touches the socket.
                 perry_ext_net::ensure_adopted_socket_dispatch();
-                crate::upgrade::fire_upgrade_listeners(
+                crate::server::upgrade::fire_upgrade_listeners(
                     up.server_handle,
                     up.request_handle,
                     up.raw_socket_id,
                     up.head,
                 );
             } else {
-                crate::upgrade::fire_upgrade_listeners(
+                crate::server::upgrade::fire_upgrade_listeners(
                     up.server_handle,
                     up.request_handle,
                     up.ws_id,
@@ -1639,34 +1640,36 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     }
 
     let mut https_handles: Vec<i64> = Vec::new();
-    perry_ffi::iter_handle_ids_of::<crate::https_server::HttpsServer, _>(|id| {
+    perry_ffi::iter_handle_ids_of::<crate::server::https_server::HttpsServer, _>(|id| {
         https_handles.push(id)
     });
     for h in https_handles {
-        count +=
-            drain_deferred_listen_for::<crate::https_server::HttpsServer, _>(h, |s| &mut s.base);
-        while let Some(p) = crate::https_server::try_recv_pending_https_nonblocking(h) {
-            crate::https_server::process_pending_https(p);
+        count += drain_deferred_listen_for::<crate::server::https_server::HttpsServer, _>(h, |s| {
+            &mut s.base
+        });
+        while let Some(p) = crate::server::https_server::try_recv_pending_https_nonblocking(h) {
+            crate::server::https_server::process_pending_https(p);
             count += 1;
         }
     }
 
     let mut h2_handles: Vec<i64> = Vec::new();
-    perry_ffi::iter_handle_ids_of::<crate::http2_server::Http2SecureServer, _>(|id| {
+    perry_ffi::iter_handle_ids_of::<crate::server::http2_server::Http2SecureServer, _>(|id| {
         h2_handles.push(id)
     });
     for h in h2_handles {
-        count += drain_deferred_listen_for::<crate::http2_server::Http2SecureServer, _>(h, |s| {
-            &mut s.base
-        });
-        count += crate::http2_server::process_pending_h2_events();
-        while let Some(p) = crate::http2_server::try_recv_pending_h2_nonblocking(h) {
-            crate::http2_server::process_pending_h2(p);
+        count += drain_deferred_listen_for::<crate::server::http2_server::Http2SecureServer, _>(
+            h,
+            |s| &mut s.base,
+        );
+        count += crate::server::http2_server::process_pending_h2_events();
+        while let Some(p) = crate::server::http2_server::try_recv_pending_h2_nonblocking(h) {
+            crate::server::http2_server::process_pending_h2(p);
             count += 1;
-            count += crate::http2_server::process_pending_h2_events();
+            count += crate::server::http2_server::process_pending_h2_events();
         }
     }
-    count += crate::http2_server::process_pending_h2_events();
+    count += crate::server::http2_server::process_pending_h2_events();
 
     // #5010 — drain perry-ext-net's own pending-event queue. A raw
     // `'upgrade'` (#4973) hands the listener a real `net.Socket` adopted into
@@ -1882,7 +1885,7 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 status_message: sr.status_message.clone(),
                 headers,
                 trailers: Vec::new(),
-                body: crate::response::ShapeBody::Full(body),
+                body: crate::server::response::ShapeBody::Full(body),
             };
             if let Some(tx) = sr.response_tx.take() {
                 let _ = tx.send(shape);

@@ -18,11 +18,11 @@ perry-ffi.workspace = true
 # it from upgrade::handle_fastify_websocket_upgrade so the fastify
 # `app.server.on("upgrade", …)` path produces a ws_id usable through
 # the rest of the perry-ext-ws FFI surface. Mirrors the proven
-# perry-ext-http-server (#577 Phase 4) dependency.
+# perry-ext-http (#577 Phase 4) dependency.
 perry-ext-ws = { path = "../perry-ext-ws" }
-hyper = { version = "1.4", features = ["server", "http1", "http2"] }
-hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
-http-body-util = "0.1"
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
+http-body-util.workspace = true
 bytes.workspace = true
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -30,12 +30,12 @@ serde_json.workspace = true
 lazy_static.workspace = true
 
 # #cluster — SO_REUSEPORT bind for `cluster.fork()` workers (unix only),
-# mirroring perry-ext-http-server's cluster_bind. The
+# mirroring perry-ext-http's cluster_bind. The
 # `perry_cluster_worker_listening` symbol it reports to resolves at final link
 # (defined in perry-runtime), like perry-ffi's runtime helpers — no Cargo dep on
 # perry-runtime is needed.
 [target.'cfg(unix)'.dependencies]
-socket2 = "0.6"
+socket2.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

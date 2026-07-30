@@ -25,7 +25,7 @@ use perry_ffi::{
     RawClosureHeader, StringHeader,
 };
 
-use crate::types::{
+use crate::server::types::{
     jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK, STRING_TAG,
 };
 
@@ -122,11 +122,11 @@ impl IncomingMessage {
             paused: false,
             encoding: None,
             trailers: HashMap::new(),
-            signal_controller: f64::from_bits(crate::types::TAG_UNDEFINED),
-            signal: f64::from_bits(crate::types::TAG_UNDEFINED),
+            signal_controller: f64::from_bits(crate::server::types::TAG_UNDEFINED),
+            signal: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             close_emitted: false,
             standalone: false,
-            socket_value: f64::from_bits(crate::types::TAG_UNDEFINED),
+            socket_value: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             socket_overridden: false,
         }
     }
@@ -146,7 +146,7 @@ fn is_undefined(value: f64) -> bool {
 
 fn object_value<T>(ptr: *mut T) -> f64 {
     if ptr.is_null() {
-        f64::from_bits(crate::types::TAG_UNDEFINED)
+        f64::from_bits(crate::server::types::TAG_UNDEFINED)
     } else {
         f64::from_bits(JsValue::from_object_ptr(ptr).bits())
     }
@@ -472,7 +472,7 @@ pub extern "C" fn js_node_http_im_raw_body(handle: i64) -> f64 {
         .unwrap_or_default();
     let buf = alloc_buffer(&bytes);
     if buf.is_null() {
-        f64::from_bits(crate::types::TAG_UNDEFINED)
+        f64::from_bits(crate::server::types::TAG_UNDEFINED)
     } else {
         f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
     }
@@ -483,7 +483,7 @@ pub extern "C" fn js_node_http_im_raw_body(handle: i64) -> f64 {
 pub extern "C" fn js_node_http_im_signal(handle: i64) -> f64 {
     get_handle_mut::<IncomingMessage>(handle)
         .map(ensure_signal)
-        .unwrap_or_else(|| f64::from_bits(crate::types::TAG_UNDEFINED))
+        .unwrap_or_else(|| f64::from_bits(crate::server::types::TAG_UNDEFINED))
 }
 
 /// `req.socket.remoteAddress` — peer IP as a dotted string.
@@ -610,7 +610,7 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 // Issue #1124 followup — the same `("http",
                 // "IncomingMessage", "on")` dispatch row services
                 // BOTH the server-side IncomingMessage (registered
-                // here in perry-ext-http-server) and the client-side
+                // here in perry-ext-http) and the client-side
                 // IncomingMessage that `http.get(url, (res) => …)`'s
                 // callback receives from perry-ext-http. The
                 // codegen can't distinguish them at compile time
@@ -719,15 +719,15 @@ pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
     let (bytes, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
         Some(im) => {
             if im.data_emitted {
-                return f64::from_bits(crate::types::TAG_NULL);
+                return f64::from_bits(crate::server::types::TAG_NULL);
             }
             im.data_emitted = true;
             (im.body_bytes.clone(), im.encoding.clone())
         }
-        None => return f64::from_bits(crate::types::TAG_NULL),
+        None => return f64::from_bits(crate::server::types::TAG_NULL),
     };
     if bytes.is_empty() {
-        return f64::from_bits(crate::types::TAG_NULL);
+        return f64::from_bits(crate::server::types::TAG_NULL);
     }
     // #5437 POST-body: Node's `req.read()` returns a Buffer by default and a
     // string only after `setEncoding()`. `Readable.toWeb(req)` (Next.js App
@@ -744,7 +744,7 @@ pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
         None => {
             let buf = alloc_buffer(&bytes);
             if buf.is_null() {
-                return f64::from_bits(crate::types::TAG_NULL);
+                return f64::from_bits(crate::server::types::TAG_NULL);
             }
             f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
         }
@@ -874,7 +874,7 @@ pub(crate) fn with_implicit_this<R>(this_val: f64, f: impl FnOnce() -> R) -> R {
 /// fields empty.
 #[no_mangle]
 pub extern "C" fn js_node_http_incoming_message_standalone_new(socket: f64) -> i64 {
-    crate::ensure_gc_scanner_registered();
+    crate::server::ensure_gc_scanner_registered();
     let mut im = IncomingMessage::new(
         String::new(),
         String::new(),
@@ -1160,7 +1160,7 @@ mod add_header_line_tests {
         // `new http.IncomingMessage()` then `req.connection = v` must read
         // back through both `socket` and `connection` (#4904).
         let handle = js_node_http_incoming_message_standalone_new(f64::from_bits(
-            crate::types::TAG_UNDEFINED,
+            crate::server::types::TAG_UNDEFINED,
         ));
         assert!(incoming_socket_override(handle).is_some());
         let marker = 1234.5_f64;

@@ -53,6 +53,36 @@ extern "C" {
         arg2: f64,
         arg3: f64,
     ) -> f64;
+    fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *mut ClosureHeader;
+    fn js_register_closure_arity(func_ptr: *const u8, arity: u32);
+    fn js_closure_get_capture_f64(closure: *const ClosureHeader, index: u32) -> f64;
+    fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index: u32, value: f64);
+}
+
+/// Register the arity the runtime uses when dispatching a native closure.
+pub fn register_closure_arity(func: *const u8, arity: u32) {
+    unsafe { js_register_closure_arity(func, arity) }
+}
+
+/// Allocate a native closure with `capture_count` f64 capture slots.
+pub fn alloc_closure(func: *const u8, capture_count: u32) -> *mut ClosureHeader {
+    unsafe { js_closure_alloc(func, capture_count) }
+}
+
+/// Read an f64 capture slot from a native closure.
+///
+/// # Safety
+/// `closure` must point to a live closure with an allocated `index` slot.
+pub unsafe fn closure_capture_f64(closure: *const ClosureHeader, index: u32) -> f64 {
+    js_closure_get_capture_f64(closure, index)
+}
+
+/// Write an f64 capture slot in a native closure.
+///
+/// # Safety
+/// `closure` must point to a live closure with an allocated `index` slot.
+pub unsafe fn set_closure_capture_f64(closure: *mut ClosureHeader, index: u32, value: f64) {
+    js_closure_set_capture_f64(closure, index, value)
 }
 
 /// Opaque handle to a JS closure (a `*const ClosureHeader`).
@@ -141,5 +171,17 @@ mod tests {
         let null = unsafe { JsClosure::from_raw(std::ptr::null()) };
         assert!(null.is_null());
         assert!(null.as_raw().is_null());
+    }
+
+    #[cfg(feature = "runtime-link")]
+    #[test]
+    fn native_closure_retains_capture() {
+        unsafe extern "C" fn callback(_: *const ClosureHeader) -> f64 {
+            0.0
+        }
+        register_closure_arity(callback as *const u8, 0);
+        let closure = alloc_closure(callback as *const u8, 1);
+        unsafe { set_closure_capture_f64(closure, 0, 42.0) };
+        assert_eq!(unsafe { closure_capture_f64(closure, 0) }, 42.0);
     }
 }

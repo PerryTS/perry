@@ -9,8 +9,8 @@
 //!
 //! This wires Fastify into the cluster machinery that already exists in
 //! perry-runtime (`worker_reuseport_bind`, `perry_cluster_worker_listening`)
-//! and is used by `net` and perry-ext-http-server. It mirrors the SO_REUSEPORT
-//! (`SCHED_NONE`) path of perry-ext-http-server's HTTP/2 & HTTPS listen sites.
+//! and is used by `net` and perry-ext-http. It mirrors the SO_REUSEPORT
+//! (`SCHED_NONE`) path of perry-ext-http's HTTP/2 & HTTPS listen sites.
 //! Round-robin fd-passing (`SCHED_RR`) and the shared ephemeral port for
 //! `listen(0)` (#4962) are a follow-up here, exactly as for those sites today.
 
@@ -18,7 +18,7 @@ use std::net::{SocketAddr, TcpListener};
 
 /// True when this process is a `cluster.fork()`ed worker (non-empty
 /// `NODE_UNIQUE_ID` in the environment — the same check the runtime and
-/// perry-ext-http-server use).
+/// perry-ext-http use).
 pub(crate) fn is_cluster_worker() -> bool {
     std::env::var("NODE_UNIQUE_ID")
         .map(|s| !s.is_empty())
@@ -62,7 +62,7 @@ pub(crate) fn bind_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Resu
 extern "C" {
     // Defined in perry-runtime's cluster module. This crate has no Cargo dep on
     // perry-runtime (dev-dep only); the symbol resolves at final link, the same
-    // way perry-ffi's runtime helpers do — matching perry-ext-http-server's
+    // way perry-ffi's runtime helpers do — matching perry-ext-http's
     // `cluster_bind`.
     fn perry_cluster_worker_listening(
         addr_ptr: *const u8,

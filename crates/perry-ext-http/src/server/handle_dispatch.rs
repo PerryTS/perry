@@ -26,12 +26,12 @@ use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, js_object_alloc_with_shape, JsValue, StringHeader,
 };
 
-use crate::http2_server::Http2SecureServer;
-use crate::https_server::HttpsServer;
-use crate::request::IncomingMessage;
-use crate::response::ServerResponse;
-use crate::server::HttpServer;
-use crate::types::{read_string_header, POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED};
+use crate::server::http2_server::Http2SecureServer;
+use crate::server::https_server::HttpsServer;
+use crate::server::request::IncomingMessage;
+use crate::server::response::ServerResponse;
+use crate::server::server::HttpServer;
+use crate::server::types::{read_string_header, POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED};
 
 #[repr(C)]
 struct ErrorHeader {
@@ -98,8 +98,8 @@ extern "C" {
         key: *const StringHeader,
         value: f64,
     );
-    fn js_promise_rejected(reason: f64) -> *mut crate::types::Promise;
-    fn js_promise_resolved(value: f64) -> *mut crate::types::Promise;
+    fn js_promise_rejected(reason: f64) -> *mut crate::server::types::Promise;
+    fn js_promise_resolved(value: f64) -> *mut crate::server::types::Promise;
 
     fn js_node_http_im_method(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_url(handle: i64) -> *mut StringHeader;
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 js_node_http_server_address_json(handle)
             };
             if s.is_null() {
-                f64::from_bits(crate::types::TAG_NULL)
+                f64::from_bits(crate::server::types::TAG_NULL)
             } else {
                 f64::from_bits(js_json_parse(s))
             }
@@ -595,10 +595,10 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             string_ptr_value(js_node_http_im_http_version(handle))
         }
         "httpVersionMajor" | "__get_httpVersionMajor" => {
-            crate::request::incoming_http_version_part(handle, false)
+            crate::server::request::incoming_http_version_part(handle, false)
         }
         "httpVersionMinor" | "__get_httpVersionMinor" => {
-            crate::request::incoming_http_version_part(handle, true)
+            crate::server::request::incoming_http_version_part(handle, true)
         }
         "__get_complete" => bool_value(js_node_http_im_complete(handle) != 0),
         "__get_aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
@@ -620,10 +620,10 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             json_string_value_empty_object(js_node_http_im_trailers_distinct_json(handle))
         }
         "__get_socket" | "socket" | "__get_connection" | "connection" => {
-            crate::request::incoming_socket_override(handle).unwrap_or(self_ref)
+            crate::server::request::incoming_socket_override(handle).unwrap_or(self_ref)
         }
         "__set_socket" | "__set_connection" if !args.is_empty() => {
-            crate::request::incoming_socket_assign(handle, args[0]);
+            crate::server::request::incoming_socket_assign(handle, args[0]);
             undef
         }
         "_addHeaderLine" if args.len() >= 3 => {
@@ -725,7 +725,9 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                 .map(|a| closure_arg(Some(*a)))
                 .find(|c| *c != 0)
                 .unwrap_or(0);
-            bool_value(crate::response::js_node_http_res_write_with_cb(handle, args[0], cb) != 0)
+            bool_value(
+                crate::server::response::js_node_http_res_write_with_cb(handle, args[0], cb) != 0,
+            )
         }
         "addTrailers" if !args.is_empty() => {
             js_node_http_res_add_trailers(handle, args[0]);
@@ -749,7 +751,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                     .unwrap_or(0);
                 (first, cb)
             };
-            crate::response::js_node_http_res_end_with_cb(handle, chunk, cb);
+            crate::server::response::js_node_http_res_end_with_cb(handle, chunk, cb);
             self_ref
         }
         "flushHeaders" => {
@@ -799,11 +801,11 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             self_ref
         }
         "assignSocket" if !args.is_empty() => {
-            crate::response::js_node_http_res_assign_socket(handle, args[0]);
+            crate::server::response::js_node_http_res_assign_socket(handle, args[0]);
             undef
         }
         "detachSocket" => {
-            crate::response::js_node_http_res_detach_socket(
+            crate::server::response::js_node_http_res_detach_socket(
                 handle,
                 args.first().copied().unwrap_or(undef),
             );
@@ -894,8 +896,8 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "method" => string_ptr_value(js_node_http_im_method(handle)),
         "url" => string_ptr_value(js_node_http_im_url(handle)),
         "httpVersion" => string_ptr_value(js_node_http_im_http_version(handle)),
-        "httpVersionMajor" => crate::request::incoming_http_version_part(handle, false),
-        "httpVersionMinor" => crate::request::incoming_http_version_part(handle, true),
+        "httpVersionMajor" => crate::server::request::incoming_http_version_part(handle, false),
+        "httpVersionMinor" => crate::server::request::incoming_http_version_part(handle, true),
         "headers" => json_string_value(js_node_http_im_headers_json(handle)),
         "rawHeaders" => json_string_value(js_node_http_im_raw_headers_json(handle)),
         "headersDistinct" => json_string_value(js_node_http_im_headers_distinct_json(handle)),
@@ -930,7 +932,7 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "writable" => bool_value(
             js_node_http_im_destroyed(handle) == 0 && js_node_http_im_aborted(handle) == 0,
         ),
-        "socket" | "connection" => crate::request::incoming_socket_override(handle)
+        "socket" | "connection" => crate::server::request::incoming_socket_override(handle)
             .unwrap_or_else(|| handle_to_pointer_f64(handle)),
         "signal" => js_node_http_im_signal(handle),
         "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
@@ -1064,7 +1066,7 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property_set(
         // Node's `connection` accessor writes `this.socket`; both aliases
         // land on the same slot.
         "socket" | "connection" => {
-            if crate::request::incoming_socket_assign(handle, value) {
+            if crate::server::request::incoming_socket_assign(handle, value) {
                 1
             } else {
                 0
@@ -1187,7 +1189,7 @@ fn string_value_arg(value: f64) -> *const StringHeader {
     if v.is_string() {
         return v.as_string_ptr();
     }
-    match crate::types::jsvalue_to_owned_string(value) {
+    match crate::server::types::jsvalue_to_owned_string(value) {
         Some(s) => alloc_string(&s).as_raw(),
         None => std::ptr::null(),
     }
@@ -1291,7 +1293,7 @@ fn closure_arg(value: Option<f64>) -> i64 {
     // #4909 — a Buffer chunk is POINTER_TAG too; `end(buf, cb)` used to
     // treat the buffer as the `end(cb)` callback form, drop the chunk, and
     // then call the buffer ("TypeError: value is not a function").
-    if unsafe { crate::types::js_value_is_closure(bits as i64) } == 0 {
+    if unsafe { crate::server::types::js_value_is_closure(bits as i64) } == 0 {
         return 0;
     }
     (bits & PTR_MASK) as i64

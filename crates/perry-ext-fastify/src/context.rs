@@ -47,7 +47,7 @@ extern "C" {
     /// `BufferHeader` registered with the runtime's BUFFER_REGISTRY.
     /// Used to distinguish `Buffer` / `Uint8Array` payloads from
     /// `StringHeader`-shaped objects when building response bodies.
-    /// Same C-exposed extern perry-ext-http-server uses (see
+    /// Same C-exposed extern perry-ext-http uses (see
     /// `crates/perry-runtime/src/buffer.rs:601`).
     fn js_buffer_is_buffer(ptr: i64) -> i32;
 }

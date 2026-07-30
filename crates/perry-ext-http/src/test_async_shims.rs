@@ -3,7 +3,7 @@
 // live in `perry-stdlib::perry_ffi_async`, only linked into the final user
 // program). Provide synchronous, test-only shims for the `perry_ffi_*` async
 // externs the crate references so `cargo test -p perry-ext-http` links — same
-// pattern as `perry-ext-net` / `perry-ext-http-server`.
+// pattern as `perry-ext-net` / `perry-ext-fetch`.
 
 use perry_ffi::Promise;
 use std::ffi::c_void;
@@ -50,3 +50,8 @@ pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
 ) {
     invoke(ctx);
 }
+
+// Pulled in transitively through perry-ext-net but normally supplied by the
+// host stdlib archive, which unit-test binaries do not link.
+#[no_mangle]
+pub extern "C" fn perry_ffi_spawn_async(_ctx: *mut c_void) {}

@@ -618,9 +618,8 @@ pub fn tcp_stream_from_fd(fd: RawFd) -> std::net::TcpStream {
 }
 
 // ---------------------------------------------------------------------------
-// C ABI surface for the out-of-crate listen sites (perry-ext-http-server has no
-// Cargo dep on perry-runtime; these resolve at final link like perry-ffi's
-// helpers and `perry_cluster_worker_listening`).
+// C ABI surface for the HTTP listen sites. These remain aligned with
+// perry-ffi's helpers and `perry_cluster_worker_listening`.
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]

@@ -87,7 +87,7 @@ pub fn parse_private_key(pem_bytes: &[u8]) -> Option<PrivateKeyDer<'static>> {
 /// that: rustls accepts the TCP connection, then aborts the handshake
 /// with a fatal alert when no certificate resolves (#4974).
 pub fn build_certless_server_config(enable_http2: bool) -> Arc<ServerConfig> {
-    ensure_crypto_provider_installed();
+    let provider = crypto_provider();
 
     #[derive(Debug)]
     struct NoCert;
@@ -100,7 +100,9 @@ pub fn build_certless_server_config(enable_http2: bool) -> Arc<ServerConfig> {
         }
     }
 
-    let mut config = ServerConfig::builder()
+    let mut config = ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring provider must support rustls default protocol versions")
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(NoCert));
     if enable_http2 {
@@ -116,19 +118,18 @@ pub fn build_certless_server_config(enable_http2: bool) -> Arc<ServerConfig> {
 /// pulls in both `ring` via our direct dep and `aws-lc-rs` via
 /// reqwest's rustls-tls feature). Without an explicit install,
 /// `ServerConfig::builder()` panics with "Could not automatically
-/// determine the process-level CryptoProvider". Idempotent — the
-/// `Once` makes repeated calls safe across multiple createServer
-/// invocations within a single process.
-fn ensure_crypto_provider_installed() {
-    use std::sync::Once;
-    static INSTALLED: Once = Once::new();
-    INSTALLED.call_once(|| {
-        // Best-effort install. If a provider was already installed
-        // by another crate (or by user code), `install_default()`
-        // returns Err; we ignore it because in that case the
-        // existing provider is already usable.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
+/// determine the process-level CryptoProvider". Keep one explicit ring
+/// provider so key loading and every server builder use the same backend.
+fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    use std::sync::OnceLock;
+    static PROVIDER: OnceLock<Arc<rustls::crypto::CryptoProvider>> = OnceLock::new();
+    PROVIDER
+        .get_or_init(|| {
+            let provider = rustls::crypto::ring::default_provider();
+            let _ = provider.clone().install_default();
+            Arc::new(provider)
+        })
+        .clone()
 }
 
 #[cfg(test)]
@@ -185,7 +186,7 @@ pub fn build_server_config(
     if cert_chain.is_empty() {
         return Err("https.createServer: empty certificate chain".to_string());
     }
-    ensure_crypto_provider_installed();
+    let provider = crypto_provider();
 
     // #4906: don't route through `ServerConfig::with_single_cert` — it
     // parses the leaf with webpki, which rejects the X.509 **v1** certs in
@@ -194,7 +195,7 @@ pub fn build_server_config(
     // user supplies without re-validating the leaf, so we mirror that by
     // loading the signing key directly and installing a fixed-cert
     // resolver. The client is the party that validates the served cert.
-    let signing_key = rustls::crypto::ring::default_provider()
+    let signing_key = provider
         .key_provider
         .load_private_key(private_key)
         .map_err(|e| format!("rustls: build server config: {}", e))?;
@@ -211,7 +212,9 @@ pub fn build_server_config(
         }
     }
 
-    let mut config = ServerConfig::builder()
+    let mut config = ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("rustls: build server config: {}", e))?
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(FixedCert(certified_key)));
     if enable_http2 {
