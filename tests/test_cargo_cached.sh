@@ -98,4 +98,14 @@ set -e
 test "$MISSING_STATUS" -eq 127
 test "$MISSING_OUTPUT" = 'cargo_cached: cargo not found in PATH'
 
+set +e
+MISSING_OUTPUT="$(
+  unset HOME XDG_CACHE_HOME SCCACHE_DIR
+  PATH="$FAKE_BIN:/usr/bin:/bin" "$WRAPPER" check 2>&1
+)"
+MISSING_STATUS=$?
+set -e
+test "$MISSING_STATUS" -eq 1
+test "$MISSING_OUTPUT" = 'cargo_cached: HOME is not set and SCCACHE_DIR/XDG_CACHE_HOME are unset'
+
 echo 'cargo cached wrapper: ok'
