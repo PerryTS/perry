@@ -89,6 +89,21 @@ fn find_path_tool(name: &str) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+/// Locate an LLVM binutil, including beside Perry's resolved `lld-link`.
+///
+/// A prebuilt Windows installation can have LLVM under
+/// `C:\Program Files\LLVM\bin` without that directory on `PATH` and without a
+/// Rust toolchain installed. `find_lld_link` already knows that location, and
+/// the archive tools used for COFF dedup ship in the same directory.
+fn find_llvm_tool_or_beside_lld(tool: &str) -> Option<PathBuf> {
+    if let Some(path) = find_llvm_tool(tool).or_else(|| find_path_tool(tool)) {
+        return Some(path);
+    }
+    let directory = find_lld_link()?.parent()?.to_path_buf();
+    let candidate = directory.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX));
+    candidate.is_file().then_some(candidate)
+}
+
 /// Find an LLVM tool shipped with a `nightly` rustup toolchain.
 ///
 /// Tier-3 targets (tvOS/watchOS) build runtime/stdlib with nightly Rust via
@@ -338,9 +353,16 @@ fn collect_archive_undefined_by_member(
 /// legacy name-pattern when `llvm-nm` isn't installed.
 pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<PathBuf> {
     let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
+    let is_win_lib = lib_name.ends_with(".lib");
     eprintln!("[strip-dedup] Processing: {}", lib_path.display());
 
-    let llvm_ar = match find_llvm_tool("llvm-ar").or_else(|| find_path_tool("ar")) {
+    let llvm_ar = match find_llvm_tool_or_beside_lld("llvm-ar").or_else(|| {
+        if is_win_lib {
+            None
+        } else {
+            find_path_tool("ar")
+        }
+    }) {
         Some(ar) => {
             eprintln!("[strip-dedup] ar found: {}", ar.display());
             ar
@@ -359,6 +381,12 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         .arg("t")
         .arg(&abs_staticlib)
         .output()?;
+    if !staticlib_out.status.success() {
+        let stderr = String::from_utf8_lossy(&staticlib_out.stderr);
+        return Err(anyhow::anyhow!(
+            "failed to list members of {lib_name}: {stderr}"
+        ));
+    }
     let staticlib_members: Vec<String> = String::from_utf8_lossy(&staticlib_out.stdout)
         .lines()
         .map(|l| l.to_string())
@@ -369,7 +397,6 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     );
 
     // Determine library naming convention from the input lib
-    let is_win_lib = lib_name.ends_with(".lib");
     let (stdlib_name, runtime_name) = if is_win_lib {
         ("perry_stdlib.lib", "perry_runtime.lib")
     } else {
@@ -517,8 +544,8 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     // Falls back to the legacy `.dll` / `compiler_builtins` short-circuits
     // plus the rlib name-prefix check when llvm-nm isn't available.
     let llvm_nm = find_nightly_llvm_tool("llvm-nm")
-        .or_else(|| find_llvm_tool("llvm-nm"))
-        .or_else(|| find_path_tool("nm"));
+        .or_else(|| find_llvm_tool_or_beside_lld("llvm-nm"))
+        .or_else(|| (!is_win_lib).then(|| find_path_tool("nm")).flatten());
     let nm_works = llvm_nm.as_ref().is_some_and(|nm| {
         // Probe with a trivial call; if it can't even run, skip the
         // symbol-set path entirely.
@@ -527,6 +554,11 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
             .output()
             .is_ok_and(|o| o.status.success())
     });
+    if is_win_lib && !nm_works {
+        return Err(anyhow::anyhow!(
+            "llvm-nm is required for evidence-based COFF archive dedup"
+        ));
+    }
 
     // Build provided-symbols union when nm is available.
     let provided_symbols: std::collections::HashSet<String> = if nm_works {
@@ -570,6 +602,11 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     } else {
         std::collections::HashMap::new()
     };
+    if is_win_lib && (provided_symbols.is_empty() || staticlib_member_symbols.is_empty()) {
+        return Err(anyhow::anyhow!(
+            "llvm-nm could not read the COFF archive symbol tables"
+        ));
+    }
 
     let mut excluded_by_subset = 0usize;
     let mut excluded_by_pattern = 0usize;
@@ -699,21 +736,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         all_objects.len()
     );
 
-    // Create new archive from just the UI-specific objects
-    let mut ar_cmd = Command::new(&llvm_ar);
-    ar_cmd.arg("crs").arg(&trimmed_lib);
-    for p in &all_objects {
-        ar_cmd.arg(p);
-    }
-    let ar_out = ar_cmd.output()?;
-    if !ar_out.status.success() {
-        let stderr = String::from_utf8_lossy(&ar_out.stderr);
-        eprintln!("[strip-dedup] ERROR: archive creation failed: {}", stderr);
-        let _ = std::fs::remove_dir_all(&extract_dir);
-        return Err(anyhow::anyhow!(
-            "Failed to create trimmed archive for {lib_name}: {stderr}"
-        ));
-    }
+    rebuild_archive(&llvm_ar, &trimmed_lib, &all_objects, is_win_lib)?;
 
     eprintln!(
         "[strip-dedup] OK: {} -> {}",
@@ -723,6 +746,69 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     let _ = std::fs::remove_dir_all(&extract_dir);
     let _ = std::fs::remove_dir_all("_perry_ui_objects");
     Ok(trimmed_lib)
+}
+
+/// Rebuild an archive without exceeding Windows' process command-line limit.
+///
+/// A Windows UI staticlib contains hundreds of members; passing every
+/// extracted path to one `llvm-ar` invocation can exceed CreateProcess's
+/// 32-KiB limit. Create the archive in bounded batches, then regenerate its
+/// symbol index once at the end. COFF output is selected explicitly for
+/// `.lib` archives so both link.exe and lld-link can consume the result.
+fn rebuild_archive(
+    llvm_ar: &Path,
+    output: &Path,
+    objects: &[PathBuf],
+    is_coff: bool,
+) -> Result<()> {
+    if objects.is_empty() {
+        return Err(anyhow::anyhow!("cannot create an empty trimmed archive"));
+    }
+    let _ = std::fs::remove_file(output);
+
+    const MAX_BATCH_ARGUMENT_BYTES: usize = 24 * 1024;
+    let mut start = 0usize;
+    while start < objects.len() {
+        let mut end = start;
+        let mut argument_bytes = output.as_os_str().len();
+        while end < objects.len() {
+            let next = objects[end].as_os_str().len() + 3;
+            if end > start && argument_bytes + next > MAX_BATCH_ARGUMENT_BYTES {
+                break;
+            }
+            argument_bytes += next;
+            end += 1;
+        }
+
+        let mut command = Command::new(llvm_ar);
+        if start == 0 {
+            if is_coff {
+                command.arg("--format=coff");
+            }
+            command.arg("crs");
+        } else {
+            command.arg("r");
+        }
+        let result = command.arg(output).args(&objects[start..end]).output()?;
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            return Err(anyhow::anyhow!(
+                "failed to create trimmed archive {}: {stderr}",
+                output.display()
+            ));
+        }
+        start = end;
+    }
+
+    let index = Command::new(llvm_ar).arg("s").arg(output).output()?;
+    if !index.status.success() {
+        let stderr = String::from_utf8_lossy(&index.stderr);
+        return Err(anyhow::anyhow!(
+            "failed to index trimmed archive {}: {stderr}",
+            output.display()
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) -> Result<PathBuf> {
@@ -1604,5 +1690,80 @@ empty_marker.o:
 
         // empty_marker.o → no entry; call site keeps it defensively.
         assert!(!by_member.contains_key("empty_marker.o"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn coff_archive_dedup_drops_only_fully_provided_members() {
+        use super::{
+            collect_archive_symbols_flat, find_llvm_tool_or_beside_lld, rebuild_archive,
+            strip_duplicate_objects_from_lib,
+        };
+        use std::path::Path;
+        use std::process::Command;
+
+        fn compile_object(source: &Path, output: &Path, crate_name: &str) {
+            let result = Command::new("rustc")
+                .arg("--crate-name")
+                .arg(crate_name)
+                .arg("--crate-type=lib")
+                .arg("--emit=obj")
+                .arg("-Cpanic=abort")
+                .arg(source)
+                .arg("-o")
+                .arg(output)
+                .output()
+                .expect("rustc must run");
+            assert!(
+                result.status.success(),
+                "rustc failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+
+        let temp = tempfile::tempdir().expect("temporary COFF fixture directory");
+        let duplicate_source = temp.path().join("runtime.rs");
+        let unique_source = temp.path().join("ui.rs");
+        std::fs::write(
+            &duplicate_source,
+            "#[no_mangle]\npub extern \"C\" fn runtime_canonical() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &unique_source,
+            "#[no_mangle]\npub extern \"C\" fn ui_only_symbol() {}\n",
+        )
+        .unwrap();
+
+        let duplicate_object = temp.path().join("runtime.obj");
+        let unique_object = temp.path().join("ui.obj");
+        compile_object(&duplicate_source, &duplicate_object, "runtime_fixture");
+        compile_object(&unique_source, &unique_object, "ui_fixture");
+
+        let llvm_ar =
+            find_llvm_tool_or_beside_lld("llvm-ar").expect("Windows LLVM must provide llvm-ar");
+        let llvm_nm =
+            find_llvm_tool_or_beside_lld("llvm-nm").expect("Windows LLVM must provide llvm-nm");
+        let runtime = temp.path().join("perry_runtime.lib");
+        let ui = temp.path().join("perry_ui_windows.lib");
+        rebuild_archive(
+            &llvm_ar,
+            &runtime,
+            std::slice::from_ref(&duplicate_object),
+            true,
+        )
+        .unwrap();
+        rebuild_archive(
+            &llvm_ar,
+            &ui,
+            &[duplicate_object.clone(), unique_object],
+            true,
+        )
+        .unwrap();
+
+        let trimmed = strip_duplicate_objects_from_lib(&ui).expect("COFF dedup must succeed");
+        let symbols = collect_archive_symbols_flat(&llvm_nm, &trimmed);
+        assert!(symbols.contains("ui_only_symbol"));
+        assert!(!symbols.contains("runtime_canonical"));
     }
 }

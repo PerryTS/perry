@@ -986,13 +986,12 @@ pub(crate) fn build_and_run_link(
         if let Some(ui_lib) = ui_lib_option {
             // The UI staticlib bundles perry_runtime + Rust std. When perry-stdlib
             // is also linked (which bundles the same), duplicate symbols cause
-            // crashes (conflicting static state initialization). Strip duplicates
-            // on Apple platforms. On Windows/Android, skip strip-dedup because
-            // perry_runtime objects contain monomorphizations needed by UI code,
-            // and --allow-multiple-definition (ELF) / /FORCE:MULTIPLE (COFF)
-            // handles duplicate symbols safely. On Android, skip_runtime=true
-            // means the UI lib is the sole provider of perry-runtime symbols.
-            let ui_lib = if is_windows || is_android || is_visionos {
+            // crashes (conflicting static state initialization). Strip fully
+            // duplicated members by symbol-set evidence on Apple and Windows;
+            // members with UI-specific monomorphizations are retained. Android
+            // remains untouched because skip_runtime=true makes the UI lib the
+            // sole provider of perry-runtime symbols.
+            let ui_lib = if is_android || is_visionos {
                 ui_lib
             } else {
                 let trimmed = match strip_duplicate_objects_from_lib(&ui_lib) {
@@ -1012,7 +1011,7 @@ pub(crate) fn build_and_run_link(
                 // rebind to the single linked copy. Linux tolerates the
                 // duplicates via --allow-multiple-definition, so restrict to
                 // the ld64 shapes.
-                if is_linux {
+                if is_linux || is_windows {
                     trimmed
                 } else {
                     let mut linked_refs: Vec<&Path> = vec![runtime_lib];

@@ -839,8 +839,10 @@ pub fn select_linker_command(
         // `editbin /STACK:67108864` post-link step users previously had to
         // run by hand.
         .arg("/STACK:67108864")
-        // Native libs (hone_editor_windows etc) bundle perry_runtime objects
-        // that can't be fully stripped. Identical symbols are safe to merge.
+        // Native libs and retained mixed-symbol UI objects can still contain
+        // duplicate definitions after evidence-based archive trimming. The
+        // canonical runtime is linked first; allow only those remaining
+        // definitions to merge behind it.
         .arg("/FORCE:MULTIPLE")
         // #6023: /FORCE:MULTIPLE makes the duplicate-definition merge
         // deliberate, but link.exe still prints one LNK4006 line per merged

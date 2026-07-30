@@ -53,22 +53,6 @@ const STDLIB_STUB_SYMBOLS: &[&str] = &[
     "js_readline_stdin_destroy",
 ];
 
-/// Locate an LLVM binutil, falling back to the directory that holds the
-/// resolved `lld-link`. `find_llvm_tool` already covers the env-var /
-/// rust-sysroot / PATH cases; a prebuilt install (no Rust toolchain) whose
-/// `C:\Program Files\LLVM\bin` is on none of those still resolves lld-link via
-/// [`find_lld_link`]'s standard-location probe, and llvm-ar / llvm-nm /
-/// llvm-objcopy live right beside it.
-fn find_llvm_tool_or_beside_lld(tool: &str) -> Option<PathBuf> {
-    if let Some(p) = find_llvm_tool(tool).or_else(|| find_path_tool(tool)) {
-        return Some(p);
-    }
-    let lld = find_lld_link()?;
-    let dir = lld.parent()?;
-    let candidate = dir.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX));
-    candidate.is_file().then_some(candidate)
-}
-
 /// #5000 — localize perry-runtime's `stdlib_stubs` no-op symbols in the
 /// standalone Windows runtime archive so perry-stdlib's real
 /// fetch / WebSocket / readline / dispatch implementations win the link.

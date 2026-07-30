@@ -872,6 +872,9 @@ jobs:
             throw "VERSIONINFO does not match Cargo version $expectedVersion (file=$($version.FileVersion), product=$($version.ProductVersion))"
           }
 
+      - name: Test COFF duplicate-symbol archive trimming
+        run: cargo test --profile perry-dev -p perry --bin perry coff_archive_dedup_drops_only_fully_provided_members
+
   # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
   #
