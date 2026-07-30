@@ -118,8 +118,7 @@ fn stmt_alloc_free(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
             update,
             body,
         } => {
-            init.as_deref()
-                .is_none_or(|s| stmt_alloc_free(s, is_inert))
+            init.as_deref().is_none_or(|s| stmt_alloc_free(s, is_inert))
                 && condition
                     .as_ref()
                     .is_none_or(|e| expr_alloc_free(e, is_inert))

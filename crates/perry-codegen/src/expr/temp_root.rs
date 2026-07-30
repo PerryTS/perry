@@ -212,14 +212,23 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 ///  * the refined type is a non-pointer primitive, so `ToPrimitive` on it is
 ///    the identity and dispatches to nothing;
 ///  * no shadow slot is reserved for the local — `collect_pointer_typed_locals`'
-///    verdict that *nowhere in this function* does the local receive a
-///    pointer-typed value. A reserved slot means pointer-possible regardless of
-///    what the refined type says; and
+///    verdict that the local is not pointer-typed. A reserved slot means
+///    pointer-possible regardless of what the refined type says; and
 ///  * the binding is not a module-level global. `local_types` and the
 ///    shadow-slot map are both computed per function, from that function's body
 ///    alone, so a module global that a *different* function assigns an object
 ///    to still looks like a number here. Those per-function facts are sound for
 ///    a genuine local and not for a global, so a global is never inert.
+///
+/// What this does NOT defend against is a *lying annotation*: `let n: number`
+/// that is handed an object anyway. Nothing here catches that — but nothing
+/// else in the compiler does either, and it is not this predicate's assumption
+/// to make good on. `collect_pointer_typed_locals` reserves root slots from the
+/// same declared type, so such a local has no shadow slot and the precise scan
+/// cannot see the object at all; the value is already unrooted long before any
+/// coercion of it reaches a poll decision. Honesty of scalar annotations is a
+/// standing invariant of the precise-root design, inherited here rather than
+/// introduced.
 pub(crate) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
     !ctx.shadow_slot_map.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)
