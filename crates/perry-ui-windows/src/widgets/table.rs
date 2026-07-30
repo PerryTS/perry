@@ -27,13 +27,13 @@
 //! notifications so interactive cells behave like the view-based macOS
 //! implementation.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::InvalidateRect;
+use windows::Win32::Graphics::Gdi::{InvalidateRect, ScreenToClient};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
@@ -90,6 +90,7 @@ struct TableEntry {
 
 thread_local! {
     static TABLES: RefCell<HashMap<i64, TableEntry>> = RefCell::new(HashMap::new());
+    static TABLE_LAYOUT_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(target_os = "windows")]
@@ -196,6 +197,17 @@ fn layout_widget_cells(handle: i64) {
     let Some(table_hwnd) = super::get_hwnd_safe(handle) else {
         return;
     };
+    if TABLE_LAYOUT_IN_PROGRESS.with(|in_progress| in_progress.replace(true)) {
+        return;
+    }
+    struct LayoutGuard;
+    impl Drop for LayoutGuard {
+        fn drop(&mut self) {
+            TABLE_LAYOUT_IN_PROGRESS.with(|in_progress| in_progress.set(false));
+        }
+    }
+    let _guard = LayoutGuard;
+
     let cells: Vec<(i64, i64, i64)> = TABLES.with(|tables| {
         tables
             .borrow()
@@ -216,6 +228,22 @@ fn layout_widget_cells(handle: i64) {
     let mut client = RECT::default();
     unsafe {
         let _ = GetClientRect(table_hwnd, &mut client);
+    }
+    let mut content_top = client.top;
+    unsafe {
+        let header =
+            HWND(SendMessageW(table_hwnd, LVM_GETHEADER, None, None).0 as *mut std::ffi::c_void);
+        if !header.0.is_null() {
+            let mut header_rect = RECT::default();
+            if GetWindowRect(header, &mut header_rect).is_ok() {
+                let mut header_bottom = POINT {
+                    x: header_rect.right,
+                    y: header_rect.bottom,
+                };
+                let _ = ScreenToClient(table_hwnd, &mut header_bottom);
+                content_top = content_top.max(header_bottom.y);
+            }
+        }
     }
     for (row, col, widget_handle) in cells {
         let Some(child_hwnd) = super::get_hwnd_safe(widget_handle) else {
@@ -242,7 +270,7 @@ fn layout_widget_cells(handle: i64) {
         let visible = found
             && cell_rect.right > client.left
             && cell_rect.left < client.right
-            && cell_rect.bottom > client.top
+            && cell_rect.bottom > content_top
             && cell_rect.top < client.bottom
             && super::get_widget_info(widget_handle)
                 .map(|info| !info.hidden)
@@ -255,9 +283,9 @@ fn layout_widget_cells(handle: i64) {
         }
 
         let x = cell_rect.left + 1;
-        let y = cell_rect.top + 1;
+        let y = cell_rect.top.max(content_top) + 1;
         let width = (cell_rect.right - cell_rect.left - 2).max(1);
-        let height = (cell_rect.bottom - cell_rect.top - 2).max(1);
+        let height = (cell_rect.bottom - cell_rect.top.max(content_top) - 2).max(1);
         unsafe {
             if GetParent(child_hwnd).ok() != Some(table_hwnd) {
                 let _ = SetParent(child_hwnd, Some(table_hwnd));
@@ -299,9 +327,9 @@ unsafe extern "system" fn table_subclass_proc(
     if msg == WM_NCDESTROY {
         let contents = TABLES.with(|tables| {
             tables
-                .borrow()
-                .get(&handle)
-                .map(|entry| entry.cell_cache.values().cloned().collect::<Vec<_>>())
+                .borrow_mut()
+                .remove(&handle)
+                .map(|entry| entry.cell_cache.into_values().collect::<Vec<_>>())
                 .unwrap_or_default()
         });
         detach_widget_cells(contents);
