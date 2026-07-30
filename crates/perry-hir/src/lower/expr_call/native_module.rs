@@ -224,6 +224,76 @@ fn detect_bundled_mysql2_create(
     mysql2_config_signature(method_name, &keys)
 }
 
+/// True when `receiver` is a (possibly nested) member-access chain whose root
+/// identifier resolves to native module `module_name` as a whole-module
+/// reference (default/namespace import, `native_method == None`). Used to
+/// recognize deeply-namespaced native APIs like node-forge's
+/// `forge.pki.rsa.generateKeyPair` whose receiver is `forge.pki.rsa`, a chain
+/// of `Member`s rather than the bare module `Ident` the ordinary arms expect.
+/// Only string (`Ident`) property segments are walked — a computed
+/// (`forge["pki"]`) segment isn't a static namespace path and returns false.
+fn member_chain_roots_at_native_module(
+    ctx: &LoweringContext,
+    receiver: &ast::Expr,
+    module_name: &str,
+) -> bool {
+    match unwrap_ts_wrappers(receiver) {
+        ast::Expr::Ident(ident) => {
+            matches!(
+                ctx.lookup_native_module(ident.sym.as_ref()),
+                Some((m, None)) if m == module_name
+            )
+        }
+        ast::Expr::Member(member) if matches!(member.prop, ast::MemberProp::Ident(_)) => {
+            member_chain_roots_at_native_module(ctx, member.obj.as_ref(), module_name)
+        }
+        _ => false,
+    }
+}
+
+/// node-forge sub-namespace flattening. Unlike the single-level `ns.method()`
+/// shape the other arms match, forge's API is deeply nested:
+/// `forge.pki.rsa.generateKeyPair(...)`, `forge.pki.createCertificate()`,
+/// `forge.md.sha256.create()`. The call's receiver is therefore a CHAIN of
+/// `Member`s (not a bare native-module `Ident`), so none of them fire — and
+/// worse, an intermediate read like `forge.pki` otherwise reaches the
+/// unimplemented-API gate in `expr_member` (no `node-forge` symbol named
+/// `pki`) and defers a throw. Collapse any member chain rooted at the
+/// node-forge default import down to its LAST segment, which is exactly the
+/// method key the codegen `NATIVE_MODULE_TABLE` rows use (`generateKeyPair`,
+/// `createCertificate`, `create`, `privateKeyToPem`, …). The intermediate
+/// `pki`/`rsa`/`md`/`sha256` path segments are dropped: within node-forge those
+/// method names are unambiguous, and an unknown method simply has no table row
+/// and surfaces as unresolved, exactly as before. `createCertificate` is typed
+/// back to a `Certificate` instance by the factory map in
+/// `js_transform/local_natives.rs`, so `cert.setSubject(...)` etc. dispatch
+/// through the normal single-level instance path.
+///
+/// Runs BEFORE the generic namespace/`module.Class.staticMethod` dispatch so it
+/// wins for the 2-level `forge.pki.createCertificate()` shape that
+/// `try_module_class_static` would otherwise claim (reading `forge.pki` as
+/// `module.Class` and hitting the gate).
+pub(super) fn try_node_forge_namespace(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Expr, Vec<Expr>> {
+    if let ast::Expr::Member(member) = expr {
+        if let ast::MemberProp::Ident(method_ident) = &member.prop {
+            if member_chain_roots_at_native_module(ctx, member.obj.as_ref(), "node-forge") {
+                return Ok(Expr::NativeMethodCall {
+                    module: "node-forge".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: method_ident.sym.to_string(),
+                    args,
+                });
+            }
+        }
+    }
+    Err(args)
+}
+
 pub(super) fn try_native_module_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,

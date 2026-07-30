@@ -138,6 +138,27 @@ struct ValidityJson {
     not_after: Option<serde_json::Value>,
 }
 
+/// A distinguished name as it appears on a builder cert. node-forge models
+/// `cert.subject` / `cert.issuer` as `{ attributes: [{name,value}, …] }`, so
+/// that is the canonical shape (produced by `setSubject`/`setIssuer` and
+/// `certificateFromPem` alike). A bare `[{name,value}]` array is also accepted
+/// so a hand-built cert object still round-trips.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DnJson {
+    Wrapped { attributes: Vec<AttrJson> },
+    Bare(Vec<AttrJson>),
+}
+
+impl DnJson {
+    fn attributes(&self) -> &[AttrJson] {
+        match self {
+            DnJson::Wrapped { attributes } => attributes,
+            DnJson::Bare(v) => v,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct CertJson {
     #[serde(rename = "publicKey")]
@@ -145,8 +166,8 @@ struct CertJson {
     #[serde(rename = "serialNumber")]
     serial_number: Option<serde_json::Value>,
     validity: Option<ValidityJson>,
-    subject: Option<Vec<AttrJson>>,
-    issuer: Option<Vec<AttrJson>>,
+    subject: Option<DnJson>,
+    issuer: Option<DnJson>,
     extensions: Option<Vec<ExtJson>>,
 }
 
@@ -249,8 +270,16 @@ fn cert_spec_from_json(cert_json: &str) -> Result<CertSpec, String> {
         serial_hex: value_to_string(&c.serial_number),
         not_before_unix: parse_time(&validity.not_before),
         not_after_unix: parse_time(&validity.not_after),
-        subject: c.subject.as_deref().map(attrs_from).unwrap_or_default(),
-        issuer: c.issuer.as_deref().map(attrs_from).unwrap_or_default(),
+        subject: c
+            .subject
+            .as_ref()
+            .map(|d| attrs_from(d.attributes()))
+            .unwrap_or_default(),
+        issuer: c
+            .issuer
+            .as_ref()
+            .map(|d| attrs_from(d.attributes()))
+            .unwrap_or_default(),
         extensions: c
             .extensions
             .as_deref()
@@ -445,7 +474,20 @@ pub extern "C" fn js_node_forge_create_certificate() -> JsValue {
     }
 }
 
-/// `cert.setSubject(attrs)` — store the attribute array in slot 3.
+/// Wrap a distinguished-name attribute array as node-forge's `{ attributes }`
+/// object, so a later `cert.subject.attributes` read returns the array (the
+/// shape `certificateFromPem` also produces). `setIssuer(caCert.subject.
+/// attributes)` — the sfw idiom — passes the already-unwrapped array back in,
+/// and it is re-wrapped here, keeping both DN fields uniform for
+/// `certificateToPem`.
+unsafe fn wrap_dn_attributes(attrs_bits: f64) -> JsValue {
+    let (packed, shape_id) = build_object_shape(&["attributes"]);
+    let dn = js_object_alloc_with_shape(shape_id, 1, packed.as_ptr(), packed.len() as u32);
+    js_object_set_field(dn, 0, JsValue::from_bits(attrs_bits.to_bits()));
+    JsValue::from_object_ptr(dn)
+}
+
+/// `cert.setSubject(attrs)` — store `{ attributes: attrs }` in slot 3.
 ///
 /// # Safety
 /// `cert` must be the NaN-unboxed `*mut ObjectHeader` of a builder cert.
@@ -453,11 +495,11 @@ pub extern "C" fn js_node_forge_create_certificate() -> JsValue {
 pub unsafe extern "C" fn js_node_forge_cert_set_subject(cert: i64, attrs_bits: f64) {
     let obj = cert as *mut ObjectHeader;
     if !obj.is_null() {
-        js_object_set_field(obj, FIELD_SUBJECT, JsValue::from_bits(attrs_bits.to_bits()));
+        js_object_set_field(obj, FIELD_SUBJECT, wrap_dn_attributes(attrs_bits));
     }
 }
 
-/// `cert.setIssuer(attrs)` — store the attribute array in slot 4.
+/// `cert.setIssuer(attrs)` — store `{ attributes: attrs }` in slot 4.
 ///
 /// # Safety
 /// See [`js_node_forge_cert_set_subject`].
@@ -465,7 +507,7 @@ pub unsafe extern "C" fn js_node_forge_cert_set_subject(cert: i64, attrs_bits: f
 pub unsafe extern "C" fn js_node_forge_cert_set_issuer(cert: i64, attrs_bits: f64) {
     let obj = cert as *mut ObjectHeader;
     if !obj.is_null() {
-        js_object_set_field(obj, FIELD_ISSUER, JsValue::from_bits(attrs_bits.to_bits()));
+        js_object_set_field(obj, FIELD_ISSUER, wrap_dn_attributes(attrs_bits));
     }
 }
 

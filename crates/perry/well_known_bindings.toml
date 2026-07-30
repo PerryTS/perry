@@ -562,3 +562,12 @@ tracking = "#867"
 crate = "perry-ext-node-forge"
 lib = "perry_ext_node_forge"
 tracking = "#466"
+
+# Upstream provenance pin (see PR #7031 / docs upstream-pins.md).
+[bindings.node-forge.upstream]
+version = "1.4.0"
+sha256 = "bf9d7ca0d774235354697bd4b5e642af6505e7ce2066762c3b855138cf870820"
+repo = "https://github.com/digitalbazaar/forge"
+ref = "fa385f92440879601240020f158bed68e444e83a"
+ported-at = "1.4.0"
+date = "2026-07-30"
