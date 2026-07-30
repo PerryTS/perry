@@ -64,7 +64,7 @@ pub fn start(interval_ms: u64, _seed: Option<u64>) {
             }
 
             // Pick a random widget
-            let idx = (rand::random::<usize>()) % widgets.len();
+            let idx = rand::random_range(0..widgets.len());
             let widget = &widgets[idx];
 
             let closure =
@@ -80,7 +80,7 @@ pub fn start(interval_ms: u64, _seed: Option<u64>) {
                     }
                     1 => {
                         // TextField — generate random string
-                        let len = 5 + (rand::random::<usize>() % 16);
+                        let len = rand::random_range(5..21);
                         let text: String = (0..len)
                             .map(|_| {
                                 let c = rand::random::<u8>() % 62;
@@ -124,7 +124,7 @@ pub fn start(interval_ms: u64, _seed: Option<u64>) {
                     }
                     4 => {
                         // Picker — random index 0..9
-                        let idx = (rand::random::<usize>() % 10) as f64;
+                        let idx = rand::random_range(0..10) as f64;
                         unsafe {
                             perry_geisterhand_queue_action1(closure, idx);
                         }

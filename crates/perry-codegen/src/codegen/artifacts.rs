@@ -1858,10 +1858,23 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         }
     }
-    for (func_id, src) in &hir.closure_source_text {
-        if registered_fn_ids.contains(func_id) || !materialized_closure_ids.contains(func_id) {
-            continue;
-        }
+    // Sorted, NOT raw `HashMap` iteration (#7038). The loop above walks
+    // `hir.functions` (a `Vec`) and is already deterministic; this one keyed off
+    // the map's iteration order, so the `@.str.N` numbering of the emitted
+    // string constants was a per-process permutation. Same input, different
+    // `.ll` on every run — which silently invalidates any A/B that compares raw
+    // IR, a technique several representation and GC investigations relied on.
+    // Emission order is the only thing that changes; sorting by `FuncId` makes
+    // it stable without altering what is emitted.
+    let mut materialized_closure_sources: Vec<(&perry_hir::types::FuncId, &String)> = hir
+        .closure_source_text
+        .iter()
+        .filter(|(func_id, _)| {
+            !registered_fn_ids.contains(*func_id) && materialized_closure_ids.contains(*func_id)
+        })
+        .collect();
+    materialized_closure_sources.sort_by_key(|(func_id, _)| **func_id);
+    for (func_id, src) in materialized_closure_sources {
         let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
         user_fn_source.push((sym, src.clone()));
     }

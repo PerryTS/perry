@@ -212,7 +212,7 @@ handle-floor | crates/perry-stdlib/src/fetch/mod.rs | 1
 handle-floor | crates/perry-stdlib/src/http.rs | 11
 handle-floor | crates/perry-stdlib/src/jsonwebtoken.rs | 1
 handle-floor | crates/perry-stdlib/src/querystring.rs | 5
-handle-floor | crates/perry-stdlib/src/readline.rs | 1
+handle-floor | crates/perry-stdlib/src/readline/mod.rs | 1
 handle-floor | crates/perry-stdlib/src/sqlite/options.rs | 3
 handle-floor | crates/perry-stdlib/src/streams.rs | 6
 handle-floor | crates/perry-stdlib/src/streams/byob.rs | 1
@@ -239,7 +239,7 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/construct.rs
 lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/prototype_objects.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/descriptors.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/accessors.rs | 3
+lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/accessors.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 2

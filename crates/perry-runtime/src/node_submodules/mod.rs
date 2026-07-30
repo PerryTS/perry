@@ -31,6 +31,7 @@ use crate::closure::{
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
+    PropertyAttrs,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
@@ -161,6 +162,7 @@ use timers::{
     timers_promises_scheduler, timers_promises_scheduler_wait, timers_promises_scheduler_yield,
     timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
+pub(crate) use trace_events::{flush_trace_events_output, init_trace_events_runtime};
 use trace_events::{thunk_trace_events_createTracing, thunk_trace_events_getEnabledCategories};
 
 // node:sys is a deprecated alias for node:util. Known util-backed
@@ -1180,6 +1182,24 @@ fn ensure_export_singleton(
             f64::from_bits(JSValue::pointer(yield_fn as *const u8).bits()),
         );
     }
+    let allocated = if submod.key == "trace_events" {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let allocated_handle = scope.root_raw_mut_ptr(allocated);
+        crate::object::set_bound_native_closure_name(
+            allocated_handle.get_raw_mut_ptr(),
+            export.name,
+        );
+        crate::object::set_builtin_closure_length(
+            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
+            export_rest_fixed_arity(submod.key, export.name).unwrap_or(export.thunk.arity()),
+        );
+        crate::object::set_builtin_closure_non_constructable(
+            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
+        );
+        allocated_handle.get_raw_mut_ptr()
+    } else {
+        allocated
+    };
     if submod.key == "test"
         && matches!(
             export.name,
@@ -1352,6 +1372,13 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
         crate::object::js_object_set_field_by_name(obj, name_header, value);
     }
     if submod.key == "trace_events" {
+        for spec in submod.exports {
+            crate::object::set_property_attrs(
+                obj as usize,
+                spec.name.to_string(),
+                PropertyAttrs::new(true, true, true),
+            );
+        }
         let default_obj = js_object_alloc(0, submod.exports.len() as u32);
         for spec in submod.exports {
             let closure_ptr = ensure_export_singleton(submod, spec);
@@ -1366,6 +1393,11 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             obj,
             name_header,
             f64::from_bits(JSValue::pointer(default_obj as *const u8).bits()),
+        );
+        crate::object::set_property_attrs(
+            obj as usize,
+            "default".to_string(),
+            PropertyAttrs::new(true, true, true),
         );
     }
     if let Some(default_value) = submodule_default_object_value(submod) {

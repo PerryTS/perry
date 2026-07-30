@@ -34,7 +34,9 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         // #6563: node-pty + the API-identical @lydell fork share one bucket.
         "node-pty" | "@lydell/node-pty" => Some("js_nm_install_node_pty"),
         "os" => Some("js_nm_install_os"),
-        "path" | "path.posix" | "path.win32" => Some("js_nm_install_path"),
+        "path" | "path/posix" | "path/win32" | "path.posix" | "path.win32" => {
+            Some("js_nm_install_path")
+        }
         "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => {
             Some("js_nm_install_perf")
         }
@@ -156,3 +158,17 @@ pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
     "js_node_submod_install_all",
     "js_node_submod_enable_install_all",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::nm_install_symbol;
+
+    #[test]
+    fn path_slash_submodules_install_the_path_dispatch_bucket() {
+        assert_eq!(nm_install_symbol("path/posix"), Some("js_nm_install_path"));
+        assert_eq!(
+            nm_install_symbol("node:path/win32"),
+            Some("js_nm_install_path")
+        );
+    }
+}
