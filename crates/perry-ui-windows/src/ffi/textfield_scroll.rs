@@ -27,10 +27,10 @@ pub extern "C" fn perry_ui_scrollview_set_child(scroll_handle: i64, child_handle
     widgets::scrollview::set_child(scroll_handle, child_handle);
 }
 
-/// Scroll to make a child visible.
+/// Scroll to a content offset. Windows ScrollView is vertical-only.
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_scroll_to(scroll_handle: i64, child_handle: i64) {
-    widgets::scrollview::scroll_to(scroll_handle, child_handle);
+pub extern "C" fn perry_ui_scrollview_scroll_to(scroll_handle: i64, _x: f64, y: f64) {
+    widgets::scrollview::set_offset(scroll_handle, y);
 }
 
 /// Get scroll offset.
@@ -41,8 +41,8 @@ pub extern "C" fn perry_ui_scrollview_get_offset(scroll_handle: i64) -> f64 {
 
 /// Set scroll offset.
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, offset: f64) {
-    widgets::scrollview::set_offset(scroll_handle, offset);
+pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, _x: f64, y: f64) {
+    widgets::scrollview::set_offset(scroll_handle, y);
 }
 
 // =============================================================================
@@ -50,7 +50,7 @@ pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, offset: f64
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_wraps(_handle: i64, _wraps: i64) {}
+pub extern "C" fn perry_ui_text_set_wraps(_handle: i64, _max_width: f64) {}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_textfield_get_string(handle: i64) -> i64 {

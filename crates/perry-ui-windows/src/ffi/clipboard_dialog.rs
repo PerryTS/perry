@@ -119,7 +119,7 @@ pub extern "C" fn perry_ui_blur_widget(handle: i64) {
     kb::blur_widget(handle);
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_is_key_down(code: f64) -> i32 {
+pub extern "C" fn perry_ui_is_key_down(code: f64) -> i64 {
     let raw = code as i32;
     if !(0..=u16::MAX as i32).contains(&raw) {
         return 0;
@@ -131,8 +131,8 @@ pub extern "C" fn perry_ui_is_key_down(code: f64) -> i32 {
     }
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_current_modifiers() -> i32 {
-    kb::current_modifiers() as i32
+pub extern "C" fn perry_ui_current_modifiers() -> i64 {
+    kb::current_modifiers() as i64
 }
 
 /// Get the icon for an application at the given path. Returns a widget handle or 0.

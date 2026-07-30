@@ -89,7 +89,7 @@ pub extern "C" fn perry_ui_toolbar_add_item(
 
 /// Attach a toolbar to the current window.
 #[no_mangle]
-pub extern "C" fn perry_ui_toolbar_attach(toolbar_handle: i64) {
+pub extern "C" fn perry_ui_toolbar_attach(toolbar_handle: i64, _window_handle: i64) {
     toolbar::attach(toolbar_handle);
 }
 
@@ -103,7 +103,7 @@ pub extern "C" fn perry_ui_tabbar_create(_on_change: f64) -> i64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_tabbar_add_tab(_handle: i64, _label_ptr: i64) {}
+pub extern "C" fn perry_ui_tabbar_add_tab(_handle: i64, _label_ptr: i64, _content: i64) {}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_tabbar_set_selected(_handle: i64, _index: i64) {}

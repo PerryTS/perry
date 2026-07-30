@@ -25,10 +25,8 @@ pub extern "C" fn perry_ui_table_set_filter_text(h: i64, t: i64) {
     widgets::table::set_filter_text(h, t as *const u8);
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_filter_text(h: i64) -> f64 {
-    let ptr = widgets::table::get_filter_text(h);
-    // Wrap as NaN-boxed STRING_TAG (top16 = 0x7FFF, lower 48 = pointer).
-    f64::from_bits(0x7FFF_0000_0000_0000_u64 | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
+pub extern "C" fn perry_ui_table_get_filter_text(h: i64) -> i64 {
+    widgets::table::get_filter_text(h)
 }
 
 /// TreeView (#480) — real Win32 impl via SysTreeView32 + TVN_SELCHANGEDW.

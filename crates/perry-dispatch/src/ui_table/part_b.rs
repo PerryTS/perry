@@ -157,7 +157,7 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         method: "richTextGetString",
         runtime: "perry_ui_rich_text_get_string",
         args: &[ArgKind::Widget],
-        ret: ReturnKind::Str,
+        ret: ReturnKind::F64,
     },
     MethodRow {
         method: "richTextSetHtml",
@@ -169,7 +169,7 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         method: "richTextGetHtml",
         runtime: "perry_ui_rich_text_get_html",
         args: &[ArgKind::Widget],
-        ret: ReturnKind::Str,
+        ret: ReturnKind::F64,
     },
     MethodRow {
         method: "richTextToggleBold",
@@ -301,7 +301,7 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
     MethodRow {
         method: "stackSetDetachesHidden",
         runtime: "perry_ui_stack_set_detaches_hidden",
-        args: &[ArgKind::Widget, ArgKind::F64],
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
     // ---- Additional constructors ----
@@ -375,7 +375,7 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         method: "pickerGetSelected",
         runtime: "perry_ui_picker_get_selected",
         args: &[ArgKind::Widget],
-        ret: ReturnKind::F64,
+        ret: ReturnKind::I64AsF64,
     },
     MethodRow {
         method: "pickerSetSelected",
@@ -654,7 +654,7 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         method: "pollOpenFile",
         runtime: "perry_ui_poll_open_file",
         args: &[],
-        ret: ReturnKind::F64,
+        ret: ReturnKind::Str,
     },
     // ---- Keyboard shortcuts ----
     // `modifiers` is a bitfield: 1=Cmd, 2=Shift, 4=Option, 8=Control.

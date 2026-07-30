@@ -6387,6 +6387,9 @@ version = "0.5.1265"
 [[package]]
 name = "perry-ui-test"
 version = "0.1.0"
+dependencies = [
+ "perry-dispatch",
+]
 
 [[package]]
 name = "perry-ui-testkit"

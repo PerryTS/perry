@@ -26,7 +26,7 @@ pub extern "C" fn perry_ui_vbox_add_child(_handle: i64, _child: i64) {}
 pub extern "C" fn perry_ui_vbox_finalize(_handle: i64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_frame_split_create() -> i64 {
+pub extern "C" fn perry_ui_frame_split_create(_divider_position: f64) -> i64 {
     0
 }
 
@@ -75,7 +75,7 @@ pub extern "C" fn perry_ui_poll_open_file() -> i64 {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_textarea_create(on_change: f64) -> i64 {
+pub extern "C" fn perry_ui_textarea_create(_placeholder_ptr: i64, on_change: f64) -> i64 {
     widgets::textarea::create(on_change)
 }
 

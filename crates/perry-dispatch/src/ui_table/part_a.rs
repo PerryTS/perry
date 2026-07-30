@@ -644,7 +644,7 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
     MethodRow {
         method: "webviewSetEphemeral",
         runtime: "perry_ui_webview_set_ephemeral",
-        args: &[ArgKind::Widget, ArgKind::F64],
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
     MethodRow {
@@ -922,7 +922,7 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
     MethodRow {
         method: "widgetAddChildAt",
         runtime: "perry_ui_widget_add_child_at",
-        args: &[ArgKind::Widget, ArgKind::Widget, ArgKind::I64Raw],
+        args: &[ArgKind::Widget, ArgKind::Widget, ArgKind::F64],
         ret: ReturnKind::Void,
     },
     MethodRow {
@@ -984,7 +984,7 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         method: "comboboxGetValue",
         runtime: "perry_ui_combobox_get_value",
         args: &[ArgKind::Widget],
-        ret: ReturnKind::Str,
+        ret: ReturnKind::F64,
     },
     // ---- TreeView (issue #480) ----
     MethodRow {
@@ -1021,7 +1021,7 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         method: "treeViewGetSelectedId",
         runtime: "perry_ui_tree_view_get_selected_id",
         args: &[ArgKind::Widget],
-        ret: ReturnKind::Str,
+        ret: ReturnKind::F64,
     },
     // ---- Calendar (issue #481) ----
     MethodRow {
@@ -1045,7 +1045,7 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         method: "calendarGetSelectedDate",
         runtime: "perry_ui_calendar_get_selected_date",
         args: &[ArgKind::Widget],
-        ret: ReturnKind::Str,
+        ret: ReturnKind::F64,
     },
     // ---- DatePicker (issue #4772) ----
     MethodRow {
@@ -1069,6 +1069,6 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         method: "datePickerGetSelectedDate",
         runtime: "perry_ui_date_picker_get_selected_date",
         args: &[ArgKind::Widget],
-        ret: ReturnKind::Str,
+        ret: ReturnKind::F64,
     },
 ];
