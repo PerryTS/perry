@@ -1633,6 +1633,33 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                 }
             };
         }
+        // #6828: `%Object.prototype%.__proto__` is a legacy accessor whose
+        // setter performs `SetPrototypeOf(Receiver, value)`. Perry exposes the
+        // getter intrinsically but does not materialize the built-in accessor
+        // in the ordinary descriptor table, so model it at the exact point in
+        // the [[Set]] walk where that descriptor would be found.
+        //
+        // Keep this AFTER `own_set_descriptor`: a user-installed own
+        // `__proto__` data/accessor property on an object earlier in the chain
+        // must win. A null-prototype receiver never reaches the canonical
+        // Object.prototype and therefore still creates an ordinary own data
+        // property. Per Annex B, a primitive RHS is ignored rather than
+        // throwing (unlike `Object.setPrototypeOf`).
+        let current_addr = extract_pointer(current.to_bits()) as usize;
+        if current_addr != 0
+            && current_addr == crate::array::object_prototype_addr()
+            && key_to_rust_string(key).as_deref() == Some("__proto__")
+        {
+            let value_bits = value.to_bits();
+            let valid_proto = value_bits == TAG_NULL
+                || lookup(value).is_some()
+                || crate::object::class_ref_id(value).is_some()
+                || unsafe { crate::object::value_is_object_like(value) };
+            if valid_proto && reflect_value_is_object(receiver) {
+                crate::object::js_object_set_prototype_of(receiver, value);
+            }
+            return true;
+        }
         if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {
             // ECMAScript poison pill: `fn.caller = v` / `fn.arguments = v` on
             // a strict-mode function (all Perry-compiled code) throws via the

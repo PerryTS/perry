@@ -75,6 +75,49 @@ const bare: any = {};
 Object.setPrototypeOf(bare, null);
 console.log("setProto(obj, null) -> getProto null:", Object.getPrototypeOf(bare) === null);
 
+// --- #6828: assignment invokes Object.prototype.__proto__ setter -----------
+const assignedProto: any = { inherited: "yes" };
+const assigned: any = {};
+assigned.__proto__ = assignedProto;
+console.log(
+  "legacy proto assignment:",
+  assigned.inherited,
+  Object.getPrototypeOf(assigned) === assignedProto,
+  Object.keys(assigned).join(","),
+);
+
+// The Annex-B setter ignores a primitive RHS rather than throwing.
+assigned.__proto__ = 7;
+console.log("legacy proto primitive ignored:", Object.getPrototypeOf(assigned) === assignedProto);
+
+// A null-prototype object does not inherit the legacy setter, so this is an
+// ordinary own enumerable data property.
+const noLegacySetter: any = Object.create(null);
+noLegacySetter.__proto__ = assignedProto;
+console.log(
+  "null-proto own __proto__:",
+  Object.getPrototypeOf(noLegacySetter) === null,
+  Object.prototype.hasOwnProperty.call(noLegacySetter, "__proto__"),
+  Object.keys(noLegacySetter).join(","),
+);
+
+// An own data descriptor also shadows the inherited legacy accessor.
+const ownProtoData: any = {};
+Object.defineProperty(ownProtoData, "__proto__", {
+  value: "before",
+  writable: true,
+  enumerable: true,
+  configurable: true,
+});
+const ownProtoDataParent = Object.getPrototypeOf(ownProtoData);
+ownProtoData.__proto__ = "after";
+console.log(
+  "own __proto__ shadows setter:",
+  ownProtoData.__proto__,
+  Object.getPrototypeOf(ownProtoData) === ownProtoDataParent,
+  Object.keys(ownProtoData).join(","),
+);
+
 // --- Proxy construction validation ---
 threw = false;
 try {

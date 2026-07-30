@@ -285,6 +285,15 @@ pub(crate) fn object_proto_descriptors_in_use() -> bool {
 /// has an own property for THIS key; an absent key cannot be intercepted, so the
 /// fast path stays safe even while unrelated descriptors exist on the prototype.
 pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
+    // #6828: `%Object.prototype%` always owns the Annex-B `__proto__`
+    // accessor, even though Perry implements that intrinsic in the ordinary
+    // [[Set]] walk rather than materializing a closure-backed descriptor.
+    // Treat it as an interceptor so the plain-object direct-store lane cannot
+    // create an own enumerable `"__proto__"` property before the walk gets a
+    // chance to invoke the intrinsic setter.
+    if unsafe { reflect_support::key_to_rust_string(key) }.as_deref() == Some("__proto__") {
+        return true;
+    }
     if !object_proto_descriptors_in_use() {
         return false;
     }
