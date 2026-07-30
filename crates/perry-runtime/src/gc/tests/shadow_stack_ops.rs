@@ -471,7 +471,7 @@ fn out_of_range_frame_pop_is_ignored() {
 }
 
 // ---------------------------------------------------------------------------
-// #7086: the inline slot-store addressing contract.
+// #7088: the inline slot-store addressing contract.
 //
 // Generated code no longer calls `js_shadow_slot_bind` / `js_shadow_slot_set`
 // for the hot per-store root write. It computes the entry address itself from
@@ -509,7 +509,11 @@ unsafe fn inline_bind_as_codegen_emits(
     let buf = state_word(state, SHADOW_STATE_PTR_OFFSET) as *mut u8;
     let entry = buf.add(slot * SHADOW_ENTRY_SIZE);
     let raw = local_slot as usize;
-    let bound = if raw & SHADOW_SLOT_ACTIVE_BIT == 0 { raw } else { 0 };
+    let bound = if raw & SHADOW_SLOT_ACTIVE_BIT == 0 {
+        raw
+    } else {
+        0
+    };
     *entry.cast::<u64>() = *local_slot;
     *entry.add(SHADOW_ENTRY_META_OFFSET).cast::<usize>() = bound | SHADOW_SLOT_ACTIVE_BIT;
     true
@@ -546,7 +550,10 @@ fn frame_enter_pushes_the_same_frame_and_yields_the_same_handle() {
 
     let before = shadow_stack_depth();
     let state = js_shadow_frame_enter(3);
-    assert!(!state.is_null(), "frame_enter must return the state address");
+    assert!(
+        !state.is_null(),
+        "frame_enter must return the state address"
+    );
     assert_eq!(shadow_stack_depth(), before + 1);
     assert_eq!(
         state as usize,
@@ -575,7 +582,8 @@ fn inline_write_and_runtime_accessor_address_the_same_entry() {
     let _guard = GcTestIsolationGuard::new();
     reset_shadow_stack();
     let state = js_shadow_frame_enter(2);
-    let handle = unsafe { state_word(state, SHADOW_STATE_FRAME_TOP_OFFSET) } - SHADOW_STACK_HEADER_SLOTS;
+    let handle =
+        unsafe { state_word(state, SHADOW_STATE_FRAME_TOP_OFFSET) } - SHADOW_STACK_HEADER_SLOTS;
 
     // inline write -> runtime read
     let mut storage: u64 = 0x7FFD_0000_DEAD_BEEF;
@@ -617,7 +625,8 @@ fn inline_clear_matches_the_runtime_clear_and_keeps_the_binding() {
     let _guard = GcTestIsolationGuard::new();
     reset_shadow_stack();
     let state = js_shadow_frame_enter(1);
-    let handle = unsafe { state_word(state, SHADOW_STATE_FRAME_TOP_OFFSET) } - SHADOW_STACK_HEADER_SLOTS;
+    let handle =
+        unsafe { state_word(state, SHADOW_STATE_FRAME_TOP_OFFSET) } - SHADOW_STACK_HEADER_SLOTS;
 
     let mut storage: u64 = 0x7FFD_0000_0000_1111;
     js_shadow_slot_bind(0, &mut storage as *mut u64);
@@ -702,8 +711,7 @@ fn inline_write_with_no_frame_installed_is_skipped_not_wrapped() {
     // buffer still holds this frame's entries.
     let buf = unsafe { state_word(state, SHADOW_STATE_PTR_OFFSET) } as *mut u8;
     let header_before = unsafe { *buf.cast::<u64>() };
-    let header_meta_before =
-        unsafe { *buf.add(SHADOW_ENTRY_META_OFFSET).cast::<usize>() };
+    let header_meta_before = unsafe { *buf.add(SHADOW_ENTRY_META_OFFSET).cast::<usize>() };
     unsafe {
         *(state
             .cast::<u8>()

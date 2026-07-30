@@ -100,7 +100,7 @@ impl ShadowEntry {
 ///
 /// # Why this is `#[repr(C)]` with a hand-rolled buffer instead of a `Vec`
 ///
-/// Generated code addresses these fields **inline** (#7086): a slot store is an
+/// Generated code addresses these fields **inline** (#7088): a slot store is an
 /// address computation and a `stp` against this struct rather than a call into
 /// [`js_shadow_slot_set`] / [`js_shadow_slot_bind`]. That requires the field
 /// offsets to be a stable, checkable contract, and `Vec`'s layout is explicitly
@@ -463,7 +463,7 @@ unsafe fn push_frame(s: &mut ShadowStackState, slot_count: u32) -> u64 {
 /// [`ShadowStackState`] instead of the frame handle.
 ///
 /// Generated code calls this once per activation and keeps the pointer for the
-/// whole frame, so the inline slot stores (#7086) are address arithmetic
+/// whole frame, so the inline slot stores (#7088) are address arithmetic
 /// against it rather than one `extern "C"` call — and one thread-local
 /// lookup — per store. The frame handle the matching
 /// [`js_shadow_frame_pop`] needs is recoverable without a second call:

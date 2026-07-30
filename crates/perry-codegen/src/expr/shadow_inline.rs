@@ -1,4 +1,4 @@
-//! Inline shadow-slot stores (#7086).
+//! Inline shadow-slot stores (#7088).
 //!
 //! # What this replaces
 //!
@@ -102,11 +102,7 @@ enum InlineSlotWrite<'a> {
 ///
 /// Returns `false` when this function has no cached state pointer (so the
 /// caller must fall back to the `extern "C"` call).
-pub(crate) fn emit_inline_slot_bind(
-    ctx: &mut FnCtx<'_>,
-    slot_idx: u32,
-    local_slot: &str,
-) -> bool {
+pub(crate) fn emit_inline_slot_bind(ctx: &mut FnCtx<'_>, slot_idx: u32, local_slot: &str) -> bool {
     emit_inline_slot_write(ctx, slot_idx, InlineSlotWrite::Bind { local_slot })
 }
 
@@ -115,11 +111,7 @@ pub(crate) fn emit_inline_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) -> bool
     emit_inline_slot_write(ctx, slot_idx, InlineSlotWrite::Clear)
 }
 
-fn emit_inline_slot_write(
-    ctx: &mut FnCtx<'_>,
-    slot_idx: u32,
-    what: InlineSlotWrite<'_>,
-) -> bool {
+fn emit_inline_slot_write(ctx: &mut FnCtx<'_>, slot_idx: u32, what: InlineSlotWrite<'_>) -> bool {
     if !crate::codegen::helpers::inline_shadow_slot_enabled() {
         return false;
     }
@@ -173,8 +165,7 @@ fn emit_inline_slot_write(
     let frame_top = ctx.block().load(I64, &frame_top_ptr);
     // `usize::MAX` is `-1` as an i64 bit pattern.
     let no_frame = ctx.block().icmp_eq(I64, &frame_top, "-1");
-    ctx.block()
-        .cond_br(&no_frame, &done_label, &chk_len_label);
+    ctx.block().cond_br(&no_frame, &done_label, &chk_len_label);
 
     // --- `let slot = top + idx; if slot >= len { return }` ---
     //
@@ -194,8 +185,7 @@ fn emit_inline_slot_write(
     );
     let len = ctx.block().load(I64, &len_ptr);
     let in_bounds = ctx.block().icmp_ult(I64, &slot, &len);
-    ctx.block()
-        .cond_br(&in_bounds, &store_label, &done_label);
+    ctx.block().cond_br(&in_bounds, &store_label, &done_label);
 
     // --- the entry write ---
     ctx.current_block = store_idx;
@@ -209,9 +199,7 @@ fn emit_inline_slot_write(
         );
         ctx.block().load(PTR, &p)
     };
-    let byte_off = ctx
-        .block()
-        .shl(I64, &slot, &SHADOW_ENTRY_SHIFT.to_string());
+    let byte_off = ctx.block().shl(I64, &slot, &SHADOW_ENTRY_SHIFT.to_string());
     let entry = ctx
         .block()
         .gep_inbounds(crate::types::I8, &buf, &[(I64, &byte_off)]);
@@ -387,7 +375,8 @@ mod tests {
     fn entry_reg(blk: &str) -> String {
         for line in blk.lines() {
             // `  %rN = getelementptr inbounds i8, ptr %rBUF, i64 %rSHIFTED`
-            if line.contains("getelementptr inbounds i8, ptr %") && line.trim_end().ends_with(|c: char| c.is_ascii_digit())
+            if line.contains("getelementptr inbounds i8, ptr %")
+                && line.trim_end().ends_with(|c: char| c.is_ascii_digit())
                 && line.contains(", i64 %")
             {
                 if let Some(name) = line.trim().split(" = ").next() {

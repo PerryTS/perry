@@ -42,7 +42,7 @@ pub use codegen::{
 };
 
 /// The shadow-stack field offsets generated code bakes into its inline root
-/// stores (#7086).
+/// stores (#7088).
 ///
 /// Exported so `perry`'s `shadow_layout_contract` test can compare them with
 /// `perry-runtime`'s copy. `perry-codegen` does not depend on `perry-runtime`,

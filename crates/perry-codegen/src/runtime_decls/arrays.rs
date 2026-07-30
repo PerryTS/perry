@@ -100,7 +100,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //
     // `js_shadow_frame_enter` is `js_shadow_frame_push` returning the address
     // of this thread's shadow state rather than the frame handle, so the
-    // inline slot stores (#7086) get a base pointer without a second
+    // inline slot stores (#7088) get a base pointer without a second
     // thread-local lookup per activation. It is the entry point shadow-frame
     // emission actually uses; `js_shadow_frame_push` stays declared (and
     // exported) for stale cached objects and out-of-tree callers.

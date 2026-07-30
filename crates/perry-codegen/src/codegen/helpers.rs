@@ -74,7 +74,7 @@ pub(super) fn shadow_stack_enabled() -> bool {
     })
 }
 
-/// Inline shadow-slot store gate (#7086). Default ON.
+/// Inline shadow-slot store gate (#7088). Default ON.
 ///
 /// When enabled, a store to a GC-rooted local is emitted as an address
 /// computation and a pair of stores against this thread's `ShadowStackState`

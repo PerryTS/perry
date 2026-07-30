@@ -1,4 +1,4 @@
-//! NOTE (#7086): the hot shadow-slot stores are now emitted **inline** against
+//! NOTE (#7088): the hot shadow-slot stores are now emitted **inline** against
 //! the `ShadowStackState` pointer `js_shadow_frame_enter` returns, not as
 //! `js_shadow_slot_bind` / `js_shadow_slot_set` calls. Each inline site still
 //! emits one of those calls on its null-state fallback arm, at exactly the
@@ -776,7 +776,7 @@ fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
     .expect("LLVM IR should be UTF-8");
     let main_ir = function_slice(&ir, "main");
 
-    // PRE-EXISTING RED, not caused by #7086: verified by running this suite
+    // PRE-EXISTING RED, not caused by #7088: verified by running this suite
     // against pristine `origin/main` sources, where the same assertion fails
     // with three reserved slots instead of one. Two row aliases now take a
     // persistent shadow slot each. This suite runs nightly/at-tag rather than

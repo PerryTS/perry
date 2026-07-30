@@ -283,7 +283,7 @@ impl LlModule {
     ///
     /// Used for `js_shadow_frame_enter`, whose `nonnull` return is what lets
     /// LLVM fold away the null-state fallback arm that every inline shadow-slot
-    /// store emits (#7086). The attribute is true by construction: the runtime
+    /// store emits (#7088). The attribute is true by construction: the runtime
     /// returns the address of a `thread_local!`.
     pub fn declare_function_with_ret_attrs(
         &mut self,

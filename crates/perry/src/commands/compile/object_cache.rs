@@ -794,7 +794,7 @@ fn compute_object_cache_key_with_env(
         "env_shadow_stack",
         env_var("PERRY_SHADOW_STACK").as_deref().unwrap_or(""),
     );
-    // #7086: flips the shadow-slot store between an inline sequence and the
+    // #7088: flips the shadow-slot store between an inline sequence and the
     // `js_shadow_slot_*` calls. Two arms that shared a cached object would
     // silently measure the same code.
     h.field(

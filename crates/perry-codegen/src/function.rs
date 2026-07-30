@@ -104,7 +104,7 @@ pub struct LlFunction {
     /// flipping the default across every user function.
     shadow_frame_slot: Option<String>,
     /// Entry alloca holding this thread's `ShadowStackState` address, so the
-    /// inline slot stores (#7086) can address the buffer without a per-store
+    /// inline slot stores (#7088) can address the buffer without a per-store
     /// thread-local lookup. Set alongside `shadow_frame_slot`.
     shadow_state_slot: Option<String>,
     /// Whether shadow-frame emission was requested for this function at all
@@ -138,7 +138,7 @@ pub struct LlFunction {
 ///
 /// `js_shadow_frame_enter` is `js_shadow_frame_push` returning the address of
 /// this thread's `ShadowStackState` instead of the frame handle, so the inline
-/// slot stores (#7086) get their base pointer without a second thread-local
+/// slot stores (#7088) get their base pointer without a second thread-local
 /// lookup. The handle the matching pop needs is recovered from the state by
 /// [`shadow_frame_handle_lines`] — `handle == frame_top - HEADER_SLOTS` — so
 /// the pop side is untouched.

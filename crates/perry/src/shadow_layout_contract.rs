@@ -1,5 +1,5 @@
 //! The shadow-stack layout contract between `perry-codegen` and
-//! `perry-runtime` (#7086).
+//! `perry-runtime` (#7088).
 //!
 //! Generated code writes GC roots *inline*: it computes the address of a
 //! `ShadowEntry` from the `ShadowStackState` pointer `js_shadow_frame_enter`
