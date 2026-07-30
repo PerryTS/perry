@@ -74,6 +74,28 @@ pub(super) fn shadow_stack_enabled() -> bool {
     })
 }
 
+/// Inline shadow-slot store gate (#7086). Default ON.
+///
+/// When enabled, a store to a GC-rooted local is emitted as an address
+/// computation and a pair of stores against this thread's `ShadowStackState`
+/// instead of a call to `js_shadow_slot_bind` / `js_shadow_slot_set`. The
+/// runtime entry points stay exported, and are what the emitted code falls
+/// back to when no state pointer is available for the activation.
+///
+/// `PERRY_INLINE_SHADOW_SLOT=0`/`off`/`false` reverts to the calls, for
+/// bisection. Independent of `PERRY_SHADOW_STACK`, which switches root
+/// emission off entirely; with the shadow stack off there is nothing to inline.
+pub(crate) fn inline_shadow_slot_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_INLINE_SHADOW_SLOT").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 /// Inline-hot-small gate. Default ON. When enabled, small functions
 /// (`INLINE_HOT_SMALL_MIN ..= SIZE_CAP` statements) that have ≥1 call site
 /// inside a loop get LLVM's `inlinehint` — a *bounded* nudge that raises the

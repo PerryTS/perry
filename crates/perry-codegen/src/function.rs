@@ -103,6 +103,10 @@ pub struct LlFunction {
     /// land wiring incrementally (e.g. just `main`) before
     /// flipping the default across every user function.
     shadow_frame_slot: Option<String>,
+    /// Entry alloca holding this thread's `ShadowStackState` address, so the
+    /// inline slot stores (#7086) can address the buffer without a per-store
+    /// thread-local lookup. Set alongside `shadow_frame_slot`.
+    shadow_state_slot: Option<String>,
     /// Whether shadow-frame emission was requested for this function at all
     /// (i.e. `enable_shadow_frame` / `enable_post_init_shadow_frame` ran).
     ///
@@ -131,11 +135,48 @@ pub struct LlFunction {
 
 /// Render the frame-push instruction. Kept in one place so the eager
 /// emission and the later count rewrite cannot drift.
-fn shadow_frame_push_line(handle_reg: &str, slot_count: u32) -> String {
+///
+/// `js_shadow_frame_enter` is `js_shadow_frame_push` returning the address of
+/// this thread's `ShadowStackState` instead of the frame handle, so the inline
+/// slot stores (#7086) get their base pointer without a second thread-local
+/// lookup. The handle the matching pop needs is recovered from the state by
+/// [`shadow_frame_handle_lines`] — `handle == frame_top - HEADER_SLOTS` — so
+/// the pop side is untouched.
+fn shadow_frame_push_line(state_reg: &str, slot_count: u32) -> String {
     format!(
-        "  {} = call i64 @js_shadow_frame_push(i32 {})",
-        handle_reg, slot_count
+        "  {} = call ptr @js_shadow_frame_enter(i32 {})",
+        state_reg, slot_count
     )
+}
+
+/// The lines following the push: stash the state pointer for the inline slot
+/// stores, then recover the frame handle from `ShadowStackState::frame_top`.
+///
+/// Offsets mirror `perry_runtime::gc::roots::SHADOW_STATE_FRAME_TOP_OFFSET`
+/// and `SHADOW_STACK_HEADER_SLOTS`; `perry`'s `shadow_layout_contract` test
+/// pins them to the runtime's.
+fn shadow_frame_handle_lines(
+    state_reg: &str,
+    state_slot: &str,
+    handle_slot: &str,
+    top_ptr_reg: &str,
+    top_reg: &str,
+    handle_reg: &str,
+) -> Vec<String> {
+    use crate::expr::shadow_inline::{SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET};
+    vec![
+        format!("  store ptr {}, ptr {}", state_reg, state_slot),
+        format!(
+            "  {} = getelementptr inbounds i8, ptr {}, i64 {}",
+            top_ptr_reg, state_reg, SHADOW_STATE_FRAME_TOP_OFFSET
+        ),
+        format!("  {} = load i64, ptr {}", top_reg, top_ptr_reg),
+        format!(
+            "  {} = sub i64 {}, {}",
+            handle_reg, top_reg, SHADOW_STACK_HEADER_SLOTS
+        ),
+        format!("  store i64 {}, ptr {}", handle_reg, handle_slot),
+    ]
 }
 
 /// Location of a function's `js_shadow_frame_push` line, so its slot-count
@@ -181,6 +222,7 @@ impl LlFunction {
             entry_post_init_setup: Vec::new(),
             entry_init_boundary: None,
             shadow_frame_slot: None,
+            shadow_state_slot: None,
             shadow_frame_requested: false,
             shadow_frame_post_init_region: false,
             shadow_frame_push: None,
@@ -241,11 +283,31 @@ impl LlFunction {
     }
 
     fn emit_shadow_frame_push(&mut self, slot_count: u32, post_init: bool) {
-        use crate::types::I64;
+        use crate::types::{I64, PTR};
         let handle_slot = self.alloca_entry(I64);
+        let state_slot = self.alloca_entry(PTR);
+        // Null-initialize in `entry_allocas`, which is always spliced at the
+        // very top of block 0 — so the slot is initialized even when the push
+        // itself lives in `entry_post_init_setup` (spliced later, after the
+        // runtime init prelude). An inline slot store that somehow ran before
+        // the push would then read null and take its runtime-call arm rather
+        // than an undef pointer. Where the push dominates, LLVM sees the later
+        // store of a `nonnull` return and folds that arm away.
+        self.entry_allocas
+            .push(format!("  store ptr null, ptr {}", state_slot));
+        let state_reg = format!("%r{}", self.reg_counter.next());
+        let top_ptr_reg = format!("%r{}", self.reg_counter.next());
+        let top_reg = format!("%r{}", self.reg_counter.next());
         let handle_reg = format!("%r{}", self.reg_counter.next());
-        let push_line = shadow_frame_push_line(&handle_reg, slot_count);
-        let store_line = format!("  store i64 {}, ptr {}", handle_reg, handle_slot);
+        let push_line = shadow_frame_push_line(&state_reg, slot_count);
+        let rest = shadow_frame_handle_lines(
+            &state_reg,
+            &state_slot,
+            &handle_slot,
+            &top_ptr_reg,
+            &top_reg,
+            &handle_reg,
+        );
         let region = if post_init {
             &mut self.entry_post_init_setup
         } else {
@@ -253,14 +315,23 @@ impl LlFunction {
         };
         let line_idx = region.len();
         region.push(push_line);
-        region.push(store_line);
+        region.extend(rest);
         self.shadow_frame_push = Some(ShadowFramePush {
             post_init,
             line_idx,
-            handle_reg,
+            handle_reg: state_reg,
         });
         self.shadow_frame_slot_count = slot_count;
         self.shadow_frame_slot = Some(handle_slot);
+        self.shadow_state_slot = Some(state_slot);
+    }
+
+    /// The entry alloca holding this thread's `ShadowStackState` address, when
+    /// this function pushed a shadow frame. `None` means the inline slot
+    /// stores have no base to work from and callers must use the `extern "C"`
+    /// entry points.
+    pub fn shadow_state_slot(&self) -> Option<&str> {
+        self.shadow_state_slot.as_deref()
     }
 
     /// Reserve one more GC-root slot in this function's shadow frame and

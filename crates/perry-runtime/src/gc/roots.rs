@@ -27,8 +27,11 @@ pub(crate) use shadow_stack::SHADOW;
 #[allow(unused_imports)]
 pub(crate) use shadow_stack::{bound_slot_meta, ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
 pub use shadow_stack::{
-    js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind, js_shadow_slot_get,
-    js_shadow_slot_set, shadow_stack_depth, SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS,
+    js_shadow_frame_enter, js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind,
+    js_shadow_slot_get, js_shadow_slot_set, js_shadow_state_addr, shadow_stack_depth,
+    ShadowStackState, SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
+    SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET,
+    SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
 };
 pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
 #[cfg(test)]

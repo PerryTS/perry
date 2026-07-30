@@ -8,7 +8,7 @@ pub mod block;
 pub(crate) mod boxed_vars;
 pub mod codegen;
 pub(crate) mod collectors;
-pub(crate) mod expr;
+pub mod expr;
 pub mod ext_registry;
 pub mod function;
 pub mod linker;
@@ -40,6 +40,22 @@ pub use codegen::{
     compile_module, resolve_target_triple, AppMetadata, CompileOptions, FpContractMode,
     ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
+
+/// The shadow-stack field offsets generated code bakes into its inline root
+/// stores (#7086).
+///
+/// Exported so `perry`'s `shadow_layout_contract` test can compare them with
+/// `perry-runtime`'s copy. `perry-codegen` does not depend on `perry-runtime`,
+/// so nothing else can catch the two drifting apart — and drift is silent:
+/// the emitted code would store live GC roots through the wrong offset rather
+/// than fail to build.
+pub mod expr_shadow_layout {
+    pub use crate::expr::shadow_inline::{
+        SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SHIFT, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
+        SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET, SHADOW_STATE_LEN_OFFSET,
+        SHADOW_STATE_PTR_OFFSET,
+    };
+}
 
 /// One row of the native-module dispatch table, projected to just
 /// the manifest-relevant fields (module / method / has_receiver /

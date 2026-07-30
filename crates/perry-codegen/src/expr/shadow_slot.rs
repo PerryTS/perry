@@ -138,6 +138,11 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     if ctx.suppressed_cleared_shadow_slots.contains(&slot_idx) {
         return;
     }
+    // #7086: emitted inline against this activation's cached `ShadowStackState`
+    // pointer when it has one; falls through to the call otherwise.
+    if super::shadow_inline::emit_inline_slot_clear(ctx, slot_idx) {
+        return;
+    }
     ctx.block().call_void(
         "js_shadow_slot_set",
         &[(I32, &slot_idx.to_string()), (I64, "0")],
@@ -192,6 +197,12 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
         return;
     };
     ctx.shadow_slots_bound.insert(slot_idx);
+    // #7086: the hot per-store root write. Emitted inline against this
+    // activation's cached `ShadowStackState` pointer when it has one; falls
+    // through to the call otherwise.
+    if super::shadow_inline::emit_inline_slot_bind(ctx, slot_idx, &local_slot) {
+        return;
+    }
     ctx.block().call_void(
         "js_shadow_slot_bind",
         &[(I32, &slot_idx.to_string()), (PTR, &local_slot)],

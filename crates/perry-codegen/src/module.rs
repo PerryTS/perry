@@ -277,6 +277,36 @@ impl LlModule {
         ));
     }
 
+    /// [`Self::declare_function`] with LLVM *return* parameter attributes
+    /// (`nonnull`, `noalias`, …), which sit before the return type and so
+    /// cannot be expressed through the trailing attribute-group string.
+    ///
+    /// Used for `js_shadow_frame_enter`, whose `nonnull` return is what lets
+    /// LLVM fold away the null-state fallback arm that every inline shadow-slot
+    /// store emits (#7086). The attribute is true by construction: the runtime
+    /// returns the address of a `thread_local!`.
+    pub fn declare_function_with_ret_attrs(
+        &mut self,
+        name: &str,
+        return_type: LlvmType,
+        param_types: &[LlvmType],
+        ret_attrs: &str,
+    ) {
+        if self.declared_names.contains(name) {
+            return;
+        }
+        self.declared_names.insert(name.to_string());
+        let param_str = param_types.join(", ");
+        let attrs = helper_decl_attrs(name);
+        self.declarations.push((
+            name.to_string(),
+            format!(
+                "declare {} {} @{}({}){}",
+                ret_attrs, return_type, name, param_str, attrs
+            ),
+        ));
+    }
+
     pub fn is_declared(&self, name: &str) -> bool {
         self.declared_names.contains(name)
     }

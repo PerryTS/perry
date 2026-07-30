@@ -132,6 +132,7 @@ pub(crate) use write_barrier::{
 mod dispatch;
 mod record_value;
 mod scalar_slot_root;
+pub(crate) mod shadow_inline;
 mod shadow_slot;
 mod slot_rep;
 pub(crate) mod temp_root;

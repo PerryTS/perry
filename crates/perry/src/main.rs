@@ -3,6 +3,8 @@
 //! CLI driver for compiling TypeScript to native executables.
 
 mod commands;
+#[cfg(test)]
+mod shadow_layout_contract;
 mod compat_reports;
 mod telemetry;
 #[cfg(test)]

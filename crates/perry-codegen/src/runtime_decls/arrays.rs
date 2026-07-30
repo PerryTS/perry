@@ -96,6 +96,15 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //   js_shadow_frame_pop(frame_handle: u64)
     //   js_shadow_slot_set(idx: u32, value: u64)
     //   js_shadow_slot_bind(idx: u32, value_slot: *mut u64)
+    //   js_shadow_frame_enter(slot_count: u32) -> *mut ShadowStackState
+    //
+    // `js_shadow_frame_enter` is `js_shadow_frame_push` returning the address
+    // of this thread's shadow state rather than the frame handle, so the
+    // inline slot stores (#7086) get a base pointer without a second
+    // thread-local lookup per activation. It is the entry point shadow-frame
+    // emission actually uses; `js_shadow_frame_push` stays declared (and
+    // exported) for stale cached objects and out-of-tree callers.
+    module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
     module.declare_function("js_shadow_frame_push", I64, &[I32]);
     module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
     module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
