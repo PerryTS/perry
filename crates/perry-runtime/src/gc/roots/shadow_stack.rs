@@ -1,5 +1,85 @@
-pub const SHADOW_STACK_HEADER_SLOTS: usize = 2; // prev_frame_top + slot_count
-pub const SHADOW_STACK_GROW_RESERVE: usize = 1024; // initial capacity (slots)
+//! Precise shadow-stack roots.
+//!
+//! # Layout
+//!
+//! One thread-local `Vec<ShadowEntry>` holds every frame back-to-back. A frame
+//! is `SHADOW_STACK_HEADER_SLOTS` header entries followed by its slots:
+//!
+//! ```text
+//!   [ header: value = caller frame_top, meta = slot_count ][ slot 0 ][ slot 1 ] ...
+//!   ^ frame_handle (base)                                  ^ frame_top
+//! ```
+//!
+//! Before this rewrite the three per-slot words lived in three parallel `Vec`s
+//! (`stack: Vec<u64>`, `slot_ptrs: Vec<usize>`, `active: Vec<bool>`) and the
+//! header took two `u64` words. That cost every frame push five separate
+//! capacity checks and three `resize` calls — two of which lowered to a
+//! `memset` **call** for the 2–4-slot frames codegen actually emits — and cost
+//! every slot store three independent bounds checks against three `Vec`
+//! headers. Interleaving the three words into one 16-byte entry makes a push
+//! one capacity check plus a handful of `stp`s, and a slot store one bounds
+//! check against one length.
+
+use std::cell::UnsafeCell;
+use std::sync::atomic::Ordering;
+
+/// Entries a frame reserves for its header. One [`ShadowEntry`] carries both
+/// header words: `value` = the caller's `frame_top`, `meta` = this frame's
+/// slot count.
+pub const SHADOW_STACK_HEADER_SLOTS: usize = 1;
+/// Entries the backing buffer reserves the first time it grows.
+pub const SHADOW_STACK_GROW_RESERVE: usize = 1024;
+
+/// Liveness bit, stored in bit 0 of [`ShadowEntry::meta`].
+///
+/// A bound slot pointer is the address of a compiled `i64`/`double` local
+/// slot and is therefore 8-byte aligned, so bit 0 is always free to carry the
+/// liveness flag alongside it. [`js_shadow_slot_bind`] refuses to record a
+/// pointer that would collide with the tag rather than truncating one.
+pub(crate) const SLOT_ACTIVE: usize = 1;
+/// Mask recovering the bound compiled-local address from `meta`.
+pub(crate) const SLOT_PTR_MASK: usize = !SLOT_ACTIVE;
+
+/// One shadow-stack entry.
+///
+/// `#[repr(C)]` with `value` first is load-bearing: the GC hands the visitor
+/// `&mut entry.value` as a `*mut u64` root slot for unbound entries, so the
+/// mirrored word must sit at offset 0 and be 8-byte aligned. 16 bytes also
+/// makes indexing a shift rather than a multiply.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct ShadowEntry {
+    /// The heap word the mutator stored.
+    ///
+    /// Raw bits rather than a typed pointer because slots hold NaN-boxed
+    /// JSValue bits (upper 16 bits are the tag, lower 48 the pointer) — the
+    /// GC tracer unwraps the NaN-box the same way it already does for closure
+    /// captures.
+    pub(crate) value: u64,
+    /// `bound_slot_address | SLOT_ACTIVE`.
+    ///
+    /// The address half is the compiled local/global slot this entry mirrors,
+    /// or 0 when the entry is unbound. When present, the GC reads and rewrites
+    /// the original slot, not the stale mirror copy. The `SLOT_ACTIVE` bit is
+    /// the liveness flag: it lets codegen stop reporting a dead local without
+    /// mutating the compiled local slot after last use.
+    pub(crate) meta: usize,
+}
+
+impl ShadowEntry {
+    pub(crate) const EMPTY: ShadowEntry = ShadowEntry { value: 0, meta: 0 };
+
+    #[inline(always)]
+    pub(crate) fn is_active(self) -> bool {
+        self.meta & SLOT_ACTIVE != 0
+    }
+
+    /// The compiled local slot this entry mirrors, or null when unbound.
+    #[inline(always)]
+    pub(crate) fn bound_ptr(self) -> *mut u64 {
+        (self.meta & SLOT_PTR_MASK) as *mut u64
+    }
+}
 
 /// Combined shadow-stack state. Holding both fields in one TLS slot
 /// halves the macOS `tlv_get_addr` calls in every shadow-stack op
@@ -18,58 +98,146 @@ pub const SHADOW_STACK_GROW_RESERVE: usize = 1024; // initial capacity (slots)
 /// while a GC walk is in progress (no allocation occurs inside the
 /// scanner/rewriter, and `GC_FLAG_IN_ALLOC` blocks reentrant GC).
 pub(crate) struct ShadowStackState {
-    /// `Vec<u64>` instead of `Vec<*mut u8>` because slots hold
-    /// NaN-boxed JSValue bits (upper 16 bits are the tag, lower 48
-    /// the pointer) — the GC tracer unwraps the NaN-box the same way
-    /// it already does for closure captures.
-    pub(crate) stack: Vec<u64>,
-    /// Optional pointer to the compiled local/global slot represented by
-    /// each shadow-stack entry. When present, the GC reads and rewrites the
-    /// original slot, not a stale mirror copy.
-    pub(crate) slot_ptrs: Vec<usize>,
-    /// Liveness bit for each shadow slot. This lets codegen stop reporting a
-    /// dead local without mutating the compiled local slot after last use.
-    pub(crate) active: Vec<bool>,
-    /// Index into `stack` where the current frame's slot_0 lives.
+    /// Every frame's header + slots, back to back.
+    pub(crate) slots: Vec<ShadowEntry>,
+    /// Index into `slots` where the current frame's slot 0 lives.
     /// `usize::MAX` when no frame is pushed (initial state + after
     /// the outermost function returns).
     pub(crate) frame_top: usize,
 }
 
 thread_local! {
-    pub(crate) static SHADOW: std::cell::UnsafeCell<ShadowStackState> =
-        std::cell::UnsafeCell::new(ShadowStackState {
-            stack: Vec::with_capacity(SHADOW_STACK_GROW_RESERVE),
-            slot_ptrs: Vec::with_capacity(SHADOW_STACK_GROW_RESERVE),
-            active: Vec::with_capacity(SHADOW_STACK_GROW_RESERVE),
+    /// `const`-initialized so the access is a plain TLS address computation.
+    /// The buffer is reserved lazily on the first push instead of eagerly at
+    /// thread start.
+    pub(crate) static SHADOW: UnsafeCell<ShadowStackState> = const {
+        UnsafeCell::new(ShadowStackState {
+            slots: Vec::new(),
             frame_top: usize::MAX,
-        });
+        })
+    };
+}
+
+/// Reserve room for `need` more entries. Outlined and `#[cold]` so the push
+/// fast path stays a capacity compare and a not-taken branch.
+#[cold]
+#[inline(never)]
+fn grow_for(s: &mut ShadowStackState, need: usize) {
+    s.slots.reserve(need.max(SHADOW_STACK_GROW_RESERVE));
+}
+
+/// Zero `n` freshly-claimed entries.
+///
+/// The small arms are spelled out rather than left to a loop so the frame
+/// sizes codegen actually emits (1–4 pointer-typed locals covers the vast
+/// majority of functions) lower to a few `stp`s instead of a `memset` call.
+///
+/// # Safety
+/// `p` must point at `n` writable, correctly-aligned `ShadowEntry`s.
+#[inline(always)]
+unsafe fn clear_slots(p: *mut ShadowEntry, n: usize) {
+    match n {
+        0 => {}
+        1 => std::ptr::write(p, ShadowEntry::EMPTY),
+        2 => std::ptr::write(p.cast::<[ShadowEntry; 2]>(), [ShadowEntry::EMPTY; 2]),
+        3 => std::ptr::write(p.cast::<[ShadowEntry; 3]>(), [ShadowEntry::EMPTY; 3]),
+        4 => std::ptr::write(p.cast::<[ShadowEntry; 4]>(), [ShadowEntry::EMPTY; 4]),
+        _ => std::ptr::write_bytes(p, 0, n),
+    }
+}
+
+/// Encode a bound compiled-local address into a live [`ShadowEntry::meta`].
+///
+/// Bit 0 carries the liveness flag, so an address whose bit 0 is set cannot be
+/// recorded. Rather than truncate it — which would hand the collector a
+/// *different* address to write a forwarded pointer into — the binding is
+/// dropped and the entry stays active-but-unbound: the mirrored value is still
+/// marked and still rewritten, only the write-through to the compiled local is
+/// lost. Compiled `i64`/`double` local slots are always 8-byte aligned, so the
+/// fallback is unreachable in practice; it exists so a mis-emitted callsite
+/// degrades instead of corrupting memory. Branchless (`tst`/`csel`), so the
+/// aligned case pays nothing.
+#[inline(always)]
+pub(crate) fn bound_slot_meta(raw: usize) -> usize {
+    let bound = if raw & SLOT_ACTIVE == 0 { raw } else { 0 };
+    bound | SLOT_ACTIVE
+}
+
+/// Shade a value that was just stored into a shadow-stack root slot, if any
+/// incremental mark cycle is in flight.
+///
+/// # Why the gate is not a narrowing
+///
+/// [`crate::gc::runtime_write_barrier_root_nanbox`] is an incremental-marking
+/// (root shading) barrier, **not** the generational remembered-set barrier —
+/// old→young edges are logged by the heap-slot barriers
+/// (`runtime_write_barrier_slot` and friends), which this change does not
+/// touch. Its whole body is `incremental_mark_barrier_value`, which reads the
+/// thread-local `INCREMENTAL_MARK_BARRIER_VALID_PTRS` and returns immediately
+/// when it is null.
+///
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` counts the threads whose
+/// thread-local pointer is currently non-null. `incremental_mark_barrier_enable`
+/// installs the thread-local *and then* increments the count, both before
+/// returning to the mutator, so on any thread:
+///
+/// > this thread's `VALID_PTRS` is non-null  ⟹  the count is ≥ 1
+///
+/// Therefore a zero count proves this thread's pointer is null, i.e. proves
+/// the call would have returned `false` without doing anything. Skipping it is
+/// observationally identical, not a weaker barrier. A non-zero count is
+/// conservative in the harmless direction: another thread's cycle makes us
+/// take the call, which then observes its own null pointer and returns.
+///
+/// This is the same gate codegen already emits inline around
+/// `js_write_barrier_root_nanbox` for persistent shadow slots
+/// (`perry-codegen/src/expr/shadow_slot.rs::emit_persistent_shadow_root_barrier`);
+/// this makes the runtime entry points agree with it.
+#[inline(always)]
+fn root_shading_barrier(value_bits: u64) {
+    if crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst) != 0 {
+        shade_root_slot_value(value_bits);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn shade_root_slot_value(value_bits: u64) {
+    crate::gc::runtime_write_barrier_root_nanbox(value_bits);
 }
 
 /// Push a new shadow-stack frame with `slot_count` live-pointer
 /// slots. Slots start zero-initialized (codegen fills them with
-/// NaN-boxed pointer values via `js_shadow_slot_set`). Returns an
-/// opaque `frame_handle` (the pre-push top index) that the matching
-/// pop must be passed — lets the GC assert frame balance in debug
-/// builds and detects codegen misemission.
+/// NaN-boxed pointer values via `js_shadow_slot_set` /
+/// `js_shadow_slot_bind`). Returns an opaque `frame_handle` (the pre-push
+/// buffer length) that the matching pop must be passed — lets the GC assert
+/// frame balance in debug builds and detects codegen misemission.
 ///
-/// Not marked `#[inline(always)]` because it's called once per
-/// function entry; the 3-line body inlines naturally.
+/// The zero-fill is load-bearing, not hygiene: the buffer beyond the current
+/// length still holds the *previous* frame's entries, so a frame that
+/// inherited them would report dead slot values — stale addresses of
+/// already-freed objects, or live bindings into a stack frame that has since
+/// returned — as roots.
 #[no_mangle]
 pub extern "C" fn js_shadow_frame_push(slot_count: u32) -> u64 {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
-        let prev_top = s.frame_top;
-        let base = s.stack.len();
-        // Header: prev_frame_top + slot_count. Slots follow,
-        // initialized to 0 (GC_FLAG_NONE + null pointer).
-        s.stack.push(prev_top as u64);
-        s.stack.push(slot_count as u64);
-        let slots_start = s.stack.len();
-        s.stack.resize(slots_start + slot_count as usize, 0);
-        s.slot_ptrs.resize(s.stack.len(), 0);
-        s.active.resize(s.stack.len(), false);
-        s.frame_top = slots_start;
+        let base = s.slots.len();
+        let need = SHADOW_STACK_HEADER_SLOTS + slot_count as usize;
+        if need > s.slots.capacity() - base {
+            grow_for(s, need);
+        }
+        let header = s.slots.as_mut_ptr().add(base);
+        std::ptr::write(
+            header,
+            ShadowEntry {
+                value: s.frame_top as u64,
+                meta: slot_count as usize,
+            },
+        );
+        clear_slots(header.add(SHADOW_STACK_HEADER_SLOTS), slot_count as usize);
+        s.slots.set_len(base + need);
+        s.frame_top = base + SHADOW_STACK_HEADER_SLOTS;
         base as u64
     })
 }
@@ -80,40 +248,33 @@ pub extern "C" fn js_shadow_frame_push(slot_count: u32) -> u64 {
 ///
 /// Robustness: the bounds check below was previously a `debug_assert!`,
 /// which is **compiled out in release builds**. A corrupted / out-of-range
-/// `frame_handle` therefore reached `s.stack[base]` unchecked and aborted
+/// `frame_handle` therefore reached the header entry unchecked and aborted
 /// the entire process with an out-of-bounds panic. This was observed on
 /// Windows release builds, where codegen could thread a NaN-boxed value
 /// (e.g. boxed `undefined`, `0x7FFC_0000_0000_0001`) into this `extern "C"`
 /// argument instead of the small index `js_shadow_frame_push` returned —
-/// `js_shadow_frame_pop(9222246136947933185)` → `s.stack[huge]` →
-/// hard crash a few seconds into startup. The shadow stack is Phase A
-/// (built but not yet consumed by the GC tracer), so skipping a malformed
-/// pop is memory-safe and GC-correctness-neutral; aborting the host
-/// program is not. Promote the check to a real release-safe guard and
-/// bail out — mirrors the bounds checks `js_shadow_slot_set` /
-/// `js_shadow_slot_get` already perform on every access.
+/// `js_shadow_frame_pop(9222246136947933185)` → out-of-range header read →
+/// hard crash a few seconds into startup. Skipping a malformed pop is
+/// memory-safe and GC-correctness-neutral (it leaves the frame installed,
+/// which over-approximates the root set); aborting the host program is not.
 #[no_mangle]
 pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
         let base = frame_handle as usize;
-        if base + SHADOW_STACK_HEADER_SLOTS > s.stack.len() {
+        if base + SHADOW_STACK_HEADER_SLOTS > s.slots.len() {
             debug_assert!(false, "shadow-stack pop past end (corrupted frame handle)");
             return;
         }
-        let prev_top = s.stack[base] as usize;
-        s.stack.truncate(base);
-        s.slot_ptrs.truncate(base);
-        s.active.truncate(base);
-        s.frame_top = prev_top;
+        s.frame_top = (*s.slots.as_ptr().add(base)).value as usize;
+        // `ShadowEntry: Copy`, so shrinking has no drop glue to run.
+        s.slots.set_len(base);
     });
 }
 
 /// Update slot `idx` in the current frame with `value`.
 /// Codegen emits this at safepoints for each live pointer-typed
-/// local. Hot path — compiled code calls this directly or inlines
-/// an equivalent sequence; Rust version exists for runtime tests
-/// and debug builds.
+/// local, and for the `value = 0` "local is dead from here" clear.
 ///
 /// # Slot value contract (#6910)
 ///
@@ -139,16 +300,24 @@ pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
             return; // no frame active — no-op
         }
         let slot = top + idx as usize;
-        if slot < s.stack.len() {
-            s.stack[slot] = value;
-            s.active[slot] = value != 0;
-            if value != 0 {
-                crate::gc::runtime_write_barrier_root_nanbox(value);
-                let ptr = s.slot_ptrs[slot] as *mut u64;
-                if !ptr.is_null() {
-                    *ptr = value;
-                }
-            }
+        if slot >= s.slots.len() {
+            return;
+        }
+        let entry = s.slots.as_mut_ptr().add(slot);
+        let meta = (*entry).meta;
+        (*entry).value = value;
+        if value == 0 {
+            // Codegen's "dead from here" clear: drop the liveness bit but keep
+            // the binding, so a later re-activation still writes through to the
+            // same compiled local slot.
+            (*entry).meta = meta & SLOT_PTR_MASK;
+            return;
+        }
+        (*entry).meta = meta | SLOT_ACTIVE;
+        root_shading_barrier(value);
+        let bound = (meta & SLOT_PTR_MASK) as *mut u64;
+        if !bound.is_null() {
+            *bound = value;
         }
     });
 }
@@ -168,18 +337,32 @@ pub extern "C" fn js_shadow_slot_bind(idx: u32, value_slot: *mut u64) {
             return;
         }
         let slot = top + idx as usize;
-        if slot < s.stack.len() {
-            s.slot_ptrs[slot] = value_slot as usize;
-            s.stack[slot] = *value_slot;
-            s.active[slot] = true;
-            crate::gc::runtime_write_barrier_root_nanbox(*value_slot);
+        if slot >= s.slots.len() {
+            return;
         }
+        // Snapshot what the mutator has in the slot right now, and root that
+        // exact word. Never re-read it later at a safepoint: a re-read can
+        // observe a *subsequent* store and root the wrong value.
+        let value = *value_slot;
+        let raw = value_slot as usize;
+        debug_assert_eq!(
+            raw & SLOT_ACTIVE,
+            0,
+            "bound compiled local slot must be 8-byte aligned"
+        );
+        std::ptr::write(
+            s.slots.as_mut_ptr().add(slot),
+            ShadowEntry {
+                value,
+                meta: bound_slot_meta(raw),
+            },
+        );
+        root_shading_barrier(value);
     });
 }
 
-/// Read the current frame's slot `idx` — test-only; Phase B GC
-/// tracer walks the raw Vec directly instead of going through a
-/// function call per slot.
+/// Read the current frame's slot `idx` — test-only; the GC tracer walks the
+/// raw buffer directly instead of going through a function call per slot.
 #[no_mangle]
 pub extern "C" fn js_shadow_slot_get(idx: u32) -> u64 {
     SHADOW.with(|cell| unsafe {
@@ -189,18 +372,17 @@ pub extern "C" fn js_shadow_slot_get(idx: u32) -> u64 {
             return 0;
         }
         let slot = top + idx as usize;
-        if slot < s.stack.len() {
-            if !s.active[slot] {
-                return 0;
-            }
-            let ptr = s.slot_ptrs[slot] as *const u64;
-            if ptr.is_null() {
-                s.stack[slot]
-            } else {
-                *ptr
-            }
+        let Some(entry) = s.slots.get(slot).copied() else {
+            return 0;
+        };
+        if !entry.is_active() {
+            return 0;
+        }
+        let bound = entry.bound_ptr();
+        if bound.is_null() {
+            entry.value
         } else {
-            0
+            *bound
         }
     })
 }
@@ -217,10 +399,10 @@ pub fn shadow_stack_depth() -> usize {
         while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
             depth += 1;
             let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base >= s.stack.len() {
+            if header_base >= s.slots.len() {
                 break;
             }
-            top = s.stack[header_base] as usize;
+            top = s.slots[header_base].value as usize;
         }
         depth
     })
@@ -244,8 +426,8 @@ pub(crate) fn shadow_stack_has_active_frame() -> bool {
 /// callee frame. Until the unwinding function eventually returns, any GC
 /// that scans roots (`visit_shadow_stack_root_slots`) would walk those
 /// orphaned frames, reading — and, on the copying/evacuating path,
-/// *writing back into* — `slot_ptrs` that point into stack memory that
-/// has already been unwound and is being reused by the catch body.
+/// *writing back into* — bound slot pointers that point into stack memory
+/// that has already been unwound and is being reused by the catch body.
 ///
 /// The same reasoning applies to the temp-root stack (#6951): generated code
 /// pushes an expression temporary, evaluates something that throws, and never
@@ -277,7 +459,7 @@ pub(crate) fn shadow_stack_savepoint() -> ShadowSavepoint {
         let s = &*cell.get();
         ShadowSavepoint {
             frame_top: s.frame_top,
-            len: s.stack.len(),
+            len: s.slots.len(),
             temp_roots: super::temp_roots::temp_root_depth(),
         }
     })
@@ -296,10 +478,8 @@ pub(crate) fn shadow_stack_savepoint() -> ShadowSavepoint {
 pub(crate) fn shadow_stack_restore(sp: ShadowSavepoint) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
-        if sp.len <= s.stack.len() {
-            s.stack.truncate(sp.len);
-            s.slot_ptrs.truncate(sp.len);
-            s.active.truncate(sp.len);
+        if sp.len <= s.slots.len() {
+            s.slots.truncate(sp.len);
         }
         s.frame_top = sp.frame_top;
     });

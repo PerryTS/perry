@@ -6,9 +6,7 @@ static YOUNG_LEAF_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub(super) fn reset_shadow_stack() {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
-        s.stack.clear();
-        s.slot_ptrs.clear();
-        s.active.clear();
+        s.slots.clear();
         s.frame_top = usize::MAX;
     });
 }

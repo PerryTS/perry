@@ -24,6 +24,8 @@ pub use scanner_shims::{
 };
 pub(crate) use shadow_stack::shadow_stack_has_active_frame;
 pub(crate) use shadow_stack::SHADOW;
+#[allow(unused_imports)]
+pub(crate) use shadow_stack::{bound_slot_meta, ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
 pub use shadow_stack::{
     js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind, js_shadow_slot_get,
     js_shadow_slot_set, shadow_stack_depth, SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS,
@@ -1493,29 +1495,34 @@ impl MutableRootSlot {
 pub(super) fn visit_shadow_stack_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
-        if s.stack.is_empty() {
+        if s.slots.is_empty() {
             return;
         }
         let mut top = s.frame_top;
         while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
             let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base + 1 >= s.stack.len() {
+            if header_base >= s.slots.len() {
                 break;
             }
-            let slot_count = s.stack[header_base + 1] as usize;
+            let header = s.slots[header_base];
+            let slot_count = header.meta;
             let slots_end = top + slot_count;
-            if slots_end > s.stack.len() {
+            if slots_end > s.slots.len() {
                 break;
             }
-            let base = s.stack.as_mut_ptr().add(top);
+            let base = s.slots.as_mut_ptr().add(top);
             for i in 0..slot_count {
-                let slot_idx = top + i;
-                if !s.active.get(slot_idx).copied().unwrap_or(false) {
+                let entry = base.add(i);
+                if !(*entry).is_active() {
                     continue;
                 }
-                let bound_ptr = s.slot_ptrs.get(slot_idx).copied().unwrap_or(0) as *mut u64;
+                let bound_ptr = (*entry).bound_ptr();
+                // Unbound entries expose the mirror word itself. `ShadowEntry`
+                // is `#[repr(C)]` with `value` at offset 0, so this is a
+                // correctly-aligned `*mut u64` into the buffer — the same
+                // storage the pre-#7076 parallel-`Vec` layout handed out.
                 let ptr = if bound_ptr.is_null() {
-                    base.add(i)
+                    std::ptr::addr_of_mut!((*entry).value)
                 } else {
                     bound_ptr
                 };
@@ -1524,7 +1531,7 @@ pub(super) fn visit_shadow_stack_root_slots(mut visit: impl FnMut(MutableRootSlo
                     ptr,
                 });
             }
-            top = s.stack[header_base] as usize;
+            top = header.value as usize;
         }
     });
 }
