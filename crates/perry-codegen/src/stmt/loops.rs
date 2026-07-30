@@ -5266,7 +5266,17 @@ pub(crate) fn emit_gc_loop_safepoint(
     // poll for pure (non-allocating) bodies so numeric/vectorizable loops stay
     // call-free (a poll defeats LLVM auto-vectorization — measured ~2x on a tight
     // scalar reduction). See `loop_may_allocate` for the safe-direction rationale.
-    if !crate::loop_purity::loop_may_allocate(body, controls) {
+    //
+    // The coercing operators (`i < n`, `sum + 1`, `i++`) are alloc-free only
+    // over operands `expr_is_inert_primitive` proves are non-pointer
+    // primitives — a user-defined `valueOf` is arbitrary JS. The borrow of
+    // `ctx` ends with the block so the poll emission below can take it
+    // mutably.
+    let needs_poll = {
+        let is_inert = |e: &perry_hir::Expr| crate::expr::temp_root::expr_is_inert_primitive(ctx, e);
+        crate::loop_purity::loop_may_allocate(body, controls, &is_inert)
+    };
+    if !needs_poll {
         return;
     }
     ctx.block().call_void("js_gc_loop_safepoint", &[]);

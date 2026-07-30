@@ -157,40 +157,83 @@ pub(crate) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// A local carrying an object — or one with a reserved shadow slot, which
 /// means it is pointer-possible regardless of its refined type — is not inert,
 /// because `ToPrimitive` on it dispatches to whatever the object defines.
-fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+///
+/// Also the whitelist behind the loop back-edge poll
+/// (`crate::loop_purity::loop_may_allocate`): "can evaluating this run user
+/// code or allocate?" is the same question there, so the answer comes from
+/// here rather than from a second copy that drifts.
+pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) => true,
         // A heap value, but ToPrimitive on a string is the identity: no user
-        // code, no allocation. (`+` is excluded below, since concatenation
+        // code, no allocation. (`+` is restricted below, since concatenation
         // does allocate.)
         Expr::String(_) => true,
-        Expr::LocalGet(id) => {
-            !ctx.shadow_slot_map.contains_key(id)
-                && matches!(
-                    ctx.local_types.get(id),
-                    Some(
-                        HirType::Number
-                            | HirType::Int32
-                            | HirType::Boolean
-                            | HirType::Null
-                            | HirType::Void
-                            | HirType::Never
-                    )
-                )
-        }
+        Expr::LocalGet(id) => local_is_inert_primitive(ctx, *id),
+        // `++` / `--` on an inert local runs ToNumeric over a value that is
+        // already a non-pointer primitive, then a numeric add and a store: no
+        // user code, no allocation. (`x++` on a BigInt DOES allocate a fresh
+        // BigInt — but `HirType::BigInt` is not in the inert set, and a
+        // BigInt-typed local is pointer-typed, so it also has a shadow slot.)
+        //
+        // [`expr_may_trigger_gc`] deliberately does not route `Update` here and
+        // keeps it on the conservative catch-all: #6951's question is about
+        // operand lists, where an embedded `Update` is vanishingly rare. The
+        // loop-poll caller is the one that needs it (`for (…; …; i++)`).
+        Expr::Update { id, .. } => local_is_inert_primitive(ctx, *id),
         Expr::Unary { operand, .. } => expr_is_inert_primitive(ctx, operand),
         Expr::Compare { left, right, .. } => {
             expr_is_inert_primitive(ctx, left) && expr_is_inert_primitive(ctx, right)
         }
-        // `+` allocates whenever it is a concatenation, so it is never inert
-        // even over two string literals.
         Expr::Binary { op, left, right } => {
-            !matches!(op, perry_hir::BinaryOp::Add)
-                && expr_is_inert_primitive(ctx, left)
+            expr_is_inert_primitive(ctx, left)
                 && expr_is_inert_primitive(ctx, right)
+                // `+` is the one operator whose RESULT can be a fresh heap
+                // value: with a string operand it concatenates, and that
+                // allocates. Inert operands alone do not rule that out —
+                // `Expr::String` is inert — so `Add` additionally demands that
+                // neither operand can BE a heap reference, which is exactly
+                // `expr_is_known_non_pointer_shadow_value`. Two operands that
+                // provably hold no pointer cannot be strings, so the `+` is a
+                // numeric add and allocates nothing.
+                && (!matches!(op, perry_hir::BinaryOp::Add)
+                    || (super::expr_is_known_non_pointer_shadow_value(ctx, left)
+                        && super::expr_is_known_non_pointer_shadow_value(ctx, right)))
         }
         _ => false,
     }
+}
+
+/// [`expr_is_inert_primitive`] for a bare local id — the shared half of its
+/// `LocalGet` and `Update` arms.
+///
+/// Three independent facts have to line up, and none alone is enough:
+///
+///  * the refined type is a non-pointer primitive, so `ToPrimitive` on it is
+///    the identity and dispatches to nothing;
+///  * no shadow slot is reserved for the local — `collect_pointer_typed_locals`'
+///    verdict that *nowhere in this function* does the local receive a
+///    pointer-typed value. A reserved slot means pointer-possible regardless of
+///    what the refined type says; and
+///  * the binding is not a module-level global. `local_types` and the
+///    shadow-slot map are both computed per function, from that function's body
+///    alone, so a module global that a *different* function assigns an object
+///    to still looks like a number here. Those per-function facts are sound for
+///    a genuine local and not for a global, so a global is never inert.
+pub(crate) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
+    !ctx.shadow_slot_map.contains_key(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && matches!(
+            ctx.local_types.get(&id),
+            Some(
+                HirType::Number
+                    | HirType::Int32
+                    | HirType::Boolean
+                    | HirType::Null
+                    | HirType::Void
+                    | HirType::Never
+            )
+        )
 }
 
 /// Does any expression after index `i` reach a collection point?
