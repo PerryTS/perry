@@ -145,6 +145,8 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             if (*old_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 crate::gc::set_forwarding_address(old_header, new_ptr as *mut u8);
             }
+        } else {
+            report_growth_stub_skipped_below_heap_min(arr as usize);
         }
 
         new_ptr
@@ -823,3 +825,38 @@ pub extern "C" fn js_array_unshift_variadic(
 #[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
     js_array_unshift_variadic;
+
+/// The `HEAP_MIN` guard above is an **address-conditional silent divergence**:
+/// whether a growth forwarding stub is installed depends on where the allocator
+/// happened to place the array. Below the floor the stub is skipped, so a stale
+/// pre-grow reference stops resolving (issue #233's whole mechanism) — with no
+/// signal at all.
+///
+/// That silence has already cost real debugging time. While investigating
+/// #7022 an experiment replaced arena blocks with `mmap`'d, guard-paged blocks;
+/// `mmap` with a NULL hint lands well below macOS's 2 TB floor, so this branch
+/// silently disabled every growth stub and the experiment came back **falsely
+/// clean**. It was only caught by re-running with a high `MAP_FIXED` hint.
+///
+/// Emit once per process so the next person gets a signal instead of a silent
+/// behaviour change. One line on stderr, so it cannot perturb a stdout parity
+/// comparison.
+#[cold]
+fn report_growth_stub_skipped_below_heap_min(arr_addr: usize) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    debug_assert!(
+        false,
+        "array-growth forwarding stub skipped: array at {arr_addr:#x} is below the platform heap floor"
+    );
+    if REPORTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "[perry-gc] array-growth forwarding stub SKIPPED for an array at {arr_addr:#x}: \
+address is below this platform's heap floor. Stale pre-grow array references \
+will no longer resolve through the growth chain (issue #233). This is normally \
+unreachable; it usually means the arena is being backed by an allocator that \
+places blocks outside the expected range. Reported once per process."
+    );
+}
