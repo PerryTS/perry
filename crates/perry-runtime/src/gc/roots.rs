@@ -1520,7 +1520,7 @@ pub(super) fn visit_shadow_stack_root_slots(mut visit: impl FnMut(MutableRootSlo
                 // Unbound entries expose the mirror word itself. `ShadowEntry`
                 // is `#[repr(C)]` with `value` at offset 0, so this is a
                 // correctly-aligned `*mut u64` into the buffer — the same
-                // storage the pre-#7076 parallel-`Vec` layout handed out.
+                // storage the pre-#7079 parallel-`Vec` layout handed out.
                 let ptr = if bound_ptr.is_null() {
                     std::ptr::addr_of_mut!((*entry).value)
                 } else {
