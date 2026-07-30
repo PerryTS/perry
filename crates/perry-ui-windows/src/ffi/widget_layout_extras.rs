@@ -32,10 +32,10 @@ pub extern "C" fn perry_ui_widget_set_hugging(handle: i64, priority: f64) {
     widgets::set_hugging_priority(handle, priority);
 }
 
-/// Set on-click callback (stub — not yet implemented on Windows).
+/// Set a single-click callback for any widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_click(handle: i64, callback: f64) {
-    let _ = handle;
+    crate::pointer::set_on_click(handle, callback);
     #[cfg(feature = "geisterhand")]
     {
         extern "C" {

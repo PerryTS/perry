@@ -1,11 +1,11 @@
 //! Continuous pointer events for perry/ui on Windows (issue #1868).
 //!
 //! Wires `onMouseDown`, `onMouseUp`, `onMouseMove` (and the
-//! `(isHovering)` flavor of `onHover`) by subclassing each registered
-//! widget's HWND with `SetWindowSubclass`. The subclass proc intercepts
-//! `WM_MOUSEMOVE`, `WM_*BUTTONDOWN`, `WM_*BUTTONUP`, `WM_XBUTTONDOWN/UP`
-//! and `WM_MOUSELEAVE`, then forwards the rest to `DefSubclassProc` so
-//! the underlying control keeps behaving normally.
+//! `(isHovering)` flavor of `onHover`) and generic `onClick` by subclassing
+//! each registered widget's HWND with `SetWindowSubclass`. The subclass proc
+//! intercepts `WM_MOUSEMOVE`, `WM_*BUTTONDOWN`, `WM_*BUTTONUP`,
+//! `WM_XBUTTONDOWN/UP` and `WM_MOUSELEAVE`, then forwards the rest to
+//! `DefSubclassProc` so the underlying control keeps behaving normally.
 //!
 //! Coordinates from `LPARAM` are client-area pixels; we divide by the
 //! app DPI scale so callbacks receive widget-local *points* (top-left
@@ -21,6 +21,8 @@ use std::collections::{HashMap, HashSet};
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
+use windows::Win32::System::SystemServices::SS_NOTIFY;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
@@ -28,11 +30,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TR
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    GetClassNameW, GetWindowLongW, SetWindowLongW, GWL_STYLE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN,
+    WM_XBUTTONUP,
 };
 
 extern "C" {
+    fn js_closure_call0(closure: *const u8) -> f64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
@@ -48,6 +52,7 @@ thread_local! {
     static MOUSE_UP_CB: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
     static MOUSE_MOVE_CB: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
     static HOVER_CB: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
+    static CLICK_CB: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
     /// HWND addresses that already have our subclass proc installed.
     static SUBCLASSED: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
     /// HWNDs that called TrackMouseEvent during their last WM_MOUSEMOVE
@@ -77,6 +82,29 @@ fn install_subclass(handle: i64) {
 
 #[cfg(not(target_os = "windows"))]
 fn install_subclass(_handle: i64) {}
+
+#[cfg(target_os = "windows")]
+fn enable_static_notifications(handle: i64) {
+    let Some(hwnd) = crate::widgets::get_hwnd(handle) else {
+        return;
+    };
+    let mut class_name = [0u16; 32];
+    let length = unsafe { GetClassNameW(hwnd, &mut class_name) };
+    if length <= 0 {
+        return;
+    }
+    let class_name = String::from_utf16_lossy(&class_name[..length as usize]);
+    if !class_name.eq_ignore_ascii_case("STATIC") {
+        return;
+    }
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        SetWindowLongW(hwnd, GWL_STYLE, (style | SS_NOTIFY.0) as i32);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn enable_static_notifications(_handle: i64) {}
 
 #[cfg(target_os = "windows")]
 fn arm_mouse_leave(hwnd: HWND) {
@@ -177,6 +205,7 @@ fn dispatch_message(handle: i64, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             if let Some(cb) = MOUSE_UP_CB.with(|c| c.borrow().get(&handle).copied()) {
                 fire_pointer_event(cb, x, y, 0);
             }
+            fire_click(handle);
         }
         m if m == WM_RBUTTONDOWN => {
             let (x, y) = decode_xy(lparam);
@@ -217,6 +246,19 @@ fn dispatch_message(handle: i64, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn fire_click(handle: i64) {
+    let Some(cb_f64) = CLICK_CB.with(|c| c.borrow().get(&handle).copied()) else {
+        return;
+    };
+    unsafe {
+        let closure_ptr = js_nanbox_get_pointer(cb_f64);
+        if closure_ptr != 0 {
+            js_closure_call0(closure_ptr as *const u8);
+        }
     }
 }
 
@@ -277,4 +319,28 @@ pub fn set_on_hover(handle: i64, callback: f64) {
         c.borrow_mut().insert(handle, callback);
     });
     install_subclass(handle);
+}
+
+pub fn set_on_click(handle: i64, callback: f64) {
+    CLICK_CB.with(|c| {
+        c.borrow_mut().insert(handle, callback);
+    });
+    enable_static_notifications(handle);
+    install_subclass(handle);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn click_registration_replaces_the_previous_callback() {
+        let handle = i64::MAX - 6614;
+        set_on_click(handle, 1.25);
+        set_on_click(handle, 2.5);
+        assert_eq!(
+            CLICK_CB.with(|c| c.borrow().get(&handle).copied()),
+            Some(2.5)
+        );
+    }
 }
