@@ -1192,6 +1192,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         super::verify::verify_marked_heap_report_nonfatal("copying-minor");
     }
 
+    // #7035: whole-heap from-space scan. MUST run here — after the rewrite
+    // pass, before from-space is reset — and it is deliberately independent of
+    // the root enumeration the rewrite pass and the evacuation verifier share.
+    super::fromspace_scan::run_fromspace_scan();
+
     crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
     finalize_dead_copied_minor_from_space_side_allocations();
     let reset = crate::arena::copying_reset_from_spaces_and_flip();

@@ -20,3 +20,5 @@ rl.close();
 console.log("answer:", answer);
 console.log("writes:", JSON.stringify(writes.join("")));
 console.log("surface:", typeof rl.question, typeof rl.close);
+input.destroy();
+output.destroy();
