@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Regression guard for the print-and-diff node-suite.
 
-Runs `scripts/node_suite_run.py` (pre-warm + fast/slow lanes) and compares the
-per-module pass counts against a committed floor baseline. FAILS (exit 1) if any
-baselined module drops below its floor. Improvements are always accepted and are
-reported as `+N` so the baseline can be ratcheted up over time.
+Runs `scripts/node_suite_run.py` (pre-warm + fast/slow lanes) and compares each
+module's pass and fixture counts against a committed floor baseline. FAILS
+(exit 1) if any baselined module drops below either floor. Improvements are
+always accepted and are reported as `+N` so the baseline can be ratcheted up
+over time.
 
 This exists because the node-suite is NOT part of the per-PR CI gate (the parity
 job is opt-in and runs node 22, while the real oracle is node 26), so a module
