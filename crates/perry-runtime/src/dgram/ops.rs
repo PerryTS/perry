@@ -415,14 +415,19 @@ fn send_message(socket: f64, args: &[f64]) -> (f64, usize, Vec<u8>) {
             .unwrap_or_else(|| throw_invalid_arg_type("offset", "number", offset_value));
         let length_number = number_value(length_value)
             .unwrap_or_else(|| throw_invalid_arg_type("length", "number", length_value));
-        let offset = offset_number as usize;
-        let length = length_number as usize;
         if !offset_number.is_finite()
             || !length_number.is_finite()
             || offset_number < 0.0
             || length_number < 0.0
-            || offset.saturating_add(length) > bytes.len()
         {
+            crate::fs::validate::throw_range_error_named(
+                "Attempt to access memory outside buffer bounds",
+                "ERR_BUFFER_OUT_OF_BOUNDS",
+            );
+        }
+        let offset = offset_number as usize;
+        let length = length_number as usize;
+        if offset.saturating_add(length) > bytes.len() {
             crate::fs::validate::throw_range_error_named(
                 "Attempt to access memory outside buffer bounds",
                 "ERR_BUFFER_OUT_OF_BOUNDS",

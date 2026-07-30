@@ -105,15 +105,17 @@ longer joins a real multicast group.
 
 ## Repeated results
 
-All totals were stable across three consecutive runs on 2026-07-27. Perry
-ran without another process reading or rebuilding `target/perry-auto-*`; shared
-cache work can invalidate a measurement. Three consecutive focused runs
-produced the clean Perry row below with no compile failure, crash, or timeout.
+The expanded-suite totals were stable across three consecutive baseline runs on
+2026-07-27. Perry ran without another process reading or rebuilding
+`target/perry-auto-*`; shared cache work can invalidate a measurement. After
+the runtime changes in this PR, a clean focused run on 2026-07-30 raised the
+Perry result from 18 to 39 exact matches, with no compile failure, crash, or
+timeout.
 
 | Runtime | Version | Pass | Diff | Error | Compile/crash/timeout | Unstable |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | Node oracle | 26.5.0 | 54 | 0 | 0 | 0 | 0 |
-| Perry focused runner | current branch | 18 | 36 | 0 | 0 | 0 |
+| Perry focused runner | current branch | 39 | 15 | 0 | 0 | 0 |
 | Deno direct | 2.9.3 | 35 | 9 | 10 | 0 | 0 |
 | Bun direct | 1.2.18 | 37 | 16 | 1 | 0 | 0 |
 
@@ -122,12 +124,14 @@ same Node oracle output. Deno's 10 stable errors exit non-zero rather than print
 Node's result. Bun's one stable error is the existing multicast-TTL `Infinity`
 case. Neither runtime timed out.
 
-Perry's 18 exact matches cover IPv4 and IPv6 loopback, bind overloads and
+Perry's 39 exact matches cover IPv4 and IPv6 loopback, bind overloads and
 conflicts, connect ordering, buffer access, zero queue/ref state, core send
 overloads, default hosts, sequential sends, implicit binding, socket controls,
-socket-type validation, and basic send validation.
+socket-type validation, signal closure, async disposal, custom lookup,
+constructor buffer options, block-list routing, range and scatter sends,
+callback timing, address normalization, and send validation.
 
-The 36 stable Perry differences group into:
+The 15 stable Perry differences that remain group into:
 
 1. export/class/prototype/descriptors and receiver validation;
 2. `bindSync()` / `connectSync()` and pending/already-bound state guards;
@@ -156,8 +160,6 @@ deterministic, in scope, and not already represented. The audit excludes:
 - interface-specific IPv6, link-local scope IDs, dual-stack port sharing, and
   source-specific multicast delivery;
 - message-size/OOB/receive faults, resource pressure, signals, GC, and stress;
-- pre-aborted and active-socket AbortSignal closure because Perry cannot expose
-  completion without a scheduler race or timeout;
 - close-during-lookup/bind races, recursive callback races, burst batch
   delivery, process-liveness timers, and ping-pong tests;
 - queue-depth assertions that need Node's private `--test-udp-no-try-send`
@@ -173,7 +175,7 @@ These boundaries assign DNS resolver behavior to `dns`, socket distribution to
 NODE_BIN=/private/tmp/node-v26.5.0-bin/bin/node \
 python3 scripts/node_suite_run.py "$PWD/target/release/perry" "$PWD" dgram
 
-dgram  18  54  33.3  diff=36
+dgram  39  54  72.2  diff=15
 ```
 
 The table and repeated direct-runtime totals come from this harness:
@@ -242,5 +244,5 @@ the repository's matching `npm:@types/node` package from the local install;
 `deno fmt --check` passes for every changed fixture.
 
 Only the dgram floor changed in `test-parity/node_suite_baseline.json`, from
-18/38 to the clean repeated 18/54 measurement. Aggregate metadata still
-describes the last full-suite run.
+18/54 to the clean 39/54 measurement after the runtime parity fixes. Aggregate
+metadata still describes the last full-suite run.
