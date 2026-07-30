@@ -783,6 +783,10 @@ mod tests {
         let mut walked =
             collect_ts_files(&dir.path().to_path_buf()).expect("collect from directory input");
         walked.sort();
-        assert_eq!(walked, vec![main, other], "directory input walks all sources");
+        assert_eq!(
+            walked,
+            vec![main, other],
+            "directory input walks all sources"
+        );
     }
 }

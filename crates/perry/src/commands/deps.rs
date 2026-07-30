@@ -819,10 +819,7 @@ mod tests {
     /// found" because the full specifier was joined as a path).
     #[test]
     fn package_base_name_splits_scoped_subpath_exports() {
-        assert_eq!(
-            package_base_name("@acme/toolkit/fs/safe"),
-            "@acme/toolkit"
-        );
+        assert_eq!(package_base_name("@acme/toolkit/fs/safe"), "@acme/toolkit");
         assert_eq!(package_base_name("@acme/toolkit"), "@acme/toolkit");
         assert_eq!(package_base_name("@scope/name/a/b/c"), "@scope/name");
         assert_eq!(package_base_name("lodash/map"), "lodash");

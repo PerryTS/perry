@@ -435,6 +435,14 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "runtime-link")]
+    #[test]
+    fn null_proto_object_field_round_trips() {
+        let object = alloc_null_proto_object(&[("status", JsValue::from_int32(204))]);
+        assert_eq!(object_field_by_name(object, "status").to_int32(), 204);
+        assert!(object_field_by_name(object, "missing").is_undefined());
+    }
+
     #[test]
     fn int32_round_trips() {
         for n in [0, 1, -1, i32::MIN, i32::MAX] {

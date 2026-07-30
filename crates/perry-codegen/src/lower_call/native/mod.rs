@@ -409,10 +409,7 @@ pub(crate) fn lower_native_method_call(
                 blk.call(
                     DOUBLE,
                     "js_node_submodule_namespace",
-                    &[
-                        (PTR, &submod_label),
-                        (I32, &submod_key.len().to_string()),
-                    ],
+                    &[(PTR, &submod_label), (I32, &submod_key.len().to_string())],
                 )
             };
             let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
