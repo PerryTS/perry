@@ -154,7 +154,7 @@ pub struct ErrorHeader {
 /// user code never resumed and any subsequent code (an in-process
 /// `fetch` against the same process, `app.close()`, etc.) never ran —
 /// the compat-sweep fixture timed out at gtimeout(30s). The fix
-/// mirrors what perry-ext-http-server did in #604: `listen()` returns
+/// mirrors what perry-ext-http did in #604: `listen()` returns
 /// immediately after spawning the accept loop, and a new
 /// `js_fastify_process_pending` extern wired into perry-stdlib's main
 /// pump drains the per-server mpsc each tick. The receiver lives
@@ -184,7 +184,7 @@ pub struct FastifyServerHandle {
 /// `app.server.on("upgrade", …)` handlers. Sent by the hyper accept
 /// task after `hyper::upgrade::on` resolves and the upgraded stream
 /// has been registered with `perry_ext_ws::register_external_ws_stream`.
-/// Mirror of perry-ext-http-server's `HttpPendingUpgrade`.
+/// Mirror of perry-ext-http's `HttpPendingUpgrade`.
 pub struct FastifyPendingUpgrade {
     pub app_handle: Handle,
     pub method: String,
@@ -257,7 +257,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
 
     let (request_tx, request_rx) = mpsc::channel::<FastifyPendingRequest>(1024);
     // #1113 — separate channel for WebSocket upgrade events so a busy
-    // request stream can't starve them (mirror of perry-ext-http-server).
+    // request stream can't starve them (mirror of perry-ext-http).
     let (upgrade_tx, upgrade_rx) = mpsc::channel::<FastifyPendingUpgrade>(256);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     let request_tx = Arc::new(request_tx);
@@ -296,7 +296,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     // hit). `spawn_blocking_with_reactor` runs the closure inside a worker
     // task (`runtime().spawn(async { … })`), so `tokio::spawn`-ing the
     // accept loop drives it and its fan-out serve tasks on the worker pool —
-    // mirroring perry-ext-http-server / -net / -ws. (A bare
+    // mirroring perry-ext-http / -net / -ws. (A bare
     // `Handle::current().block_on` here would panic "Cannot start a runtime
     // from within a runtime" inside the worker task; spawn instead.)
     perry_ffi::spawn_blocking_with_reactor(move || {
@@ -585,7 +585,7 @@ pub extern "C" fn js_fastify_process_pending() -> i32 {
             None => continue,
         };
         // #1113 — drain WebSocket upgrades FIRST so a busy request
-        // stream can't starve them (mirror of perry-ext-http-server's
+        // stream can't starve them (mirror of perry-ext-http's
         // `js_node_http_server_process_pending`).
         count += drain_server_upgrades(h);
         while let Some(pending) = try_recv_pending_request(h) {
@@ -630,7 +630,7 @@ pub extern "C" fn js_fastify_process_pending() -> i32 {
 }
 
 /// #1113 — non-blocking try_recv for a pending WebSocket upgrade.
-/// Mirror of perry-ext-http-server's `try_recv_upgrade`.
+/// Mirror of perry-ext-http's `try_recv_upgrade`.
 fn try_recv_fastify_upgrade(server_handle: Handle) -> Option<FastifyPendingUpgrade> {
     if let Some(s) = get_handle::<FastifyServerHandle>(server_handle) {
         let mut guard = s.upgrade_rx.lock().unwrap();
@@ -657,7 +657,7 @@ pub extern "C" fn js_fastify_has_active() -> i32 {
             // Even after close(), the upgrade channel may still hold
             // queued items the pump needs to drain on a later tick
             // before the program can exit cleanly (mirror of
-            // perry-ext-http-server's `server_is_active`).
+            // perry-ext-http's `server_is_active`).
             if let Ok(guard) = s.upgrade_rx.lock() {
                 if let Some(rx) = guard.as_ref() {
                     if !rx.is_closed() && !rx.is_empty() {
@@ -712,7 +712,7 @@ async fn handle_request(
     // tungstenite server handshake, registers the WebSocketStream
     // with perry-ext-ws, and queues a `FastifyPendingUpgrade` for the
     // main-thread pump to fire the registered handlers. Mirror of
-    // perry-ext-http-server's #577 Phase 4 path.
+    // perry-ext-http's #577 Phase 4 path.
     if crate::upgrade::is_websocket_upgrade(&req) {
         return handle_fastify_websocket_upgrade(
             app_handle, req, method, path, headers, upgrade_tx,
@@ -834,7 +834,7 @@ async fn handle_request(
     }
 }
 
-/// #1113 — WebSocket upgrade dispatch (mirror of perry-ext-http-server's
+/// #1113 — WebSocket upgrade dispatch (mirror of perry-ext-http's
 /// `handle_websocket_upgrade`, issue #577 Phase 4).
 ///
 /// Synchronously builds the 101 response (so hyper drives the protocol

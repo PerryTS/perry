@@ -5,7 +5,7 @@ use super::*;
 /// length through `out_len`. Returns null (and sets `*out_len = 0`) for any
 /// value that is neither a Buffer nor a TypedArray.
 ///
-/// Used by out-of-crate FFI callers (`perry-ext-http-server`'s
+/// Used by out-of-crate FFI callers (`perry-ext-http`'s
 /// `getUnpackedSettings`) that must read a *program-allocated* Buffer's
 /// bytes. Going through this extern symbol ensures the Buffer-registry
 /// lookup runs in the same runtime copy that allocated the Buffer (via the
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
     std::ptr::null()
 }
 
-// Referenced only from the prebuilt `perry-ext-http-server` archive, so the
+// Referenced only from the prebuilt `perry-ext-http` archive, so the
 // auto-optimize LTO pass would otherwise dead-strip it. Pin it.
 #[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u32) -> *const u8 =

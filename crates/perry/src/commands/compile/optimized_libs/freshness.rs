@@ -72,6 +72,26 @@ pub(crate) fn size_opt_level() -> Option<&'static str> {
 /// a single codegen unit. Slower build, smaller/faster archive; only
 /// meaningful together with `size_opt_level`. Keyed into the cache like the
 /// opt level.
+/// `PERRY_SIZE_PANIC=abort-immediate` — size mode only. Rebuilds the Rust
+/// standard library from source with `panic_immediate_abort`, which removes
+/// the backtrace symbolizer (gimli + addr2line + rustc_demangle + the default
+/// panic hook's formatting: ~159 KB measured) and drops unwind tables. A Rust
+/// panic then aborts without printing a symbolized Rust backtrace — the JS
+/// error surface is unaffected, but internal-error diagnostics get terser, so
+/// this stays opt-in on top of `PERRY_SIZE_OPT`. Requires a nightly toolchain
+/// (`-Zbuild-std`); the build falls back to the prebuilt libraries with a note
+/// if nightly is unavailable.
+pub(crate) fn size_panic_immediate_abort() -> bool {
+    std::env::var("PERRY_SIZE_PANIC").ok().as_deref() == Some("abort-immediate")
+        && size_opt_level().is_some()
+}
+
+/// Immediate-abort may only replace the normal panic strategy when the same
+/// reachability analysis that permits `panic=abort` found no unwind consumers.
+pub(crate) fn effective_size_panic_immediate_abort(panic_abort_safe: bool) -> bool {
+    panic_abort_safe && size_panic_immediate_abort()
+}
+
 pub(crate) fn size_lto_fat() -> bool {
     std::env::var("PERRY_SIZE_LTO").ok().as_deref() == Some("fat")
 }
@@ -83,6 +103,7 @@ pub(crate) fn size_lto_fat() -> bool {
 pub(crate) fn auto_optimized_cache_key(
     feature_arg: &str,
     panic_abort_safe: bool,
+    panic_immediate: bool,
     target: Option<&str>,
     ctx: &CompilationContext,
 ) -> String {
@@ -121,9 +142,14 @@ pub(crate) fn auto_optimized_cache_key(
         // key the freshness stamp like every other runtime feature toggle.
         perry_hir::has_deferred_dynamic_code_sites(),
         format!(
-            "{}{}",
+            "{}{}{}",
             size_opt_level().unwrap_or("off"),
-            if size_lto_fat() { "+fatlto" } else { "" }
+            if size_lto_fat() { "+fatlto" } else { "" },
+            if panic_immediate {
+                "+panicimm"
+            } else {
+                ""
+            }
         ),
         std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1"),
         env!("CARGO_PKG_VERSION"),
@@ -283,10 +309,14 @@ pub(crate) fn auto_optimized_cross_features(
 fn declared_feature_names(workspace_root: &Path, krate: &str) -> Option<BTreeSet<String>> {
     let manifest_path = workspace_root.join("crates").join(krate).join("Cargo.toml");
     let manifest: toml::Value = toml::from_str(&fs::read_to_string(manifest_path).ok()?).ok()?;
-    let feature_table = manifest.get("features")?.as_table()?;
-    let mut names: BTreeSet<String> = feature_table.keys().cloned().collect();
+    let feature_table = manifest.get("features").and_then(|value| value.as_table());
+    let mut names: BTreeSet<String> = feature_table
+        .into_iter()
+        .flat_map(|table| table.keys().cloned())
+        .collect();
     let hidden_implicit_features: BTreeSet<&str> = feature_table
-        .values()
+        .into_iter()
+        .flat_map(|table| table.values())
         .filter_map(|value| value.as_array())
         .flatten()
         .filter_map(|value| value.as_str())

@@ -91,7 +91,7 @@ pub(crate) unsafe fn sqlite_error_message(conn: &Connection) -> String {
 
 pub(crate) unsafe fn prepare_node_raw_statement(conn: &Connection, sql: &str) -> RawNodeStatement {
     let c_sql = CString::new(sql)
-        .unwrap_or_else(|_| throw_type("The \"sql\" argument must not contain null bytes"));
+        .unwrap_or_else(|_| throw_sqlite_error("SQL string must not contain null bytes"));
     let mut raw = std::ptr::null_mut();
     let rc = ffi::sqlite3_prepare_v2(
         conn.handle(),
@@ -183,7 +183,31 @@ pub(crate) unsafe fn bind_node_sqlite_value(
         ffi::sqlite3_bind_double(raw_stmt, index, js.as_number())
     } else {
         let raw = raw_addr_from_value(value);
-        if raw != 0 && is_registered_buffer(raw) {
+        if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
+            let typed_array = raw as *const perry_runtime::typedarray::TypedArrayHeader;
+            let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(typed_array) else {
+                throw_type(&format!(
+                    "Provided value cannot be bound to SQLite parameter {}.",
+                    index
+                ));
+            };
+            let data_ptr = if bytes.is_empty() {
+                std::ptr::null()
+            } else {
+                bytes.as_ptr() as *const c_void
+            };
+            if bytes.is_empty() {
+                ffi::sqlite3_bind_zeroblob(raw_stmt, index, 0)
+            } else {
+                ffi::sqlite3_bind_blob(
+                    raw_stmt,
+                    index,
+                    data_ptr,
+                    bytes.len() as c_int,
+                    ffi::SQLITE_TRANSIENT(),
+                )
+            }
+        } else if raw != 0 && is_registered_buffer(raw) {
             let buffer = raw as *const BufferHeader;
             let len = (*buffer).length as usize;
             let data_ptr = if len == 0 {
@@ -191,13 +215,17 @@ pub(crate) unsafe fn bind_node_sqlite_value(
             } else {
                 buffer_data(buffer) as *const c_void
             };
-            ffi::sqlite3_bind_blob(
-                raw_stmt,
-                index,
-                data_ptr,
-                len as c_int,
-                ffi::SQLITE_TRANSIENT(),
-            )
+            if len == 0 {
+                ffi::sqlite3_bind_zeroblob(raw_stmt, index, 0)
+            } else {
+                ffi::sqlite3_bind_blob(
+                    raw_stmt,
+                    index,
+                    data_ptr,
+                    len as c_int,
+                    ffi::SQLITE_TRANSIENT(),
+                )
+            }
         } else {
             throw_type(&format!(
                 "Provided value cannot be bound to SQLite parameter {}.",
@@ -226,7 +254,10 @@ pub(crate) fn is_named_parameter_object(value: f64) -> bool {
         return false;
     }
     let raw = raw_addr_from_value(value);
-    raw >= 0x1000 && !is_registered_buffer(raw)
+    raw >= 0x1000
+        && !is_registered_buffer(raw)
+        && perry_runtime::typedarray::lookup_typed_array_kind(raw).is_none()
+        && unsafe { perry_runtime::symbol::js_is_symbol(value) == 0 }
 }
 
 pub(crate) unsafe fn string_key_from_js_value(value: JSValue) -> Option<String> {
@@ -328,13 +359,23 @@ pub(crate) unsafe fn bind_node_sqlite_params(
     }
 
     let positional_count = args.len().saturating_sub(positional_start);
-    if positional_count > anonymous_indices.len() {
+    let positional_indices: Vec<c_int> = if named_params.is_some() {
+        anonymous_indices
+    } else if named_indices
+        .keys()
+        .any(|name| has_sqlite_parameter_prefix(name))
+    {
+        Vec::new()
+    } else {
+        (1..=param_count).collect()
+    };
+    if positional_count > positional_indices.len() {
         // Node raises ERR_SQLITE_ERROR with errcode 25 (SQLITE_RANGE) when
         // more anonymous values are supplied than the statement has
         // anonymous parameters (#6561).
         throw_sqlite_error_ext("column index out of range", ffi::SQLITE_RANGE);
     }
-    for (offset, index) in anonymous_indices.into_iter().enumerate() {
+    for (offset, index) in positional_indices.into_iter().enumerate() {
         if let Some(value) = args.get(positional_start + offset).copied() {
             bind_node_sqlite_value(conn, raw_stmt, index, value);
         }
@@ -730,7 +771,9 @@ pub(crate) unsafe fn node_sqlite_aggregate_emit(ctx: *mut ffi::sqlite3_context, 
     let Some(state) = node_sqlite_aggregate_state(ctx, &*aggregate, true) else {
         return;
     };
-    let value = if let Some(result) = (*aggregate).result {
+    let value = if finalize && (*aggregate).inverse.is_some() {
+        (*state).state
+    } else if let Some(result) = (*aggregate).result {
         node_sqlite_call_closure(result, &[(*state).state])
     } else {
         (*state).state
@@ -826,6 +869,7 @@ where
     if stmt.finalized.load(Ordering::Relaxed) {
         throw_invalid_state("statement has been finalized");
     }
+    stmt.iteration_epoch.fetch_add(1, Ordering::Relaxed);
     let db = get_handle::<NodeSqliteDbHandle>(stmt.db_handle)
         .unwrap_or_else(|| throw_invalid_state("database is not open"));
     let conn_ptr = {
@@ -903,4 +947,25 @@ pub(crate) fn build_packed_keys(column_names: &[String]) -> (Vec<u8>, u32) {
     }
     shape_id = shape_id.wrapping_add(column_names.len() as u32);
     (packed, shape_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_named_parameter_object;
+
+    #[test]
+    fn symbols_are_not_named_parameter_objects() {
+        let symbol = unsafe { perry_runtime::symbol::js_symbol_new_empty() };
+        assert!(!is_named_parameter_object(symbol));
+    }
+
+    #[test]
+    fn typed_arrays_are_not_named_parameter_objects() {
+        let typed_array = perry_runtime::typedarray::js_typed_array_new_empty(
+            perry_runtime::typedarray::KIND_UINT8 as i32,
+            1,
+        );
+        let value = perry_runtime::value::js_nanbox_pointer(typed_array as i64);
+        assert!(!is_named_parameter_object(value));
+    }
 }

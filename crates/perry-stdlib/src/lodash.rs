@@ -783,15 +783,15 @@ pub extern "C" fn js_lodash_in_range(number: f64, start: f64, end: f64) -> f64 {
 /// _.random(lower, upper, floating?) -> number
 #[no_mangle]
 pub extern "C" fn js_lodash_random(lower: f64, upper: f64, floating: bool) -> f64 {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
+    use rand::RngExt;
+    let mut rng = rand::rng();
 
     if floating {
-        rng.gen_range(lower..upper)
+        rng.random_range(lower..upper)
     } else {
         let lower = lower.floor() as i64;
         let upper = upper.ceil() as i64;
-        rng.gen_range(lower..=upper) as f64
+        rng.random_range(lower..=upper) as f64
     }
 }
 

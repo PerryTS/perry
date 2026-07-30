@@ -2875,7 +2875,6 @@ fn lower_object_array_write_versioned_for(
         extra_guards.push((g_packed, g_box));
     }
     let preheader_idx = ctx.current_block;
-    let preheader_label = ctx.block().label.clone();
 
     // Emit the fallback first. Besides preserving the original semantics, this
     // creates the ordinary local slots for the nested counter, allowing the
@@ -5080,6 +5079,7 @@ fn lower_for_after_init_with_i32_bound(
         if let Some(cond_expr) = condition {
             let cv = lower_expr(ctx, cond_expr)?;
             let i1 = lower_truthy(ctx, &cv, cond_expr);
+            emit_gc_loop_safepoint(ctx, &[], &[cond_expr]);
             ctx.block().cond_br(&i1, &body_label, &exit_label);
         } else {
             ctx.block().br(&body_label);
@@ -5092,6 +5092,7 @@ fn lower_for_after_init_with_i32_bound(
         if let Some(cond_expr) = condition {
             let cv = lower_expr(ctx, cond_expr)?;
             let i1 = lower_truthy(ctx, &cv, cond_expr);
+            emit_gc_loop_safepoint(ctx, &[], &[cond_expr]);
             ctx.block().cond_br(&i1, &body_label, &exit_label);
         } else {
             // `for (;;)` — unconditional jump into the body. May be an
@@ -5141,7 +5142,7 @@ fn lower_for_after_init_with_i32_bound(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body);
+        emit_gc_loop_safepoint(ctx, body, &[]);
         ctx.block().br(&update_label);
     }
 
@@ -5149,6 +5150,7 @@ fn lower_for_after_init_with_i32_bound(
     ctx.current_block = update_idx;
     if let Some(update_expr) = update {
         let _ = lower_expr(ctx, update_expr)?;
+        emit_gc_loop_safepoint(ctx, &[], &[update_expr]);
     }
     // #6072: a loop-private i32 counter is invisible to the `Update` lowering
     // (it is not in `ctx.i32_counter_slots`), so advance it here. The classifier
@@ -5226,7 +5228,7 @@ fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     // DEFAULT ON (moving-nursery flip): emit the back-edge poll, but ONLY for
-    // allocating loop bodies (see the `body_may_allocate` gate in
+    // allocating loops (see the `loop_may_allocate` gate in
     // `emit_gc_loop_safepoint`) so numeric/vectorizable loops stay call-free.
     // Kill switch: PERRY_GC_MOVING_LOOP_POLLS=0/off/false. Must match the runtime
     // `gc_moving_loop_polls_enabled` (same env) so deferrals always have a drain.
@@ -5238,11 +5240,12 @@ fn moving_safepoint_polls_enabled() -> bool {
     })
 }
 
-/// Emit a `js_gc_loop_safepoint()` poll at a loop back-edge. Call this AFTER
-/// `clear_loop_body_shadow_slots` and only where the block is not terminated:
-/// at that point the loop-body expression has completed, so every live heap
-/// value is a named local on the shadow stack (no unspilled register temps) —
-/// a precise-root safepoint where a deferred copying minor can MOVE survivors.
+/// Emit a `js_gc_loop_safepoint()` after an allocating loop segment has
+/// completed and only where the block is not terminated. Body calls must run
+/// after `clear_loop_body_shadow_slots`; control calls run after their result
+/// has been reduced or discarded. At either point every live heap value is a
+/// named local on the shadow stack (no unspilled register temps) — a precise
+/// root safepoint where a deferred copying minor can MOVE survivors.
 ///
 /// COVERAGE (Phase 2, follow-up): currently wired into the generic `while`,
 /// `do..while`, and `for` back-edges. The specialized/versioned `for`-loop
@@ -5251,15 +5254,19 @@ fn moving_safepoint_polls_enabled() -> bool {
 /// loop that takes one of those paths won't drain a deferred moving minor until
 /// the next event-loop safepoint. Adding the poll to every back-edge across
 /// those paths is the remaining Phase 2 codegen work.
-pub(crate) fn emit_gc_loop_safepoint(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
+pub(crate) fn emit_gc_loop_safepoint(
+    ctx: &mut FnCtx<'_>,
+    body: &[Stmt],
+    controls: &[&perry_hir::Expr],
+) {
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
         return;
     }
     // Only an ALLOCATING loop body can defer a collection to this poll; skip the
     // poll for pure (non-allocating) bodies so numeric/vectorizable loops stay
     // call-free (a poll defeats LLVM auto-vectorization — measured ~2x on a tight
-    // scalar reduction). See `body_may_allocate` for the safe-direction rationale.
-    if !crate::loop_purity::body_may_allocate(body) {
+    // scalar reduction). See `loop_may_allocate` for the safe-direction rationale.
+    if !crate::loop_purity::loop_may_allocate(body, controls) {
         return;
     }
     ctx.block().call_void("js_gc_loop_safepoint", &[]);
@@ -7005,6 +7012,7 @@ pub(crate) fn lower_while(
     ctx.current_block = cond_idx;
     let cv = lower_expr(ctx, condition)?;
     let i1 = lower_truthy(ctx, &cv, condition);
+    emit_gc_loop_safepoint(ctx, &[], &[condition]);
     ctx.block().cond_br(&i1, &body_label, &exit_label);
 
     // For while-loops, continue jumps back to the cond block.
@@ -7042,7 +7050,7 @@ pub(crate) fn lower_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body);
+        emit_gc_loop_safepoint(ctx, body, &[]);
         ctx.block().br(&cond_label);
     }
     ctx.active_region_id = previous_region_id;
@@ -7100,13 +7108,14 @@ pub(crate) fn lower_do_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body);
+        emit_gc_loop_safepoint(ctx, body, &[]);
         ctx.block().br(&cond_label);
     }
 
     ctx.current_block = cond_idx;
     let cv = lower_expr(ctx, condition)?;
     let i1 = lower_truthy(ctx, &cv, condition);
+    emit_gc_loop_safepoint(ctx, &[], &[condition]);
     ctx.block().cond_br(&i1, &body_label, &exit_label);
     ctx.active_region_id = previous_region_id;
 

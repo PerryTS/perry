@@ -7,19 +7,27 @@ function label(value: any): string {
   return String(value);
 }
 
-function firstLine(err: any): string {
-  return String(err.message).split("\n")[0];
-}
-
 const familyValues: any[] = [true, false, 1, 0, "true", null, undefined];
 for (const value of familyValues) {
   try {
     const before = net.getDefaultAutoSelectFamily();
     const result = net.setDefaultAutoSelectFamily(value);
-    console.log("family", label(value), "OK", net.getDefaultAutoSelectFamily(), result);
+    console.log(
+      "family",
+      label(value),
+      "OK",
+      net.getDefaultAutoSelectFamily(),
+      result,
+    );
     net.setDefaultAutoSelectFamily(before);
   } catch (err: any) {
-    console.log("family", label(value), "THROW", err.name, err.code, "|", firstLine(err));
+    console.log(
+      "family",
+      label(value),
+      "THROW",
+      err.name,
+      err.code,
+    );
   }
 }
 
@@ -51,6 +59,12 @@ for (const value of timeoutValues) {
     );
     net.setDefaultAutoSelectFamilyAttemptTimeout(before);
   } catch (err: any) {
-    console.log("timeout", label(value), "THROW", err.name, err.code, "|", firstLine(err));
+    console.log(
+      "timeout",
+      label(value),
+      "THROW",
+      err.name,
+      err.code,
+    );
   }
 }

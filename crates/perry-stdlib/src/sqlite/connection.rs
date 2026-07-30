@@ -155,6 +155,7 @@ pub(crate) unsafe fn finalize_node_sqlite_statements(db: &NodeSqliteDbHandle) {
     for handle in handles {
         if let Some(stmt) = get_handle::<NodeSqliteStmtHandle>(handle) {
             stmt.finalized.store(true, Ordering::Relaxed);
+            stmt.iteration_epoch.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -164,6 +165,7 @@ pub(crate) unsafe fn finalize_node_sqlite_statement_handle(stmt_handle: Handle) 
         return;
     };
     stmt.finalized.store(true, Ordering::Relaxed);
+    stmt.iteration_epoch.fetch_add(1, Ordering::Relaxed);
     if let Some(db) = get_handle::<NodeSqliteDbHandle>(stmt.db_handle) {
         if let Ok(mut statements) = db.statements.lock() {
             statements.remove(&stmt_handle);

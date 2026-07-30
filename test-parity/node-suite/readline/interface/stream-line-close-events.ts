@@ -24,3 +24,5 @@ await new Promise<void>((resolve) => setImmediate(resolve));
 await new Promise<void>((resolve) => setImmediate(resolve));
 
 console.log("events:", events.join("|"));
+input.destroy();
+output.destroy();

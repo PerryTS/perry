@@ -203,6 +203,10 @@ pub fn scan_packages(
         package_count: packages.len(),
         findings,
         verdict,
+        // Filled in by the caller, which is the only place that knows whether
+        // the installer ran through sfw. Defaults to Unavailable so a caller
+        // that forgets under-claims protection.
+        firewall: Default::default(),
     }
 }
 

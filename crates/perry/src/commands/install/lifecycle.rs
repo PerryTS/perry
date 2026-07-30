@@ -212,6 +212,7 @@ mod tests {
             production: false,
             installer: None,
             skip_scan: false,
+            no_firewall: false,
             allow_risky: vec![],
             allow_risky_all: false,
             run_scripts: vec![],

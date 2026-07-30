@@ -63,7 +63,7 @@ mod-dgram = []
 # that never imports `http2` links none of these tables and macOS
 # `-dead_strip` recovers the space. Pure cfg gate, no extra deps. This gates
 # only the constant tables — the HTTP/2 server surface (`js_node_http2_*`) is
-# unaffected (it lives in perry-ext-http-server, routed via `http-client`).
+# unaffected (it lives in perry-ext-http, routed via `http-client`).
 mod-http2-constants = []
 # Cold-path diagnostic JSON serializers (~67 KB of code + the `serde_json`
 # pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
@@ -240,7 +240,7 @@ dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 thiserror.workspace = true
 anyhow.workspace = true
 libc.workspace = true
-rand = "0.8"
+rand = "0.10"
 regex = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
@@ -302,7 +302,7 @@ resolv-conf = "0.7"
 # + the common multicast/broadcast/TTL options; socket2 borrows the same fd
 # (SockRef) for the few std lacks — set_multicast_if and source-specific
 # membership — so those are real rather than silent no-ops.
-socket2 = { version = "0.6", features = ["all"] }
+socket2 = { workspace = true, features = ["all"] }
 # mimalloc is declared 64-bit-only below (see the target_pointer_width section) —
 # on arm64_32/ILP32 it is neither used nor compiled.
 

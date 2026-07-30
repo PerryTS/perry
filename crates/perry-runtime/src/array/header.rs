@@ -507,8 +507,9 @@ pub(crate) fn test_template_raw_roots() -> (usize, usize) {
 /// <= capacity <= 16M (same bound as the GC tracer's sanity guard).
 #[inline(always)]
 pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    // Heap window varies by OS: macOS mimalloc lands in the 3-5 TB range;
-    // Android scudo + Linux glibc allocate MUCH lower (often < 1 TB); Windows
+    // Heap window varies by allocator and run: macOS mimalloc can land well
+    // below 2 TB (observed around 45 GB in the Rust test harness);
+    // Android scudo + Linux glibc also allocate MUCH lower (often < 1 TB); Windows
     // mimalloc lands well under 1 TB (often in the GB-to-tens-of-GB range).
     // iOS / tvOS / watchOS / visionOS *device* targets use libsystem_malloc
     // (mimalloc is host-side only) and allocate in the same low range —
@@ -526,6 +527,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // GcHeader / obj_type validation downstream.
     #[cfg(any(
         target_os = "android",
+        target_os = "macos",
         target_os = "linux",
         target_os = "windows",
         target_os = "ios",
@@ -536,6 +538,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     const HEAP_MIN: u64 = 0x1000; // 4 KB (classic user-space floor)
     #[cfg(not(any(
         target_os = "android",
+        target_os = "macos",
         target_os = "linux",
         target_os = "windows",
         target_os = "ios",
@@ -543,7 +546,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         target_os = "watchos",
         target_os = "visionos",
     )))]
-    const HEAP_MIN: u64 = 0x200_0000_0000; // 2 TB — above observed corrupt handles on macOS
+    const HEAP_MIN: u64 = 0x200_0000_0000; // 2 TB — retained for unlisted targets
     const HEAP_MAX: u64 = 0x8000_0000_0000; // 47-bit userspace cap
     let bits = arr as u64;
     let top16 = bits >> 48;

@@ -83,10 +83,6 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
 
     // #4904: Agent tunables (`agent.maxSockets = 4`) and the
     // `agent.createConnection = fn` monkeypatch pattern Node's tests use.
-    #[cfg(feature = "http-client")]
-    if crate::http::dispatch_agent_property_set(handle, property_name, value) {
-        return;
-    }
     #[cfg(feature = "external-http-client-pump")]
     if matches!(
         property_name,
@@ -164,6 +160,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_own_property_names_dispatch(handle: i64) -> f64 {
+    #[cfg(feature = "database-sqlite")]
+    if let Some(names) = crate::sqlite::dispatch_node_sqlite_own_property_names(handle) {
+        return names;
+    }
     if crate::string_decoder::is_string_decoder_handle(handle) {
         return crate::string_decoder::string_decoder_own_property_names(handle);
     }
@@ -180,7 +180,7 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
 
 /// #2533: route a captured / aliased `http`/`https`/`http2` `createServer`
 /// (or the `Server` / `createSecureServer` aliases) back to the
-/// perry-ext-http-server factories. Registered with the runtime via
+/// perry-ext-http factories. Registered with the runtime via
 /// `js_set_native_http_dispatch` under `external-http-server-pump` (enabled
 /// whenever the program imports one of those modules), so we can safely
 /// `extern "C"`-reference the ext-crate symbols — they're guaranteed linked.
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
         // #4965: Headers → `res.setHeaders` entries-JSON producer.
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_headers_entries_json(
             f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
         );
@@ -532,7 +532,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     );
     #[cfg(feature = "web-fetch")]
     js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
     #[cfg(feature = "web-fetch")]
     js_register_global_headers_object_json(crate::fetch::js_headers_fetch_object_json);
@@ -670,7 +670,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
-    // the perry-ext-http-server factories. Only registered when the http ext
+    // the perry-ext-http factories. Only registered when the http ext
     // crate is linked (its symbols are referenced by the dispatcher), so the
     // runtime arm stays null-and-undefined for non-http programs.
     #[cfg(feature = "external-http-server-pump")]

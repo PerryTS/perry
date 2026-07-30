@@ -43,8 +43,8 @@
 use crate::ensure_gc_scanner_registered;
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, iter_handles_of_mut, register_handle, GcRootVisitor,
-    Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
+    alloc_string, get_handle, get_handle_mut, iter_handles_of_mut, register_handle, ErrorKind,
+    GcRootVisitor, Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -253,10 +253,7 @@ fn throw_out_of_range(name: &str, bound: &str, received: f64) -> ! {
         "The value of \"{}\" is out of range. It must be {}. Received {}",
         name, bound, received_str
     );
-    let msg_ptr = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    perry_runtime::node_submodules::register_error_code_pub(msg_ptr, "ERR_OUT_OF_RANGE");
-    let err = perry_runtime::error::js_rangeerror_new(msg_ptr);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_ffi::throw_with_code(&message, "ERR_OUT_OF_RANGE", ErrorKind::RangeError)
 }
 
 fn format_received_number(n: f64) -> String {
@@ -301,44 +298,25 @@ fn validate_positive(name: &str, value: f64) {
 /// universe so we can't mix them on the `js_object_get_field_by_name`
 /// boundary.
 unsafe fn read_field_bits(obj_f64: f64, field: &str) -> Option<u64> {
-    let bits = obj_f64.to_bits();
-    let upper = bits >> 48;
-    let obj_ptr: *const perry_runtime::ObjectHeader = if upper >= 0x7FF8 {
-        (bits & PTR_MASK) as *const perry_runtime::ObjectHeader
-    } else if upper == 0 && bits >= 0x10000 {
-        bits as *const perry_runtime::ObjectHeader
-    } else {
-        return None;
-    };
-    if obj_ptr.is_null() {
-        return None;
-    }
-    let key = perry_runtime::js_string_from_bytes(field.as_ptr(), field.len() as u32);
-    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key);
-    if val.is_undefined() || val.is_null() {
+    let value = perry_ffi::object_field_by_name(JsValue::from_bits(obj_f64.to_bits()), field);
+    if value.is_undefined() || value.is_null() {
         None
     } else {
-        Some(val.bits())
+        Some(value.bits())
     }
 }
 
-unsafe fn raw_object_ptr_is_null(val_f64: f64) -> bool {
-    let bits = val_f64.to_bits();
-    let upper = bits >> 48;
-    if upper >= 0x7FF8 {
-        (bits & PTR_MASK) == 0
-    } else {
-        !(upper == 0 && bits >= 0x10000)
-    }
+unsafe fn raw_object_ptr_is_null(value: f64) -> bool {
+    !JsValue::from_bits(value.to_bits()).is_pointer_or_raw()
 }
 
 unsafe fn read_number_field(obj_f64: f64, field: &str) -> Option<f64> {
     let bits = read_field_bits(obj_f64, field)?;
-    let val = perry_runtime::JSValue::from_bits(bits);
+    let val = JsValue::from_bits(bits);
     if val.is_number() {
         Some(val.to_number())
     } else if val.is_int32() {
-        Some(val.as_int32() as f64)
+        Some(val.to_int32() as f64)
     } else {
         None
     }
@@ -346,9 +324,9 @@ unsafe fn read_number_field(obj_f64: f64, field: &str) -> Option<f64> {
 
 unsafe fn read_bool_field(obj_f64: f64, field: &str) -> Option<bool> {
     let bits = read_field_bits(obj_f64, field)?;
-    let val = perry_runtime::JSValue::from_bits(bits);
+    let val = JsValue::from_bits(bits);
     if val.is_bool() {
-        Some(val.as_bool())
+        Some(val.to_bool())
     } else {
         None
     }
@@ -356,11 +334,11 @@ unsafe fn read_bool_field(obj_f64: f64, field: &str) -> Option<bool> {
 
 unsafe fn read_string_field(obj_f64: f64, field: &str) -> Option<String> {
     let bits = read_field_bits(obj_f64, field)?;
-    let val = perry_runtime::JSValue::from_bits(bits);
+    let val = JsValue::from_bits(bits);
     if !val.is_string() {
         return None;
     }
-    let ptr = val.as_string_ptr() as *mut perry_ffi::StringHeader;
+    let ptr = val.as_string_ptr();
     if ptr.is_null() {
         return None;
     }
@@ -617,16 +595,7 @@ unsafe fn agent_new_with_protocol(options_f64: f64, default_protocol: &str) -> H
                     "The argument 'scheduling' must be one of: 'fifo', 'lifo'. Received {:?}",
                     s
                 );
-                let msg_ptr =
-                    perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-                perry_runtime::node_submodules::register_error_code_pub(
-                    msg_ptr,
-                    "ERR_INVALID_ARG_VALUE",
-                );
-                let err = perry_runtime::error::js_typeerror_new(msg_ptr);
-                perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(
-                    err as i64,
-                ))
+                perry_ffi::throw_with_code(&message, "ERR_INVALID_ARG_VALUE", ErrorKind::TypeError)
             }
             agent.scheduling = s;
         }
@@ -857,11 +826,13 @@ fn json_value_to_string(v: &serde_json::Value) -> String {
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
-    perry_runtime::stub_diag::perry_stub_warn(
-        "http.Agent keepSocketAlive/reuseSocket",
-        "reqwest owns the keep-alive pool; per-socket hooks are no-ops",
-        Some("#4917"),
-    );
+    unsafe {
+        perry_ffi::warn_stub(
+            c"http.Agent keepSocketAlive/reuseSocket",
+            c"reqwest owns the keep-alive pool; per-socket hooks are no-ops",
+            Some(c"#4917"),
+        )
+    };
     handle
 }
 

@@ -182,7 +182,7 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     module.declare_function("js_https_request", I64, &[DOUBLE, I64]);
 
     // ========== node:http / node:https / node:http2 SERVER (issue #577) ==========
-    // perry-ext-http-server — handler-push HTTP/1.1 + HTTP/2 + TLS via rustls.
+    // perry-ext-http — handler-push HTTP/1.1 + HTTP/2 + TLS via rustls.
     // Symbols are linked through perry-ext-http (rlib dep), so the
     // existing `bindings.http` / `bindings.https` / `bindings.http2`
     // entries in well_known_bindings.toml route imports here.

@@ -14,7 +14,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 tokio = { workspace = true }
-# Use the workspace pin so perry-ext-http-server (issue #577) and
+# Use the workspace pin so perry-ext-http (issue #577) and
 # perry-ext-ws agree on the WebSocketStream<S> type for the upgrade
 # handoff; mismatched versions split type identity and the
 # `register_external_ws_stream` re-export silently fails to compile.
@@ -24,7 +24,7 @@ tokio-tungstenite = { workspace = true }
 # CryptoProvider (feature unification enables both `ring` and `aws-lc-rs` in
 # the final link, and rustls panics on the first wss:// handshake unless one
 # is installed). Same pattern as perry-ext-net.
-rustls = "0.23"
+rustls.workspace = true
 futures-util = "0.3"
 lazy_static.workspace = true
 

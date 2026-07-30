@@ -33,7 +33,7 @@
 //! (`for (;;) {}`, `while (cond) {}`) — the #74 repro case — as the only
 //! class that still receives the barrier.
 
-use perry_hir::{Expr, Stmt};
+use perry_hir::{CompareOp, Expr, Stmt, UnaryOp};
 use std::collections::HashSet;
 
 /// True when the body needs an `asm sideeffect` barrier inserted. This is
@@ -62,8 +62,8 @@ pub(crate) fn body_needs_asm_barrier(body: &[Stmt]) -> bool {
 /// the poll. A spurious poll costs a little vectorization; a missing one only
 /// delays a deferred minor to the next safepoint (bounded by the moving-GC hard
 /// cap) — never a correctness or UAF hazard.
-pub(crate) fn body_may_allocate(body: &[Stmt]) -> bool {
-    !body.iter().all(stmt_alloc_free)
+pub(crate) fn loop_may_allocate(body: &[Stmt], controls: &[&Expr]) -> bool {
+    !body.iter().all(stmt_alloc_free) || controls.iter().any(|expr| !expr_alloc_free(expr))
 }
 
 /// Like `stmt_is_pure`, but the question is narrower — "can this allocate (or
@@ -113,23 +113,25 @@ fn stmt_alloc_free(s: &Stmt) -> bool {
 }
 
 fn expr_alloc_free(e: &Expr) -> bool {
-    // Everything LLVM-pure is allocation-free (literals, reads, arithmetic).
-    if expr_is_pure(e) {
-        return true;
-    }
     match e {
-        // Element READS never allocate — they return an existing element / a
-        // number. Recurse so the object and index are themselves alloc-free.
-        Expr::IndexGet { object, index } => expr_alloc_free(object) && expr_alloc_free(index),
-        Expr::BufferIndexGet { buffer, index } => {
-            expr_alloc_free(buffer) && expr_alloc_free(index)
-        }
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::BigInt(_)
+        | Expr::String(_)
+        | Expr::This
+        | Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::ClassRef(_)
+        | Expr::EnumMember { .. } => true,
+        // Typed/buffer reads are fixed-layout numeric loads. Generic
+        // IndexGet/IndexUpdate are deliberately excluded: proxies, accessors,
+        // and coercion hooks can run user code and allocate.
+        Expr::BufferIndexGet { buffer, index } => expr_alloc_free(buffer) && expr_alloc_free(index),
         Expr::Uint8ArrayGet { array, index } => expr_alloc_free(array) && expr_alloc_free(index),
-        // `arr[i]++` / `--`: read-modify-write of an existing numeric slot, no
-        // growth, no allocation.
-        Expr::IndexUpdate { object, index, .. } => {
-            expr_alloc_free(object) && expr_alloc_free(index)
-        }
         // Typed-array element WRITES store into a fixed-size backing buffer that
         // never grows/reallocates. (Generic `IndexSet` is deliberately absent —
         // a plain JS-array write can grow the array and allocate.)
@@ -143,21 +145,51 @@ fn expr_alloc_free(e: &Expr) -> bool {
             index,
             value,
         } => expr_alloc_free(array) && expr_alloc_free(index) && expr_alloc_free(value),
-        // Re-handle the composite arithmetic/assign forms so an alloc-free (but
-        // not LLVM-pure) operand — e.g. a `BufferIndexGet` — propagates through.
         Expr::LocalSet(_, val) => expr_alloc_free(val),
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. } => expr_alloc_free(left) && expr_alloc_free(right),
-        Expr::Unary { operand, .. } | Expr::TypeOf(operand) | Expr::Void(operand) => {
-            expr_alloc_free(operand)
+        Expr::Compare {
+            op: CompareOp::Eq | CompareOp::Ne,
+            left,
+            right,
         }
+        | Expr::Logical { left, right, .. } => expr_alloc_free(left) && expr_alloc_free(right),
+        Expr::Unary {
+            op: UnaryOp::Not,
+            operand,
+        }
+        | Expr::TypeOf(operand)
+        | Expr::Void(operand) => expr_alloc_free(operand),
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => expr_alloc_free(condition) && expr_alloc_free(then_expr) && expr_alloc_free(else_expr),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    use perry_hir::BinaryOp;
+
+    #[test]
+    fn generic_index_update_keeps_the_loop_safepoint() {
+        let update = Expr::IndexUpdate {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(0)),
+            op: BinaryOp::Add,
+            prefix: false,
+        };
+        assert!(loop_may_allocate(&[Stmt::Expr(update)], &[]));
+    }
+
+    #[test]
+    fn allocating_loop_control_keeps_the_loop_safepoint() {
+        let condition = Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(0)),
+        };
+        assert!(loop_may_allocate(&[], &[&condition]));
     }
 }
 

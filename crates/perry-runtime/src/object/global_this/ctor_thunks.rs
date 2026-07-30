@@ -25,6 +25,65 @@ pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     super::super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
 }
 
+/// `RegExp(pattern, flags)` called WITHOUT `new` — unlike Map/Set below,
+/// RegExp IS callable: ECMA-262 22.2.4 makes the call form construct exactly
+/// like `new RegExp(pattern, flags)`, with one identity shortcut — `RegExp(re)`
+/// with an existing RegExp and undefined flags returns `re` unchanged.
+///
+/// The noop-thunk fallback returned `undefined` here, which is how lodash's
+/// module init died: `runInContext` rebinds the global (`var RegExp =
+/// context.RegExp`) and builds its native-function probe through the call form
+/// (`var reIsNative = RegExp('^' + …)`) — the very next `reIsNative.test(...)`
+/// threw "Cannot read properties of undefined". Construction mirrors the
+/// dynamic-`new` RegExp arm in class_registry/construct.rs.
+#[cfg(feature = "regex-engine")]
+pub(crate) extern "C" fn regexp_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    pattern: f64,
+    flags: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_nanbox_f64(pattern);
+    let flags = scope.root_nanbox_f64(flags);
+    let flags_undefined = flags.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED;
+    let pattern_value = crate::value::JSValue::from_bits(pattern.get_nanbox_f64().to_bits());
+    if flags_undefined && pattern_value.is_pointer() {
+        let addr = (pattern.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::regex::is_regex_pointer(addr as *const u8) {
+            return pattern.get_nanbox_f64();
+        }
+    }
+    let pattern_string = if pattern_value.is_undefined() {
+        None
+    } else {
+        Some(scope.root_string_ptr(crate::builtins::js_string_coerce(pattern.get_nanbox_f64())))
+    };
+    let flags_string = if flags_undefined {
+        None
+    } else {
+        Some(scope.root_string_ptr(crate::builtins::js_string_coerce(flags.get_nanbox_f64())))
+    };
+    let pattern_ptr = pattern_string
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.get_raw_const_ptr());
+    let flags_ptr = flags_string
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.get_raw_const_ptr());
+    let re = crate::regex::js_regexp_new(pattern_ptr, flags_ptr);
+    crate::value::js_nanbox_pointer(re as i64)
+}
+
+/// Without the regex engine there is no RegExp to construct — keep the
+/// pre-existing noop behavior rather than referencing a compiled-out ctor.
+#[cfg(not(feature = "regex-engine"))]
+pub(crate) extern "C" fn regexp_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _pattern: f64,
+    _flags: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 // #4569: Map/Set/WeakMap/WeakSet/WeakRef are constructors — calling them
 // without `new` is a TypeError (ECMA-262: an undefined newTarget throws). The
 // bare-call form previously fell through to `global_this_builtin_noop_thunk`

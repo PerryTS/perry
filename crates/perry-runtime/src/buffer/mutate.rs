@@ -29,7 +29,7 @@ fn throw_invalid_buffer_size() -> ! {
 /// bytes in-place. Returns the same buffer pointer.
 #[no_mangle]
 pub extern "C" fn js_buffer_fill_random(buf_ptr: f64) -> f64 {
-    use rand::RngCore;
+    use rand::Rng;
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     if buf.is_null() {
         return buf_ptr;
@@ -38,7 +38,7 @@ pub extern "C" fn js_buffer_fill_random(buf_ptr: f64) -> f64 {
         let len = (*buf).length as usize;
         let data = buffer_data_mut(buf);
         let bytes = std::slice::from_raw_parts_mut(data, len);
-        rand::thread_rng().fill_bytes(bytes);
+        rand::rng().fill_bytes(bytes);
         super::view::propagate_written_range_from_receiver(buf as usize, 0, data, len as u32);
     }
     buf_ptr

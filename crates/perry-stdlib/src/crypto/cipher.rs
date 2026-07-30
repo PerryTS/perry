@@ -57,10 +57,10 @@ impl CipherKind {
 }
 
 // CBC type aliases (Aes256CbcEnc/Dec already exist above for aes-256-cbc).
-pub(super) type Aes128CbcEnc = Encryptor<Aes128>;
-pub(super) type Aes128CbcDec = Decryptor<Aes128>;
-pub(super) type Aes192CbcEnc = Encryptor<Aes192>;
-pub(super) type Aes192CbcDec = Decryptor<Aes192>;
+pub(super) type Aes128CbcEnc = Encryptor<Aes128CbcCipher>;
+pub(super) type Aes128CbcDec = Decryptor<Aes128CbcCipher>;
+pub(super) type Aes192CbcEnc = Encryptor<Aes192CbcCipher>;
+pub(super) type Aes192CbcDec = Decryptor<Aes192CbcCipher>;
 pub(super) type Aes128EcbEnc = ecb::Encryptor<Aes128>;
 pub(super) type Aes128EcbDec = ecb::Decryptor<Aes128>;
 pub(super) type Aes192EcbEnc = ecb::Encryptor<Aes192>;
@@ -776,14 +776,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         Err(_) => return nanbox_undefined(),
                     };
                     if state.auto_padding {
-                        match cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
+                        match cipher.encrypt_padded::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher
-                            .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext_or_ct.len())
-                        {
+                        match cipher.encrypt_padded::<NoPadding>(&mut buf, plaintext_or_ct.len()) {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -803,14 +801,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         Err(_) => return nanbox_undefined(),
                     };
                     if state.auto_padding {
-                        match cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
+                        match cipher.encrypt_padded::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher
-                            .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext_or_ct.len())
-                        {
+                        match cipher.encrypt_padded::<NoPadding>(&mut buf, plaintext_or_ct.len()) {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -830,14 +826,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         Err(_) => return nanbox_undefined(),
                     };
                     if state.auto_padding {
-                        match cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
+                        match cipher.encrypt_padded::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher
-                            .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext_or_ct.len())
-                        {
+                        match cipher.encrypt_padded::<NoPadding>(&mut buf, plaintext_or_ct.len()) {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -855,13 +849,14 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     let cipher =
                         Aes256EcbEnc::new_from_slice(&state.key).unwrap_or_else(|_| unreachable!());
                     if state.auto_padding {
-                        match cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
+                        match cipher.encrypt_padded_mut::<EcbPkcs7>(&mut buf, plaintext_or_ct.len())
+                        {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
                         match cipher
-                            .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext_or_ct.len())
+                            .encrypt_padded_mut::<EcbNoPadding>(&mut buf, plaintext_or_ct.len())
                         {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
@@ -880,13 +875,14 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     let cipher =
                         Aes192EcbEnc::new_from_slice(&state.key).unwrap_or_else(|_| unreachable!());
                     if state.auto_padding {
-                        match cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
+                        match cipher.encrypt_padded_mut::<EcbPkcs7>(&mut buf, plaintext_or_ct.len())
+                        {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
                         match cipher
-                            .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext_or_ct.len())
+                            .encrypt_padded_mut::<EcbNoPadding>(&mut buf, plaintext_or_ct.len())
                         {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
@@ -905,13 +901,14 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     let cipher =
                         Aes128EcbEnc::new_from_slice(&state.key).unwrap_or_else(|_| unreachable!());
                     if state.auto_padding {
-                        match cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_or_ct.len()) {
+                        match cipher.encrypt_padded_mut::<EcbPkcs7>(&mut buf, plaintext_or_ct.len())
+                        {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
                         match cipher
-                            .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext_or_ct.len())
+                            .encrypt_padded_mut::<EcbNoPadding>(&mut buf, plaintext_or_ct.len())
                         {
                             Ok(ct) => ct.to_vec(),
                             Err(_) => return nanbox_undefined(),
@@ -955,12 +952,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         Err(_) => return nanbox_undefined(),
                     };
                     if state.auto_padding {
-                        match cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+                        match cipher.decrypt_padded::<Pkcs7>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher.decrypt_padded_mut::<NoPadding>(&mut buf) {
+                        match cipher.decrypt_padded::<NoPadding>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -973,12 +970,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         Err(_) => return nanbox_undefined(),
                     };
                     if state.auto_padding {
-                        match cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+                        match cipher.decrypt_padded::<Pkcs7>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher.decrypt_padded_mut::<NoPadding>(&mut buf) {
+                        match cipher.decrypt_padded::<NoPadding>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -991,12 +988,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         Err(_) => return nanbox_undefined(),
                     };
                     if state.auto_padding {
-                        match cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+                        match cipher.decrypt_padded::<Pkcs7>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher.decrypt_padded_mut::<NoPadding>(&mut buf) {
+                        match cipher.decrypt_padded::<NoPadding>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -1007,12 +1004,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     let cipher =
                         Aes256EcbDec::new_from_slice(&state.key).unwrap_or_else(|_| unreachable!());
                     if state.auto_padding {
-                        match cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+                        match cipher.decrypt_padded_mut::<EcbPkcs7>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher.decrypt_padded_mut::<NoPadding>(&mut buf) {
+                        match cipher.decrypt_padded_mut::<EcbNoPadding>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -1023,12 +1020,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     let cipher =
                         Aes192EcbDec::new_from_slice(&state.key).unwrap_or_else(|_| unreachable!());
                     if state.auto_padding {
-                        match cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+                        match cipher.decrypt_padded_mut::<EcbPkcs7>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher.decrypt_padded_mut::<NoPadding>(&mut buf) {
+                        match cipher.decrypt_padded_mut::<EcbNoPadding>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
@@ -1039,12 +1036,12 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     let cipher =
                         Aes128EcbDec::new_from_slice(&state.key).unwrap_or_else(|_| unreachable!());
                     if state.auto_padding {
-                        match cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+                        match cipher.decrypt_padded_mut::<EcbPkcs7>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }
                     } else {
-                        match cipher.decrypt_padded_mut::<NoPadding>(&mut buf) {
+                        match cipher.decrypt_padded_mut::<EcbNoPadding>(&mut buf) {
                             Ok(pt) => pt.to_vec(),
                             Err(_) => return nanbox_undefined(),
                         }

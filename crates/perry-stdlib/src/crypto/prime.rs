@@ -196,7 +196,7 @@ fn bit_length(value: &RsaBigUint) -> usize {
 fn generate_candidate_bytes(bits: usize) -> Vec<u8> {
     let len = ((bits + 7) / 8).max(1);
     let mut bytes = vec![0; len];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let excess = len * 8 - bits;
     if excess > 0 {
         bytes[0] &= 0xffu8 >> excess;

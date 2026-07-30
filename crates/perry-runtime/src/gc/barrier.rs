@@ -1296,7 +1296,10 @@ thread_local! {
 fn ever_dirty_tracking_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| std::env::var_os("PERRY_GC_VERIFY_EVACUATION").is_some())
+    *CACHED.get_or_init(|| {
+        std::env::var_os("PERRY_GC_VERIFY_EVACUATION").is_some()
+            || super::fromspace_scan::fromspace_scan_enabled()
+    })
 }
 
 fn ever_dirty_note(page: usize) {
@@ -1858,4 +1861,18 @@ fn clear_one_conservative_pin() -> bool {
 pub fn remembered_set_clear() {
     let mut state = RememberedSetClearState::new();
     while !state.step(usize::MAX) {}
+}
+
+/// #7035: is `addr`'s old page currently in the remembered set?
+pub(super) fn dirty_now_for_addr(addr: usize) -> bool {
+    DIRTY_OLD_PAGES.with(|s| {
+        s.borrow()
+            .contains(&crate::arena::generation_page_for_addr(addr))
+    })
+}
+
+/// #7035: was `addr`'s old page EVER dirtied? Distinguishes "barrier never ran"
+/// from "edge was recorded then lost".
+pub(super) fn ever_dirty_for_addr(addr: usize) -> bool {
+    ever_dirty_old_page(crate::arena::generation_page_for_addr(addr))
 }

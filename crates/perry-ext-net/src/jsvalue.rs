@@ -56,7 +56,7 @@ extern "C" {
 
 /// Issue #1131 — read a NaN-boxed JS value as the raw bytes to put on
 /// the wire for `socket.write(chunk)`. Outbound mirror of
-/// `perry-ext-http-server`'s `jsvalue_to_body_bytes` (#1124): a JS
+/// `perry-ext-http`'s `jsvalue_to_body_bytes` (#1124): a JS
 /// string and a `Buffer` have *different* memory layouts
 /// (`StringHeader` is 20 bytes, `{ utf16_len, byte_len, capacity,
 /// refcount, flags }`; `BufferHeader` is 8 bytes, `{ length, capacity

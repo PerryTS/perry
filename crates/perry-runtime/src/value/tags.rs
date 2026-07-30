@@ -158,7 +158,7 @@ pub(crate) type JsNativeTlsDispatchFn =
 /// enabled whenever a program imports one of those modules). Lets a captured /
 /// aliased `createServer` (`const cs = createServer; cs(handler)`, or
 /// `@hono/node-server`'s `const createServer = options.createServer ||
-/// createServerHTTP`) reach the perry-ext-http-server impls. Unlike crypto/zlib
+/// createServerHTTP`) reach the perry-ext-http impls. Unlike crypto/zlib
 /// it also takes the module name so one callback can route http vs https vs
 /// http2. Stays null when the http ext crate isn't linked. (#2533)
 pub(crate) type JsNativeHttpDispatchFn =

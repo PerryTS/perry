@@ -112,6 +112,18 @@ Generational mark-sweep GC in `crates/perry-runtime/src/gc.rs` (default since v0
 
 **Escape hatches**: `PERRY_GEN_GC=0`/`off`/`false` reverts to full mark-sweep (bisection only). `PERRY_GEN_GC_EVACUATE=0`/`off`/`false` disables policy evacuation; `=1`/`on`/`true` is accepted as auto-policy allowed, not unconditional evacuation. `PERRY_GC_FORCE_EVACUATE=1` stress-copies every marked non-pinned nursery object only when generated write barriers are active and policy evacuation is allowed. `PERRY_GC_VERIFY_EVACUATION=1` panics if any mutable live slot still points at a forwarded nursery object after an evacuation/rewrite cycle. `PERRY_WRITE_BARRIERS=0`/`off`/`false` disables codegen-emitted write barriers at compile time and runtime exact helper barriers at runtime for benchmark/debug bisection; unset, `=1`/`on`/`true` keep barriers enabled. `PERRY_GC_DIAG=1` prints per-cycle diagnostics, including evacuation-policy decisions for considered cycles and `barriers_inactive` skips.
 
+### GC knob kill-policy (binding)
+
+**Every GC env knob either has a required CI arm exercising its OFF state, or it is deleted after one release of soak.** At most one diagnostic-only knob may exist at a time, and it must be labelled untested.
+
+This is not tidiness. An unexercised mode is a configuration nobody has verified, and this project has repeatedly paid for that:
+
+- `PERRY_GC_FORCE_EVACUATE` was **inert** for every `gc()`-driven test — it is read only on the minor path, while `gc()` runs a full mark-sweep with a forced conservative scan (#6942/#6946). Months of "passes under evacuation" meant nothing.
+- The matrix's `--pressure` knob **disabled the very path it was measuring** — the defer hard cap and the arena-trigger ceiling shared a formula and collapsed together, so the `default` arm ran zero copying minors on all 22 rows (#7024).
+- `gc_incremental_enabled`'s doc said "EXPERIMENTAL — default OFF" eight lines above a body comment saying "DEFAULT ON" (#6987). A merge decision was made on the wrong one.
+
+**A mode that still exists is a decision that hasn't been made.** When a knob's off-state stops being exercised, delete the off-state and the branch behind it — the losing mode should stop compiling, not linger as an untested configuration that a future bisect will trust.
+
 ## Threading (`perry/thread`)
 
 Single-threaded by default. `perry/thread` provides:

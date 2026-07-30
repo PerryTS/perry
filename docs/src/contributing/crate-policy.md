@@ -63,8 +63,6 @@ reason to split or merge it.
 
 - Native bindings use `perry-ffi` as their production interface to Perry.
 - A production dependency from `perry-ext-*` to `perry-runtime` is forbidden.
-  `perry-ext-http` is the sole recorded migration debt while its missing FFI
-  capabilities are introduced.
 - Test binaries may enable `perry-ffi/runtime-link`; that edge provides runtime
   symbols for tests and is not part of the binding's distributed contract.
 - Runtime and stdlib functionality must have one production implementation.
@@ -111,7 +109,7 @@ views reproduce each crate's category, decision, source path, Rust LOC,
 production dependencies, internal consumers, default membership, and workspace
 lint inheritance. LOC is reported live and is deliberately not committed.
 
-The committed baseline records only structural signals: the 78 reviewed member
+The committed baseline records only structural signals: the 76 reviewed member
 decisions, the default dependency closure, the `perry` CLI closure, and decision
 counts. Any structural change must update the policy intentionally; ordinary
 Rust source edits do not churn the baseline.

@@ -46,6 +46,10 @@ pub(crate) use bigint_promise::{
     object_is_sealed_thunk, object_is_thunk, object_keys_thunk, object_prevent_extensions_thunk,
     object_seal_thunk, object_set_prototype_of_thunk, object_values_thunk,
     promise_static_function_spec, reflect_apply_thunk, reflect_construct_thunk,
+    reflect_define_property_thunk, reflect_delete_property_thunk,
+    reflect_get_own_property_descriptor_thunk, reflect_get_prototype_of_thunk, reflect_get_thunk,
+    reflect_has_thunk, reflect_is_extensible_thunk, reflect_own_keys_thunk,
+    reflect_prevent_extensions_thunk, reflect_set_prototype_of_thunk, reflect_set_thunk,
     string_from_char_code_static, string_from_code_point_static, string_raw_static,
     symbol_for_thunk, symbol_key_for_thunk, typed_array_from_thunk, typed_array_of_thunk,
 };
@@ -70,12 +74,13 @@ pub(crate) use ctor_thunks::{
     global_this_url_pattern_call_thunk, is_function_prototype_object_value,
     map_constructor_call_thunk, normalize_eval_this_body, promise_constructor_call_thunk,
     range_error_constructor_call_thunk, reference_error_constructor_call_thunk,
-    set_constructor_call_thunk, subtle_crypto_method_value, syntax_error_constructor_call_thunk,
-    type_error_constructor_call_thunk, typed_array_constructor_call_thunk,
-    uri_error_constructor_call_thunk, weak_map_constructor_call_thunk,
-    weak_ref_constructor_call_thunk, weak_set_constructor_call_thunk,
-    webcrypto_get_random_values_thunk, webcrypto_illegal_constructor_thunk, webcrypto_method_value,
-    webcrypto_random_uuid_thunk, webcrypto_subtle_getter_thunk,
+    regexp_constructor_call_thunk, set_constructor_call_thunk, subtle_crypto_method_value,
+    syntax_error_constructor_call_thunk, type_error_constructor_call_thunk,
+    typed_array_constructor_call_thunk, uri_error_constructor_call_thunk,
+    weak_map_constructor_call_thunk, weak_ref_constructor_call_thunk,
+    weak_set_constructor_call_thunk, webcrypto_get_random_values_thunk,
+    webcrypto_illegal_constructor_thunk, webcrypto_method_value, webcrypto_random_uuid_thunk,
+    webcrypto_subtle_getter_thunk,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;

@@ -78,7 +78,7 @@ pub(super) unsafe fn crypto_random_fill_sync_dispatch(
     offset_bits: f64,
     size_bits: f64,
 ) -> f64 {
-    use rand::RngCore;
+    use rand::Rng;
 
     let addr = crypto_dispatch_value_addr(target);
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
@@ -96,7 +96,7 @@ pub(super) unsafe fn crypto_random_fill_sync_dispatch(
                 .saturating_add(count_elem.saturating_mul(elem_size))
                 .min(data.len());
             if end > start {
-                rand::thread_rng().fill_bytes(&mut data[start..end]);
+                rand::rng().fill_bytes(&mut data[start..end]);
             }
             return target;
         }
@@ -108,7 +108,7 @@ pub(super) unsafe fn crypto_random_fill_sync_dispatch(
         let (start, count) = crypto_random_fill_range(total, offset_bits, size_bits);
         if count > 0 {
             let data = crate::buffer::buffer_data_mut(buf);
-            rand::thread_rng().fill_bytes(std::slice::from_raw_parts_mut(data.add(start), count));
+            rand::rng().fill_bytes(std::slice::from_raw_parts_mut(data.add(start), count));
         }
         return target;
     }

@@ -860,24 +860,50 @@ pub(crate) fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
 /// #4139: reify the `Reflect` namespace's own methods for reflection parity.
 /// See `install_math_namespace` for the rationale.
 pub(crate) fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
-    let noop = global_this_builtin_noop_thunk as *const u8;
+    // Every member is REAL as a value (#5989 for `construct`, then the rest):
+    // primordials-style captures (`const ReflectOwnKeys = Reflect.ownKeys`)
+    // call these through stored bindings, and a noop stub silently returned
+    // `undefined` — a hardened-primordials library's `recursiveFreeze` walked
+    // `Reflect.ownKeys(obj)` at class-static-init time and threw on
+    // destructuring the stub's `undefined` result.
     let methods = [
-        ("defineProperty", noop, 3),
-        ("deleteProperty", noop, 2),
+        (
+            "defineProperty",
+            reflect_define_property_thunk as *const u8,
+            3,
+        ),
+        (
+            "deleteProperty",
+            reflect_delete_property_thunk as *const u8,
+            2,
+        ),
         ("apply", reflect_apply_thunk as *const u8, 3),
-        // #5989: `construct` must be REAL as a value — Next.js's Date
-        // extension calls it through a captured binding (see
-        // `reflect_construct_thunk`).
         ("construct", reflect_construct_thunk as *const u8, 2),
-        ("get", noop, 2),
-        ("getOwnPropertyDescriptor", noop, 2),
-        ("getPrototypeOf", noop, 1),
-        ("has", noop, 2),
-        ("isExtensible", noop, 1),
-        ("ownKeys", noop, 1),
-        ("preventExtensions", noop, 1),
-        ("set", noop, 3),
-        ("setPrototypeOf", noop, 2),
+        ("get", reflect_get_thunk as *const u8, 2),
+        (
+            "getOwnPropertyDescriptor",
+            reflect_get_own_property_descriptor_thunk as *const u8,
+            2,
+        ),
+        (
+            "getPrototypeOf",
+            reflect_get_prototype_of_thunk as *const u8,
+            1,
+        ),
+        ("has", reflect_has_thunk as *const u8, 2),
+        ("isExtensible", reflect_is_extensible_thunk as *const u8, 1),
+        ("ownKeys", reflect_own_keys_thunk as *const u8, 1),
+        (
+            "preventExtensions",
+            reflect_prevent_extensions_thunk as *const u8,
+            1,
+        ),
+        ("set", reflect_set_thunk as *const u8, 3),
+        (
+            "setPrototypeOf",
+            reflect_set_prototype_of_thunk as *const u8,
+            2,
+        ),
     ];
     for (name, func_ptr, arity) in methods {
         install_proto_method(ns_obj, name, func_ptr, arity);

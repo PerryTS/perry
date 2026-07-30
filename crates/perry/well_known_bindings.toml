@@ -243,9 +243,8 @@ crate = "perry-ext-http"
 lib = "perry_ext_http"
 tracking = "#466"
 
-# Server-side `node:http2` lives in perry-ext-http-server, but its
-# symbols are pulled in transitively through perry-ext-http (rlib
-# dep), so the staticlib binding stays uniform across http/https/http2.
+# Server-side `node:http2` lives in perry-ext-http's internal server
+# module, so the staticlib binding stays uniform across http/https/http2.
 [bindings.http2]
 crate = "perry-ext-http"
 lib = "perry_ext_http"
