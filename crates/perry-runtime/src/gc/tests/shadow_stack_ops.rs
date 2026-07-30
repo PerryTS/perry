@@ -274,8 +274,8 @@ fn bind_roots_the_value_present_at_the_call_not_a_later_store() {
     SHADOW.with(|cell| unsafe {
         let s = &*cell.get();
         let top = s.frame_top;
-        assert_eq!(s.slots[top].value, ptr_bits(0xAAAA_0000));
-        assert_eq!(s.slots[top + 1].value, ptr_bits(0xBBBB_0000));
+        assert_eq!(s.slots()[top].value, ptr_bits(0xAAAA_0000));
+        assert_eq!(s.slots()[top + 1].value, ptr_bits(0xBBBB_0000));
     });
 
     // A bound slot deliberately tracks later mutator stores through the

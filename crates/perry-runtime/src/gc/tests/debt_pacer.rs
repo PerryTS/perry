@@ -581,8 +581,8 @@ fn atomic_finalize_remark_rescues_pointer_hidden_in_shadow_slot_after_root_scan(
     SHADOW.with(|cell| unsafe {
         let st = &mut *cell.get();
         let slot = st.frame_top + 1;
-        st.slots[slot].value = string_bits(hidden);
-        st.slots[slot].meta |= SLOT_ACTIVE;
+        st.slots_mut()[slot].value = string_bits(hidden);
+        st.slots_mut()[slot].meta |= SLOT_ACTIVE;
     });
 
     let completed = complete_budgeted_gc_cycle();

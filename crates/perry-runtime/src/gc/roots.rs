@@ -1495,22 +1495,22 @@ impl MutableRootSlot {
 pub(super) fn visit_shadow_stack_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
-        if s.slots.is_empty() {
+        if s.len == 0 || s.ptr.is_null() {
             return;
         }
         let mut top = s.frame_top;
         while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
             let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base >= s.slots.len() {
+            if header_base >= s.len {
                 break;
             }
-            let header = s.slots[header_base];
+            let header = *s.ptr.add(header_base);
             let slot_count = header.meta;
             let slots_end = top + slot_count;
-            if slots_end > s.slots.len() {
+            if slots_end > s.len {
                 break;
             }
-            let base = s.slots.as_mut_ptr().add(top);
+            let base = s.ptr.add(top);
             for i in 0..slot_count {
                 let entry = base.add(i);
                 if !(*entry).is_active() {
