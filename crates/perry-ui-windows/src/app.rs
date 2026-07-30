@@ -243,15 +243,15 @@ fn to_wide(s: &str) -> Vec<u16> {
 /// Create an app window. Returns app handle (1-based).
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     let title = str_from_header(title_ptr);
-    let w = if width > 0.0 { width as i32 } else { 800 };
-    let h = if height > 0.0 { height as i32 } else { 600 };
+    let w = if width > 0.0 { width } else { 800.0 };
+    let h = if height > 0.0 { height } else { 600.0 };
 
     #[cfg(target_os = "windows")]
     {
         unsafe {
             ensure_dpi_initialized();
-            let w = scale_logical_px(w as f64);
-            let h = scale_logical_px(h as f64);
+            let w = scale_logical_px(w);
+            let h = scale_logical_px(h);
 
             // Initialize common controls
             let icc = INITCOMMONCONTROLSEX {
@@ -1457,6 +1457,7 @@ mod dpi_tests {
         assert_eq!(dpi_scale_from_dpi(192), 2.0);
         assert_eq!(scale_logical_px_by(800.0, 1.5), 1200);
         assert_eq!(scale_logical_px_by(600.0, 1.5), 900);
+        assert_eq!(scale_logical_px_by(100.9, 1.5), 151);
     }
 
     #[test]
