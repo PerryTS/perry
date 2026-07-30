@@ -2875,7 +2875,6 @@ fn lower_object_array_write_versioned_for(
         extra_guards.push((g_packed, g_box));
     }
     let preheader_idx = ctx.current_block;
-
     // Emit the fallback first. Besides preserving the original semantics, this
     // creates the ordinary local slots for the nested counter, allowing the
     // fast completion block to synchronize loop variables before the merge.
