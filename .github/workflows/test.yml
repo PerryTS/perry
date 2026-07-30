@@ -1976,7 +1976,7 @@ jobs:
             # stdlib/http/snippets.ts excluded since v0.5.886: it links
             # against js_axios_response_data_parsed +
             # js_node_http2_create_secure_server which live in
-            # perry-ext-axios / perry-ext-http-server. v0.5.885's
+            # perry-ext-axios / perry-ext-http. v0.5.885's
             # PERRY_NO_AUTO_OPTIMIZE skips the well-known-binding probe
             # that would route those .a files into the link surface.
             # Proper fix: hoist well-known-binding lookup out of

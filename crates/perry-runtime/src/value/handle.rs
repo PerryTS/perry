@@ -94,7 +94,7 @@ pub extern "C" fn js_set_native_tls_dispatch(func: JsNativeTlsDispatchFn) {
 
 /// Set the node:http/https/http2 server-factory dispatcher. Registered by
 /// perry-stdlib at startup (under `external-http-server-pump`) so a captured /
-/// aliased `createServer` reaches the perry-ext-http-server impls, which this
+/// aliased `createServer` reaches the perry-ext-http impls, which this
 /// crate can't call directly. Stays null when the http ext crate isn't linked. (#2533)
 #[no_mangle]
 pub extern "C" fn js_set_native_http_dispatch(func: JsNativeHttpDispatchFn) {

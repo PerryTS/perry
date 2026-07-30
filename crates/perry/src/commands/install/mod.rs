@@ -18,6 +18,7 @@ use crate::OutputFormat;
 
 pub mod allowlist;
 pub mod detect;
+pub mod firewall;
 pub mod lifecycle;
 pub mod runner;
 pub mod scanner;
@@ -51,6 +52,15 @@ pub struct InstallArgs {
     /// hand. Lifecycle scripts still don't run.
     #[arg(long)]
     pub skip_scan: bool,
+
+    /// Don't route the installer through Socket Firewall (sfw) even when
+    /// it is available. Without this flag, sfw is auto-detected (the
+    /// PERRY_SFW path if set, else `sfw` on PATH) and the install's network
+    /// traffic is scanned in-flight; when sfw is absent the install proceeds
+    /// unfirewalled with a stderr note, and the install report records
+    /// `firewall.state`.
+    #[arg(long)]
+    pub no_firewall: bool,
 
     /// Bypass the scan for a single package (repeat to bypass multiple).
     #[arg(long = "allow-risky", value_name = "PKG")]
@@ -86,7 +96,7 @@ pub fn run(args: InstallArgs, _format: OutputFormat, use_color: bool) -> Result<
         installer.print_banner(use_color);
     }
 
-    runner::install(&installer, &args)?;
+    let firewall_status = runner::install(&installer, &args)?;
 
     if args.skip_scan {
         if !args.json {
@@ -117,7 +127,11 @@ pub fn run(args: InstallArgs, _format: OutputFormat, use_color: bool) -> Result<
         .unwrap_or_else(|| cwd.clone());
 
     let packages = scanner::discover_packages(&node_modules);
-    let report = scanner::scan_packages(&packages, &args.allow_risky, args.allow_risky_all);
+    let mut report = scanner::scan_packages(&packages, &args.allow_risky, args.allow_risky_all);
+    // Record the network-time layer alongside the install-time scan, so the
+    // --json consumer (CI) can see an unfirewalled install instead of only a
+    // human reading stderr.
+    report.firewall = firewall_status;
     report.write_to(&project_root)?;
 
     if args.json {

@@ -9,9 +9,9 @@ use perry_ffi::{
 };
 use std::collections::HashMap;
 
-use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
-use crate::response::HyperResponseShape;
-use crate::types::{
+use crate::server::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
+use crate::server::response::HyperResponseShape;
+use crate::server::types::{
     jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK,
     TAG_UNDEFINED,
 };
@@ -323,7 +323,7 @@ fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
             status_message: None,
             headers,
             trailers: Vec::new(),
-            body: crate::response::ShapeBody::Full(body),
+            body: crate::server::response::ShapeBody::Full(body),
         };
         if let Some(tx) = stream.response_tx.take() {
             let _ = tx.send(shape);

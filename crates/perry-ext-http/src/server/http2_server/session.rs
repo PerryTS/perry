@@ -16,9 +16,9 @@ use perry_ffi::{
     register_handle, JsValue,
 };
 
-use crate::ensure_gc_scanner_registered;
-use crate::http2_session_settings::Http2SettingsState;
-use crate::types::jsvalue_to_owned_string;
+use crate::server::ensure_gc_scanner_registered;
+use crate::server::http2_session_settings::Http2SettingsState;
+use crate::server::types::jsvalue_to_owned_string;
 
 pub(crate) fn register_server_session(server_handle: i64, peer_addr: SocketAddr) -> i64 {
     let session_handle = register_handle(Http2SessionHandle {

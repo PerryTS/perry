@@ -33,17 +33,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // spellings need the same feature for auto-optimized stdlib builds.
         "streams" | "stream/web" | "stream_web" | "fs/promises" => &["bundled-streams"],
 
-        // ── HTTP client (reqwest) ─────────────────────────────────────
-        // `http` / `https` / `http2` join the `http-client` umbrella since
-        // they bottom out in reqwest just like axios + node-fetch — and
-        // perry-ext-http-server (issue #577) needs the same async-runtime
-        // bridge for `perry_ffi_spawn_blocking_with_reactor`. The
-        // well-known flip swaps perry-stdlib's http.rs for perry-ext-http
-        // (v0.5.571); `http2` flips to the same staticlib via the rlib
-        // dep on perry-ext-http-server. Programs that import `streams`
-        // should NOT also use the well-known flip — streams stays in
-        // perry-stdlib until its own port lands.
-        "axios" | "node-fetch" | "http" | "https" | "http2" => &["http-client"],
+        // ── Web Fetch and Axios compatibility surface ────────────────
+        // Node HTTP/HTTPS/HTTP2 are provided by perry-ext-http and need
+        // no perry-stdlib feature. Axios and node-fetch still use the
+        // legacy umbrella for compatibility.
+        "axios" | "node-fetch" => &["http-client"],
 
         // ── WebSocket ─────────────────────────────────────────────────
         // `websocket` umbrella retained for backwards-compat;
@@ -222,17 +216,16 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // events won't propagate to user callbacks.
         "readline" => &["async-runtime"],
 
-        // Modules with no optional perry-stdlib dependency (decimal.js,
-        // bignumber.js, lru-cache, commander, exponential-backoff, http,
-        // https, events, async_hooks, worker_threads, …) — handled by
-        // always-on stdlib code.
+        // Modules with no optional perry-stdlib dependency (http, https,
+        // http2, events, async_hooks, worker_threads, …) are provided by
+        // external bindings or always-on runtime code.
         _ => &[],
     }
 }
 
 /// Compute the union of perry-stdlib features required to cover every
 /// native module the project imports, plus features needed to satisfy
-/// non-import-based usage flags (e.g. `uses_fetch` ⇒ `http-client`).
+/// non-import-based usage flags (e.g. `uses_fetch` ⇒ `web-fetch`).
 pub fn compute_required_features(
     native_module_imports: &BTreeSet<String>,
     uses_fetch: bool,
@@ -245,13 +238,8 @@ pub fn compute_required_features(
         }
     }
     // Built-in `fetch()` / `node-fetch` and the WHATWG data types
-    // (`Headers` / `Request` / `Response` / `Blob`) bottom out in reqwest
-    // but do NOT need perry-stdlib's bundled node:http client. #5174: ask
-    // for `web-fetch` (just `src/fetch/` + `src/fetch_blob.rs`), not the
-    // `http-client` umbrella that also pulls in `src/http.rs` / `src/axios.rs`.
-    // When the program ALSO imports `node:http`, that import adds
-    // `http-client` separately and the well-known flip strips it down to
-    // `web-fetch` — so the bundled client never collides with perry-ext-http.
+    // (`Headers` / `Request` / `Response` / `Blob`) use the Web Fetch
+    // feature directly, without enabling Axios.
     if uses_fetch {
         features.insert("web-fetch");
     }
@@ -285,5 +273,13 @@ mod tests {
 
         let features = compute_required_features(&imports, false, false);
         assert!(features.contains("bundled-streams"));
+    }
+
+    #[test]
+    fn node_http_uses_external_binding_without_legacy_client_feature() {
+        assert!(module_to_features("http").is_empty());
+        assert!(module_to_features("node:https").is_empty());
+        assert!(module_to_features("http2").is_empty());
+        assert_eq!(module_to_features("axios"), &["http-client"]);
     }
 }

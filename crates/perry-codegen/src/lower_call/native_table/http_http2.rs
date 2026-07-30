@@ -68,7 +68,7 @@ pub(super) const HTTP_HTTP2_ROWS: &[NativeModSig] = &[
         ret: NR_OBJ_FROM_JSON_STR,
     },
     // ========== node:http2 settings helpers (issue #3168) ==========
-    // Pure pack/unpack functions implemented in perry-ext-http-server (so
+    // Pure pack/unpack functions implemented in perry-ext-http (so
     // their Buffer alloc/recognition shares the program's runtime copy).
     NativeModSig {
         module: "http2",

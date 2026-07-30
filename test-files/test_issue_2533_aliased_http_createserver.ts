@@ -8,7 +8,7 @@
 // `is_native_module_callable_export` so the value-read yields a bound-method
 // closure, and routes the closure's invocation through a new
 // `JS_NATIVE_HTTP_DISPATCH` hook (registered by perry-stdlib under
-// `external-http-server-pump`) to the perry-ext-http-server factories.
+// `external-http-server-pump`) to the perry-ext-http factories.
 //
 // Scope mirrors #2153 (HttpServer dynamic dispatch): this verifies the bind
 // path — `createServer` no longer throws and the returned server supports

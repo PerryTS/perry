@@ -332,40 +332,42 @@ unsafe extern "C" fn http_server_method_dispatch_ext(
         return 0;
     }
     let value = if is_http_server_method(name)
-        && crate::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
-    {
-        Some(crate::handle_dispatch::js_ext_http_server_dispatch_method(
-            handle, method_ptr, method_len, args_ptr, args_len,
-        ))
-    } else if is_incoming_message_member(name)
-        && crate::handle_dispatch::js_ext_http_incoming_message_is_handle(handle) != 0
+        && crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
     {
         Some(
-            crate::handle_dispatch::js_ext_http_incoming_message_dispatch_method(
+            crate::server::handle_dispatch::js_ext_http_server_dispatch_method(
+                handle, method_ptr, method_len, args_ptr, args_len,
+            ),
+        )
+    } else if is_incoming_message_member(name)
+        && crate::server::handle_dispatch::js_ext_http_incoming_message_is_handle(handle) != 0
+    {
+        Some(
+            crate::server::handle_dispatch::js_ext_http_incoming_message_dispatch_method(
                 handle, method_ptr, method_len, args_ptr, args_len,
             ),
         )
     } else if is_server_response_member(name)
-        && crate::handle_dispatch::js_ext_http_server_response_is_handle(handle) != 0
+        && crate::server::handle_dispatch::js_ext_http_server_response_is_handle(handle) != 0
     {
         Some(
-            crate::handle_dispatch::js_ext_http_server_response_dispatch_method(
+            crate::server::handle_dispatch::js_ext_http_server_response_dispatch_method(
                 handle, method_ptr, method_len, args_ptr, args_len,
             ),
         )
     } else if is_h2_session_member(name)
-        && crate::http2_server::dispatch::js_ext_http2_session_is_handle(handle) != 0
+        && crate::server::http2_server::dispatch::js_ext_http2_session_is_handle(handle) != 0
     {
         Some(
-            crate::http2_server::dispatch::js_ext_http2_session_dispatch_method(
+            crate::server::http2_server::dispatch::js_ext_http2_session_dispatch_method(
                 handle, method_ptr, method_len, args_ptr, args_len,
             ),
         )
     } else if is_h2_stream_member(name)
-        && crate::http2_server::dispatch::js_ext_http2_stream_is_handle(handle) != 0
+        && crate::server::http2_server::dispatch::js_ext_http2_stream_is_handle(handle) != 0
     {
         Some(
-            crate::http2_server::dispatch::js_ext_http2_stream_dispatch_method(
+            crate::server::http2_server::dispatch::js_ext_http2_stream_dispatch_method(
                 handle, method_ptr, method_len, args_ptr, args_len,
             ),
         )
@@ -395,50 +397,50 @@ unsafe extern "C" fn http_server_property_dispatch_ext(
         return 0;
     }
     let value = if is_http_server_property(name)
-        && crate::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
+        && crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
     {
         Some(
-            crate::handle_dispatch::js_ext_http_server_dispatch_property(
+            crate::server::handle_dispatch::js_ext_http_server_dispatch_property(
                 handle,
                 property_ptr,
                 property_len,
             ),
         )
     } else if is_incoming_message_member(name)
-        && crate::handle_dispatch::js_ext_http_incoming_message_is_handle(handle) != 0
+        && crate::server::handle_dispatch::js_ext_http_incoming_message_is_handle(handle) != 0
     {
         Some(
-            crate::handle_dispatch::js_ext_http_incoming_message_dispatch_property(
+            crate::server::handle_dispatch::js_ext_http_incoming_message_dispatch_property(
                 handle,
                 property_ptr,
                 property_len,
             ),
         )
     } else if is_server_response_member(name)
-        && crate::handle_dispatch::js_ext_http_server_response_is_handle(handle) != 0
+        && crate::server::handle_dispatch::js_ext_http_server_response_is_handle(handle) != 0
     {
         Some(
-            crate::handle_dispatch::js_ext_http_server_response_dispatch_property(
+            crate::server::handle_dispatch::js_ext_http_server_response_dispatch_property(
                 handle,
                 property_ptr,
                 property_len,
             ),
         )
     } else if is_h2_session_member(name)
-        && crate::http2_server::dispatch::js_ext_http2_session_is_handle(handle) != 0
+        && crate::server::http2_server::dispatch::js_ext_http2_session_is_handle(handle) != 0
     {
         Some(
-            crate::http2_server::dispatch::js_ext_http2_session_dispatch_property(
+            crate::server::http2_server::dispatch::js_ext_http2_session_dispatch_property(
                 handle,
                 property_ptr,
                 property_len,
             ),
         )
     } else if is_h2_stream_member(name)
-        && crate::http2_server::dispatch::js_ext_http2_stream_is_handle(handle) != 0
+        && crate::server::http2_server::dispatch::js_ext_http2_stream_is_handle(handle) != 0
     {
         Some(
-            crate::http2_stream_props::js_ext_http2_stream_dispatch_property(
+            crate::server::http2_stream_props::js_ext_http2_stream_dispatch_property(
                 handle,
                 property_ptr,
                 property_len,
@@ -483,9 +485,9 @@ unsafe extern "C" fn http_server_property_set_dispatch_ext(
             | "strictContentLength"
             | "socket"
             | "connection"
-    ) && crate::handle_dispatch::js_ext_http_server_response_is_handle(handle) != 0
+    ) && crate::server::handle_dispatch::js_ext_http_server_response_is_handle(handle) != 0
     {
-        return crate::handle_dispatch::js_ext_http_server_response_dispatch_property_set(
+        return crate::server::handle_dispatch::js_ext_http_server_response_dispatch_property_set(
             handle,
             property_ptr,
             property_len,
@@ -493,9 +495,9 @@ unsafe extern "C" fn http_server_property_set_dispatch_ext(
         );
     }
     if matches!(name, "socket" | "connection")
-        && crate::handle_dispatch::js_ext_http_incoming_message_is_handle(handle) != 0
+        && crate::server::handle_dispatch::js_ext_http_incoming_message_is_handle(handle) != 0
     {
-        return crate::handle_dispatch::js_ext_http_incoming_message_dispatch_property_set(
+        return crate::server::handle_dispatch::js_ext_http_incoming_message_dispatch_property_set(
             handle,
             property_ptr,
             property_len,

@@ -4,7 +4,7 @@
 //!
 //! # Why
 //!
-//! Wrappers compiled into their own staticlib (e.g. `perry-ext-http-server`)
+//! Wrappers compiled into their own staticlib (e.g. `perry-ext-http`)
 //! cannot depend on `perry-runtime`'s Rust API and must not touch the
 //! runtime's thread-local registries directly: a direct
 //! `is_registered_buffer` / `register_error_code` call from the wrapper's
@@ -13,7 +13,8 @@
 //! through these single extern symbols keeps the registry/throw logic in
 //! the one runtime copy the dispatch path resolves to.
 
-use crate::JsValue;
+use crate::{alloc_string, JsValue};
+use std::ffi::{c_char, CStr};
 
 extern "C" {
     /// Runtime entry: build an Error subclass with a `.code`.
@@ -51,6 +52,8 @@ extern "C" {
         syscall_len: usize,
         errno: f64,
     ) -> f64;
+    fn js_process_emit_warning(warning: f64, type_name: f64, code: f64);
+    fn perry_stub_warn_ffi(name: *const c_char, reason: *const c_char, issue: *const c_char);
 }
 
 /// Which JS Error subclass [`throw_with_code`] raises.
@@ -123,6 +126,31 @@ pub fn system_error_value(msg: &str, code: &str, syscall: &str, errno: i64) -> J
         )
     };
     JsValue::from_bits(value.to_bits())
+}
+
+/// Queue a Node process warning with the given message and type name.
+pub fn emit_warning(message: &str, type_name: &str) {
+    let message = JsValue::from_string_ptr(alloc_string(message).as_raw());
+    let type_name = JsValue::from_string_ptr(alloc_string(type_name).as_raw());
+    unsafe {
+        js_process_emit_warning(
+            f64::from_bits(message.bits()),
+            f64::from_bits(type_name.bits()),
+            f64::from_bits(JsValue::UNDEFINED.bits()),
+        )
+    }
+}
+
+/// Emit the runtime's once-per-symbol no-op warning.
+///
+/// # Safety
+/// All strings must live for the process lifetime. Use C string literals.
+pub unsafe fn warn_stub(name: &'static CStr, reason: &'static CStr, issue: Option<&'static CStr>) {
+    perry_stub_warn_ffi(
+        name.as_ptr(),
+        reason.as_ptr(),
+        issue.map_or(std::ptr::null(), CStr::as_ptr),
+    )
 }
 
 /// Borrow the raw bytes of a `Buffer` or `TypedArray` value. Returns

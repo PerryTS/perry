@@ -10,10 +10,27 @@ pub enum Installer {
 }
 
 impl Installer {
+    /// Every variant perry can pick. Anything that must stay in step with the
+    /// set of installers — notably the Socket Firewall shim sentinels in
+    /// `firewall::firewall_env` — iterates this instead of restating the list,
+    /// so adding a variant here is enough (and the compiler flags the
+    /// `match`es that also need updating).
+    pub const ALL: [Installer; 2] = [Installer::Bun, Installer::Npm];
+
     pub fn binary(&self) -> &'static str {
         match self {
             Installer::Bun => "bun",
             Installer::Npm => "npm",
+        }
+    }
+
+    /// The `SFW_SHIM_ACTIVE_*` variable that tells an sfw shim for this
+    /// package manager to exec the real binary instead of starting a second,
+    /// nested proxy inside the one perry already started.
+    pub fn shim_sentinel_env(&self) -> &'static str {
+        match self {
+            Installer::Bun => "SFW_SHIM_ACTIVE_BUN",
+            Installer::Npm => "SFW_SHIM_ACTIVE_NPM",
         }
     }
 

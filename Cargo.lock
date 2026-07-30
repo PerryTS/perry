@@ -5864,20 +5864,6 @@ name = "perry-ext-http"
 version = "0.5.1265"
 dependencies = [
  "bytes",
- "lazy_static",
- "perry-ext-http-server",
- "perry-ffi",
- "perry-runtime",
- "reqwest",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "perry-ext-http-server"
-version = "0.5.1265"
-dependencies = [
- "bytes",
  "h2",
  "http-body-util",
  "hyper",
@@ -5887,6 +5873,7 @@ dependencies = [
  "perry-ext-ws",
  "perry-ffi",
  "perry-runtime",
+ "reqwest",
  "rustls",
  "rustls-pemfile",
  "serde_json",

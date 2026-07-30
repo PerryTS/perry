@@ -570,13 +570,6 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += ws_count;
     }
 
-    // Process pending HTTP events (http/https client callbacks)
-    #[cfg(feature = "http-client")]
-    {
-        let http_count = unsafe { crate::http::js_http_process_pending() };
-        count += http_count;
-    }
-
     // Process pending raw TCP socket events (net.Socket).
     // v0.5.579 — gate now fires for `bundled-net` (perry-stdlib's
     // own implementation) AND `external-net-pump` (which the
@@ -609,7 +602,7 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += unsafe { crate::tls::js_tls_process_pending() };
     }
 
-    // Process pending HTTP server requests + WS upgrades (perry-ext-http-server).
+    // Process pending HTTP server requests + WS upgrades (perry-ext-http).
     // Closes #604 — pre-fix `js_node_http_server_listen` blocked the
     // main TS thread inside an inner event_loop, so axios.get/etc.
     // after a `server.listen(port, () => resolve())` callback never

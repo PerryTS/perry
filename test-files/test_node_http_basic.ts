@@ -3,7 +3,7 @@
 // property-style `req.method` / `req.url`, property-set
 // `res.statusCode = N`, method-call `res.setHeader(...)` /
 // `res.end(...)`. End-to-end smoke for the HIR/codegen plumbing
-// through to perry-ext-http-server's hyper accept loop.
+// through to perry-ext-http's hyper accept loop.
 
 import { createServer } from "node:http";
 

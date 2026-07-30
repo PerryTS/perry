@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 /// Adopt an already-connected TCP stream as a `net.Socket` handle.
 ///
-/// perry-ext-http-server's raw `'upgrade'` path (#4973) calls this: Node
+/// perry-ext-http's raw `'upgrade'` path (#4973) calls this: Node
 /// hands the `'upgrade'` listener the raw connection socket with nothing
 /// written to it, so the HTTP accept task peels the request head off the
 /// stream and passes the live stream here. The returned id drives the
