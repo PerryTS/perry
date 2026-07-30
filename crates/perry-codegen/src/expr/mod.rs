@@ -196,6 +196,13 @@ pub(crate) struct FnCtx<'a> {
     /// tracking" extension). Populated from function params and `Stmt::Let`
     /// declarations as they're lowered.
     pub local_types: std::collections::HashMap<u32, HirType>,
+    /// Bindings assigned after declaration anywhere in this region.
+    ///
+    /// A TypeScript annotation describes the source-level contract, but an
+    /// `as any` assignment can replace the runtime value with an unrelated
+    /// class. Class-keyed lowering must therefore ignore `local_types` for
+    /// these ids and use runtime dispatch (#6906).
+    pub reassigned_locals: std::collections::HashSet<u32>,
     /// Immutable locals whose initializer is a string literal. These values
     /// can be resolved to the module's interned string global at a use site;
     /// unlike a runtime dynamic-key cache, this does not retain a movable

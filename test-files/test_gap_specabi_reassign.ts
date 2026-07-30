@@ -11,10 +11,13 @@ console.log("before:", first(P));
 P = new Int32Array([7, 8]);
 console.log("after:", first(P));
 
-// NOTE: reassigning P to a PLAIN array (`P = [99]`) trips the pre-existing
-// declared-type staleness bug tracked as #6906 (reads through the reassigned
-// binding return undefined), independent of the spec-ABI routing this test
-// gates — kept out so the test can gate on the routing property.
+// #6906: the source-level typed-array type is not a lifetime proof. An
+// `as any` assignment can replace the binding with a plain array, and every
+// later access must use runtime dispatch rather than stale typed-array
+// lowering.
+P = [99, 101] as any;
+console.log("plain:", first(P), P[1], P.length);
+
 P = new Int32Array(1);
-P[0] = 99;
+P[0] = 123;
 console.log("third:", first(P), P.length);

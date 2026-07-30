@@ -677,6 +677,7 @@ pub(super) fn compile_function(
         native_facts: &native_facts,
         locals,
         local_types,
+        reassigned_locals: crate::collectors::reassigned_locals(&f.body),
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,

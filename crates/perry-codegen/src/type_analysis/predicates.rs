@@ -274,6 +274,11 @@ fn declared_type_overrides_shape_proof(ctx: &FnCtx<'_>, id: &u32) -> bool {
 /// pick the right `perry_method_<class>_<name>` function.
 pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
     match e {
+        // A declared class/typed-array type is not a lifetime proof. An
+        // `as any` reassignment can replace the binding with a different
+        // runtime value, so class-specific field/index/method lowering would
+        // be unsound for every use of a reassigned local (#6906).
+        Expr::LocalGet(id) if ctx.reassigned_locals.contains(id) => None,
         // Representation-selection Phase 3b: a shape-proven Ptr<Shape> local
         // (or one of its const aliases — the exact-receiver inliner's
         // `__cmpd_base_N` receivers are typed `Any`) has a provenance-exact
