@@ -559,6 +559,20 @@ fn test_perry_ui_state_value_uses_native_getter() {
 /// native FFI dispatch as the canonical `widgetAddChild(parent, child)` free
 /// function, including for basic widget factories such as VStack and Text.
 #[test]
+fn test_perry_ui_widget_factory_handle_classification() {
+    for factory in ["VStack", "HStack", "Button", "ForEach", "Text", "WebView"] {
+        assert!(
+            super::perry_ui_factory_returns_handle(factory),
+            "{factory} should be classified as a Widget-returning factory"
+        );
+    }
+    assert!(!super::perry_ui_factory_returns_handle("showToast"));
+    assert!(!super::perry_ui_factory_returns_handle("widgetAddChild"));
+}
+
+/// #6642: native lowering must preserve the Widget compatibility methods on
+/// factory results and explicitly Widget-typed parameters.
+#[test]
 fn test_perry_ui_widget_add_child_uses_native_dispatch() {
     use crate::ir::{clear_current_module_source, Expr, Stmt};
 

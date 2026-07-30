@@ -1715,12 +1715,12 @@ pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
 /// dispatch receiver methods through `PERRY_UI_INSTANCE_TABLE`.
 ///
 /// Keep factory classification tied to the shared dispatch table rather than
-/// maintaining another constructor allowlist in HIR. `VStack`, `HStack`, and
-/// `Button` are the only exceptions: their overloaded argument shapes have
-/// dedicated native-codegen branches, so they intentionally have no generic
-/// dispatch-table rows.
+/// maintaining another constructor allowlist in HIR. `VStack`, `HStack`,
+/// `Button`, `ForEach`, and `WebView` are the only exceptions: their overloaded,
+/// callback-driven, or option-bag argument shapes have dedicated native-codegen
+/// branches, so they intentionally have no generic dispatch-table rows.
 pub(crate) fn perry_ui_factory_returns_handle(name: &str) -> bool {
-    matches!(name, "VStack" | "HStack" | "Button")
+    matches!(name, "VStack" | "HStack" | "Button" | "ForEach" | "WebView")
         || perry_dispatch::perry_ui_lookup(name)
             .is_some_and(|row| row.ret == perry_dispatch::ReturnKind::Widget)
 }
