@@ -278,7 +278,8 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
     // any IIFE binding, sibling helper, or class cannot be duplicated safely;
     // add only those unsafe names to `iife_locals`, which keeps their dependent
     // classes inside the wrapper.
-    let function_decls = collect_top_level_function_decls(source);
+    let stripped_source = super::detect::strip_comments_and_strings(source);
+    let function_decls = collect_top_level_function_decls(source, &stripped_source);
     let function_names: Vec<String> = function_decls.iter().map(|f| f.name.clone()).collect();
     let class_names = top_level_class_names(source);
     let exported_names = super::extract_exports::extract_exports_from_source(source);
@@ -295,7 +296,7 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
         let unsafe_to_duplicate = class_body_references_any(&decl.block_text, &blockers)
             || super::extract_requires::identifier_is_reassigned(source, &decl.name)
             || identifier_used_as_value_outside(
-                source,
+                &stripped_source,
                 &decl.name,
                 decl.source_start,
                 decl.source_end,
@@ -896,7 +897,10 @@ struct TopLevelFunctionDecl {
 /// their exact source blocks. The comment/string/regex masker preserves byte
 /// positions, letting this scan balance braces without mistaking literal
 /// contents for code.
-fn collect_top_level_function_decls(source: &str) -> Vec<TopLevelFunctionDecl> {
+fn collect_top_level_function_decls(
+    source: &str,
+    stripped_source: &str,
+) -> Vec<TopLevelFunctionDecl> {
     fn is_ident_byte(b: u8) -> bool {
         b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
     }
@@ -907,8 +911,7 @@ fn collect_top_level_function_decls(source: &str) -> Vec<TopLevelFunctionDecl> {
         i
     }
 
-    let stripped = super::detect::strip_comments_and_strings(source);
-    let bytes = stripped.as_bytes();
+    let bytes = stripped_source.as_bytes();
     let mut decls = Vec::new();
     let mut depth: i32 = 0;
     let mut i = 0usize;
@@ -1029,7 +1032,7 @@ fn collect_top_level_function_decls(source: &str) -> Vec<TopLevelFunctionDecl> {
 /// from the original. Member property names such as `obj.helper()` are
 /// unrelated bindings and are ignored.
 fn identifier_used_as_value_outside(
-    source: &str,
+    stripped_source: &str,
     name: &str,
     excluded_start: usize,
     excluded_end: usize,
@@ -1038,8 +1041,7 @@ fn identifier_used_as_value_outside(
         b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
     }
 
-    let stripped = super::detect::strip_comments_and_strings(source);
-    let bytes = stripped.as_bytes();
+    let bytes = stripped_source.as_bytes();
     let name_bytes = name.as_bytes();
     let mut i = 0usize;
     while i + name_bytes.len() <= bytes.len() {
