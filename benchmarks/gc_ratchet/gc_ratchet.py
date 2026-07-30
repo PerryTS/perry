@@ -652,8 +652,15 @@ def validate_artifact(artifact: Mapping[str, Any]) -> None:
                 raise RatchetError(f"{name}: {metric} has too few samples")
             if recorded != distribution(samples):
                 raise RatchetError(f"{name}: {metric} summary is inconsistent with its samples")
-        if entry.get("correctness", {}).get("status") == "fail":
-            raise RatchetError(f"{name}: baseline pinned a probe whose output is wrong")
+        # A baseline may only be pinned from an oracle-verified run: "unchecked"
+        # is as unacceptable here as "fail", because the whole artifact's
+        # authority rests on the probes having been shown to compute the right
+        # thing at the moment they were frozen.
+        if entry.get("correctness", {}).get("status") != "pass":
+            raise RatchetError(
+                f"{name}: baseline was pinned without a passing Node oracle diff "
+                f"(status={entry.get('correctness', {}).get('status')!r})"
+            )
         if metrics["minor_cycles"]["median"] < 1:
             raise RatchetError(f"{name}: baseline pinned a probe that ran no minor collection")
 
@@ -734,8 +741,19 @@ def evaluate(
 
         if cur_entry.get("stdout") != base_entry.get("stdout"):
             failures.append(f"{name}: observable output changed since the baseline")
-        if cur_entry.get("correctness", {}).get("status") == "fail":
+
+        # "unchecked" is a failure, not a pass. A run that could not reach the
+        # Node oracle has not verified that the probe still computes anything;
+        # its retained-heap numbers could just as well come from a probe that
+        # silently stopped allocating. "We did not verify" must never be
+        # indistinguishable from "verified".
+        correctness = cur_entry.get("correctness", {})
+        status = correctness.get("status")
+        if status == "fail":
             failures.append(f"{name}: probe output no longer matches the Node oracle")
+        elif status != "pass":
+            reason = correctness.get("reason") or "no correctness report"
+            failures.append(f"{name}: correctness was not verified against the Node oracle ({reason})")
 
         for metric in ALL_METRICS:
             tolerance = tolerances[metric]

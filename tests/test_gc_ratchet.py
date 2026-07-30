@@ -252,6 +252,20 @@ class GateFailTests(unittest.TestCase):
         _, failures = evaluate(baseline, current, profile="shared_ci")
         self.assertTrue(any("Node oracle" in failure for failure in _hard(failures)))
 
+    def test_unverified_correctness_fails(self):
+        # A run that could not reach the oracle has not shown the probe still
+        # computes anything. Passing it would make "we did not check"
+        # indistinguishable from "we checked and it was fine".
+        baseline = _baseline()
+        current = _measurement(_probe(correctness="unchecked"))
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        self.assertTrue(any("not verified" in failure for failure in _hard(failures)))
+
+    def test_baseline_cannot_be_pinned_without_an_oracle_diff(self):
+        artifact = _baseline(_probe(correctness="unchecked"))
+        with self.assertRaises(RatchetError):
+            validate_artifact(artifact)
+
     def test_changed_observable_output_fails(self):
         baseline = _baseline()
         probes = _probe()

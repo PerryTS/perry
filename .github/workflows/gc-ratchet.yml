@@ -144,10 +144,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .bench-results
+          # Load is recorded inside the measurement JSON too; printing it here
+          # keeps it in the log next to the numbers.
           uptime
+          # Pass the oracle explicitly rather than letting the harness search.
+          # A run that cannot reach the oracle now fails the gate — "we did not
+          # verify" must not look like "verified" — so resolution must not be
+          # left to chance.
           python3 benchmarks/gc_ratchet/gc_ratchet.py measure \
             --perry target/release/perry \
             --repeats 7 \
+            --node "$(command -v node)" \
             --output .bench-results/gc-ratchet-current.json
 
       # No pipe, no `|| true`, no continue-on-error: this step's exit status is
