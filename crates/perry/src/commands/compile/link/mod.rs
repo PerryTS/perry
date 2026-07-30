@@ -31,12 +31,13 @@ use std::process::Command;
 use crate::OutputFormat;
 
 use super::{
-    apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3, dedup_runtime_for_tier3,
-    dedup_stdlib_for_tier3, dedup_ui_lib_against_linked_libs, find_geisterhand_library,
-    find_geisterhand_runtime, find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link,
-    find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
-    find_stdlib_library, find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime,
-    localize_stdlib_stub_symbols, localize_stdlib_stub_symbols_for_windows, rust_target_triple,
+    android_target, apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3,
+    dedup_runtime_for_tier3, dedup_stdlib_for_tier3, dedup_ui_lib_against_linked_libs,
+    find_geisterhand_library, find_geisterhand_runtime, find_geisterhand_stdlib,
+    find_geisterhand_ui, find_lld_link, find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe,
+    find_perry_windows_sdk, find_stdlib_library, find_ui_library, find_visionos_swift_runtime,
+    find_watchos_swift_runtime, is_android_target, localize_stdlib_stub_symbols,
+    localize_stdlib_stub_symbols_for_windows, rust_target_triple,
     strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
     strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
     windows_pe_subsystem_flag, windows_subsystem_needs_ui, CompilationContext,
@@ -454,9 +455,9 @@ pub(super) fn response_file_contents(args: &[String], msvc: bool) -> String {
 /// path the NDK doesn't ship.
 ///
 /// #5740 — this drives `clang` itself rather than the NDK's per-target wrapper
-/// (`aarch64-linux-android24-clang`), which is a two-line shim that execs
-/// `clang --target=aarch64-linux-android24 "$@"`. Every caller here already
-/// passes `-target aarch64-linux-android24` explicitly, so the two are
+/// (`<triple>24-clang`), which is a two-line shim that execs
+/// `clang --target=<triple>24 "$@"`. Every caller here already passes the
+/// architecture-specific `-target` explicitly, so the two are
 /// equivalent — except on Windows, where the wrapper is a `.cmd` batch file:
 /// Rust's `Command` can only spawn a batch file through `cmd.exe`, which layers
 /// a second round of command-line quoting (plus the batch-escaping restrictions

@@ -21,7 +21,7 @@ use anyhow::Result;
 use crate::OutputFormat;
 
 use super::resolve::{has_perry_native_library, parse_native_library_manifest};
-use super::CompilationContext;
+use super::{is_android_target, CompilationContext};
 
 /// #498 - discover every `perry.nativeLibrary` archive a build of
 /// the project at `project_root` would consume. Scans every
@@ -142,6 +142,9 @@ fn derive_target_key(target: Option<&str>) -> String {
         "x86" => "i686",
         other => other,
     };
+    if is_android_target(target) {
+        return "android".to_string();
+    }
     match target {
         None => format!("{}-{}", std::env::consts::OS, arch),
         Some("macos") => format!("macos-{}", arch),
@@ -159,8 +162,6 @@ fn derive_target_key(target: Option<&str>) -> String {
         Some("watchos-simulator") => "watchos-simulator".to_string(),
         Some("visionos") => "visionos".to_string(),
         Some("visionos-simulator") => "visionos-simulator".to_string(),
-        // Wear OS reuses Android's resolved native-dependency set.
-        Some("android") | Some("wearos") => "android".to_string(),
         Some("harmonyos") => "harmonyos".to_string(),
         Some("harmonyos-simulator") => "harmonyos-simulator".to_string(),
         Some("web") => "web".to_string(),
@@ -261,6 +262,7 @@ mod lock_integration_tests {
         assert_eq!(derive_target_key(Some("tvos")), "tvos");
         assert_eq!(derive_target_key(Some("watchos")), "watchos");
         assert_eq!(derive_target_key(Some("android")), "android");
+        assert_eq!(derive_target_key(Some("android-x86_64")), "android");
     }
 
     #[test]

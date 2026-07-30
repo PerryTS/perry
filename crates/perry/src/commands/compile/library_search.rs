@@ -29,7 +29,7 @@ use crate::OutputFormat;
 // `rust_target_triple` and `find_perry_workspace_root` still live in
 // the compile.rs orchestrator. Pull them in as private parent-module
 // items so the search helpers below can reach them.
-use super::{find_perry_workspace_root, rust_target_triple};
+use super::{android_target, find_perry_workspace_root, is_android_target, rust_target_triple};
 
 /// Resolve the host's Rust target triple by parsing `rustc -vV`.
 ///
@@ -1223,8 +1223,8 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = match target {
         Some("ios-simulator") | Some("ios") => "libperry_ui_ios.a",
         Some("visionos-simulator") | Some("visionos") => "libperry_ui_visionos.a",
-        // Wear OS reuses the Android View backend.
-        Some("android") | Some("wearos") => "libperry_ui_android.a",
+        // Wear OS and every Android architecture reuse the Android View backend.
+        target if is_android_target(target) => "libperry_ui_android.a",
         Some("watchos-simulator") | Some("watchos") => "libperry_ui_watchos.a",
         Some("tvos-simulator") | Some("tvos") => "libperry_ui_tvos.a",
         Some("linux") => "libperry_ui_gtk4.a",
@@ -1332,11 +1332,10 @@ pub(super) fn find_harmonyos_sdk() -> Option<PathBuf> {
 /// 24 (Android 7.0) — matches the existing `platform_cmd.rs` /
 /// `link/mod.rs` JNI stub compile invocations.
 pub(super) fn android_cross_env(ndk_home: &Path, target: Option<&str>) -> Vec<(String, String)> {
-    let (triple, clang_target) = match target {
-        Some("android-x86_64") => ("x86_64-linux-android", "x86_64-linux-android24"),
-        // `android` (default) is the arm64 device target.
-        _ => ("aarch64-linux-android", "aarch64-linux-android24"),
-    };
+    let android = android_target(target)
+        .expect("android_cross_env must only be called for an Android target");
+    let triple = android.rust_triple;
+    let clang_target = android.clang_target;
 
     // NDK ships per-host prebuilt toolchains. Tag must match the build
     // machine, NOT the target — Windows-host builds were falling through
@@ -1397,6 +1396,29 @@ pub(super) fn android_cross_env(ndk_home: &Path, target: Option<&str>) -> Vec<(S
             clang.display().to_string(),
         ),
     ]
+}
+
+#[cfg(test)]
+mod android_cross_env_tests {
+    use super::android_cross_env;
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    #[test]
+    fn x86_64_uses_matching_ndk_wrappers_and_cargo_linker() {
+        let env: HashMap<_, _> = android_cross_env(Path::new("/ndk"), Some("android-x86_64"))
+            .into_iter()
+            .collect();
+        let cc = env
+            .get("CC_x86_64-linux-android")
+            .expect("hyphenated cc-rs target key");
+        assert!(cc.contains("x86_64-linux-android24-clang"), "{cc}");
+        let linker = env
+            .get("CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER")
+            .expect("Cargo target linker");
+        assert!(linker.contains("x86_64-linux-android24-clang"), "{linker}");
+        assert!(env.contains_key("AR_x86_64_linux_android"));
+    }
 }
 
 /// Cross-compile env vars to pass to `cargo build` so `cc-rs` picks up the
@@ -1558,7 +1580,7 @@ pub(super) fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
         "libperry_ui_ios.a"
     } else if matches!(target, Some("visionos-simulator") | Some("visionos")) {
         return None;
-    } else if matches!(target, Some("android") | Some("wearos")) {
+    } else if is_android_target(target) {
         "libperry_ui_android.a"
     } else if matches!(target, Some("linux")) || cfg!(target_os = "linux") {
         "libperry_ui_gtk4.a"
@@ -1581,7 +1603,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
     // Determine which UI crate to build based on target platform
     let ui_crate = match target {
         Some("ios-simulator") | Some("ios") => "perry-ui-ios",
-        Some("android") | Some("wearos") => "perry-ui-android",
+        target if is_android_target(target) => "perry-ui-android",
         Some("linux") => "perry-ui-gtk4",
         Some("windows-winui") => "perry-ui-windows-winui",
         Some("windows") => "perry-ui-windows",
@@ -1655,10 +1677,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
     // `libperry_app.so` on Android; force global-dynamic TLS so the IE
     // model doesn't crash at load. (RUSTFLAGS scopes to the cross target,
     // so host build-scripts/proc-macros are unaffected.)
-    if matches!(
-        target,
-        Some("android") | Some("android-x86_64") | Some("wearos")
-    ) {
+    if is_android_target(target) {
         let tls_flag = super::optimized_libs::android_global_dynamic_tls_rustflag(&mut cargo_cmd);
         cargo_cmd.env("RUSTFLAGS", tls_flag);
     }

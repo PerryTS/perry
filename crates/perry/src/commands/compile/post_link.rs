@@ -9,7 +9,7 @@ use crate::OutputFormat;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{CompilationContext, ObjectCache};
+use super::{is_android_target, CompilationContext, ObjectCache};
 
 /// Strip debug symbols from the final binary (reduces size
 /// significantly). Skipped for: dylib output, every cross-
@@ -41,10 +41,9 @@ pub(super) fn strip_final_binary(
         || is_tvos
         || is_watchos
         || is_harmonyos
-        || target == Some("android")
-        // Wear OS ships the same dlopen'd .so — stripping would drop the
+        // Android and Wear OS ship a dlopen'd .so — stripping would drop the
         // no_mangle JNI/FFI symbols PerryActivity resolves at load.
-        || target == Some("wearos")
+        || is_android_target(target)
         || std::env::var("PERRY_DEBUG_SYMBOLS").is_ok()
     {
         return;

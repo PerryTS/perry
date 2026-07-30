@@ -10,8 +10,8 @@ use perry_api_manifest::{
 };
 
 use super::super::{
-    NativeBackend, NativeBackendConfig, NativeBackendPackageMetadata, NativeFunctionDecl,
-    NativeLibraryManifest, TargetNativeConfig,
+    android_target, is_android_target, NativeBackend, NativeBackendConfig,
+    NativeBackendPackageMetadata, NativeFunctionDecl, NativeLibraryManifest, TargetNativeConfig,
 };
 
 pub(crate) fn validate_native_library_manifest_value(
@@ -52,11 +52,12 @@ pub(crate) fn validate_native_library_manifest_value(
 }
 
 pub(super) fn native_manifest_target_key(target: Option<&str>) -> &'static str {
+    if is_android_target(target) {
+        return "android";
+    }
     match target {
         Some("ios-simulator") | Some("ios") => "ios",
         Some("visionos-simulator") | Some("visionos") => "visionos",
-        // Wear OS resolves native-addon config from the [android] target.
-        Some("android") | Some("wearos") => "android",
         Some("tvos-simulator") | Some("tvos") => "tvos",
         Some("watchos-simulator") | Some("watchos") => "watchos",
         Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
@@ -1308,6 +1309,9 @@ fn arch_for_target_key(target: Option<&str>) -> Option<&'static str> {
     if target.is_none() {
         return Some(host_arch_token());
     }
+    if let Some(android) = android_target(target) {
+        return Some(android.manifest_arch);
+    }
     match target {
         // OS-level targets where both arm64 and x64 are real distribution
         // targets — surface the arch so wrappers can ship per-arch
@@ -1315,7 +1319,6 @@ fn arch_for_target_key(target: Option<&str>) -> Option<&'static str> {
         Some("macos") => Some("arm64"),
         Some("linux") => Some("x64"),
         Some("windows") | Some("windows-winui") => Some("x64"),
-        Some("android") | Some("wearos") => Some("arm64"),
         Some("harmonyos") => Some("arm64"),
         Some("harmonyos-simulator") => Some("x64"),
         // ios/tvos/watchos/visionos: device builds are always arm64 (or
@@ -1338,6 +1341,20 @@ fn host_arch_token() -> &'static str {
         "x86_64" => "x64",
         "x86" => "ia32",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod android_target_tests {
+    use super::{arch_for_target_key, native_manifest_target_key};
+
+    #[test]
+    fn x86_64_android_uses_android_manifest_and_x64_override() {
+        assert_eq!(
+            native_manifest_target_key(Some("android-x86_64")),
+            "android"
+        );
+        assert_eq!(arch_for_target_key(Some("android-x86_64")), Some("x64"));
     }
 }
 

@@ -104,7 +104,7 @@ pub struct CompileArgs {
     pub enable_wasm_runtime: bool,
 
     /// Target platform: ios-simulator, ios, visionos-simulator, visionos,
-    /// android, ios-widget, ios-widget-simulator, watchos-widget,
+    /// android, android-x86_64, ios-widget, ios-widget-simulator, watchos-widget,
     /// watchos-widget-simulator, android-widget, wearos-tile, web, wasm,
     /// windows, linux (default: native host). See docs/src/cli/flags.md
     /// for the full target table.

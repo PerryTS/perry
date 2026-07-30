@@ -24,7 +24,8 @@ Use `--target` to cross-compile:
 | `ios` | iOS Device | ARM64 device binary |
 | `visionos-simulator` | visionOS Simulator | Apple Vision Pro simulator build |
 | `visionos` | visionOS Device | Apple Vision Pro device build |
-| `android` | Android | ARM64/ARMv7 |
+| `android` | Android | ARM64 device build |
+| `android-x86_64` | Android | x86_64 emulator/device build |
 | `ios-widget` | iOS Widget | WidgetKit extension (requires `--app-bundle-id`) |
 | `ios-widget-simulator` | iOS Widget (Sim) | Widget for simulator |
 | `watchos-widget` | watchOS Complication | WidgetKit extension for Apple Watch |

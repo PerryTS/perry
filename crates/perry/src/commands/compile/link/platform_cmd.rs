@@ -590,17 +590,20 @@ pub fn select_linker_command(
         })?;
         // #1508 (per-host toolchain tag) + #5740 (drive `clang` directly rather
         // than the NDK's `.cmd`/shell wrapper) — see `ndk_clang_path`. The
-        // `-target aarch64-linux-android24` below is what the wrapper would have
-        // added, so nothing else changes.
+        // The explicit architecture-specific `-target` below is what the
+        // per-target wrapper would have added, so nothing else changes.
         let clang = ndk_clang_path(&ndk_home);
         if !PathBuf::from(&clang).exists() {
             return Err(anyhow!("Android NDK clang not found at: {}", clang));
         }
         let mut c = Command::new(clang);
+        let clang_target = android_target(target)
+            .expect("Android linker branch requires a recognized Android target")
+            .clang_target;
         c.arg("-shared")
             .arg("-fPIC")
             .arg("-target")
-            .arg("aarch64-linux-android24")
+            .arg(clang_target)
             .arg("-Wl,-z,max-page-size=16384")
             .arg("-Wl,-z,separate-loadable-segments")
             // Prevent ELF symbol interposition: bind all symbols within the .so

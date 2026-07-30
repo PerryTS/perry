@@ -9,6 +9,7 @@ use crate::OutputFormat;
 // `compile/` directory. The `compile.rs` orchestrator stays as the
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
+mod android_target;
 mod app_metadata;
 mod apple_codesign;
 mod apple_info_plist;
@@ -50,6 +51,7 @@ mod strip_dedup;
 mod targets;
 pub mod well_known;
 pub(crate) mod widget_build;
+use android_target::{android_target, is_android_target};
 use app_metadata::rust_target_triple;
 // apple_info_plist helpers used through bundle_ios (no direct uses in
 // compile.rs anymore now that the iOS bundle code moved out).

@@ -59,8 +59,8 @@ pub(crate) fn build_and_run_link(
 
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
-    // Wear OS links exactly like Android (same triple, NDK, cdylib + TLS model).
-    let is_android = matches!(target, Some("android") | Some("wearos"));
+    // Wear OS and every Android architecture share the NDK/cdylib link path.
+    let is_android = is_android_target(target);
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
     let is_linux = matches!(target, Some(t) if t.starts_with("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
@@ -889,8 +889,11 @@ pub(crate) fn build_and_run_link(
         // spawn here is silent: `stub_ok` goes false and the link then dies on an
         // undefined `JNI_GetCreatedJavaVMs`). `-target` is passed below.
         let ndk_clang = ndk_clang_path(&ndk_home);
+        let clang_target = android_target(target)
+            .expect("Android JNI stub branch requires a recognized Android target")
+            .clang_target;
         let stub_ok = Command::new(&ndk_clang)
-            .args(["-c", "-fPIC", "-target", "aarch64-linux-android24"])
+            .args(["-c", "-fPIC", "-target", clang_target])
             .arg("-o")
             .arg(&stub_o)
             .arg(&stub_c)
@@ -1148,6 +1151,9 @@ pub(crate) fn build_and_run_link(
                     "cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim",
                 )
             } else if is_android {
+                let triple = android_target(target)
+                    .expect("Android library diagnostic requires a recognized target")
+                    .rust_triple;
                 (
                     "libperry_ui_android.a",
                     // Two audiences here: a binary-install user (WinGet/Scoop/npm,
@@ -1156,7 +1162,11 @@ pub(crate) fn build_and_run_link(
                     // for workspace users. #1529 — the dlopen'd cdylib needs the
                     // global-dynamic TLS model, and `tls-model` is `-Z`-gated, so
                     // RUSTC_BOOTSTRAP=1 lets it through on a stable rustc.
-                    "either (a) drop libperry_ui_android.a next to perry under aarch64-linux-android/release/ from the prebuilt perry-cross-aarch64-linux-android.tar.gz release asset, or (b) from a perry checkout: RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
+                    if triple == "x86_64-linux-android" {
+                        "from a perry checkout: RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target x86_64-linux-android"
+                    } else {
+                        "either (a) drop libperry_ui_android.a next to perry under aarch64-linux-android/release/ from the prebuilt perry-cross-aarch64-linux-android.tar.gz release asset, or (b) from a perry checkout: RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android"
+                    },
                 )
             } else if is_linux {
                 (
@@ -1355,8 +1365,16 @@ pub(crate) fn build_and_run_link(
                             super::super::optimized_libs::android_global_dynamic_tls_rustflag(
                                 &mut cargo_cmd,
                             );
+                        let rustflags_env = format!(
+                            "CARGO_TARGET_{}_RUSTFLAGS",
+                            android_target(target)
+                                .expect("Android native build requires a recognized target")
+                                .rust_triple
+                                .to_uppercase()
+                                .replace('-', "_")
+                        );
                         cargo_cmd.env(
-                            "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
+                            rustflags_env,
                             format!("-C link-arg=-Wl,-z,max-page-size=16384 {tls_flag}"),
                         );
                     }

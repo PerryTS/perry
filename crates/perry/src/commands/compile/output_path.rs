@@ -9,6 +9,8 @@
 
 use std::path::PathBuf;
 
+use super::is_android_target;
+
 /// The output file a compile targets when no `-o` was given.
 ///
 /// `stem` is the already-sanitized entry-file stem (`app.ts` → `app`).
@@ -41,20 +43,12 @@ pub(super) fn default_output_path(
         } else {
             PathBuf::from(format!("lib{}.a", stem))
         }
-    } else if matches!(
-        target,
-        Some("harmonyos")
-            | Some("harmonyos-simulator")
-            // #5740 — Android (and Wear OS, which links identically: same NDK,
-            // same triple, same cdylib shape) links with `-shared` and ships as
-            // a `.so` that `PerryActivity` dlopens; there is no standalone
-            // executable shipping shape. Without this arm the default output was
-            // the bare stem (`app`), which fails the link outright in a stock
-            // Android project — `app/` is already a directory there, so lld
-            // reports `cannot open output file app: Is a directory`.
-            | Some("android")
-            | Some("wearos")
-    ) {
+    } else if matches!(target, Some("harmonyos") | Some("harmonyos-simulator"))
+        || is_android_target(target)
+    {
+        // #5740 — Android targets link with `-shared` and ship as a `.so`
+        // that `PerryActivity` dlopens; there is no standalone executable
+        // shipping shape.
         // HarmonyOS apps ship as .so loaded by the ArkTS runtime via
         // napi_module_register — there is no standalone executable
         // shipping shape. `lib` prefix matches the dlopen name used by
@@ -109,6 +103,10 @@ mod tests {
     fn android_defaults_to_shared_library() {
         assert_eq!(exe(Some("android"), "app"), PathBuf::from("libapp.so"));
         assert_eq!(exe(Some("android"), "hello"), PathBuf::from("libhello.so"));
+        assert_eq!(
+            exe(Some("android-x86_64"), "app"),
+            PathBuf::from("libapp.so")
+        );
     }
 
     /// Wear OS links exactly like Android (same NDK, triple, cdylib + TLS

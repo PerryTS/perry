@@ -199,7 +199,10 @@ pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
             // Child. Async-signal-safe calls ONLY from here to execve.
             unsafe {
                 libc::setsid();
-                libc::ioctl(slave, libc::TIOCSCTTY as libc::c_ulong, 0);
+                // Infer libc's platform-specific `Ioctl` type. Android x86_64
+                // uses `c_int` while BSD/macOS uses `c_ulong`; forcing either
+                // concrete type makes the other platform fail to compile.
+                libc::ioctl(slave, libc::TIOCSCTTY as _, 0);
                 libc::dup2(slave, 0);
                 libc::dup2(slave, 1);
                 libc::dup2(slave, 2);
@@ -255,7 +258,7 @@ pub(crate) fn wait_child(pid: i32) -> (Option<i32>, Option<i32>) {
 /// foreground process group.
 pub(crate) fn resize_pty(master: RawFd, cols: u16, rows: u16) -> bool {
     let ws = winsize(cols, rows);
-    unsafe { libc::ioctl(master, libc::TIOCSWINSZ as libc::c_ulong, &ws) == 0 }
+    unsafe { libc::ioctl(master, libc::TIOCSWINSZ as _, &ws) == 0 }
 }
 
 /// `kill(2)` — deliver `signo` to `pid`.
@@ -267,7 +270,7 @@ pub(crate) fn signal_pid(pid: i32, signo: i32) -> bool {
 #[cfg(test)]
 pub(crate) fn read_winsize(fd: RawFd) -> Option<(u16, u16)> {
     let mut ws = winsize(0, 0);
-    let rc = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as libc::c_ulong, &mut ws) };
+    let rc = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as _, &mut ws) };
     if rc == 0 {
         Some((ws.ws_col, ws.ws_row))
     } else {

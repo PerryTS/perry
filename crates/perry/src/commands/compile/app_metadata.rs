@@ -9,15 +9,17 @@
 use std::fs;
 use std::path::Path;
 
+use super::{android_target, is_android_target};
+
 pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str> {
+    if is_android_target(target) {
+        return Some("android");
+    }
     match target {
         Some("ios") | Some("ios-simulator") => Some("ios"),
         Some("visionos") | Some("visionos-simulator") => Some("visionos"),
         Some("watchos") | Some("watchos-simulator") => Some("watchos"),
         Some("tvos") | Some("tvos-simulator") => Some("tvos"),
-        Some("android") => Some("android"),
-        // Wear OS reuses the [android] perry.toml section (bundle_id, etc.).
-        Some("wearos") => Some("android"),
         Some("macos") => Some("macos"),
         // WinUI shares the [windows] perry.toml section (#4680).
         Some("windows") | Some("windows-winui") => Some("windows"),
@@ -154,6 +156,9 @@ pub(super) fn read_app_metadata(
 
 /// Get the Rust target triple for a given perry target string
 pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
+    if let Some(android) = android_target(target) {
+        return Some(android.rust_triple);
+    }
     match target {
         Some("ios-simulator") | Some("ios-widget-simulator") => Some("aarch64-apple-ios-sim"),
         Some("ios") | Some("ios-widget") => Some("aarch64-apple-ios"),
@@ -172,9 +177,6 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("tvos") => Some("aarch64-apple-tvos"),
         Some("harmonyos") => Some("aarch64-unknown-linux-ohos"),
         Some("harmonyos-simulator") => Some("x86_64-unknown-linux-ohos"),
-        Some("android") => Some("aarch64-linux-android"),
-        // Wear OS is Android-on-a-watch: same arm64 Android .so + toolchain.
-        Some("wearos") => Some("aarch64-linux-android"),
         Some("linux") | Some("linux-x86_64") => Some("x86_64-unknown-linux-gnu"),
         Some("linux-arm64") | Some("linux-aarch64") => Some("aarch64-unknown-linux-gnu"),
         // Fully-static musl targets (#4826). The perry-runtime / perry-stdlib
@@ -189,10 +191,22 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
 
 #[cfg(test)]
 mod app_metadata_tests {
-    use super::read_app_metadata;
+    use super::{read_app_metadata, rust_target_triple, target_bundle_section};
 
     fn parse(src: &str) -> toml::Table {
         src.parse::<toml::Table>().unwrap()
+    }
+
+    #[test]
+    fn android_x86_64_uses_android_metadata_and_rust_target() {
+        assert_eq!(
+            target_bundle_section(Some("android-x86_64")),
+            Some("android")
+        );
+        assert_eq!(
+            rust_target_triple(Some("android-x86_64")),
+            Some("x86_64-linux-android")
+        );
     }
 
     #[test]

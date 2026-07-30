@@ -7,7 +7,9 @@ use crate::commands::stdlib_features::{compute_required_features, features_to_ca
 use crate::OutputFormat;
 
 use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env, host_target_triple};
-use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
+use super::super::{
+    find_perry_workspace_root, is_android_target, rust_target_triple, CompilationContext,
+};
 
 /// Rebuild perry-runtime + perry-stdlib in a single cargo invocation with
 /// the chosen Cargo features and panic mode, and return paths to the
@@ -828,10 +830,7 @@ pub(crate) fn build_optimized_libs(
     // #1508: same shape for Android — cc-rs can't find the NDK clang
     // otherwise (silent on Unix where `clang` happens to exist, hard fail
     // on Windows with `clang.exe not found`).
-    if matches!(
-        target,
-        Some("android") | Some("android-x86_64") | Some("wearos")
-    ) {
+    if is_android_target(target) {
         if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
             for (k, v) in
                 super::super::library_search::android_cross_env(std::path::Path::new(&ndk), target)
@@ -911,10 +910,7 @@ pub(crate) fn build_optimized_libs(
     // shadow stack), so those IE TLS relocations get baked into the final
     // cdylib. Force global-dynamic so the dynamic linker can resolve TLS
     // slots after the process has started.
-    if matches!(
-        target,
-        Some("android") | Some("android-x86_64") | Some("wearos")
-    ) {
+    if is_android_target(target) {
         rustflags.push(android_global_dynamic_tls_rustflag(&mut cargo_cmd).to_string());
     }
     // Set RUSTFLAGS whenever we have flags to pass, and also whenever a CPU
@@ -1167,7 +1163,7 @@ pub(crate) fn build_optimized_libs(
                 | Some("ios-widget")
                 | Some("ios-widget-simulator") => "perry-ui-ios",
                 Some("visionos-simulator") | Some("visionos") => "perry-ui-visionos",
-                Some("android") | Some("wearos") => "perry-ui-android",
+                target if is_android_target(target) => "perry-ui-android",
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
                 Some("linux") => "perry-ui-gtk4",
