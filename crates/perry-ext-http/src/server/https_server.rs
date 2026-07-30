@@ -23,17 +23,19 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::TlsAcceptor;
 
-use crate::ensure_gc_scanner_registered;
-use crate::request::{
+use crate::server::ensure_gc_scanner_registered;
+use crate::server::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
 };
-use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
-use crate::server::{
+use crate::server::response::{
+    alloc_server_response_for_request, HyperResponseShape, ResponseBody,
+};
+use crate::server::server::{
     sanitize_request_timeout, signal_connections_close, HttpPendingRequest, HttpServer,
     ReadActivity, TrackedConnection, CONNECTIONS, NEXT_CONNECTION_ID, PENDING_CONNECTION_EVENTS,
 };
-use crate::tls::{
+use crate::server::tls::{
     build_certless_server_config, build_server_config, has_pem_material, json_value_to_pem_bytes,
     parse_cert_chain, parse_private_key,
 };
@@ -74,7 +76,7 @@ unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool) {
         .unwrap_or(false);
     (key_pem, cert_pem, enable_h2)
 }
-use crate::types::{
+use crate::server::types::{
     extract_host, extract_port, js_promise_run_microtasks, read_string_header, POINTER_TAG,
     PTR_MASK,
 };
@@ -93,7 +95,7 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
 
     let (key_pem, cert_pem, enable_http2_alpn) = parse_https_opts(opts_f64);
     let mut base = HttpServer::with_handler(handler);
-    crate::server::apply_server_options(&mut base, opts_f64);
+    crate::server::server::apply_server_options(&mut base, opts_f64);
 
     let cert_chain = parse_cert_chain(&cert_pem);
     let has_tls_material = has_pem_material(&key_pem, &cert_pem);
@@ -153,7 +155,7 @@ pub struct HttpsServer {
 #[no_mangle]
 pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64 {
     // Returns `server_handle` for chainability (#2129).
-    let parsed = crate::types::parse_listen_args(args_array);
+    let parsed = crate::server::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 443);
     let host = parsed
@@ -174,7 +176,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
     // #4914 — SO_REUSEPORT in cluster workers; plain bind otherwise.
-    let std_listener = match crate::cluster_bind::bind_listener(addr) {
+    let std_listener = match crate::server::cluster_bind::bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("[node:https] bind {}:{} failed: {}", host, port, e);
@@ -186,7 +188,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         eprintln!("[node:https] set_nonblocking failed: {}", e);
         return server_handle;
     }
-    crate::cluster_bind::notify_listening(&host, actual_port);
+    crate::server::cluster_bind::notify_listening(&host, actual_port);
 
     // Capture `noDelay` (default true) under the same handle lock as the TLS
     // config, so the accept loop can apply it per connection without re-locking
@@ -237,7 +239,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                 // default. Honor the server's `noDelay` option
                                 // (default true) on the raw TCP socket before the
                                 // TLS handshake; the option persists through rustls.
-                                crate::server::apply_accept_no_delay(&stream, no_delay);
+                                crate::server::server::apply_accept_no_delay(&stream, no_delay);
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 // #4905/#4971 — register the connection so
@@ -325,7 +327,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
     // assigned. The pump binds `this` to the server when it fires them
     // (#2132). See `server::drain_deferred_listen_for`.
     if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
-        crate::server::queue_deferred_listening_emit(&mut s.base, callback);
+        crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
     }
 
     // Closes #604 — `listen()` is now non-blocking. Pending requests
@@ -451,8 +453,8 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     // #6710 — clear a possibly-recycled handle id's per-handle JS side tables
     // before the handler observes req/res (see process_pending in server.rs).
     unsafe {
-        crate::types::js_handle_clear_side_tables(pending.request_handle);
-        crate::types::js_handle_clear_side_tables(pending.response_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.request_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.response_handle);
     }
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
@@ -475,7 +477,7 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
                 js_promise_run_microtasks();
             }
         }
-        crate::server::finalize_or_park_request(&pending);
+        crate::server::server::finalize_or_park_request(&pending);
         return;
     }
     for cb in &pending.request_listeners {
@@ -510,7 +512,7 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     // is already flushed, otherwise park it for the reaper instead of
     // synthesizing a premature empty response and freeing the handles out
     // from under the pending work.
-    crate::server::finalize_or_park_request(&pending);
+    crate::server::server::finalize_or_park_request(&pending);
 }
 
 /// `httpsServer.address()` mirroring `http.Server.address()`.
@@ -587,7 +589,7 @@ pub extern "C" fn js_node_https_server_close_all_connections(handle: i64) {
     // registries are shared and keyed by server handle, and the HTTP
     // path also finalizes parked async requests whose connection task
     // just died.
-    crate::server::js_node_http_server_close_all_connections(handle);
+    crate::server::server::js_node_http_server_close_all_connections(handle);
 }
 
 /// `httpsServer.closeIdleConnections()` — destroy connections with no
@@ -731,7 +733,7 @@ mod nodelay_tests {
     //! `lib.rs` (`http_server_seeds_node_timeout_defaults`), so a default
     //! server continues to get `TCP_NODELAY` on.
 
-    use crate::server::apply_accept_no_delay;
+    use crate::server::server::apply_accept_no_delay;
     use tokio::net::{TcpListener, TcpStream};
 
     /// Accept a loopback connection and return the SERVER-side stream — the

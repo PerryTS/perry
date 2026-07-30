@@ -29,12 +29,11 @@ fn null_value() -> f64 {
 }
 
 fn bool_value(value: bool) -> f64 {
-    f64::from_bits(perry_runtime::JSValue::bool(value).bits())
+    f64::from_bits(JsValue::from_bool(value).bits())
 }
 
 fn string_value(value: &str) -> f64 {
-    let ptr = perry_runtime::js_string_from_bytes(value.as_ptr(), value.len() as u32);
-    f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+    f64::from_bits(JsValue::from_string_ptr(alloc_string(value).as_raw()).bits())
 }
 
 fn handle_value(handle: Handle) -> f64 {
@@ -117,12 +116,16 @@ fn remove_header_by_name(handle: Handle, name: &str) {
 
 fn headers_array(handle: Handle, raw: bool) -> f64 {
     let names = header_names(handle, raw);
-    let mut arr = perry_runtime::js_array_alloc(names.len() as u32);
+    let mut array = unsafe { perry_ffi::js_array_alloc(names.len() as u32) };
     for name in names {
-        let ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        arr = perry_runtime::js_array_push(arr, perry_runtime::JSValue::string_ptr(ptr));
+        array = unsafe {
+            perry_ffi::js_array_push(
+                array,
+                JsValue::from_string_ptr(alloc_string(&name).as_raw()),
+            )
+        };
     }
-    f64::from_bits(perry_runtime::JSValue::array_ptr(arr).bits())
+    f64::from_bits(JsValue::from_object_ptr(array).bits())
 }
 
 fn headers_object(handle: Handle) -> f64 {
@@ -136,35 +139,29 @@ fn headers_object(handle: Handle) -> f64 {
         .unwrap_or_default();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries.dedup_by(|a, b| a.0 == b.0);
-
-    let obj = perry_runtime::js_object_alloc_null_proto(0, entries.len() as u32);
-    let mut keys = perry_runtime::js_array_alloc(entries.len() as u32);
-    for (index, (key, value)) in entries.iter().enumerate() {
-        let key_ptr = perry_runtime::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        let value_ptr = perry_runtime::js_string_from_bytes(value.as_ptr(), value.len() as u32);
-        perry_runtime::js_object_set_field(
-            obj,
-            index as u32,
-            perry_runtime::JSValue::string_ptr(value_ptr),
-        );
-        keys = perry_runtime::js_array_push(keys, perry_runtime::JSValue::string_ptr(key_ptr));
-    }
-    perry_runtime::js_object_set_keys(obj, keys);
-    f64::from_bits(perry_runtime::JSValue::object_ptr(obj as *mut u8).bits())
+    let fields: Vec<(&str, JsValue)> = entries
+        .iter()
+        .map(|(key, value)| {
+            (
+                key.as_str(),
+                JsValue::from_string_ptr(alloc_string(value).as_raw()),
+            )
+        })
+        .collect();
+    f64::from_bits(perry_ffi::alloc_null_proto_object(&fields).bits())
 }
 
 /// `{ name: <class name> }` — stands in for `<handle>.constructor` so
 /// `out.constructor.name` discriminates ClientRequest/ServerResponse the
 /// way the corpus outgoing-message tests expect (#4909).
 pub(crate) fn constructor_object(name: &str) -> f64 {
-    let obj = perry_runtime::js_object_alloc_null_proto(0, 1);
-    let key_ptr = perry_runtime::js_string_from_bytes("name".as_ptr(), 4);
-    let value_ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    perry_runtime::js_object_set_field(obj, 0, perry_runtime::JSValue::string_ptr(value_ptr));
-    let mut keys = perry_runtime::js_array_alloc(1);
-    keys = perry_runtime::js_array_push(keys, perry_runtime::JSValue::string_ptr(key_ptr));
-    perry_runtime::js_object_set_keys(obj, keys);
-    f64::from_bits(perry_runtime::JSValue::object_ptr(obj as *mut u8).bits())
+    f64::from_bits(
+        perry_ffi::alloc_null_proto_object(&[(
+            "name",
+            JsValue::from_string_ptr(alloc_string(name).as_raw()),
+        )])
+        .bits(),
+    )
 }
 
 fn socket_value(handle: Handle) -> f64 {
@@ -173,9 +170,7 @@ fn socket_value(handle: Handle) -> f64 {
     }
     with_state_mut(handle, |state| {
         if state.socket == 0.0 {
-            let obj = perry_runtime::js_object_alloc(0, 0);
-            state.socket =
-                f64::from_bits(perry_runtime::JSValue::object_ptr(obj as *mut u8).bits());
+            state.socket = f64::from_bits(perry_ffi::alloc_object().bits());
         }
         state.socket
     })

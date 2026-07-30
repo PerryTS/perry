@@ -4,7 +4,7 @@
 //! # Design
 //!
 //! When a hyper service fn sees a request with `Connection: Upgrade`
-//! + `Upgrade: websocket`, perry-ext-http-server diverges from the
+//! + `Upgrade: websocket`, perry-ext-http diverges from the
 //! Phase 1 (req, res) flow. Instead:
 //!
 //! 1. The accepting tokio task awaits `hyper::upgrade::on(&mut req)`,
@@ -37,9 +37,11 @@
 
 use perry_ffi::{alloc_string, get_handle_mut, JsClosure, RawClosureHeader};
 
-use crate::request::handle_to_pointer_f64;
-use crate::server::HttpServer;
-use crate::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK, STRING_TAG, TAG_UNDEFINED};
+use crate::server::request::handle_to_pointer_f64;
+use crate::server::server::HttpServer;
+use crate::server::types::{
+    js_promise_run_microtasks, POINTER_TAG, PTR_MASK, STRING_TAG, TAG_UNDEFINED,
+};
 
 /// Test whether a request looks like a WebSocket upgrade — checks
 /// `Connection: Upgrade` (case-insensitive contains) and

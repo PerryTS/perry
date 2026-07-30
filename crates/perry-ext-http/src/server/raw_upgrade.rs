@@ -36,9 +36,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use crate::request::alloc_incoming_message;
-use crate::request::IncomingMessage;
-use crate::server::HttpPendingUpgrade;
+use crate::server::request::alloc_incoming_message;
+use crate::server::request::IncomingMessage;
+use crate::server::server::HttpPendingUpgrade;
 
 /// Replays an already-read prefix before the live stream. Write side passes
 /// straight through.

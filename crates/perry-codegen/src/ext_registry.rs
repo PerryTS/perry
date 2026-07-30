@@ -240,8 +240,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_http_client_request_socket",               OwnerKind::WellKnown("http")),
 
     // ── #846: node:http server ───────────────────────────────────────
-    // `perry-ext-http-server` defines `js_node_http_*`. It's pulled in
-    // transitively via `perry-ext-http` (rlib dep), and the well-known
+    // `perry-ext-http` defines `js_node_http_*` in its internal server
+    // module, and the well-known
     // table already has `[bindings.http]` / `[bindings.https]` /
     // `[bindings.http2]` → `perry-ext-http`. So tagging these as
     // `WellKnown("http")` makes the existing flip do the right thing:
@@ -834,7 +834,7 @@ mod tests {
     }
 
     /// #3954 regression: HTTP-suite native-table rows can emit newer
-    /// `perry-ext-http`, `perry-ext-http-server`, or `perry-ext-net`
+    /// `perry-ext-http` or `perry-ext-net`
     /// symbols without the module-import path being visible to collection.
     /// Each emitted external symbol must independently flip its well-known
     /// owner so the wrapper joins the link line.

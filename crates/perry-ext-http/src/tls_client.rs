@@ -36,8 +36,6 @@
 //!   tests need `rejectUnauthorized:false`. The `ca` trust anchors are
 //!   still wired up so properly-SAN'd certs verify.
 
-use super::PTR_MASK;
-
 /// Parsed client-side TLS options. `Default` is "no TLS customization",
 /// in which case the caller keeps using the pooled default client.
 #[derive(Clone, Default, Debug)]
@@ -285,26 +283,6 @@ mod tests {
 /// detect `checkServerIdentity` without a JSON round-trip (which drops
 /// functions). Mirrors the raw NaN-boxed field read in `agent.rs`.
 unsafe fn has_function_field(obj_f64: f64, field: &str) -> bool {
-    let bits = obj_f64.to_bits();
-    let upper = bits >> 48;
-    let obj_ptr: *const perry_runtime::ObjectHeader = if upper >= 0x7FF8 {
-        (bits & PTR_MASK) as *const perry_runtime::ObjectHeader
-    } else if upper == 0 && bits >= 0x10000 {
-        bits as *const perry_runtime::ObjectHeader
-    } else {
-        return false;
-    };
-    if obj_ptr.is_null() {
-        return false;
-    }
-    let key = perry_runtime::js_string_from_bytes(field.as_ptr(), field.len() as u32);
-    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key);
-    if val.is_undefined() || val.is_null() {
-        return false;
-    }
-    // Closures are NaN-boxed with POINTER_TAG (0x7FFD); a bare raw pointer
-    // (codegen sometimes hands these back) is also accepted.
-    let vbits = val.bits();
-    let vupper = vbits >> 48;
-    vupper == 0x7FFD || (vupper == 0 && vbits >= 0x10000)
+    perry_ffi::object_field_by_name(perry_ffi::JsValue::from_bits(obj_f64.to_bits()), field)
+        .is_pointer_or_raw()
 }

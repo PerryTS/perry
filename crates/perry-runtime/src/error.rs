@@ -370,7 +370,7 @@ pub unsafe extern "C" fn js_error_value_with_code(
 }
 
 /// Generic "throw a JS Error subclass carrying a Node `.code`" FFI entry
-/// point for out-of-crate callers (e.g. `perry-ext-http-server`'s http2
+/// point for out-of-crate callers (e.g. `perry-ext-http`'s http2
 /// settings helpers) that have no direct access to `perry-runtime`'s Rust
 /// API. Diverges via `js_throw`.
 ///

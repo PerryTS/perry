@@ -174,7 +174,7 @@ for entry in "${TARGETS[@]}"; do
 done
 
 # --- #1652 / #589: node:http + Web Fetch link+run smoke (host only) ---
-# Guards against perry-ext-http-server's `js_node_http_*` FFI symbols, or the
+# Guards against perry-ext-http's `js_node_http_*` FFI symbols, or the
 # Web Fetch Headers/Request/Response constructors, silently dropping out of
 # the default link. node:http server only links on the host (perry-ext-http
 # isn't cross-compiled to the mobile targets), so this is host-only. The

@@ -3,9 +3,7 @@
   "expected_default_members": [
     "perry"
   ],
-  "allowed_binding_runtime_dependencies": [
-    "perry-ext-http"
-  ],
+  "allowed_binding_runtime_dependencies": [],
   "ci": {
     "linux_host_excluded_members": [
       "perry-ui-android",
@@ -23,7 +21,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 77,
+    "workspace_members": 76,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -65,7 +63,7 @@
     "decision_counts": {
       "externalize": 29,
       "keep": 42,
-      "merge": 2,
+      "merge": 1,
       "remove": 1,
       "review": 3
     }
@@ -202,10 +200,6 @@
     "perry-ext-http": {
       "category": "binding",
       "decision": "keep"
-    },
-    "perry-ext-http-server": {
-      "category": "binding",
-      "decision": "merge"
     },
     "perry-ext-ioredis": {
       "category": "binding",
