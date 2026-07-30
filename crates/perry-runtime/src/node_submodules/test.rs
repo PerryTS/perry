@@ -434,7 +434,7 @@ struct MockState {
     id: i64,
     original: f64,
     implementation: f64,
-    once: Vec<f64>,
+    once: Vec<(usize, f64)>,
     calls: f64,
     context: f64,
     function: f64,
@@ -640,7 +640,7 @@ fn mock_context_object(id: i64, calls: f64, include_call_tracking: bool) -> f64 
         set_field(
             obj,
             "mockImplementationOnce",
-            closure_value_with_id(mock_context_mock_implementation_once as *const u8, 1, id),
+            closure_value_with_id(mock_context_mock_implementation_once as *const u8, 2, id),
         );
     }
     set_field(
@@ -737,16 +737,45 @@ fn reset_mock_state_calls(state: &mut MockState) {
     update_mock_context_calls(state.context, state.calls);
 }
 
+fn mock_state_call_count(state: &MockState) -> usize {
+    if !is_array_value(state.calls) {
+        return 0;
+    }
+    crate::array::js_array_length(
+        raw_ptr_from_value(state.calls) as *const crate::array::ArrayHeader
+    ) as usize
+}
+
+fn schedule_mock_implementation_once(state: &mut MockState, call: usize, implementation: f64) {
+    if let Some((_, existing)) = state.once.iter_mut().find(|(index, _)| *index == call) {
+        *existing = implementation;
+    } else {
+        state.once.push((call, implementation));
+    }
+    crate::gc::runtime_write_barrier_root_nanbox(implementation.to_bits());
+}
+
+fn take_mock_implementation(state: &mut MockState) -> f64 {
+    let call = mock_state_call_count(state);
+    if let Some(position) = state.once.iter().position(|(index, _)| *index == call) {
+        state.once.remove(position).1
+    } else {
+        state.implementation
+    }
+}
+
+fn prepare_mock_state_restore(state: &mut MockState) -> MockRestoreTarget {
+    state.implementation = state.original;
+    state.restore.clone()
+}
+
 fn restore_mock_state(id: i64) {
     let restore = MOCK_STATES.with(|states| {
         let mut states = states.borrow_mut();
         let Some(state) = states.iter_mut().find(|state| state.id == id) else {
             return None;
         };
-        state.implementation = state.original;
-        state.once.clear();
-        reset_mock_state_calls(state);
-        Some(state.restore.clone())
+        Some(prepare_mock_state_restore(state))
     });
     match restore {
         Some(MockRestoreTarget::ObjectProperty {
@@ -829,11 +858,7 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
         let Some(state) = states.iter_mut().find(|state| state.id == id) else {
             return undefined_value();
         };
-        if !state.once.is_empty() {
-            state.once.remove(0)
-        } else {
-            state.implementation
-        }
+        take_mock_implementation(state)
     });
 
     let this_value = crate::object::js_implicit_this_get();
@@ -928,12 +953,31 @@ extern "C" fn mock_context_mock_implementation(
 extern "C" fn mock_context_mock_implementation_once(
     closure: *const ClosureHeader,
     implementation: f64,
+    on_call: f64,
 ) -> f64 {
     assert_callable_arg("implementation", implementation);
     let id = closure_id(closure);
+    let next_call = MOCK_STATES.with(|states| {
+        states
+            .borrow()
+            .iter()
+            .find(|state| state.id == id)
+            .map(mock_state_call_count)
+            .unwrap_or(0)
+    });
+    let call = if is_undefined_value(on_call) {
+        next_call
+    } else {
+        crate::validators::validate_integer(
+            on_call,
+            "onCall",
+            next_call as f64,
+            crate::validators::MAX_SAFE_INTEGER,
+        ) as usize
+    };
     MOCK_STATES.with(|states| {
         if let Some(state) = states.borrow_mut().iter_mut().find(|state| state.id == id) {
-            state.once.push(implementation);
+            schedule_mock_implementation_once(state, call, implementation);
         }
     });
     undefined_value()
@@ -1798,7 +1842,7 @@ pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             visitor.visit_nanbox_f64_slot(&mut state.calls);
             visitor.visit_nanbox_f64_slot(&mut state.context);
             visitor.visit_nanbox_f64_slot(&mut state.function);
-            for implementation in state.once.iter_mut() {
+            for (_, implementation) in state.once.iter_mut() {
                 visitor.visit_nanbox_f64_slot(implementation);
             }
             if let MockRestoreTarget::ObjectProperty {
@@ -1815,6 +1859,10 @@ pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
 #[cfg(test)]
 #[path = "test_unit_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "test_once_unit_tests.rs"]
+mod once_tests;
 
 fn reporter_with_kind(kind: i32, source: f64) -> f64 {
     if JSValue::from_bits(source.to_bits()).is_undefined() {
