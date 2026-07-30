@@ -57,20 +57,22 @@ pub extern "C" fn perry_ui_widget_set_shadow(
     widgets::set_shadow(handle, r, g, b, a, blur, offset_x, offset_y);
 }
 
-/// Set static opacity on a widget (issue #185 Phase B closure).
-/// Currently stub-with-state; see `widgets::set_opacity` for rationale.
+/// Set static opacity on a widget.
+///
+/// Windows renders this through `WS_EX_LAYERED` and
+/// `SetLayeredWindowAttributes`.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_opacity(handle: i64, opacity: f64) {
     widgets::set_opacity(handle, opacity);
 }
 
-/// Set border color (issue #185 Phase B closure). Stub-with-state.
+/// Set the color used by the widget's border-paint subclass.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     widgets::set_border_color(handle, r, g, b, a);
 }
 
-/// Set border width (issue #185 Phase B closure). Stub-with-state.
+/// Set the width used by the widget's border-paint subclass.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_border_width(handle: i64, width: f64) {
     widgets::set_border_width(handle, width);

@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
-    DrawTextW, FillRect, InvalidateRect, SelectObject, SetBkMode, SetTextColor, DT_CENTER,
-    DT_SINGLELINE, DT_VCENTER, HGDIOBJ, TRANSPARENT,
+    DrawTextW, FillRect, InvalidateRect, SelectObject, SetBkMode, SetTextColor, DT_CALCRECT,
+    DT_CENTER, DT_SINGLELINE, DT_VCENTER, HDC, HGDIOBJ, TRANSPARENT,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -39,9 +39,29 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+#[derive(Clone)]
+struct ButtonContent {
+    title: String,
+    image: Option<String>,
+    position: i64,
+}
+
+impl ButtonContent {
+    fn new(title: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            image: None,
+            // NSImageLeading, matching the macOS default after set_image.
+            position: 7,
+        }
+    }
+}
+
 thread_local! {
     // Map from widget handle -> callback pointer
     static BUTTON_CALLBACKS: RefCell<HashMap<i64, *const u8>> = RefCell::new(HashMap::new());
+    // Separate title/icon state lets image-position changes preserve both.
+    static BUTTON_CONTENT: RefCell<HashMap<i64, ButtonContent>> = RefCell::new(HashMap::new());
     // Map from widget handle -> text COLORREF
     static BUTTON_TEXT_COLORS: RefCell<HashMap<i64, u32>> = RefCell::new(HashMap::new());
     // Map from button HWND -> widget handle (for WM_DRAWITEM lookup)
@@ -83,6 +103,11 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
             BUTTON_CALLBACKS.with(|cb| {
                 cb.borrow_mut().insert(handle, callback_ptr);
             });
+            BUTTON_CONTENT.with(|content| {
+                content
+                    .borrow_mut()
+                    .insert(handle, ButtonContent::new(label));
+            });
             #[cfg(feature = "geisterhand")]
             {
                 extern "C" {
@@ -102,6 +127,11 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
         let handle = register_widget(0, WidgetKind::Button, control_id);
         BUTTON_CALLBACKS.with(|cb| {
             cb.borrow_mut().insert(handle, callback_ptr);
+        });
+        BUTTON_CONTENT.with(|content| {
+            content
+                .borrow_mut()
+                .insert(handle, ButtonContent::new(label));
         });
         #[cfg(feature = "geisterhand")]
         {
@@ -159,18 +189,70 @@ pub fn set_bordered(handle: i64, bordered: bool) {
     }
 }
 
+fn join_button_parts(first: &str, second: &str, separator: &str) -> String {
+    match (first.is_empty(), second.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => second.to_owned(),
+        (false, true) => first.to_owned(),
+        (false, false) => format!("{first}{separator}{second}"),
+    }
+}
+
+fn composed_button_text(content: &ButtonContent) -> String {
+    let image = content.image.as_deref().unwrap_or("");
+    match content.position {
+        0 => content.title.clone(),                             // NSNoImage
+        1 => image.to_owned(),                                  // NSImageOnly
+        2 | 7 => join_button_parts(image, &content.title, " "), // left / leading
+        3 | 8 => join_button_parts(&content.title, image, " "), // right / trailing
+        4 => join_button_parts(&content.title, image, "\n"),    // below
+        5 => join_button_parts(image, &content.title, "\n"),    // above
+        6 => join_button_parts(image, &content.title, ""),      // overlaps fallback
+        _ => join_button_parts(image, &content.title, " "),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn update_button_content(handle: i64) {
+    let Some((text, position)) = BUTTON_CONTENT.with(|content| {
+        content
+            .borrow()
+            .get(&handle)
+            .map(|content| (composed_button_text(content), content.position))
+    }) else {
+        return;
+    };
+    let Some(hwnd) = super::get_hwnd(handle) else {
+        return;
+    };
+    let wide = to_wide(&text);
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        let style = if matches!(position, 4 | 5) {
+            style | BS_MULTILINE as u32
+        } else {
+            style & !(BS_MULTILINE as u32)
+        };
+        SetWindowLongW(hwnd, GWL_STYLE, style as i32);
+        let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr()));
+        let _ = InvalidateRect(Some(hwnd), None, true);
+    }
+}
+
 /// Set the title text of a Button.
 pub fn set_title(handle: i64, title_ptr: *const u8) {
     let title = str_from_header(title_ptr);
+    BUTTON_CONTENT.with(|content| {
+        let mut content = content.borrow_mut();
+        content
+            .entry(handle)
+            .or_insert_with(|| ButtonContent::new(""))
+            .title = title.to_owned();
+    });
 
     #[cfg(target_os = "windows")]
     {
-        if let Some(hwnd) = super::get_hwnd(handle) {
-            let wide = to_wide(title);
-            unsafe {
-                let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr()));
-            }
-        }
+        update_button_content(handle);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -179,12 +261,10 @@ pub fn set_title(handle: i64, title_ptr: *const u8) {
     }
 }
 
-/// Set button image by SF Symbol name. On Windows, maps known names to Unicode/text fallbacks.
-pub fn set_image(handle: i64, name_ptr: *const u8) {
-    let name = str_from_header(name_ptr);
+fn symbol_fallback(name: &str) -> &str {
     // Use non-emoji Unicode glyphs that respect SetTextColor on Windows.
     // Emoji glyphs (U+1Fxxx) use color fonts and IGNORE SetTextColor.
-    let fallback = match name {
+    match name {
         // Activity bar & common UI icons — use Segoe UI Symbol / basic Unicode
         "doc.on.doc" | "doc.on.doc.fill" => "\u{25A1}\u{25A0}", // □■ (files)
         "magnifyingglass" => "\u{2315}",                        // ⌕ (search)
@@ -223,16 +303,24 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
         "arrow.up.left.and.arrow.down.right" => "\u{2922}", // ⤢ (maximize)
         "arrow.down.right.and.arrow.up.left" => "\u{2925}", // ⤥ (collapse)
         _ => name,
-    };
+    }
+}
+
+/// Set button image by SF Symbol name. On Windows, maps known names to Unicode/text fallbacks.
+pub fn set_image(handle: i64, name_ptr: *const u8) {
+    let name = str_from_header(name_ptr);
+    let fallback = symbol_fallback(name);
+    BUTTON_CONTENT.with(|content| {
+        content
+            .borrow_mut()
+            .entry(handle)
+            .or_insert_with(|| ButtonContent::new(""))
+            .image = Some(fallback.to_owned());
+    });
 
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
-            // Replace the button text with the icon fallback.
-            let wide = to_wide(fallback);
-            unsafe {
-                let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr()));
-            }
             // Set font to "Segoe UI Symbol" so Unicode glyphs render at the correct
             // size. The default "Segoe UI" doesn't contain these symbols and Win32
             // falls back to a tiny glyph from another font.
@@ -246,12 +334,33 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
                     Some(LPARAM(1)),
                 );
             }
+            update_button_content(handle);
         }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (handle, fallback);
+    }
+}
+
+/// Set the image position of a button.
+///
+/// Values mirror NSImagePosition:
+/// 0=none, 1=image-only, 2=left, 3=right, 4=below, 5=above,
+/// 6=overlaps, 7=leading, 8=trailing.
+pub fn set_image_position(handle: i64, position: i64) {
+    BUTTON_CONTENT.with(|content| {
+        content
+            .borrow_mut()
+            .entry(handle)
+            .or_insert_with(|| ButtonContent::new(""))
+            .position = position;
+    });
+
+    #[cfg(target_os = "windows")]
+    {
+        update_button_content(handle);
     }
 }
 
@@ -276,6 +385,41 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
                 let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn draw_centered_text(hdc: HDC, rect: RECT, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let mut wide = to_wide(text);
+    let text_len = wide.len().saturating_sub(1);
+    if text.contains('\n') {
+        let mut measured = RECT {
+            left: 0,
+            top: 0,
+            right: rect.right - rect.left,
+            bottom: rect.bottom - rect.top,
+        };
+        DrawTextW(
+            hdc,
+            &mut wide[..text_len],
+            &mut measured,
+            DT_CENTER | DT_CALCRECT,
+        );
+        let block_height = measured.bottom - measured.top;
+        let mut text_rect = rect;
+        text_rect.top += ((rect.bottom - rect.top - block_height) / 2).max(0);
+        DrawTextW(hdc, &mut wide[..text_len], &mut text_rect, DT_CENTER);
+    } else {
+        let mut text_rect = rect;
+        DrawTextW(
+            hdc,
+            &mut wide[..text_len],
+            &mut text_rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
     }
 }
 
@@ -327,7 +471,7 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
             FillRect(hdc, &rect, crate::theme::control_brush());
         }
 
-        // Draw centered text
+        // Draw text and text-backed image using the requested image position.
         SetTextColor(hdc, text_color);
         SetBkMode(hdc, TRANSPARENT);
 
@@ -340,17 +484,24 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
             HGDIOBJ::default()
         };
 
-        let text_len = GetWindowTextLengthW(dis.hwndItem);
-        if text_len > 0 {
-            let mut buf = vec![0u16; (text_len + 1) as usize];
-            GetWindowTextW(dis.hwndItem, &mut buf);
-            let mut text_rect = rect;
-            DrawTextW(
-                hdc,
-                &mut buf[..text_len as usize],
-                &mut text_rect,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-            );
+        let content = BUTTON_CONTENT.with(|content| content.borrow().get(&handle).cloned());
+        if let Some(content) = content {
+            if content.position == 6 {
+                if let Some(image) = content.image.as_deref() {
+                    draw_centered_text(hdc, rect, image);
+                }
+                draw_centered_text(hdc, rect, &content.title);
+            } else {
+                draw_centered_text(hdc, rect, &composed_button_text(&content));
+            }
+        } else {
+            let text_len = GetWindowTextLengthW(dis.hwndItem);
+            if text_len > 0 {
+                let mut buf = vec![0u16; (text_len + 1) as usize];
+                GetWindowTextW(dis.hwndItem, &mut buf);
+                let text = String::from_utf16_lossy(&buf[..text_len as usize]);
+                draw_centered_text(hdc, rect, &text);
+            }
         }
 
         if !old_font.is_invalid() {
@@ -358,4 +509,45 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn content(position: i64) -> ButtonContent {
+        ButtonContent {
+            title: "Run".to_owned(),
+            image: Some("▶".to_owned()),
+            position,
+        }
+    }
+
+    #[test]
+    fn image_position_composes_text_backed_button_content() {
+        assert_eq!(composed_button_text(&content(0)), "Run");
+        assert_eq!(composed_button_text(&content(1)), "▶");
+        assert_eq!(composed_button_text(&content(2)), "▶ Run");
+        assert_eq!(composed_button_text(&content(3)), "Run ▶");
+        assert_eq!(composed_button_text(&content(4)), "Run\n▶");
+        assert_eq!(composed_button_text(&content(5)), "▶\nRun");
+        assert_eq!(composed_button_text(&content(7)), "▶ Run");
+        assert_eq!(composed_button_text(&content(8)), "Run ▶");
+    }
+
+    #[test]
+    fn image_position_does_not_add_spacing_for_missing_parts() {
+        let image_only = ButtonContent {
+            title: String::new(),
+            image: Some("▶".to_owned()),
+            position: 7,
+        };
+        let title_only = ButtonContent {
+            title: "Run".to_owned(),
+            image: None,
+            position: 7,
+        };
+        assert_eq!(composed_button_text(&image_only), "▶");
+        assert_eq!(composed_button_text(&title_only), "Run");
+    }
 }

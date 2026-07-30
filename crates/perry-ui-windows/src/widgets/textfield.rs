@@ -6,7 +6,9 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{CreateSolidBrush, InvalidateRect, SetBkColor, HBRUSH, HDC};
+use windows::Win32::Graphics::Gdi::{
+    CreateSolidBrush, InvalidateRect, SetBkColor, SetTextColor, HBRUSH, HDC,
+};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
@@ -48,6 +50,9 @@ thread_local! {
     /// Background color (COLORREF) and brush per textfield handle
     #[cfg(target_os = "windows")]
     static TEXTFIELD_BG: RefCell<HashMap<i64, (u32, HBRUSH)>> = RefCell::new(HashMap::new());
+    /// Foreground COLORREF per textfield handle.
+    #[cfg(target_os = "windows")]
+    static TEXTFIELD_FG: RefCell<HashMap<i64, u32>> = RefCell::new(HashMap::new());
 }
 
 /// Create a TextField. Returns widget handle.
@@ -238,26 +243,42 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     }
 }
 
-/// Handle WM_CTLCOLOREDIT — set background color for textfield EDIT controls.
-/// Returns Some(brush_isize) if the child HWND belongs to a textfield with a custom bg color.
+/// Handle WM_CTLCOLOREDIT for TextField foreground/background styling.
+///
+/// Returns a brush when either color is customized. Returning a brush is
+/// required even for a foreground-only override; otherwise the parent window's
+/// default handler can overwrite the HDC text color before the EDIT is drawn.
 #[cfg(target_os = "windows")]
 pub fn handle_ctlcoloredit(hdc: HDC, child_hwnd: HWND) -> Option<isize> {
-    // Find the widget handle for this HWND
     let handle = super::find_handle_by_hwnd(child_hwnd);
     if handle <= 0 {
         return None;
     }
-    TEXTFIELD_BG.with(|bg| {
-        let bg = bg.borrow();
-        if let Some(&(colorref, brush)) = bg.get(&handle) {
-            unsafe {
-                SetBkColor(hdc, COLORREF(colorref));
-            }
-            Some(brush.0 as isize)
-        } else {
-            None
-        }
-    })
+
+    let foreground = TEXTFIELD_FG.with(|fg| fg.borrow().get(&handle).copied());
+    let background = TEXTFIELD_BG.with(|bg| bg.borrow().get(&handle).copied());
+    if foreground.is_none() && background.is_none() {
+        return None;
+    }
+
+    let (background_color, brush) = background
+        .map(|(color, brush)| (COLORREF(color), brush))
+        .unwrap_or_else(|| {
+            (
+                crate::theme::control_background_color(),
+                crate::theme::control_brush(),
+            )
+        });
+    unsafe {
+        SetBkColor(hdc, background_color);
+        SetTextColor(
+            hdc,
+            foreground
+                .map(COLORREF)
+                .unwrap_or_else(crate::theme::text_color),
+        );
+    }
+    Some(brush.0 as isize)
 }
 
 /// Set the font size of the text field.
@@ -283,9 +304,28 @@ pub fn set_font_size(handle: i64, size: f64) {
     }
 }
 
-/// Set the text color of the text field (stub — not implemented on Windows).
+/// Set the foreground color of the TextField's EDIT control.
 pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    let _ = (handle, r, g, b, a);
+    #[cfg(target_os = "windows")]
+    {
+        let _ = a;
+        let ri = (r * 255.0).round().clamp(0.0, 255.0) as u32;
+        let gi = (g * 255.0).round().clamp(0.0, 255.0) as u32;
+        let bi = (b * 255.0).round().clamp(0.0, 255.0) as u32;
+        TEXTFIELD_FG.with(|fg| {
+            fg.borrow_mut().insert(handle, ri | (gi << 8) | (bi << 16));
+        });
+        if let Some(hwnd) = super::get_hwnd(handle) {
+            unsafe {
+                let _ = InvalidateRect(Some(hwnd), None, true);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (handle, r, g, b, a);
+    }
 }
 
 /// Get the current text from a TextField. Returns a perry string pointer (i64).

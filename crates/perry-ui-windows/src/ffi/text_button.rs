@@ -35,9 +35,7 @@ pub extern "C" fn perry_ui_text_set_selectable(handle: i64, selectable: f64) {
     widgets::text::set_selectable(handle, selectable != 0.0);
 }
 
-/// Set text decoration (issue #185 Phase B closure). Currently
-/// stub-with-state on Windows; see `widgets::text::set_decoration`
-/// for rationale.
+/// Set text decoration through the Text widget's Win32 font.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_decoration(handle: i64, decoration: i64) {
     widgets::text::set_decoration(handle, decoration);
@@ -90,9 +88,11 @@ pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64) {
     widgets::button::set_image(handle, name_ptr as *const u8);
 }
 
-/// Set button image position. No-op on Windows (our "images" are text).
+/// Set button image position using the same numeric values as NSImagePosition.
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_image_position(_handle: i64, _position: f64) {}
+pub extern "C" fn perry_ui_button_set_image_position(handle: i64, position: i64) {
+    widgets::button::set_image_position(handle, position);
+}
 
 /// Set button content tint color. On Windows, delegates to text color since icons are text.
 #[no_mangle]
