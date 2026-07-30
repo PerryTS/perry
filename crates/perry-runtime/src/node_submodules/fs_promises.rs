@@ -106,6 +106,11 @@ pub extern "C" fn js_fs_promises_mkdir(path: f64, options: f64) -> f64 {
     thunk_fs_promises_mkdir(std::ptr::null(), path, options)
 }
 
+#[no_mangle]
+pub extern "C" fn js_fs_promises_rmdir(path: f64, options: f64) -> f64 {
+    thunk_fs_promises_rmdir(std::ptr::null(), path, options)
+}
+
 pub(crate) extern "C" fn thunk_fs_promises_readFile(
     _closure: *const ClosureHeader,
     path: f64,

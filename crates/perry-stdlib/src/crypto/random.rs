@@ -63,7 +63,7 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
         (*buf).length = size as u32;
         let data = perry_runtime::buffer::buffer_data_mut(buf);
         let bytes = std::slice::from_raw_parts_mut(data, size);
-        rand::thread_rng().fill_bytes(bytes);
+        rand::rng().fill_bytes(bytes);
     }
     buf
 }
@@ -115,7 +115,7 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
     let size = validate_random_bytes_size(size);
 
     let mut bytes = vec![0u8; size];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let hex_str = hex::encode(&bytes);
 
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
@@ -252,7 +252,7 @@ pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
         );
         perry_runtime::fs::validate::throw_range_error_with_code(&message);
     }
-    rand::thread_rng().gen_range(min..max) as f64
+    rand::rng().random_range(min..max) as f64
 }
 
 /// #1577: dispatcher for captured-then-called `crypto.*` methods
@@ -489,7 +489,7 @@ pub extern "C" fn js_crypto_random_fill_sync(
                     .saturating_add(count_elem.saturating_mul(elem_size))
                     .min(data.len());
                 if end > start {
-                    rand::thread_rng().fill_bytes(&mut data[start..end]);
+                    rand::rng().fill_bytes(&mut data[start..end]);
                 }
                 return buf_bits;
             }
@@ -503,7 +503,7 @@ pub extern "C" fn js_crypto_random_fill_sync(
             if count > 0 {
                 let data = perry_runtime::buffer::buffer_data_mut(buf);
                 let slice = std::slice::from_raw_parts_mut(data.add(start), count);
-                rand::thread_rng().fill_bytes(slice);
+                rand::rng().fill_bytes(slice);
             }
             // Hand back the same NaN-boxed value the caller passed.
             return buf_bits;

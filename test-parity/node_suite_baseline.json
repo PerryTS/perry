@@ -42,16 +42,22 @@
       "total": 242
     },
     "dgram": {
-      "pass": 18,
-      "total": 38
+      "pass": 39,
+      "total": 54
     },
     "diagnostics_channel": {
       "pass": 66,
       "total": 69
     },
     "dns": {
-      "pass": 6,
-      "total": 6
+      "pass": 17,
+      "total": 43,
+      "outcomes": {
+        "diff": 26,
+        "node_err": 0,
+        "compile_fail": 0,
+        "perry_err": 0
+      }
     },
     "domain": {
       "pass": 18,

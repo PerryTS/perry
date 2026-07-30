@@ -10,21 +10,43 @@ function thrownShape(label: string, fn: () => void): void {
   }
 }
 
-dns.setServers(["8.8.8.8", "[2001:4860:4860::8888]:53", "1.1.1.1:5353", "[2001:4860:4860::8844]:5353"]);
-dnsPromises.setServers(["9.9.9.9"]);
+dns.setServers([
+  "8.8.8.8",
+  "[2001:4860:4860::8888]:53",
+  "1.1.1.1:5353",
+  "[2001:4860:4860::8844]:5353",
+]);
+if (typeof dnsPromises.setServers === "function") {
+  dnsPromises.setServers(["9.9.9.9"]);
+}
 console.log("callback servers:", dns.getServers().join("|"));
-console.log("promise servers:", dnsPromises.getServers().join("|"));
+console.log(
+  "promise servers:",
+  typeof dnsPromises.getServers === "function"
+    ? dnsPromises.getServers().join("|")
+    : "absent",
+);
 
 const resolverA = new dns.Resolver();
 const resolverB = new dns.Resolver();
 resolverA.setServers(["4.4.4.4"]);
 resolverB.setServers(["[2001:db8::1]:5353"]);
-console.log("resolver servers:", resolverA.getServers().join("|"), resolverB.getServers().join("|"));
+console.log(
+  "resolver servers:",
+  resolverA.getServers().join("|"),
+  resolverB.getServers().join("|"),
+);
 console.log("module servers unchanged:", dns.getServers().join("|"));
 
 const promiseResolver = new dnsPromises.Resolver();
 promiseResolver.setServers(["5.5.5.5"]);
-console.log("promise resolver servers:", promiseResolver.getServers().join("|"), dnsPromises.getServers().join("|"));
+console.log(
+  "promise resolver servers:",
+  promiseResolver.getServers().join("|"),
+  typeof dnsPromises.getServers === "function"
+    ? dnsPromises.getServers().join("|")
+    : "absent",
+);
 console.log("cancel returns:", resolverA.cancel(), promiseResolver.cancel());
 
 thrownShape("invalid not array", () => dns.setServers("8.8.8.8" as any));

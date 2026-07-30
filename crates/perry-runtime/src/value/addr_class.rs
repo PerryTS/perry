@@ -123,11 +123,11 @@ pub fn is_stream_id_band(id: usize) -> bool {
 /// Issue #73 follow-up: raised the lower bound from 1 MB to 2 TB to reject
 /// corrupted NaN-boxes whose 48-bit handle lands in the 1-2 TB window
 /// (e.g. `0x00FF_0000_0000` from an `ArrayHeader { length: 0, capacity:
-/// 255 }` read as u64). Real macOS mimalloc + arena allocations all
-/// land in the 3-5 TB range; anything below 2 TB is certainly bogus on
-/// that platform. Linux glibc and Windows mimalloc allocate well below
-/// 2 TB though (often in the GB-to-tens-of-GB range), so the macOS floor
-/// silently rejects every legitimate object pointer there — issues
+/// 255 }` read as u64). macOS mimalloc + arena allocations can also land
+/// below 2 TB (observed around 45 GB in the Rust test harness). Linux glibc
+/// and Windows mimalloc likewise allocate well below 2 TB (often in the
+/// GB-to-tens-of-GB range); a 2 TB floor silently rejects legitimate object
+/// pointers there — issues
 /// #385/#386/#387 traced back to this exact filter on Windows.
 ///
 /// #1136 / #1129: iOS-family *device* targets (aarch64-apple-ios,
@@ -135,12 +135,11 @@ pub fn is_stream_id_band(id: usize) -> bool {
 /// libsystem_malloc, whose user allocations land in the same low range
 /// as Android/Linux/Windows. Treat them like those platforms — the
 /// downstream `GcHeader.obj_type` check is the real liveness guard.
-/// The simulator (e.g. ios + target_abi = "sim") runs on the macOS
-/// host's mimalloc so its allocations still land above 2 TB; lowering
-/// the floor here is safe because the obj_type validation does the
-/// work.
+/// The simulator (e.g. ios + target_abi = "sim") runs on the macOS host's
+/// allocator too. Lowering the floor is safe because the handle-band check
+/// and downstream obj_type validation do the real work.
 ///
-/// NOTE: the platform `HEAP_MIN` floor on Linux/Android/iOS/Windows
+/// NOTE: the platform `HEAP_MIN` floor on Linux/Android/macOS/iOS/Windows
 /// (`0x1000`) is BELOW the handle band, so this predicate alone does NOT
 /// reject small handles there — pair it with [`is_handle_band`] (or use
 /// [`try_read_gc_header`], which does both) when the input can carry a
@@ -162,6 +161,7 @@ pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
     let addr = ptr as u64;
     #[cfg(any(
         target_os = "android",
+        target_os = "macos",
         target_os = "linux",
         target_os = "windows",
         target_os = "ios",
@@ -172,6 +172,7 @@ pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
     const HEAP_MIN: u64 = 0x1000;
     #[cfg(not(any(
         target_os = "android",
+        target_os = "macos",
         target_os = "linux",
         target_os = "windows",
         target_os = "ios",
@@ -268,5 +269,14 @@ mod tests {
         assert!(is_stream_id_band(STREAM_ID_BAND_START));
         assert!(!is_stream_id_band(HANDLE_BAND_MAX - 1));
         assert!(!is_handle_band(STREAM_ID_BAND_START));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_accepts_heap_addresses_below_two_tb() {
+        // The Rust test harness has observed mimalloc allocations around
+        // 45 GB. Classification is purely numeric and must not dereference
+        // this representative address.
+        assert!(is_valid_obj_ptr(0x0000_000a_0000_0000usize as *const u8));
     }
 }
