@@ -12,6 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+mod async_hooks_exports;
 mod callable_export_check;
 pub(crate) mod callable_exports;
 mod constants;

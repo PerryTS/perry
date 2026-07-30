@@ -246,7 +246,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("querystring", "escape") => Some(1),
         ("querystring", "stringify" | "parse") => Some(4),
         ("async_hooks", "AsyncLocalStorage") => Some(0),
-        ("async_hooks", "AsyncResource") => Some(2),
+        ("async_hooks", "AsyncResource") => Some(1),
         ("async_hooks", "createHook") => Some(1),
         ("async_hooks", "executionAsyncId") => Some(0),
         ("async_hooks", "triggerAsyncId") => Some(0),
@@ -1686,6 +1686,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
     closure_addr: usize,
 ) -> f64 {
     if property_name == "AsyncLocalStorage" {
+        super::async_hooks_exports::attach_async_local_storage_prototype(value);
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "bind",
@@ -1709,6 +1710,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
     }
 
     if property_name == "AsyncResource" {
+        super::async_hooks_exports::attach_async_resource_prototype(value);
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "bind",
@@ -1817,7 +1819,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
         "async_hooks",
         &[
             ("AsyncLocalStorage", 0),
-            ("AsyncResource", 2),
+            ("AsyncResource", 1),
             ("createHook", 1),
             ("executionAsyncId", 0),
             ("executionAsyncResource", 0),
