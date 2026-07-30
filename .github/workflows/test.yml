@@ -2035,9 +2035,8 @@ jobs:
   # demand. PR authors and maintainers can both apply labels.
   # ---------------------------------------------------------------------------
   doc-tests:
-    # Release-publish decoupling (see `parity` above): aspirational extended
-    # suite, informational only — does not block package publishing.
-    continue-on-error: true
+    # Blocking host runs and the portable cross-compile subset gate the job.
+    # Known platform-tail failures remain advisory at their individual steps.
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
