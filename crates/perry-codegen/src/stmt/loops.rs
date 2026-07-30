@@ -5079,6 +5079,7 @@ fn lower_for_after_init_with_i32_bound(
         if let Some(cond_expr) = condition {
             let cv = lower_expr(ctx, cond_expr)?;
             let i1 = lower_truthy(ctx, &cv, cond_expr);
+            emit_gc_loop_safepoint(ctx, &[], &[cond_expr]);
             ctx.block().cond_br(&i1, &body_label, &exit_label);
         } else {
             ctx.block().br(&body_label);
@@ -5091,6 +5092,7 @@ fn lower_for_after_init_with_i32_bound(
         if let Some(cond_expr) = condition {
             let cv = lower_expr(ctx, cond_expr)?;
             let i1 = lower_truthy(ctx, &cv, cond_expr);
+            emit_gc_loop_safepoint(ctx, &[], &[cond_expr]);
             ctx.block().cond_br(&i1, &body_label, &exit_label);
         } else {
             // `for (;;)` — unconditional jump into the body. May be an
@@ -5140,8 +5142,7 @@ fn lower_for_after_init_with_i32_bound(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
-        emit_gc_loop_safepoint(ctx, body, &controls);
+        emit_gc_loop_safepoint(ctx, body, &[]);
         ctx.block().br(&update_label);
     }
 
@@ -5149,6 +5150,7 @@ fn lower_for_after_init_with_i32_bound(
     ctx.current_block = update_idx;
     if let Some(update_expr) = update {
         let _ = lower_expr(ctx, update_expr)?;
+        emit_gc_loop_safepoint(ctx, &[], &[update_expr]);
     }
     // #6072: a loop-private i32 counter is invisible to the `Update` lowering
     // (it is not in `ctx.i32_counter_slots`), so advance it here. The classifier
@@ -5238,11 +5240,12 @@ fn moving_safepoint_polls_enabled() -> bool {
     })
 }
 
-/// Emit a `js_gc_loop_safepoint()` poll at a loop back-edge. Call this AFTER
-/// `clear_loop_body_shadow_slots` and only where the block is not terminated:
-/// at that point the loop-body expression has completed, so every live heap
-/// value is a named local on the shadow stack (no unspilled register temps) —
-/// a precise-root safepoint where a deferred copying minor can MOVE survivors.
+/// Emit a `js_gc_loop_safepoint()` after an allocating loop segment has
+/// completed and only where the block is not terminated. Body calls must run
+/// after `clear_loop_body_shadow_slots`; control calls run after their result
+/// has been reduced or discarded. At either point every live heap value is a
+/// named local on the shadow stack (no unspilled register temps) — a precise
+/// root safepoint where a deferred copying minor can MOVE survivors.
 ///
 /// COVERAGE (Phase 2, follow-up): currently wired into the generic `while`,
 /// `do..while`, and `for` back-edges. The specialized/versioned `for`-loop
@@ -7009,6 +7012,7 @@ pub(crate) fn lower_while(
     ctx.current_block = cond_idx;
     let cv = lower_expr(ctx, condition)?;
     let i1 = lower_truthy(ctx, &cv, condition);
+    emit_gc_loop_safepoint(ctx, &[], &[condition]);
     ctx.block().cond_br(&i1, &body_label, &exit_label);
 
     // For while-loops, continue jumps back to the cond block.
@@ -7046,7 +7050,7 @@ pub(crate) fn lower_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body, &[condition]);
+        emit_gc_loop_safepoint(ctx, body, &[]);
         ctx.block().br(&cond_label);
     }
     ctx.active_region_id = previous_region_id;
@@ -7104,13 +7108,14 @@ pub(crate) fn lower_do_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body, &[condition]);
+        emit_gc_loop_safepoint(ctx, body, &[]);
         ctx.block().br(&cond_label);
     }
 
     ctx.current_block = cond_idx;
     let cv = lower_expr(ctx, condition)?;
     let i1 = lower_truthy(ctx, &cv, condition);
+    emit_gc_loop_safepoint(ctx, &[], &[condition]);
     ctx.block().cond_br(&i1, &body_label, &exit_label);
     ctx.active_region_id = previous_region_id;
 
