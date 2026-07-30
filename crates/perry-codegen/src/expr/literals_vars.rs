@@ -706,6 +706,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local update")?;
                 let idx_str = capture_idx.to_string();
                 // Boxed captured var: deref box bits, modify, store back.
+                //
+                // `box_ptr` deliberately survives the `coerce_old`/`step_new`
+                // calls below even though those can collect: a box is
+                // `std::alloc::alloc`'d by `js_box_alloc_bits`, is never freed
+                // and is never relocated (`scan_box_roots_mut` rewrites the
+                // JSValue *inside* the box, not the box's address), so an
+                // address read before a collection still names the same live
+                // cell after it. The closure pointer has no such guarantee,
+                // which is why the non-boxed arm below re-reads it.
                 if ctx.boxed_vars.contains(id) {
                     let blk = ctx.block();
                     let box_ptr = blk.call(
@@ -734,7 +743,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let old = coerce_old(blk, &old);
                 let new = step_new(blk, &old);
                 let new_bits = blk.bitcast_double_to_i64(&new);
-                blk.call_void(
+                // #7055: `coerce_old` emits `js_to_numeric`, which runs a user
+                // `valueOf` — arbitrary JS, including allocating loops that
+                // reach a `js_gc_loop_safepoint` and relocate this very
+                // closure. `js_closure_set_capture_bits` does NOT validate its
+                // pointer (unlike `js_closure_get_capture_bits`, which bounds-
+                // checks and returns 0), so writing through a pre-coercion
+                // `closure_ptr` would store into whatever the mutator has since
+                // put at that recycled from-space address. Re-read the rooted
+                // slot after the coercion; the collector has rewritten it.
+                // Only the coercing path pays the reload — a statically
+                // integer-typed counter emits no call in between.
+                let closure_ptr = if needs_numeric_coerce {
+                    super::current_closure_ptr_value(ctx, "captured local update")?
+                } else {
+                    closure_ptr
+                };
+                ctx.block().call_void(
                     "js_closure_set_capture_bits",
                     &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );

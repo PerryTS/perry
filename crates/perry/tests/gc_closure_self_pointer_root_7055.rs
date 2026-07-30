@@ -129,9 +129,32 @@ fn relocating_minor_does_not_replay_an_async_loop_iteration() {
     }
     arms.push(vec![("PERRY_GEN_GC", "0")]);
 
+    // The test runner's own environment is inherited by `Command`, so a
+    // developer (or a bisect script) exporting `PERRY_GEN_GC=0` — or any other
+    // collector kill switch — would silently turn every arm into the
+    // never-relocates control and the suite would pass against the unfixed
+    // compiler. Clear the whole family first, then apply only this arm's own
+    // settings.
+    const GC_ENV_OVERRIDES: &[&str] = &[
+        "PERRY_GEN_GC",
+        "PERRY_GEN_GC_EVACUATE",
+        "PERRY_GC_SCAVENGE",
+        "PERRY_GC_SCAVENGE_NURSERY_MB",
+        "PERRY_GC_MOVING_SAFEPOINT",
+        "PERRY_GC_MOVING_LOOP_POLLS",
+        "PERRY_GC_FORCE_EVACUATE",
+        "PERRY_CONSERVATIVE_STACK_SCAN",
+        "PERRY_WRITE_BARRIERS",
+        "PERRY_GC_INCREMENTAL",
+        "PERRY_GC_HEAP_LIMIT",
+    ];
+
     for arm in &arms {
         let mut cmd = Command::new(&output);
         cmd.current_dir(dir.path());
+        for key in GC_ENV_OVERRIDES {
+            cmd.env_remove(key);
+        }
         for (k, v) in arm {
             cmd.env(k, v);
         }
