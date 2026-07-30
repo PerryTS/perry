@@ -37,6 +37,11 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
         // Data getters resolved by FFI.
         "blob" => is_blob_getter_name(prop),
         "fetch" => is_fetch_response_getter_name(prop),
+        // `State` is an opaque perry/ui handle, so `.value` must invoke the
+        // platform getter instead of falling through to an own-property read
+        // on the NaN-boxed handle. Other perry/ui members are methods and reach
+        // dispatch through the call-expression path.
+        "perry/ui" => class == "State" && prop == "value",
         // Web Streams: only the getter list reaches dispatch (methods are
         // PropertyGet bound-method reads).
         "readable_stream"
@@ -587,5 +592,12 @@ mod tests {
             "Interface",
             "custom"
         ));
+    }
+
+    #[test]
+    fn perry_ui_state_dispatches_value_getter_only() {
+        assert!(is_native_dispatch_member("perry/ui", "State", "value"));
+        assert!(!is_native_dispatch_member("perry/ui", "State", "custom"));
+        assert!(!is_native_dispatch_member("perry/ui", "Canvas", "value"));
     }
 }
