@@ -2875,8 +2875,6 @@ fn lower_object_array_write_versioned_for(
         extra_guards.push((g_packed, g_box));
     }
     let preheader_idx = ctx.current_block;
-    let preheader_label = ctx.block().label.clone();
-
     // Emit the fallback first. Besides preserving the original semantics, this
     // creates the ordinary local slots for the nested counter, allowing the
     // fast completion block to synchronize loop variables before the merge.
@@ -5141,7 +5139,8 @@ fn lower_for_after_init_with_i32_bound(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body);
+        let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+        emit_gc_loop_safepoint(ctx, body, &controls);
         ctx.block().br(&update_label);
     }
 
@@ -5226,7 +5225,7 @@ fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     // DEFAULT ON (moving-nursery flip): emit the back-edge poll, but ONLY for
-    // allocating loop bodies (see the `body_may_allocate` gate in
+    // allocating loops (see the `loop_may_allocate` gate in
     // `emit_gc_loop_safepoint`) so numeric/vectorizable loops stay call-free.
     // Kill switch: PERRY_GC_MOVING_LOOP_POLLS=0/off/false. Must match the runtime
     // `gc_moving_loop_polls_enabled` (same env) so deferrals always have a drain.
@@ -5251,15 +5250,19 @@ fn moving_safepoint_polls_enabled() -> bool {
 /// loop that takes one of those paths won't drain a deferred moving minor until
 /// the next event-loop safepoint. Adding the poll to every back-edge across
 /// those paths is the remaining Phase 2 codegen work.
-pub(crate) fn emit_gc_loop_safepoint(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
+pub(crate) fn emit_gc_loop_safepoint(
+    ctx: &mut FnCtx<'_>,
+    body: &[Stmt],
+    controls: &[&perry_hir::Expr],
+) {
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
         return;
     }
     // Only an ALLOCATING loop body can defer a collection to this poll; skip the
     // poll for pure (non-allocating) bodies so numeric/vectorizable loops stay
     // call-free (a poll defeats LLVM auto-vectorization — measured ~2x on a tight
-    // scalar reduction). See `body_may_allocate` for the safe-direction rationale.
-    if !crate::loop_purity::body_may_allocate(body) {
+    // scalar reduction). See `loop_may_allocate` for the safe-direction rationale.
+    if !crate::loop_purity::loop_may_allocate(body, controls) {
         return;
     }
     ctx.block().call_void("js_gc_loop_safepoint", &[]);
@@ -7042,7 +7045,7 @@ pub(crate) fn lower_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body);
+        emit_gc_loop_safepoint(ctx, body, &[condition]);
         ctx.block().br(&cond_label);
     }
     ctx.active_region_id = previous_region_id;
@@ -7100,7 +7103,7 @@ pub(crate) fn lower_do_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, body);
+        emit_gc_loop_safepoint(ctx, body, &[condition]);
         ctx.block().br(&cond_label);
     }
 
