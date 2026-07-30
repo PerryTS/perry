@@ -1355,6 +1355,11 @@ pub fn detect_native_instance_creation_with_context(
                 // Tagging the local as CheerioAPI lets the rewriter below
                 // turn `$(sel)` into `NativeMethodCall(cheerio.select, $)`.
                 ("cheerio", "load" | "loadFragment") => "CheerioAPI",
+                // node-forge: `forge.pki.createCertificate()` returns a
+                // mutable cert builder whose instance methods
+                // (setSubject/setIssuer/setExtensions/sign) dispatch under
+                // class "Certificate" (see NATIVE_MODULE_TABLE).
+                ("node-forge", "createCertificate") => "Certificate",
                 _ => return None,
             };
             // For ("net", _) / ("tls", _) factories, `s` belongs to net.Socket's

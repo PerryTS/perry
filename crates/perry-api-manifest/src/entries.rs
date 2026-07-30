@@ -177,6 +177,11 @@ pub const NATIVE_MODULES: &[&str] = &[
     // the one perry-runtime implementation — no N-API addon involved.
     "node-pty",
     "@lydell/node-pty", // API-identical node-pty fork (see above)
+    // #466: node-forge PKI subset (RSA keygen, X.509 build/sign, PEM).
+    // Bundled wrapper at `crates/perry-ext-node-forge`; served natively
+    // for Socket Firewall's TLS-MITM CA so forge's pure-JS crypto isn't
+    // AOT-compiled.
+    "node-forge",
 ];
 
 /// Node built-in submodules that Perry routes through the

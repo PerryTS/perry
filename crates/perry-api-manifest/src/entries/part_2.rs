@@ -1237,6 +1237,24 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         TypeSpec::BigInt,
     ),
     method("ethers", "createRandom", false, Some("Wallet")),
+    // node-forge PKI subset (perry-ext-node-forge). Declared with the
+    // arity-agnostic `method(...)` form (params &[], returns Any) so the
+    // #512 dispatch↔manifest drift gate is satisfied by name while the
+    // real argument shapes live in the wrapper. Namespaced call sites
+    // (`forge.pki.rsa.generateKeyPair`, `forge.md.sha256.create`)
+    // dispatch once perry-hir flattens the sub-namespace member chains.
+    method("node-forge", "generateKeyPair", false, None),
+    method("node-forge", "createCertificate", false, None),
+    method("node-forge", "certificateFromPem", false, None),
+    method("node-forge", "certificateToPem", false, None),
+    method("node-forge", "privateKeyFromPem", false, None),
+    method("node-forge", "privateKeyToPem", false, None),
+    method("node-forge", "publicKeyToPem", false, None),
+    method("node-forge", "create", false, None),
+    method("node-forge", "setSubject", true, Some("Certificate")),
+    method("node-forge", "setIssuer", true, Some("Certificate")),
+    method("node-forge", "setExtensions", true, Some("Certificate")),
+    method("node-forge", "sign", true, Some("Certificate")),
     // ===========================================================
     // Methods dispatched via custom Expr::* variants
     // (perry-hir/src/lower/expr_call.rs and expr_member.rs)

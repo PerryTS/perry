@@ -46,6 +46,7 @@ members = [
     "crates/perry-ext-fastify",
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
+    "crates/perry-ext-node-forge",
     "crates/perry-wasm-host",
     "crates/perry-container-compose",
     "crates/perry-container-e2e",
@@ -458,6 +459,7 @@ perry-ext-streams = { path = "crates/perry-ext-streams" }
 perry-ext-fastify = { path = "crates/perry-ext-fastify" }
 perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
+perry-ext-node-forge = { path = "crates/perry-ext-node-forge" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
 perry-ui-model = { path = "crates/perry-ui-model" }

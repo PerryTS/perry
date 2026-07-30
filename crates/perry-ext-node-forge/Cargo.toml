@@ -1,0 +1,50 @@
+[package]
+name = "perry-ext-node-forge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for the npm `node-forge` package — the PKI subset (RSA keygen, X.509 certificate build/sign, PEM round-trips) that Socket Firewall's TLS-MITM CA uses. Uses only `perry-ffi` plus RustCrypto (`rsa` / `x509-cert`). CPU-only: no tokio, not in `binding_needs_shared_tokio`."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+# RustCrypto PKI stack — all already present in the workspace Cargo.lock.
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+sha2 = "0.10"
+x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
+der = { version = "0.7", features = ["oid"] }
+spki = "0.7"
+const-oid = "0.9"
+pem = "3"
+rand = "0.8"
+time = { version = "0.3", features = ["parsing"] }
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+# #6303: perry-runtime MUST be built here with the same feature set the shipped
+# `libperry_runtime.a` / `libperry_stdlib.a` carry (i.e. its `default`). This crate
+# is a `staticlib`, so it BUNDLES the perry-runtime rlib objects into
+# `libperry_ext_*.a` — and perry links the ext archives BEFORE stdlib/runtime
+# (`prefer_well_known_before_stdlib`), so those bundled objects WIN the link for
+# every symbol they define. The workspace dep is `default-features = false`, so
+# without `"default"` here a per-crate `cargo build -p perry-ext-<x>` (exactly what
+# release-packages.yml does in its per-crate loop) bundles a runtime with
+# `regex-engine`/`temporal`/... compiled OUT. The dispatchers those features gate
+# are exported UNCONDITIONALLY (`js_string_replace_search_dyn`,
+# `js_native_call_method`, ...) with the feature-gated logic `#[cfg]`-ed out of the
+# BODY — so the degraded copy silently ToString-coerces a RegExp argument and
+# searches for it literally instead of matching it (str.replace(re, fn) never fires
+# its callback). Keep `"default"` in lock-step with perry-runtime's default feature
+# list; the `ext_crates_bundle_a_full_featured_perry_runtime` test (well_known.rs) guards it.
+# `stdlib`: this crate bundles perry-runtime into its staticlib and is co-linked
+# with the real perry-stdlib, so drop the bundled no-op stdlib_stubs that would
+# otherwise shadow perry-stdlib's real symbols (#6314). `default`: keep the copy
+# feature-identical to the shipped runtime so gated dispatchers behave (#6303).
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }
