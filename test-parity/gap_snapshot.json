@@ -59,6 +59,13 @@
       "category": "gap-categorical",
       "reason": "node --experimental-strip-types refuses this file: ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, 'TypeScript parameter property is not supported in strip-only mode'. The oracle CANNOT execute the very feature under test, so this has never verified anything. Fix by giving it a test-parity/expected/<name>.txt fixture (expected-output mode), not by editing the test."
     },
+    "test_gap_enum_in_function_body": {
+      "status": "node_fail",
+      "issue": null,
+      "added": "2026-07-30",
+      "category": "gap-categorical",
+      "reason": "node --experimental-strip-types refuses a function-body enum with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX. The oracle cannot execute the TypeScript syntax under test; add an expected-output fixture to restore coverage."
+    },
     "test_gap_fetch_instanceof_5433": {
       "status": "crash",
       "issue": "5433",
