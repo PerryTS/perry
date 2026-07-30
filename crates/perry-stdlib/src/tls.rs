@@ -759,7 +759,12 @@ unsafe fn build_server_config_from_options(
     // Node serves whatever cert/key the user supplies; load the signing
     // key directly and install a fixed-cert resolver. (Mirrors
     // `perry-ext-http::tls::build_server_config`.)
-    let signing_key = rustls::crypto::ring::default_provider()
+    // The minimal auto-optimized `tls` graph uses rustls's default AWS-LC
+    // provider (installed by `ensure_crypto_provider_installed`) and does not
+    // enable the optional `ring` module. Load the key through that same
+    // provider so a TLS-only program can build without unrelated features
+    // pulling `ring` in by feature unification.
+    let signing_key = rustls::crypto::aws_lc_rs::default_provider()
         .key_provider
         .load_private_key(key)
         .map_err(|e| format!("rustls: build server config: {e}"))?;
