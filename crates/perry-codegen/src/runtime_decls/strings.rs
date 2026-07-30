@@ -439,6 +439,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_fs_promises_mkdir", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_promises_rmdir", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.mkdirSync(path) — returns i32 status (1=success).
     module.declare_function("js_fs_mkdir_sync", I32, &[DOUBLE]);
     module.declare_function("js_fs_mkdir_sync_options", I32, &[DOUBLE, DOUBLE]);
@@ -898,6 +899,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_emit", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_run_finalization_exit", VOID, &[]);
+    module.declare_function("js_trace_events_flush_output", VOID, &[]);
     module.declare_function("js_promise_report_unhandled_rejections", VOID, &[]);
     // #6666: the natural-exit epilogue returns the stored `process.exitCode`
     // (default 0) as the process status instead of a hardcoded 0.

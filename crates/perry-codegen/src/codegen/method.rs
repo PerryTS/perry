@@ -370,6 +370,11 @@ pub(super) fn compile_method(
         .collect();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
+    // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _opt_report_scope = crate::opt_report::enter_region(
+        &format!("{}.{}", class.name, method.name),
+        crate::opt_report::RegionKind::Method,
+    );
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &method.body,
         &[],
@@ -1409,6 +1414,11 @@ pub(super) fn compile_static_method(
         .collect();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
+    // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _opt_report_scope = crate::opt_report::enter_region(
+        &format!("{}.{} (static)", class.name, f.name),
+        crate::opt_report::RegionKind::Method,
+    );
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &f.body,
         &[],

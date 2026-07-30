@@ -373,11 +373,27 @@ while [ "$ai" -lt "$NARMS" ]; do
             # per collection; one built WITH it prints the full JSON trace
             # object. Count either -- both are exactly one line per cycle.
             cycles=$(grep -cE '^\[gc\] cycle|^\{.*"phase_progression"' "$WORK/out/$b.$id.err" 2>/dev/null | tr -d ' ')
-            moved=$( { grep -oE 'moved_objects=[0-9]+' "$WORK/out/$b.$id.err" 2>/dev/null || true; \
-                       grep -oE '\[gc-copy-minor\] ran copied_objects=[0-9]+' "$WORK/out/$b.$id.err" 2>/dev/null || true; } \
-                     | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
-            : "${cycles:=0}"; : "${moved:=0}"
-            ev="cycles=$cycles moved=$moved"
+            # #7025: these are TWO different collectors and must be reported
+            # separately. Summing them lets a `requires=move` cell go green on
+            # relocation the arm was not testing:
+            #   evacuated= : `moved_objects=` from the C4b evacuation policy
+            #                inside the mark-sweep collector -- the pre-existing
+            #                non-moving-minor path that relocates tenured objects
+            #                during a full cycle.
+            #   scavenged= : `[gc-copy-minor] ran copied_objects=` from the
+            #                copying young-gen minor -- the path #7019 made
+            #                default-on, and the one the evacuating arms exist
+            #                to exercise.
+            # A cell showing `evacuated=N scavenged=0` did relocate something,
+            # but it did NOT run a copying minor, and the distinction is exactly
+            # what tells you whether the arm bit.
+            evacuated=$(grep -oE 'moved_objects=[0-9]+' "$WORK/out/$b.$id.err" 2>/dev/null \
+                        | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
+            scavenged=$(grep -oE '\[gc-copy-minor\] ran copied_objects=[0-9]+' "$WORK/out/$b.$id.err" 2>/dev/null \
+                        | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
+            : "${cycles:=0}"; : "${evacuated:=0}"; : "${scavenged:=0}"
+            moved=$((evacuated + scavenged))
+            ev="cycles=$cycles evacuated=$evacuated scavenged=$scavenged"
             if [ "$rc" -ne 0 ]; then
                 result="FAIL"; ev="exit=$rc $ev"
             elif ! cmp -s "$WORK/out/$b.$id.out" "$WORK/oracle/$b.out"; then
@@ -437,18 +453,24 @@ echo
 echo "arm liveness across the corpus (cells where the arm actually bit):"
 ai=0
 while [ "$ai" -lt "$NARMS" ]; do
-    tot=0; livec=0; livem=0; ti=0
+    tot=0; livec=0; livem=0; lives=0; ti=0
     while [ "$ti" -lt "${#CORPUS[@]}" ]; do
         ev="${EVID[$((ti*NARMS+ai))]:-}"
         cy="$(printf '%s' "$ev" | sed -nE 's/.*cycles=([0-9]+).*/\1/p')"
-        mv="$(printf '%s' "$ev" | sed -nE 's/.*moved=([0-9]+).*/\1/p')"
+        evac="$(printf '%s' "$ev" | sed -nE 's/.*evacuated=([0-9]+).*/\1/p')"
+        scav="$(printf '%s' "$ev" | sed -nE 's/.*scavenged=([0-9]+).*/\1/p')"
         tot=$((tot+1))
         [ "${cy:-0}" -gt 0 ] 2>/dev/null && livec=$((livec+1))
-        [ "${mv:-0}" -gt 0 ] 2>/dev/null && livem=$((livem+1))
+        [ $(( ${evac:-0} + ${scav:-0} )) -gt 0 ] 2>/dev/null && livem=$((livem+1))
+        [ "${scav:-0}" -gt 0 ] 2>/dev/null && lives=$((lives+1))
         ti=$((ti+1))
     done
-    printf '  %-24s requires=%-8s collected %2d/%2d   moved-objects %2d/%2d\n' \
-        "${ARM_IDS[$ai]}" "${ARM_LIVES[$ai]}" "$livec" "$tot" "$livem" "$tot"
+    # #7025: `copy-minor` is reported separately from `moved-objects` because the
+    # latter counts BOTH collectors. An evacuating arm showing a healthy
+    # moved-objects count but `copy-minor 0/N` did not run the path it exists to
+    # test -- that is the shape #7024 describes, and summing the two hid it.
+    printf '  %-24s requires=%-8s collected %2d/%2d   moved-objects %2d/%2d   copy-minor %2d/%2d\n' \
+        "${ARM_IDS[$ai]}" "${ARM_LIVES[$ai]}" "$livec" "$tot" "$livem" "$tot" "$lives" "$tot"
     ai=$((ai+1))
 done
 

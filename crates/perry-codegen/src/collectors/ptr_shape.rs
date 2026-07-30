@@ -88,7 +88,10 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Class, Expr, Stmt};
 
+use super::ptr_shape_report as report;
+use super::ptr_shape_report::ShapeDenial;
 use super::ModuleDispatchFacts;
+use crate::opt_report;
 
 /// `PERRY_PTR_SHAPE_LOCALS` gate. Enabled by default; `=0`/`off`/`false`
 /// disables shape-proven pointer-local selection (every access keeps today's
@@ -156,7 +159,33 @@ pub(crate) fn expr_is_shape_barrier(expr: &Expr) -> bool {
 
 /// Compile-time visibility: one stderr line per shape-proven local, plus a
 /// process-wide running count. Only under `PERRY_REPSEL_DEBUG=1`.
-fn note_ptr_shape_local(id: u32, fact: &PtrShapeLocal) {
+///
+/// Also feeds the `--opt-report` win column (#6952) — the two mechanisms
+/// share this one call site so a future proof cannot appear in one and not
+/// the other.
+fn note_ptr_shape_local(
+    id: u32,
+    fact: &PtrShapeLocal,
+    names: &HashMap<u32, String>,
+    depths: &HashMap<u32, u32>,
+) {
+    if opt_report::enabled() {
+        let fallback = format!("<local {id}>");
+        let name = names.get(&id).map(String::as_str).unwrap_or(&fallback);
+        opt_report::select(
+            opt_report::Position::Local,
+            name,
+            Some(id),
+            opt_report::Analysis::PtrShape,
+            "Ptr<Shape>",
+            depths.get(&id).copied().unwrap_or(0),
+            Some(format!(
+                "class {} ({} numeric field(s) proven)",
+                fact.class_name,
+                fact.numeric_fields.len()
+            )),
+        );
+    }
     if !repsel_debug_enabled() {
         return;
     }
@@ -167,6 +196,32 @@ fn note_ptr_shape_local(id: u32, fact: &PtrShapeLocal) {
         "repsel: ptr-shape local id {id} class '{}' numeric_fields {:?} (total {n})",
         fact.class_name, fact.numeric_fields
     );
+}
+
+/// Record every candidate the collector will not even reach, on an
+/// early-bail path (env gate off, or the rule-5 module-wide barrier).
+///
+/// Runs only under `--opt-report`; it re-derives the candidate seeds purely
+/// to name them, and returns nothing the collector consumes — the bail-out
+/// itself is unchanged.
+fn report_early_bail(
+    stmts: &[Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    denial: ShapeDenial,
+) {
+    if !opt_report::enabled() {
+        return;
+    }
+    let names = report::local_names(stmts);
+    let depths = report::loop_depths(stmts);
+    let seeds = report::candidate_seeds(stmts, boxed_vars, module_globals);
+    for (id, class_name) in &seeds {
+        report::deny_local(*id, &names, &depths, Some(class_name), denial);
+    }
+    for site in report::unbound_new_sites(stmts) {
+        report::deny_alloc_site(&site);
+    }
 }
 
 /// Entry point: collect the shape-proven pointer locals of one lowered region.
@@ -181,8 +236,28 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     module_dispatch: &ModuleDispatchFacts,
     not_bigint_locals: &HashSet<u32>,
 ) -> HashMap<u32, PtrShapeLocal> {
-    if !ptr_shape_locals_enabled() || module_dispatch.has_shape_barrier_sites() {
+    if !ptr_shape_locals_enabled() {
+        report_early_bail(stmts, boxed_vars, module_globals, report::GATE_DISABLED);
         return HashMap::new();
+    }
+    if module_dispatch.has_shape_barrier_sites() {
+        report_early_bail(stmts, boxed_vars, module_globals, report::MODULE_BARRIER);
+        return HashMap::new();
+    }
+    // `--opt-report` (#6952): binding names and loop depths for the values
+    // this pass is about to accept or deny. Both walks are skipped entirely
+    // when the report is off.
+    let (names, depths) = if opt_report::enabled() {
+        (report::local_names(stmts), report::loop_depths(stmts))
+    } else {
+        (HashMap::new(), HashMap::new())
+    };
+    if opt_report::enabled() {
+        // Allocations that are never bound to a local — rule 1 can never see
+        // them, and on real code they are the majority (#7034 §4).
+        for site in report::unbound_new_sites(stmts) {
+            report::deny_alloc_site(&site);
+        }
     }
     // Pass 1: `Stmt::Let { init: New }` candidates, same seed as scalar
     // replacement (excludes boxed and module-global locals — which also
@@ -195,7 +270,15 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     }
     // Class-level admission BEFORE the use walk so the walk's chain-field
     // membership tests are meaningful.
-    candidates.retain(|_, class_name| chain_admissible(classes, class_name));
+    candidates.retain(|id, class_name| {
+        match report::admission_cause(classes, class_name, &chain_classes(classes, class_name)) {
+            None => true,
+            Some(cause) => {
+                report::deny_local(*id, &names, &depths, Some(class_name), cause);
+                false
+            }
+        }
+    });
     if candidates.is_empty() {
         return HashMap::new();
     }
@@ -241,6 +324,8 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         method_calls: HashMap::new(),
         new_args: HashMap::new(),
         const_local_inits: HashMap::new(),
+        disq_reasons: HashMap::new(),
+        escape_ctx: report::ESC_BARE_REFERENCE,
     };
     walk.walk_stmts(stmts);
     let UseWalk {
@@ -250,11 +335,30 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         method_calls,
         new_args,
         const_local_inits,
+        disq_reasons,
         ..
     } = walk;
     let mut out = HashMap::new();
+    // `--opt-report`: one closure so every `continue` below has a matching
+    // one-line recording. Behaviour is unchanged — `deny` is a no-op when
+    // the report is off.
+    let deny = |id: &u32, class_name: &String, why: ShapeDenial| {
+        report::deny_local(*id, &names, &depths, Some(class_name), why);
+    };
     'cand: for (id, class_name) in &candidates {
-        if disqualified.contains(id) || let_counts.get(id).copied().unwrap_or(0) != 1 {
+        if disqualified.contains(id) {
+            deny(
+                id,
+                class_name,
+                disq_reasons
+                    .get(id)
+                    .copied()
+                    .unwrap_or(report::ESC_BARE_REFERENCE),
+            );
+            continue;
+        }
+        if let_counts.get(id).copied().unwrap_or(0) != 1 {
+            deny(id, class_name, report::MULTIPLE_LET);
             continue;
         }
         // Every alias of this root must itself be single-Let (a re-declared
@@ -263,6 +367,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             .iter()
             .any(|(m, r)| r == id && m != id && let_counts.get(m).copied().unwrap_or(0) != 1)
         {
+            deny(id, class_name, report::ALIAS_NOT_SINGLE_LET);
             continue;
         }
         let chain = chain_classes(classes, class_name);
@@ -282,23 +387,28 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             allow_this_in_store_values: false,
         };
         if !analysis.ctor_chain_safe() {
+            deny(id, class_name, report::THIS_ESCAPE);
             continue;
         }
         let called = method_calls.get(id);
         if let Some(called) = called {
             if !module_dispatch.prototype_is_stable(classes, class_name) {
+                deny(id, class_name, report::UNSTABLE_PROTOTYPE);
                 continue;
             }
             for m in called.keys() {
                 if fields.contains(m.as_str()) {
                     // A name that is both a field and a method is ambiguous
                     // under own-property shadowing — bail.
+                    deny(id, class_name, report::FIELD_METHOD_AMBIGUITY);
                     continue 'cand;
                 }
                 let Some((owner, func)) = methods.get(m.as_str()) else {
+                    deny(id, class_name, report::ESC_UNRESOLVED_METHOD);
                     continue 'cand;
                 };
                 if !analysis.method_safe(owner, func) {
+                    deny(id, class_name, report::METHOD_THIS_ESCAPE);
                     continue 'cand;
                 }
             }
@@ -327,7 +437,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             class_name: class_name.clone(),
             numeric_fields,
         };
-        note_ptr_shape_local(*id, &fact);
+        note_ptr_shape_local(*id, &fact, &names, &depths);
         // Aliases carry the same fact: they hold the same object, their slots
         // are equally shadow-bound, and access sites key on the local they
         // actually reference.
@@ -422,38 +532,21 @@ pub(super) fn chain_classes<'a>(
     out
 }
 
+/// Class-level admission. Delegates to
+/// [`super::ptr_shape_report::admission_cause`], which enumerates the same
+/// disqualifiers and additionally *names* the first one that fired so
+/// `--opt-report` can report it. Keeping one implementation means the gate
+/// and the explanation can never disagree.
+///
+/// The disqualifiers are: an empty/unresolvable chain, a getter or setter, a
+/// computed member or computed field key, a dynamic or lexically-shadowed
+/// `extends`, an `extends` ClassId with no resolvable `extends_name`, a
+/// native base, and (from the shipped scalar-replacement rejections) a
+/// built-in Error base or an unmodeled base — the latter two install fields
+/// or stamp their method surface as own properties at run time.
 pub(super) fn chain_admissible(classes: &HashMap<String, &Class>, class_name: &str) -> bool {
     let chain = chain_classes(classes, class_name);
-    if chain.is_empty() {
-        return false;
-    }
-    for class in &chain {
-        if class.extends_expr.is_some()
-            || class.native_extends.is_some()
-            || class.heritage_lexically_shadowed
-            || !class.getters.is_empty()
-            || !class.setters.is_empty()
-            || !class.computed_members.is_empty()
-            || class.fields.iter().any(|f| f.key_expr.is_some())
-        {
-            return false;
-        }
-        // `extends` (ClassId) without a resolvable `extends_name` means the
-        // parent is not statically walkable here.
-        if class.extends.is_some() && class.extends_name.is_none() {
-            return false;
-        }
-    }
-    // Reuse the shipped scalar-replacement chain rejections: built-in Error
-    // bases install fields at runtime; unmodeled/native bases stamp their
-    // method surface as own properties.
-    let class = chain[0];
-    if super::this_as_value::class_chain_extends_builtin_error(class, classes)
-        || super::this_as_value::class_chain_has_unmodeled_base(class, classes)
-    {
-        return false;
-    }
-    true
+    super::ptr_shape_report::admission_cause(classes, class_name, &chain).is_none()
 }
 
 pub(super) fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
@@ -509,6 +602,14 @@ struct UseWalk<'a> {
     /// re-declared id is poisoned to `None`). Lets the numeric-field proof
     /// chase one level through `const v = i * 0.5`-style temps.
     const_local_inits: HashMap<u32, Option<&'a Expr>>,
+    /// `--opt-report` (#6952): root candidate -> the FIRST use that
+    /// disqualified it. Purely observational — `disqualified` is the set the
+    /// proof consults; this only records why.
+    disq_reasons: HashMap<u32, ShapeDenial>,
+    /// The escape kind a bare `LocalGet` in the current position implies.
+    /// Parent arms narrow it (`return`, call argument, array element, …) so
+    /// the report can say *how* the object escaped, not just that it did.
+    escape_ctx: ShapeDenial,
 }
 
 impl<'a> UseWalk<'a> {
@@ -517,10 +618,34 @@ impl<'a> UseWalk<'a> {
         self.roots.get(&id).copied()
     }
 
-    fn disq(&mut self, id: u32) {
+    fn disq(&mut self, id: u32, why: ShapeDenial) {
         if let Some(root) = self.tracked_root(id) {
             self.disqualified.insert(root);
+            self.note_reason(root, why);
         }
+    }
+
+    /// Disqualify a root that has already been resolved.
+    fn disq_root(&mut self, root: u32, why: ShapeDenial) {
+        self.disqualified.insert(root);
+        self.note_reason(root, why);
+    }
+
+    /// First reason wins: it is the use the developer will find first, and
+    /// later uses are usually consequences of the same escape.
+    fn note_reason(&mut self, root: u32, why: ShapeDenial) {
+        if !opt_report::enabled() {
+            return;
+        }
+        self.disq_reasons.entry(root).or_insert(why);
+    }
+
+    /// Run `f` with the bare-reference escape kind narrowed to `why`.
+    fn with_ctx(&mut self, why: ShapeDenial, f: impl FnOnce(&mut Self)) {
+        let previous = self.escape_ctx;
+        self.escape_ctx = why;
+        f(self);
+        self.escape_ctx = previous;
     }
 
     fn candidate_chain_has_field(&self, root: u32, property: &str) -> bool {
@@ -553,7 +678,7 @@ impl<'a> UseWalk<'a> {
                     }
                     // A candidate whose Let init is not the New (var-redecl
                     // seed) is not provenance-stable.
-                    self.disq(*id);
+                    self.disq(*id, report::LET_INIT_NOT_NEW);
                 } else if !self.roots.contains_key(id) {
                     // Plain local: remember single-Let const inits for the
                     // numeric proof; poison re-declared ids.
@@ -588,17 +713,18 @@ impl<'a> UseWalk<'a> {
                         Some(Expr::LocalGet(src)) if self.tracked_root(*src) == Some(root) => {
                             return;
                         }
-                        _ => self.disqualified.insert(root),
-                    };
+                        _ => self.disq_root(root, report::ALIAS_NOT_SINGLE_LET),
+                    }
                 }
                 if let Some(e) = init {
                     self.walk_expr(e);
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
+            Stmt::Expr(e) => self.walk_expr(e),
+            Stmt::Throw(e) => self.with_ctx(report::ESC_THROWN, |w| w.walk_expr(e)),
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
-                    self.walk_expr(e);
+                    self.with_ctx(report::ESC_RETURN, |w| w.walk_expr(e));
                 }
             }
             Stmt::If {
@@ -677,7 +803,7 @@ impl<'a> UseWalk<'a> {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
                         if !self.candidate_chain_has_field(root, property) {
-                            self.disqualified.insert(root);
+                            self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
                         }
                         return;
                     }
@@ -695,7 +821,7 @@ impl<'a> UseWalk<'a> {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
                         if !self.candidate_chain_has_field(root, property) {
-                            self.disqualified.insert(root);
+                            self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
                         } else {
                             self.field_stores
                                 .entry(root)
@@ -705,7 +831,7 @@ impl<'a> UseWalk<'a> {
                         // The value walk is position-aware: a field read of the
                         // same object is safe; a BARE reference to it (e.g.
                         // `o.self = o`) hits the LocalGet arm and escapes.
-                        self.walk_expr(value);
+                        self.with_ctx(report::ESC_ELEMENT, |w| w.walk_expr(value));
                         return;
                     }
                 }
@@ -718,7 +844,7 @@ impl<'a> UseWalk<'a> {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
                         if !self.candidate_chain_has_field(root, property) {
-                            self.disqualified.insert(root);
+                            self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
                         } else {
                             self.field_stores
                                 .entry(root)
@@ -743,14 +869,14 @@ impl<'a> UseWalk<'a> {
                     if id == rid {
                         if let Some(root) = self.tracked_root(*id) {
                             if !self.candidate_chain_has_field(root, property) {
-                                self.disqualified.insert(root);
+                                self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
                             } else {
                                 self.field_stores
                                     .entry(root)
                                     .or_default()
                                     .push((property.clone(), StoreValue::Direct(value)));
                             }
-                            self.walk_expr(value);
+                            self.with_ctx(report::ESC_ELEMENT, |w| w.walk_expr(value));
                             return;
                         }
                     }
@@ -774,7 +900,7 @@ impl<'a> UseWalk<'a> {
                             let chain = chain_classes(self.classes, class_name);
                             let resolvable = chain_method_map(&chain).contains_key(property);
                             if !resolvable {
-                                self.disqualified.insert(root);
+                                self.disq_root(root, report::ESC_UNRESOLVED_METHOD);
                             } else {
                                 self.method_calls
                                     .entry(root)
@@ -786,7 +912,7 @@ impl<'a> UseWalk<'a> {
                             for a in args {
                                 // Position-aware: `o.m(o.field)` is safe,
                                 // `o.m(o)` escapes via the LocalGet arm.
-                                self.walk_expr(a);
+                                self.with_ctx(report::ESC_CALL_ARGUMENT, |w| w.walk_expr(a));
                             }
                             return;
                         }
@@ -794,7 +920,19 @@ impl<'a> UseWalk<'a> {
                 }
                 self.walk_expr(callee);
                 for a in args {
-                    self.walk_expr(a);
+                    self.with_ctx(report::ESC_CALL_ARGUMENT, |w| w.walk_expr(a));
+                }
+            }
+            // A tracked member passed to a constructor escapes as an argument.
+            Expr::New { args, .. } => {
+                for a in args {
+                    self.with_ctx(report::ESC_CALL_ARGUMENT, |w| w.walk_expr(a));
+                }
+            }
+            // Container literals: a tracked member becomes an element.
+            Expr::Array(items) => {
+                for i in items {
+                    self.with_ctx(report::ESC_ELEMENT, |w| w.walk_expr(i));
                 }
             }
             // Barriers / hard escapes on a tracked member itself.
@@ -803,7 +941,7 @@ impl<'a> UseWalk<'a> {
                     Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
                         if let Expr::LocalGet(id) = object.as_ref() {
                             if self.tracked_root(*id).is_some() {
-                                self.disq(*id);
+                                self.disq(*id, report::ESC_DELETE);
                                 return;
                             }
                         }
@@ -815,7 +953,7 @@ impl<'a> UseWalk<'a> {
             Expr::ObjectFreeze(t) | Expr::ObjectSeal(t) | Expr::ObjectPreventExtensions(t) => {
                 if let Expr::LocalGet(id) = t.as_ref() {
                     if self.tracked_root(*id).is_some() {
-                        self.disq(*id);
+                        self.disq(*id, report::ESC_FREEZE);
                         return;
                     }
                 }
@@ -823,14 +961,15 @@ impl<'a> UseWalk<'a> {
             }
             // Reassignment / bare reference / numeric update = escape.
             Expr::LocalSet(id, v) => {
-                self.disq(*id);
+                self.disq(*id, report::ESC_REASSIGNED);
                 self.walk_expr(v);
             }
             Expr::LocalGet(id) => {
-                self.disq(*id);
+                let why = self.escape_ctx;
+                self.disq(*id, why);
             }
             Expr::Update { id, .. } => {
-                self.disq(*id);
+                self.disq(*id, report::ESC_REASSIGNED);
             }
             // Id-keyed variants the child walker cannot see.
             Expr::ArrayPush { array_id, .. }
@@ -838,21 +977,25 @@ impl<'a> UseWalk<'a> {
             | Expr::ArrayUnshift { array_id, .. }
             | Expr::ArraySplice { array_id, .. }
             | Expr::ArrayCopyWithin { array_id, .. } => {
-                self.disq(*array_id);
-                perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
+                self.disq(*array_id, report::ESC_CONTAINER_MUTATOR);
+                self.with_ctx(report::ESC_ELEMENT, |w| {
+                    perry_hir::walker::walk_expr_children(e, &mut |c| w.walk_expr(c))
+                });
             }
             Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
-                self.disq(*id);
+                self.disq(*id, report::ESC_CONTAINER_MUTATOR);
             }
             Expr::SetAdd { set_id, .. } => {
-                self.disq(*set_id);
-                perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
+                self.disq(*set_id, report::ESC_CONTAINER_MUTATOR);
+                self.with_ctx(report::ESC_ELEMENT, |w| {
+                    perry_hir::walker::walk_expr_children(e, &mut |c| w.walk_expr(c))
+                });
             }
             Expr::WithSet { fallback, .. } => {
                 match fallback {
                     perry_hir::WithSetFallback::Local(id)
                     | perry_hir::WithSetFallback::SloppyImplicit(id) => {
-                        self.disq(*id);
+                        self.disq(*id, report::ESC_BARE_REFERENCE);
                     }
                     _ => {}
                 }
@@ -867,7 +1010,7 @@ impl<'a> UseWalk<'a> {
                 ..
             } => {
                 for c in captures.iter().chain(mutable_captures.iter()) {
-                    self.disq(*c);
+                    self.disq(*c, report::ESC_CLOSURE_CAPTURE);
                 }
                 self.walk_stmts(body);
             }
@@ -1764,3 +1907,10 @@ fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool 
 // ToNumber(Symbol) THROWS, so the store never completes — throw behavior is
 // identical on the guarded and bare paths, and no non-number value can reach
 // the slot through these operators.
+
+/// `--opt-report` (#6952) end-to-end tests. Kept in a sibling file for the
+/// file-size gate; still a child module, so `use super::*` reaches the
+/// collector's private items.
+#[cfg(test)]
+#[path = "ptr_shape_opt_report_tests.rs"]
+mod opt_report_tests;

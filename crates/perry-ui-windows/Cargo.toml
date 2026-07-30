@@ -19,7 +19,7 @@ base64.workspace = true
 libc.workspace = true
 # Proper PNG encoder (deflate). The old inline encoder wrote stored blocks
 # → 2.7 MB baseline for a 900×788 window. With real compression: ~50 KB.
-png = "0.17"
+png = "0.18"
 # Pure-Rust QR code generator for the qrcode widget (GDI bitmap path).
 # macOS/iOS/tvOS use CIFilter("CIQRCodeGenerator"); Android uses zxing-android-embedded;
 # GTK4 stub. Windows path renders the matrix into a 32bpp DIB and BitBlt's it onto

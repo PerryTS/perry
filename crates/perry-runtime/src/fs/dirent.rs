@@ -170,7 +170,9 @@ pub(crate) unsafe fn options_field_value(
     options_value: f64,
     field: &[u8],
 ) -> Option<crate::value::JSValue> {
-    let bits = options_value.to_bits();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options_handle = scope.root_nanbox_f64(options_value);
+    let bits = options_handle.get_nanbox_f64().to_bits();
     let value = crate::value::JSValue::from_bits(bits);
     let raw_ptr = if value.is_pointer() {
         value.as_pointer::<crate::object::ObjectHeader>() as usize
@@ -203,7 +205,23 @@ pub(crate) unsafe fn options_field_value(
         }
     }
     let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
-    let val = crate::object::js_object_get_field_by_name(obj_ptr, key);
+    let refreshed_bits = options_handle.get_nanbox_f64().to_bits();
+    let refreshed_value = crate::value::JSValue::from_bits(refreshed_bits);
+    let refreshed_ptr = if refreshed_value.is_pointer() {
+        refreshed_value.as_pointer::<crate::object::ObjectHeader>() as usize
+    } else if refreshed_bits >> 48 == 0x0000 {
+        (refreshed_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        return None;
+    };
+    if refreshed_ptr < 0x1000 {
+        return None;
+    }
+    let refreshed_obj_ptr = refreshed_ptr as *const crate::object::ObjectHeader;
+    if refreshed_obj_ptr.is_null() {
+        return None;
+    }
+    let val = crate::object::js_object_get_field_by_name(refreshed_obj_ptr, key);
     if val.bits() == crate::value::TAG_UNDEFINED {
         None
     } else {

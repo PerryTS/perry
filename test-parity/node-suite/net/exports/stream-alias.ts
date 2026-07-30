@@ -3,7 +3,12 @@ import * as net from "node:net";
 const keys = Object.keys(net);
 
 console.log("keys includes Stream:", keys.includes("Stream"));
-console.log("class keys:", JSON.stringify(keys.filter((k) => ["Server", "Socket", "Stream"].includes(k))));
+console.log(
+  "class keys:",
+  JSON.stringify(
+    keys.filter((k) => ["Server", "Socket", "Stream"].includes(k)),
+  ),
+);
 console.log("Stream === Socket:", (net as any).Stream === net.Socket);
 console.log("Stream name:", (net as any).Stream?.name);
 console.log("Stream length:", (net as any).Stream?.length);

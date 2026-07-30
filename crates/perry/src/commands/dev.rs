@@ -313,6 +313,7 @@ fn build_once(
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         explain_lowering: false,
+        opt_report: None,
         emit_attest: false,
         emit_sandbox: false,
         lockdown: false,

@@ -116,7 +116,7 @@ pub unsafe extern "C" fn js_webcrypto_sign(
                         return reject_with_dom_exception("OperationError", "The operation failed")
                     }
                 };
-                let mut rng = rand::rngs::OsRng;
+                let mut rng = rand_core_06::OsRng;
                 let sig: P521EcdsaSignature = signing_key.sign_with_rng(&mut rng, &data_bytes);
                 sig.to_bytes().as_slice().to_vec()
             }

@@ -116,6 +116,12 @@ static PENDING_LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Raw byte chunks waiting for the main thread to dispatch as 'data' /
 /// 'keypress' events.
 static PENDING_DATA: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+/// Partial ANSI escape sequence carried across pump ticks: the raw-mode
+/// reader queues one byte per chunk, so `\x1b[A` arrives as three chunks
+/// and `pump::coalesce_escape_sequences` parks an incomplete prefix here.
+static PENDING_ESCAPE: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+/// Whether the one-shot `'readable'` EOF notification has been delivered.
+static READABLE_EOF_NOTIFIED: AtomicBool = AtomicBool::new(false);
 /// `true` when raw mode is enabled — the reader thread checks this
 /// between bytes to decide which queue to push to.
 static RAW_MODE: AtomicBool = AtomicBool::new(false);
@@ -361,7 +367,11 @@ fn stdin_chunk_value(chunk: &[u8]) -> f64 {
 }
 
 fn try_register_pump() {
-    #[cfg(feature = "async-runtime")]
+    // Unit tests drive the queues directly through
+    // `js_readline_process_pending`; initializing the whole stdlib dispatch
+    // graph here requires the generated-program bootstrap and throws in the
+    // standalone Rust test harness.
+    #[cfg(all(feature = "async-runtime", not(test)))]
     crate::common::async_bridge::ensure_pump_registered();
     ensure_stdin_listeners_provider_registered();
 }
@@ -440,8 +450,15 @@ fn key_ptr(key: &[u8]) -> *mut StringHeader {
 }
 
 fn object_field(value: f64, key: &[u8]) -> Option<f64> {
-    let obj = object_ptr_from_value(value)?;
-    let field = js_object_get_field_by_name_f64(obj, key_ptr(key));
+    // Creating the property-name string can trigger a moving collection.
+    // Keep the receiver rooted and derive its raw pointer only after that
+    // allocation; otherwise option/custom-stream reads can dereference a
+    // stale from-space object.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let key = key_ptr(key);
+    let obj = object_ptr_from_value(value.get_nanbox_f64())?;
+    let field = js_object_get_field_by_name_f64(obj, key);
     if JSValue::from_bits(field.to_bits()).is_undefined() {
         None
     } else {
@@ -568,18 +585,6 @@ fn callback_arg(line: &str) -> f64 {
     boxed_str(line.as_bytes())
 }
 
-fn fire_line_or_question(state: &mut ReadlineInterfaceState, line: String) {
-    state.line.clear();
-    let arg = callback_arg(&line);
-    if let Some(cb_i64) = state.question_callback.take() {
-        js_closure_call1(cb_i64 as *const ClosureHeader, arg);
-        return;
-    }
-    if let Some(cb_i64) = state.line_callback {
-        js_closure_call1(cb_i64 as *const ClosureHeader, arg);
-    }
-}
-
 fn close_custom_interface(handle: i64) {
     // Resolve any outstanding async-iteration `next()` with `{ done: true }`
     // and mark the stream ended, before delivering the `'close'` event.
@@ -609,6 +614,15 @@ fn close_custom_interface(handle: i64) {
     if let Some(cb_i64) = cb {
         js_closure_call0(cb_i64 as *const ClosureHeader);
     }
+    // Release the slot so the GC scanner stops rooting the closed
+    // interface's input/output/callbacks. Handles are NOT reused: a stale
+    // handle to a closed interface must hit the `None` slot (a no-op, like
+    // Node's ERR_USE_AFTER_CLOSE), not alias a newer interface.
+    READLINE_INTERFACES.with(|interfaces| {
+        if let Some(slot) = interfaces.borrow_mut().get_mut(handle as usize) {
+            *slot = None;
+        }
+    });
 }
 
 fn append_custom_input(handle: i64, chunk: f64) {
@@ -637,11 +651,20 @@ fn append_custom_input(handle: i64, chunk: f64) {
             deliver_async_iter_line(handle, line);
         }
     } else {
-        with_interface_mut(handle, |state| {
-            for line in lines {
-                fire_line_or_question(state, line);
+        // Pull the callback under a short borrow, invoke with it released:
+        // the callback may re-enter the interface (`rl.close()`, a nested
+        // emit) — a held RefCell borrow panics, and the GC scanner skips
+        // borrowed interface slots (stale roots under a moving GC).
+        for line in lines {
+            let cb = with_interface_mut(handle, |state| {
+                state.line.clear();
+                state.question_callback.take().or(state.line_callback)
+            })
+            .flatten();
+            if let Some(cb_i64) = cb {
+                js_closure_call1(cb_i64 as *const ClosureHeader, callback_arg(&line));
             }
-        });
+        }
     }
 }
 
@@ -762,12 +785,19 @@ extern "C" fn readline_aiter_self(closure: *const ClosureHeader) -> f64 {
 /// input stream feed this iterator (see `deliver_async_iter_line`).
 #[no_mangle]
 pub extern "C" fn js_readline_iterator(handle: i64) -> i64 {
+    // The interface state this iterator feeds holds NaN-boxed stream values
+    // and a raw pending-promise pointer — make sure the moving collector
+    // rewrites them even when `question`/`on` were never called.
+    ensure_gc_scanner_registered();
     register_aiter_arities();
     with_interface_mut(handle, |state| {
         state.async_iter_active = true;
     });
     // Drain anything already pending in the line buffer is handled lazily by
     // `next()`. Build the iterator object: `{ next, return }` + asyncIterator.
+    // `obj` is rooted across the closure/symbol allocations below — any of
+    // them can trigger a moving minor GC that would relocate it.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let packed = b"next\0return\0";
     let obj = js_object_alloc_with_shape(
         READLINE_ITER_SHAPE_ID + 1,
@@ -775,25 +805,44 @@ pub extern "C" fn js_readline_iterator(handle: i64) -> i64 {
         packed.as_ptr(),
         packed.len() as u32,
     );
+    let obj_handle = scope.root_raw_mut_ptr(obj);
     let next_cl = js_closure_alloc(readline_aiter_next as *const u8, 1);
     js_closure_set_capture_f64(next_cl, 0, handle as f64);
-    js_object_set_field(obj, 0, JSValue::pointer(next_cl as *const u8));
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+        0,
+        JSValue::pointer(next_cl as *const u8),
+    );
     let ret_cl = js_closure_alloc(readline_aiter_return as *const u8, 1);
     js_closure_set_capture_f64(ret_cl, 0, handle as f64);
-    js_object_set_field(obj, 1, JSValue::pointer(ret_cl as *const u8));
+    js_object_set_field(
+        obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+        1,
+        JSValue::pointer(ret_cl as *const u8),
+    );
 
-    let iter_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     let sym = perry_runtime::symbol::well_known_symbol("asyncIterator");
     if !sym.is_null() {
+        let iter_val = f64::from_bits(
+            JSValue::pointer(obj_handle.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+        );
+        let iter_handle = scope.root_nanbox_f64(iter_val);
         let self_cl = js_closure_alloc(readline_aiter_self as *const u8, 1);
-        js_closure_set_capture_f64(self_cl, 0, iter_val);
+        js_closure_set_capture_f64(self_cl, 0, iter_handle.get_nanbox_f64());
         let self_val = f64::from_bits(JSValue::pointer(self_cl as *const u8).bits());
+        // Re-fetch the interned symbol: the closure allocation above may
+        // have moved between the first lookup and this use.
+        let sym = perry_runtime::symbol::well_known_symbol("asyncIterator");
         let sym_val = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
         unsafe {
-            perry_runtime::symbol::js_object_set_symbol_property(iter_val, sym_val, self_val);
+            perry_runtime::symbol::js_object_set_symbol_property(
+                iter_handle.get_nanbox_f64(),
+                sym_val,
+                self_val,
+            );
         }
     }
-    obj as i64
+    obj_handle.get_raw_mut_ptr::<ObjectHeader>() as i64
 }
 
 extern "C" fn custom_input_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
@@ -809,40 +858,65 @@ extern "C" fn custom_input_close(closure: *const ClosureHeader) -> f64 {
 }
 
 fn attach_custom_input(handle: i64, input: f64) {
-    let Some(raw) = raw_ptr_from_value(input) else {
+    if raw_ptr_from_value(input).is_none() {
         return;
-    };
+    }
+    // Root every value built here: each later closure/string allocation (and
+    // the JS `.on` calls below) can trigger a moving minor GC, leaving an
+    // unrooted listener pointer in from-space. Re-read handles at each use.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let input_handle = scope.root_nanbox_f64(input);
     let data = js_closure_alloc(custom_input_data as *const u8, 1);
     js_closure_set_capture_f64(data, 0, handle as f64);
-    let data_value = f64::from_bits(JSValue::pointer(data as *const u8).bits());
+    let data_handle =
+        scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(data as *const u8).bits()));
     let close = js_closure_alloc(custom_input_close as *const u8, 1);
     js_closure_set_capture_f64(close, 0, handle as f64);
-    let close_value = f64::from_bits(JSValue::pointer(close as *const u8).bits());
-    let data_event = boxed_str(b"data");
-    let end_event = boxed_str(b"end");
-    let close_event = boxed_str(b"close");
+    let close_handle =
+        scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(close as *const u8).bits()));
+    let data_event = scope.root_nanbox_f64(boxed_str(b"data"));
+    let end_event = scope.root_nanbox_f64(boxed_str(b"end"));
+    let close_event = scope.root_nanbox_f64(boxed_str(b"close"));
     // A `child_process` stdio pipe is not a `node:stream` instance, so the
     // node_stream `on` helper can't be used. Register through the object's own
     // bound `.on` method (its closure already carries `this`), which routes the
     // listener into the child_process reactor's event delivery.
-    if !stream_is_readable(input) {
-        if let Some(on) = object_field(input, b"on").filter(|v| is_callable(*v)) {
+    if !stream_is_readable(input_handle.get_nanbox_f64()) {
+        let on = object_field(input_handle.get_nanbox_f64(), b"on").filter(|v| is_callable(*v));
+        if let Some(on) = on {
+            let on_handle = scope.root_nanbox_f64(on);
             for (event, cb) in [
-                (data_event, data_value),
-                (end_event, close_value),
-                (close_event, close_value),
+                (data_event, data_handle),
+                (end_event, close_handle),
+                (close_event, close_handle),
             ] {
-                let args = [event, cb];
+                // Each `.on` call runs JS and may GC — rebuild the argument
+                // slice from the handles every iteration.
+                let args = [event.get_nanbox_f64(), cb.get_nanbox_f64()];
                 unsafe {
-                    let _ = js_native_call_value(on, args.as_ptr(), args.len());
+                    let _ =
+                        js_native_call_value(on_handle.get_nanbox_f64(), args.as_ptr(), args.len());
                 }
             }
         }
         return;
     }
-    let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, data_event, data_value);
-    let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, end_event, close_value);
-    let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, close_event, close_value);
+    for (event, cb) in [
+        (data_event, data_handle),
+        (end_event, close_handle),
+        (close_event, close_handle),
+    ] {
+        // Recompute the raw stream pointer per call: the previous `.on`
+        // may have moved the stream object.
+        let Some(raw) = raw_ptr_from_value(input_handle.get_nanbox_f64()) else {
+            return;
+        };
+        let _ = perry_runtime::node_stream::js_node_stream_method_on(
+            raw,
+            event.get_nanbox_f64(),
+            cb.get_nanbox_f64(),
+        );
+    }
 }
 
 fn prompt_from_options(opts: f64) -> String {
@@ -903,6 +977,12 @@ fn ensure_reader_started() {
     {
         return;
     }
+    // Under `cargo test` never spawn the real reader: it would block on the
+    // test runner's stdin and flip EOF_REACHED / push to the shared queues
+    // at arbitrary points mid-test. The flag still flips so the has-active
+    // logic sees the same state it would in production, and `reset()` can
+    // clear it between tests.
+    #[cfg(not(test))]
     std::thread::spawn(move || {
         let stdin = io::stdin();
         let mut reader = stdin.lock();
@@ -999,7 +1079,7 @@ mod termios_impl {
             }
             // Save the original on first enable so disable can restore.
             {
-                let mut saved = SAVED.lock().unwrap();
+                let mut saved = SAVED.lock().unwrap_or_else(|p| p.into_inner());
                 if saved.is_none() {
                     *saved = Some(current);
                 }
@@ -1027,7 +1107,7 @@ mod termios_impl {
     /// Disable raw mode (restore the saved cooked-mode termios).
     pub fn disable() -> bool {
         unsafe {
-            let saved = SAVED.lock().unwrap();
+            let saved = SAVED.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(t) = saved.as_ref() {
                 libc::tcsetattr(0, libc::TCSANOW, t) == 0
             } else {
@@ -1088,7 +1168,7 @@ mod termios_impl {
             };
 
             {
-                let mut saved = SAVED.lock().unwrap();
+                let mut saved = SAVED.lock().unwrap_or_else(|p| p.into_inner());
                 if saved.is_none() {
                     *saved = Some((current_in, current_out));
                 }
@@ -1110,7 +1190,7 @@ mod termios_impl {
 
     pub fn disable() -> bool {
         unsafe {
-            let saved = SAVED.lock().unwrap();
+            let saved = SAVED.lock().unwrap_or_else(|p| p.into_inner());
             if let Some((in_mode, out_mode)) = saved.as_ref() {
                 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
                 let h_in = GetStdHandle(STD_INPUT_HANDLE);
@@ -1154,6 +1234,10 @@ mod termios_impl {
 /// the stdin-backed singleton behavior.
 #[no_mangle]
 pub extern "C" fn js_readline_create_interface(opts: f64) -> i64 {
+    // The interface state stores NaN-boxed input/output stream values the
+    // moving collector must rewrite even if `question`/`on` are never
+    // called on this interface.
+    ensure_gc_scanner_registered();
     CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
     CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     try_register_pump();
@@ -1246,11 +1330,23 @@ pub extern "C" fn js_readline_on(
 /// `Interface.close()` semantics) and mark the interface as EOF.
 #[no_mangle]
 pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
-    if with_interface(_handle, |state| state.uses_custom_stream).unwrap_or(false) {
-        close_custom_interface(_handle);
-        return undefined();
+    match with_interface(_handle, |state| state.uses_custom_stream) {
+        Some(true) => {
+            close_custom_interface(_handle);
+            return undefined();
+        }
+        // Custom-interface handles are never reused. A missing non-stdin slot
+        // therefore means this interface was already closed and released;
+        // do not fall through and mutate the unrelated stdin singleton.
+        None if _handle != STDIN_READLINE_HANDLE => return undefined(),
+        _ => {}
     }
     EOF_REACHED.store(true, Ordering::Release);
+    // Node stops emitting 'line' after close(). Without clearing these, the
+    // pump would still deliver a queued late line to the 'line' handler and
+    // `has_line_callbacks` would keep the event loop alive.
+    QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+    LINE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     let already = CLOSE_FIRED.with(|f| {
         let was = *f.borrow();
         *f.borrow_mut() = true;
@@ -1268,30 +1364,55 @@ pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_readline_pause(handle: i64) -> i64 {
-    if let Some(input) = with_interface(handle, |state| state.input) {
-        if let Some(raw) = raw_ptr_from_value(input) {
-            let _ = perry_runtime::node_stream::js_node_stream_method_pause(raw);
+    match with_interface(handle, |state| (state.uses_custom_stream, state.input)) {
+        Some((true, input)) => {
+            if let Some(raw) = raw_ptr_from_value(input) {
+                let _ = perry_runtime::node_stream::js_node_stream_method_pause(raw);
+            }
         }
+        Some((false, _)) => {
+            // Stdin-backed interface: its input is not a node stream, so
+            // pausing must gate the shared stdin state or 'line' delivery
+            // keeps flowing (the pump holds queued lines while paused).
+            STDIN_PAUSED.store(true, Ordering::Release);
+        }
+        None => {}
     }
     handle
 }
 
 #[no_mangle]
 pub extern "C" fn js_readline_resume(handle: i64) -> i64 {
-    if let Some(input) = with_interface(handle, |state| state.input) {
-        if let Some(raw) = raw_ptr_from_value(input) {
-            let _ = perry_runtime::node_stream::js_node_stream_method_resume(raw);
+    match with_interface(handle, |state| (state.uses_custom_stream, state.input)) {
+        Some((true, input)) => {
+            if let Some(raw) = raw_ptr_from_value(input) {
+                let _ = perry_runtime::node_stream::js_node_stream_method_resume(raw);
+            }
         }
+        Some((false, _)) => {
+            if !STDIN_DESTROYED.load(Ordering::Acquire) {
+                STDIN_PAUSED.store(false, Ordering::Release);
+                try_register_pump();
+                ensure_reader_started();
+            }
+        }
+        None => {}
     }
     handle
 }
 
 #[no_mangle]
 pub extern "C" fn js_readline_prompt(handle: i64) -> f64 {
-    with_interface_mut(handle, |state| {
-        call_write_value(state.output, &state.prompt);
+    // Write outside the interface borrow: `call_write_value` can run a JS
+    // `write` method that re-enters the interface (RefCell) or allocates
+    // while the GC scanner would skip the borrowed slots.
+    let out = with_interface_mut(handle, |state| {
         state.cursor_cols = state.prompt.chars().count() as i32;
+        (state.output, state.prompt.clone())
     });
+    if let Some((output, prompt)) = out {
+        call_write_value(output, &prompt);
+    }
     undefined()
 }
 
@@ -1313,9 +1434,16 @@ pub extern "C" fn js_readline_get_prompt(handle: i64) -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_readline_write(handle: i64, chunk: f64) -> f64 {
     let text = value_to_string(chunk);
-    with_interface_mut(handle, |state| {
+    // Node's Interface.write() writes the chunk to the output stream; this
+    // previously only bumped the cursor column. Write outside the borrow
+    // (see js_readline_prompt).
+    let output = with_interface_mut(handle, |state| {
         state.cursor_cols = state.cursor_cols.max(text.chars().count() as i32);
+        state.output
     });
+    if let Some(output) = output {
+        call_write_value(output, &text);
+    }
     undefined()
 }
 
@@ -1379,6 +1507,10 @@ pub extern "C" fn js_readline_set_raw_mode(enabled: f64) -> f64 {
 /// readline 'close' event since Node fires 'end' on stdin EOF).
 #[no_mangle]
 pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback: i64) -> f64 {
+    // This is the extern codegen lowers `process.stdin.on(...)` to directly
+    // (bypassing stdin_on_op) — the listener lists it fills are GC roots the
+    // moving collector must rewrite.
+    ensure_gc_scanner_registered();
     if event_ptr.is_null() {
         return undefined();
     }
@@ -1509,6 +1641,9 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
     if let Ok(mut q) = PENDING_DATA.lock() {
         q.clear();
     }
+    if let Ok(mut p) = PENDING_ESCAPE.lock() {
+        p.clear();
+    }
     if let Ok(mut q) = PENDING_LINES.lock() {
         q.clear();
     }
@@ -1516,6 +1651,9 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
         v.clear();
     }
     if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
+        v.clear();
+    }
+    if let Ok(mut v) = READABLE_CALLBACKS.lock() {
         v.clear();
     }
     QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = None);
@@ -1527,282 +1665,13 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// Drain / pump
+// Drain / pump — lives in `pump.rs` (this file was past the 2000-line CI
+// cap). Re-exported so the `readline::*` path in lib.rs keeps exposing the
+// `js_readline_process_pending` / `js_readline_has_active` externs.
 // ---------------------------------------------------------------------------
 
-/// Build a NaN-boxed object literal `{ name, ctrl, shift, meta, sequence }`
-/// suitable for the `'keypress'` event's second argument.
-fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &str) -> f64 {
-    use perry_runtime::object::{js_object_alloc_with_shape, js_object_set_field};
-    let packed = b"name\0ctrl\0shift\0meta\0sequence\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF47, 5, packed.as_ptr(), packed.len() as u32);
-    let name_str = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field(obj, 0, JSValue::string_ptr(name_str));
-    js_object_set_field(
-        obj,
-        1,
-        if ctrl {
-            JSValue::bool(true)
-        } else {
-            JSValue::bool(false)
-        },
-    );
-    js_object_set_field(
-        obj,
-        2,
-        if shift {
-            JSValue::bool(true)
-        } else {
-            JSValue::bool(false)
-        },
-    );
-    js_object_set_field(
-        obj,
-        3,
-        if meta {
-            JSValue::bool(true)
-        } else {
-            JSValue::bool(false)
-        },
-    );
-    let seq_str = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
-    js_object_set_field(obj, 4, JSValue::string_ptr(seq_str));
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
-}
-
-/// Parse a single byte chunk into a (name, ctrl, shift, meta, sequence)
-/// keypress descriptor. Recognises Enter, Backspace, Tab, Escape, Ctrl+
-/// letter, and ANSI CSI arrow keys (which arrive as the 3-byte sequence
-/// `\x1b[A`/`B`/`C`/`D`). Multi-byte sequences are reassembled by the
-/// drain loop using the `pending_escape` accumulator.
-fn parse_keypress(chunk: &[u8]) -> Option<(String, bool, bool, bool, String)> {
-    if chunk.is_empty() {
-        return None;
-    }
-    let seq = String::from_utf8_lossy(chunk).into_owned();
-    // CSI arrow keys: \x1b[A..D
-    if chunk.len() == 3 && chunk[0] == 0x1b && chunk[1] == b'[' {
-        let name = match chunk[2] {
-            b'A' => "up",
-            b'B' => "down",
-            b'C' => "right",
-            b'D' => "left",
-            b'H' => "home",
-            b'F' => "end",
-            _ => return Some(("undefined".to_string(), false, false, false, seq)),
-        };
-        return Some((name.to_string(), false, false, false, seq));
-    }
-    // Single byte
-    if chunk.len() == 1 {
-        let b = chunk[0];
-        let (name, ctrl) = match b {
-            b'\r' | b'\n' => ("return".to_string(), false),
-            b'\t' => ("tab".to_string(), false),
-            0x7f | 0x08 => ("backspace".to_string(), false),
-            0x1b => ("escape".to_string(), false),
-            b' ' => ("space".to_string(), false),
-            // Ctrl+letter is byte = letter & 0x1F
-            0x01..=0x1a => {
-                let letter = (b + b'a' - 1) as char;
-                (letter.to_string(), true)
-            }
-            b'a'..=b'z' => ((b as char).to_string(), false),
-            b'A'..=b'Z' => ((b as char).to_string(), false),
-            b'0'..=b'9' => ((b as char).to_string(), false),
-            _ => (seq.clone(), false),
-        };
-        let shift = matches!(b, b'A'..=b'Z');
-        return Some((name, ctrl, shift, false, seq));
-    }
-    // Anything else — surface the raw sequence with `name == sequence`.
-    Some((seq.clone(), false, false, false, seq))
-}
-
-/// Drain pending lines and byte chunks, dispatching to registered
-/// callbacks. Called from the async-bridge tick on every event-loop
-/// iteration. Returns the number of callbacks fired.
-#[no_mangle]
-pub extern "C" fn js_readline_process_pending() -> i32 {
-    let mut fired: i32 = 0;
-
-    // Drain raw-mode byte chunks → 'data' / 'keypress' callbacks.
-    let chunks: Vec<Vec<u8>> = if STDIN_DESTROYED.load(Ordering::Acquire) {
-        if let Ok(mut q) = PENDING_DATA.lock() {
-            q.clear();
-        }
-        Vec::new()
-    } else if STDIN_PAUSED.load(Ordering::Acquire) {
-        Vec::new()
-    } else {
-        let mut q = match PENDING_DATA.lock() {
-            Ok(g) => g,
-            Err(_) => return fired,
-        };
-        std::mem::take(&mut *q)
-    };
-    // Paused ("pull") mode: hand the bytes to the buffer that `process.stdin.read()`
-    // drains, then notify the `readable` listeners (which take no argument and pull
-    // the data themselves). `read()` is the one stdin method codegen does NOT lower
-    // to a direct readline extern — it stays a method on the runtime's stdin object
-    // and reads that buffer — so the bytes have to be deposited there or the two
-    // halves of `on("readable") + read()` would never meet.
-    // Buffer the bytes wherever `process.stdin.read()` can still reach them
-    // whenever stdin is NOT in flowing mode (i.e. no `data` listener is consuming
-    // them). That covers two cases:
-    //
-    //   * paused/pull mode — an `on("readable")` listener plus `read()`.
-    //   * NO listener at all — which is not the same as "nobody wants these
-    //     bytes". A TUI can deliberately strip its `readable` listener to read a
-    //     terminal query response directly with `read()` (suspend/resume around a
-    //     capability probe). Discarding the bytes there hangs it forever: the
-    //     response never arrives, stdin is never resumed, and the keyboard stays
-    //     dead for the rest of the session.
-    //
-    // `read()` is the one stdin method codegen does NOT lower to a readline extern
-    // — it stays a method on the runtime's stdin object and drains that buffer — so
-    // the bytes have to be deposited there or the two halves never meet.
-    let data_flowing = DATA_CALLBACKS
-        .lock()
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    if !data_flowing && !chunks.is_empty() {
-        for chunk in &chunks {
-            perry_runtime::os::stdin_push_bytes(chunk);
-        }
-    }
-    let readable_callbacks = READABLE_CALLBACKS
-        .lock()
-        .map(|v| v.clone())
-        .unwrap_or_default();
-    for cb_i64 in &readable_callbacks {
-        let closure = *cb_i64 as *const ClosureHeader;
-        js_closure_call0(closure);
-        fired += 1;
-    }
-
-    for chunk in chunks {
-        // 'data' callback receives the raw bytes as a string.
-        let data_callbacks = DATA_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default();
-        for cb_i64 in data_callbacks {
-            let arg = stdin_chunk_value(&chunk);
-            let closure = cb_i64 as *const ClosureHeader;
-            js_closure_call1(closure, arg);
-            fired += 1;
-        }
-        // 'keypress' callback receives (sequence_string, key_object).
-        let keypress_callbacks = KEYPRESS_CALLBACKS
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default();
-        for cb_i64 in keypress_callbacks {
-            if let Some((name, ctrl, shift, meta, seq)) = parse_keypress(&chunk) {
-                let seq_str = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
-                let arg1 = f64::from_bits(JSValue::string_ptr(seq_str).bits());
-                let arg2 = build_keypress_object(&name, ctrl, shift, meta, &seq);
-                let closure = cb_i64 as *const ClosureHeader;
-                js_closure_call2(closure, arg1, arg2);
-                fired += 1;
-            }
-        }
-    }
-
-    // Drain line-mode lines → question (one-shot) or 'line' callback.
-    let lines: Vec<String> = {
-        let mut q = match PENDING_LINES.lock() {
-            Ok(g) => g,
-            Err(_) => return fired,
-        };
-        std::mem::take(&mut *q)
-    };
-    for line in lines {
-        let str_ptr = js_string_from_bytes(line.as_ptr(), line.len() as u32);
-        let arg = f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-        let q_cb = QUESTION_CALLBACK.with(|cb| cb.borrow_mut().take());
-        if let Some(cb_i64) = q_cb {
-            let closure = cb_i64 as *const ClosureHeader;
-            js_closure_call1(closure, arg);
-            fired += 1;
-            continue;
-        }
-        let line_cb = LINE_CALLBACK.with(|cb| *cb.borrow());
-        if let Some(cb_i64) = line_cb {
-            let closure = cb_i64 as *const ClosureHeader;
-            js_closure_call1(closure, arg);
-            fired += 1;
-        }
-    }
-
-    // Fire close callback once on EOF.
-    if EOF_REACHED.load(Ordering::Acquire) {
-        let already = CLOSE_FIRED.with(|f| {
-            let was = *f.borrow();
-            *f.borrow_mut() = true;
-            was
-        });
-        if !already {
-            let cb = CLOSE_CALLBACK.with(|c| c.borrow_mut().take());
-            if let Some(cb_i64) = cb {
-                let closure = cb_i64 as *const ClosureHeader;
-                js_closure_call0(closure);
-                fired += 1;
-            }
-        }
-    }
-    fired
-}
-
-/// Whether readline has any active state requiring the event loop to
-/// keep running.
-#[no_mangle]
-pub extern "C" fn js_readline_has_active() -> i32 {
-    // #3962: a TUI that tore down stdin (`process.stdin.destroy()/.pause()/
-    // .unref()`) no longer pins the event loop, so the process can quiesce.
-    if perry_runtime::os::stdin_is_detached() {
-        return 0;
-    }
-    let started = READER_STARTED.load(Ordering::Acquire);
-    let eof = EOF_REACHED.load(Ordering::Acquire);
-    let destroyed = STDIN_DESTROYED.load(Ordering::Acquire);
-    let paused = STDIN_PAUSED.load(Ordering::Acquire);
-    let refed = STDIN_REFED.load(Ordering::Acquire);
-    let has_lines = PENDING_LINES.lock().map(|q| !q.is_empty()).unwrap_or(false);
-    let has_data = PENDING_DATA.lock().map(|q| !q.is_empty()).unwrap_or(false);
-    let has_stdin_callbacks = DATA_CALLBACKS
-        .lock()
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-        || KEYPRESS_CALLBACKS
-            .lock()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-        || READABLE_CALLBACKS
-            .lock()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
-    let has_line_callbacks = QUESTION_CALLBACK.with(|c| c.borrow().is_some())
-        || LINE_CALLBACK.with(|c| c.borrow().is_some());
-    let has_close_cb =
-        !CLOSE_FIRED.with(|f| *f.borrow()) && CLOSE_CALLBACK.with(|c| c.borrow().is_some());
-    let has_dispatchable_data = has_data && has_stdin_callbacks && !paused;
-    let reader_keeps_alive = started
-        && !eof
-        && !destroyed
-        && refed
-        && !paused
-        && (((RAW_MODE.load(Ordering::Acquire) || STDIN_DATA_FLOWING.load(Ordering::Acquire))
-            && has_stdin_callbacks)
-            || has_line_callbacks
-            || has_close_cb);
-    if !destroyed
-        && refed
-        && (has_lines || has_dispatchable_data || has_close_cb || reader_keeps_alive)
-    {
-        1
-    } else {
-        0
-    }
-}
+mod pump;
+pub use pump::{js_readline_has_active, js_readline_process_pending};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1840,6 +1709,7 @@ mod tests {
     static TEST_LOCK: Mutex<()> = Mutex::new(());
     thread_local! {
         static DATA_COUNT: RefCell<usize> = const { RefCell::new(0) };
+        static KEYPRESS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     extern "C" fn count_data_callback(_closure: *const ClosureHeader, _chunk: f64) -> f64 {
@@ -1851,6 +1721,31 @@ mod tests {
         js_closure_alloc(count_data_callback as *const u8, 0) as i64
     }
 
+    extern "C" fn count_readable_callback(_closure: *const ClosureHeader) -> f64 {
+        DATA_COUNT.with(|count| *count.borrow_mut() += 1);
+        undefined()
+    }
+
+    fn readable_counter_callback() -> i64 {
+        js_closure_alloc(count_readable_callback as *const u8, 0) as i64
+    }
+
+    extern "C" fn record_keypress_callback(
+        _closure: *const ClosureHeader,
+        _seq: f64,
+        key_obj: f64,
+    ) -> f64 {
+        let name = object_field(key_obj, b"name")
+            .map(value_to_string)
+            .unwrap_or_default();
+        KEYPRESS_NAMES.with(|names| names.borrow_mut().push(name));
+        undefined()
+    }
+
+    fn keypress_recorder_callback() -> i64 {
+        js_closure_alloc(record_keypress_callback as *const u8, 0) as i64
+    }
+
     fn event_name(name: &str) -> *mut StringHeader {
         js_string_from_bytes(name.as_ptr(), name.len() as u32)
     }
@@ -1858,6 +1753,7 @@ mod tests {
     fn reset() -> MutexGuard<'static, ()> {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         DATA_COUNT.with(|count| *count.borrow_mut() = 0);
+        KEYPRESS_NAMES.with(|names| names.borrow_mut().clear());
         QUESTION_CALLBACK.with(|c| *c.borrow_mut() = None);
         LINE_CALLBACK.with(|c| *c.borrow_mut() = None);
         CLOSE_CALLBACK.with(|c| *c.borrow_mut() = None);
@@ -1872,7 +1768,9 @@ mod tests {
         }
         PENDING_LINES.lock().unwrap().clear();
         PENDING_DATA.lock().unwrap().clear();
+        PENDING_ESCAPE.lock().unwrap().clear();
         EOF_REACHED.store(false, Ordering::Release);
+        READABLE_EOF_NOTIFIED.store(false, Ordering::Release);
         STDIN_PAUSED.store(false, Ordering::Release);
         STDIN_REFED.store(true, Ordering::Release);
         STDIN_DESTROYED.store(false, Ordering::Release);
@@ -1881,7 +1779,9 @@ mod tests {
         STDIN_DATA_FLOWING.store(false, Ordering::Release);
         READLINE_INTERFACES.with(|interfaces| interfaces.borrow_mut().clear());
         NEXT_READLINE_HANDLE.with(|next| *next.borrow_mut() = 2);
-        // READER_STARTED stays sticky once set in a test process.
+        // ensure_reader_started never spawns a real thread under cfg(test),
+        // so the started flag is safe to clear between tests.
+        READER_STARTED.store(false, Ordering::Release);
         guard
     }
 
@@ -1893,6 +1793,27 @@ mod tests {
         js_readline_close(h);
         assert_eq!(js_readline_process_pending(), 0);
         assert_eq!(js_readline_process_pending(), 0);
+    }
+
+    #[test]
+    fn repeated_custom_close_does_not_mutate_stdin_state() {
+        let _g = reset();
+        let handle = allocate_interface(ReadlineInterfaceState::new(
+            undefined(),
+            undefined(),
+            String::new(),
+            false,
+            true,
+        ));
+        QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = Some(123));
+
+        js_readline_close(handle);
+        assert!(!EOF_REACHED.load(Ordering::Acquire));
+        QUESTION_CALLBACK.with(|cb| assert_eq!(*cb.borrow(), Some(123)));
+
+        js_readline_close(handle);
+        assert!(!EOF_REACHED.load(Ordering::Acquire));
+        QUESTION_CALLBACK.with(|cb| assert_eq!(*cb.borrow(), Some(123)));
     }
 
     #[test]
@@ -1929,8 +1850,11 @@ mod tests {
     #[test]
     fn stdin_remove_listener_detaches_data_callback() {
         let _g = reset();
-        let cb = data_counter_callback();
         let event = event_name("data");
+        // Allocate the event string before the raw callback pointer. The real
+        // JS caller roots both arguments; this unit test must not leave its
+        // freshly allocated closure unrooted across `event_name`.
+        let cb = data_counter_callback();
         let _ = js_readline_stdin_on(event, cb);
         let _ = js_readline_stdin_remove_listener(event, cb);
         test_inject_chunk(b"x");
@@ -1942,8 +1866,9 @@ mod tests {
     #[test]
     fn stdin_pause_resume_gates_data_dispatch() {
         let _g = reset();
+        let event = event_name("data");
         let cb = data_counter_callback();
-        let _ = js_readline_stdin_on(event_name("data"), cb);
+        let _ = js_readline_stdin_on(event, cb);
         let _ = js_readline_stdin_pause();
         test_inject_chunk(b"x");
         assert_eq!(js_readline_process_pending(), 0);
@@ -1966,14 +1891,11 @@ mod tests {
         assert!(!RAW_MODE.load(Ordering::Acquire));
         assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
 
-        let cb = data_counter_callback();
         let event = event_name("data");
+        let cb = data_counter_callback();
         let _ = js_readline_stdin_on(event, cb);
         assert!(STDIN_DATA_FLOWING.load(Ordering::Acquire));
-        // Cooked-mode data listener keeps the event loop alive. (Clear EOF
-        // first: a real reader thread spawned by an earlier `resume()` test
-        // may have flipped this shared static on the runner's empty stdin.)
-        EOF_REACHED.store(false, Ordering::Release);
+        // Cooked-mode data listener keeps the event loop alive.
         assert_eq!(js_readline_has_active(), 1);
 
         // Cooked-mode chunks (delivered by the reader with the newline
@@ -2009,47 +1931,54 @@ mod tests {
     }
 
     #[test]
-    fn parse_keypress_arrow_keys() {
-        let (name, ctrl, shift, meta, seq) = parse_keypress(b"\x1b[A").unwrap();
-        assert_eq!(name, "up");
-        assert!(!ctrl && !shift && !meta);
-        assert_eq!(seq, "\x1b[A");
-
-        assert_eq!(parse_keypress(b"\x1b[B").unwrap().0, "down");
-        assert_eq!(parse_keypress(b"\x1b[C").unwrap().0, "right");
-        assert_eq!(parse_keypress(b"\x1b[D").unwrap().0, "left");
+    fn split_escape_sequence_reassembles_to_single_keypress() {
+        // The raw-mode reader queues one byte per chunk, so an arrow key
+        // arrives as `\x1b`, `[`, `A` in three chunks. The pump must
+        // reassemble them into ONE 'up' keypress, not escape + [ + A.
+        let _g = reset();
+        let event = event_name("keypress");
+        let cb = keypress_recorder_callback();
+        let _ = js_readline_stdin_on(event, cb);
+        test_inject_chunk(b"\x1b");
+        test_inject_chunk(b"[");
+        test_inject_chunk(b"A");
+        let fired = js_readline_process_pending();
+        KEYPRESS_NAMES.with(|names| assert_eq!(*names.borrow(), vec!["up".to_string()]));
+        assert_eq!(fired, 1);
     }
 
     #[test]
-    fn parse_keypress_ctrl_letter() {
-        // Ctrl+C = 0x03
-        let (name, ctrl, _, _, _) = parse_keypress(&[0x03]).unwrap();
-        assert_eq!(name, "c");
-        assert!(ctrl);
-        // Ctrl+A = 0x01
-        let (name, ctrl, _, _, _) = parse_keypress(&[0x01]).unwrap();
-        assert_eq!(name, "a");
-        assert!(ctrl);
+    fn bare_escape_flushes_on_next_tick() {
+        // A lone ESC can't be distinguished from the start of a sequence
+        // within one tick — it's held, then flushed as a bare 'escape'
+        // keypress on the next tick if nothing followed.
+        let _g = reset();
+        let event = event_name("keypress");
+        let cb = keypress_recorder_callback();
+        let _ = js_readline_stdin_on(event, cb);
+        test_inject_chunk(b"\x1b");
+        assert_eq!(js_readline_process_pending(), 0);
+        // The held prefix keeps the loop alive so the flush tick runs.
+        assert_eq!(js_readline_has_active(), 1);
+        assert_eq!(js_readline_process_pending(), 1);
+        KEYPRESS_NAMES.with(|names| assert_eq!(*names.borrow(), vec!["escape".to_string()]));
     }
 
     #[test]
-    fn parse_keypress_special_keys() {
-        assert_eq!(parse_keypress(b"\r").unwrap().0, "return");
-        assert_eq!(parse_keypress(b"\n").unwrap().0, "return");
-        assert_eq!(parse_keypress(b"\t").unwrap().0, "tab");
-        assert_eq!(parse_keypress(&[0x7f]).unwrap().0, "backspace");
-        assert_eq!(parse_keypress(&[0x1b]).unwrap().0, "escape");
-        assert_eq!(parse_keypress(b" ").unwrap().0, "space");
-    }
-
-    #[test]
-    fn parse_keypress_letter_shift_flag() {
-        let (name, ctrl, shift, _, _) = parse_keypress(b"A").unwrap();
-        assert_eq!(name, "A");
-        assert!(!ctrl);
-        assert!(shift); // uppercase A → shift true
-        let (_, _, shift, _, _) = parse_keypress(b"a").unwrap();
-        assert!(!shift);
+    fn readable_only_fires_with_new_chunks() {
+        // A registered 'readable' listener must not be invoked on ticks
+        // that delivered no new data (that was a per-tick JS busy loop).
+        let _g = reset();
+        let event = event_name("readable");
+        let cb = readable_counter_callback();
+        let _ = js_readline_stdin_on(event, cb);
+        assert_eq!(js_readline_process_pending(), 0);
+        assert_eq!(js_readline_process_pending(), 0);
+        test_inject_chunk(b"x");
+        assert_eq!(js_readline_process_pending(), 1);
+        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+        // Queue drained again → quiet ticks stay quiet.
+        assert_eq!(js_readline_process_pending(), 0);
     }
 
     #[test]

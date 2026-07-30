@@ -583,6 +583,47 @@ def h1_equivalence_native_records():
 
 
 class CompilerOutputRegressionTests(unittest.TestCase):
+    def test_function_scoped_ir_check_does_not_include_callers(self):
+        ir = """
+define void @target_function() {
+entry:
+  ret void
+}
+
+define void @caller() {
+entry:
+  call void @target_function()
+  %array = call i64 @js_array_alloc(i32 1)
+  ret void
+}
+"""
+        workloads = {
+            "function_scope": {
+                "ir_checks": [
+                    {
+                        "name": "target_has_no_array_allocation",
+                        "function_contains": "target_function",
+                        "regex_none": ["@js_array_alloc"],
+                        "detail": "only inspect matching function definitions",
+                    }
+                ]
+            }
+        }
+        report = HARNESS.verify_artifacts(
+            workload="function_scope",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            workloads=workloads,
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
     def test_image_convolution_good_shape_passes(self):
         report = HARNESS.verify_artifacts(
             workload="image_convolution",
@@ -621,6 +662,27 @@ class CompilerOutputRegressionTests(unittest.TestCase):
         self.assertTrue(
             any("hot_loops_no_runtime_calls" in error for error in report["errors"])
         )
+
+    def test_gc_loop_safepoint_is_allowed_in_hot_loop_contracts(self):
+        ir = GOOD_IR.replace(
+            "  %m = mul i32 %h, 16777619\n",
+            "  call void @js_gc_loop_safepoint()\n"
+            "  %m = mul i32 %h, 16777619\n",
+        )
+        report = HARNESS.verify_artifacts(
+            workload="image_convolution",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            native_reps=[{"records": image_native_records()}],
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
 
     def test_image_convolution_requires_named_regions(self):
         bad_ir = GOOD_IR.replace("for.body.42:", "for.body.77:").replace(

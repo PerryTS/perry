@@ -11,7 +11,15 @@ const closed = new Promise<void>((resolve) => {
   });
 });
 
-socket.close(() => order.push("callback"));
-await closed;
-await Promise.resolve();
-console.log("close order:", order.join(","));
+try {
+  socket.close(function () {
+    order.push(`callback:${this === socket}:${arguments.length}`);
+  });
+  await closed;
+  await Promise.resolve();
+  console.log("close order:", order.join(","));
+} finally {
+  if (!order.includes("event")) {
+    await new Promise<void>((resolve) => socket.close(resolve));
+  }
+}

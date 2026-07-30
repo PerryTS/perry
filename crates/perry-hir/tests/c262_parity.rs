@@ -575,9 +575,16 @@ fn logical_property_assignment_short_circuits_the_store_4586() {
             "expected a property read on the LHS for `{src}`, got {left:?}"
         );
         // The single store lives on the RHS, so it is only evaluated when the
-        // short-circuit does NOT hold.
+        // short-circuit does NOT hold. Both store shapes satisfy that
+        // invariant: a plain member target lowers to `PropertySet`, while a
+        // parenthesized / `as`-cast target routes through `PutValueSet` so the
+        // const-immutability check runs (#6300). The property being asserted
+        // here is *where* the store sits, not which node encodes it.
         assert!(
-            matches!(right.as_ref(), Expr::PutValueSet { .. }),
+            matches!(
+                right.as_ref(),
+                Expr::PutValueSet { .. } | Expr::PropertySet { .. }
+            ),
             "expected the store to live on the short-circuit RHS for `{src}`, got {right:?}"
         );
     }

@@ -592,6 +592,10 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    // `--opt-report` (#6952): attribute every representation decision the
+    // collectors below make to this function. No-op when the report is off.
+    let _opt_report_scope =
+        crate::opt_report::enter_region(&f.name, crate::opt_report::RegionKind::Function);
     let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_lens(
         &f.body,
         &f.params,
@@ -609,6 +613,24 @@ pub(super) fn compile_function(
     );
 
     if let Some(plan) = spec_entry {
+        // `--opt-report` (#6952): the spec-ABI win, recorded at the same site
+        // as the PERRY_REPSEL_DEBUG line so the two cannot diverge.
+        if crate::opt_report::enabled() {
+            crate::opt_report::select(
+                crate::opt_report::Position::Param,
+                "(parameters + return)",
+                None,
+                crate::opt_report::Analysis::SpecAbi,
+                &plan
+                    .reps
+                    .iter()
+                    .map(|r| r.label().to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                0,
+                Some(format!("specialized entry for {}", f.name)),
+            );
+        }
         if std::env::var("PERRY_REPSEL_DEBUG").as_deref() == Ok("1") {
             eprintln!(
                 "repsel: spec entry '{}' tuple=[{}] [{}]",
