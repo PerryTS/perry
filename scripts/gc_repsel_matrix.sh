@@ -91,6 +91,12 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # Arms.  Format:  id | compile-env | run-env | liveness-requirement | note
 #
 # liveness requirement:
+#   scavenge the arm claims the COPYING MINOR runs -> require
+#            `[gc-copy-minor] ran copied_objects=` > 0. Strictly stronger than
+#            `move`, which the C4b mark-sweep evacuation satisfies on its own
+#            (#7025) -- `default` reported `moved=7 610 512` while running zero
+#            copying minors. Any arm whose subject is the relocating young-gen
+#            minor #7019 shipped must use THIS, not `move`.
 #   move     the arm claims to evacuate -> require moved/copied objects > 0
 #   collect  the arm claims to collect  -> require at least one GC cycle
 #   none     no GC claim of its own (an explicit control)
@@ -400,6 +406,10 @@ while [ "$ai" -lt "$NARMS" ]; do
                 result="FAIL"; ev="output-mismatch $ev"
             else
                 case "$live" in
+                    # #7024/#7025: the copying minor's OWN counter, never the
+                    # sum. An arm that certifies the relocating young-gen minor
+                    # must not go green on a C4b mark-sweep evacuation.
+                    scavenge) [ "$scavenged" -gt 0 ] && result="PASS" || result="UNVER" ;;
                     move)    [ "$moved" -gt 0 ] && result="PASS" || result="UNVER" ;;
                     collect) [ "$cycles" -gt 0 ] && result="PASS" || result="UNVER" ;;
                     *)       result="PASS" ;;

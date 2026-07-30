@@ -641,17 +641,56 @@ thread_local! {
     /// back-edge poll) so the copying minor can MOVE survivors instead of the
     /// conservative non-moving minor running mid-expression.
     pub(super) static GC_SAFEPOINT_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// `arena_total_bytes()` sampled at the moment `GC_SAFEPOINT_PENDING` was
+    /// last set — the baseline the deferral slack is measured from (#7024).
+    /// Meaningless while `GC_SAFEPOINT_PENDING` is false.
+    pub(super) static GC_SAFEPOINT_DEFER_ARENA_BASE: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Hard cap on committed arena bytes before which a nursery trigger may be
-/// deferred to a safepoint (Phase 2/3). Loop back-edge polls drain the pending
+/// Committed arena bytes a deferred nursery trigger may allocate **past the
+/// point at which it was deferred** before the alloc-point non-moving minor
+/// runs as the safety valve (Phase 2/3). Loop back-edge polls drain the pending
 /// flag every iteration, so the arena never grows near this in normal code; the
-/// cap bounds RSS for code that reaches no safepoint before the next trigger —
+/// slack bounds RSS for code that reaches no safepoint before the next trigger —
 /// a synchronous loop on a specialized lowering path that doesn't yet emit the
-/// poll, or a single mega-expression — where the alloc-point non-moving minor
-/// runs as the safety valve. Kept modest so those cases don't balloon under the
-/// default-on moving GC (raise once poll coverage is complete).
-pub(super) const GC_MOVING_DEFER_HARD_CAP_BYTES: usize = 128 * 1024 * 1024;
+/// poll, or a single mega-expression.
+///
+/// ★ #7024: this is a SLACK (a delta from the deferral point), not an absolute
+/// arena size, and that is the whole point. It was an absolute cap derived by
+/// `budget_scaled(_, 1, 4, 2 MB)` — **the same formula as
+/// `gc_trigger_absolute_ceiling_bytes()`**. `gc_budgeted_due_trigger()` reports
+/// `ArenaBytes` due exactly when `arena_total_bytes() >= trigger`, and the
+/// deferral required `arena_total_bytes() < cap`; under any explicit
+/// `PERRY_GC_HEAP_LIMIT` the two collapsed to the same number, so the two
+/// predicates became exact complements and the deferral was *unreachable* — the
+/// copying minor could never run under the very pressure setting the stress
+/// matrix used to provoke it (`default` arm: 0 copying minors on all 22 corpus
+/// rows). A delta cannot collapse into the trigger, at any heap budget: the
+/// first deferral of a cycle is always taken and the arena is allowed a bounded
+/// amount of growth to reach a poll.
+pub(super) const GC_MOVING_DEFER_SLACK_BYTES: usize = 64 * 1024 * 1024;
+
+/// Whether an alloc-point nursery trigger may (still) be deferred to the next
+/// precise-root safepoint.
+///
+/// `deferred_at` is `Some(arena_total_at_the_first_deferral)` while a deferral
+/// is outstanding, `None` when none is. The first deferral of a cycle is
+/// unconditional — deferring is the *sound* path (it collects with precise,
+/// rewritable roots at a real safepoint) and the alloc-point fallback exists
+/// only to bound growth when nothing drains the deferral. See
+/// `GC_MOVING_DEFER_SLACK_BYTES` for why this is a delta and not an absolute
+/// cap (#7024).
+#[inline]
+pub(super) fn moving_defer_within_slack(
+    arena_total: usize,
+    deferred_at: Option<usize>,
+    slack: usize,
+) -> bool {
+    match deferred_at {
+        None => true,
+        Some(base) => arena_total < base.saturating_add(slack),
+    }
+}
 
 /// RAII guard that marks a #5476 direct old-gen reclaim in progress so a nested
 /// `gc_check_trigger` can't re-enter it. See `GC_OLD_RECLAIM_IN_PROGRESS`.
@@ -1317,14 +1356,39 @@ pub fn gc_check_trigger() {
             // to the next precise-root safepoint (event-loop boundary or a
             // codegen loop back-edge poll) so the copying minor MOVES survivors
             // instead of the conservative non-moving minor running here at a
-            // register-imprecise point. Safety valve: once committed arena bytes
-            // pass the hard cap (a mega-expression that reached no poll), fall
-            // through and collect non-moving here so growth stays bounded.
-            if gc_moving_loop_polls_enabled()
-                && crate::arena::arena_total_bytes() < gc_moving_defer_hard_cap_dyn_bytes()
-            {
-                GC_SAFEPOINT_PENDING.with(|p| p.set(true));
-                return;
+            // register-imprecise point. Safety valve: once the arena has grown
+            // `gc_moving_defer_slack_dyn_bytes()` PAST the point at which the
+            // collection was deferred (a mega-expression that reached no poll),
+            // fall through and collect non-moving here so growth stays bounded.
+            //
+            // #7024: the allowance is measured from the deferral point, not
+            // against an absolute arena size. The absolute cap shared
+            // `budget_scaled(_, 1, 4, 2 MB)` with the trigger ceiling, so under
+            // an explicit PERRY_GC_HEAP_LIMIT "a trigger is due" and "the
+            // deferral is allowed" became exact complements and this branch was
+            // dead — see `GC_MOVING_DEFER_SLACK_BYTES`.
+            if gc_moving_loop_polls_enabled() {
+                let arena_total = crate::arena::arena_total_bytes();
+                let already_deferred = GC_SAFEPOINT_PENDING.with(Cell::get);
+                let deferred_at =
+                    already_deferred.then(|| GC_SAFEPOINT_DEFER_ARENA_BASE.with(Cell::get));
+                if moving_defer_within_slack(
+                    arena_total,
+                    deferred_at,
+                    gc_moving_defer_slack_dyn_bytes(),
+                ) {
+                    if !already_deferred {
+                        GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(arena_total));
+                        GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+                    }
+                    return;
+                }
+                // The deferral never drained. The direct minor below IS the
+                // collection that was owed, so retire the request — leaving it
+                // pending would pin `GC_SAFEPOINT_DEFER_ARENA_BASE` at a stale,
+                // already-exceeded baseline and disable deferral for the rest of
+                // the process (the same "the branch is dead" shape as #7024).
+                GC_SAFEPOINT_PENDING.with(|p| p.set(false));
             }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();

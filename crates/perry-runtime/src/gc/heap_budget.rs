@@ -6,7 +6,7 @@
 use std::sync::OnceLock;
 
 use super::policy::{
-    GC_COPY_PROMOTION_HANDOFF_MIN_BYTES, GC_MOVING_DEFER_HARD_CAP_BYTES,
+    GC_COPY_PROMOTION_HANDOFF_MIN_BYTES, GC_MOVING_DEFER_SLACK_BYTES,
     GC_OLD_GEN_RECLAIM_GROWTH_BYTES, GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
     GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES,
     GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES, GC_TRIGGER_ABSOLUTE_CEILING,
@@ -152,11 +152,24 @@ budget_scaled_accessor!(
     2 * 1024 * 1024
 );
 budget_scaled_accessor!(
-    gc_moving_defer_hard_cap_dyn_bytes,
-    GC_MOVING_DEFER_HARD_CAP_BYTES,
+    /// Growth allowance for a nursery trigger that has been deferred to a
+    /// precise-root safepoint, measured **from the deferral point** (#7024).
+    ///
+    /// ★ Do not give this the `1, 4, 2 MB` shape of
+    /// `gc_trigger_absolute_ceiling_bytes` again, and do not turn it back into
+    /// an absolute arena cap. While it was both, the two collapsed to the same
+    /// number under every explicit `PERRY_GC_HEAP_LIMIT`, which made "a trigger
+    /// is due" (`arena_total >= trigger`) and "the deferral is allowed"
+    /// (`arena_total < cap`) exact complements: the copying minor became
+    /// unreachable at precisely the pressure settings that provoke it. A delta
+    /// is immune to that by construction; the denominator is a third rather
+    /// than a quarter so the deferral point (≈ a quarter of the budget) plus
+    /// its slack still leaves the budget headroom.
+    gc_moving_defer_slack_dyn_bytes,
+    GC_MOVING_DEFER_SLACK_BYTES,
     1,
-    4,
-    2 * 1024 * 1024
+    3,
+    1024 * 1024
 );
 budget_scaled_accessor!(
     gc_tiny_parse_in_use_trigger_dyn_bytes,
