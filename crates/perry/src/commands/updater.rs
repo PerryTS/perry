@@ -157,9 +157,9 @@ pub fn run(args: UpdaterArgs) -> Result<()> {
 }
 
 fn run_keygen(args: KeygenArgs) -> Result<()> {
-    use rand::TryRngCore;
+    use rand::TryRng;
     let mut seed = [0u8; SECRET_KEY_LENGTH];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut seed)
         .context("failed to read 32 random bytes from the OS RNG")?;
     let signing = SigningKey::from_bytes(&seed);

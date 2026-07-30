@@ -1353,7 +1353,9 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                 }
             }
-            if key_bytes == b"constructor" {
+            if key_bytes == b"constructor"
+                && super::super::prototype_chain::object_static_prototype(obj as usize).is_none()
+            {
                 if let Some(v) = super::class_object_props::instance_constructor_value(obj, key) {
                     return v;
                 }

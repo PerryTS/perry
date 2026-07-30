@@ -106,6 +106,9 @@ fn executable_exit_releases_collection_side_allocations_last() {
     let finalization = exit_block
         .find("call void @js_process_run_finalization_exit()")
         .expect("exit finalization call should be emitted");
+    let trace_flush = exit_block
+        .find("call void @js_trace_events_flush_output()")
+        .expect("trace output flush should be emitted");
     let rejections = exit_block
         .find("call void @js_promise_report_unhandled_rejections()")
         .expect("unhandled-rejection report should be emitted");
@@ -120,7 +123,8 @@ fn executable_exit_releases_collection_side_allocations_last() {
         .find("ret i32 ")
         .expect("exit return should be emitted");
 
-    assert!(finalization < rejections);
+    assert!(finalization < trace_flush);
+    assert!(trace_flush < rejections);
     assert!(rejections < release);
     assert!(release < ret);
 

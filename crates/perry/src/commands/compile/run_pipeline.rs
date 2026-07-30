@@ -3190,9 +3190,21 @@ pub fn run_with_parse_cache(
                         .cloned();
                     if let Some(ref origin_name) = resolved_origin_name {
                         if origin_name != &exported_name {
-                            import_function_origin_names
-                                .insert(exported_name.clone(), origin_name.clone());
-                            if local_name != exported_name {
+                            // Key by the same rule as `import_function_prefixes`
+                            // above: the LOCAL name for an aliased import, the
+                            // exported name otherwise — the HIR's `ExternFuncRef`
+                            // carries exactly that string. Also inserting an
+                            // aliased import under its EXPORTED name poisons any
+                            // same-file binding that happens to share it:
+                            // `import { XML } from "a"` + `import { XML as C }
+                            // from "b"` (where b's barrel does `export { default
+                            // as XML }`) rewrote a's `XML` suffix to `default`
+                            // and the link failed on `perry_fn_<a>__default`
+                            // (the fast-xml-parser × is-unsafe graph).
+                            if local_name == exported_name {
+                                import_function_origin_names
+                                    .insert(exported_name.clone(), origin_name.clone());
+                            } else {
                                 import_function_origin_names
                                     .insert(local_name.clone(), origin_name.clone());
                             }

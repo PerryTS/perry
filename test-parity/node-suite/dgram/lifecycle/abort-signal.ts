@@ -13,11 +13,12 @@ function invalidSignalResult(): string {
   }
 }
 
-console.log("invalid signal:", invalidSignalResult());
-if (invalidSignalSocket) {
-  await new Promise<void>((resolve) =>
-    invalidSignalSocket!.close(() => resolve())
-  );
+try {
+  console.log("invalid signal:", invalidSignalResult());
+} finally {
+  if (invalidSignalSocket) {
+    await new Promise<void>((resolve) => invalidSignalSocket!.close(resolve));
+  }
 }
 
 const preAbortedController = new AbortController();
@@ -44,8 +45,16 @@ console.log("active signal: closed");
 const controller = new AbortController();
 const socket = dgram.createSocket({ type: "udp4", signal: controller.signal });
 let closes = 0;
-socket.on("close", () => closes++);
-await new Promise<void>((resolve) => socket.close(() => resolve()));
-controller.abort();
-await new Promise<void>((resolve) => queueMicrotask(resolve));
-console.log("abort after close:", closes);
+const onClose = () => closes++;
+socket.on("close", onClose);
+try {
+  await new Promise<void>((resolve) => socket.close(resolve));
+  controller.abort();
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  console.log("abort after close:", closes);
+} finally {
+  if (closes === 0) {
+    await new Promise<void>((resolve) => socket.close(resolve));
+  }
+  socket.removeListener("close", onClose);
+}
