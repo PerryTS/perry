@@ -762,7 +762,7 @@ pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader 
             None => return std::ptr::null_mut(),
         };
 
-        match std::env::var(name) {
+        match std::env::var(&name) {
             Ok(value) => {
                 // Create a JS string from the value
                 let bytes = value.as_bytes();
@@ -898,7 +898,7 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
             Some(name) => name,
             None => return,
         };
-        if !env_name_is_settable(name) {
+        if !env_name_is_settable(&name) {
             return;
         }
 
@@ -926,8 +926,8 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
         // in the environment block. Keep the materialized object's first-seen
         // spelling instead of appending an enumerable alias such as both
         // `Path` and `PATH`.
-        let cache_name = env_cache_name_for_set(name);
-        std::env::set_var(name, v_str);
+        let cache_name = env_cache_name_for_set(&name);
+        std::env::set_var(&name, v_str);
         // Keep the cached `process.env` object in step so enumeration
         // (`Object.keys(process.env)`, `for…in`, spread) sees the new key —
         // reads go through `js_getenv`, but enumeration walks this object.
@@ -1038,11 +1038,11 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
             Some(name) => name,
             None => return,
         };
-        if !env_name_is_settable(name) {
+        if !env_name_is_settable(&name) {
             return;
         }
-        let cache_name = env_cache_name_for_remove(name);
-        std::env::remove_var(name);
+        let cache_name = env_cache_name_for_remove(&name);
+        std::env::remove_var(&name);
 
         let cached = CACHED_ENV.with(|c| c.get());
         if cached != 0.0 {
@@ -1086,21 +1086,35 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 }
 
-unsafe fn env_name_from_header<'a>(name_ptr: *const StringHeader) -> Option<&'a str> {
+unsafe fn env_name_from_header(name_ptr: *const StringHeader) -> Option<String> {
     if name_ptr.is_null() || (name_ptr as usize) < 0x1000 {
         return None;
     }
     let len = unsafe { (*name_ptr).byte_len as usize };
     let data_ptr = unsafe { (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
-    std::str::from_utf8(unsafe { std::slice::from_raw_parts(data_ptr, len) }).ok()
+    std::str::from_utf8(unsafe { std::slice::from_raw_parts(data_ptr, len) })
+        .ok()
+        .map(str::to_owned)
+}
+
+struct EnvCacheMutationGuard<'a> {
+    active: &'a std::cell::Cell<bool>,
+    previous: bool,
+}
+
+impl Drop for EnvCacheMutationGuard<'_> {
+    fn drop(&mut self) {
+        self.active.set(self.previous);
+    }
 }
 
 fn with_env_cache_mutation<R>(f: impl FnOnce() -> R) -> R {
     ENV_CACHE_MUTATION.with(|active| {
-        let previous = active.replace(true);
-        let result = f();
-        active.set(previous);
-        result
+        let _guard = EnvCacheMutationGuard {
+            active,
+            previous: active.replace(true),
+        };
+        f()
     })
 }
 
@@ -1966,6 +1980,16 @@ mod env_object_tests {
             windows_env_key_identity("perry_Mixed_Case"),
             windows_env_key_identity("PERRY_mIXED_cASE")
         );
+    }
+
+    #[test]
+    fn env_cache_mutation_flag_is_restored_after_unwind() {
+        assert!(!env_cache_mutation_active());
+        let result = std::panic::catch_unwind(|| {
+            with_env_cache_mutation(|| panic!("simulated JS exception"));
+        });
+        assert!(result.is_err());
+        assert!(!env_cache_mutation_active());
     }
 
     #[test]
