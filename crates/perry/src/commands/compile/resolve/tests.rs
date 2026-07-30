@@ -1937,3 +1937,42 @@ mod exports_over_module_precedence_tests {
         assert_eq!(resolved, pkg.join("dist/index.js"));
     }
 }
+
+/// pnpm layout regression — a package's own `node_modules` usually holds
+/// only `.bin`, while its real dependencies live in the
+/// `.pnpm/<pkg>@<v>/node_modules` sibling one level further up. The
+/// resolver must consult EVERY ancestor `node_modules` (Node's algorithm),
+/// not stop at the first one found.
+mod ancestor_node_modules_tests {
+    use super::super::ancestor_node_modules_dirs;
+
+    #[test]
+    fn walk_lists_every_ancestor_node_modules_nearest_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+
+        // <root>/node_modules/.pnpm/fxp@1/node_modules/fxp/node_modules/.bin
+        //                                             └── strnum lives in the
+        //                                                 .pnpm sibling dir
+        let pnpm_nm = root.join("node_modules/.pnpm/fxp@1/node_modules");
+        let pkg_local_nm = pnpm_nm.join("fxp/node_modules");
+        std::fs::create_dir_all(pkg_local_nm.join(".bin")).expect("mkdir .bin");
+        std::fs::create_dir_all(pnpm_nm.join("strnum")).expect("mkdir strnum");
+        let start = pnpm_nm.join("fxp/src/xmlparser");
+        std::fs::create_dir_all(&start).expect("mkdir src");
+
+        // Ancestors of the temp dir itself (e.g. /tmp) are outside the
+        // fixture; keep only the chain under `root` so the exact-order
+        // assertion cannot flake on a host machine's own node_modules.
+        let dirs: Vec<_> = ancestor_node_modules_dirs(&start)
+            .into_iter()
+            .filter(|d| d.starts_with(root))
+            .collect();
+        assert_eq!(
+            dirs,
+            vec![pkg_local_nm, pnpm_nm, root.join("node_modules")],
+            "every ancestor node_modules, nearest first: the package-local `.bin` \
+             host, then the .pnpm sibling hosting the real deps, then the project root"
+        );
+    }
+}

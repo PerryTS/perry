@@ -943,11 +943,22 @@ fn promise_prototype_receiver(method: &str) -> *mut Promise {
 /// first (invoking accessor getters) and throws TypeError if it is not callable —
 /// correctly propagating overridden `then` properties on Promise instances.
 fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
+    let receiver_bits = receiver.to_bits();
+    if receiver_bits == crate::value::TAG_NULL || receiver_bits == crate::value::TAG_UNDEFINED {
+        let kind = if receiver_bits == crate::value::TAG_NULL {
+            "null"
+        } else {
+            "undefined"
+        };
+        throw_type_error_thunk(&format!(
+            "Cannot read properties of {kind} (reading 'then')"
+        ));
+    }
     let then_fn = unsafe {
         crate::value::js_dynamic_object_get_property(receiver, b"then".as_ptr() as *const i8, 4)
     };
     if !super::spec_combinators::is_callable_value(then_fn) {
-        let msg = b"Promise method called on non-callable 'then'";
+        let msg = b"receiver.then is not a function";
         let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err_ptr = crate::error::js_typeerror_new(msg_str);
         let err_val = crate::value::JSValue::pointer(err_ptr as *const u8).bits();

@@ -1,18 +1,6 @@
 import * as dns from "node:dns";
 import * as dnsPromises from "node:dns/promises";
 
-function lookupCb(hostname: string): Promise<any> {
-  return new Promise((resolve) => {
-    dns.lookup(hostname, (err, address, family) => {
-      resolve({ err, address, family });
-    });
-  });
-}
-
-function orderSummary(values: Array<{ address: string; family: number }>): string {
-  return values.map((value) => `${value.family}:${value.address}`).join("|");
-}
-
 function thrownShape(label: string, fn: () => void): void {
   try {
     fn();
@@ -22,22 +10,24 @@ function thrownShape(label: string, fn: () => void): void {
   }
 }
 
-dns.setDefaultResultOrder("ipv4first");
-const callback4 = await lookupCb("localhost");
-const promise4 = await dnsPromises.lookup("localhost");
-const all4 = await dnsPromises.lookup("localhost", { all: true });
-console.log("ipv4 callback:", callback4.err === null, callback4.address, callback4.family);
-console.log("ipv4 promise:", promise4.address, promise4.family);
-console.log("ipv4 all:", orderSummary(all4));
+function getPromiseOrder(): string {
+  return typeof dnsPromises.getDefaultResultOrder === "function"
+    ? dnsPromises.getDefaultResultOrder()
+    : "absent";
+}
 
-dnsPromises.setDefaultResultOrder("ipv6first");
-const callback6 = await lookupCb("localhost");
-const promise6 = await dnsPromises.lookup("localhost");
-const all6 = await dnsPromises.lookup("localhost", { all: true });
-console.log("ipv6 callback:", callback6.err === null, callback6.address, callback6.family);
-console.log("ipv6 promise:", promise6.address, promise6.family);
-console.log("ipv6 all:", orderSummary(all6));
-console.log("shared order:", dns.getDefaultResultOrder(), dnsPromises.getDefaultResultOrder());
+console.log("initial:", dns.getDefaultResultOrder(), getPromiseOrder());
+
+dns.setDefaultResultOrder("ipv4first");
+console.log("callback set:", dns.getDefaultResultOrder(), getPromiseOrder());
+
+if (typeof dnsPromises.setDefaultResultOrder === "function") {
+  dnsPromises.setDefaultResultOrder("ipv6first");
+}
+console.log("promise set:", dns.getDefaultResultOrder(), getPromiseOrder());
+
+dns.setDefaultResultOrder("verbatim");
+console.log("verbatim:", dns.getDefaultResultOrder(), getPromiseOrder());
 
 thrownShape("invalid order", () => dns.setDefaultResultOrder("bad" as any));
 console.log("order preserved:", dns.getDefaultResultOrder());

@@ -5,9 +5,12 @@ pub(super) use aes::cipher::{
     generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit as AesBlockKeyInit,
 };
 pub(super) use aes::{Aes128, Aes192, Aes256};
+pub(super) use aes_09::{
+    Aes128 as Aes128CbcCipher, Aes192 as Aes192CbcCipher, Aes256 as Aes256CbcCipher,
+};
 pub(super) use base64::Engine as _;
 pub(super) use cbc::{
-    cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit},
+    cipher::{block_padding::Pkcs7, BlockModeDecrypt, BlockModeEncrypt, KeyIvInit},
     Decryptor, Encryptor,
 };
 pub(super) use hmac::{Hmac, KeyInit, Mac};
@@ -1027,32 +1030,32 @@ pub(super) fn compute_kmac(
 }
 
 pub(super) fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     Some(P256EcdsaSigningKey::random(&mut rng))
 }
 
 pub(super) fn generate_p384_signing_key() -> Option<P384EcdsaSigningKey> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     Some(P384EcdsaSigningKey::random(&mut rng))
 }
 
 pub(super) fn generate_p521_signing_key() -> Option<P521EcdsaSigningKey> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     Some(P521EcdsaSigningKey::random(&mut rng))
 }
 
 pub(super) fn generate_p256_secret_key() -> Option<P256SecretKey> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     Some(P256SecretKey::random(&mut rng))
 }
 
 pub(super) fn generate_p384_secret_key() -> Option<P384SecretKey> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     Some(P384SecretKey::random(&mut rng))
 }
 
 pub(super) fn generate_p521_secret_key() -> Option<P521SecretKey> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     Some(P521SecretKey::random(&mut rng))
 }
 
@@ -1116,7 +1119,7 @@ pub(super) fn generate_ecdh_key_pair_bytes(curve: EcNamedCurve) -> Option<(Vec<u
 }
 
 pub(super) fn rsa_oaep_encrypt(hash: HashAlgo, key: &RsaPublicKey, data: &[u8]) -> Option<Vec<u8>> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     match hash {
         HashAlgo::Sha1 => key
             .encrypt(&mut rng, Oaep::new::<rsa_sha1::Sha1>(), data)
@@ -1132,7 +1135,7 @@ pub(super) fn rsa_oaep_decrypt(
     key: &RsaPrivateKey,
     data: &[u8],
 ) -> Option<Vec<u8>> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     match hash {
         HashAlgo::Sha1 => key
             .decrypt_blinded(&mut rng, Oaep::new::<rsa_sha1::Sha1>(), data)
@@ -1198,7 +1201,7 @@ pub(super) fn rsa_pss_sign(
     data: &[u8],
     salt_len: usize,
 ) -> Option<Vec<u8>> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand_core_06::OsRng;
     match hash {
         HashAlgo::Sha256 => RsaPssSigningKey::<RsaSha256>::new_with_salt_len(key, salt_len)
             .try_sign_with_rng(&mut rng, data)

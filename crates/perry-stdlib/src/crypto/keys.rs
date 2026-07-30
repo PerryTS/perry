@@ -81,7 +81,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_sync(
         _ => return std::ptr::null_mut(),
     };
     let mut bytes = vec![0u8; byte_len];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand_core_06::OsRng.fill_bytes(&mut bytes);
     let buf = alloc_buffer_from_slice(&bytes);
     if !buf.is_null() {
         perry_runtime::buffer::mark_as_uint8array(buf as usize);

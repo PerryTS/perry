@@ -84,7 +84,7 @@ fslock = "0.2"
 ed25519-dalek = { version = "2.1", features = ["rand_core"], optional = true }
 sha2 = "0.11"
 hex.workspace = true
-rand = { version = "0.9", optional = true }
+rand = { version = "0.10", optional = true }
 # chrono is already a transitive dep through perry-stdlib; listing it
 # here makes the year accessor available to `perry native init`'s
 # LICENSE template substitution.

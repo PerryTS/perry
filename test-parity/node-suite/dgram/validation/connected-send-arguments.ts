@@ -11,22 +11,28 @@ function codeOf(fn: () => unknown): string {
 }
 
 const peer = dgram.createSocket("udp4");
-await new Promise<void>((resolve) => peer.bind(0, "127.0.0.1", () => resolve()));
 const socket = dgram.createSocket("udp4");
-await new Promise<void>((resolve) => {
-  socket.connect(peer.address().port, "127.0.0.1", () => resolve());
-});
+try {
+  await new Promise<void>((resolve) =>
+    peer.bind(0, "127.0.0.1", () => resolve())
+  );
+  await new Promise<void>((resolve) => {
+    socket.connect(peer.address().port, "127.0.0.1", () => resolve());
+  });
 
-console.log(
-  "destination while connected:",
-  codeOf(() => socket.send("x", peer.address().port, "127.0.0.1")),
-);
-console.log(
-  "range destination while connected:",
-  codeOf(() => socket.send(Buffer.from("x"), 0, 1, peer.address().port, "127.0.0.1")),
-);
-
-await Promise.all([
-  new Promise<void>((resolve) => socket.close(() => resolve())),
-  new Promise<void>((resolve) => peer.close(() => resolve())),
-]);
+  console.log(
+    "destination while connected:",
+    codeOf(() => socket.send("x", peer.address().port, "127.0.0.1")),
+  );
+  console.log(
+    "range destination while connected:",
+    codeOf(() =>
+      socket.send(Buffer.from("x"), 0, 1, peer.address().port, "127.0.0.1")
+    ),
+  );
+} finally {
+  await Promise.all([
+    new Promise<void>((resolve) => socket.close(() => resolve())),
+    new Promise<void>((resolve) => peer.close(() => resolve())),
+  ]);
+}
