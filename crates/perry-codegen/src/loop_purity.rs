@@ -87,8 +87,15 @@ pub(crate) fn loop_may_allocate(
 /// numeric updates never allocate, and typed-array element WRITES store into a
 /// fixed-size backing buffer that never grows. Generic `IndexSet` is NOT
 /// accepted: a plain JS-array index write can grow (reallocate) the backing
-/// store. This lets a `for (…) acc += arr[i]` reduction stay poll-free (LLVM can
-/// vectorize) while `keep.push({…})` (a Call) still gets its poll.
+/// store, while `keep.push({…})` (a Call) still gets its poll.
+///
+/// Note that a `for (…) acc += arr[i]` REDUCTION is not yet covered end to end:
+/// the element read is alloc-free on its own, but the `+` that consumes it goes
+/// through `is_inert`, which does not admit `BufferIndexGet` / `Uint8ArrayGet`.
+/// Admitting them is a real follow-up — a typed-array element read is a number
+/// by construction (#6996) — but it needs its own soundness argument for the
+/// dynamic-key lowerings that fall through to property lookup, so it is not
+/// bundled in here.
 fn stmt_alloc_free(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
     match s {
         Stmt::Expr(e) => expr_alloc_free(e, is_inert),
