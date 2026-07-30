@@ -89,7 +89,13 @@
     },
     "http2": {
       "pass": 32,
-      "total": 59
+      "total": 59,
+      "outcomes": {
+        "diff": 27,
+        "node_err": 0,
+        "compile_fail": 0,
+        "perry_err": 0
+      }
     },
     "https": {
       "pass": 5,

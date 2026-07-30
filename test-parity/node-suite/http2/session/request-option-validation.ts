@@ -23,6 +23,7 @@ try {
         ":authority": "localhost",
       }, { [key]: value });
       console.log(key, "accepted");
+      request.once("error", () => {});
       request.destroy();
     } catch (error: any) {
       console.log(key, error.name, error.code);
