@@ -93,7 +93,13 @@
     },
     "https": {
       "pass": 6,
-      "total": 47
+      "total": 47,
+      "outcomes": {
+        "diff": 41,
+        "node_err": 0,
+        "compile_fail": 0,
+        "perry_err": 0
+      }
     },
     "inspector": {
       "pass": 4,
