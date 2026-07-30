@@ -703,6 +703,7 @@ pub(super) fn compile_function(
         namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
+        current_closure_slot: None,
         enums,
         is_async_fn: f.is_async,
         is_strict_fn: f.is_strict,

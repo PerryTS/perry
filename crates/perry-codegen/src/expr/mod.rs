@@ -8,7 +8,7 @@
 //! error so a user running `--backend llvm` on richer TypeScript gets a
 //! one-line explanation instead of a silent broken binary.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
 
@@ -147,9 +147,10 @@ pub(crate) use scalar_slot_root::{
     root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
 };
 pub(crate) use shadow_slot::{
-    emit_persistent_shadow_root_barrier, emit_shadow_slot_bind_for_local, emit_shadow_slot_clear,
-    emit_shadow_slot_update_for_expr, enable_persistent_shadow_slot_for_array_alias,
-    expr_is_known_non_pointer_shadow_value,
+    current_closure_ptr_value, emit_persistent_shadow_root_barrier,
+    emit_shadow_slot_bind_for_local, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    enable_persistent_shadow_slot_for_array_alias, expr_is_known_non_pointer_shadow_value,
+    try_current_closure_ptr_value,
 };
 
 /// One in-flight inline-constructor return target. See
@@ -343,7 +344,23 @@ pub(crate) struct FnCtx<'a> {
     /// Inside a closure body, the LLVM SSA value name for the current
     /// closure pointer (`%this_closure`). `Expr::LocalGet` of a captured
     /// id uses this as the first arg to `js_closure_get_capture_bits`.
+    ///
+    /// Prefer [`current_closure_ptr_value`] over reading this directly — the
+    /// raw SSA parameter is NOT a GC root and goes stale the moment a
+    /// relocating collection runs inside the body (#7055).
     pub current_closure_ptr: Option<String>,
+    /// Inside a closure body, the entry-block alloca holding the NaN-boxed
+    /// `%this_closure` pointer, bound to a shadow-stack slot so the moving
+    /// collector marks AND rewrites it (#7055).
+    ///
+    /// `%this_closure` itself lives only in a register, and the copying minor
+    /// at a loop back-edge poll (`js_gc_loop_safepoint`) runs with precise
+    /// roots and no conservative stack scan — so a closure relocated mid-body
+    /// left every later `js_closure_get_capture_bits` reading recycled
+    /// from-space memory, silently returning 0 and turning every capture
+    /// read/write into a no-op. Reload through this slot at every capture
+    /// access instead.
+    pub current_closure_slot: Option<String>,
     /// Map from (enum_name, member_name) → enum value. Built once in
     /// `compile_module` from `hir.enums`. Used by `Expr::EnumMember`
     /// to lower enum references to constants.
@@ -1864,10 +1881,7 @@ pub(crate) fn is_compiler_private_async_i1_control_local(ctx: &FnCtx<'_>, id: u3
 
 pub(crate) fn load_boxed_local_pointer(ctx: &mut FnCtx<'_>, id: u32) -> Result<Option<String>> {
     if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
-        let closure_ptr = ctx
-            .current_closure_ptr
-            .clone()
-            .ok_or_else(|| anyhow!("boxed local capture but no current_closure_ptr"))?;
+        let closure_ptr = current_closure_ptr_value(ctx, "boxed local capture")?;
         let cap_bits = ctx.block().call(
             I64,
             "js_closure_get_capture_bits",

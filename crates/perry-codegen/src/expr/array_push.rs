@@ -432,9 +432,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.boxed_vars.contains(array_id) {
                 // Captured-through-closure boxed var.
                 if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                    let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
-                        anyhow!("ArrayPush boxed captured but no current_closure_ptr")
-                    })?;
+                    let closure_ptr =
+                        super::current_closure_ptr_value(ctx, "ArrayPush boxed captured")?;
                     let idx_str = capture_idx.to_string();
                     let blk = ctx.block();
                     let box_ptr = blk.call(
@@ -477,10 +476,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // module-global store-back below instead of returning.
             }
             if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                let closure_ptr = ctx
-                    .current_closure_ptr
-                    .clone()
-                    .ok_or_else(|| anyhow!("ArrayPush captured but no current_closure_ptr"))?;
+                let closure_ptr = super::current_closure_ptr_value(ctx, "ArrayPush captured")?;
                 let idx_str = capture_idx.to_string();
                 let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
                 ctx.block().call_void(
@@ -526,9 +522,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let new_box = nanbox_pointer_inline(blk, &new_handle);
             if ctx.boxed_vars.contains(array_id) {
                 if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                    let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
-                        anyhow!("ArrayPushSpread boxed captured but no current_closure_ptr")
-                    })?;
+                    let closure_ptr =
+                        super::current_closure_ptr_value(ctx, "ArrayPushSpread boxed captured")?;
                     let idx_str = capture_idx.to_string();
                     let blk = ctx.block();
                     let box_ptr = blk.call(
@@ -562,9 +557,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // GC-root slot (see the matching note in `Expr::ArrayPush`).
             }
             if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
-                    anyhow!("ArrayPushSpread captured but no current_closure_ptr")
-                })?;
+                let closure_ptr =
+                    super::current_closure_ptr_value(ctx, "ArrayPushSpread captured")?;
                 let idx_str = capture_idx.to_string();
                 let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
                 ctx.block().call_void(

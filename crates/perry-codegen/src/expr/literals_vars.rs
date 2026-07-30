@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, UpdateOp};
 
@@ -391,10 +391,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Captured by closure (from outer scope):
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
-                let closure_ptr = ctx
-                    .current_closure_ptr
-                    .clone()
-                    .ok_or_else(|| anyhow!("captured local but no current_closure_ptr"))?;
+                let closure_ptr = super::current_closure_ptr_value(ctx, "captured local")?;
                 let idx_str = capture_idx.to_string();
                 // If the captured id is a boxed var, the capture slot holds a
                 // raw box pointer. Read the capture, extract the box pointer,
@@ -578,10 +575,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Closure captures first (write through the runtime), then
             // locals, then module globals.
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
-                let closure_ptr = ctx
-                    .current_closure_ptr
-                    .clone()
-                    .ok_or_else(|| anyhow!("captured local set but no current_closure_ptr"))?;
+                let closure_ptr = super::current_closure_ptr_value(ctx, "captured local set")?;
                 let idx_str = capture_idx.to_string();
                 // Boxed captured var: read the box pointer from the
                 // capture slot, then js_box_set_bits to update the shared
@@ -709,10 +703,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             // Closure capture path: runtime get + add/sub + runtime set.
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
-                let closure_ptr = ctx
-                    .current_closure_ptr
-                    .clone()
-                    .ok_or_else(|| anyhow!("captured local update but no current_closure_ptr"))?;
+                let closure_ptr = super::current_closure_ptr_value(ctx, "captured local update")?;
                 let idx_str = capture_idx.to_string();
                 // Boxed captured var: deref box bits, modify, store back.
                 if ctx.boxed_vars.contains(id) {

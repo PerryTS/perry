@@ -34,9 +34,7 @@ pub(crate) fn emit_grow_mutator_writeback(
         // Boxed var: the slot / capture holds the BOX pointer; update the box
         // content so every closure sharing the box sees the new head.
         if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
-            let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
-                anyhow::anyhow!("unshift boxed capture but no current_closure_ptr")
-            })?;
+            let closure_ptr = crate::expr::current_closure_ptr_value(ctx, "unshift boxed capture")?;
             let idx_str = capture_idx.to_string();
             let blk = ctx.block();
             let box_ptr = blk.call(
@@ -60,10 +58,7 @@ pub(crate) fn emit_grow_mutator_writeback(
         // directly from a nested fn) — fall through to the global store.
     }
     if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
-        let closure_ptr = ctx
-            .current_closure_ptr
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("unshift capture but no current_closure_ptr"))?;
+        let closure_ptr = crate::expr::current_closure_ptr_value(ctx, "unshift capture")?;
         let idx_str = capture_idx.to_string();
         let new_bits = ctx.block().bitcast_double_to_i64(new_box);
         ctx.block().call_void(

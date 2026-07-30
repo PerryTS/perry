@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::type_analysis::compute_auto_captures;
@@ -91,9 +91,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // transitively-captured box. Read the
                         // capture slot RAW (it holds the box ptr
                         // bits) and propagate directly.
-                        let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
-                            anyhow!("nested boxed capture but no current_closure_ptr")
-                        })?;
+                        let closure_ptr =
+                            super::current_closure_ptr_value(ctx, "nested boxed capture")?;
                         let idx_str = _capture_idx.to_string();
                         let v = ctx.block().call(
                             I64,

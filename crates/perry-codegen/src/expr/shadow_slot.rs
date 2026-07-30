@@ -5,10 +5,38 @@
 //! `crate::expr::X` call paths resolve unchanged.
 use super::*;
 
+use anyhow::{anyhow, Result};
+
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr};
 
 use crate::types::{I32, I64, PTR};
+
+/// The current closure pointer to feed to `js_closure_get/set_capture_bits`,
+/// re-read from the shadow-rooted slot when one exists (#7055).
+///
+/// Every capture access MUST go through here rather than reusing the
+/// `%this_closure` SSA parameter. The parameter is a register value the
+/// collector cannot see: an evacuating young collection at a loop back-edge
+/// poll inside the body relocates the closure, rewrites every root it knows
+/// about, and then resets from-space — after which the register points at
+/// recycled memory whose `capture_count` no longer covers the index, so
+/// `js_closure_get_capture_bits` returns 0 and every subsequent boxed-capture
+/// read/write silently no-ops. Returns `None` when the body has no closure
+/// pointer at all (top-level functions/methods).
+pub(crate) fn try_current_closure_ptr_value(ctx: &mut FnCtx<'_>) -> Option<String> {
+    if let Some(slot) = ctx.current_closure_slot.clone() {
+        let bits = ctx.block().load(I64, &slot);
+        return Some(ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64));
+    }
+    ctx.current_closure_ptr.clone()
+}
+
+/// [`try_current_closure_ptr_value`] with the shared "no current_closure_ptr"
+/// diagnostic; `what` names the lowering that needed it.
+pub(crate) fn current_closure_ptr_value(ctx: &mut FnCtx<'_>, what: &str) -> Result<String> {
+    try_current_closure_ptr_value(ctx).ok_or_else(|| anyhow!("{what} but no current_closure_ptr"))
+}
 
 pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {

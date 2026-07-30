@@ -541,7 +541,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // relink with a concrete closure when they have one.
         Expr::LinkGeneratorPrototype { obj, is_async } => {
             let obj_val = lower_expr(ctx, obj)?;
-            if let Some(closure_ptr) = ctx.current_closure_ptr.clone() {
+            if let Some(closure_ptr) = crate::expr::try_current_closure_ptr_value(ctx) {
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_generator_attach_closure_prototype",

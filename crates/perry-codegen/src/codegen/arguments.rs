@@ -67,7 +67,13 @@ pub(crate) fn materialize_arguments_object(
                         .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ref)]);
                 nanbox_pointer_inline(ctx.block(), &closure_ptr)
             }
-            ArgumentsCallee::CurrentClosure => nanbox_pointer_inline(ctx.block(), "%this_closure"),
+            ArgumentsCallee::CurrentClosure => {
+                // #7055: through the shadow-rooted slot when there is one — the
+                // raw `%this_closure` register is not a GC root.
+                let ptr = crate::expr::try_current_closure_ptr_value(ctx)
+                    .unwrap_or_else(|| "%this_closure".to_string());
+                nanbox_pointer_inline(ctx.block(), &ptr)
+            }
         }
     };
     let args_obj = ctx.block().call(
