@@ -1070,3 +1070,36 @@ fn raw_arena_alloc_method_never_reaches_the_gc_trigger() {
          (#7022). The trigger belongs in `arena_cell_alloc`."
     );
 }
+
+#[test]
+fn emergency_block_reclaim_runs_with_no_live_arena_borrow() {
+    // The out-of-memory path is the second place a trigger can fire from an
+    // arena allocation: `reserve_arena_block` runs `gc_try_emergency_reclaim()`
+    // when the OS refuses memory, and that collection allocates into the arenas
+    // exactly like `gc_check_trigger` does. It gets the same rule. Driven here
+    // by a one-shot injected allocation failure rather than real heap
+    // exhaustion, so the invariant is asserted rather than assumed.
+    reset_gc_trigger_arena_probe();
+    force_next_block_alloc_failure();
+    // Bigger than any existing block, so a fresh block — and therefore
+    // `reserve_arena_block` — is unavoidable.
+    let ptr = OLD_ARENA.with(|a| unsafe { arena_cell_alloc(a.get(), BLOCK_SIZE + 1, 8) });
+    assert!(
+        !ptr.is_null(),
+        "the emergency retry must still hand back a usable block"
+    );
+    assert!(
+        gc_trigger_arena_calls() >= 2,
+        "the run must have reached BOTH the allocation-point trigger and the \
+         emergency reclaim ({} trigger(s) seen); without the second one this \
+         test asserts nothing",
+        gc_trigger_arena_calls()
+    );
+    assert_eq!(
+        gc_trigger_arena_borrow_depth(),
+        0,
+        "gc_try_emergency_reclaim() ran while an `&mut Arena` borrow was live — \
+         the emergency collection allocates into this same arena and may \
+         reallocate its `blocks` Vec underneath the borrow (#7022)"
+    );
+}

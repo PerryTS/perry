@@ -33,7 +33,8 @@ pub(crate) use block::{
 };
 #[cfg(test)]
 pub(crate) use block::{
-    gc_trigger_arena_borrow_depth, gc_trigger_arena_calls, reset_gc_trigger_arena_probe,
+    force_next_block_alloc_failure, gc_trigger_arena_borrow_depth, gc_trigger_arena_calls,
+    reset_gc_trigger_arena_probe,
 };
 pub(crate) use page_meta::{
     address_span_overlaps_pages, register_block_space, register_old_object_pages,

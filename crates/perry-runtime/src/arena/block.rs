@@ -43,35 +43,82 @@ pub(crate) const BLOCK_SIZE: usize = 1024 * 1024;
 pub(crate) const FRESH_GENERAL_BLOCK_MIN_USED_BYTES: usize = 256 * 1024;
 
 /// Create a block of at least the given size (for oversized allocations)
-fn alloc_block(min_size: usize) -> ArenaBlock {
-    let size = if min_size <= BLOCK_SIZE {
+#[inline]
+fn block_size_for(min_size: usize) -> usize {
+    if min_size <= BLOCK_SIZE {
         BLOCK_SIZE
     } else {
         // Round up to next multiple of BLOCK_SIZE
         min_size.div_ceil(BLOCK_SIZE) * BLOCK_SIZE
-    };
+    }
+}
+
+/// One raw block allocation. NEVER collects, so it is safe under an `&mut
+/// Arena` borrow. `injectable` marks the single call site a test is allowed to
+/// force a failure at (see [`force_next_block_alloc_failure`]) — the collection
+/// that `reserve_arena_block` then runs allocates blocks of its own through the
+/// non-injectable path, so the injected refusal cannot be consumed by the wrong
+/// allocation.
+fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
+    let size = block_size_for(min_size);
     let layout = Layout::from_size_align(size, 16).unwrap();
-    let mut data = unsafe { alloc(layout) };
-    if data.is_null() {
-        // The OS refused memory. Try one emergency full collection —
-        // idle-block dealloc and malloc sweep can return real pages —
-        // then retry once before giving up.
-        if crate::gc::gc_try_emergency_reclaim() {
-            data = unsafe { alloc(layout) };
-        }
+    #[cfg(test)]
+    if injectable && FORCE_BLOCK_ALLOC_FAILURE.with(|f| f.replace(false)) {
+        return None;
     }
+    #[cfg(not(test))]
+    let _ = injectable;
+    let data = unsafe { alloc(layout) };
     if data.is_null() {
-        panic!(
-            "Failed to allocate arena block of {} bytes (heap exhausted after emergency GC)",
-            size
-        );
+        return None;
     }
-    ArenaBlock {
+    Some(ArenaBlock {
         data,
         size,
         offset: 0,
         dead_cycles: 0,
+    })
+}
+
+/// Reserve a block, running one emergency full collection if the OS refuses
+/// memory — idle-block dealloc and the malloc sweep can return real pages.
+///
+/// **NO `&mut Arena` BORROW MAY BE LIVE ACROSS THIS CALL (#7022).** The
+/// emergency collection allocates into the arenas exactly like the
+/// allocation-point trigger does, so it can grow `self.blocks` underneath a
+/// borrow held by the frame that is extending the arena — the same aliasing
+/// violation [`arena_cell_alloc`] exists to avoid, on the out-of-memory path.
+/// `arena_cell_alloc` is the only caller; every `&mut self` path uses
+/// [`alloc_block_no_gc`].
+pub(crate) fn reserve_arena_block(min_size: usize) -> ArenaBlock {
+    if let Some(block) = try_alloc_block(min_size, true) {
+        return block;
     }
+    note_gc_trigger_arena_borrow_depth();
+    crate::gc::gc_try_emergency_reclaim();
+    if let Some(block) = try_alloc_block(min_size, false) {
+        return block;
+    }
+    panic!(
+        "Failed to allocate arena block of {} bytes (heap exhausted after emergency GC)",
+        block_size_for(min_size)
+    );
+}
+
+/// Block allocation for the `&mut self` paths — `Arena::alloc`, the C4b
+/// evacuation path's `alloc_excluding_pages`, and `arena_start_fresh_general_block`.
+/// Deliberately does NOT run the emergency reclaim: those callers hold a live
+/// arena borrow, and two of the three are already executing inside a collection,
+/// where starting another one is precisely what must not happen. The mutator
+/// allocation path — the one where heap exhaustion actually surfaces — keeps the
+/// reclaim via [`reserve_arena_block`].
+fn alloc_block_no_gc(min_size: usize) -> ArenaBlock {
+    try_alloc_block(min_size, false).unwrap_or_else(|| {
+        panic!(
+            "Failed to allocate arena block of {} bytes (heap exhausted)",
+            block_size_for(min_size)
+        )
+    })
 }
 
 /// A single arena block
@@ -91,8 +138,10 @@ pub(crate) struct ArenaBlock {
 }
 
 impl ArenaBlock {
+    /// The initial block of a thread's arena, built during `Arena::new` — i.e.
+    /// while the arena does not exist yet, so nothing may collect here.
     fn new() -> Self {
-        alloc_block(BLOCK_SIZE)
+        alloc_block_no_gc(BLOCK_SIZE)
     }
 
     /// Try to allocate within this block, respecting alignment
@@ -293,8 +342,14 @@ impl Arena {
         });
     }
 
+    /// Reserve **and** install a block. Never collects — see
+    /// [`alloc_block_no_gc`] for why.
     pub(crate) fn install_fresh_block(&mut self, size: usize) {
-        let fresh = alloc_block(size);
+        self.install_reserved_block(alloc_block_no_gc(size));
+    }
+
+    /// Install a block that was reserved with no arena borrow live (#7022).
+    pub(crate) fn install_reserved_block(&mut self, fresh: ArenaBlock) {
         let fresh_size = fresh.size;
         let fresh_base = fresh.data as usize;
         register_block_space(fresh_base, fresh_size, self.generation, self.space);
@@ -353,11 +408,29 @@ impl Arena {
     /// one. Split out of `alloc` for #7022 — see [`arena_cell_alloc`].
     #[inline]
     pub(crate) fn alloc_after_gc(&mut self, size: usize, align: usize) -> *mut u8 {
+        if let Some(ptr) = self.try_alloc_after_gc(size, align) {
+            return ptr;
+        }
+        // Still no room anywhere — need a fresh block. C4b-δ:
+        // prefer reusing a tombstoned slot (a block deallocated by
+        // `arena_reset_empty_blocks` after staying idle past the
+        // dealloc threshold) over growing the Vec, so block_idx
+        // semantics stay bounded even on workloads that churn
+        // through nursery blocks.
+        self.alloc_fresh_block(size, align)
+    }
+
+    /// The part of [`Self::alloc_after_gc`] that can be satisfied from blocks
+    /// the arena already owns. Returns `None` when a fresh block is needed —
+    /// which `arena_cell_alloc` reserves with no borrow live, because that
+    /// reservation can collect (#7022).
+    #[inline]
+    pub(crate) fn try_alloc_after_gc(&mut self, size: usize, align: usize) -> Option<*mut u8> {
         // Retry the (possibly newly-reset) current block. arena.current
         // may have been changed by arena_reset_empty_blocks to point
         // at the lowest reset block.
         if let Some(ptr) = self.try_block_alloc(self.current, size, align) {
-            return ptr;
+            return Some(ptr);
         }
 
         // Scan forward for any other block with space — the GC may
@@ -372,17 +445,10 @@ impl Arena {
                 self.current = i;
                 // Resync inline state to the new current block.
                 self.resync_inline_to_current();
-                return ptr;
+                return Some(ptr);
             }
         }
-
-        // Still no room anywhere — need a fresh block. C4b-δ:
-        // prefer reusing a tombstoned slot (a block deallocated by
-        // `arena_reset_empty_blocks` after staying idle past the
-        // dealloc threshold) over growing the Vec, so block_idx
-        // semantics stay bounded even on workloads that churn
-        // through nursery blocks.
-        self.alloc_fresh_block(size, align)
+        None
     }
 
     /// GC-free allocation. Used by paths that already run inside a collection
@@ -476,8 +542,26 @@ pub(crate) unsafe fn arena_cell_alloc(arena: *mut Arena, size: usize, align: usi
     note_gc_trigger_arena_borrow_depth();
     crate::gc::gc_check_trigger();
 
+    {
+        let _borrow = ArenaBorrowGuard::new();
+        if let Some(ptr) = (*arena).try_alloc_after_gc(size, align) {
+            return ptr;
+        }
+    }
+
+    // A fresh block is needed. `reserve_arena_block` runs an emergency full
+    // collection when the OS refuses memory, and that collection allocates into
+    // the arenas exactly like the trigger above — so it gets the same treatment:
+    // NO ARENA BORROW IS LIVE HERE either. (CodeRabbit caught this second path
+    // on the first cut of #7022, where the reservation still happened inside
+    // `alloc_fresh_block` under the borrow.)
+    let fresh = reserve_arena_block(size);
+
     let _borrow = ArenaBorrowGuard::new();
-    (*arena).alloc_after_gc(size, align)
+    (*arena).install_reserved_block(fresh);
+    (*arena)
+        .try_alloc_current(size, align)
+        .expect("freshly installed block should have space")
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +576,10 @@ pub(crate) unsafe fn arena_cell_alloc(arena: *mut Arena, size: usize, align: usi
 
 #[cfg(test)]
 thread_local! {
+    /// One-shot: make the next *injectable* block allocation report failure, so
+    /// a test can drive `reserve_arena_block`'s emergency-reclaim path without
+    /// needing the OS to actually refuse memory.
+    static FORCE_BLOCK_ALLOC_FAILURE: Cell<bool> = const { Cell::new(false) };
     /// Number of `&mut Arena` borrows currently live inside `arena_cell_alloc`.
     static ARENA_BORROW_DEPTH: Cell<u32> = const { Cell::new(0) };
     /// `ARENA_BORROW_DEPTH` sampled immediately before the most recent
@@ -544,8 +632,16 @@ pub(crate) fn gc_trigger_arena_calls() -> u32 {
     GC_TRIGGER_CALLS.with(Cell::get)
 }
 
+/// Arm the one-shot block-allocation failure consumed by
+/// `reserve_arena_block`'s first attempt.
+#[cfg(test)]
+pub(crate) fn force_next_block_alloc_failure() {
+    FORCE_BLOCK_ALLOC_FAILURE.with(|f| f.set(true));
+}
+
 #[cfg(test)]
 pub(crate) fn reset_gc_trigger_arena_probe() {
+    FORCE_BLOCK_ALLOC_FAILURE.with(|f| f.set(false));
     GC_TRIGGER_BORROW_DEPTH.with(|d| d.set(u32::MAX));
     GC_TRIGGER_CALLS.with(|c| c.set(0));
 }
