@@ -54,10 +54,6 @@ use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcR
 
 mod cluster_bind;
 mod dispatch_ext;
-// Unit-test binaries do not link the host stdlib/runtime archive that
-// provides the perry_ffi async bridge; without these the test link is at the
-// mercy of --gc-sections keeping/dropping the perry-ffi references pulled in
-// via the perry-ext-net rlib (same shims as perry-ext-net / perry-ext-fetch).
 mod handle_dispatch;
 mod http2_server;
 mod http2_session_settings;
@@ -69,9 +65,6 @@ mod request;
 mod response;
 mod response_fast;
 mod server;
-#[cfg(test)]
-#[cfg(test)]
-mod test_async_shims;
 mod tls;
 mod types;
 mod upgrade;
@@ -99,29 +92,20 @@ static GC_REGISTERED: Once = Once::new();
 /// same root cause as issue #35 for net.Socket listeners.
 pub(crate) fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named("perry-ext-http-server", scan_http_server_roots);
-        // #2532 — register the server pump + has-active with perry-runtime
-        // directly. In a workspace build perry-stdlib drains these via its
-        // `external-http-server-pump` arm, but an out-of-tree install links
-        // the prebuilt full stdlib with that arm compiled OUT — so without
-        // this the accepted requests would never be dispatched and the
-        // program would hang. Registration is idempotent on the runtime
-        // side, so the in-tree double-drain is a harmless no-op.
-        extern "C" {
-            fn js_register_aux_pump(f: extern "C" fn() -> i32);
-            fn js_register_aux_has_active(f: extern "C" fn() -> i32);
-        }
-        unsafe {
-            js_register_aux_pump(crate::server::js_node_http_server_process_pending);
-            js_register_aux_has_active(crate::server::js_node_http_server_has_active);
-        }
+        gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_server_roots);
+        // Register the extension pump for out-of-tree links where stdlib does
+        // not compile its HTTP pump arm. Runtime registration is idempotent.
+        perry_ffi::register_aux_event_pump(
+            crate::server::server::js_node_http_server_process_pending,
+            crate::server::server::js_node_http_server_has_active,
+        );
         // Wall 10 — register the handle property/method/property-set dispatch
         // extensions so erased-receiver `req.url` / `res.end(...)` etc. route to
         // our handles even when the linked perry-stdlib was built WITHOUT
         // `external-http-server-pump` (the prebuilt `full` stdlib used by
         // out-of-tree installs and `PERRY_NO_AUTO_OPTIMIZE=1`). See
         // `dispatch_ext.rs`.
-        crate::dispatch_ext::ensure_dispatch_extensions_registered();
+        crate::server::dispatch_ext::ensure_dispatch_extensions_registered();
     });
 }
 
@@ -231,7 +215,8 @@ mod tests {
 
     fn young_gc_value() -> f64 {
         f64::from_bits(
-            crate::types::POINTER_TAG | (young_gc_root() as u64 & crate::types::PTR_MASK),
+            crate::server::types::POINTER_TAG
+                | (young_gc_root() as u64 & crate::server::types::PTR_MASK),
         )
     }
 
@@ -242,7 +227,7 @@ mod tests {
 
     fn assert_nanbox_rewritten(before: f64, after: f64) {
         assert_ne!(after.to_bits(), before.to_bits());
-        let ptr = after.to_bits() & crate::types::PTR_MASK;
+        let ptr = after.to_bits() & crate::server::types::PTR_MASK;
         assert!(perry_runtime::arena::pointer_in_nursery(ptr as usize));
     }
 
@@ -267,7 +252,10 @@ mod tests {
         assert_eq!(s.keep_alive_timeout_buffer, 1_000.0);
         assert_eq!(s.request_timeout, 300_000.0);
         assert_eq!(s.idle_timeout, 0.0);
-        assert_eq!(s.max_headers_count.to_bits(), crate::types::TAG_NULL);
+        assert_eq!(
+            s.max_headers_count.to_bits(),
+            crate::server::types::TAG_NULL
+        );
         assert_eq!(s.max_requests_per_socket, 0.0);
         assert!(s.no_delay);
         assert!(!s.keep_alive);
@@ -282,41 +270,41 @@ mod tests {
         let handle = register_handle(HttpServer::with_handler(0));
         // Sanity: defaults visible through the FFI getter.
         assert_eq!(
-            crate::server::js_node_http_server_headers_timeout(handle),
+            crate::server::server::js_node_http_server_headers_timeout(handle),
             60_000.0
         );
         assert_eq!(
-            crate::server::js_node_http_server_keep_alive_timeout_buffer(handle),
+            crate::server::server::js_node_http_server_keep_alive_timeout_buffer(handle),
             1_000.0
         );
         // Set then read back.
-        crate::server::js_node_http_server_set_headers_timeout(handle, 0.0);
-        crate::server::js_node_http_server_set_keep_alive_timeout_buffer(handle, 250.0);
-        crate::server::js_node_http_server_set_idle_timeout(handle, 45_000.0);
-        crate::server::js_node_http_server_set_max_requests_per_socket(handle, 100.0);
+        crate::server::server::js_node_http_server_set_headers_timeout(handle, 0.0);
+        crate::server::server::js_node_http_server_set_keep_alive_timeout_buffer(handle, 250.0);
+        crate::server::server::js_node_http_server_set_idle_timeout(handle, 45_000.0);
+        crate::server::server::js_node_http_server_set_max_requests_per_socket(handle, 100.0);
         assert_eq!(
-            crate::server::js_node_http_server_headers_timeout(handle),
+            crate::server::server::js_node_http_server_headers_timeout(handle),
             0.0
         );
         assert_eq!(
-            crate::server::js_node_http_server_keep_alive_timeout_buffer(handle),
+            crate::server::server::js_node_http_server_keep_alive_timeout_buffer(handle),
             250.0
         );
         assert_eq!(
-            crate::server::js_node_http_server_idle_timeout(handle),
+            crate::server::server::js_node_http_server_idle_timeout(handle),
             45_000.0
         );
         assert_eq!(
-            crate::server::js_node_http_server_max_requests_per_socket(handle),
+            crate::server::server::js_node_http_server_max_requests_per_socket(handle),
             100.0,
         );
         // `setTimeout(ms, cb)` updates the idle timeout and registers
         // the cb as a `'timeout'` listener — returns the handle for chaining.
         let chained =
-            crate::server::js_node_http_server_set_timeout_method(handle, 9_999.0, 0xCAFE);
+            crate::server::server::js_node_http_server_set_timeout_method(handle, 9_999.0, 0xCAFE);
         assert_eq!(chained, handle);
         assert_eq!(
-            crate::server::js_node_http_server_idle_timeout(handle),
+            crate::server::server::js_node_http_server_idle_timeout(handle),
             9_999.0
         );
         let listener_count = get_handle::<HttpServer>(handle)
@@ -337,7 +325,7 @@ mod tests {
         perry_runtime::gc::js_shadow_slot_set(0, options.bits());
 
         let mut server = HttpServer::with_handler(0);
-        crate::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+        crate::server::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
 
         assert_eq!(server.headers_timeout, 111.0);
         assert_eq!(server.keep_alive_timeout, 222.0);
@@ -348,10 +336,7 @@ mod tests {
     #[test]
     fn gc_mutable_scanner_rewrites_server_wrapper_and_request_response_roots() {
         let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner_named(
-            "perry-ext-http-server",
-            scan_http_server_roots,
-        );
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_server_roots);
 
         let http_handler = young_gc_root();
         let http_listener = young_gc_root();
@@ -451,7 +436,7 @@ mod tests {
     /// lacking a throw path here we coerce to the nearest in-range value).
     #[test]
     fn request_timeout_is_sanitized_to_a_u64_safe_ms_count() {
-        use crate::server::sanitize_request_timeout;
+        use crate::server::server::sanitize_request_timeout;
 
         // Non-finite falls back to Node's 300s default rather than
         // saturating the cast.
@@ -492,17 +477,18 @@ mod tests {
     fn request_timeout_setter_paths_store_sanitized_values() {
         // Property-setter path: `Infinity` previously stored verbatim.
         let handle = register_handle(HttpServer::with_handler(0));
-        let ret = crate::server::js_node_http_server_set_request_timeout(handle, f64::INFINITY);
+        let ret =
+            crate::server::server::js_node_http_server_set_request_timeout(handle, f64::INFINITY);
         // The setter returns the assigned value (JS `a = b` evaluates to `b`)…
         assert!(ret.is_infinite());
         // …but the *stored* field is sanitized to the safe default.
         assert_eq!(
-            crate::server::js_node_http_server_request_timeout(handle),
+            crate::server::server::js_node_http_server_request_timeout(handle),
             300_000.0
         );
-        crate::server::js_node_http_server_set_request_timeout(handle, 7_500.0);
+        crate::server::server::js_node_http_server_set_request_timeout(handle, 7_500.0);
         assert_eq!(
-            crate::server::js_node_http_server_request_timeout(handle),
+            crate::server::server::js_node_http_server_request_timeout(handle),
             7_500.0
         );
         drop_handle(handle);
@@ -516,7 +502,7 @@ mod tests {
         perry_runtime::gc::js_shadow_slot_set(0, options.bits());
 
         let mut server = HttpServer::with_handler(0);
-        crate::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+        crate::server::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
         // Oversized `requestTimeout` clamped; unrelated knob untouched.
         assert_eq!(server.request_timeout, 9_007_199_254_740_991.0);
         assert_eq!(server.headers_timeout, 222.0);

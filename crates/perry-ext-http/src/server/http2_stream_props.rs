@@ -1,10 +1,10 @@
 use perry_ffi::get_handle;
 
-use crate::http2_server::{
+use crate::server::http2_server::{
     bind_handle_method, bool_value, empty_object_value, pairs_to_js_object, Http2StreamHandle,
 };
-use crate::request::handle_to_pointer_f64;
-use crate::types::TAG_UNDEFINED;
+use crate::server::request::handle_to_pointer_f64;
+use crate::server::types::TAG_UNDEFINED;
 
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_http2_stream_dispatch_property(

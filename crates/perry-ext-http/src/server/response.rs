@@ -19,8 +19,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::oneshot;
 
-use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
-use crate::types::{
+use crate::server::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
+use crate::server::types::{
     js_json_stringify, js_node_setheaders_entries_json, js_value_is_closure, jsvalue_to_body_bytes,
     jsvalue_to_owned_string, read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL,
     TAG_TRUE, TAG_UNDEFINED,
@@ -280,7 +280,7 @@ impl HyperResponseShape {
         // `StatusCode` constant, skipping `from_u16`'s numeric range-check
         // + `unwrap_or` on every response. Uncommon / custom codes keep the
         // parsing path, so the resulting status is identical for every code.
-        let status = crate::response_fast::status_code_const(self.status)
+        let status = crate::server::response_fast::status_code_const(self.status)
             .unwrap_or_else(|| StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
         let mut builder = Response::builder().status(status);
         // `res.statusMessage = 'Custom Message'` must reach the HTTP/1
@@ -377,7 +377,7 @@ impl HyperResponseShape {
             // timeouts servers commonly run with (Node's 5 s default, etc.), so
             // the per-response `format!` only fires for an unusual timeout. The
             // interned string equals `format!("timeout={}", secs)` exactly.
-            let value = crate::response_fast::keep_alive_header_value(secs)
+            let value = crate::server::response_fast::keep_alive_header_value(secs)
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("timeout={}", secs));
             self.headers.push(("Keep-Alive".to_string(), value));
@@ -1697,7 +1697,7 @@ pub extern "C" fn js_node_http_outgoing_message_new() -> i64 {
 /// flushes through the socket assigned via `res.assignSocket(socket)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -> i64 {
-    crate::ensure_gc_scanner_registered();
+    crate::server::ensure_gc_scanner_registered();
     let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
     let mut sr = ServerResponse::new(tx);
     sr.standalone = true;
@@ -1767,7 +1767,7 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
                 "ERR_STREAM_DESTROYED",
                 perry_ffi::ErrorKind::Error,
             );
-            crate::http2_server::call1(callback, f64::from_bits(err.bits()));
+            crate::server::http2_server::call1(callback, f64::from_bits(err.bits()));
         }
         return 0;
     }
@@ -1886,7 +1886,9 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         // message, or an uncommon code, falls back so its reason still reaches
         // the wire byte-for-byte.
         let mut head = match sr.status_message.as_deref() {
-            None => crate::response_fast::status_line_bytes(sr.status_code).map(str::to_string),
+            None => {
+                crate::server::response_fast::status_line_bytes(sr.status_code).map(str::to_string)
+            }
             Some(_) => None,
         }
         .unwrap_or_else(|| {

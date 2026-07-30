@@ -12,7 +12,7 @@
 /// dispatch (`class_handles.rs::composite_handle_method_dispatch`) asks each
 /// registered extension "is this handle yours?" — so the FIRST extension whose
 /// private counter reached that number claims the call. Next.js's HTTP server
-/// (perry-ext-http-server handle 1, via `register_handle`) therefore claimed
+/// (perry-ext-http handle 1, via `register_handle`) therefore claimed
 /// `socket.on('data', …)` on this crate's socket 1: the listener landed on the
 /// HTTP server, the reader delivered the MySQL greeting to an empty listener
 /// list, and mysql2's handshake hung to ETIMEDOUT.

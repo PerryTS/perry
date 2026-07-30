@@ -36,19 +36,23 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::TlsAcceptor;
 
-use crate::ensure_gc_scanner_registered;
-use crate::http2_session_settings::Http2SettingsState;
-use crate::request::{
+use crate::server::ensure_gc_scanner_registered;
+use crate::server::http2_session_settings::Http2SettingsState;
+use crate::server::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
 };
-use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
-use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest, HttpServer};
-use crate::tls::{
+use crate::server::response::{
+    alloc_server_response_for_request, HyperResponseShape, ResponseBody,
+};
+use crate::server::server::{
+    synthesize_default_response_if_needed, HttpPendingRequest, HttpServer,
+};
+use crate::server::tls::{
     build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
     parse_private_key,
 };
-use crate::types::{
+use crate::server::types::{
     extract_host, extract_port, js_promise_run_microtasks, js_value_is_closure,
     jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK,
     STRING_TAG, TAG_NULL, TAG_UNDEFINED,
@@ -438,7 +442,7 @@ pub unsafe extern "C" fn js_node_http2_create_server(first_arg: f64, second_arg:
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_array: i64) -> i64 {
     // Returns `server_handle` for chainability (#2129).
-    let parsed = crate::types::parse_listen_args(args_array);
+    let parsed = crate::server::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 443);
     let host = parsed
@@ -458,7 +462,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
     // #4914 — SO_REUSEPORT in cluster workers; plain bind otherwise.
-    let std_listener = match crate::cluster_bind::bind_listener(addr) {
+    let std_listener = match crate::server::cluster_bind::bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("[node:http2] bind {}:{} failed: {}", host, port, e);
@@ -470,7 +474,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
         eprintln!("[node:http2] set_nonblocking failed: {}", e);
         return server_handle;
     }
-    crate::cluster_bind::notify_listening(&host, actual_port);
+    crate::server::cluster_bind::notify_listening(&host, actual_port);
 
     // Capture `noDelay` (default true) under the same handle lock as the TLS
     // config so the accept loop can apply it per connection. Mirrors the HTTP/1
@@ -543,7 +547,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
                                 // server's `noDelay` on the raw TCP socket here,
                                 // before the TLS or h2c branch — the option
                                 // persists through any wrapping.
-                                crate::server::apply_accept_no_delay(&stream, no_delay);
+                                crate::server::server::apply_accept_no_delay(&stream, no_delay);
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 tokio::spawn(async move {
@@ -607,7 +611,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
     // assigned. The pump binds `this` to the server when it fires them
     // (#2132). See `server::drain_deferred_listen_for`.
     if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
-        crate::server::queue_deferred_listening_emit(&mut s.base, callback);
+        crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
     }
 
     // Closes #604 — `listen()` is now non-blocking; the unified

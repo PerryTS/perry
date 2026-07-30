@@ -53,7 +53,7 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 /// #6117 — rustls panics resolving the process-level CryptoProvider on the
 /// first `wss://` handshake when both `ring` and `aws-lc-rs` end up
-/// feature-unified into the final link (perry-ext-http-server brings ring;
+/// feature-unified into the final link (perry-ext-http brings ring;
 /// perry-ext-net brings aws-lc-rs). Install one explicitly before
 /// connecting. Idempotent — `install_default` errors (ignored) if a
 /// provider is already set. Same pattern as perry-ext-net's tls module.
@@ -992,7 +992,7 @@ pub extern "C" fn js_ws_server_close(handle: i64) {
 }
 
 /// Register an externally-provided WebSocket stream as a perry-ext-ws
-/// connection — used by perry-ext-http-server's upgrade path so that
+/// connection — used by perry-ext-http's upgrade path so that
 /// `Server.on('upgrade', ...)` integration flows through the same
 /// per-client IO loop and listener registry as standalone
 /// `WebSocketServer({port})` connections (issue #577 Phase 4).
@@ -1037,7 +1037,7 @@ where
 ///
 /// The handshake + per-client IO loop already happened: the host
 /// server's accept task (fastify's `handle_fastify_websocket_upgrade`
-/// or perry-ext-http-server's `handle_websocket_upgrade`) drove
+/// or perry-ext-http's `handle_websocket_upgrade`) drove
 /// `hyper::upgrade::on`, completed the tungstenite server handshake,
 /// and called `register_external_ws_stream` (which spawned
 /// `drive_server_client_io`). By the time the user's `'upgrade'`

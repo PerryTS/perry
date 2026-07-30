@@ -22,7 +22,7 @@ use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Han
 
 /// #6117 — rustls panics resolving the process-level CryptoProvider on the
 /// first `wss://` handshake when both `ring` and `aws-lc-rs` end up
-/// feature-unified into the final link (perry-ext-http-server brings ring;
+/// feature-unified into the final link (perry-ext-http brings ring;
 /// net/tls bring aws-lc-rs). Install one explicitly before connecting.
 /// Idempotent — `install_default` errors (ignored) if a provider is already
 /// set. Mirrors `net::mod` / `tls` (#4971) and `perry-ext-net`.
