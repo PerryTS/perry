@@ -295,6 +295,72 @@ pub(crate) fn auto_optimized_cross_features(
     cross_features
 }
 
+/// Feature names a workspace crate's `Cargo.toml` can satisfy in a
+/// `--features <crate>/<name>` request: the `[features]` table keys plus every
+/// optional dependency (an optional dep implicitly defines a same-named
+/// feature unless all its `dep:` references say otherwise — over-including
+/// those keeps this fail-open). `None` when the manifest is missing or
+/// unparseable, so callers skip filtering rather than dropping features a
+/// manifest they couldn't read might well declare.
+fn declared_feature_names(workspace_root: &Path, krate: &str) -> Option<BTreeSet<String>> {
+    let manifest_path = workspace_root.join("crates").join(krate).join("Cargo.toml");
+    let manifest: toml::Value = toml::from_str(&fs::read_to_string(manifest_path).ok()?).ok()?;
+    let mut names: BTreeSet<String> = manifest
+        .get("features")?
+        .as_table()?
+        .keys()
+        .cloned()
+        .collect();
+    let mut collect_optional = |deps: Option<&toml::Value>| {
+        let Some(table) = deps.and_then(|d| d.as_table()) else {
+            return;
+        };
+        for (name, spec) in table {
+            if spec.get("optional").and_then(|o| o.as_bool()) == Some(true) {
+                names.insert(name.clone());
+            }
+        }
+    };
+    collect_optional(manifest.get("dependencies"));
+    if let Some(targets) = manifest.get("target").and_then(|t| t.as_table()) {
+        for target_spec in targets.values() {
+            collect_optional(target_spec.get("dependencies"));
+        }
+    }
+    Some(names)
+}
+
+/// The `perry` binary's baked-in cross-feature list tracks the branch the
+/// binary was BUILT from, while the auto-optimize cargo build resolves against
+/// the workspace found on disk — and the two can skew (binary from branch A,
+/// checkout on branch B). One `perry-runtime/<feat>` the checkout doesn't
+/// declare fails the entire cargo resolve, and the silent prebuilt fallback
+/// then links without the ext-pump entrypoints the well-known routing loop
+/// already stripped stdlib features for — surfacing as undefined-`js_*` link
+/// errors far from the cause. Drop the unknown names instead (a feature the
+/// checkout never heard of gates nothing in its sources) and return them so
+/// the caller can say what was dropped.
+pub(crate) fn retain_workspace_declared_features(
+    workspace_root: &Path,
+    cross_features: &mut Vec<String>,
+) -> Vec<String> {
+    let mut dropped = Vec::new();
+    for krate in ["perry-runtime", "perry-stdlib"] {
+        let Some(declared) = declared_feature_names(workspace_root, krate) else {
+            continue;
+        };
+        let prefix = format!("{krate}/");
+        cross_features.retain(|entry| match entry.strip_prefix(&prefix) {
+            Some(feat) if !declared.contains(feat) => {
+                dropped.push(entry.clone());
+                false
+            }
+            _ => true,
+        });
+    }
+    dropped
+}
+
 /// Content fingerprint of every workspace source tree that lands in the
 /// auto-optimized archives: the crates this build compiles (the runtime/stdlib
 /// static wrappers and the tokio-using ext crates) plus their transitive

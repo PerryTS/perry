@@ -14,6 +14,12 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 flate2 = "1"
+# zstd codecs: `zlib.zstdCompressSync` / `createZstdDecompress`. When `zlib`
+# routes here, perry-stdlib's `compression` module is compiled out — this
+# archive must carry the full zstd surface too, or programs whose compiled JS
+# references it (undici's web-fetch content decoding does, unconditionally)
+# die at link with undefined `js_zlib_*zstd*` symbols.
+zstd.workspace = true
 # Brotli stream + one-shot support (#1843). Matches the version the
 # `compression` feature pulls into perry-stdlib.
 brotli = "8.0.2"

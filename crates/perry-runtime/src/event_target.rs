@@ -147,9 +147,13 @@ unsafe fn listener_signal(options: f64) -> Option<*mut ObjectHeader> {
 }
 
 fn set_event_field(event: *mut ObjectHeader, name: &[u8], value: f64) {
-    js_object_set_field_by_name(event, key(name), value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let event = scope.root_raw_mut_ptr(event);
+    let value = scope.root_nanbox_f64(value);
+    let field_key = key(name);
+    js_object_set_field_by_name(event.get_raw_mut_ptr(), field_key, value.get_nanbox_f64());
     crate::object::set_builtin_property_attrs(
-        event as usize,
+        event.get_raw_mut_ptr::<ObjectHeader>() as usize,
         String::from_utf8_lossy(name).into_owned(),
         crate::object::PropertyAttrs::new(true, false, true),
     );
@@ -326,6 +330,56 @@ pub extern "C" fn js_event_subclass_init(
 #[used]
 static KEEP_JS_EVENT_SUBCLASS_INIT: extern "C" fn(f64, f64, f64, u32, u32) -> f64 =
     js_event_subclass_init;
+
+/// `class X extends DOMException` — `super(message, name)` initializer
+/// (undici's `WebSocketError`, and its module-init `class Test extends
+/// DOMException` capability probe). The subclass instance is a registry-class
+/// object, not the ErrorHeader `new DOMException(...)` allocates, so stamp the
+/// DOMException surface onto `this`: `message`, `name` (default `"Error"`,
+/// matching `js_dom_exception_new`), and the legacy numeric `code` for that
+/// name.
+#[no_mangle]
+pub extern "C" fn js_dom_exception_subclass_init(this_value: f64, message: f64, name: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let exception = scope.root_nanbox_f64(this_value);
+    let message = scope.root_nanbox_f64(message);
+    let name = scope.root_nanbox_f64(name);
+    if value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).is_none() {
+        return undefined_value();
+    }
+    let message_ptr = optional_string_from_value(message.get_nanbox_f64(), b"");
+    let message_ptr = scope.root_string_ptr(message_ptr);
+    let name_ptr = optional_string_from_value(name.get_nanbox_f64(), b"Error");
+    let name_ptr = scope.root_string_ptr(name_ptr);
+    let name_string = unsafe {
+        let name_ptr = name_ptr.get_raw_const_ptr::<StringHeader>();
+        let len = (*name_ptr).byte_len as usize;
+        let data = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    };
+    set_event_field(
+        value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).unwrap(),
+        b"message",
+        crate::value::js_nanbox_string(message_ptr.get_raw_const_ptr::<StringHeader>() as i64),
+    );
+    set_event_field(
+        value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).unwrap(),
+        b"name",
+        crate::value::js_nanbox_string(name_ptr.get_raw_const_ptr::<StringHeader>() as i64),
+    );
+    set_event_field(
+        value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).unwrap(),
+        b"code",
+        dom_exception_code(&name_string),
+    );
+    undefined_value()
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build —
+/// `js_dom_exception_subclass_init` is a generated-code-only callee.
+#[used]
+static KEEP_JS_DOM_EXCEPTION_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
+    js_dom_exception_subclass_init;
 
 fn is_event_instance(event: *const ObjectHeader) -> bool {
     if event.is_null() {

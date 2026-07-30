@@ -525,7 +525,24 @@ pub(crate) fn build_optimized_libs(
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
     }
     let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace_root, hash);
-    let cross_features = auto_optimized_cross_features(ctx, &features, cli_features);
+    let mut cross_features = auto_optimized_cross_features(ctx, &features, cli_features);
+    // Binary/workspace skew guard: the baked-in list above tracks the branch
+    // this `perry` was built from, but cargo resolves it against the checkout
+    // on disk. One unknown `perry-runtime/<feat>` fails the whole resolve, and
+    // the prebuilt fallback below then links without the ext-pump entrypoints
+    // — undefined-`js_*` errors two stages away from the cause. Filter before
+    // the build stamp so the stamp keys on what actually gets built.
+    let dropped_features = retain_workspace_declared_features(&workspace_root, &mut cross_features);
+    if !dropped_features.is_empty() && matches!(format, OutputFormat::Text) {
+        eprintln!(
+            "  auto-optimize: dropping feature(s) this workspace does not declare: {} \
+             (this perry binary was likely built from a different branch than the \
+             checkout at {})",
+            dropped_features.join(", "),
+            workspace_root.display()
+        );
+    }
+    let cross_features = cross_features;
     // `-Zbuild-std` (the `PERRY_SIZE_PANIC=abort-immediate` path) requires an
     // explicit `--target`, and passing one relocates cargo's output into
     // `target/<triple>/release`. Resolve the effective triple ONCE so the
@@ -855,8 +872,12 @@ pub(crate) fn build_optimized_libs(
     if !status.success() {
         if matches!(format, OutputFormat::Text) {
             eprintln!(
-                "  auto-optimize: cargo build failed (exit {}), \
-                 using prebuilt libraries",
+                "  auto-optimize: cargo build failed ({}), \
+                 using prebuilt libraries. The prebuilt archives may lack the \
+                 feature-gated `js_*` entrypoints this compile routed to ext \
+                 crates; if the link fails with undefined symbols, fix the \
+                 cargo error above (or rebuild the workspace so it matches \
+                 this perry binary) and re-run.",
                 status
             );
         }

@@ -38,6 +38,7 @@ pub(crate) enum NativeInstanceBase {
     Set,
     Event,
     CustomEvent,
+    DomException,
 }
 
 /// The native base a parent NAME denotes, if any.
@@ -56,6 +57,7 @@ pub(crate) fn native_instance_base(name: &str) -> Option<NativeInstanceBase> {
         "Set" => Some(NativeInstanceBase::Set),
         "Event" => Some(NativeInstanceBase::Event),
         "CustomEvent" => Some(NativeInstanceBase::CustomEvent),
+        "DOMException" => Some(NativeInstanceBase::DomException),
         _ => None,
     }
 }
@@ -168,6 +170,23 @@ pub(crate) fn emit_native_instance_base_init(
                     (I32, &argc),
                     (I32, &is_custom),
                 ],
+            );
+        }
+        NativeInstanceBase::DomException => {
+            // `super(message, name)` — both optional (`new DOMException()` is
+            // legal; the runtime defaults name to "Error").
+            let arg0 = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            let arg1 = lowered_args
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            ctx.block().call(
+                DOUBLE,
+                "js_dom_exception_subclass_init",
+                &[(DOUBLE, this_box), (DOUBLE, &arg0), (DOUBLE, &arg1)],
             );
         }
     }
