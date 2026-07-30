@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2887 entries across 121 modules.
+Total: 2899 entries across 122 modules.
 
 ## Modules
 
@@ -116,6 +116,7 @@ Total: 2887 entries across 121 modules.
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
+- [`undici`](#undici)
 - [`url`](#url)
 - [`util`](#util)
 - [`util/types`](#utiltypes)
@@ -3527,6 +3528,26 @@ Total: 2887 entries across 121 modules.
 - `open` — module
 - `queryAll` — instance
 - `queryOne` — instance
+
+## `undici`
+
+### Classes
+
+- `Agent`
+- `ProxyAgent`
+
+### Methods
+
+- `Agent` — module
+- `ProxyAgent` — module
+- `close` — instance *(class: `ProxyAgent`)*
+- `close` — instance *(class: `Agent`)*
+- `destroy` — instance *(class: `ProxyAgent`)*
+- `destroy` — instance *(class: `Agent`)*
+- `fetch` — module
+- `getGlobalDispatcher` — module
+- `request` — module
+- `setGlobalDispatcher` — module
 
 ## `url`
 

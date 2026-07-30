@@ -38,6 +38,7 @@ members = [
     "crates/perry-ext-pg",
     "crates/perry-ext-mysql2",
     "crates/perry-ext-fetch",
+    "crates/perry-ext-undici",
     "crates/perry-ext-mongodb",
     "crates/perry-ext-ws",
     "crates/perry-ext-net",
@@ -198,6 +199,8 @@ codegen-units = 16
 codegen-units = 16
 [profile.release.package.perry-ext-net]
 codegen-units = 16
+[profile.release.package.perry-ext-undici]
+codegen-units = 16
 [profile.release.package.perry-ext-ws]
 codegen-units = 16
 
@@ -282,6 +285,8 @@ codegen-units = 16
 [profile.dist.package.perry-ext-ioredis]
 codegen-units = 16
 [profile.dist.package.perry-ext-net]
+codegen-units = 16
+[profile.dist.package.perry-ext-undici]
 codegen-units = 16
 [profile.dist.package.perry-ext-ws]
 codegen-units = 16
@@ -451,6 +456,7 @@ perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
 perry-ext-pg = { path = "crates/perry-ext-pg" }
 perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
 perry-ext-fetch = { path = "crates/perry-ext-fetch" }
+perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }
 perry-ext-net = { path = "crates/perry-ext-net" }

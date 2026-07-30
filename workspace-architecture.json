@@ -197,6 +197,10 @@
       "category": "binding",
       "decision": "externalize"
     },
+    "perry-ext-undici": {
+      "category": "binding",
+      "decision": "externalize"
+    },
     "perry-ext-http": {
       "category": "binding",
       "decision": "keep"

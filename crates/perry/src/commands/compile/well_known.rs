@@ -295,6 +295,13 @@ mod tests {
     }
 
     #[test]
+    fn undici_is_registered() {
+        let binding = lookup_well_known("undici").expect("undici must be a well-known binding");
+        assert_eq!(binding.krate, "perry-ext-undici");
+        assert_eq!(binding.lib, "perry_ext_undici");
+    }
+
+    #[test]
     fn node_prefix_stripped_on_lookup() {
         let bare = lookup_well_known("dotenv");
         let prefixed = lookup_well_known("node:dotenv");

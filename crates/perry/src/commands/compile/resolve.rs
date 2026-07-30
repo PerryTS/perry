@@ -137,7 +137,12 @@ mod tests;
 /// Packages that Perry provides built-in native extensions for.
 /// These must never be loaded into V8 — Perry's codegen intercepts all imports
 /// from these packages and replaces them with native calls.
-const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] = &["ioredis", "ethers", "mysql2", "ws", "dotenv"];
+// `undici` is here because it's an extremely common transitive install:
+// without the guard, a deep import reached through another package's
+// compiled JS would make the walker read undici's real sources (llhttp
+// wasm) instead of routing to perry-ext-undici.
+const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] =
+    &["ioredis", "ethers", "mysql2", "ws", "dotenv", "undici"];
 
 /// Check if a file path is inside a Perry native extension package (has built-in stdlib support)
 /// or a package that has perry.nativeLibrary in its package.json.

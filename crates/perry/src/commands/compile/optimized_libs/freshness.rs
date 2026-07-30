@@ -665,6 +665,12 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
         | "axios"
         | "node-fetch"
         | "fetch"
+        // undici — glue over the native fetch stack (network I/O family).
+        // The wrapper itself has no tokio dep today, but it rides the
+        // shared build so the driver auto-builds its archive alongside
+        // the runtime, and so a future `request()` implementation that
+        // pulls tokio/reqwest can't silently hit the CONTEXT collision.
+        | "undici"
         // HTTP server (hyper)
         | "fastify"
         // Database drivers (mongodb, sqlx, redis)

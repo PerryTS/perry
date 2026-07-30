@@ -192,13 +192,93 @@ lazy_static! {
     /// reqwest::Client (~250 KB) and the memory never gets reused.
     /// Sets a default User-Agent so endpoints that reject anonymous
     /// requests (api.github.com etc.) work out of the box.
-    static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
+    static ref HTTP_CLIENT: reqwest::Client = fetch_client_builder()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    /// Global proxy override installed by `undici.setGlobalDispatcher(new
+    /// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici).
+    /// `None` = direct connections through `HTTP_CLIENT`. Mirrors
+    /// perry-stdlib's copy byte-for-byte (this crate shadows the stdlib
+    /// symbols when `node-fetch`/`fetch` is imported — see
+    /// `prefer_well_known_before_stdlib`).
+    static ref GLOBAL_PROXY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> =
+        std::sync::RwLock::new(None);
+}
+
+/// Shared builder options for every fetch client (direct or proxied).
+fn fetch_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
         .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(16)
         .tcp_keepalive(std::time::Duration::from_secs(60))
+}
+
+/// The client every fetch path must use: the proxied client when a global
+/// dispatcher proxy is installed, the pooled direct client otherwise.
+fn fetch_client() -> reqwest::Client {
+    if let Ok(guard) = GLOBAL_PROXY_CLIENT.read() {
+        if let Some(client) = guard.as_ref() {
+            return client.clone();
+        }
+    }
+    HTTP_CLIENT.clone()
+}
+
+/// Build a reqwest client that routes every request through `uri`.
+/// `token` is undici's `ProxyAgent` token — the literal value for the
+/// `Proxy-Authorization` header (e.g. `Basic <base64>`). reqwest performs
+/// HTTP CONNECT tunneling for https targets automatically.
+fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client, String> {
+    let mut proxy =
+        reqwest::Proxy::all(uri).map_err(|e| format!("Invalid proxy URI \"{uri}\": {e}"))?;
+    if let Some(token) = token {
+        let value = reqwest::header::HeaderValue::from_str(token)
+            .map_err(|e| format!("Invalid proxy token: {e}"))?;
+        proxy = proxy.custom_http_auth(value);
+    }
+    fetch_client_builder()
+        .proxy(proxy)
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .map_err(|e| format!("Failed to build proxy client: {e}"))
+}
+
+/// Install (or clear) the process-wide fetch proxy. Called by
+/// perry-ext-undici's `setGlobalDispatcher` glue. A null `uri_ptr` clears
+/// the proxy (an undici `Agent` dispatcher = direct connections).
+/// Returns 1.0 on success, 0.0 when the proxy URI/token is invalid (the
+/// current proxy state is left unchanged in that case).
+///
+/// # Safety
+/// Both pointers must be null or Perry-runtime `StringHeader`s.
+#[no_mangle]
+pub unsafe extern "C" fn js_fetch_set_global_proxy(
+    uri_ptr: *const StringHeader,
+    token_ptr: *const StringHeader,
+) -> f64 {
+    if uri_ptr.is_null() {
+        if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
+            *guard = None;
+            return 1.0;
+        }
+        return 0.0;
+    }
+    let Some(uri) = read_str(uri_ptr).filter(|uri| !uri.is_empty()) else {
+        return 0.0;
+    };
+    let token = read_str(token_ptr).filter(|t| !t.is_empty());
+    match build_proxy_client(&uri, token.as_deref()) {
+        Ok(client) => {
+            if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
+                *guard = Some(client);
+                1.0
+            } else {
+                0.0
+            }
+        }
+        Err(_) => 0.0,
+    }
 }
 
 #[derive(Clone)]
@@ -422,13 +502,14 @@ fn do_fetch(
 ) {
     spawn_blocking(move || {
         let outcome = tokio::runtime::Handle::current().block_on(async move {
+            let client = fetch_client();
             let mut req = match method.to_uppercase().as_str() {
-                "POST" => HTTP_CLIENT.post(&url),
-                "PUT" => HTTP_CLIENT.put(&url),
-                "DELETE" => HTTP_CLIENT.delete(&url),
-                "PATCH" => HTTP_CLIENT.patch(&url),
-                "HEAD" => HTTP_CLIENT.head(&url),
-                _ => HTTP_CLIENT.get(&url),
+                "POST" => client.post(&url),
+                "PUT" => client.put(&url),
+                "DELETE" => client.delete(&url),
+                "PATCH" => client.patch(&url),
+                "HEAD" => client.head(&url),
+                _ => client.get(&url),
             };
             for (k, v) in &custom_headers {
                 req = req.header(k.as_str(), v.as_str());
@@ -711,7 +792,7 @@ pub unsafe extern "C" fn js_fetch_text(url_ptr: *const StringHeader) -> *mut Pro
     };
     spawn_blocking(move || {
         let result = tokio::runtime::Handle::current().block_on(async move {
-            HTTP_CLIENT
+            fetch_client()
                 .get(&url)
                 .send()
                 .await
@@ -763,12 +844,13 @@ pub unsafe extern "C" fn js_fetch_stream_start(
 
     spawn_blocking(move || {
         tokio::runtime::Handle::current().block_on(async move {
+            let client = fetch_client();
             let mut req = match method.to_uppercase().as_str() {
-                "POST" => HTTP_CLIENT.post(&url),
-                "PUT" => HTTP_CLIENT.put(&url),
-                "DELETE" => HTTP_CLIENT.delete(&url),
-                "PATCH" => HTTP_CLIENT.patch(&url),
-                _ => HTTP_CLIENT.get(&url),
+                "POST" => client.post(&url),
+                "PUT" => client.put(&url),
+                "DELETE" => client.delete(&url),
+                "PATCH" => client.patch(&url),
+                _ => client.get(&url),
             };
             for (k, v) in &custom_headers {
                 req = req.header(k.as_str(), v.as_str());

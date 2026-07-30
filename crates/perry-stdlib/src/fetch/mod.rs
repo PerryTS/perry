@@ -87,13 +87,92 @@ lazy_static::lazy_static! {
     /// the box. Per-request `User-Agent` headers passed via `fetch(url, {
     /// headers: { "User-Agent": "..." } })` override this default; reqwest's
     /// `RequestBuilder::header` replaces the client-level value.
-    static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
+    static ref HTTP_CLIENT: reqwest::Client = fetch_client_builder()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    /// Global proxy override installed by `undici.setGlobalDispatcher(new
+    /// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici).
+    /// `None` = direct connections through `HTTP_CLIENT`. The client is
+    /// prebuilt at install time so per-request cost stays a clone (Arc bump).
+    static ref GLOBAL_PROXY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> =
+        std::sync::RwLock::new(None);
+}
+
+/// Shared builder options for every fetch client (direct or proxied).
+fn fetch_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
         .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(16)
         .tcp_keepalive(std::time::Duration::from_secs(60))
+}
+
+/// The client every fetch path must use: the proxied client when a global
+/// dispatcher proxy is installed, the pooled direct client otherwise.
+pub(crate) fn fetch_client() -> reqwest::Client {
+    if let Ok(guard) = GLOBAL_PROXY_CLIENT.read() {
+        if let Some(client) = guard.as_ref() {
+            return client.clone();
+        }
+    }
+    HTTP_CLIENT.clone()
+}
+
+/// Build a reqwest client that routes every request through `uri`.
+/// `token` is undici's `ProxyAgent` token — the literal value for the
+/// `Proxy-Authorization` header (e.g. `Basic <base64>`). reqwest performs
+/// HTTP CONNECT tunneling for https targets automatically.
+fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client, String> {
+    let mut proxy =
+        reqwest::Proxy::all(uri).map_err(|e| format!("Invalid proxy URI \"{uri}\": {e}"))?;
+    if let Some(token) = token {
+        let value = reqwest::header::HeaderValue::from_str(token)
+            .map_err(|e| format!("Invalid proxy token: {e}"))?;
+        proxy = proxy.custom_http_auth(value);
+    }
+    fetch_client_builder()
+        .proxy(proxy)
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .map_err(|e| format!("Failed to build proxy client: {e}"))
+}
+
+/// Install (or clear) the process-wide fetch proxy. Called by
+/// perry-ext-undici's `setGlobalDispatcher` glue; also exported so any
+/// other binding can reuse it. A null `uri_ptr` clears the proxy
+/// (an undici `Agent` dispatcher = direct connections). Returns 1.0 on
+/// success, 0.0 when the proxy URI/token is invalid (the current proxy
+/// state is left unchanged in that case).
+///
+/// # Safety
+/// Both pointers must be null or Perry-runtime `StringHeader`s.
+#[no_mangle]
+pub unsafe extern "C" fn js_fetch_set_global_proxy(
+    uri_ptr: *const StringHeader,
+    token_ptr: *const StringHeader,
+) -> f64 {
+    if uri_ptr.is_null() {
+        if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
+            *guard = None;
+            return 1.0;
+        }
+        return 0.0;
+    }
+    let Some(uri) = string_from_header(uri_ptr).filter(|uri| !uri.is_empty()) else {
+        return 0.0;
+    };
+    let token = string_from_header(token_ptr).filter(|t| !t.is_empty());
+    match build_proxy_client(&uri, token.as_deref()) {
+        Ok(client) => {
+            if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
+                *guard = Some(client);
+                1.0
+            } else {
+                0.0
+            }
+        }
+        Err(_) => 0.0,
+    }
 }
 
 fn alloc_fetch_handle_id() -> usize {
@@ -319,7 +398,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
     };
 
     spawn(async move {
-        match HTTP_CLIENT.get(&url).send().await {
+        match fetch_client().get(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
                 let status_text = response
@@ -390,7 +469,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
     let auth_header = string_from_header(auth_header_ptr).unwrap_or_default();
 
     spawn(async move {
-        let client = HTTP_CLIENT.clone();
+        let client = fetch_client();
         let mut request = client.get(&url);
         if !auth_header.is_empty() {
             request = request.header("Authorization", &auth_header);
@@ -466,7 +545,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
     let body = string_from_header(body_ptr).unwrap_or_default();
 
     spawn(async move {
-        let client = HTTP_CLIENT.clone();
+        let client = fetch_client();
         let mut request = client.post(&url).header("Content-Type", "application/json");
         if !auth_header.is_empty() {
             request = request.header("Authorization", &auth_header);
@@ -548,7 +627,7 @@ pub unsafe extern "C" fn js_fetch_post(
         string_from_header(content_type_ptr).unwrap_or_else(|| "application/json".to_string());
 
     spawn(async move {
-        let client = HTTP_CLIENT.clone();
+        let client = fetch_client();
         match client
             .post(&url)
             .header("Content-Type", &content_type)
@@ -861,7 +940,7 @@ pub unsafe extern "C" fn js_fetch_text(
     };
 
     spawn(async move {
-        match HTTP_CLIENT.get(&url).send().await {
+        match fetch_client().get(&url).send().await {
             Ok(response) => match response.text().await {
                 Ok(text) => {
                     let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
@@ -918,7 +997,7 @@ pub unsafe extern "C" fn js_fetch_stream_start(
     );
     let sid = stream_id;
     spawn(async move {
-        let client = HTTP_CLIENT.clone();
+        let client = fetch_client();
         let mut request = match method.to_uppercase().as_str() {
             "POST" => client.post(&url),
             "PUT" => client.put(&url),

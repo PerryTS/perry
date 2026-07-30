@@ -313,6 +313,13 @@ fn cpu_only_wrappers_do_not_need_shared_tokio() {
 }
 
 #[test]
+fn undici_needs_shared_tokio() {
+    // perry-ext-undici is network-I/O-family glue over the native fetch
+    // stack; it rides the shared build (see the freshness.rs comment).
+    assert!(binding_needs_shared_tokio("undici"));
+}
+
+#[test]
 fn unknown_modules_default_to_workspace_path() {
     // Defensive default: if a module isn't in the allowlist,
     // treat it as CPU-only (existing v0.5.586 behavior).
@@ -342,6 +349,17 @@ fn explicit_node_fetch_import_still_routes_to_well_known_fetch() {
     let modules = well_known_iteration_set(&ctx);
 
     assert!(modules.contains("node-fetch"));
+}
+
+#[test]
+fn explicit_undici_import_routes_to_well_known_undici() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    ctx.native_module_imports.insert("undici".to_string());
+
+    let modules = well_known_iteration_set(&ctx);
+
+    assert!(modules.contains("undici"));
 }
 
 #[test]

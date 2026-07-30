@@ -6045,6 +6045,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-ext-undici"
+version = "0.5.1265"
+dependencies = [
+ "perry-ffi",
+ "perry-runtime",
+ "serde_json",
+]
+
+[[package]]
 name = "perry-ext-uuid"
 version = "0.5.1265"
 dependencies = [

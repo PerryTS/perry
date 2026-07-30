@@ -441,6 +441,32 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
+            // #466: `new ProxyAgent(...)` / `new Agent(...)` imported from
+            // `undici`. Same shape as the http/https Agent arm above: a
+            // receiver-less NativeMethodCall whose method is the exported
+            // class name, dispatched through the `undici` rows in
+            // NATIVE_MODULE_TABLE (perry-ext-undici's
+            // `js_undici_proxy_agent_new` / `js_undici_agent_new`). The
+            // var-decl machinery then tags the local as an
+            // ("undici", "ProxyAgent"|"Agent") native instance so
+            // `.close()` / `.destroy()` dispatch by class filter.
+            let undici_ctor = ctx
+                .lookup_native_module(&class_name)
+                .and_then(|(module, export)| match (module, export) {
+                    ("undici", Some(ctor @ ("ProxyAgent" | "Agent"))) => Some(ctor.to_string()),
+                    _ => None,
+                });
+            if let Some(ctor) = undici_ctor {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NativeMethodCall {
+                    module: "undici".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: ctor,
+                    args,
+                });
+            }
+
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("v8", Some("GCProfiler")))

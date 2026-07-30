@@ -571,3 +571,27 @@ repo = "https://github.com/digitalbazaar/forge"
 ref = "fa385f92440879601240020f158bed68e444e83a"
 ported-at = "1.4.0"
 date = "2026-07-30"
+
+# `undici` — Node's HTTP client library, served by perry's NATIVE
+# fetch/http stack instead of AOT-compiling undici's ~50k lines of JS.
+# Subset binding: ProxyAgent / Agent / setGlobalDispatcher /
+# getGlobalDispatcher are real; `fetch` re-uses the native Web Fetch
+# lowering; `request` and the pool/mock/stream surface are not
+# implemented. Targets undici's stable dispatcher API (unchanged
+# across 6.x → 7.x).
+[bindings.undici]
+crate = "perry-ext-undici"
+lib = "perry_ext_undici"
+tracking = "#466"
+
+# Upstream provenance pin (see PR #7031 / docs upstream-pins.md). undici's
+# stable dispatcher API (ProxyAgent/Agent/setGlobalDispatcher) is unchanged
+# across the 6.x/7.x/8.x majors this wrapper targets; the pin tracks one
+# release for provenance, not the API-compat range.
+[bindings.undici.upstream]
+version = "8.9.0"
+sha256 = "f554abb3e9352e04bc325208066a25c229163d8408bb1d5161db3d793445d69c"
+repo = "https://github.com/nodejs/undici"
+ref = "21a8e1ed1843e74c3004a2926c12bb0ceaca6b71"
+ported-at = "8.9.0"
+date = "2026-07-30"
