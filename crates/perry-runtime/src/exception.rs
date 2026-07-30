@@ -53,14 +53,14 @@ const MAX_TRY_DEPTH: usize = 1024;
 /// B (its stack frame doesn't exist there) — so the buffers, the depth
 /// counter, the current exception, and the finally-flag all have to
 /// live in TLS once `perry/thread` workers can run user code that
-/// throws. Previously all five were process-wide `static mut`s and would
+/// throws. Previously this state was process-wide `static mut` data and would
 /// corrupt under any concurrent throw.
-// arm64_32 fix: the three per-depth arrays are HEAP-allocated (`Box<[..]>`)
+// arm64_32 fix: the per-depth arrays are HEAP-allocated (`Box<[..]>`)
 // instead of stored inline in TLS. At MAX_TRY_DEPTH=1024 they are ~280KB of
 // initialized thread-local data (`jump_buffers` alone is 1024 * 256B = 256KB),
 // which overflows ld64's 64KB `__thread_data` cap for arm64_32 (and the ILP32
-// TLS layout generally). Boxing leaves only three fat pointers + scalars inline
-// in TLS; the arrays live on the heap. `[T]` indexing on `Box<[T]>` is
+// TLS layout generally). Boxing leaves only fat pointers + scalars inline in
+// TLS; the arrays live on the heap. `[T]` indexing on `Box<[T]>` is
 // unchanged, so the accessors below need no edits. (Mirrors the
 // TRANSITION_CACHE / VTABLE_IC / INTERN_TABLE boxing.)
 struct ExceptionState {
@@ -81,6 +81,10 @@ struct ExceptionState {
     /// `call_method_depth_*`). Indexed by try-depth, in lockstep with
     /// `jump_buffers`.
     call_method_depths: Box<[u32]>,
+    /// Recorded-prototype lookup stack depth. A getter can throw while
+    /// `resolve_inherited_field` is recursively walking; longjmp skips its
+    /// guard drops, so restore the stack to this try-entry savepoint.
+    prototype_resolution_depths: Box<[usize]>,
     /// #6559: dyn-eval interpreter state (rooted-stack length + interpreter
     /// call depth, packed) captured when each `try` was pushed. A throw
     /// `longjmp`s past interpreter Rust frames without running their
@@ -104,6 +108,7 @@ impl ExceptionState {
             shadow_savepoints: vec![ShadowSavepoint::EMPTY; MAX_TRY_DEPTH].into_boxed_slice(),
             runtime_handle_savepoints: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
+            prototype_resolution_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             #[cfg(feature = "dyn-eval")]
             dyn_eval_savepoints: vec![0u64; MAX_TRY_DEPTH].into_boxed_slice(),
             try_depth: 0,
@@ -142,6 +147,8 @@ pub extern "C" fn js_try_push() -> *mut i32 {
         // this `try` can restore it — `longjmp` skips the `CallMethodDepthGuard`
         // `Drop`s of the method frames it unwinds (#5591).
         (*s).call_method_depths[depth] = crate::object::call_method_depth_savepoint();
+        (*s).prototype_resolution_depths[depth] =
+            crate::object::prototype_chain::resolution_stack_savepoint();
         // #6559: capture the dyn-eval interpreter's rooted-stack length +
         // call depth, so a caught throw restores interpreter state exactly
         // like the shadow stack.
@@ -250,6 +257,9 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         // per caught throw and eventually wedges every method call into the
         // depth-guard fallback (#5591).
         crate::object::call_method_depth_restore((*s).call_method_depths[depth]);
+        crate::object::prototype_chain::resolution_stack_restore(
+            (*s).prototype_resolution_depths[depth],
+        );
         // #6559: restore the dyn-eval interpreter's rooted stack + call depth
         // (interpreter Rust frames unwound by this longjmp never run their
         // truncate/decrement epilogues).
@@ -449,6 +459,9 @@ pub(crate) fn test_unwind_innermost_shadow_restore() {
         let depth = (*s).try_depth - 1;
         shadow_stack_restore((*s).shadow_savepoints[depth]);
         runtime_handle_stack_restore((*s).runtime_handle_savepoints[depth]);
+        crate::object::prototype_chain::resolution_stack_restore(
+            (*s).prototype_resolution_depths[depth],
+        );
     });
 }
 

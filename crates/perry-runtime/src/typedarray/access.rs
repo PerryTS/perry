@@ -43,6 +43,52 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
     }
 }
 
+/// Read the exact raw lane bits of a BigInt64Array/BigUint64Array element.
+///
+/// Cross-crate structured-clone snapshots use this instead of
+/// `js_typed_array_get`, whose JS-facing result is a freshly allocated
+/// NaN-boxed BigInt pointer. Returning the stored lane avoids retaining a
+/// transient heap pointer and preserves all 64 bits.
+pub fn bigint_lane_bits(ta: *const TypedArrayHeader, index: i32) -> Option<u64> {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || index < 0 {
+        return None;
+    }
+    unsafe {
+        if crate::native_arena::is_native_typed_view(ta) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta),
+            );
+        }
+        if index as u32 >= (*ta).length || !matches!((*ta).kind, KIND_BIGINT64 | KIND_BIGUINT64) {
+            return None;
+        }
+        let slot = data_ptr(ta).add(index as usize * (*ta).elem_size as usize);
+        Some(*(slot as *const u64))
+    }
+}
+
+/// Restore one exact raw BigInt64Array/BigUint64Array lane.
+pub fn set_bigint_lane_bits(ta: *mut TypedArrayHeader, index: i32, bits: u64) -> bool {
+    let ta = clean_ta_ptr(ta) as *mut TypedArrayHeader;
+    if ta.is_null() || index < 0 {
+        return false;
+    }
+    unsafe {
+        if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
+            crate::native_arena::validate_view_alive(
+                crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
+            );
+        }
+        if index as u32 >= (*ta).length || !matches!((*ta).kind, KIND_BIGINT64 | KIND_BIGUINT64) {
+            return false;
+        }
+        let slot = data_ptr(ta).add(index as usize * (*ta).elem_size as usize);
+        *(slot as *mut u64) = bits;
+        true
+    }
+}
+
 /// Cold fallback for the codegen inline **checked i32** typed-array element read
 /// (integer-kind receivers reached through an erased / typed parameter — e.g.
 /// `function f(S: Int32Array){ return S[i] | 0 }`). The inline path serves the

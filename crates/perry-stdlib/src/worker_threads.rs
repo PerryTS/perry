@@ -515,6 +515,7 @@ extern "C" fn worker_threads_channels_microtask(_closure: *const ClosureHeader) 
 enum SerializedMessage {
     Json(String),
     ArrayBuffer(Vec<u8>),
+    BigIntTypedArray { kind: u8, lanes: Vec<u64> },
     TypedArray { kind: u8, elements: Vec<f64> },
 }
 
@@ -544,6 +545,17 @@ fn serialize_message(value: f64) -> SerializedMessage {
     if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
         let typed = raw as *const perry_runtime::typedarray::TypedArrayHeader;
         let len = perry_runtime::typedarray::js_typed_array_length(typed).max(0);
+        if matches!(
+            kind,
+            perry_runtime::typedarray::KIND_BIGINT64 | perry_runtime::typedarray::KIND_BIGUINT64
+        ) {
+            let lanes = (0..len)
+                .map(|index| {
+                    perry_runtime::typedarray::bigint_lane_bits(typed, index).unwrap_or_default()
+                })
+                .collect();
+            return SerializedMessage::BigIntTypedArray { kind, lanes };
+        }
         let elements = (0..len)
             .map(|index| perry_runtime::typedarray::js_typed_array_get(typed, index))
             .collect();
@@ -564,6 +576,16 @@ fn deserialize_message(msg: &SerializedMessage) -> f64 {
                 perry_runtime::buffer::js_buffer_set(buffer, index as i32, *value as i32);
             }
             f64::from_bits(JSValue::pointer(buffer as *const u8).bits())
+        }
+        SerializedMessage::BigIntTypedArray { kind, lanes } => {
+            let typed = perry_runtime::typedarray::js_typed_array_new_empty(
+                *kind as i32,
+                lanes.len() as i32,
+            );
+            for (index, bits) in lanes.iter().enumerate() {
+                perry_runtime::typedarray::set_bigint_lane_bits(typed, index as i32, *bits);
+            }
+            f64::from_bits(JSValue::pointer(typed as *const u8).bits())
         }
         SerializedMessage::TypedArray { kind, elements } => {
             if *kind == perry_runtime::typedarray::KIND_UINT8 {
@@ -610,6 +632,7 @@ fn message_value_is_uncloneable(value: f64, visited: &mut HashSet<usize>) -> boo
     }
     if raw < 0x10000
         || perry_runtime::buffer::is_registered_buffer(raw)
+        || perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some()
         || perry_runtime::set::is_registered_set(raw)
         || perry_runtime::shared_sab::is_shared_sab(raw)
     {

@@ -25,6 +25,7 @@
 //! `TAG_NULL`, so a recorded-null entry is distinguishable from "no entry
 //! recorded" (default prototype); in the meta record, 0 means unset.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -43,6 +44,46 @@ pub(crate) fn array_static_proto_recorded() -> bool {
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
 static OBJECT_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+thread_local! {
+    /// Owners currently walking a recorded prototype chain. Although
+    /// `Object.setPrototypeOf` normally rejects cycles, residual/native owners
+    /// and custom-construction links can still expose a malformed chain. Keep
+    /// recursive property lookup bounded and stop on a repeated owner.
+    static PROTOTYPE_RESOLUTION_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
+
+struct PrototypeResolutionGuard;
+
+impl PrototypeResolutionGuard {
+    fn enter(owner: usize) -> Option<Self> {
+        PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.len() >= MAX_PROTOTYPE_RESOLUTION_DEPTH || stack.contains(&owner) {
+                return None;
+            }
+            stack.push(owner);
+            Some(Self)
+        })
+    }
+}
+
+impl Drop for PrototypeResolutionGuard {
+    fn drop(&mut self) {
+        PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+            stack.borrow_mut().pop();
+        });
+    }
+}
+
+pub(crate) fn resolution_stack_savepoint() -> usize {
+    PROTOTYPE_RESOLUTION_STACK.with(|stack| stack.borrow().len())
+}
+
+pub(crate) fn resolution_stack_restore(depth: usize) {
+    PROTOTYPE_RESOLUTION_STACK.with(|stack| stack.borrow_mut().truncate(depth));
+}
+
 /// Latched true by the first recorded `Object.setPrototypeOf`. Lets hot
 /// per-object probes (e.g. JSON.stringify's `toJSON` fast-negative check,
 /// #6009) skip the map mutex entirely in processes that never re-prototype
@@ -323,6 +364,7 @@ pub(crate) fn resolve_inherited_field(
     obj_ptr: usize,
     key: *const crate::StringHeader,
 ) -> Option<crate::value::JSValue> {
+    let _guard = PrototypeResolutionGuard::enter(obj_ptr)?;
     let proto_bits = object_static_prototype(obj_ptr)?;
     if proto_bits == TAG_NULL {
         return None;
@@ -387,5 +429,45 @@ pub(crate) fn resolve_inherited_field(
         None
     } else {
         Some(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_lookup_stops_on_recorded_prototype_cycle() {
+        let first = crate::object::js_object_alloc(0, 0);
+        let second = crate::object::js_object_alloc(0, 0);
+        object_set_static_prototype(
+            first as usize,
+            crate::value::js_nanbox_pointer(second as i64).to_bits(),
+        );
+        object_set_static_prototype(
+            second as usize,
+            crate::value::js_nanbox_pointer(first as i64).to_bits(),
+        );
+        let missing = crate::string::js_string_from_bytes(b"missing".as_ptr(), 7);
+        assert!(resolve_inherited_field(first as usize, missing).is_none());
+        assert!(PROTOTYPE_RESOLUTION_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn exception_unwind_restores_resolution_stack_savepoint() {
+        let base_depth = resolution_stack_savepoint();
+        let _jump_buffer = crate::exception::js_try_push();
+        let first = PrototypeResolutionGuard::enter(usize::MAX - 1).unwrap();
+        let second = PrototypeResolutionGuard::enter(usize::MAX).unwrap();
+        assert_eq!(resolution_stack_savepoint(), base_depth + 2);
+
+        // A real longjmp skips these drops. Forget the guards to model that
+        // behavior, then replay js_throw's savepoint restoration.
+        std::mem::forget(first);
+        std::mem::forget(second);
+        crate::exception::test_unwind_innermost_shadow_restore();
+        crate::exception::js_try_end();
+
+        assert_eq!(resolution_stack_savepoint(), base_depth);
     }
 }

@@ -32,9 +32,9 @@ mod transform;
 // such item by name to keep those paths resolving. Inherent/no-path-referenced
 // items need no re-export.
 pub use access::{
-    js_typed_array_at, js_typed_array_copy_within, js_typed_array_get,
+    bigint_lane_bits, js_typed_array_at, js_typed_array_copy_within, js_typed_array_get,
     js_typed_array_index_get_dynamic, js_typed_array_length, js_typed_array_set,
-    js_typed_array_set_from, js_uint8array_get, js_uint8array_set,
+    js_typed_array_set_from, js_uint8array_get, js_uint8array_set, set_bigint_lane_bits,
 };
 pub(crate) use construct::typed_array_from_source_raw_values;
 pub use construct::{js_typed_array_new, js_typed_array_new_empty, js_typed_array_new_from_array};
@@ -1119,6 +1119,17 @@ mod tests {
             assert_eq!(check(KIND_INT32, 1e21), -559939584.0);
             assert_eq!(check(KIND_UINT32, -1.0), 4294967295.0);
             assert_eq!(check(KIND_INT8, 1e21), 0.0);
+        }
+    }
+
+    #[test]
+    fn bigint_lane_snapshot_helpers_preserve_all_64_bits() {
+        for kind in [KIND_BIGINT64, KIND_BIGUINT64] {
+            let typed = typed_array_alloc(kind, 2);
+            assert!(set_bigint_lane_bits(typed, 0, u64::MAX));
+            assert!(set_bigint_lane_bits(typed, 1, 9_007_199_254_740_993));
+            assert_eq!(bigint_lane_bits(typed, 0), Some(u64::MAX));
+            assert_eq!(bigint_lane_bits(typed, 1), Some(9_007_199_254_740_993));
         }
     }
 }

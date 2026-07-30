@@ -47,6 +47,33 @@ console.log(
   view.join(","),
 );
 
+const ints = new Int32Array([-1, 2147483647]);
+sender.postMessage(ints);
+ints[0] = 7;
+const intsPacket = receiveMessageOnPort(receiver);
+const clonedInts = intsPacket?.message;
+console.log(
+  "int32",
+  clonedInts instanceof Int32Array,
+  clonedInts.join(","),
+  ints.join(","),
+);
+
+const bigs = new BigUint64Array([
+  18446744073709551615n,
+  9007199254740993n,
+]);
+sender.postMessage(bigs);
+bigs[0] = 1n;
+const bigsPacket = receiveMessageOnPort(receiver);
+const clonedBigs = bigsPacket?.message;
+console.log(
+  "biguint64",
+  clonedBigs instanceof BigUint64Array,
+  clonedBigs.join(","),
+  bigs.join(","),
+);
+
 const channel = new MessageChannel();
 console.log(
   "broadcast-port",
@@ -111,6 +138,9 @@ channel.port2.close();
         String::from_utf8_lossy(&run.stdout),
         concat!(
             "typed true 3,1,4 9,1,4\n",
+            "int32 true -1,2147483647 7,2147483647\n",
+            "biguint64 true 18446744073709551615,9007199254740993 ",
+            "1,9007199254740993\n",
             "broadcast-port DataCloneError 25\n",
             "closed InvalidStateError 11\n",
             "marked-root DataCloneError 25\n",
