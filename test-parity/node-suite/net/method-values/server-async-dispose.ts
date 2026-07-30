@@ -8,5 +8,13 @@ console.log("listening before:", (server as any)["listening"]);
 const result = server[Symbol.asyncDispose]();
 console.log("asyncDispose result then:", typeof result?.then);
 
-await result;
-console.log("asyncDispose resolved:", (server as any)["listening"], (server as any).closed);
+try {
+  await result;
+  console.log(
+    "asyncDispose resolved:",
+    (server as any)["listening"],
+    (server as any).closed,
+  );
+} catch (error: any) {
+  console.log("asyncDispose rejected:", error.name, error.code);
+}

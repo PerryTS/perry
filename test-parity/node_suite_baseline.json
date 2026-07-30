@@ -1,8 +1,8 @@
 {
   "_schema": {
-    "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass; dropping below is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
+    "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass and total >= floor.total; dropping below either is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
     "oracle": "node v26.5.0 (pinned by .node-version)",
-    "note": "Full pass sets the floor for deterministic modules. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console uses a full floor (119) for its deterministic content. Three clean focused Perry runs against Node 26.5.0 set the expanded HTTP floor at a stable 22/52, with no crashes or timeouts. A clean node-26 run at 2810/2863 (98.1%) refreshed the floors, then an independent Node 26.5.0 run set the deterministic child_process floor at 43/53."
+    "note": "Full pass sets the floor for deterministic modules. Timing/racy modules (net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console uses a full floor (119) for its deterministic content. Three clean focused Perry runs against Node 26.5.0 set the expanded HTTP floor at a stable 22/52 and the expanded net floor at 16/47, with no crashes or timeouts. The granular http2 suite is stable at 32/59 with no margin. A clean node-26 run at 2810/2863 (98.1%) refreshed the floors, then an independent Node 26.5.0 run set the deterministic child_process floor at 43/53."
   },
   "modules": {
     "assert": {
@@ -88,8 +88,14 @@
       "total": 52
     },
     "http2": {
-      "pass": 8,
-      "total": 9
+      "pass": 32,
+      "total": 59,
+      "outcomes": {
+        "diff": 27,
+        "node_err": 0,
+        "compile_fail": 0,
+        "perry_err": 0
+      }
     },
     "https": {
       "pass": 6,
@@ -114,8 +120,14 @@
       "total": 69
     },
     "net": {
-      "pass": 12,
-      "total": 13
+      "pass": 16,
+      "total": 47,
+      "outcomes": {
+        "diff": 31,
+        "node_err": 0,
+        "compile_fail": 0,
+        "perry_err": 0
+      }
     },
     "node-core": {
       "pass": 2,
