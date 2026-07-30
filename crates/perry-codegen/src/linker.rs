@@ -266,26 +266,9 @@ fn build_clang_compile_plan(
 /// resulting `.o`, and clean up both on success. On failure the temp files
 /// are left behind for debugging — the caller can `grep /tmp/perry_llvm_*`.
 pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Result<Vec<u8>> {
-    let tmp_dir = env::temp_dir();
-    let pid = std::process::id();
-    // Per-call unique counter — strictly monotonic, no collisions across
-    // rayon workers in the same process. We still mix in the wall-clock
-    // nanos for cross-process distinctness (two `perry` invocations can
-    // share /tmp), but the counter is what guarantees in-process safety.
-    let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let wall_nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let ll_path = tmp_dir.join(format!("perry_llvm_{}_{}_{}.ll", pid, wall_nonce, counter));
-    let obj_path = tmp_dir.join(format!("perry_llvm_{}_{}_{}.o", pid, wall_nonce, counter));
-
-    {
-        let mut f = fs::File::create(&ll_path)
-            .with_context(|| format!("Failed to create temp .ll file at {}", ll_path.display()))?;
-        f.write_all(ll_text.as_bytes())?;
-    }
-
+    // Validate the toolchain before creating the potentially large `.ll`
+    // scratch file. Unsupported clang releases should fail without leaving
+    // an artifact that was never passed to the compiler.
     let clang = find_clang().context(if cfg!(windows) {
         "clang not found. Install LLVM with one of:\n\
          \n\
@@ -307,6 +290,26 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
          PERRY_LLVM_CLANG to the path of clang. Run `perry doctor` to verify the install."
     })?;
     ensure_supported_clang(&clang)?;
+
+    let tmp_dir = env::temp_dir();
+    let pid = std::process::id();
+    // Per-call unique counter — strictly monotonic, no collisions across
+    // rayon workers in the same process. We still mix in the wall-clock
+    // nanos for cross-process distinctness (two `perry` invocations can
+    // share /tmp), but the counter is what guarantees in-process safety.
+    let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let wall_nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let ll_path = tmp_dir.join(format!("perry_llvm_{}_{}_{}.ll", pid, wall_nonce, counter));
+    let obj_path = tmp_dir.join(format!("perry_llvm_{}_{}_{}.o", pid, wall_nonce, counter));
+
+    {
+        let mut f = fs::File::create(&ll_path)
+            .with_context(|| format!("Failed to create temp .ll file at {}", ll_path.display()))?;
+        f.write_all(ll_text.as_bytes())?;
+    }
 
     let plan = build_clang_compile_plan(
         clang.clone(),
@@ -660,12 +663,25 @@ pub const MINIMUM_CLANG_MAJOR: u32 = 15;
 /// accepting wrappers that write their version banner to stderr.
 pub fn clang_version_output(clang: &Path) -> Option<String> {
     let output = Command::new(clang).arg("--version").output().ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !stdout.is_empty() {
-        return Some(stdout);
+    select_clang_version_output(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+fn select_clang_version_output(stdout: &str, stderr: &str) -> Option<String> {
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    if parse_clang_major_version(stdout).is_some() {
+        return Some(stdout.to_string());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    (!stderr.is_empty()).then_some(stderr)
+    if parse_clang_major_version(stderr).is_some() {
+        return Some(stderr.to_string());
+    }
+    if !stdout.is_empty() {
+        return Some(stdout.to_string());
+    }
+    (!stderr.is_empty()).then(|| stderr.to_string())
 }
 
 /// Parse the major release from standard clang version banners, including
@@ -1098,6 +1114,22 @@ mod tests {
             Some(18)
         );
         assert_eq!(parse_clang_major_version("not a clang banner"), None);
+    }
+
+    #[test]
+    fn version_banner_on_stderr_wins_over_stdout_wrapper_noise() {
+        let selected = select_clang_version_output(
+            "wrapper: selecting system toolchain",
+            "Ubuntu clang version 14.0.0-1ubuntu1.1",
+        );
+        assert_eq!(
+            selected.as_deref(),
+            Some("Ubuntu clang version 14.0.0-1ubuntu1.1")
+        );
+        assert_eq!(
+            select_clang_version_output("clang version 18.1.8", "warning").as_deref(),
+            Some("clang version 18.1.8")
+        );
     }
 
     #[test]
