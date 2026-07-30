@@ -536,8 +536,11 @@ pub(crate) unsafe fn nm_dispatch_inspector(
         ("inspector.Session", "disconnect") | ("inspector/promises.Session", "disconnect") => {
             crate::node_inspector::js_node_inspector_session_disconnect(obj as usize as i64)
         }
-        ("inspector.Session", "post") | ("inspector/promises.Session", "post") => {
+        ("inspector.Session", "post") => {
             crate::node_inspector::js_node_inspector_session_post(obj as usize as i64, arg(0), arg(1), arg(2))
+        }
+        ("inspector/promises.Session", "post") => {
+            crate::node_inspector::js_node_inspector_promises_session_post(obj as usize as i64, arg(0), arg(1), arg(2))
         }
         ("inspector.Network", "requestWillBeSent")
         | ("inspector.Network", "responseReceived")

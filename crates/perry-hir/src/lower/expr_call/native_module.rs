@@ -307,6 +307,19 @@ pub(super) fn try_native_module_methods(
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
+    // `Session` is a class export. A direct call is not construction, even
+    // though the native constructor fast path handles `new Session()`.
+    if let ast::Expr::Ident(ident) = expr {
+        if matches!(ctx.lookup_native_module(ident.sym.as_ref()), Some(("inspector/promises", Some("Session")))) {
+            return Ok(Ok(Expr::NativeMethodCall {
+                module: "inspector/promises".to_string(),
+                class_name: None,
+                object: None,
+                method: "SessionCall".to_string(),
+                args,
+            }));
+        }
+    }
     // Check for native module method calls (e.g., mysql.createConnection())
     if let ast::Expr::Member(member) = expr {
         // Bundled mysql2 (webpack/turbopack): when a bundler inlines mysql2
