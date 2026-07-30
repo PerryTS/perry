@@ -617,8 +617,8 @@ pub unsafe extern "C" fn js_crypto_secure_heap_used() -> *mut ObjectHeader {
 }
 
 // Type aliases for AES-256-CBC
-pub(super) type Aes256CbcEnc = Encryptor<Aes256>;
-pub(super) type Aes256CbcDec = Decryptor<Aes256>;
+pub(super) type Aes256CbcEnc = Encryptor<Aes256CbcCipher>;
+pub(super) type Aes256CbcDec = Decryptor<Aes256CbcCipher>;
 
 /// AES-256-CBC encryption
 /// crypto.createCipheriv('aes-256-cbc', key, iv) -> string (base64)
@@ -670,7 +670,7 @@ pub unsafe extern "C" fn js_crypto_aes256_encrypt(
     buf[..data.len()].copy_from_slice(&data);
 
     // Encrypt with PKCS7 padding
-    let ciphertext = match cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, data.len()) {
+    let ciphertext = match cipher.encrypt_padded::<Pkcs7>(&mut buf, data.len()) {
         Ok(ct) => ct,
         Err(_) => return std::ptr::null_mut(),
     };
@@ -729,7 +729,7 @@ pub unsafe extern "C" fn js_crypto_aes256_decrypt(
     };
 
     // Decrypt with PKCS7 padding
-    let plaintext = match cipher.decrypt_padded_mut::<Pkcs7>(&mut ciphertext) {
+    let plaintext = match cipher.decrypt_padded::<Pkcs7>(&mut ciphertext) {
         Ok(p) => p,
         Err(_) => return std::ptr::null_mut(),
     };

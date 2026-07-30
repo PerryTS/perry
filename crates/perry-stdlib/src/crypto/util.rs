@@ -1,12 +1,20 @@
 pub(super) use crate::common::handle::{get_handle_mut, register_handle, Handle};
 pub(super) use aes::{Aes128, Aes192, Aes256};
+pub(super) use aes_09::{
+    Aes128 as Aes128CbcCipher, Aes192 as Aes192CbcCipher, Aes256 as Aes256CbcCipher,
+};
 pub(super) use base64::Engine as _;
 pub(super) use cbc::{
     cipher::{
         block_padding::{NoPadding, Pkcs7},
-        BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit,
+        BlockModeDecrypt, BlockModeEncrypt, KeyIvInit,
     },
     Decryptor, Encryptor,
+};
+pub(super) use ecb::cipher::{
+    block_padding::{NoPadding as EcbNoPadding, Pkcs7 as EcbPkcs7},
+    BlockDecryptMut as EcbBlockDecryptMut, BlockEncryptMut as EcbBlockEncryptMut,
+    KeyInit as EcbKeyInit,
 };
 pub(super) use hkdf::Hkdf;
 pub(super) use md5::{Digest as Md5Digest, Md5};
