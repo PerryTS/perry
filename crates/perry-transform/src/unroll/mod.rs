@@ -1395,6 +1395,66 @@ mod tests {
         }
     }
 
+    /// #6876: a hoisted `var` is declared once at function entry and again at
+    /// its source position with the SAME id. It must keep that id across
+    /// unrolled copies even when no reference escapes the loop body.
+    #[test]
+    fn loop_local_hoisted_var_keeps_original_id() {
+        // var value;
+        // for (let i = 0; i < 3; i++) {
+        //   var value;
+        //   if (i === 0) value = "kept";
+        //   use(value);
+        // }
+        let i = 1u32;
+        let value = 2u32;
+        let hoist = Stmt::Let {
+            id: value,
+            name: "value".into(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        };
+        let body = vec![
+            Stmt::Let {
+                id: value,
+                name: "value".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: None,
+            },
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(ivar(i)),
+                    right: Box::new(integer(0)),
+                },
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(
+                    value,
+                    Box::new(Expr::String("kept".into())),
+                ))],
+                else_branch: None,
+            },
+            Stmt::Expr(Expr::LocalGet(value)),
+        ];
+        let f = make_for(i, 0, 3, body, CompareOp::Lt);
+        let mut stmts = vec![hoist, f];
+        let mut changed = false;
+        run_unroll_in_stmts(&mut stmts, &mut changed);
+        assert!(changed, "expected unroll to fire");
+
+        for s in &stmts {
+            if let Stmt::Let { name, id, .. } = s {
+                if name == "value" {
+                    assert_eq!(
+                        *id, value,
+                        "all copies of a hoisted var must address its function slot"
+                    );
+                }
+            }
+        }
+    }
+
     /// #2308 guard: a block-scoped `let` declared in the loop body and
     /// referenced ONLY inside it (here, captured by a per-iteration closure)
     /// must still get fresh ids per copy, so each closure binds a distinct

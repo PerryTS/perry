@@ -1,52 +1,65 @@
 //! #2308 escaping-id analysis for the static-loop unroller.
 //!
 //! Splits out the pass that decides which loop-body-declared locals are
-//! hoisted, function-scoped `var`s (referenced outside the loop body) and so
-//! must keep their original id across unrolled copies rather than being
-//! renamed per copy by `refresh_local_ids`. See `compute_loop_escaping_ids`.
+//! shared bindings and so must keep their original id across unrolled copies
+//! rather than being renamed per copy by `refresh_local_ids`. See
+//! `compute_loop_escaping_ids`.
 
 use perry_hir::types::LocalId;
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{Expr, Stmt};
 use std::collections::{HashMap, HashSet};
 
-/// #2308: compute the set of loop-body-declared local ids that are
-/// referenced OUTSIDE the loop body declaring them — i.e. hoisted,
-/// function-scoped `var`s whose value is read after (or otherwise outside)
-/// the loop they're declared in. The unroller must NOT rename these per
-/// copy: every unrolled copy has to write the same slot so a later read of
-/// the original id observes the last iteration's value, matching JS `var`
-/// semantics. A block-scoped `let`/`const` declared in a loop body can
-/// never be referenced outside it, so it never lands in this set and keeps
-/// getting fresh per-copy ids (preserving distinct closure captures).
+/// #2308 / #6876: compute the set of loop-body-declared local ids that name
+/// shared bindings. This includes:
+///
+/// - ids referenced outside the loop body; and
+/// - ids also declared outside the loop body.
+///
+/// The second case is how lowered, hoisted `var` declarations are represented:
+/// one `Stmt::Let` creates the function-scoped slot at entry and the declaration
+/// in the source loop reuses that same id. Such a `var` still has to keep its
+/// value across iterations even when every read is inside the loop. Looking at
+/// references alone missed that case and refreshed the declaration to a new id
+/// per unrolled copy.
+///
+/// The unroller must NOT rename shared ids: every unrolled copy has to use the
+/// same slot, matching JavaScript `var` semantics. A block-scoped `let`/`const`
+/// declared in a loop body has neither an outside declaration nor a legal
+/// outside reference, so it keeps getting fresh per-copy ids (preserving
+/// distinct closure captures).
 ///
 /// Computed on the ORIGINAL (un-unrolled) body so reference counts are
-/// stable: `total` counts every use site in the whole scope; for each loop
-/// `inside` counts uses within that loop's body. `total > inside` for a
-/// loop-body-declared id ⇒ it's used somewhere outside the loop ⇒ escaping.
+/// stable. For references and declarations independently, `total > inside`
+/// means the loop-body declaration participates in a binding visible outside
+/// that body and must be protected.
 pub(super) fn compute_loop_escaping_ids(stmts: &[Stmt]) -> HashSet<LocalId> {
-    let mut total: HashMap<LocalId, usize> = HashMap::new();
-    count_local_refs_stmts(stmts, &mut total);
+    let mut total_refs: HashMap<LocalId, usize> = HashMap::new();
+    count_local_refs_stmts(stmts, &mut total_refs);
+    let mut total_decls: HashMap<LocalId, usize> = HashMap::new();
+    count_declared_ids_stmts(stmts, &mut total_decls);
     let mut escaping = HashSet::new();
-    collect_escaping_in_stmts(stmts, &total, &mut escaping);
+    collect_escaping_in_stmts(stmts, &total_refs, &total_decls, &mut escaping);
     escaping
 }
 
 fn collect_escaping_in_stmts(
     stmts: &[Stmt],
-    total: &HashMap<LocalId, usize>,
+    total_refs: &HashMap<LocalId, usize>,
+    total_decls: &HashMap<LocalId, usize>,
     escaping: &mut HashSet<LocalId>,
 ) {
     for s in stmts {
         if let Stmt::For { body, .. } = s {
-            let mut inside: HashMap<LocalId, usize> = HashMap::new();
-            count_local_refs_stmts(body, &mut inside);
+            let mut inside_refs: HashMap<LocalId, usize> = HashMap::new();
+            count_local_refs_stmts(body, &mut inside_refs);
             let mut decls: HashSet<LocalId> = HashSet::new();
             collect_declared_ids_stmts(body, &mut decls);
             for id in decls {
-                let t = total.get(&id).copied().unwrap_or(0);
-                let ins = inside.get(&id).copied().unwrap_or(0);
-                if t > ins {
+                let refs_escape = total_refs.get(&id).copied().unwrap_or(0)
+                    > inside_refs.get(&id).copied().unwrap_or(0);
+                let declaration_is_shared = total_decls.get(&id).copied().unwrap_or(0) > 1;
+                if refs_escape || declaration_is_shared {
                     escaping.insert(id);
                 }
             }
@@ -54,7 +67,7 @@ fn collect_escaping_in_stmts(
         // Recurse into every nested stmt list so inner loops are analyzed
         // against the same whole-scope `total` reference counts.
         each_child_stmt_list(s, &mut |list| {
-            collect_escaping_in_stmts(list, total, escaping)
+            collect_escaping_in_stmts(list, total_refs, total_decls, escaping)
         });
     }
 }
@@ -75,6 +88,25 @@ fn collect_declared_ids_stmts(stmts: &[Stmt], out: &mut HashSet<LocalId>) {
             }
         }
         each_child_stmt_list(s, &mut |list| collect_declared_ids_stmts(list, out));
+    }
+}
+
+/// Count declarations rather than collecting unique ids. A repeated id is the
+/// key signal for a lowered hoisted `var`: its function-entry declaration and
+/// its source-position declaration intentionally address the same slot.
+fn count_declared_ids_stmts(stmts: &[Stmt], out: &mut HashMap<LocalId, usize>) {
+    for s in stmts {
+        if let Stmt::Let { id, .. } = s {
+            *out.entry(*id).or_insert(0) += 1;
+        }
+        if let Stmt::For { init, .. } = s {
+            if let Some(init_stmt) = init {
+                if let Stmt::Let { id, .. } = init_stmt.as_ref() {
+                    *out.entry(*id).or_insert(0) += 1;
+                }
+            }
+        }
+        each_child_stmt_list(s, &mut |list| count_declared_ids_stmts(list, out));
     }
 }
 

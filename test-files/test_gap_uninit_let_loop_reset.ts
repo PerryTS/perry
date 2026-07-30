@@ -72,12 +72,20 @@ for (let i = 0; i < 3; i++) {
 }
 console.log(g3.join(" "));
 
-// NOTE: the `var` counterpart of this — `var v;` in a loop body must KEEP its
-// value across iterations, since `var` is function-scoped and hoisted — is a
-// separate pre-existing defect (perry prints "kept u u", node "kept kept kept")
-// and is tracked on its own. This fix deliberately excludes `var`, so it
-// neither fixes nor worsens that; asserting it here would just bake in a known
-// failure.
+// --- `var` remains one function-scoped binding after static unrolling -------
+// #6876: the unroller used to refresh this declaration to a fresh LocalId for
+// each copy. `var` is hoisted, though, so the value assigned in iteration zero
+// must remain visible to the later iterations.
+function varKeepsValue(): string {
+  const values: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    var value: string | undefined;
+    if (i === 0) value = "kept";
+    values.push(value === undefined ? "u" : value);
+  }
+  return values.join(" ");
+}
+console.log(varKeepsValue());
 
 // --- declaration without init still reads undefined before assignment -----
 function readsUndefined(): string {
