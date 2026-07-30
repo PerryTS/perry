@@ -37,14 +37,23 @@ Platform-specific extras — only required if you're touching that backend:
 - **Linux UI** (`perry-ui-gtk4`): `libgtk-4-dev libadwaita-1-dev libpulse-dev pkg-config` (Xvfb for headless UI tests)
 - **Windows UI** (`perry-ui-windows`): MSVC (`ilammy/msvc-dev-cmd` or a `vcvars64.bat` session)
 
-Build and test the default (platform-independent) workspace:
+Build the default (platform-independent) workspace and run the affected crates'
+fast unit tests:
 
 ```bash
 cargo build --release
-cargo test --workspace \
-  --exclude perry-ui-ios --exclude perry-ui-tvos --exclude perry-ui-watchos \
-  --exclude perry-ui-gtk4 --exclude perry-ui-android --exclude perry-ui-windows
+./scripts/test_affected_crates.sh --base origin/main
 ```
+
+The runner includes committed, staged, and unstaged paths relative to the base
+revision; stage new files before running it because untracked paths are ignored.
+Use `--dry-run` to inspect its per-crate Cargo commands, or set
+`PERRY_TEST_BASE` to change the default base. It mirrors CI's
+`scripts/ci_test_scope.py` selection and unit-target filtering, including the
+single-threaded `perry-runtime` run. It deliberately skips integration tests
+under `crates/*/tests/`; CI runs those through its scoped and nightly jobs.
+Never replace it with `cargo test --workspace`: Perry's per-crate feature sets
+must remain isolated.
 
 For a faster inner loop, `cargo check -p perry` (correctness only) or
 `cargo build --profile perry-dev -p perry` (optimized local dev build). The
