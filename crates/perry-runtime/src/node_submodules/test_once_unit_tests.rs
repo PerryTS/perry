@@ -65,3 +65,24 @@ fn restoring_a_mock_preserves_calls_and_scheduled_implementations() {
     assert_eq!(mock_state_call_count(&state), 2);
     assert_eq!(state.once, vec![(4, 30.0)]);
 }
+
+#[test]
+fn reentrant_dispatch_uses_completed_call_indices_like_node() {
+    let mut explicit = mock_state_with_calls(0, 10.0);
+    schedule_mock_implementation_once(&mut explicit, 1, 20.0);
+
+    // Node records a call only after its implementation completes. The outer
+    // and nested dispatches therefore both observe completed-call index 0, so
+    // an explicit onCall=1 entry is not consumed by either invocation.
+    assert_eq!(take_mock_implementation(&mut explicit), 10.0);
+    assert_eq!(take_mock_implementation(&mut explicit), 10.0);
+    set_call_count(&mut explicit, 2);
+    assert_eq!(take_mock_implementation(&mut explicit), 10.0);
+    assert_eq!(explicit.once, vec![(1, 20.0)]);
+
+    let mut scheduled_inside = mock_state_with_calls(0, 10.0);
+    assert_eq!(take_mock_implementation(&mut scheduled_inside), 10.0);
+    let current = mock_state_call_count(&scheduled_inside);
+    schedule_mock_implementation_once(&mut scheduled_inside, current, 30.0);
+    assert_eq!(take_mock_implementation(&mut scheduled_inside), 30.0);
+}
