@@ -899,7 +899,11 @@ pub(crate) fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
             1,
         ),
         ("set", reflect_set_thunk as *const u8, 3),
-        ("setPrototypeOf", reflect_set_prototype_of_thunk as *const u8, 2),
+        (
+            "setPrototypeOf",
+            reflect_set_prototype_of_thunk as *const u8,
+            2,
+        ),
     ];
     for (name, func_ptr, arity) in methods {
         install_proto_method(ns_obj, name, func_ptr, arity);
