@@ -20,12 +20,12 @@
 //! - `set_filter_text(h, text_ptr)`         → store on entry (passive — user reduces rows).
 //! - `get_filter_text(h)` → ptr to StringHeader.
 //!
-//! Render closures returning `Text(...)` widgets get their string extracted
-//! via `text::get_string`. Any other widget type renders as `[widget]` —
-//! Win32 ListView cells are text-only without owner-draw, and a full
-//! per-cell HWND embed (matching NSTableView's view-based cells) would
-//! need a much larger rewrite. This trade-off is documented in the
-//! macOS-pre-impl shape comment per the v0.5.771 GTK4 audit pattern.
+//! Primitive string results use the ListView's native text path. Widget
+//! results are cached per cell and their HWNDs are reparented into the
+//! ListView, then positioned over `LVM_GETSUBITEMRECT` bounds. A subclass
+//! keeps them aligned while the table scrolls/resizes and forwards child
+//! notifications so interactive cells behave like the view-based macOS
+//! implementation.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,6 +38,8 @@ use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -66,6 +68,12 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+#[derive(Clone)]
+enum CellContent {
+    Text(String),
+    Widget(i64),
+}
+
 struct TableEntry {
     handle: i64,
     row_count: i64,
@@ -75,14 +83,17 @@ struct TableEntry {
     sort_closure: f64,
     sort_ascending: HashMap<i64, bool>,
     filter_text: String,
-    /// Cached per-cell rendered text. The dispinfo callback fills this on
-    /// demand; rebuilt on `update_row_count`. Indexed by `(row, col)`.
-    cell_cache: HashMap<(i64, i64), String>,
+    /// Cached per-cell content. The dispinfo callback fills this on demand;
+    /// rebuilt on `update_row_count`. Indexed by `(row, col)`.
+    cell_cache: HashMap<(i64, i64), CellContent>,
 }
 
 thread_local! {
     static TABLES: RefCell<HashMap<i64, TableEntry>> = RefCell::new(HashMap::new());
 }
+
+#[cfg(target_os = "windows")]
+const TABLE_SUBCLASS_ID: usize = 0x6616;
 
 /// True when `handle` belongs to a table widget (vs a real tree). Used by
 /// `handle_notify` to route LVN_*/TVN_* sharing the same TVN code space.
@@ -90,8 +101,20 @@ pub fn is_registered(handle: i64) -> bool {
     TABLES.with(|t| t.borrow().contains_key(&handle))
 }
 
+fn decode_widget_handle(value: f64) -> i64 {
+    let bits = value.to_bits();
+    match (bits >> 48) as u16 {
+        // POINTER_TAG — lower 48 bits are the handle int.
+        0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as i64,
+        // INT32_TAG.
+        0x7FFE => ((bits as u32) as i32) as i64,
+        // Plain f64 number.
+        _ => value as i64,
+    }
+}
+
 /// Render a single cell by invoking the user's render closure.
-fn render_cell(handle: i64, row: i64, col: i64) -> String {
+fn render_cell(handle: i64, row: i64, col: i64) -> CellContent {
     let render_closure = TABLES.with(|t| {
         t.borrow()
             .get(&handle)
@@ -99,11 +122,11 @@ fn render_cell(handle: i64, row: i64, col: i64) -> String {
             .unwrap_or(0.0)
     });
     if render_closure == 0.0 {
-        return String::new();
+        return CellContent::Text(String::new());
     }
     let closure_ptr = unsafe { js_nanbox_get_pointer(render_closure) } as *const u8;
     if closure_ptr.is_null() {
-        return String::new();
+        return CellContent::Text(String::new());
     }
     // The closure is `(row, col) => widget`. We get back a NaN-boxed widget
     // handle (POINTER_TAG'd small integer) or a string-typed widget for the
@@ -115,40 +138,192 @@ fn render_cell(handle: i64, row: i64, col: i64) -> String {
     if top16 == 0x7FFF {
         // STRING_TAG — pointer is the lower 48 bits.
         let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-        return str_from_header(ptr).to_string();
+        return CellContent::Text(str_from_header(ptr).to_string());
     }
-    // Otherwise treat the result as a widget handle and try to read its
-    // text via the existing text registry. Falls back to "[widget]" when
-    // the widget isn't a Text node.
-    let widget_handle = if top16 == 0x7FFD {
-        // POINTER_TAG — lower 48 bits are the handle int.
-        (bits & 0x0000_FFFF_FFFF_FFFF) as i64
-    } else if top16 == 0x7FFE {
-        // INT32_TAG.
-        ((bits as u32) as i32) as i64
-    } else {
-        // Plain f64 number — round.
-        result as i64
-    };
+    let widget_handle = decode_widget_handle(result);
     if widget_handle <= 0 {
-        return String::new();
+        return CellContent::Text(String::new());
     }
-    // Try to read the widget's HWND text — works for Text / Button /
-    // TextField widgets (anything backed by a control with GetWindowTextW).
+
     #[cfg(target_os = "windows")]
     {
-        if let Some(hwnd) = super::get_hwnd(widget_handle) {
-            unsafe {
-                let len = GetWindowTextLengthW(hwnd);
-                if len > 0 {
-                    let mut buf = vec![0u16; (len + 1) as usize];
-                    GetWindowTextW(hwnd, &mut buf);
-                    return String::from_utf16_lossy(&buf[..len as usize]);
+        if super::get_hwnd_safe(widget_handle).is_some() {
+            return CellContent::Widget(widget_handle);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = widget_handle;
+    }
+
+    CellContent::Text(String::new())
+}
+
+#[cfg(target_os = "windows")]
+fn detach_widget_cells(contents: impl IntoIterator<Item = CellContent>) {
+    let parking = super::get_parking_hwnd();
+    for content in contents {
+        if let CellContent::Widget(widget_handle) = content {
+            if let Some(child_hwnd) = super::get_hwnd_safe(widget_handle) {
+                unsafe {
+                    let _ = ShowWindow(child_hwnd, SW_HIDE);
+                    let _ = SetParent(child_hwnd, Some(parking));
                 }
             }
         }
     }
-    "[widget]".to_string()
+}
+
+fn drain_cell_contents(handle: i64) -> Vec<CellContent> {
+    TABLES.with(|tables| {
+        tables
+            .borrow_mut()
+            .get_mut(&handle)
+            .map(|entry| {
+                entry
+                    .cell_cache
+                    .drain()
+                    .map(|(_, content)| content)
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn layout_widget_cells(handle: i64) {
+    let Some(table_hwnd) = super::get_hwnd_safe(handle) else {
+        return;
+    };
+    let cells: Vec<(i64, i64, i64)> = TABLES.with(|tables| {
+        tables
+            .borrow()
+            .get(&handle)
+            .map(|entry| {
+                entry
+                    .cell_cache
+                    .iter()
+                    .filter_map(|(&(row, col), content)| match content {
+                        CellContent::Widget(widget) => Some((row, col, *widget)),
+                        CellContent::Text(_) => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+
+    let mut client = RECT::default();
+    unsafe {
+        let _ = GetClientRect(table_hwnd, &mut client);
+    }
+    for (row, col, widget_handle) in cells {
+        let Some(child_hwnd) = super::get_hwnd_safe(widget_handle) else {
+            continue;
+        };
+        if child_hwnd == table_hwnd {
+            continue;
+        }
+
+        let mut cell_rect = RECT {
+            left: LVIR_BOUNDS as i32,
+            top: col as i32,
+            ..Default::default()
+        };
+        let found = unsafe {
+            SendMessageW(
+                table_hwnd,
+                LVM_GETSUBITEMRECT,
+                Some(WPARAM(row as usize)),
+                Some(LPARAM(&mut cell_rect as *mut _ as isize)),
+            )
+            .0 != 0
+        };
+        let visible = found
+            && cell_rect.right > client.left
+            && cell_rect.left < client.right
+            && cell_rect.bottom > client.top
+            && cell_rect.top < client.bottom
+            && super::get_widget_info(widget_handle)
+                .map(|info| !info.hidden)
+                .unwrap_or(false);
+        if !visible {
+            unsafe {
+                let _ = ShowWindow(child_hwnd, SW_HIDE);
+            }
+            continue;
+        }
+
+        let x = cell_rect.left + 1;
+        let y = cell_rect.top + 1;
+        let width = (cell_rect.right - cell_rect.left - 2).max(1);
+        let height = (cell_rect.bottom - cell_rect.top - 2).max(1);
+        unsafe {
+            if GetParent(child_hwnd).ok() != Some(table_hwnd) {
+                let _ = SetParent(child_hwnd, Some(table_hwnd));
+                let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
+                SetWindowLongW(
+                    child_hwnd,
+                    GWL_STYLE,
+                    ((style | WS_CHILD.0 | WS_VISIBLE.0) & !WS_POPUP.0) as i32,
+                );
+            }
+            let _ = SetWindowPos(
+                child_hwnd,
+                None,
+                x,
+                y,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            );
+        }
+        crate::layout::layout_widget(widget_handle, width, height);
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn table_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    refdata: usize,
+) -> LRESULT {
+    if let Some(result) = crate::theme::handle_container_message(hwnd, msg, wparam, lparam) {
+        return result;
+    }
+
+    let handle = refdata as i64;
+    if msg == WM_NCDESTROY {
+        let contents = TABLES.with(|tables| {
+            tables
+                .borrow()
+                .get(&handle)
+                .map(|entry| entry.cell_cache.values().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        });
+        detach_widget_cells(contents);
+        let _ = RemoveWindowSubclass(hwnd, Some(table_subclass_proc), TABLE_SUBCLASS_ID);
+        return DefSubclassProc(hwnd, msg, wparam, lparam);
+    }
+
+    let result = DefSubclassProc(hwnd, msg, wparam, lparam);
+    if matches!(
+        msg,
+        WM_PAINT
+            | WM_SIZE
+            | WM_HSCROLL
+            | WM_VSCROLL
+            | WM_MOUSEWHEEL
+            | WM_MOUSEHWHEEL
+            | WM_NOTIFY
+            | WM_WINDOWPOSCHANGED
+    ) {
+        layout_widget_cells(handle);
+    }
+    result
 }
 
 /// Create a table backed by a Win32 ListView (LVS_REPORT + LVS_OWNERDATA).
@@ -179,6 +354,7 @@ pub fn create(row_count: f64, col_count: f64, render_closure: f64) -> i64 {
                     WS_CHILD.0
                         | WS_VISIBLE.0
                         | WS_TABSTOP.0
+                        | WS_CLIPCHILDREN.0
                         | LVS_REPORT as u32
                         | LVS_OWNERDATA as u32
                         | LVS_SHOWSELALWAYS as u32
@@ -261,6 +437,12 @@ pub fn create(row_count: f64, col_count: f64, render_closure: f64) -> i64 {
                     },
                 );
             });
+            let _ = SetWindowSubclass(
+                hwnd,
+                Some(table_subclass_proc),
+                TABLE_SUBCLASS_ID,
+                table_handle as usize,
+            );
 
             table_handle
         }
@@ -333,6 +515,7 @@ pub fn set_column_width(handle: i64, col: i64, width: f64) {
                     Some(LPARAM(width as isize)),
                 );
             }
+            layout_widget_cells(handle);
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -346,11 +529,12 @@ pub fn update_row_count(handle: i64, count: i64) {
     TABLES.with(|t| {
         if let Some(entry) = t.borrow_mut().get_mut(&handle) {
             entry.row_count = count;
-            entry.cell_cache.clear();
         }
     });
+    let old_contents = drain_cell_contents(handle);
     #[cfg(target_os = "windows")]
     {
+        detach_widget_cells(old_contents);
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
                 SendMessageW(
@@ -365,7 +549,7 @@ pub fn update_row_count(handle: i64, count: i64) {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = handle;
+        let _ = (handle, old_contents);
     }
 }
 
@@ -549,16 +733,23 @@ pub fn handle_dispinfo(handle: i64, lparam: LPARAM) {
             .get(&handle)
             .and_then(|e| e.cell_cache.get(&(row, col)).cloned())
     });
-    let text = match cached {
-        Some(s) => s,
+    let content = match cached {
+        Some(content) => content,
         None => {
-            let s = render_cell(handle, row, col);
+            let content = render_cell(handle, row, col);
             TABLES.with(|t| {
                 if let Some(entry) = t.borrow_mut().get_mut(&handle) {
-                    entry.cell_cache.insert((row, col), s.clone());
+                    entry.cell_cache.insert((row, col), content.clone());
                 }
             });
-            s
+            content
+        }
+    };
+    let text = match content {
+        CellContent::Text(text) => text,
+        CellContent::Widget(_) => {
+            layout_widget_cells(handle);
+            String::new()
         }
     };
 
@@ -667,14 +858,54 @@ pub fn handle_columnclick(handle: i64, lparam: LPARAM) {
         js_closure_call2(closure_ptr, col as f64, if ascending { 1.0 } else { 0.0 });
     }
     // Clear the cache so next paint re-renders post-sort.
-    TABLES.with(|t| {
-        if let Some(entry) = t.borrow_mut().get_mut(&handle) {
-            entry.cell_cache.clear();
-        }
-    });
+    let old_contents = drain_cell_contents(handle);
+    detach_widget_cells(old_contents);
     if let Some(hwnd) = super::get_hwnd(handle) {
         unsafe {
             let _ = InvalidateRect(Some(hwnd), None, true);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_widget_handles_from_runtime_number_shapes() {
+        let pointer = f64::from_bits((0x7FFDu64 << 48) | 42);
+        let int32 = f64::from_bits((0x7FFEu64 << 48) | u32::MAX as u64);
+        assert_eq!(decode_widget_handle(pointer), 42);
+        assert_eq!(decode_widget_handle(int32), -1);
+        assert_eq!(decode_widget_handle(17.0), 17);
+    }
+
+    #[test]
+    fn draining_cell_contents_removes_cached_widgets_and_text() {
+        let handle = i64::MAX - 6616;
+        TABLES.with(|tables| {
+            tables.borrow_mut().insert(
+                handle,
+                TableEntry {
+                    handle,
+                    row_count: 1,
+                    col_count: 2,
+                    render_closure: 0.0,
+                    select_closure: 0.0,
+                    sort_closure: 0.0,
+                    sort_ascending: HashMap::new(),
+                    filter_text: String::new(),
+                    cell_cache: HashMap::from([
+                        ((0, 0), CellContent::Text("value".to_owned())),
+                        ((0, 1), CellContent::Widget(99)),
+                    ]),
+                },
+            );
+        });
+        assert_eq!(drain_cell_contents(handle).len(), 2);
+        assert!(TABLES.with(|tables| tables
+            .borrow()
+            .get(&handle)
+            .is_some_and(|entry| entry.cell_cache.is_empty())));
     }
 }
