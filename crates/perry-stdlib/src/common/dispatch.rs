@@ -45,7 +45,7 @@ pub(crate) use fastify_net_zlib::dispatch_external_net_socket;
     not(target_os = "android")
 ))]
 pub(crate) use fastify_net_zlib::dispatch_net_socket;
-#[cfg(feature = "compression")]
+#[cfg(feature = "compression-gzip")]
 pub(crate) use fastify_net_zlib::dispatch_zlib_stream;
 
 pub(crate) type EventEmitterOn = unsafe extern "C" fn(i64, i64, i64) -> i64;

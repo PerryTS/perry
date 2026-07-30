@@ -81,7 +81,7 @@ pub(crate) unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]
 /// `.close` lose their static type and arrive here. Compression is synchronous
 /// and buffered in the runtime: `.write()` accumulates input, `.end()` runs the
 /// codec and queues 'data'/'end' onto the deferred-event pump.
-#[cfg(feature = "compression")]
+#[cfg(feature = "compression-gzip")]
 pub(crate) unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64]) -> f64 {
     fn unbox_to_i64(v: f64) -> i64 {
         (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64

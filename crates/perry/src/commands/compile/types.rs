@@ -669,6 +669,16 @@ pub struct CompilationContext {
     /// `CryptoSha256`/`CryptoMd5` which dispatch to runtime symbols that
     /// live behind the perry-stdlib `crypto` feature.
     pub uses_crypto_builtins: bool,
+    /// Whether any TS module references a `node:zlib` Brotli API token
+    /// (`brotliCompressSync`, `createBrotliDecompress`, `BROTLI_*`
+    /// constants, …). Adds `compression-brotli` on top of the
+    /// `compression-gzip` base a `node:zlib` import selects, so gzip-only
+    /// programs never link the Brotli tables (stdlib cherry-pick).
+    pub uses_zlib_brotli: bool,
+    /// Same as `uses_zlib_brotli`, for the zstd codec family
+    /// (`zstdCompressSync`, `createZstdCompress`, `ZSTD_*`, …) →
+    /// `compression-zstd` (the bundled zstd C library).
+    pub uses_zlib_zstd: bool,
     /// Whether any TS module needs the regular-expression engine — a regex
     /// literal / `RegExp`, a regex-coercing string method (`.match` /
     /// `.matchAll` / `.search`), or a glob API (`path.matchesGlob` /
@@ -1078,6 +1088,8 @@ impl CompilationContext {
             native_module_imports: BTreeSet::new(),
             uses_fetch: false,
             uses_crypto_builtins: false,
+            uses_zlib_brotli: false,
+            uses_zlib_zstd: false,
             uses_regex: false,
             uses_temporal: false,
             uses_event_emitter: false,
