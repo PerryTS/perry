@@ -649,6 +649,11 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
+        // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _opt_report_scope = crate::opt_report::enter_region(
+            "module_init",
+            crate::opt_report::RegionKind::ModuleInit,
+        );
         let main_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
             &[],
@@ -1273,6 +1278,11 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
+        // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _opt_report_scope = crate::opt_report::enter_region(
+            "module_init",
+            crate::opt_report::RegionKind::ModuleInit,
+        );
         let init_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
             &[],

@@ -473,6 +473,36 @@ pub struct CompileArgs {
     /// dump. No effect unless `--trace hir` (or `--print-hir`) is set.
     #[arg(long, value_name = "NAME")]
     pub focus: Option<String>,
+
+    /// Report which values Perry could NOT statically type, why, and whether
+    /// you can do anything about it (#6952) — the representation-selection
+    /// analogue of LLVM's `-Rpass-missed` remarks.
+    ///
+    /// Perry's speed comes from proving static types and selecting unboxed
+    /// representations; when a proof fails the value stays NaN-boxed and the
+    /// fast paths silently do not fire. This prints, per value: its position
+    /// (local / param / return / allocation site), the representation it got,
+    /// the collector rule that denied it, an actionability tier, and a static
+    /// hotness proxy. Wins are reported too, so you can see the ratio.
+    ///
+    /// `--opt-report` prints human-readable text; `--opt-report=json` emits a
+    /// stable schema for tooling (CI can diff two builds to catch a silent
+    /// representation regression). Also settable via `PERRY_OPT_REPORT=1`.
+    ///
+    /// Observational only — emitted code is byte-identical with the flag on
+    /// and off. It does disable build/object cache reuse for its own run, so
+    /// that codegen actually executes and has something to report.
+    #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "text")]
+    pub opt_report: Option<OptReportFormat>,
+}
+
+/// Output format for `--opt-report`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum OptReportFormat {
+    /// Human-readable, ranked, grouped by actionability tier.
+    Text,
+    /// Stable JSON schema for tooling.
+    Json,
 }
 
 /// Information about a JavaScript module that will be interpreted at runtime

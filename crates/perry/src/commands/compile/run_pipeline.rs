@@ -190,6 +190,32 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // `--opt-report` (#6952): promote to the env var the codegen collectors
+    // read, single-threaded before rayon spawns the module workers — the same
+    // discipline as `--debug-symbols` and `--trace llvm` above. `PERRY_NO_CACHE`
+    // goes with it because the per-module object cache short-circuits codegen
+    // for unchanged modules, and a skipped `compile_module` records nothing:
+    // the report would come up empty on the second run of an unchanged file.
+    // The flag is deliberately NOT part of the object-cache key — it changes
+    // no emitted byte, it only forces codegen to actually run.
+    let opt_report_format =
+        args.opt_report
+            .or_else(|| match std::env::var("PERRY_OPT_REPORT").as_deref() {
+                Ok("json") => Some(OptReportFormat::Json),
+                Ok("1") | Ok("text") => Some(OptReportFormat::Text),
+                _ => None,
+            });
+    if let Some(fmt) = opt_report_format {
+        std::env::set_var(
+            "PERRY_OPT_REPORT",
+            match fmt {
+                OptReportFormat::Json => "json",
+                OptReportFormat::Text => "text",
+            },
+        );
+        std::env::set_var("PERRY_NO_CACHE", "1");
+    }
+
     // Canonicalize the input path first so its `.parent()` is an absolute directory.
     // Without this, a bare filename like `perry demo.ts` produced `Path::new("").parent()`
     // → fallback `"."`, and the walk-up loops below (package.json + perry.toml discovery)
@@ -4546,6 +4572,18 @@ pub fn run_with_parse_cache(
 
     if let Some(explain_lowering) = explain_lowering.as_ref() {
         explain_lowering.emit(format)?;
+    }
+
+    // `--opt-report` (#6952). Drained once, after every module's codegen has
+    // finished, and written to stderr so it never contaminates a `--format
+    // json` stdout payload or a piped program output.
+    if let Some(fmt) = opt_report_format {
+        let entries = perry_codegen::opt_report::take_entries();
+        let rendered = match fmt {
+            OptReportFormat::Json => perry_codegen::opt_report::render_json(&entries),
+            OptReportFormat::Text => perry_codegen::opt_report::render_text(&entries),
+        };
+        eprintln!("{rendered}");
     }
 
     // #835 + #846: fold the codegen-side FFI provenance registry into

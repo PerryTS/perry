@@ -58,6 +58,7 @@ mod opts;
 mod spec_abi;
 mod string_pool;
 mod typed_abi;
+mod typed_abi_opt_report;
 
 pub(crate) use closure::emit_typed_string_capture_guard;
 pub use helpers::resolve_target_triple;
@@ -127,6 +128,33 @@ fn record_typed_clone_rejection(
     if !should_record_typed_clone_rejection(reason) {
         return;
     }
+    let source_function = source_function.into();
+    // `--opt-report` (#6952): surface the specialized-ABI (RFC Phase 2)
+    // decision, which is the only place params and returns get a
+    // representation today. The `typed_*_clone_decision` consumers are the
+    // older per-type clone mechanism and would report the same function up
+    // to four times, so they stay out of the report and keep going to the
+    // native-reps artifact only.
+    if consumer == "spec_abi_entry_decision" && crate::opt_report::enabled() {
+        let (why, tier, issue) = reason.opt_report_reason();
+        crate::opt_report::deny_named(
+            &source_function,
+            crate::opt_report::RegionKind::Function,
+            crate::opt_report::Denial {
+                position: crate::opt_report::Position::Param,
+                name: "(parameters + return)",
+                local_id: None,
+                analysis: crate::opt_report::Analysis::SpecAbi,
+                rule: reason.as_str(),
+                reason: why,
+                tier,
+                issue,
+                loop_depth: 0,
+                detail: None,
+                byte_offset: None,
+            },
+        );
+    }
     records.push(crate::native_value::typed_clone_rejection_record(
         source_function,
         consumer,
@@ -162,6 +190,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
     // set-per-module discipline as the outline gate above.
     helpers::set_jscvt_for_target(&triple);
+
+    // `--opt-report` (#6952): mark the closures that are iterating-builtin
+    // callbacks before any region is lowered, so their denials carry the
+    // per-element hotness column. No-op when the report is off.
+    crate::opt_report::scan_module(hir);
+    // Module-wide fallback attribution scope. Per-region scopes nest inside
+    // it and restore it on drop, so decisions taken outside any region (the
+    // specialized-ABI entry decision) still know their module.
+    let _opt_report_module_scope = crate::opt_report::enter_module(&hir.name);
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target
