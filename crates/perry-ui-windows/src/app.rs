@@ -50,6 +50,12 @@ const TEST_EXIT_TIMER_ID: usize = 9997;
 /// Global DPI scale factor (1.0 at 96 DPI, 1.5 at 144 DPI, 2.0 at 192 DPI).
 static DPI_SCALE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Process DPI awareness must be selected before the first HWND is created.
+/// Widget constructors run while `App({ body: ... })` arguments are evaluated,
+/// so the hidden parking HWND can predate `app_create` (#5884).
+#[cfg(target_os = "windows")]
+static DPI_INIT: std::sync::Once = std::sync::Once::new();
+
 /// Get the system DPI for the primary monitor.
 ///
 /// Routes through `crate::dpi_compat::get_system_dpi_compat`, which uses
@@ -66,14 +72,41 @@ fn set_dpi_scale(scale: f64) {
     DPI_SCALE.store(scale.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Get the DPI scale factor. Returns 1.0 if not set.
+fn dpi_scale_from_dpi(dpi: u32) -> f64 {
+    dpi.max(96) as f64 / 96.0
+}
+
+/// Get the DPI scale factor, initializing process awareness on first use.
 pub fn get_dpi_scale() -> f64 {
+    #[cfg(target_os = "windows")]
+    ensure_dpi_initialized();
+
     let bits = DPI_SCALE.load(std::sync::atomic::Ordering::Relaxed);
     if bits == 0 {
         1.0
     } else {
         f64::from_bits(bits)
     }
+}
+
+/// Convert a logical 96-DPI dimension to physical pixels using the active
+/// process/monitor scale.
+pub(crate) fn scale_logical_px(px: f64) -> i32 {
+    scale_logical_px_by(px, get_dpi_scale())
+}
+
+fn scale_logical_px_by(px: f64, scale: f64) -> i32 {
+    (px * scale.max(1.0)).round() as i32
+}
+
+/// Select process DPI awareness and cache the initial scale before any window
+/// (including the hidden widget parking window) is created.
+#[cfg(target_os = "windows")]
+pub(crate) fn ensure_dpi_initialized() {
+    DPI_INIT.call_once(|| {
+        crate::dpi_compat::set_process_dpi_awareness_compat();
+        set_dpi_scale(dpi_scale_from_dpi(get_system_dpi()));
+    });
 }
 
 thread_local! {
@@ -216,16 +249,9 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     #[cfg(target_os = "windows")]
     {
         unsafe {
-            // Enable DPI awareness — Win10 1607+ best, Win8.1 ok, Win7 silent
-            // fallback to system DPI. See dpi_compat.rs (issue #303).
-            crate::dpi_compat::set_process_dpi_awareness_compat();
-
-            // Scale window size by system DPI (96 = 100%, 144 = 150%, 192 = 200%)
-            let dpi = get_system_dpi();
-            let scale = dpi as f64 / 96.0;
-            let w = (w as f64 * scale) as i32;
-            let h = (h as f64 * scale) as i32;
-            set_dpi_scale(scale);
+            ensure_dpi_initialized();
+            let w = scale_logical_px(w as f64);
+            let h = scale_logical_px(h as f64);
 
             // Initialize common controls
             let icc = INITCOMMONCONTROLSEX {
@@ -1417,6 +1443,27 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod dpi_tests {
+    use super::{dpi_scale_from_dpi, scale_logical_px_by};
+
+    #[test]
+    fn converts_logical_window_sizes_at_common_scales() {
+        assert_eq!(dpi_scale_from_dpi(96), 1.0);
+        assert_eq!(dpi_scale_from_dpi(144), 1.5);
+        assert_eq!(dpi_scale_from_dpi(192), 2.0);
+        assert_eq!(scale_logical_px_by(800.0, 1.5), 1200);
+        assert_eq!(scale_logical_px_by(600.0, 1.5), 900);
+    }
+
+    #[test]
+    fn invalid_or_sub_96_dpi_values_do_not_shrink_ui() {
+        assert_eq!(dpi_scale_from_dpi(0), 1.0);
+        assert_eq!(dpi_scale_from_dpi(72), 1.0);
+        assert_eq!(scale_logical_px_by(100.0, 0.0), 100);
     }
 }
 

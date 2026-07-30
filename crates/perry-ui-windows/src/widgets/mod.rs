@@ -218,6 +218,10 @@ pub fn get_parking_hwnd() -> HWND {
     fn to_wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
+    // `App({ body: Widget() })` constructs the body before app_create runs.
+    // Select DPI awareness before this first hidden HWND locks the process
+    // into DPI-unaware virtualization (#5884).
+    crate::app::ensure_dpi_initialized();
     PARKING_HWND.with(|cell| {
         let mut opt = cell.borrow_mut();
         if let Some(hwnd) = *opt {

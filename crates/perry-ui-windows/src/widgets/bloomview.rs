@@ -86,6 +86,12 @@ pub fn create(width: f64, height: f64) -> i64 {
     #[cfg(target_os = "windows")]
     {
         ensure_class_registered();
+        let parking_hwnd = super::get_parking_hwnd();
+        // Constructor dimensions are logical (96-DPI) pixels, matching App and
+        // widgetSetFixedWidth/Height. Creating the parking window first also
+        // selects process DPI awareness before either HWND exists.
+        let width_px = crate::app::scale_logical_px(width);
+        let height_px = crate::app::scale_logical_px(height);
         let class_name = to_wide("PerryBloomView");
         let window_text = to_wide("");
         unsafe {
@@ -102,9 +108,9 @@ pub fn create(width: f64, height: f64) -> i64 {
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
                 0,
                 0,
-                width as i32,
-                height as i32,
-                Some(super::get_parking_hwnd()),
+                width_px,
+                height_px,
+                Some(parking_hwnd),
                 None,
                 Some(HINSTANCE::from(hinstance)),
                 None,
@@ -116,8 +122,8 @@ pub fn create(width: f64, height: f64) -> i64 {
             let handle =
                 register_widget_with_layout(hwnd, WidgetKind::Image, 0.0, (0.0, 0.0, 0.0, 0.0));
             // Reserve the requested size so the view is visible in a layout.
-            set_fixed_width(handle, width as i32);
-            set_fixed_height(handle, height as i32);
+            set_fixed_width(handle, width_px);
+            set_fixed_height(handle, height_px);
             handle
         }
     }
