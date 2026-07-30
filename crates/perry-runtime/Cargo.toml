@@ -337,6 +337,10 @@ libmimalloc-sys = { version = "0.1", features = ["extended"], optional = true }
 windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_Foundation",
+    # `GetAdaptersAddresses` backs `os.networkInterfaces()` on Windows.
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
     "Win32_System_LibraryLoader",
     # `Win32_System_Threading` powers the Windows arm of `process.kill`
     # (`OpenProcess` / `TerminateProcess` / `GetExitCodeProcess`, mirroring
