@@ -1264,6 +1264,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     module.declare_function("js_custom_event_new", I64, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_dom_exception_new", I64, &[DOUBLE, DOUBLE]);
+    // `super(message, name)` from `class X extends DOMException` — stamps the
+    // DOMException surface (`message`/`name`/`code`) onto the subclass `this`.
+    module.declare_function(
+        "js_dom_exception_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_event_target_add_event_listener", VOID, &[I64, I64, I64]);
     module.declare_function(
         "js_event_target_add_event_listener_with_options",

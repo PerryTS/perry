@@ -662,3 +662,64 @@ printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_ext_http.a"
         target_dir.join("release/libperry_ext_http.a")
     );
 }
+
+/// Binary/workspace skew: a cross-feature the on-disk checkout's
+/// perry-runtime doesn't declare must be dropped (and reported), not passed
+/// through to fail the entire cargo resolve — that failure's prebuilt
+/// fallback links without the routed ext entrypoints and dies with
+/// undefined `js_*` symbols far from the cause.
+#[test]
+fn retain_workspace_declared_features_drops_unknown_names() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_file(
+        &dir.path().join("crates/perry-runtime/Cargo.toml"),
+        b"[package]\nname = \"perry-runtime\"\n\n[features]\nfull = []\nregex-engine = []\n\n[dependencies]\nmimalloc = { version = \"0.1\", optional = true }\n",
+    );
+    write_file(
+        &dir.path().join("crates/perry-stdlib/Cargo.toml"),
+        b"[package]\nname = \"perry-stdlib\"\n\n[features]\ncrypto = []\n",
+    );
+
+    let mut cross_features = vec![
+        "perry-runtime/full".to_string(),
+        "perry-runtime/alloc-mimalloc".to_string(),
+        "perry-runtime/mimalloc".to_string(),
+        "perry-stdlib/crypto".to_string(),
+        "perry-stdlib/web-fetch".to_string(),
+    ];
+    let dropped = retain_workspace_declared_features(dir.path(), &mut cross_features);
+
+    // `full` and `crypto` are declared features; `mimalloc` is an optional
+    // dep (implicit feature). Only the names the checkout has never heard of
+    // go.
+    assert_eq!(
+        cross_features,
+        vec![
+            "perry-runtime/full".to_string(),
+            "perry-runtime/mimalloc".to_string(),
+            "perry-stdlib/crypto".to_string(),
+        ]
+    );
+    assert_eq!(
+        dropped,
+        vec![
+            "perry-runtime/alloc-mimalloc".to_string(),
+            "perry-stdlib/web-fetch".to_string(),
+        ]
+    );
+}
+
+/// Fail-open: with no readable manifest (release tarball, partial checkout)
+/// there is nothing trustworthy to filter against — every requested feature
+/// must survive.
+#[test]
+fn retain_workspace_declared_features_keeps_all_without_manifests() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cross_features = vec![
+        "perry-runtime/full".to_string(),
+        "perry-runtime/alloc-mimalloc".to_string(),
+    ];
+    let dropped = retain_workspace_declared_features(dir.path(), &mut cross_features);
+    assert!(dropped.is_empty());
+    assert_eq!(cross_features.len(), 2);
+}
