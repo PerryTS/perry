@@ -46,7 +46,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Ok(u) => u,
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand_core_06::OsRng;
         let private_key = match RsaPrivateKey::new(&mut rng, 2048) {
             Ok(k) => k,
             Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         let mut seed = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
+        rand_core_06::OsRng.fill_bytes(&mut seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         let public_bytes = signing_key.verifying_key().to_bytes();
 
@@ -169,7 +169,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         let mut seed = [0u8; 57];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
+        rand_core_06::OsRng.fill_bytes(&mut seed);
         let signing_key = match ed448_goldilocks::SigningKey::try_from(seed.as_slice()) {
             Ok(k) => k,
             Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         let mut seed = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
+        rand_core_06::OsRng.fill_bytes(&mut seed);
         let private_key = x25519_dalek::StaticSecret::from(seed);
         let public_key = x25519_dalek::PublicKey::from(&private_key);
         let private_bytes = private_key.to_bytes();
@@ -305,7 +305,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
 
         let mut seed = [0u8; 64];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
+        rand_core_06::OsRng.fill_bytes(&mut seed);
         let (private_der, public_der) = match ml_kem_der_pair_from_seed(key_algo, &seed) {
             Some(pair) => pair,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -366,7 +366,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         let mut seed = [0u8; 56];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
+        rand_core_06::OsRng.fill_bytes(&mut seed);
         let private_key = x448::StaticSecret::from(seed);
         let public_key = x448::PublicKey::from(&private_key);
         let private_bytes = private_key.as_bytes().to_vec();
@@ -574,8 +574,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
         let byte_len = ((bit_len + 7) / 8) as usize;
         let mut key_bytes = vec![0u8; byte_len];
-        use rand::RngCore;
-        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        use rand_core_06::RngCore;
+        rand_core_06::OsRng.fill_bytes(&mut key_bytes);
         let buf = alloc_uint8array_from_slice(&key_bytes);
         if buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
@@ -600,8 +600,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         let mut key_bytes = vec![0u8; 32];
-        use rand::RngCore;
-        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        use rand_core_06::RngCore;
+        rand_core_06::OsRng.fill_bytes(&mut key_bytes);
         let buf = alloc_uint8array_from_slice(&key_bytes);
         if buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
@@ -658,8 +658,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             );
         }
         let mut key_bytes = vec![0u8; bit_len.div_ceil(8) as usize];
-        use rand::RngCore;
-        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        use rand_core_06::RngCore;
+        rand_core_06::OsRng.fill_bytes(&mut key_bytes);
         if bit_len % 8 != 0 {
             if let Some(last) = key_bytes.last_mut() {
                 *last &= 0xFF << (8 - bit_len % 8);
@@ -739,8 +739,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     };
     // Pull cryptographically strong random bytes for the key.
     let mut key_bytes = vec![0u8; byte_len];
-    use rand::RngCore;
-    rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+    use rand_core_06::RngCore;
+    rand_core_06::OsRng.fill_bytes(&mut key_bytes);
 
     // Allocate the CryptoKey-shaped buffer and register the requested
     // WebCrypto algorithm so later operations can validate it.

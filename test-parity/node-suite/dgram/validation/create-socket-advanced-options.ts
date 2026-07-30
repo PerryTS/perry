@@ -12,21 +12,48 @@ function codeOf(fn: () => unknown): string {
   }
 }
 
-console.log(
-  "invalid lookup:",
-  [null, true, 0, "lookup", {}]
-    .map((lookup) => codeOf(() => dgram.createSocket({ type: "udp4", lookup: lookup as never })))
-    .join(","),
-);
-console.log(
-  "invalid recv size:",
-  codeOf(() => dgram.createSocket({ type: "udp4", recvBufferSize: "bad" as never })),
-);
-console.log(
-  "invalid send size:",
-  codeOf(() => dgram.createSocket({ type: "udp4", sendBufferSize: "bad" as never })),
-);
-
-await Promise.all(
-  acceptedSockets.map((socket) => new Promise<void>((resolve) => socket.close(() => resolve()))),
-);
+try {
+  console.log(
+    "invalid lookup:",
+    [null, true, 0, "lookup", {}]
+      .map((lookup) =>
+        codeOf(() =>
+          dgram.createSocket({ type: "udp4", lookup: lookup as never })
+        )
+      )
+      .join(","),
+  );
+  console.log(
+    "invalid recv size:",
+    codeOf(() =>
+      dgram.createSocket({ type: "udp4", recvBufferSize: "bad" as never })
+    ),
+  );
+  console.log(
+    "invalid send size:",
+    codeOf(() =>
+      dgram.createSocket({ type: "udp4", sendBufferSize: "bad" as never })
+    ),
+  );
+  console.log(
+    "invalid receive block list:",
+    codeOf(() =>
+      dgram.createSocket({ type: "udp4", receiveBlockList: {} as never })
+    ),
+  );
+  console.log(
+    "invalid send block list:",
+    codeOf(() =>
+      dgram.createSocket({ type: "udp4", sendBlockList: {} as never })
+    ),
+  );
+} finally {
+  for (const socket of acceptedSockets) {
+    await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
+    const closed = new Promise<void>((resolve) =>
+      socket.once("close", resolve)
+    );
+    socket.close();
+    await closed;
+  }
+}

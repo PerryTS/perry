@@ -33,6 +33,15 @@ pub(crate) const NODE_CORE_DGRAM_FS_OS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "dgram",
         has_receiver: true,
+        method: "sendto",
+        class_filter: Some("Socket"),
+        runtime: "js_dgram_socket_sendto",
+        args: &[NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "dgram",
+        has_receiver: true,
         method: "bind",
         class_filter: Some("Socket"),
         runtime: "js_dgram_socket_bind",

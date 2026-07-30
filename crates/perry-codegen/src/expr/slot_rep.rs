@@ -147,6 +147,21 @@ fn repsel_debug_enabled() -> bool {
 /// canonical representation (i32/u32/Str),
 /// plus a process-wide running count. Only under `PERRY_REPSEL_DEBUG=1`.
 pub(crate) fn note_canonical_local(ctx: &FnCtx<'_>, id: u32, name: &str, rep: SlotRep) {
+    // `--opt-report` (#6952) shares this one call site with PERRY_REPSEL_DEBUG
+    // so a canonical local can never show up in one mechanism and not the
+    // other. `FnCtx` already knows the function and module, so no ambient
+    // scope is needed here.
+    if crate::opt_report::enabled() {
+        crate::opt_report::select_explicit(
+            &ctx.source_function,
+            crate::opt_report::RegionKind::Function,
+            crate::opt_report::Position::Local,
+            name,
+            Some(id),
+            crate::opt_report::Analysis::CanonicalSlot,
+            &format!("{rep:?}"),
+        );
+    }
     if !repsel_debug_enabled() {
         return;
     }

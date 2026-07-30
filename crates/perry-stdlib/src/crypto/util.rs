@@ -1,12 +1,20 @@
 pub(super) use crate::common::handle::{get_handle_mut, register_handle, Handle};
 pub(super) use aes::{Aes128, Aes192, Aes256};
+pub(super) use aes_09::{
+    Aes128 as Aes128CbcCipher, Aes192 as Aes192CbcCipher, Aes256 as Aes256CbcCipher,
+};
 pub(super) use base64::Engine as _;
 pub(super) use cbc::{
     cipher::{
         block_padding::{NoPadding, Pkcs7},
-        BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit,
+        BlockModeDecrypt, BlockModeEncrypt, KeyIvInit,
     },
     Decryptor, Encryptor,
+};
+pub(super) use ecb::cipher::{
+    block_padding::{NoPadding as EcbNoPadding, Pkcs7 as EcbPkcs7},
+    BlockDecryptMut as EcbBlockDecryptMut, BlockEncryptMut as EcbBlockEncryptMut,
+    KeyInit as EcbKeyInit,
 };
 pub(super) use hkdf::Hkdf;
 pub(super) use md5::{Digest as Md5Digest, Md5};
@@ -21,7 +29,8 @@ pub(super) use perry_runtime::{
     js_object_alloc, js_object_get_field_by_name, js_object_set_field_by_name,
     js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
 };
-pub(super) use rand::{Rng, RngCore};
+pub(super) use rand::{Rng, RngExt};
+pub(super) use rand_core_06::RngCore;
 pub(super) use rsa::pkcs1v15::{
     Pkcs1v15Sign, Signature as RsaPkcs1v15Signature, SigningKey, VerifyingKey,
 };
@@ -816,7 +825,7 @@ pub(super) fn sign_rsa_pss_data(
     data: &[u8],
     salt_len: usize,
 ) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_core_06::OsRng;
     match alg {
         RsaDigestKind::Sha256 => {
             RsaPssSigningKey::<RsaSha256>::new_with_salt_len(private_key, salt_len)

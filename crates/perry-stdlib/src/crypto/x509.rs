@@ -1237,7 +1237,7 @@ pub(super) fn dh_secret(prime: &[u8], private_key: &[u8], other_public_key: &[u8
 pub(super) fn dh_random_private_key(prime: &[u8]) -> Vec<u8> {
     let p = RsaBigUint::from_bytes_be(prime);
     let two = RsaBigUint::from(2u32);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_core_06::OsRng;
     for _ in 0..128 {
         let mut bytes = vec![0u8; prime.len()];
         rng.fill_bytes(&mut bytes);
@@ -1361,7 +1361,7 @@ pub(super) unsafe fn decode_dh_generator_value(value: Option<f64>, encoding: &st
 }
 
 pub(super) fn generate_p256_secret_key() -> Option<P256SecretKey> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_core_06::OsRng;
     for _ in 0..128 {
         let mut bytes = [0u8; 32];
         rng.fill_bytes(&mut bytes);

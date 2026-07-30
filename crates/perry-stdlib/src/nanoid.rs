@@ -58,11 +58,11 @@ pub unsafe extern "C" fn js_nanoid_custom(
     }
 
     // Generate ID using custom alphabet
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
+    use rand::RngExt;
+    let mut rng = rand::rng();
     let id: String = (0..size)
         .map(|_| {
-            let idx = rng.gen_range(0..alphabet_chars.len());
+            let idx = rng.random_range(0..alphabet_chars.len());
             alphabet_chars[idx]
         })
         .collect();

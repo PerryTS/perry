@@ -210,6 +210,24 @@ pub fn try_lower_namespace_member_call(
                 );
                 return Ok(Some(promise));
             }
+            "rmdir" => {
+                let path = if let Some(path) = args.first() {
+                    lower_expr(ctx, path)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let options = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let promise = ctx.block().call(
+                    DOUBLE,
+                    "js_fs_promises_rmdir",
+                    &[(DOUBLE, &path), (DOUBLE, &options)],
+                );
+                return Ok(Some(promise));
+            }
             _ => {}
         }
     }

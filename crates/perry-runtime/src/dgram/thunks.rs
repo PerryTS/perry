@@ -12,6 +12,10 @@ pub(crate) extern "C" fn dgram_send_thunk(closure: *const ClosureHeader, rest: f
     send_impl(this_value(closure), &collect_rest_args(rest))
 }
 
+pub(crate) extern "C" fn dgram_sendto_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    sendto_impl(this_value(closure), &collect_rest_args(rest))
+}
+
 pub(crate) extern "C" fn dgram_bind_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
     bind_impl(this_value(closure), &collect_rest_args(rest))
 }

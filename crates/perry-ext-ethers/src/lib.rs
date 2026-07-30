@@ -38,8 +38,7 @@ pub extern "C" fn js_ethers_get_address(str_ptr: *const StringHeader) -> *mut St
 /// `Wallet.createRandom() -> { address: string, privateKey: string }`.
 #[no_mangle]
 pub extern "C" fn js_ethers_wallet_create_random() -> JsValue {
-    use rand::Rng;
-    let pk_bytes: [u8; 32] = rand::thread_rng().gen();
+    let pk_bytes: [u8; 32] = rand::random();
 
     let hash = keccak256(&pk_bytes);
     let addr_bytes = &hash[12..32];

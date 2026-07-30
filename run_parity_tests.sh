@@ -295,6 +295,17 @@ cap_output() {
     '
 }
 
+# Unimported globals fixtures exercise script semantics. The repository root
+# marks `.ts` files as ESM, which makes Node run those scripts in strict mode.
+# Retry only a failed, import-free globals fixture as a `.cts` copy so both
+# Node and Perry use CommonJS without changing ESM fixtures or source files.
+can_retry_node_globals_as_commonjs() {
+    local test_id=$1
+    local test_file=$2
+    [[ "$test_id" == node-suite/globals/* && "$test_file" == *.ts ]] || return 1
+    ! grep -qE '^[[:space:]]*(import|export)[[:space:]{]' "$test_file"
+}
+
 # Function to normalize output for comparison
 normalize_output() {
     local input="$1"
@@ -411,6 +422,27 @@ echo "Building compiler (release)..."
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
 needs_wasm_host=0
+# The default `test-files/` corpus (the gap suite) under PERRY_NO_AUTO_OPTIMIZE
+# links the prebuilt `full` stdlib, which is NOT compiled with the
+# `external-*` pump features. Any test whose module routes through a
+# well-known ext wrapper (events / http / net / ws / zlib) then links against
+# a stdlib with no pump and fails — reported as an untriaged NEW gap failure
+# with no hint that the run mode caused it. Measured: 7 such false regressions
+# (test_gap_events_import_4995, 5x http/fetch, test_gap_net_connect_bound_value),
+# all of which pass with auto-optimize. node-suite already compensates below;
+# do the same here. There is no MODULE_FILTER for this suite, so build the
+# whole well-known set rather than switching on it.
+if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]]; then
+    BUILD_PACKAGES+=(-p perry-ext-events -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib)
+    BUILD_FEATURES+=(
+        perry-stdlib/external-events-construct
+        perry-stdlib/external-http-server-pump
+        perry-stdlib/external-http-client-pump
+        perry-stdlib/external-net-pump
+        perry-stdlib/external-ws-pump
+        perry-stdlib/external-zlib-pump
+    )
+fi
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
         ""|http|http/*|https|https/*|http2|http2/*)
@@ -633,6 +665,8 @@ for test_file in "${TEST_FILES[@]}"; do
     node_output_file="$OUTPUT_DIR/node/${safe_test_id}.txt"
     perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
     perry_binary="$PARITY_TMP/perry_parity_$safe_test_id"
+    parity_test_file="$test_file"
+    perry_compile_command=()
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_env_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-env:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
@@ -675,6 +709,14 @@ for test_file in "${TEST_FILES[@]}"; do
     run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
         node --experimental-strip-types "${node_argv[@]}" "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
+    if [[ $node_exit -ne 0 ]] && can_retry_node_globals_as_commonjs "$test_id" "$test_file"; then
+        parity_test_file="$PARITY_TMP/${safe_test_id}.cts"
+        cp "$test_file" "$parity_test_file"
+        perry_compile_command=(compile)
+        run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+            node --experimental-strip-types "${node_argv[@]}" "$parity_test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
+        node_exit=$?
+    fi
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"
 
@@ -720,10 +762,10 @@ for test_file in "${TEST_FILES[@]}"; do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${compile_flags[@]}" "$test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${compile_flags[@]}" --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 
@@ -751,8 +793,46 @@ for test_file in "${TEST_FILES[@]}"; do
     # up on the 2>&1-captured stream for any test that exercises a flagged
     # API (dns/dgram loopback, v8 heap snapshot, …) and diff against Node.
     perry_tmp=$(mktemp)
-    run_with_timeout 10 env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
+    # Cap the test binary's fork budget at current-user-tasks + 50: legit
+    # multi-process tests (cluster/child_process) fit easily, while a
+    # fork-bombing test (cluster re-exec loop, 2026-07-22) stalls at ~50
+    # orphans instead of saturating the user process limit — which would
+    # starve the harness itself out of fork() and kill the whole run.
+    # If the proc count can't be measured or the cap can't be applied, abort
+    # this test before exec: an uncapped run could recreate the fork bomb this
+    # containment layer exists to prevent. The budget is per-UID, not per-tree,
+    # so a concurrent heavy job can transiently eat the +50 headroom; recomputing
+    # per test keeps that window small, and the worst case is one test
+    # classified as crash rather than a wedged machine.
+    run_with_timeout 10 "$BASH" -c '
+        if [ "$(uname -s)" = "Linux" ]; then
+            proc_list=$(ps -u "$(id -u)" -L -o lwp= 2>/dev/null)
+        else
+            proc_list=$(ps -u "$(id -u)" -o pid= 2>/dev/null)
+        fi || {
+            echo "failed to measure the current user process count" >&2
+            exit 125
+        }
+        nproc_now=$(printf "%s\n" "$proc_list" | awk "NF { count++ } END { print count + 0 }") || {
+            echo "failed to count the current user processes" >&2
+            exit 125
+        }
+        if ! [ "$nproc_now" -gt 0 ] 2>/dev/null; then
+            echo "invalid current user process count: $nproc_now" >&2
+            exit 125
+        fi
+        if ! ulimit -u $(( nproc_now + 50 )) 2>/dev/null; then
+            echo "failed to apply the per-test process limit" >&2
+            exit 125
+        fi
+        exec "$@"' _ env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
+    # Reap orphaned children of the test binary (cluster tests fork workers
+    # that survive the timeout kill of the direct child and can fork-bomb the
+    # machine — 2026-07-22). Scoped to this run's tmp dir, so concurrent
+    # suite runs are unaffected. pkill -f treats the pattern as a regex, so
+    # escape the path's metacharacters (the mktemp dir contains a dot).
+    pkill -9 -f "$(printf '%s/' "$PARITY_TMP" | sed 's/[][\.*^$()+?{|]/\\&/g')" 2>/dev/null
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"
 
