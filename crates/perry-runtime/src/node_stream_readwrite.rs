@@ -1496,7 +1496,7 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
         let arr = crate::array::js_array_push_f64(arr, iterable);
         return normalized_readable_chunks(box_pointer(arr as *const u8));
     }
-    if let Some(source_iterator) = crate::array::call_symbol_async_iterator_for_flat_map(iterable) {
+    if let Some(source_iterator) = crate::array::call_symbol_async_iterator(iterable) {
         return NormalizedReadableInput {
             chunks: box_pointer(crate::array::js_array_alloc(0) as *const u8),
             source_iterator: Some(source_iterator),

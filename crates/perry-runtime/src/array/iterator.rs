@@ -988,12 +988,9 @@ pub extern "C" fn js_iterator_close_if_not_done(iter_f64: f64, done_f64: f64) ->
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// Issue #1572 — node:stream uses this from `node_stream::ns_iter_flat_map`
-/// to drive an async-iterable mapper result (an `async function*` return
-/// value) without re-deriving the `Symbol.asyncIterator` lookup +
-/// implicit-this dance.
-pub(crate) fn call_symbol_async_iterator_for_flat_map(value: f64) -> Option<f64> {
-    call_symbol_async_iterator(value)
+/// Resolve `Symbol.asyncIterator` and invoke it with the iterable as `this`.
+pub(crate) fn call_symbol_async_iterator(value: f64) -> Option<f64> {
+    call_symbol_async_iterator_impl(value)
 }
 
 /// Issue #1572 — same as `js_async_iterator_to_array` but reachable from
@@ -1076,7 +1073,7 @@ pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut 
     Some(result)
 }
 
-fn call_symbol_async_iterator(value: f64) -> Option<f64> {
+fn call_symbol_async_iterator_impl(value: f64) -> Option<f64> {
     let sym = crate::symbol::well_known_symbol("asyncIterator");
     if sym.is_null() {
         return None;

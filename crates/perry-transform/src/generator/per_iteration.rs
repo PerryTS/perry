@@ -1094,4 +1094,27 @@ mod tests {
 
         assert!(!collect_per_iteration_ids(&body).contains(&id));
     }
+
+    #[test]
+    fn for_loop_local_used_after_await_stays_hoisted() {
+        let id = 1;
+        let body = vec![Stmt::For {
+            init: None,
+            condition: Some(Expr::Bool(true)),
+            update: None,
+            body: vec![
+                Stmt::Let {
+                    id,
+                    name: "value".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::String("x".into())),
+                },
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+                Stmt::Expr(Expr::LocalGet(id)),
+            ],
+        }];
+
+        assert!(!collect_per_iteration_ids(&body).contains(&id));
+    }
 }

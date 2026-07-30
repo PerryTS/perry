@@ -976,7 +976,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         (DOUBLE, &options),
                     ],
                 );
-                let _ = ctx.block().call(
+                let pipe = ctx.block().call(
                     I64,
                     "js_readable_stream_pipe_to",
                     &[
@@ -985,6 +985,8 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         (DOUBLE, &options),
                     ],
                 );
+                ctx.block()
+                    .call_void("js_promise_mark_internally_handled", &[(I64, &pipe)]);
                 return Ok(Some(readable));
             }
             "locked" => {

@@ -933,7 +933,7 @@ fn array_value_ptr(input: f64) -> Option<*const crate::array::ArrayHeader> {
 }
 
 fn iterator_value_for_from_async(input: f64) -> Option<f64> {
-    if let Some(iter) = crate::array::call_symbol_async_iterator_for_flat_map(input) {
+    if let Some(iter) = crate::array::call_symbol_async_iterator(input) {
         return Some(iter);
     }
     if crate::object::is_async_generator_instance_value(input) {

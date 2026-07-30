@@ -323,7 +323,11 @@ extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64
         iterator_enqueue(iterator, chunk);
     }
     if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
-        pause_readable_stream(stream);
+        if iterator_has_pending(iterator) {
+            resume_readable_stream(stream);
+        } else {
+            pause_readable_stream(stream);
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -511,21 +515,28 @@ pub(super) fn call_source_iterator_return(stream: f64) {
 }
 
 extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
-    let iterator = this_value(closure);
-    if iterator_is_done(iterator) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(this_value(closure));
+    if iterator_is_done(iterator.get_nanbox_f64()) {
         return readable_iterator_done();
     }
-    let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) else {
+    let Some(stream) = get_hidden_value(
+        iterator.get_nanbox_f64(),
+        hidden_key(READABLE_ITERATOR_STREAM_KEY),
+    ) else {
         return readable_iterator_done();
     };
+    let stream = scope.root_nanbox_f64(stream);
 
-    if !readable_chunks_nonempty(stream) {
-        if let Some(source_iterator) =
-            get_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
-        {
+    if !readable_chunks_nonempty(stream.get_nanbox_f64()) {
+        if let Some(source_iterator) = get_hidden_value(
+            stream.get_nanbox_f64(),
+            hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+        ) {
+            let source_iterator = scope.root_nanbox_f64(source_iterator);
             let next = match catch_pipeline_throw(|| unsafe {
                 crate::object::js_native_call_method(
-                    source_iterator,
+                    source_iterator.get_nanbox_f64(),
                     b"next".as_ptr() as *const i8,
                     4,
                     std::ptr::null(),
@@ -534,57 +545,65 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
             }) {
                 Ok(next) => next,
                 Err(reason) => {
-                    iterator_mark_done(iterator);
-                    call_source_iterator_return(stream);
-                    destroy_stream(stream, reason);
-                    return rejected_promise(reason);
+                    let reason = scope.root_nanbox_f64(reason);
+                    iterator_mark_done(iterator.get_nanbox_f64());
+                    call_source_iterator_return(stream.get_nanbox_f64());
+                    destroy_stream(stream.get_nanbox_f64(), reason.get_nanbox_f64());
+                    return rejected_promise(reason.get_nanbox_f64());
                 }
             };
-            let promise = if crate::promise::js_value_is_promise(next) != 0 {
-                crate::value::js_nanbox_get_pointer(next) as *mut crate::promise::Promise
+            let next = scope.root_nanbox_f64(next);
+            let promise = if crate::promise::js_value_is_promise(next.get_nanbox_f64()) != 0 {
+                crate::value::js_nanbox_get_pointer(next.get_nanbox_f64())
+                    as *mut crate::promise::Promise
             } else {
-                crate::promise::js_promise_resolved(next)
+                crate::promise::js_promise_resolved(next.get_nanbox_f64())
             };
+            let promise = scope.root_raw_mut_ptr(promise);
             let fulfilled = js_closure_alloc(ns_readable_source_iterator_fulfilled as *const u8, 1);
+            let fulfilled = scope.root_raw_mut_ptr(fulfilled);
             let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
-            js_closure_set_capture_f64(fulfilled, 0, iterator);
-            js_closure_set_capture_f64(rejected, 0, iterator);
-            return box_pointer(
-                crate::promise::js_promise_then(promise, fulfilled, rejected) as *const u8,
-            );
+            let rejected = scope.root_raw_mut_ptr(rejected);
+            js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
+            js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
+            return box_pointer(crate::promise::js_promise_then(
+                promise.get_raw_mut_ptr(),
+                fulfilled.get_raw_mut_ptr(),
+                rejected.get_raw_mut_ptr(),
+            ) as *const u8);
         }
     }
 
     // First pull: attach persistent listeners + start flow. Listeners deliver
     // asynchronously (resume schedules microtasks), so nothing arrives
     // synchronously here — no event-loop re-entrancy.
-    iterator_ensure_attached(iterator, stream);
+    iterator_ensure_attached(iterator.get_nanbox_f64(), stream.get_nanbox_f64());
 
     // A chunk is already buffered → resolve immediately.
-    if let Some(chunk) = iterator_dequeue(iterator) {
-        note_yield(iterator);
+    if let Some(chunk) = iterator_dequeue(iterator.get_nanbox_f64()) {
+        note_yield(iterator.get_nanbox_f64());
         return readable_iterator_chunk_result(chunk);
     }
 
-    if !readable_chunks_nonempty(stream) {
-        if let Some(err) = readable_hidden_error(stream) {
-            iterator_mark_done(iterator);
-            iterator_remove_listeners(iterator);
+    if !readable_chunks_nonempty(stream.get_nanbox_f64()) {
+        if let Some(err) = readable_hidden_error(stream.get_nanbox_f64()) {
+            iterator_mark_done(iterator.get_nanbox_f64());
+            iterator_remove_listeners(iterator.get_nanbox_f64());
             return rejected_promise(err);
         }
     }
 
     // A stored error surfaces (once) as a rejection, then the iterator is done.
-    if let Some(err) = iterator_stored_error(iterator) {
-        iterator_mark_done(iterator);
-        iterator_remove_listeners(iterator);
+    if let Some(err) = iterator_stored_error(iterator.get_nanbox_f64()) {
+        iterator_mark_done(iterator.get_nanbox_f64());
+        iterator_remove_listeners(iterator.get_nanbox_f64());
         return rejected_promise(err);
     }
 
     // The stream has ended and the queue is drained → done.
-    if iterator_stream_ended(iterator) {
-        iterator_mark_done(iterator);
-        iterator_remove_listeners(iterator);
+    if iterator_stream_ended(iterator.get_nanbox_f64()) {
+        iterator_mark_done(iterator.get_nanbox_f64());
+        iterator_remove_listeners(iterator.get_nanbox_f64());
         return readable_iterator_done();
     }
 
@@ -592,9 +611,10 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     // `data`/`end`/`error` event settles. Concurrent `next()` calls each enqueue
     // their own promise (FIFO) — none is overwritten or dropped.
     let promise = crate::promise::js_promise_new();
-    iterator_push_pending(iterator, promise);
-    resume_readable_stream(stream);
-    box_pointer(promise as *const u8)
+    let promise = scope.root_raw_mut_ptr(promise);
+    iterator_push_pending(iterator.get_nanbox_f64(), promise.get_raw_mut_ptr());
+    resume_readable_stream(stream.get_nanbox_f64());
+    box_pointer(promise.get_raw_const_ptr())
 }
 
 extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 {
@@ -775,7 +795,8 @@ mod fifo_pending_tests {
 
     #[test]
     fn pending_pulls_settle_in_fifo_order_on_data() {
-        let iterator = new_iterator();
+        let stream = readable_from_chunks(crate::array::js_array_alloc(0));
+        let iterator = build_readable_async_iterator(stream, true);
         let p1 = crate::promise::js_promise_new();
         let p2 = crate::promise::js_promise_new();
         // Two `next()` pulls made while the queue is empty: both must be
@@ -787,9 +808,11 @@ mod fifo_pending_tests {
         let data_cb = js_closure_alloc(ns_readable_iter_on_data as *const u8, 1);
         js_closure_set_capture_f64(data_cb, 0, iterator);
 
-        // Two data events resolve p1 then p2 in FIFO order.
+        set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
         ns_readable_iter_on_data(data_cb, 1.0);
+        assert!(readable_is_flowing(stream));
         ns_readable_iter_on_data(data_cb, 2.0);
+        assert!(readable_is_paused(stream));
 
         assert_eq!(
             unsafe { (*p1).state },

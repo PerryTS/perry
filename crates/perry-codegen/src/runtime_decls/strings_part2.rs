@@ -879,6 +879,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     module.declare_function("js_promise_resolve", VOID, &[I64, DOUBLE]);
     module.declare_function("js_promise_reject", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_promise_mark_internally_handled", VOID, &[I64]);
     module.declare_function("js_promise_resolved", I64, &[DOUBLE]);
     module.declare_function("js_async_fn_result", I64, &[DOUBLE]);
     module.declare_function("js_promise_rejected", I64, &[DOUBLE]);
