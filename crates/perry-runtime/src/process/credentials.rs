@@ -209,12 +209,12 @@ pub extern "C" fn js_process_setgroups(groups: f64) {
     if arr_ptr.is_null() {
         return;
     }
-    let len = unsafe { crate::array::js_array_length(arr_ptr) };
+    let len = crate::array::js_array_length(arr_ptr);
     #[cfg(unix)]
     {
         let mut gids: Vec<libc::gid_t> = Vec::with_capacity(len as usize);
         for i in 0..len {
-            let v = unsafe { crate::array::js_array_get_f64(arr_ptr, i) };
+            let v = crate::array::js_array_get_f64(arr_ptr, i);
             if let Some(id) = unix_id_arg(v) {
                 gids.push(id as libc::gid_t);
             }

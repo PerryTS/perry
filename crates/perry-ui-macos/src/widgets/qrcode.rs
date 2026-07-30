@@ -1,7 +1,7 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::{AnyThread, MainThreadOnly};
+use objc2::MainThreadOnly;
 use objc2_app_kit::{NSImage, NSImageView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 
@@ -120,7 +120,7 @@ unsafe fn generate_qr_image(text: &str, display_size: f64) -> Option<Retained<NS
         return None;
     }
 
-    let cg_image: *mut AnyObject = msg_send![context, createCGImage: ci_image fromRect: extent];
+    let cg_image: *mut AnyObject = msg_send![context, createCGImage: ci_image, fromRect: extent];
     if cg_image.is_null() {
         return None;
     }
@@ -136,7 +136,7 @@ unsafe fn generate_qr_image(text: &str, display_size: f64) -> Option<Retained<NS
     let ns_image_cls = AnyClass::get(c"NSImage").unwrap();
     let ns_image_raw: *mut AnyObject = msg_send![ns_image_cls, alloc];
     let ns_image_raw: *mut AnyObject =
-        msg_send![ns_image_raw, initWithCGImage: cg_image size: target_size];
+        msg_send![ns_image_raw, initWithCGImage: cg_image, size: target_size];
 
     // Release the CGImage (we own it from createCGImage:fromRect:)
     extern "C" {
@@ -148,10 +148,8 @@ unsafe fn generate_qr_image(text: &str, display_size: f64) -> Option<Retained<NS
         return None;
     }
 
-    // Wrap in Retained
-    let ns_image: Retained<NSImage> = Retained::retain(ns_image_raw as *mut NSImage)?;
-    // Balance the retain (init already gives us +1)
-    std::mem::forget(Retained::retain(ns_image_raw as *mut NSImage));
+    // Adopt the +1 result returned by the alloc/init pair.
+    let ns_image: Retained<NSImage> = Retained::from_raw(ns_image_raw as *mut NSImage)?;
 
     Some(ns_image)
 }

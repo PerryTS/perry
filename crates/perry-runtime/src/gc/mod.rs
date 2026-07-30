@@ -41,7 +41,7 @@ pub use policy::*;
 mod progress;
 pub use progress::*;
 mod heap_budget;
-pub use heap_budget::*;
+pub(crate) use heap_budget::*;
 mod pressure;
 pub use pressure::*;
 mod telemetry;
@@ -367,6 +367,7 @@ thread_local! {
 /// Suppress (or re-enable) lazy `ensure_gc_initialized` on this thread, returning
 /// the previous value. Used by the GC tests' `ScopedRootScannerRegistryGuard` to
 /// run collections against a hand-controlled root set.
+#[allow(dead_code)] // test scaffolding: used only by ScopedRootScannerRegistryGuard under cfg(test)
 pub(crate) fn set_auto_gc_init_suppressed(suppressed: bool) -> bool {
     AUTO_GC_INIT_SUPPRESSED.with(|c| c.replace(suppressed))
 }

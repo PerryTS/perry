@@ -88,24 +88,22 @@ pub fn array_values_iter_null_done(
     if arr_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    unsafe {
-        let obj = js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 5);
-        js_object_set_field(
-            obj,
-            0,
-            JSValue::from_bits(js_nanbox_pointer(arr_ptr as i64).to_bits()),
-        );
-        js_object_set_field(obj, 1, JSValue::number(0.0));
-        js_object_set_field(obj, 2, JSValue::number(KIND_VALUES_NULL_DONE as f64));
-        js_object_set_field(
-            obj,
-            3,
-            JSValue::pointer(iteration_epoch as *const _ as *const u8),
-        );
-        js_object_set_field(obj, 4, JSValue::number(epoch as f64));
-        crate::object::attach_iterator_prototype(obj, ARRAY_ITERATOR_CLASS_ID);
-        js_nanbox_pointer(obj as i64)
-    }
+    let obj = js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 5);
+    js_object_set_field(
+        obj,
+        0,
+        JSValue::from_bits(js_nanbox_pointer(arr_ptr as i64).to_bits()),
+    );
+    js_object_set_field(obj, 1, JSValue::number(0.0));
+    js_object_set_field(obj, 2, JSValue::number(KIND_VALUES_NULL_DONE as f64));
+    js_object_set_field(
+        obj,
+        3,
+        JSValue::pointer(iteration_epoch as *const _ as *const u8),
+    );
+    js_object_set_field(obj, 4, JSValue::number(epoch as f64));
+    crate::object::attach_iterator_prototype(obj, ARRAY_ITERATOR_CLASS_ID);
+    js_nanbox_pointer(obj as i64)
 }
 
 /// `arr.keys()` iterator — yields each index `0..length`.

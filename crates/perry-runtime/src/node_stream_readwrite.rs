@@ -1729,10 +1729,6 @@ pub(crate) fn js_node_stream_is_stub_ended_after_read(stream: f64) -> bool {
     stream_hidden_ended(stream)
 }
 
-pub(crate) fn js_node_stream_is_stub_ended(stream: f64) -> bool {
-    stream_hidden_ended(stream)
-}
-
 #[cfg(test)]
 pub(crate) fn test_set_hidden_error(stream: f64, err: f64) {
     set_hidden_value(stream, hidden_error_key(), err);

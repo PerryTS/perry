@@ -599,7 +599,7 @@ mod sso_tests_1781 {
     /// SSO lookup key lets js_string_equals match).
     #[test]
     fn in_operator_finds_object_key_via_sso_lookup() {
-        unsafe {
+        {
             let obj = crate::object::js_object_alloc(0, 0);
             let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
             crate::object::js_object_set_field_by_name(obj, key, 42.0);

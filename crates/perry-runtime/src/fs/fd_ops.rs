@@ -471,8 +471,8 @@ pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_v
     // common-case `readv(123, [buf])` → `EBADF` parity and leave the
     // empty-array divergence as a follow-up.
     let buffers_for_check = array_ptr_from_value(buffers_value);
-    let buffers_nonempty = !buffers_for_check.is_null()
-        && unsafe { crate::array::js_array_length(buffers_for_check) } > 0;
+    let buffers_nonempty =
+        !buffers_for_check.is_null() && crate::array::js_array_length(buffers_for_check) > 0;
     if buffers_nonempty {
         crate::fs::validate::validate_fd_open(fd_value, "read");
     } else {
@@ -551,8 +551,8 @@ pub extern "C" fn js_fs_writev_sync(fd_value: f64, buffers_value: f64, position_
     // own writev returns 0 without touching the fd), validate only when
     // there's something to write.
     let buffers_for_check = array_ptr_from_value(buffers_value);
-    let buffers_nonempty = !buffers_for_check.is_null()
-        && unsafe { crate::array::js_array_length(buffers_for_check) } > 0;
+    let buffers_nonempty =
+        !buffers_for_check.is_null() && crate::array::js_array_length(buffers_for_check) > 0;
     if buffers_nonempty {
         // #2013: upgrade from type-only validation to type + EBADF so
         // `fs.writevSync(123, [buf])` matches Node's

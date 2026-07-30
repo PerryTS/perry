@@ -672,20 +672,18 @@ fn ensure_tty_prototypes() {
         read_keys.as_ptr(),
         read_keys.len() as u32,
     );
-    unsafe {
-        crate::object::js_object_set_field(
-            read_proto,
-            1,
-            JSValue::from_bits(
-                closure_value(
-                    js_tty_read_stream_set_raw_mode as *const u8,
-                    "setRawMode",
-                    1,
-                )
-                .to_bits(),
-            ),
-        );
-    }
+    crate::object::js_object_set_field(
+        read_proto,
+        1,
+        JSValue::from_bits(
+            closure_value(
+                js_tty_read_stream_set_raw_mode as *const u8,
+                "setRawMode",
+                1,
+            )
+            .to_bits(),
+        ),
+    );
     crate::object::class_prototype_object_root_store(CLASS_ID_TTY_READ_STREAM, read_proto);
 
     let write_keys = b"constructor\0isTTY\0getColorDepth\0hasColors\0_refreshSize\0cursorTo\0moveCursor\0clearLine\0clearScreenDown\0getWindowSize\0";
@@ -695,92 +693,88 @@ fn ensure_tty_prototypes() {
         write_keys.as_ptr(),
         write_keys.len() as u32,
     );
-    unsafe {
-        crate::object::js_object_set_field(write_proto, 1, JSValue::from_bits(TAG_TRUE));
-        crate::object::js_object_set_field(
-            write_proto,
-            2,
-            JSValue::from_bits(
-                closure_value(
-                    js_tty_write_stream_get_color_depth as *const u8,
-                    "getColorDepth",
-                    1,
-                )
-                .to_bits(),
-            ),
-        );
-        crate::object::js_object_set_field(
-            write_proto,
-            3,
-            JSValue::from_bits(
-                closure_value(js_tty_write_stream_has_colors as *const u8, "hasColors", 2)
-                    .to_bits(),
-            ),
-        );
-        crate::object::js_object_set_field(
-            write_proto,
-            4,
-            JSValue::from_bits(
-                closure_value(
-                    js_tty_write_stream_refresh_size as *const u8,
-                    "_refreshSize",
-                    0,
-                )
-                .to_bits(),
-            ),
-        );
-        crate::object::js_object_set_field(
-            write_proto,
-            5,
-            JSValue::from_bits(
-                closure_value(js_tty_write_stream_cursor_to as *const u8, "cursorTo", 3).to_bits(),
-            ),
-        );
-        crate::object::js_object_set_field(
-            write_proto,
-            6,
-            JSValue::from_bits(
-                closure_value(
-                    js_tty_write_stream_move_cursor as *const u8,
-                    "moveCursor",
-                    3,
-                )
-                .to_bits(),
-            ),
-        );
-        crate::object::js_object_set_field(
-            write_proto,
-            7,
-            JSValue::from_bits(
-                closure_value(js_tty_write_stream_clear_line as *const u8, "clearLine", 2)
-                    .to_bits(),
-            ),
-        );
-        crate::object::js_object_set_field(
-            write_proto,
-            8,
-            JSValue::from_bits(
-                closure_value(
-                    js_tty_write_stream_clear_screen_down as *const u8,
-                    "clearScreenDown",
-                    1,
-                )
-                .to_bits(),
-            ),
-        );
-        crate::object::js_object_set_field(
-            write_proto,
-            9,
-            JSValue::from_bits(
-                closure_value(
-                    js_tty_write_stream_get_window_size as *const u8,
-                    "getWindowSize",
-                    0,
-                )
-                .to_bits(),
-            ),
-        );
-    }
+    crate::object::js_object_set_field(write_proto, 1, JSValue::from_bits(TAG_TRUE));
+    crate::object::js_object_set_field(
+        write_proto,
+        2,
+        JSValue::from_bits(
+            closure_value(
+                js_tty_write_stream_get_color_depth as *const u8,
+                "getColorDepth",
+                1,
+            )
+            .to_bits(),
+        ),
+    );
+    crate::object::js_object_set_field(
+        write_proto,
+        3,
+        JSValue::from_bits(
+            closure_value(js_tty_write_stream_has_colors as *const u8, "hasColors", 2).to_bits(),
+        ),
+    );
+    crate::object::js_object_set_field(
+        write_proto,
+        4,
+        JSValue::from_bits(
+            closure_value(
+                js_tty_write_stream_refresh_size as *const u8,
+                "_refreshSize",
+                0,
+            )
+            .to_bits(),
+        ),
+    );
+    crate::object::js_object_set_field(
+        write_proto,
+        5,
+        JSValue::from_bits(
+            closure_value(js_tty_write_stream_cursor_to as *const u8, "cursorTo", 3).to_bits(),
+        ),
+    );
+    crate::object::js_object_set_field(
+        write_proto,
+        6,
+        JSValue::from_bits(
+            closure_value(
+                js_tty_write_stream_move_cursor as *const u8,
+                "moveCursor",
+                3,
+            )
+            .to_bits(),
+        ),
+    );
+    crate::object::js_object_set_field(
+        write_proto,
+        7,
+        JSValue::from_bits(
+            closure_value(js_tty_write_stream_clear_line as *const u8, "clearLine", 2).to_bits(),
+        ),
+    );
+    crate::object::js_object_set_field(
+        write_proto,
+        8,
+        JSValue::from_bits(
+            closure_value(
+                js_tty_write_stream_clear_screen_down as *const u8,
+                "clearScreenDown",
+                1,
+            )
+            .to_bits(),
+        ),
+    );
+    crate::object::js_object_set_field(
+        write_proto,
+        9,
+        JSValue::from_bits(
+            closure_value(
+                js_tty_write_stream_get_window_size as *const u8,
+                "getWindowSize",
+                0,
+            )
+            .to_bits(),
+        ),
+    );
     crate::object::class_prototype_object_root_store(CLASS_ID_TTY_WRITE_STREAM, write_proto);
 }
 
@@ -803,7 +797,7 @@ pub(crate) fn attach_tty_constructor_prototype(constructor_value: f64, name: &st
     if proto.is_null() {
         return;
     }
-    unsafe {
+    {
         crate::object::js_object_set_field(
             proto,
             0,
@@ -864,10 +858,8 @@ pub extern "C" fn js_tty_read_stream_new(fd: f64) -> f64 {
         keys.as_ptr(),
         keys.len() as u32,
     );
-    unsafe {
-        crate::object::js_object_set_field(obj, 0, JSValue::from_bits(TAG_FALSE));
-        crate::object::js_object_set_field(obj, 1, JSValue::from_bits(TAG_TRUE));
-    }
+    crate::object::js_object_set_field(obj, 0, JSValue::from_bits(TAG_FALSE));
+    crate::object::js_object_set_field(obj, 1, JSValue::from_bits(TAG_TRUE));
     ptr_value(obj)
 }
 
@@ -1115,7 +1107,7 @@ pub extern "C" fn js_tty_write_stream_remove_all_listeners(
 
 pub fn throw_invalid_fd(fd: f64) -> ! {
     let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    unsafe {
+    {
         crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
         let str_val = |s: &str| -> f64 {
             let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);

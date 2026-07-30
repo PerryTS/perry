@@ -109,7 +109,7 @@ pub(crate) fn class_own_static_accessor_ptrs(class_id: u32, name: &str) -> Optio
 /// closure calling convention. The receiver comes from `IMPLICIT_THIS`, set
 /// by the method-call dispatch the closure value travels through.
 extern "C" fn class_accessor_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
-    let raw = unsafe { crate::closure::js_closure_get_capture_ptr(closure, 0) } as usize;
+    let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
     if raw == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -123,7 +123,7 @@ extern "C" fn class_accessor_setter_thunk(
     closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
-    let raw = unsafe { crate::closure::js_closure_get_capture_ptr(closure, 0) } as usize;
+    let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
     if raw == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -156,7 +156,7 @@ pub(crate) fn class_accessor_function_value(
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    unsafe { crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64) };
+    crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64);
     // Spec `.length`: params before the first default/rest. A getter takes no
     // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
     // has `.length === 0` (defaults don't count). Codegen registers the raw
@@ -176,9 +176,7 @@ pub(crate) fn class_accessor_function_value(
     let fn_name = format!("{prefix}{prop_name}");
     let name_ptr = crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
     let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
-    unsafe {
-        crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
-    }
+    crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
     crate::object::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
@@ -291,11 +289,13 @@ pub unsafe extern "C" fn js_register_class_static_setter(
 
 // These two are only ever called from codegen-emitted module-init IR (no Rust
 // caller), so the auto-optimize whole-program-LLVM build would dead-strip them
-// without an anchor. Pin each via a `#[cfg_attr(feature = "keepalive-anchors", used)]` static (mirrors node_v8.rs).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+// without an anchor. Pin each via a `#[used]` static (mirrors node_v8.rs).
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REGISTER_STATIC_GETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_getter;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_setter;
 
@@ -328,7 +328,8 @@ pub unsafe extern "C" fn js_register_class_method_bind_length(
         .insert((class_id as u32, name), length as u32);
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REGISTER_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_method_bind_length;
 
@@ -361,7 +362,8 @@ pub unsafe extern "C" fn js_register_class_static_method_bind_length(
         .insert((class_id as u32, name), length as u32);
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_REGISTER_STATIC_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_method_bind_length;
 

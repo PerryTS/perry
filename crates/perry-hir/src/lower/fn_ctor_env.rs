@@ -44,6 +44,8 @@ pub(crate) enum FnCtorShape {
     DynCtor(DynFnCtorKind),
     /// `var f = async function () {};` — a function-literal var, recorded so
     /// a later `f.constructor` resolves to the right dynamic ctor kind.
+    #[allow(dead_code)]
+    // payload retained for the planned `f.constructor` kind resolution; matched only via `_` today
     FnLiteral(DynFnCtorKind),
 }
 

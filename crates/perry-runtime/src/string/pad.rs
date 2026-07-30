@@ -27,10 +27,11 @@ pub extern "C" fn js_string_pad_fill(value: f64) -> *mut StringHeader {
     crate::builtins::js_string_coerce(value)
 }
 
-// `#[cfg_attr(feature = "keepalive-anchors", used)]` keepalive: `js_string_pad_fill` is reached only from generated
+// `#[used]` keepalive: `js_string_pad_fill` is reached only from generated
 // `.o`, so the whole-program auto-optimize bitcode rebuild would dead-strip it
 // without an anchor (see project_auto_optimize_keepalive_3320).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_PAD_FILL: extern "C" fn(f64) -> *mut StringHeader = js_string_pad_fill;
 
 /// Maximum string length Perry/V8 supports as a single `String`. This

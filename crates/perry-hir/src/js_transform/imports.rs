@@ -15,7 +15,7 @@ pub struct JsImportInfo {
 
 /// Context for tracking JS values during transformation
 #[derive(Debug, Clone, Default)]
-struct JsValueTracker {
+pub(crate) struct JsValueTracker {
     /// LocalIds that hold JS values (from imports or JS function results)
     js_locals: HashSet<LocalId>,
     /// Class names that are JS classes (from imports)

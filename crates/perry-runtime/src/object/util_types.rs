@@ -172,11 +172,9 @@ pub extern "C" fn js_util_types_is_promise(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
     nanbox_bool(
         v.is_pointer()
-            && unsafe {
-                crate::promise::js_is_promise(
-                    v.as_pointer::<crate::promise::Promise>() as *mut crate::promise::Promise
-                ) != 0
-            },
+            && crate::promise::js_is_promise(
+                v.as_pointer::<crate::promise::Promise>() as *mut crate::promise::Promise
+            ) != 0,
     )
 }
 

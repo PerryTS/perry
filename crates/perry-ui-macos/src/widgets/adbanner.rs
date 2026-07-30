@@ -10,7 +10,7 @@
 
 use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::{AnyThread, MainThreadOnly};
+use objc2::MainThreadOnly;
 use objc2_app_kit::NSView;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::MainThreadMarker;

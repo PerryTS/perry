@@ -16,18 +16,8 @@
 //! `js_set_from_iterable`, `js_weakmap_init_iterable`, `js_weakset_init_iterable`)
 //! call into here so the throw-vs-empty-vs-consume decision lives in one place.
 
-use crate::array::ArrayHeader;
 use crate::value::{js_jsvalue_to_string, js_nanbox_get_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 use std::os::raw::c_int;
-
-/// Outcome of classifying a constructor init argument.
-pub(crate) enum InitIter {
-    /// `null` / `undefined` — treat as empty init, no entries.
-    Empty,
-    /// An iterable; the yielded values have been materialized into this
-    /// (NaN-box-stripped) Array pointer.
-    Values(*mut ArrayHeader),
-}
 
 /// `typeof`-style word for a non-iterable value, used to build the Node
 /// "<type> is not iterable" message. `null`/`undefined` are handled by the
@@ -397,26 +387,4 @@ fn value_display(value: f64) -> String {
         let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
         String::from_utf8_lossy(std::slice::from_raw_parts(data, byte_len)).into_owned()
     }
-}
-
-/// Classify a collection-constructor init argument:
-/// - `null`/`undefined` → [`InitIter::Empty`],
-/// - any iterable → materialize the yielded values into an Array
-///   ([`InitIter::Values`]),
-/// - anything else → throw the Node "not iterable" `TypeError`.
-///
-/// The returned Array pointer is NaN-box-stripped (a raw `*mut ArrayHeader`).
-pub(crate) fn classify_init(value: f64) -> InitIter {
-    let bits = value.to_bits();
-    if bits == TAG_UNDEFINED || bits == TAG_NULL {
-        return InitIter::Empty;
-    }
-    if !is_iterable(value) {
-        throw_not_iterable(value);
-    }
-    // `js_for_of_to_array` returns a NaN-boxed (POINTER_TAG) Array f64 whose
-    // elements are exactly what `for...of value` would yield.
-    let arr_f64 = crate::array::js_for_of_to_array(value);
-    let arr_ptr = js_nanbox_get_pointer(arr_f64) as *mut ArrayHeader;
-    InitIter::Values(arr_ptr)
 }

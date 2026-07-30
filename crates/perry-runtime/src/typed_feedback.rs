@@ -1994,7 +1994,8 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard(
     }
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_F64_RANGE_LOOP_GUARD: extern "C" fn(
     u64,
     f64,
@@ -2035,7 +2036,8 @@ pub extern "C" fn js_typed_feedback_packed_i32_array_loop_guard(
     }
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
     js_typed_feedback_packed_i32_array_loop_guard;
 
@@ -2072,7 +2074,8 @@ pub extern "C" fn js_typed_feedback_packed_u32_array_loop_guard(
     }
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
     js_typed_feedback_packed_u32_array_loop_guard;
 

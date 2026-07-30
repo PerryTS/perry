@@ -5,6 +5,16 @@
 //! DateTimeFormat, and Collator, with deterministic formatting for the common
 //! explicit locale/options combinations used by Perry's Node parity suite.
 
+#![cfg_attr(
+    not(any(
+        feature = "intl-namespace",
+        feature = "intl-locale",
+        feature = "intl-datetime",
+        feature = "intl-segmenter"
+    )),
+    allow(dead_code, unused_imports)
+)]
+
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::closure::ClosureHeader;
 use crate::object::{
@@ -458,6 +468,7 @@ fn throw_invalid_language_tag(tag: &str) -> ! {
     crate::exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
+#[allow(dead_code)] // used only in the #[cfg(not(feature = "intl-locale"))] fallback branch
 pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return None;

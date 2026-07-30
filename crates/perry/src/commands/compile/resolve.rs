@@ -857,26 +857,6 @@ fn resolve_exports_with_conditions(
     }
 }
 
-/// Resolve exports field from package.json for executable module entries.
-///
-/// `node` is ranked ABOVE `default` (and above `import`/`module`) because perry
-/// compiles a Node target: a package whose `exports` offers a `{ node, default }`
-/// conditional pair ships its full Node API under `node` and a reduced
-/// browser/edge build under `default`. Picking `default` drops Node-only
-/// exports — e.g. `unicorn-magic` exposes `toPath`/`traversePathUp` only in its
-/// `node` entry (`./node.js`); resolving `./default.js` left them undefined, so
-/// `npm-run-path` (→ execa) failed to LINK (`undefined symbol
-/// perry_fn_…unicorn_magic…__toPath`). Matches the `resolve_subpath_import`
-/// condition order (chalk's `#supports-color` `{ node, default }`); the two
-/// resolvers must agree.
-pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String> {
-    resolve_exports_with_conditions(
-        exports,
-        subpath,
-        &["perry", "node", "import", "module", "default", "require"],
-    )
-}
-
 /// Node subpath imports (#5039): resolve a `#`-prefixed specifier through the
 /// importing package's own `package.json` `"imports"` map
 /// (https://nodejs.org/api/packages.html#imports). chalk 5 loads its vendored
@@ -910,7 +890,7 @@ fn resolve_subpath_import(import_source: &str, importer_path: &Path) -> Option<P
     None
 }
 
-/// Like [`resolve_exports`], but returns EVERY condition branch's resolution
+/// Like `resolve_exports_with_conditions`, but returns EVERY condition branch's resolution
 /// in priority order instead of only the first. Callers that check disk
 /// existence (`resolve_package_entry`) walk the list so a pruned target
 /// (Next.js standalone file tracing) falls through to the next condition.
@@ -947,22 +927,30 @@ pub(super) fn resolve_exports_candidates(
                     collect(entry, subpath, out);
                     return;
                 }
-                for (key, entry) in map.iter() {
-                    if key.contains('*') {
-                        let parts: Vec<&str> = key.splitn(2, '*').collect();
-                        if parts.len() == 2 {
-                            let (prefix, suffix) = (parts[0], parts[1]);
-                            if subpath.starts_with(prefix) && subpath.ends_with(suffix) {
-                                let matched = &subpath[prefix.len()..subpath.len() - suffix.len()];
-                                let mut templates = Vec::new();
-                                collect(entry, subpath, &mut templates);
-                                for template in templates {
-                                    let resolved = template.replace('*', matched);
-                                    if !out.contains(&resolved) {
-                                        out.push(resolved);
-                                    }
-                                }
-                            }
+                let mut patterns: Vec<_> = map
+                    .iter()
+                    .filter_map(|(key, entry)| {
+                        let (prefix, suffix) = key.split_once('*')?;
+                        let end = subpath.len().checked_sub(suffix.len())?;
+                        (subpath.starts_with(prefix)
+                            && subpath.ends_with(suffix)
+                            && prefix.len() <= end)
+                            .then_some((prefix, suffix, end, entry))
+                    })
+                    .collect();
+                patterns.sort_by(|a, b| {
+                    b.0.len()
+                        .cmp(&a.0.len())
+                        .then_with(|| (b.0.len() + b.1.len()).cmp(&(a.0.len() + a.1.len())))
+                });
+                for (prefix, _, end, entry) in patterns {
+                    let matched = &subpath[prefix.len()..end];
+                    let mut templates = Vec::new();
+                    collect(entry, subpath, &mut templates);
+                    for template in templates {
+                        let resolved = template.replace('*', matched);
+                        if !out.contains(&resolved) {
+                            out.push(resolved);
                         }
                     }
                 }

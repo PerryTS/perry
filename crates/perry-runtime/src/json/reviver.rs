@@ -582,10 +582,6 @@ unsafe fn object_child_source(
     }
 }
 
-unsafe fn holder_ptr_from_bits(bits: u64) -> *mut crate::ObjectHeader {
-    (bits & POINTER_MASK) as *mut crate::ObjectHeader
-}
-
 unsafe fn delete_property_or_keep(
     holder_handle: &crate::gc::RuntimeHandle<'_>,
     key_handle: &crate::gc::RuntimeHandle<'_>,

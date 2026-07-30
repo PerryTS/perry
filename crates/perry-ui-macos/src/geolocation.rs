@@ -62,7 +62,11 @@ struct WatchEntry {
 
 struct PermissionRequest {
     callback: f64,
+    #[allow(dead_code)]
+    // keep-alive owner: retains the CLLocationManager while the async permission request is pending
     manager: Retained<AnyObject>,
+    #[allow(dead_code)]
+    // keep-alive owner: retains the delegate so authorization callbacks still fire
     delegate: Retained<AnyObject>,
 }
 

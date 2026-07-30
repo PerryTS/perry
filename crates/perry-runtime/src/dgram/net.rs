@@ -11,7 +11,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket}
 use std::sync::Arc;
 
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
-use crate::value::JSValue;
 
 pub(crate) fn allocate_port(registry: &mut DgramRegistry, address: &str) -> u16 {
     for _ in 0..16384 {
@@ -125,33 +124,6 @@ pub(crate) fn build_rinfo(address: &str, family: &str, port: u16, size: usize) -
     js_object_set_field_by_name(obj, key("port"), port as f64);
     js_object_set_field_by_name(obj, key("size"), size as f64);
     boxed_pointer(obj as *const u8)
-}
-
-pub(crate) fn message_value(value: f64) -> Option<(f64, usize)> {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_any_string() {
-        let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
-        if ptr.is_null() {
-            return None;
-        }
-        let buf = crate::buffer::js_buffer_from_string(ptr, 0);
-        let len = unsafe { (*buf).length as usize };
-        return Some((boxed_pointer(buf as *const u8), len));
-    }
-    let raw = raw_ptr_from_value(value);
-    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        return Some((value, unsafe { (*buf).length as usize }));
-    }
-    if raw >= 0x10000 && crate::typedarray::lookup_typed_array_kind(raw).is_some() {
-        let len = unsafe {
-            crate::typedarray::typed_array_bytes(raw as *const crate::typedarray::TypedArrayHeader)
-                .map(|bytes| bytes.len())
-                .unwrap_or(0)
-        };
-        return Some((value, len));
-    }
-    None
 }
 
 /// Whether `PERRY_DETERMINISTIC_NET=1` — use the in-process loopback registry

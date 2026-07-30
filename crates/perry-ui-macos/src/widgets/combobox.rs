@@ -12,7 +12,7 @@
 use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
-use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
+use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_app_kit::NSView;
 use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 use std::cell::RefCell;

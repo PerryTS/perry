@@ -2221,7 +2221,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let Some(sites) = spec_facts.call_sites.get(&f.id) else {
                 continue;
             };
-            let mut reject =
+            let reject =
                 |reason: typed_abi::TypedCloneRejectionReason,
                  records: &mut Vec<crate::native_value::NativeRepRecord>| {
                     record_typed_clone_rejection(

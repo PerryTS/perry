@@ -219,7 +219,6 @@ pub(crate) unsafe fn typed_array_define_own_property(
         // Symbol / non-string / non-canonical key → ordinary define handles it.
         return TypedArrayDefineOutcome::NotTypedArray;
     };
-    let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
     let descriptor_value = desc_handle.get_nanbox_f64();
 
     // Canonical numeric index → integer-indexed branch. From here every path

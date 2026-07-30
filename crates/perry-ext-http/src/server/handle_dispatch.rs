@@ -155,9 +155,7 @@ extern "C" {
     fn js_node_http_res_set_strict_content_length(handle: i64, value: f64);
     fn js_node_http_res_req_handle(handle: i64) -> i64;
     fn js_node_http_res_write_head(handle: i64, status: f64, arg2: i64, arg3: i64);
-    fn js_node_http_res_write(handle: i64, chunk: f64) -> i32;
     fn js_node_http_res_add_trailers(handle: i64, headers_value: f64);
-    fn js_node_http_res_end(handle: i64, chunk: f64);
     fn js_node_http_res_flush_headers(handle: i64);
     fn js_node_http_res_cork(handle: i64);
     fn js_node_http_res_uncork(handle: i64);
@@ -209,26 +207,6 @@ pub extern "C" fn js_ext_http_server_response_is_handle(handle: i64) -> i32 {
         0
     }
 }
-
-/// Methods this dispatcher claims. Kept in sync with the
-/// `class_filter: Some("HttpServer")` rows in
-/// `crates/perry-codegen/src/lower_call/native_table/http.rs`.
-pub const HTTP_SERVER_METHODS: &[&str] = &[
-    "listen",
-    "close",
-    "closeAllConnections",
-    "closeIdleConnections",
-    "address",
-    "on",
-    "addListener",
-    "removeAllListeners",
-    "removeListener",
-    "off",
-    "setTimeout",
-    "ref",
-    "unref",
-    "@@__perry_wk_asyncDispose",
-];
 
 fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
     match name {

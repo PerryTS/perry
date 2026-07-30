@@ -666,7 +666,7 @@ pub extern "C" fn js_string_locale_compare_opts(
     b: *const StringHeader,
     options: f64,
 ) -> f64 {
-    let numeric = unsafe {
+    let numeric = {
         let ptr =
             crate::value::js_nanbox_get_pointer(options) as *const crate::object::ObjectHeader;
         if ptr.is_null() || (ptr as usize) < 0x10000 {
@@ -810,7 +810,7 @@ mod tests_sso_helpers {
             let bytes = name.as_bytes();
             assert!(bytes.len() <= SHORT_STRING_MAX_LEN);
 
-            let incoming = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) };
+            let incoming = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
             let heap_stored = JSValue::string_ptr(incoming);
             let sso_stored = JSValue::try_short_string(bytes).expect("len<=5 encodes as SSO");
             assert!(sso_stored.is_short_string(), "{name:?} should be SSO");
@@ -840,9 +840,9 @@ mod tests_sso_helpers {
     /// is SSO and the other is heap.
     #[test]
     fn key_matches_rejects_different_bytes_across_reps() {
-        let incoming = unsafe { js_string_from_bytes(b"id".as_ptr(), 2) };
+        let incoming = js_string_from_bytes(b"id".as_ptr(), 2);
         let sso_other = JSValue::try_short_string(b"tag").expect("SSO");
-        let heap_other_ptr = unsafe { js_string_from_bytes(b"other".as_ptr(), 5) };
+        let heap_other_ptr = js_string_from_bytes(b"other".as_ptr(), 5);
         let heap_other = JSValue::string_ptr(heap_other_ptr);
 
         unsafe {
@@ -855,7 +855,7 @@ mod tests_sso_helpers {
     /// without dereferencing the payload.
     #[test]
     fn key_matches_rejects_non_string_stored() {
-        let incoming = unsafe { js_string_from_bytes(b"id".as_ptr(), 2) };
+        let incoming = js_string_from_bytes(b"id".as_ptr(), 2);
         for stored in [
             JSValue::undefined(),
             JSValue::null(),
@@ -874,7 +874,7 @@ mod tests_sso_helpers {
     #[test]
     fn key_bytes_round_trips_sso_and_heap() {
         let sso = JSValue::try_short_string(b"path").expect("SSO");
-        let heap = JSValue::string_ptr(unsafe { js_string_from_bytes(b"longish".as_ptr(), 7) });
+        let heap = JSValue::string_ptr(js_string_from_bytes(b"longish".as_ptr(), 7));
         let mut buf = [0u8; SHORT_STRING_MAX_LEN];
         unsafe {
             assert_eq!(js_string_key_bytes(sso, &mut buf), Some(b"path".as_ref()));

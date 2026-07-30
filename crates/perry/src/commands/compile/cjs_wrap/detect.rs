@@ -1,7 +1,5 @@
 //! CommonJS-vs-ESM heuristic detection plus reserved-word filtering.
 
-use super::*;
-
 /// Heuristic CJS detection. Same shape as
 /// `perry-jsruntime/src/modules.rs::is_commonjs`. False negatives are
 /// acceptable (the file just falls through to the existing ESM-only

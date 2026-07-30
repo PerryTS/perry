@@ -269,7 +269,7 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
             return this_arg;
         }
         if std::ptr::eq(unsafe { (*closure).func_ptr }, BOUND_FUNCTION_FUNC_PTR) {
-            let inner = unsafe { js_closure_get_capture_f64(closure, 0) };
+            let inner = js_closure_get_capture_f64(closure, 0);
             let ij = crate::value::JSValue::from_bits(inner.to_bits());
             if !ij.is_pointer() {
                 return this_arg;
@@ -485,9 +485,10 @@ pub unsafe extern "C" fn js_function_bind(
 
 /// Keepalive anchor for the `js_function_bind` symbol. The auto-optimize
 /// whole-program LLVM rebuild dead-strips `#[no_mangle]` fns that are only
-/// referenced from generated `.o` / other crates; this `#[cfg_attr(feature = "keepalive-anchors", used)]` static
+/// referenced from generated `.o` / other crates; this `#[used]` static
 /// survives the bitcode pipeline. See project_auto_optimize_keepalive_3320.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_FUNCTION_BIND: unsafe extern "C" fn(f64, *const f64, usize) -> f64 =
     js_function_bind;
 

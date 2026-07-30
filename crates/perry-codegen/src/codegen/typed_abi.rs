@@ -635,10 +635,6 @@ pub(crate) fn typed_i1_closure_rejection_reason_with_types(
     typed_i1_body_rejection_reason(body, locals)
 }
 
-pub(crate) fn typed_i32_closure_rejection_reason(expr: &Expr) -> Option<TypedCloneRejectionReason> {
-    typed_i32_closure_rejection_reason_with_types(expr, &HashMap::new())
-}
-
 pub(crate) fn typed_i32_closure_rejection_reason_with_types(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
@@ -922,6 +918,10 @@ fn typed_receiver_chain_fields<'a>(
         if link.extends_expr.is_some()
             || link.native_extends.is_some()
             || link.heritage_lexically_shadowed
+            // A name-only parent is imported. Its authoritative layout is
+            // source-prefix-resolved elsewhere; this name-keyed map cannot
+            // disambiguate same-named cross-module classes safely.
+            || (link.extends_name.is_some() && link.extends.is_none())
             || (link.extends.is_some() && link.extends_name.is_none())
         {
             return Err(TypedCloneRejectionReason::ReceiverClassExtends);
@@ -1891,7 +1891,7 @@ pub(crate) fn lower_typed_i1_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_hir::Param;
+    use perry_hir::{Class, Param};
 
     fn param(id: u32, name: &str, ty: Type) -> Param {
         Param {
@@ -1926,6 +1926,46 @@ mod tests {
 
     fn ret(expr: Expr) -> Vec<Stmt> {
         vec![Stmt::Return(Some(expr))]
+    }
+
+    fn class(id: u32, name: &str, extends: Option<u32>, extends_name: Option<&str>) -> Class {
+        Class {
+            id,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends,
+            extends_name: extends_name.map(str::to_string),
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: Vec::new(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+            alloc_width_hint: 0,
+        }
+    }
+
+    #[test]
+    fn receiver_clone_rejects_name_only_imported_parent_chain() {
+        let parent = class(1, "Parent", None, None);
+        let child = class(2, "Child", None, Some("Parent"));
+        let classes = HashMap::from([("Parent".to_string(), &parent)]);
+
+        assert!(matches!(
+            typed_receiver_chain_fields(&classes, &child),
+            Err(TypedCloneRejectionReason::ReceiverClassExtends)
+        ));
     }
 
     #[test]

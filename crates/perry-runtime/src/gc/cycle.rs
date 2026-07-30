@@ -856,6 +856,8 @@ impl AtomicFinalizeCycleState {
 
 pub(super) struct GcCycleState {
     collection_kind: GcCollectionKind,
+    #[allow(dead_code)]
+    // captured trigger classification retained alongside collection_kind/progress_kind for cycle diagnostics
     trigger_kind: GcTriggerKind,
     progress_kind: GcProgressKind,
     phase: GcCyclePhase,

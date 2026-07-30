@@ -1,6 +1,5 @@
 use perry_container_compose::backend::*;
 use perry_container_compose::types::ContainerSpec;
-use std::collections::HashMap;
 
 // Feature: perry-container | Layer: unit | Req: 1.1 | Property: -
 #[test]

@@ -124,9 +124,11 @@ pub extern "C" fn js_with_implicit_unset() -> f64 {
 }
 
 // #1561-style force-keep: only generated IR calls these.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_WITH_IMPLICIT_UNSET: extern "C" fn() -> f64 = js_with_implicit_unset;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_WITH_IMPLICIT_READ: extern "C" fn(f64, f64) -> f64 = js_with_implicit_read;
 
 /// `name` arrives as a NaN-boxed string (codegen lowers `Expr::String` args
@@ -160,7 +162,7 @@ pub extern "C" fn js_with_implicit_read(value: f64, name: f64) -> f64 {
             let gj = JSValue::from_bits(g_handle.get_heap_word_u64());
             let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
             if !gptr.is_null() && !key.is_null() {
-                let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+                let v = crate::object::js_object_get_field_by_name(gptr, key);
                 return f64::from_bits(v.bits());
             }
         }

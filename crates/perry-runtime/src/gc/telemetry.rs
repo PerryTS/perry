@@ -92,6 +92,8 @@ pub(super) struct OldYoungEdgeVerifyStats {
 }
 
 impl OldYoungEdgeVerifyStats {
+    #[allow(dead_code)]
+    // GC old→young edge-verify telemetry hook; simple companion to record_missing_diag for diagnostic call sites
     #[inline]
     pub(super) fn record_missing(&mut self, parent: usize, slot: usize, child: usize) {
         self.record_missing_diag(parent, slot, child, 0, 0, false, false);
@@ -599,6 +601,7 @@ pub(super) struct GcPauseStepTrace {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) enum AllocatorMaintenanceStatus {
     Skipped,
     Executed,
@@ -618,6 +621,7 @@ impl AllocatorMaintenanceStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) enum AllocatorMaintenanceReason {
     OrdinaryBudgeted,
     NotSupported,
@@ -1194,7 +1198,7 @@ pub(super) fn take_test_last_gc_trace_json() -> Option<serde_json::Value> {
     TEST_LAST_GC_TRACE_JSON.with(|slot| slot.borrow_mut().take())
 }
 
-pub(super) struct GcCollectOutcome {
+pub(crate) struct GcCollectOutcome {
     pub(super) freed_bytes: u64,
     pub(super) malloc_swept: bool,
     pub(super) trace: Option<GcCycleTrace>,

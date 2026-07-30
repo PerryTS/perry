@@ -1820,6 +1820,30 @@ mod exports_candidates_tests {
         );
     }
 
+    #[test]
+    fn wildcard_candidates_reject_overlapping_bounds() {
+        let exports: serde_json::Value = serde_json::json!({
+            "./long*long": "./wrong/*.js"
+        });
+        assert!(resolve_exports_candidates(&exports, "./long").is_empty());
+    }
+
+    #[test]
+    fn wildcard_candidates_prefer_the_most_specific_pattern() {
+        let exports: serde_json::Value = serde_json::json!({
+            "./*": "./broad/*.js",
+            "./features/*": "./specific/*.js"
+        });
+        let candidates = resolve_exports_candidates(&exports, "./features/a");
+        assert_eq!(
+            candidates,
+            vec![
+                "./specific/a.js".to_string(),
+                "./broad/features/a.js".to_string()
+            ]
+        );
+    }
+
     /// #5237 — a Node "exports" *fallback array* (an ordered list of targets,
     /// here a conditions-object followed by a plain string) must expand to its
     /// inner targets. Before the fix the array form produced no candidates at

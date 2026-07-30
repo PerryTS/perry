@@ -19,7 +19,7 @@ use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
 use crate::string::js_string_from_bytes;
-use crate::value::{JSValue, TAG_FALSE};
+use crate::value::JSValue;
 use std::os::raw::c_int;
 
 #[inline]
@@ -112,10 +112,6 @@ pub(crate) fn options_signal(options: f64) -> Option<f64> {
         return None;
     }
     get_object_property(options, b"signal")
-}
-
-fn option_is_false(options: f64, name: &[u8]) -> bool {
-    get_object_property(options, name).is_some_and(|value| value.to_bits() == TAG_FALSE)
 }
 
 pub(crate) fn signal_aborted(signal: f64) -> bool {
@@ -574,6 +570,7 @@ fn catch_stream_promises_throw(call: impl FnOnce()) -> Result<(), f64> {
     }
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_pipeline(
     _closure: *const ClosureHeader,
     source: f64,
@@ -618,6 +615,7 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     promise_value
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_finished(
     _closure: *const ClosureHeader,
     stream: f64,

@@ -1079,8 +1079,8 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             if !obj_ptr.is_null() {
                 // Armed ops table (see `nm_namespace_hooks`): namespace key
                 // enumeration links only when a namespace can exist.
-                if let Some(arr) = super::nm_namespace_ops()
-                    .and_then(|ops| unsafe { (ops.own_keys_array)(obj_ptr) })
+                if let Some(arr) =
+                    super::nm_namespace_ops().and_then(|ops| (ops.own_keys_array)(obj_ptr))
                 {
                     return f64::from_bits((arr as u64) | 0x7FFD_0000_0000_0000);
                 }
@@ -1548,7 +1548,8 @@ pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64
     result
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_OBJECT_CREATE_WITH_PROPS: extern "C" fn(f64, f64) -> f64 = js_object_create_with_props;
 
 /// `Object.getOwnPropertyDescriptor` handling for native-module namespace

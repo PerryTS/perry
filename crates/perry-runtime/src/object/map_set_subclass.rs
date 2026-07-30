@@ -171,80 +171,78 @@ pub(crate) fn super_collection_method(this_value: f64, name: &str, args: &[f64])
     let this_handle = scope.root_nanbox_f64(this_value);
     let boxed = |ptr: i64| f64::from_bits(JSValue::pointer(ptr as *const u8).bits());
     let boolean = |b: bool| f64::from_bits(JSValue::bool(b).bits());
-    unsafe {
-        match backing {
-            CollectionBacking::Map(map) => match name {
-                "get" => Some(crate::map::js_map_get(map, *args.first()?)),
-                "set" => {
-                    let key = *args.first()?;
-                    let value = args.get(1).copied().unwrap_or(undefined);
-                    crate::map::js_map_set(map, key, value);
-                    Some(this_handle.get_nanbox_f64())
-                }
-                "has" => Some(boolean(crate::map::js_map_has(map, *args.first()?) != 0)),
-                "delete" => Some(boolean(crate::map::js_map_delete(map, *args.first()?) != 0)),
-                "clear" => {
-                    crate::map::js_map_clear(map);
-                    Some(undefined)
-                }
-                "forEach" => {
-                    let callback = *args.first()?;
-                    let this_arg = args.get(1).copied().unwrap_or(undefined);
-                    // The callback's 3rd argument must be the SUBCLASS instance,
-                    // not the backing — same receiver-identity rule the ordinary
-                    // dispatch path applies.
-                    crate::map::js_map_foreach_with_collection(
-                        map,
-                        callback,
-                        this_arg,
-                        this_handle.get_nanbox_f64(),
-                    );
-                    Some(undefined)
-                }
-                "keys" => Some(boxed(crate::collection_iter_object::js_map_keys_iter_obj(
+    match backing {
+        CollectionBacking::Map(map) => match name {
+            "get" => Some(crate::map::js_map_get(map, *args.first()?)),
+            "set" => {
+                let key = *args.first()?;
+                let value = args.get(1).copied().unwrap_or(undefined);
+                crate::map::js_map_set(map, key, value);
+                Some(this_handle.get_nanbox_f64())
+            }
+            "has" => Some(boolean(crate::map::js_map_has(map, *args.first()?) != 0)),
+            "delete" => Some(boolean(crate::map::js_map_delete(map, *args.first()?) != 0)),
+            "clear" => {
+                crate::map::js_map_clear(map);
+                Some(undefined)
+            }
+            "forEach" => {
+                let callback = *args.first()?;
+                let this_arg = args.get(1).copied().unwrap_or(undefined);
+                // The callback's 3rd argument must be the SUBCLASS instance,
+                // not the backing — same receiver-identity rule the ordinary
+                // dispatch path applies.
+                crate::map::js_map_foreach_with_collection(
                     map,
-                ))),
-                "values" => Some(boxed(
-                    crate::collection_iter_object::js_map_values_iter_obj(map),
-                )),
-                "entries" | "Symbol.iterator" | "@@iterator" => Some(boxed(
-                    crate::collection_iter_object::js_map_entries_iter_obj(map),
-                )),
-                _ => None,
-            },
-            CollectionBacking::Set(set) => match name {
-                "add" => {
-                    crate::set::js_set_add(set, *args.first()?);
-                    Some(this_handle.get_nanbox_f64())
-                }
-                "has" => Some(boolean(crate::set::js_set_has(set, *args.first()?) != 0)),
-                "delete" => Some(boolean(crate::set::js_set_delete(set, *args.first()?) != 0)),
-                "clear" => {
-                    crate::set::js_set_clear(set);
-                    Some(undefined)
-                }
-                "forEach" => {
-                    let callback = *args.first()?;
-                    let this_arg = args.get(1).copied().unwrap_or(undefined);
-                    crate::set::js_set_foreach_with_collection(
-                        set,
-                        callback,
-                        this_arg,
-                        this_handle.get_nanbox_f64(),
-                    );
-                    Some(undefined)
-                }
-                // `Set.prototype.keys` is an alias of `values`, and the default
-                // iterator is `values` — matching the builtin.
-                "keys" | "values" | "Symbol.iterator" | "@@iterator" => Some(boxed(
-                    crate::collection_iter_object::js_set_values_iter_obj(set),
-                )),
-                "entries" => Some(boxed(
-                    crate::collection_iter_object::js_set_entries_iter_obj(set),
-                )),
-                _ => None,
-            },
-        }
+                    callback,
+                    this_arg,
+                    this_handle.get_nanbox_f64(),
+                );
+                Some(undefined)
+            }
+            "keys" => Some(boxed(crate::collection_iter_object::js_map_keys_iter_obj(
+                map,
+            ))),
+            "values" => Some(boxed(
+                crate::collection_iter_object::js_map_values_iter_obj(map),
+            )),
+            "entries" | "Symbol.iterator" | "@@iterator" => Some(boxed(
+                crate::collection_iter_object::js_map_entries_iter_obj(map),
+            )),
+            _ => None,
+        },
+        CollectionBacking::Set(set) => match name {
+            "add" => {
+                crate::set::js_set_add(set, *args.first()?);
+                Some(this_handle.get_nanbox_f64())
+            }
+            "has" => Some(boolean(crate::set::js_set_has(set, *args.first()?) != 0)),
+            "delete" => Some(boolean(crate::set::js_set_delete(set, *args.first()?) != 0)),
+            "clear" => {
+                crate::set::js_set_clear(set);
+                Some(undefined)
+            }
+            "forEach" => {
+                let callback = *args.first()?;
+                let this_arg = args.get(1).copied().unwrap_or(undefined);
+                crate::set::js_set_foreach_with_collection(
+                    set,
+                    callback,
+                    this_arg,
+                    this_handle.get_nanbox_f64(),
+                );
+                Some(undefined)
+            }
+            // `Set.prototype.keys` is an alias of `values`, and the default
+            // iterator is `values` — matching the builtin.
+            "keys" | "values" | "Symbol.iterator" | "@@iterator" => Some(boxed(
+                crate::collection_iter_object::js_set_values_iter_obj(set),
+            )),
+            "entries" => Some(boxed(
+                crate::collection_iter_object::js_set_entries_iter_obj(set),
+            )),
+            _ => None,
+        },
     }
 }
 

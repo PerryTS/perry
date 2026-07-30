@@ -1,5 +1,20 @@
 //! `globalThis` singleton plus built-in constructor/namespace population.
 
+#![cfg_attr(
+    not(any(
+        feature = "global-math",
+        feature = "global-json",
+        feature = "global-reflect",
+        feature = "global-atomics",
+        feature = "global-url",
+        feature = "global-text",
+        feature = "global-websocket",
+        feature = "global-webcrypto",
+        feature = "global-webfetch"
+    )),
+    allow(dead_code, unused_imports)
+)]
+
 use super::*;
 
 #[path = "global_this_webassembly.rs"]

@@ -4,7 +4,6 @@
 // Section, string + number formatting, and the perry/media drain glue.
 use super::*;
 
-#[test]
 // ----- Phase 2 v12: Tabs / Modal / Menu / Grid -----
 #[test]
 fn tabs_emits_tabcontent_per_spec() {

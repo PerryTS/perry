@@ -1,9 +1,8 @@
 use super::*;
 
 use std::fs;
-use std::io::Write;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 

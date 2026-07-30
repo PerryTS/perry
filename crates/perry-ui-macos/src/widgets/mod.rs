@@ -211,9 +211,9 @@ pub fn register_external_nsview(nsview_ptr: i64) -> i64 {
             // Set low content hugging so it stretches in both axes.
             unsafe {
                 let _: () =
-                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 0i64]; // horizontal
+                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32, forOrientation: 0i64]; // horizontal
                 let _: () =
-                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 1i64];
+                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32, forOrientation: 1i64];
                 // vertical
             }
             // Clip to bounds — prevent the view from drawing outside its frame
@@ -590,7 +590,7 @@ pub fn add_overlay(parent_handle: i64, child_handle: i64) {
 /// x/y are relative to the parent's coordinate system.
 pub fn set_overlay_frame(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     if let Some(view) = get_widget(handle) {
-        unsafe {
+        {
             view.setTranslatesAutoresizingMaskIntoConstraints(true);
             let frame = objc2_core_foundation::CGRect::new(
                 objc2_core_foundation::CGPoint::new(x, y),
@@ -851,14 +851,12 @@ pub fn set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64
         };
         if is_stack {
             let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&view) as *const NSStackView) };
-            unsafe {
-                stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
-                    top,
-                    left,
-                    bottom,
-                    right,
-                });
-            }
+            stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
+                top,
+                left,
+                bottom,
+                right,
+            });
         }
     }
 }
@@ -1052,7 +1050,6 @@ pub fn match_parent_width(child_handle: i64) {
 
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 

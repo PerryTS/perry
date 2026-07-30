@@ -290,9 +290,11 @@ pub unsafe extern "C" fn js_https_server_construct_with_this(
 /// Keepalive anchors: the auto-optimize whole-program LLVM rebuild
 /// dead-strips `#[no_mangle]` fns referenced only from generated `.o`
 /// files. See the `KEEP_JS_FUNCTION_BIND` precedent in closure/dispatch.rs.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_HTTP_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64) -> f64 =
     js_http_server_construct_with_this;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_HTTPS_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64) -> f64 =
     js_https_server_construct_with_this;

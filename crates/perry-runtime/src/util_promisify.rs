@@ -763,9 +763,8 @@ fn callable_then_field(value: f64) -> Option<f64> {
     }
     let obj = addr as *const crate::object::ObjectHeader;
     let key = js_string_from_bytes(b"then".as_ptr(), 4);
-    let then_value = unsafe {
-        crate::object::js_object_get_field_by_name_f64(obj, key as *const crate::StringHeader)
-    };
+    let then_value =
+        crate::object::js_object_get_field_by_name_f64(obj, key as *const crate::StringHeader);
     if is_callable_closure(then_value) {
         Some(then_value)
     } else {

@@ -1,3 +1,9 @@
+// The `native_proof_*` integration tests share one hand-written HIR builder
+// toolkit, and each file drives a different subset of it. Per-file pruning
+// would make the next test in this family re-add the builder it needs, so the
+// toolkit stays whole.
+#![allow(dead_code)]
+
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{FunctionType, ObjectType, PropertyInfo, Type};
 use perry_hir::{

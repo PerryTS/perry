@@ -1612,11 +1612,6 @@ fn reporter_with_kind(kind: i32, source: f64) -> f64 {
     readable_from_text(output)
 }
 
-pub(crate) extern "C" fn thunk_reporter(closure: *const ClosureHeader, source: f64) -> f64 {
-    let kind = js_closure_get_capture_f64(closure, 0) as i32;
-    reporter_with_kind(kind, source)
-}
-
 pub(crate) extern "C" fn thunk_reporter_spec(_closure: *const ClosureHeader, source: f64) -> f64 {
     reporter_with_kind(REPORTER_SPEC, source)
 }

@@ -75,7 +75,7 @@ fn fancy_backreference_match() {
     let re = js_regexp_new(make_string(r"(\w)\1"), make_string(""));
     let result = js_string_match(make_string("hello"), re);
     assert!(!result.is_null());
-    unsafe {
+    {
         let v = crate::array::js_array_get_f64(result, 0);
         let sp = crate::value::js_get_string_pointer_unified(v) as *const StringHeader;
         assert_eq!(string_as_str(sp), "ll");
@@ -127,7 +127,7 @@ fn fancy_lookbehind_exec_index() {
     let result = js_regexp_exec(re, make_string("price: $42"));
     assert!(!result.is_null());
     assert_eq!(js_regexp_exec_get_index(), 8.0);
-    unsafe {
+    {
         let v = crate::array::js_array_get_f64(result, 0);
         let sp = crate::value::js_get_string_pointer_unified(v) as *const StringHeader;
         assert_eq!(string_as_str(sp), "42");

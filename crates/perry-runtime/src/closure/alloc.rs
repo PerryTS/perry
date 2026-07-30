@@ -490,9 +490,11 @@ pub extern "C" fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index:
     js_closure_set_capture_bits(closure, index, value as u64);
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_CLOSURE_GET_CAPTURE_BITS: extern "C" fn(*const ClosureHeader, u32) -> u64 =
     js_closure_get_capture_bits;
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_CLOSURE_SET_CAPTURE_BITS: extern "C" fn(*mut ClosureHeader, u32, u64) =
     js_closure_set_capture_bits;

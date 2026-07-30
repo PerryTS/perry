@@ -226,9 +226,10 @@ pub extern "C" fn js_buffer_index_get_value(buf_ptr: *const BufferHeader, index:
 // #6088: force-keep the JS-value buffer index getter under LTO /
 // auto-optimize. It has zero internal Rust callers — codegen emits the only
 // call (in `perry-codegen/src/expr/index_get.rs`), so a whole-program bitcode
-// link is otherwise free to internalize and dead-strip it. The `#[cfg_attr(feature = "keepalive-anchors", used)]`
+// link is otherwise free to internalize and dead-strip it. The `#[used]`
 // anchor pins it (mirrors `KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC`).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_BUFFER_INDEX_GET_VALUE: extern "C" fn(*const BufferHeader, i32) -> f64 =
     js_buffer_index_get_value;
 

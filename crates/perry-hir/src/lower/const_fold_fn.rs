@@ -1443,7 +1443,7 @@ fn extract_fn_expr(module: &ast::Module) -> Option<&ast::FnExpr> {
     }
 }
 
-/// Owning arrow analog of [`extract_fn_expr_owned`] — pull the `ArrowExpr`
+/// Owning arrow analog of `extract_fn_expr` — pull the `ArrowExpr`
 /// out of a synthesized `(() => { ... });` module.
 fn extract_arrow_expr_owned(module: ast::Module) -> Option<ast::ArrowExpr> {
     let item = module.body.into_iter().next()?;
@@ -1455,23 +1455,6 @@ fn extract_arrow_expr_owned(module: ast::Module) -> Option<ast::ArrowExpr> {
         match e {
             ast::Expr::Paren(p) => e = *p.expr,
             ast::Expr::Arrow(arrow) => return Some(arrow),
-            _ => return None,
-        }
-    }
-}
-
-/// Owning variant of [`extract_fn_expr`] — consumes the module so the caller
-/// can mutate the function body before lowering.
-fn extract_fn_expr_owned(module: ast::Module) -> Option<ast::FnExpr> {
-    let item = module.body.into_iter().next()?;
-    let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) = item else {
-        return None;
-    };
-    let mut e = *expr_stmt.expr;
-    loop {
-        match e {
-            ast::Expr::Paren(p) => e = *p.expr,
-            ast::Expr::Fn(fn_expr) => return Some(fn_expr),
             _ => return None,
         }
     }

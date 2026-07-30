@@ -83,6 +83,7 @@ members = [
 # Build each platform package explicitly for its applicable target.
 default-members = [
     "crates/perry",
+    "crates/perry-container-compose",
 ]
 
 # Aggressive release optimizations for small, fast binaries

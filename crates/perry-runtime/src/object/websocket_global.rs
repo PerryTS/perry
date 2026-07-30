@@ -45,6 +45,7 @@ pub(super) fn install_constructor_shape(
     }
 }
 
+#[cfg(feature = "global-websocket")]
 pub(super) fn install_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method;
     install_proto_method(

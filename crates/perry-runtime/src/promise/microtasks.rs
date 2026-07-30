@@ -75,7 +75,8 @@ pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
 // The entry event loop is generated code, so nothing in the Rust runtime
 // references this symbol — anchor it like the other codegen-only hooks so the
 // auto-optimize internalize+dead-strip pass can't drop it (#4876).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_PROMISE_RUN_MICROTASKS_EVENT_LOOP: extern "C" fn() -> i32 =
     js_promise_run_microtasks_event_loop;
 

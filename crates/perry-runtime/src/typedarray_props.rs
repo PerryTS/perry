@@ -747,7 +747,8 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
     }
 }
 
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_TYPED_ARRAY_INDEX_SET_DYNAMIC: extern "C" fn(
     *mut TypedArrayHeader,
     f64,

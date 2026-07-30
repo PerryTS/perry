@@ -600,7 +600,7 @@ mod tests {
         let image = image_from(&[1, 2, 3, 4, 5, 6, 7, 8], &[]);
         let r = unsafe {
             raw::call_int(
-                sum8_i32 as usize,
+                sum8_i32 as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -615,7 +615,7 @@ mod tests {
         let image = image_from(&[], &[0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]);
         let r = unsafe {
             raw::call_f64(
-                dsum8 as usize,
+                dsum8 as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -633,7 +633,7 @@ mod tests {
         let image = image_from(&[10, 20, 30], &[2.0, 4.0, f_img]);
         let r = unsafe {
             raw::call_f64(
-                mixed as usize,
+                mixed as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -648,7 +648,7 @@ mod tests {
         let image = image_from(&[], &[f64::from_bits((21.0f32).to_bits() as u64)]);
         let r = unsafe {
             raw::call_f32(
-                f32_half as usize,
+                f32_half as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -663,7 +663,7 @@ mod tests {
         let image = image_from(&[u64::MAX as usize], &[]);
         let r = unsafe {
             raw::call_int(
-                u64_id as usize,
+                u64_id as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -678,7 +678,7 @@ mod tests {
         let image = image_from(&[1], &[]);
         let r = unsafe {
             raw::call_int(
-                bool_not as usize,
+                bool_not as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -691,7 +691,7 @@ mod tests {
         let image = image_from(&[5], &[]);
         let r = unsafe {
             raw::call_int(
-                i8_neg as usize,
+                i8_neg as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -716,7 +716,7 @@ mod tests {
         let image = image_from(&[100, 20, 3], &[]);
         let r = unsafe {
             raw::call_int(
-                add3 as usize,
+                add3 as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,
@@ -731,7 +731,7 @@ mod tests {
         let image = image_from(&[], &[]);
         let r = unsafe {
             raw::call_int(
-                noargs as usize,
+                noargs as *const () as usize,
                 image.n_int,
                 &image.ints,
                 image.n_float,

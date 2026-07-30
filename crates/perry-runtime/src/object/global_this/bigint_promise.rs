@@ -272,7 +272,7 @@ fn bigint_to_bigint_arg(value: f64) -> f64 {
         if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_BITS {
             let arr_ptr = jv.as_pointer::<crate::array::ArrayHeader>();
             let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
-            let joined = unsafe { crate::array::js_array_join(arr_ptr, comma) };
+            let joined = crate::array::js_array_join(arr_ptr, comma);
             return bigint_to_bigint_arg(crate::value::js_nanbox_string(joined as i64));
         }
         // Object: ToPrimitive("number") then re-coerce. Try a custom
@@ -723,7 +723,7 @@ pub(crate) extern "C" fn typed_array_from_thunk(
         )
     });
     let ta_ptr = addr as *mut crate::typedarray::TypedArrayHeader;
-    let target_len = unsafe { crate::typedarray::js_typed_array_length(ta_ptr) } as usize;
+    let target_len = crate::typedarray::js_typed_array_length(ta_ptr) as usize;
     if target_len < len {
         super::super::object_ops::throw_object_type_error(
             b"Derived TypedArray constructor created an array which was too small",
@@ -803,7 +803,7 @@ fn typed_array_create_from_values(
         )
     });
     let ta_ptr = addr as *mut crate::typedarray::TypedArrayHeader;
-    let target_len = unsafe { crate::typedarray::js_typed_array_length(ta_ptr) } as usize;
+    let target_len = crate::typedarray::js_typed_array_length(ta_ptr) as usize;
     if target_len < len {
         // `TypedArrayCreate(C, «len»)` throws a *TypeError* (not RangeError)
         // when the constructed typed array is shorter than the requested length

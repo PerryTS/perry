@@ -808,10 +808,6 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
                 crate::process::js_process_umask_set(mask)
             }
         }
-        ("process", "emitWarning") => {
-            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        }
         ("process", "hrtime") => crate::os::js_process_hrtime(arg(0)),
         ("process", "cpuUsage") => crate::process::js_process_cpu_usage(arg(0)),
         // ── crypto module ──

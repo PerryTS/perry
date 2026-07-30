@@ -1,3 +1,5 @@
+// See native_proof_buffer_views.rs — shared HIR builder toolkit, each file in
+// this family drives a different subset.
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{
@@ -414,6 +416,7 @@ fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
     }
 }
 
+#[allow(dead_code)] // shared HIR-builder vocabulary retained for sibling regressions
 fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr) -> Stmt {
     Stmt::Let {
         id,
@@ -560,6 +563,7 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
     })
 }
 
+#[allow(dead_code)] // shared HIR-builder vocabulary retained for sibling regressions
 fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
     call(
         Expr::PropertyGet {
@@ -6767,6 +6771,28 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
             "generated boxed capture traffic should not use old f64 helper edge {old_helper}:\n{ir}"
         );
     }
+}
+
+#[test]
+fn tdz_numeric_const_read_is_not_constant_folded() {
+    let mut fixture = module("tdz_numeric_const.ts", Vec::new());
+    fixture.init = vec![
+        Stmt::PreallocateTdzBoxes(vec![9]),
+        Stmt::Expr(Expr::LocalGet(9)),
+        Stmt::Let {
+            id: 9,
+            name: "value".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Number(42.0)),
+        },
+    ];
+
+    let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call i64 @js_box_get_bits(i64 "),
+        "the pre-declaration read must retain the TDZ box check:\n{ir}"
+    );
 }
 
 #[test]

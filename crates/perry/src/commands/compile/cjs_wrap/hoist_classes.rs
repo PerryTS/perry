@@ -1,7 +1,5 @@
 //! Top-level `class` hoisting and `module.exports = class …` rewrite passes.
 
-use super::*;
-
 /// Issue #665 (fifth pass): rewrite the leaf-file shape
 /// `module.exports = class Name { ... };` into declaration form
 /// `class Name { ... }\nmodule.exports = Name;` so the existing
@@ -603,13 +601,6 @@ fn collect_pattern_binding_names(bytes: &[u8], start: usize, names: &mut Vec<Str
             }
             b',' => {
                 after_colon = false;
-                i += 1;
-            }
-            // A computed object key `[expr]:` — skip the bracketed expression
-            // (only meaningful in object patterns; array patterns never hit
-            // this because their `[` is consumed by the nested-pattern arm).
-            b'[' => {
-                // Unreachable in practice (handled above), kept for clarity.
                 i += 1;
             }
             c if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' => {

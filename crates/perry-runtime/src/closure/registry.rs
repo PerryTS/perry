@@ -380,7 +380,8 @@ pub extern "C" fn js_register_closure_strict_function(func_ptr: *const u8) {
 
 /// Keepalive anchor for the auto-optimize whole-program build — the strict
 /// registration is emitted only from generated module-init code.
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_REGISTER_CLOSURE_STRICT_FUNCTION: extern "C" fn(*const u8) =
     js_register_closure_strict_function;
 

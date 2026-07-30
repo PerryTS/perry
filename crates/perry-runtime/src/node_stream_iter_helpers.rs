@@ -142,27 +142,6 @@ pub(super) fn promise_from_capture(
     crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *mut crate::promise::Promise
 }
 
-/// Abort-listener body: reject the captured Promise with an AbortError.
-pub(super) extern "C" fn ns_abort_reject(closure: *const ClosureHeader) -> f64 {
-    let p = promise_from_capture(closure, 0);
-    if !p.is_null() {
-        crate::promise::js_promise_reject(p, abort_error());
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-/// Deferred-resolve body: fulfill the captured Promise (slot 0) with the
-/// captured value (slot 1) on the next microtask — a no-op if an abort
-/// already rejected it.
-pub(super) extern "C" fn ns_deferred_resolve(closure: *const ClosureHeader) -> f64 {
-    let p = promise_from_capture(closure, 0);
-    let value = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
-    if !p.is_null() {
-        crate::promise::js_promise_resolve(p, value);
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
-
 pub(super) extern "C" fn ns_stream_abort_listener(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -170,47 +149,6 @@ pub(super) extern "C" fn ns_stream_abort_listener(closure: *const ClosureHeader)
     let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     destroy_stream(stream, abort_error());
     f64::from_bits(TAG_UNDEFINED)
-}
-
-/// Build a pending Promise for a consuming helper running under a
-/// not-yet-aborted signal: an abort listener rejects it with an
-/// AbortError, while a queued microtask fulfills it with `value` if no
-/// abort fires first. This matches Node's async timing — the operation
-/// is in flight when a synchronous `controller.abort()` lands before
-/// the awaiter resumes.
-pub(super) fn deferred_promise(signal: f64, value: f64) -> f64 {
-    let promise = crate::promise::js_promise_new();
-    let promise_box = box_pointer(promise as *const u8);
-
-    if let Some(sig_obj) = object_ptr_from_value(signal) {
-        let reject_cl = js_closure_alloc(ns_abort_reject as *const u8, 1);
-        crate::closure::js_closure_set_capture_ptr(reject_cl, 0, promise_box.to_bits() as i64);
-        crate::url::js_abort_signal_add_listener(
-            sig_obj,
-            string_value(b"abort"),
-            box_pointer(reject_cl as *const u8),
-        );
-    }
-
-    let resolve_cl = js_closure_alloc(ns_deferred_resolve as *const u8, 2);
-    crate::closure::js_closure_set_capture_ptr(resolve_cl, 0, promise_box.to_bits() as i64);
-    crate::closure::js_closure_set_capture_ptr(resolve_cl, 1, value.to_bits() as i64);
-    crate::builtins::js_queue_microtask(resolve_cl as i64);
-
-    promise_box
-}
-
-/// Settle a consuming helper's result under any governing signal: reject
-/// now if already aborted, defer if a signal is pending, else resolve.
-pub(super) fn settle_consuming(this: f64, opts: f64, value: f64) -> f64 {
-    if let Some(err) = readable_hidden_error(this) {
-        return rejected_promise(err);
-    }
-    match effective_signal(this, opts) {
-        Some(sig) if signal_is_aborted(sig) => rejected_promise(abort_error()),
-        Some(sig) => deferred_promise(sig, value),
-        None => resolved_promise(value),
-    }
 }
 
 /// Carry a lazy helper's source error and governing signal onto its

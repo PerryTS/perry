@@ -79,6 +79,8 @@ pub use prototype_objects::{js_set_function_prototype, NEXT_SYNTHETIC_CLASS_ID};
 // ── class_meta.rs ───────────────────────────────────────────────────────────
 #[cfg(test)]
 pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
+#[cfg(feature = "global-text")]
+pub(crate) use class_meta::text_decoder_bool_option;
 pub use class_meta::{
     class_name_for_id, is_anon_shape_class_id, js_compression_stream_new,
     js_decompression_stream_new, js_register_anon_shape_class_id, js_register_class_id,
@@ -86,15 +88,13 @@ pub use class_meta::{
     js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_NAMES,
 };
 pub(crate) use class_meta::{
-    identify_global_builtin_constructor, report_dispatch_miss, text_decoder_bool_option,
+    identify_global_builtin_constructor, report_dispatch_miss,
     text_encoding_stream_new_with_constructor, validate_web_compression_stream_format,
     CLASS_ID_COMPRESSION_STREAM, CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM,
     CLASS_ID_TEXT_ENCODER_STREAM,
 };
 #[cfg(test)]
 pub(crate) use prototype_methods::CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED;
-#[cfg(test)]
-pub(crate) use state::CLASS_DELETED_KEYS;
 
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{
@@ -131,9 +131,8 @@ pub(crate) use gc_roots::{
     test_class_prototype_method_root_bits, test_class_prototype_method_value_root_bits,
     test_class_prototype_object_root_addr, test_clear_class_side_table_roots,
     test_function_class_id_key_for_class, test_seed_class_dynamic_prop_root,
-    test_seed_class_parent_closure_root, test_seed_class_prototype_method_root,
-    test_seed_class_prototype_method_value_root, test_seed_class_prototype_object_root,
-    test_seed_function_class_id_key,
+    test_seed_class_prototype_method_root, test_seed_class_prototype_method_value_root,
+    test_seed_class_prototype_object_root, test_seed_function_class_id_key,
 };
 
 // ── registration.rs ─────────────────────────────────────────────────────────

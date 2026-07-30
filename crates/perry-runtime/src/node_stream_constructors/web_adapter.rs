@@ -94,6 +94,7 @@ fn web_readable_close() -> Option<WebReadableCloseFn> {
     load_web_callback!(WEB_READABLE_CLOSE_PTR, WebReadableCloseFn)
 }
 
+#[allow(dead_code)] // accessor for the deliberately-registered WEB_READABLE_ERROR_PTR callback (set in register); consumer not yet wired
 fn web_readable_error() -> Option<WebReadableErrorFn> {
     load_web_callback!(WEB_READABLE_ERROR_PTR, WebReadableErrorFn)
 }

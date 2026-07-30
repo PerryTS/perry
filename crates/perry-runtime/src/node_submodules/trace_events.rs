@@ -204,7 +204,7 @@ fn trace_id_symbol() -> f64 {
 
 fn this_trace_id() -> i64 {
     let this_value = crate::object::js_implicit_this_get();
-    let Some(obj) = object_ptr_from_value(this_value) else {
+    let Some(_) = object_ptr_from_value(this_value) else {
         throw_invalid_this();
     };
     let id_value =
@@ -399,7 +399,7 @@ fn validate_categories_value(categories_value: f64) -> f64 {
 
     for idx in 0..len {
         let value = js_array_get_f64(categories, idx);
-        let Some(category) = string_from_value(value) else {
+        let Some(_) = string_from_value(value) else {
             let message = format!(
                 "The \"options.categories[{}]\" property must be of type string. Received {}",
                 idx,
@@ -442,6 +442,7 @@ fn create_trace(categories: f64, source_categories: Vec<String>) -> f64 {
     obj_value
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_trace_events_createTracing(
     _closure: *const ClosureHeader,
     options: f64,
@@ -452,6 +453,7 @@ pub(crate) extern "C" fn thunk_trace_events_createTracing(
     create_trace(categories, categories_from_array(categories))
 }
 
+#[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_trace_events_getEnabledCategories(
     _closure: *const ClosureHeader,
     _arg: f64,

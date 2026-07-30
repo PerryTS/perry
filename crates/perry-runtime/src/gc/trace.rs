@@ -754,6 +754,7 @@ pub(super) fn trace_one_worklist_header(
 }
 
 /// Trace from marked objects: follow references iteratively using a worklist.
+#[allow(dead_code)] // test scaffolding: exercised only by gc::tests::layout_trace under cfg(test)
 pub(super) fn trace_marked_objects(valid_ptrs: &ValidPointerSet) {
     // Same MARK_SEEDS-based approach as the minor variant — root scans
     // populated `MARK_SEEDS` via `try_mark_value`, no need to walk arena

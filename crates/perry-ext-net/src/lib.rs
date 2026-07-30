@@ -221,11 +221,6 @@ pub(crate) mod statics {
         P.get_or_init(|| Mutex::new(Vec::new()))
     }
 
-    pub fn next_net_id() -> &'static Mutex<i64> {
-        static N: OnceLock<Mutex<i64>> = OnceLock::new();
-        N.get_or_init(|| Mutex::new(1))
-    }
-
     /// Server registry — `net.createServer(...)` returns a handle here.
     /// Separate from the socket map: server handles host an accept-loop
     /// shutdown channel and a bound port; sockets host a per-connection

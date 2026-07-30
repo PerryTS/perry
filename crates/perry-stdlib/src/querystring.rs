@@ -87,7 +87,7 @@ unsafe fn nanboxed_to_string(value: f64) -> Option<String> {
 
 /// Allocate a heap StringHeader from a Rust `&str`.
 fn intern_string(s: &str) -> *mut StringHeader {
-    unsafe { js_string_from_bytes(s.as_ptr(), s.len() as u32) }
+    js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
 /// NaN-box a `*mut StringHeader` with STRING_TAG so it returns through
@@ -405,7 +405,7 @@ fn resolve_max_keys(options: f64) -> Option<usize> {
         return Some(1000);
     }
     let key = intern_string("maxKeys");
-    let max_keys = unsafe { js_object_get_field_by_name(obj, key) };
+    let max_keys = js_object_get_field_by_name(obj, key);
     if max_keys.is_undefined() || max_keys.is_null() {
         return Some(1000);
     }
@@ -628,7 +628,7 @@ fn querystring_scalar_to_string(value_bits: u64) -> String {
         if ptr.is_null() {
             return String::new();
         }
-        let hdr = unsafe { perry_runtime::bigint::js_bigint_to_string(ptr) };
+        let hdr = perry_runtime::bigint::js_bigint_to_string(ptr);
         if hdr.is_null() {
             return String::new();
         }

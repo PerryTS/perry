@@ -569,7 +569,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
 /// Keepalive anchor — `js_object_alloc_class_dynamic_parent` is a
 /// generated-code-only callee, so the auto-optimize whole-program build would
 /// otherwise dead-strip it (see the FFI-symbol-link-break class).
-#[cfg_attr(feature = "keepalive-anchors", used)]
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_OBJECT_ALLOC_CLASS_DYNAMIC_PARENT: extern "C" fn(
     u32,
     u32,

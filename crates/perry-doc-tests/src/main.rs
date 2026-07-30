@@ -609,16 +609,6 @@ fn run_one(
     }
 }
 
-/// Whether a given `--target` value can be built from this host. Any
-/// other combination gets reported as `XCOMPILE_SKIP` with the reason so
-/// coverage stays visible without failing the job. Also checks whether
-/// the host has the toolchain installed (Xcode, Android NDK) so that
-/// local dev boxes don't hit false failures when they're simply missing
-/// the mobile SDKs.
-fn target_buildable_on_host(target: &str, host: &str) -> bool {
-    target_buildable_reason(target, host).is_none()
-}
-
 /// Reason the target can't be built from this host, or None if it can.
 fn target_buildable_reason(target: &str, host: &str) -> Option<String> {
     match target {

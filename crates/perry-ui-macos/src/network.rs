@@ -52,7 +52,6 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 struct Status {
     connected: bool,
     kind: &'static str,
-    initialized: bool,
 }
 
 impl Status {
@@ -60,7 +59,6 @@ impl Status {
         Self {
             connected: false,
             kind: "unknown",
-            initialized: false,
         }
     }
 }
@@ -100,7 +98,6 @@ fn classify(path: *mut c_void) -> Status {
         return Status {
             connected: false,
             kind: "none",
-            initialized: true,
         };
     }
     let status_code = unsafe { nw_path_get_status(path) };
@@ -108,7 +105,6 @@ fn classify(path: *mut c_void) -> Status {
         return Status {
             connected: false,
             kind: "none",
-            initialized: true,
         };
     }
     let kind = if unsafe { nw_path_uses_interface_type(path, NW_INTERFACE_TYPE_WIFI) } {
@@ -123,7 +119,6 @@ fn classify(path: *mut c_void) -> Status {
     Status {
         connected: true,
         kind,
-        initialized: true,
     }
 }
 

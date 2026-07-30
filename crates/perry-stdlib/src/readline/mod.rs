@@ -27,7 +27,9 @@
 //! independent of this file.
 
 use std::cell::RefCell;
-use std::io::{self, Read, Write};
+#[cfg(not(test))]
+use std::io::Read;
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
