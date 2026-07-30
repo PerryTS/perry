@@ -58,6 +58,7 @@ mod opts;
 mod spec_abi;
 mod string_pool;
 mod typed_abi;
+mod typed_abi_opt_report;
 
 pub(crate) use closure::emit_typed_string_capture_guard;
 pub use helpers::resolve_target_triple;
@@ -127,6 +128,33 @@ fn record_typed_clone_rejection(
     if !should_record_typed_clone_rejection(reason) {
         return;
     }
+    let source_function = source_function.into();
+    // `--opt-report` (#6952): surface the specialized-ABI (RFC Phase 2)
+    // decision, which is the only place params and returns get a
+    // representation today. The `typed_*_clone_decision` consumers are the
+    // older per-type clone mechanism and would report the same function up
+    // to four times, so they stay out of the report and keep going to the
+    // native-reps artifact only.
+    if consumer == "spec_abi_entry_decision" && crate::opt_report::enabled() {
+        let (why, tier, issue) = reason.opt_report_reason();
+        crate::opt_report::deny_named(
+            &source_function,
+            crate::opt_report::RegionKind::Function,
+            crate::opt_report::Denial {
+                position: crate::opt_report::Position::Param,
+                name: "(parameters + return)",
+                local_id: None,
+                analysis: crate::opt_report::Analysis::SpecAbi,
+                rule: reason.as_str(),
+                reason: why,
+                tier,
+                issue,
+                loop_depth: 0,
+                detail: None,
+                byte_offset: None,
+            },
+        );
+    }
     records.push(crate::native_value::typed_clone_rejection_record(
         source_function,
         consumer,
@@ -162,6 +190,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
     // set-per-module discipline as the outline gate above.
     helpers::set_jscvt_for_target(&triple);
+
+    // `--opt-report` (#6952): mark the closures that are iterating-builtin
+    // callbacks before any region is lowered, so their denials carry the
+    // per-element hotness column. No-op when the report is off.
+    crate::opt_report::scan_module(hir);
+    // Module-wide fallback attribution scope. Per-region scopes nest inside
+    // it and restore it on drop, so decisions taken outside any region (the
+    // specialized-ABI entry decision) still know their module.
+    let _opt_report_module_scope = crate::opt_report::enter_module(&hir.name);
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target
@@ -1340,6 +1377,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
+    // eligibility loop because representation-selection Phase 5a's
+    // proven-`this` admission consults them (§5.2 shape barriers, the
+    // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
+    // below — computed exactly once per module either way.
+    let module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    // Representation-selection Phase 5a: proven-`this` method clones.
+    let mut pshape_methods: std::collections::HashMap<
+        (String, String),
+        crate::collectors::PtrShapeLocal,
+    > = std::collections::HashMap::new();
     // Phase 3b typed-receiver widening: chain-global field indexes need the
     // full class table — and it must be the SAME table dynamic dispatch's
     // call-site gating consults (`class_table`, incl. class-expression
@@ -1350,6 +1398,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     for class in &hir.classes {
         for method in &class.methods {
             let source_function = format!("{}::{}", class.name, method.name);
+            // Representation-selection Phase 5a: does this method admit a
+            // proven-`this` clone? Uses the SAME class table as the
+            // typed-receiver decision below, for the same reason — the two
+            // routing sites gate on this map, and a chain resolvable only
+            // through an alias would gate a call to a symbol the emission
+            // loop never produced.
+            if let Some(fact) = crate::collectors::method_proven_this(
+                class,
+                method,
+                receiver_class_table,
+                &module_dispatch_facts,
+            ) {
+                pshape_methods.insert((class.name.clone(), method.name.clone()), fact);
+            }
             match typed_abi::typed_f64_method_rejection_reason(method) {
                 None => {
                     let key = (class.name.clone(), method.name.clone());
@@ -1599,7 +1661,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         compile_time_constants,
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
-        module_dispatch: crate::collectors::collect_module_dispatch_facts(hir),
+        module_dispatch: module_dispatch_facts,
         // Inline-hot-small pre-pass (#6850 follow-up): FuncIds with an in-loop
         // call site AND few total call sites, so small hot callees can earn
         // `inlinehint` while the call-site cap bounds duplication.
@@ -1645,6 +1707,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_string_methods,
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
+        pshape_methods,
         typed_f64_closures: std::collections::HashSet::new(),
         typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),
@@ -1825,6 +1888,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &imported_class_source_name,
         &module_prefix,
     );
+
+    // Representation-selection Phase 5a: now that the method registry exists,
+    // drop any proven-`this` clone whose composed symbol would collide with a
+    // symbol a real user member already owns (issue #6927 tracks the
+    // family-wide fix for every generated-clone suffix). Pruning HERE — before
+    // `emit_module_artifacts` reads `cross_module.pshape_methods` for both
+    // emission and call-site routing — keeps the two in lockstep, so a call
+    // site can never route to a clone the emission loop declined to produce.
+    crate::collectors::prune_colliding_clones(&mut cross_module.pshape_methods, &method_names);
 
     // Resolve user function names + signatures up front. See
     // `func_registry::build_func_registry`.

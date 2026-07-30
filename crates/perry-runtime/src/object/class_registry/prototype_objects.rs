@@ -88,17 +88,12 @@ pub(crate) fn ensure_function_prototype_object(
     // object, not a captured instance). Mirrors what `Stream.prototype` already
     // does. This proto is cached (`class_prototype_object_root_store` above), so
     // the install runs once.
-    if let Some((module, method)) =
-        unsafe { super::super::native_module::bound_native_callable_module_and_method(func_value) }
-    {
-        if module.trim_start_matches("node:") == "events"
-            && matches!(
-                method.as_str(),
-                "EventEmitter" | "EventEmitterAsyncResource"
-            )
-        {
-            crate::node_stream::install_event_emitter_prototype_methods(proto);
-        }
+    // Routed through the armed ops table (see `nm_namespace_hooks`): bound
+    // native-callable closures only exist once `callable_exports` minted one
+    // (which arms), so binaries without module imports link neither the
+    // probe nor the EventEmitter prototype machinery.
+    if let Some(ops) = super::super::nm_namespace_ops() {
+        unsafe { (ops.ee_prototype_install)(func_value, proto) };
     }
 
     let func_bits = func_value.to_bits();
@@ -493,4 +488,27 @@ pub(crate) fn function_value_for_class_id(class_id: u32) -> Option<f64> {
                 .find_map(|(&bits, &cid)| (cid == class_id).then_some(f64::from_bits(bits)))
         })
     })
+}
+
+/// #5477: when `func_value` is the bound `events.EventEmitter` /
+/// `EventEmitterAsyncResource` export, its synthetic prototype must carry the
+/// EventEmitter methods (the `Object.setPrototypeOf(x, EventEmitter.prototype)`
+/// mixin pattern — pino). Extracted verbatim; reached ONLY through
+/// `NmNamespaceOps::ee_prototype_install`.
+pub(crate) unsafe fn nm_ee_prototype_install(
+    func_value: f64,
+    proto: *mut crate::object::ObjectHeader,
+) {
+    if let Some((module, method)) =
+        super::super::native_module::bound_native_callable_module_and_method(func_value)
+    {
+        if module.trim_start_matches("node:") == "events"
+            && matches!(
+                method.as_str(),
+                "EventEmitter" | "EventEmitterAsyncResource"
+            )
+        {
+            crate::node_stream::install_event_emitter_prototype_methods(proto);
+        }
+    }
 }

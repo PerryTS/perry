@@ -1,6 +1,6 @@
 //! Math operations runtime support
 
-use rand::Rng;
+use rand::RngExt;
 
 /// Math built-ins apply ECMAScript ToNumber, where Symbol and BigInt throw.
 /// `Number(1n)` is allowed in JavaScript, so this stays separate from the
@@ -285,8 +285,8 @@ pub extern "C" fn js_math_hypot(a: f64, b: f64) -> f64 {
 /// Math.random() -> number (0 <= x < 1)
 #[no_mangle]
 pub extern "C" fn js_math_random() -> f64 {
-    let mut rng = rand::thread_rng();
-    rng.gen::<f64>()
+    let mut rng = rand::rng();
+    rng.random::<f64>()
 }
 
 /// Math.min(...array) -> number — find minimum value in an array

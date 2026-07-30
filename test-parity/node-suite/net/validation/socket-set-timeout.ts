@@ -6,12 +6,14 @@ import * as net from "node:net";
 const badMsecs: any[] = [true, null, {}, -1, NaN, Infinity, -5.5];
 
 for (const value of badMsecs) {
+  const sock = new net.Socket();
   try {
-    const sock = new net.Socket();
     sock.setTimeout(value);
     console.log("setTimeout", String(value), "=> NO THROW");
   } catch (err: any) {
-    console.log("setTimeout", String(value), "=>", err.name, err.code, "|", err.message);
+    console.log("setTimeout", String(value), "=>", err.name, err.code);
+  } finally {
+    sock.destroy();
   }
 }
 
@@ -19,3 +21,4 @@ for (const value of badMsecs) {
 const sock = new net.Socket();
 console.log("setTimeout(1000) === socket:", sock.setTimeout(1000) === sock);
 console.log("setTimeout(0) ok:", typeof sock.setTimeout(0));
+sock.destroy();

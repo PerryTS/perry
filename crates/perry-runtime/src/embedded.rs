@@ -265,16 +265,16 @@ pub extern "C" fn js_perry_read_embedded(path_value: f64) -> *mut crate::buffer:
 
 // Keep the FFI symbols external under the thin-LTO + `strip=true` release
 // profile. A `#[no_mangle] pub extern "C"` alone is internalized and
-// dead-stripped; only individual `#[used]` typed fn-pointer statics survive
+// dead-stripped; only individual `#[cfg_attr(feature = "keepalive-anchors", used)]` typed fn-pointer statics survive
 // (see the note in `typed_feedback/trace.rs`). `js_register_embedded_asset` is
 // called only from the generated C constructor, and `js_perry_read_embedded`
 // only from codegen-emitted callsites — both are invisible to Rust's reachability.
 #[rustfmt::skip]
 mod keep_embedded {
     use super::*;
-    #[used] static K0: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_asset;
-    #[used] static K1: extern "C" fn(f64) -> *mut crate::buffer::BufferHeader = js_perry_read_embedded;
-    #[used] static K2: extern "C" fn() -> *mut crate::array::ArrayHeader = js_perry_embedded_files;
+    #[cfg_attr(feature = "keepalive-anchors", used)] static K0: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_asset;
+    #[cfg_attr(feature = "keepalive-anchors", used)] static K1: extern "C" fn(f64) -> *mut crate::buffer::BufferHeader = js_perry_read_embedded;
+    #[cfg_attr(feature = "keepalive-anchors", used)] static K2: extern "C" fn() -> *mut crate::array::ArrayHeader = js_perry_embedded_files;
 }
 
 #[cfg(test)]

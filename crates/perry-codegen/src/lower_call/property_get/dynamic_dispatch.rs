@@ -861,14 +861,13 @@ pub(crate) fn try_lower_instance_method_call(
                 // `this`-flow safe), no own-property write can shadow the
                 // method (non-declared-field writes disqualify), and
                 // `prototype_is_stable` held for the chain.
-                let ptr_shape_receiver = match object {
-                    Expr::LocalGet(recv_id) if ctx.repsel_context_allows_canonical_i32 => ctx
-                        .native_facts
-                        .shape_proven_ptr_local(*recv_id)
-                        .map(|fact| fact.class_name == class_name)
-                        .unwrap_or(false),
-                    _ => false,
-                };
+                // Phase 5a additionally admits `this` inside a `__pshape`
+                // clone, so a proven receiver's `this.other()` chain stays
+                // guard-free instead of falling back to the dispatch tower.
+                let ptr_shape_receiver = ctx
+                    .ptr_shape_receiver_fact(object)
+                    .map(|fact| fact.class_name == class_name)
+                    .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
                     // Prefer the typed-receiver clone (bare gep+load field
                     // access inside the body) when one exists: the receiver
@@ -933,7 +932,20 @@ pub(crate) fn try_lower_instance_method_call(
                         );
                         return Ok(Some(merged));
                     }
-                    let direct = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                    // Representation-selection Phase 5a: route to the
+                    // proven-`this` clone when one exists. The receiver is
+                    // already proven here (no guard is emitted on this path at
+                    // all), and a `pshape_methods` hit additionally proves
+                    // `class_name` DECLARES `property` — so the clone's `this`
+                    // is exactly the class it was compiled for and cannot be a
+                    // subclass instance. Same ABI, so the call is unchanged
+                    // apart from the callee name.
+                    let pshape_target = ctx
+                        .pshape_methods
+                        .contains_key(&(class_name.clone(), property.to_string()))
+                        .then(|| crate::collectors::pshape_method_name(&fallback_fn));
+                    let target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
+                    let direct = ctx.block().call(DOUBLE, target, &arg_slices);
                     return Ok(Some(direct));
                 }
                 if let Some(guarded) = emit_guarded_direct_method_call(

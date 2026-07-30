@@ -171,7 +171,7 @@ pub extern "C" fn js_tagged_template_get_or_init(
     cooked_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_TAGGED_TEMPLATE_GET_OR_INIT: extern "C" fn(
     u64,
     *mut ArrayHeader,
@@ -507,8 +507,9 @@ pub(crate) fn test_template_raw_roots() -> (usize, usize) {
 /// <= capacity <= 16M (same bound as the GC tracer's sanity guard).
 #[inline(always)]
 pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    // Heap window varies by OS: macOS mimalloc lands in the 3-5 TB range;
-    // Android scudo + Linux glibc allocate MUCH lower (often < 1 TB); Windows
+    // Heap window varies by allocator and run: macOS mimalloc can land well
+    // below 2 TB (observed around 45 GB in the Rust test harness);
+    // Android scudo + Linux glibc also allocate MUCH lower (often < 1 TB); Windows
     // mimalloc lands well under 1 TB (often in the GB-to-tens-of-GB range).
     // iOS / tvOS / watchOS / visionOS *device* targets use libsystem_malloc
     // (mimalloc is host-side only) and allocate in the same low range —
@@ -526,6 +527,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // GcHeader / obj_type validation downstream.
     #[cfg(any(
         target_os = "android",
+        target_os = "macos",
         target_os = "linux",
         target_os = "windows",
         target_os = "ios",
@@ -536,6 +538,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     const HEAP_MIN: u64 = 0x1000; // 4 KB (classic user-space floor)
     #[cfg(not(any(
         target_os = "android",
+        target_os = "macos",
         target_os = "linux",
         target_os = "windows",
         target_os = "ios",
@@ -543,7 +546,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         target_os = "watchos",
         target_os = "visionos",
     )))]
-    const HEAP_MIN: u64 = 0x200_0000_0000; // 2 TB — above observed corrupt handles on macOS
+    const HEAP_MIN: u64 = 0x200_0000_0000; // 2 TB — retained for unlisted targets
     const HEAP_MAX: u64 = 0x8000_0000_0000; // 47-bit userspace cap
     let bits = arr as u64;
     let top16 = bits >> 48;
@@ -956,6 +959,79 @@ unsafe fn set_array_raw_f64_holes_flag(arr: *const ArrayHeader) {
 #[inline]
 pub(crate) unsafe fn mark_array_raw_f64_holes_fresh(arr: *const ArrayHeader) {
     set_array_raw_f64_holes_flag(arr);
+}
+
+/// Repsel 4a.2 (#6904): either raw-f64 invariant bit — the O(1) proof the
+/// hole-tolerant fast tiers key on.
+#[inline]
+pub(crate) unsafe fn array_has_raw_f64_layout_or_holes(arr: *const ArrayHeader) -> bool {
+    array_gc_header(arr).is_some_and(|header| {
+        (*header)._reserved
+            & (crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES)
+            != 0
+    })
+}
+
+/// Repsel 4a.2 (#6904): hole-fill store for a sparse-extend gap. `TAG_HOLE`
+/// is part of the raw-f64-or-holes invariant, so this deliberately does NOT
+/// run the numeric-layout clear that [`note_array_slot`] applies to
+/// non-numeric values (which permanently demoted every sparsely-extended
+/// numeric array to the O(n) verify walk). Layout note + write barrier still
+/// apply (TAG_HOLE is a non-pointer sentinel).
+#[inline]
+pub(crate) unsafe fn note_array_hole_fill_slot(arr: *mut ArrayHeader, index: usize) {
+    // GC_STORE_AUDIT(BARRIERED): TAG_HOLE sentinel store, layout-noted and barriered below.
+    std::ptr::write(array_elements_ptr(arr).add(index), crate::value::TAG_HOLE);
+    crate::gc::layout_note_slot(arr as usize, index, crate::value::TAG_HOLE);
+    let slot = array_elements_ptr(arr).add(index) as usize;
+    crate::gc::runtime_write_barrier_slot(arr as usize, slot, crate::value::TAG_HOLE);
+}
+
+/// Repsel 4a.2 (#6904): follow the growth/GC forwarding chain of a
+/// POINTER-tagged array head and return the re-boxed LIVE head; every other
+/// input (non-pointer tags, handle-band ids, non-arrays, already-live heads)
+/// is returned unchanged.
+///
+/// Consumed by the inline guard tiers' COLD arms: a caller-held stale head
+/// (canonically: a Phase 2 specialized-ABI callee grew an array the CALLER
+/// allocated — the callee's growth write-backs update the callee's own param
+/// slot, so the caller's binding keeps the pre-growth stub forever) fails
+/// every structural guard by design, which pinned such receivers to the
+/// boxed fallback on EVERY access. The cold arm calls this once, stores the
+/// repaired head back into the receiver's local slot, and every later
+/// iteration re-loads the live head and takes the inline tier. Semantics are
+/// unchanged — forwarding is transparent, this only re-points the binding at
+/// the same JS object's live storage.
+#[no_mangle]
+pub extern "C" fn js_array_refresh_local_head(value: f64) -> f64 {
+    let bits = value.to_bits();
+    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return value;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    // Handle-band ids and implausible addresses pass through untouched.
+    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
+        return value;
+    }
+    let cleaned = clean_arr_ptr(raw as *const ArrayHeader);
+    if cleaned.is_null() || cleaned as usize == raw {
+        return value;
+    }
+    f64::from_bits(crate::value::POINTER_TAG | (cleaned as u64 & crate::value::POINTER_MASK))
+}
+
+/// Repsel 4a.2 (#6904): a raw-f64(-or-holes) array that just gap-filled a
+/// sparse extend with a numeric value keeps the verified raw-f64-or-holes
+/// invariant — but holes now exist, so the DENSE flag must drop while the
+/// HOLES flag records the invariant (previously this transition cleared both
+/// flags, sending every later access through the O(n) rebuild walk).
+#[inline]
+pub(crate) unsafe fn demote_array_raw_f64_dense_to_holes(arr: *mut ArrayHeader) {
+    if let Some(header) = array_gc_header(arr) {
+        (*header)._reserved &= !crate::gc::GC_ARRAY_RAW_F64_LAYOUT;
+        (*header)._reserved |= crate::gc::GC_ARRAY_RAW_F64_HOLES;
+        crate::typed_feedback::invalidate_representation_change(arr as usize);
+    }
 }
 
 pub(crate) unsafe fn mark_array_as_arguments_object(arr: *const ArrayHeader) {
@@ -1411,21 +1487,23 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
 
 // These raw numeric-array helpers are called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` exports.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern "C" fn(f64) -> f64 =
     js_array_numeric_value_to_raw_f64;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_mark_numeric_f64_layout;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern "C" fn(*mut ArrayHeader) =
     js_array_clear_numeric_layout;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
     js_array_note_numeric_write;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) -> i32 =
     js_array_is_numeric_f64_layout;
+#[cfg_attr(feature = "keepalive-anchors", used)]
+static KEEP_JS_ARRAY_REFRESH_LOCAL_HEAD: extern "C" fn(f64) -> f64 = js_array_refresh_local_head;
 
 /// Calculate the byte size for an array with N elements capacity
 #[inline]

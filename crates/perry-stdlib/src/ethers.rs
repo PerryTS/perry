@@ -38,8 +38,7 @@ pub extern "C" fn js_ethers_get_address(str_ptr: *const StringHeader) -> *mut St
 /// formatted with EIP-55 checksum encoding.
 #[no_mangle]
 pub extern "C" fn js_ethers_wallet_create_random() -> *mut ObjectHeader {
-    use rand::Rng;
-    let pk_bytes: [u8; 32] = rand::thread_rng().gen();
+    let pk_bytes: [u8; 32] = rand::random();
 
     // Derive address: keccak256(private_key_bytes)[12..32] = 20-byte address
     let hash = keccak256(&pk_bytes);

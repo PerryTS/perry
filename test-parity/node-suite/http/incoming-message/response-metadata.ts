@@ -17,6 +17,7 @@ try {
   }
   await new Promise<void>((resolve, reject) => {
     get({ hostname: "127.0.0.1", port: address.port }, (res) => {
+      res.once("error", reject);
       console.log(
         "meta:",
         res.statusCode,

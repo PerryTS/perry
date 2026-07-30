@@ -2,7 +2,11 @@
 //! macOS tooling decodes tag 100 as `IOAccelerator`, so the whole JS heap
 //! shows up as GPU-driver memory in vmmap/Instruments/footprint.
 
-#[cfg(all(target_pointer_width = "64", target_vendor = "apple"))]
+#[cfg(all(
+    target_pointer_width = "64",
+    target_vendor = "apple",
+    feature = "alloc-mimalloc"
+))]
 #[test]
 fn js_gc_init_retags_mimalloc_os_mappings() {
     // Only asserts when the profiler override isn't steering the tag —

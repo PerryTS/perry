@@ -649,6 +649,11 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
+        // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _opt_report_scope = crate::opt_report::enter_region(
+            "module_init",
+            crate::opt_report::RegionKind::ModuleInit,
+        );
         let main_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
             &[],
@@ -793,6 +798,7 @@ pub(super) fn compile_module_entry(
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
             scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
+            scalar_slot_shadow_slots: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: main_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
@@ -820,6 +826,8 @@ pub(super) fn compile_module_entry(
             typed_i1_functions: &cross_module.typed_i1_functions,
             typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
             typed_f64_methods: &cross_module.typed_f64_methods,
+            pshape_methods: &cross_module.pshape_methods,
+            proven_this: None,
             typed_i32_methods: &cross_module.typed_i32_methods,
             typed_i1_methods: &cross_module.typed_i1_methods,
             typed_string_methods: &cross_module.typed_string_methods,
@@ -1087,6 +1095,7 @@ pub(super) fn compile_module_entry(
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
+                ctx.block().call_void("js_trace_events_flush_output", &[]);
                 // After the event loop drains, surface any still-unhandled
                 // promise rejection (Node exits non-zero; this matches the
                 // oracle for `Promise.reject`/combinator-reject programs).
@@ -1269,6 +1278,11 @@ pub(super) fn compile_module_entry(
             .chain(cross_module.returns_int_functions.iter())
             .copied()
             .collect();
+        // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _opt_report_scope = crate::opt_report::enter_region(
+            "module_init",
+            crate::opt_report::RegionKind::ModuleInit,
+        );
         let init_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
             &[],
@@ -1410,6 +1424,7 @@ pub(super) fn compile_module_entry(
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
             scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
+            scalar_slot_shadow_slots: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: init_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: init_native_facts.non_escaping_new_used_fields().clone(),
@@ -1437,6 +1452,8 @@ pub(super) fn compile_module_entry(
             typed_i1_functions: &cross_module.typed_i1_functions,
             typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
             typed_f64_methods: &cross_module.typed_f64_methods,
+            pshape_methods: &cross_module.pshape_methods,
+            proven_this: None,
             typed_i32_methods: &cross_module.typed_i32_methods,
             typed_i1_methods: &cross_module.typed_i1_methods,
             typed_string_methods: &cross_module.typed_string_methods,

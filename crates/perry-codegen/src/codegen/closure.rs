@@ -731,6 +731,14 @@ pub(super) fn compile_closure(
         .collect();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
+    // `--opt-report` (#6952): closures are the position #7034 §8 found most
+    // of the guard sites in, so they get their own scope with the source
+    // function name when one is known.
+    let opt_report_name = func_names
+        .get(&func_id)
+        .cloned()
+        .unwrap_or_else(|| format!("closure#{func_id}"));
+    let _opt_report_scope = crate::opt_report::enter_closure(&opt_report_name, func_id);
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         body,
         &[],
@@ -903,6 +911,7 @@ pub(super) fn compile_closure(
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
         scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
+        scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
@@ -928,6 +937,8 @@ pub(super) fn compile_closure(
         typed_i1_functions: &cross_module.typed_i1_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
+        pshape_methods: &cross_module.pshape_methods,
+        proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
         typed_string_methods: &cross_module.typed_string_methods,

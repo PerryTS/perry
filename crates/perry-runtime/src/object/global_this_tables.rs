@@ -124,6 +124,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "URLPattern"
         | "AbortController"
         | "AbortSignal"
+        | "EventTarget"
         | "DOMException"
         | "FormData"
         | "Blob"

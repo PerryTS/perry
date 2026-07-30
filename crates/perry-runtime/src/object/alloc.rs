@@ -569,7 +569,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
 /// Keepalive anchor — `js_object_alloc_class_dynamic_parent` is a
 /// generated-code-only callee, so the auto-optimize whole-program build would
 /// otherwise dead-strip it (see the FFI-symbol-link-break class).
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_OBJECT_ALLOC_CLASS_DYNAMIC_PARENT: extern "C" fn(
     u32,
     u32,
@@ -614,6 +614,11 @@ pub extern "C" fn js_object_alloc_with_shape(
         crate::gc::layout_init_pointer_free(obj_ptr as *mut u8);
     }
 
+    // A cache miss below allocates the keys array and every key string. Keep
+    // the newborn object live and reload it before installing the finished
+    // shape; otherwise a moving collection leaves `obj_ptr` in from-space.
+    let obj_scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = obj_scope.root_raw_mut_ptr(obj_ptr);
     let (cached, cached_runtime_id) = shape_cache_get_with_id(shape_id);
     let (keys_arr, runtime_shape_id) = if !cached.is_null() {
         (cached, cached_runtime_id)
@@ -627,12 +632,19 @@ pub extern "C" fn js_object_alloc_with_shape(
         let num_keys = keys.len();
         // Issue #179: shape-cache keys_array lives in the longlived arena.
         let arr = crate::array::js_array_alloc_with_length_longlived(num_keys as u32);
-        let elements_ptr = unsafe { (arr as *mut u8).add(8) as *mut f64 };
+        // The array is not installed in the shape cache (and therefore not a
+        // scanner root) until every key has been allocated. A longlived-string
+        // allocation can collect in between, so root the in-progress array and
+        // reload it before each slot write.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
         for (i, key_bytes) in keys.iter().enumerate() {
             let str_ptr = crate::string::js_string_from_bytes_longlived(
                 key_bytes.as_ptr(),
                 key_bytes.len() as u32,
             );
+            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+            let elements_ptr = unsafe { (arr as *mut u8).add(8) as *mut f64 };
             let nanboxed = f64::from_bits(
                 crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
             );
@@ -642,11 +654,13 @@ pub extern "C" fn js_object_alloc_with_shape(
                 crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
             }
         }
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         shape_cache_insert(shape_id, arr);
         (arr, shape_cache_get_with_id(shape_id).1)
     };
 
     unsafe {
+        let obj_ptr = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         set_object_keys_array(obj_ptr, keys_arr);
         // #6804: birth-stamp the runtime ShapeId (see `ShapeCacheEntry`) —
         // newborn literals carry their stable identity immediately, so
@@ -657,7 +671,7 @@ pub extern "C" fn js_object_alloc_with_shape(
         }
     }
 
-    obj_ptr
+    obj_handle.get_raw_mut_ptr::<ObjectHeader>()
 }
 
 /// Clone a spread source object and reserve extra physical slot capacity for additional

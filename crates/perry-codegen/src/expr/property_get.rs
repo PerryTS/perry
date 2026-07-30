@@ -1309,15 +1309,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // out of alias analysis) → bitcast → POINTER_MASK →
                         // gep header → gep index → load. No volatile gate, no
                         // header checks, no fallback arm, no phi.
-                        let ptr_shape_fact = match object.as_ref() {
-                            Expr::LocalGet(recv_id) if ctx.repsel_context_allows_canonical_i32 => {
-                                ctx.native_facts
-                                    .shape_proven_ptr_local(*recv_id)
-                                    .filter(|fact| fact.class_name == class_name)
-                                    .cloned()
-                            }
-                            _ => None,
-                        };
+                        // Phase 5a extends the same proof to `this` inside a
+                        // proven-`this` method clone (collectors/proven_this.rs).
+                        let ptr_shape_fact = ctx
+                            .ptr_shape_receiver_fact(object.as_ref())
+                            .filter(|fact| fact.class_name == class_name)
+                            .cloned();
                         if let Some(fact) = ptr_shape_fact {
                             let recv_box = lower_expr(ctx, object)?;
                             let field_idx_str = field_index.to_string();

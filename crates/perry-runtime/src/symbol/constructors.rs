@@ -179,8 +179,8 @@ fn is_well_known_symbol_member_name(name: &str) -> bool {
 // #1561-style force-keep: `js_symbol_computed_member` has no internal Rust
 // callers — only generated IR (perry-hir lowers `Symbol[key]` to a call to it),
 // so LTO / whole-program-bitcode link modes are free to internalize and
-// dead-strip it. The `#[used]` reference edge keeps the export alive.
-#[used]
+// dead-strip it. The `#[cfg_attr(feature = "keepalive-anchors", used)]` reference edge keeps the export alive.
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_SYMBOL_COMPUTED_MEMBER: unsafe extern "C" fn(f64, f64) -> f64 =
     js_symbol_computed_member;
 

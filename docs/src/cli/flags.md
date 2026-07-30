@@ -101,6 +101,7 @@ accept either the `$perryfs/<path>` virtual path or the embed-relative key.
 | `--no-link` | Produce `.o` object file only, skip linking |
 | `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
+| `--opt-report[=json]` | Report which values Perry could **not** statically type, why, and whether you can fix it. Text by default; `--opt-report=json` emits a stable schema for tooling. Also settable via `PERRY_OPT_REPORT=1` |
 
 The `--trace`/`--focus` pair localizes "compiled to the wrong thing" bugs:
 `perry compile foo.ts --trace hir,llvm --focus parseRow` dumps just the
@@ -108,6 +109,67 @@ The `--trace`/`--focus` pair localizes "compiled to the wrong thing" bugs:
 which stage corrupted it without scrolling a full-module dump. `--trace llvm`
 forces a full recompile (the object cache otherwise skips codegen for
 unchanged modules, leaving the trace dir empty).
+
+### `--opt-report` — why a value stayed boxed
+
+Perry's speed comes from proving static types and selecting unboxed
+representations (see the
+[representation-selection RFC](https://github.com/PerryTS/perry/blob/main/docs/representation-selection-rfc.md)).
+When a proof fails the value stays NaN-boxed and the fast paths silently do
+not fire. `--opt-report` is the representation-selection analogue of LLVM's
+`-Rpass-missed` remarks: it prints what was proven, what was not, and which
+rule made the call.
+
+```console
+$ perry compile batch.ts -o batch --opt-report
+Representation summary
+----------------------
+  Ptr<Shape>          0 selected /    4 denied   (0% of 4 candidates)
+  I32/U32/Str         3 selected /    0 denied   (100% of 3 candidates)
+  specialized ABI     0 selected /    3 denied   (0% of 3 candidates)
+  TOTAL            3 values unboxed, 7 left Boxed
+
+*** Ptr<Shape> promoted 0 of 4 candidates in this build. ***
+    Every candidate was denied; the rules are in collectors/ptr_shape.rs.
+...
+  batch.ts :: local `acc` [loop depth 0]
+      in function totalsRow -> Boxed
+      ptr-shape rule 2 (containment)
+      returned from this function. Return positions do not carry a shape
+      fact yet, so returning a record forfeits its proof.
+```
+
+Each denied value carries:
+
+- **Position** — `local`, `param`, `return`, `field`, or `alloc-site` (an
+  object literal that is never bound to a local, the `.map(x => ({...}))`
+  idiom).
+- **The rule that denied it**, in the collector's own numbering, so you can
+  check it against the named source file.
+- **An actionability tier**: *Fixable in your source* (stop reassigning it,
+  don't capture it in a closure), *Inherently polymorphic* (correctly boxed —
+  no action), or *Perry limitation* (not your code; names the tracking issue
+  where one exists).
+- **A hotness proxy.** Loop-nesting depth **and**, separately, whether the
+  enclosing region is an iterating builtin's callback. The two are reported
+  as distinct columns on purpose: a `map`/`sort`/`reduce` callback has no
+  loop of its own but runs once per element, so loop depth alone ranks it
+  last. Neither is a profile — they are static proxies.
+
+Wins are reported alongside the misses, so the ratio is visible rather than
+just the complaints.
+
+**It is observational only** — emitted code is byte-identical with the flag
+on and off. Like `--trace llvm`, it disables build and object cache reuse for
+its own run, because a cache hit skips codegen entirely and there would be
+nothing to report. The report goes to **stderr**, so it never mixes into a
+`--format json` payload or your program's piped output.
+
+Values are identified by **function and binding name**: Perry's HIR keeps
+names through lowering but drops source positions, so there is no `file:line`
+yet. `--opt-report=json` carries the same data under `schema_version: 1`;
+diffing two builds' JSON is a cheap CI check against a representation
+silently regressing to zero.
 
 ## Output Optimization
 
@@ -117,6 +179,24 @@ unchanged modules, leaving the trace dir empty).
 | `--march <CPU>` | CPU baseline for the generated machine code: an LLVM CPU name (`x86-64-v2`, `x86-64-v3`, `znver2`, `apple-m1`, …), `native` (tune to the build machine — the default for host builds), or `generic` (the target architecture's portable baseline — the default for cross builds). Pin this when the binary runs on other machines: a host-native build on an AVX-512 box otherwise SIGILLs on older x86-64 CPUs. Also settable via `PERRY_TARGET_CPU` or perry.toml `[build] march`; `[build] native_tuning = false` is shorthand for `generic`. Applies to app code and the auto-optimized runtime/stdlib rebuild. |
 
 Minification strips comments, collapses whitespace, and mangles local variable/parameter/non-exported function names for smaller output.
+
+### Size-optimized builds
+
+For the smallest possible native binaries, two opt-in environment variables
+rebuild the auto-optimized runtime/stdlib archives tuned for size instead of
+speed (they require a Perry workspace checkout, like the rest of
+auto-optimize):
+
+| Variable | Description |
+|----------|-------------|
+| `PERRY_SIZE_OPT=z` (or `s`) | Rebuild the runtime/stdlib at `-C opt-level=z`/`s` instead of `3`. Roughly halves a small program's binary at some runtime-speed cost (compute-heavy inner loops can run ~2-3× slower). Size-optimized and normal archives are cached independently. |
+| `PERRY_SIZE_LTO=fat` | Additionally run whole-archive fat LTO over the rebuilt archives (slower rebuild, smaller binary). Only meaningful together with `PERRY_SIZE_OPT`. |
+| `PERRY_SIZE_PANIC=abort-immediate` | Additionally rebuild the Rust standard library with the `immediate-abort` panic strategy when auto-optimize proves that no UI/thread/plugin callback needs unwinding, removing the backtrace symbolizer and unwind tables (~314 KB measured). Requires a nightly toolchain (`-Zbuild-std`); only meaningful together with `PERRY_SIZE_OPT`. A Rust-level internal panic then aborts without a symbolized backtrace — JS `throw`/`catch`, `finally`, error stacks and `uncaughtException` are unaffected. |
+
+A `console.log` hello world on macOS arm64: 4.03 MB default → 2.17 MB with
+`PERRY_SIZE_OPT=z PERRY_SIZE_LTO=fat` → 1.87 MB adding
+`PERRY_SIZE_PANIC=abort-immediate`. Programs that use more of the runtime
+shrink less, proportionally.
 
 ## Testing Flags
 
@@ -146,6 +226,7 @@ Minification strips comments, collapses whitespace, and mangles local variable/p
 | `PERRY_UPDATE_SERVER` | Custom update server URL |
 | `CI=true` | Auto-skip update checks (set by most CI systems) |
 | `RUST_LOG` | Debug logging level (`debug`, `info`, `trace`) |
+| `PERRY_OPT_REPORT` | `1`/`text` or `json` — same as `--opt-report[=json]`, for driving the report from an environment where adding a flag is awkward |
 
 ## Configuration Files
 

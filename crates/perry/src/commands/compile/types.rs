@@ -473,6 +473,36 @@ pub struct CompileArgs {
     /// dump. No effect unless `--trace hir` (or `--print-hir`) is set.
     #[arg(long, value_name = "NAME")]
     pub focus: Option<String>,
+
+    /// Report which values Perry could NOT statically type, why, and whether
+    /// you can do anything about it (#6952) — the representation-selection
+    /// analogue of LLVM's `-Rpass-missed` remarks.
+    ///
+    /// Perry's speed comes from proving static types and selecting unboxed
+    /// representations; when a proof fails the value stays NaN-boxed and the
+    /// fast paths silently do not fire. This prints, per value: its position
+    /// (local / param / return / allocation site), the representation it got,
+    /// the collector rule that denied it, an actionability tier, and a static
+    /// hotness proxy. Wins are reported too, so you can see the ratio.
+    ///
+    /// `--opt-report` prints human-readable text; `--opt-report=json` emits a
+    /// stable schema for tooling (CI can diff two builds to catch a silent
+    /// representation regression). Also settable via `PERRY_OPT_REPORT=1`.
+    ///
+    /// Observational only — emitted code is byte-identical with the flag on
+    /// and off. It does disable build/object cache reuse for its own run, so
+    /// that codegen actually executes and has something to report.
+    #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "text")]
+    pub opt_report: Option<OptReportFormat>,
+}
+
+/// Output format for `--opt-report`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum OptReportFormat {
+    /// Human-readable, ranked, grouped by actionability tier.
+    Text,
+    /// Stable JSON schema for tooling.
+    Json,
 }
 
 /// Information about a JavaScript module that will be interpreted at runtime
@@ -680,6 +710,28 @@ pub struct CompilationContext {
     /// `perry-runtime/intl-locale` (`icu_locale_core`'s data-free BCP-47 / UTS #35
     /// structural parser). A program that never canonicalizes a locale links a
     /// lighter hand-rolled fallback instead.
+    /// The program can reach the `Intl.*` namespace surface (any `Intl`
+    /// token or locale-formatting API). Gates `perry-runtime/intl-namespace`
+    /// (~219 KB of constructor/option/format machinery). Over-approximates:
+    /// a dynamic-code site forces it on.
+    pub uses_intl_namespace: bool,
+    /// Per-namespace `globalThis` member tables (`Math`/`JSON`/`Reflect`/
+    /// `Atomics`). Each gates the matching `perry-runtime/global-*` feature;
+    /// set when the program mentions the name at all (call sites lower to
+    /// intrinsics, so a mention means it may be used as a VALUE).
+    pub uses_global_math: bool,
+    pub uses_global_json: bool,
+    pub uses_global_reflect: bool,
+    pub uses_global_atomics: bool,
+    /// Per-group `globalThis` web-platform member tables (URL / Text* /
+    /// WebSocket / webcrypto / fetch value types).
+    pub uses_global_url: bool,
+    pub uses_global_text: bool,
+    pub uses_global_websocket: bool,
+    pub uses_global_webcrypto: bool,
+    pub uses_global_webfetch: bool,
+    /// `process.send`/`disconnect`/`connected`/`channel` — gates `proc-ipc`.
+    pub uses_proc_ipc: bool,
     pub uses_intl_locale: bool,
     /// Whether any TS module localizes a date/time — `Intl.DateTimeFormat`, or
     /// `Date.prototype.toLocale{,Date,Time}String`. Gates
@@ -1028,6 +1080,17 @@ impl CompilationContext {
             uses_url: false,
             uses_string_normalize: false,
             uses_intl_segmenter: false,
+            uses_intl_namespace: false,
+            uses_global_math: false,
+            uses_global_json: false,
+            uses_global_reflect: false,
+            uses_global_atomics: false,
+            uses_global_url: false,
+            uses_global_text: false,
+            uses_global_websocket: false,
+            uses_global_webcrypto: false,
+            uses_global_webfetch: false,
+            uses_proc_ipc: false,
             uses_intl_locale: false,
             uses_intl_datetime: false,
             uses_diagnostics: false,

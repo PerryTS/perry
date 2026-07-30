@@ -458,7 +458,7 @@ fn throw_invalid_language_tag(tag: &str) -> ! {
     crate::exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
-fn canonical_locale(tag: &str) -> Option<String> {
+pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return None;
     }
@@ -1733,6 +1733,17 @@ fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
     );
 }
 
+/// Install the `Intl.*` namespace members. Behind `intl-namespace` (default-on;
+/// the compiler enables it whenever the program mentions `Intl` or any
+/// locale-formatting API): when the feature is off this is a no-op, the
+/// `Intl` global is still a real (empty) namespace object, and `-dead_strip`
+/// reclaims the constructor/option/format machinery that nothing else
+/// reaches. `toLocale*` / `localeCompare` are unaffected — their entry points
+/// and helpers live outside this gate.
+#[cfg(not(feature = "intl-namespace"))]
+pub fn install_intl_namespace(_ns_obj: *mut ObjectHeader) {}
+
+#[cfg(feature = "intl-namespace")]
 pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;

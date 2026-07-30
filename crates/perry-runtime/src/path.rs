@@ -829,10 +829,10 @@ pub extern "C" fn js_path_win32_relative_checked(from_f64: f64, to_f64: f64) -> 
 
 /// Keepalive anchors: these are emitted only from generated code, so the
 /// whole-program auto-optimize bitcode pass would otherwise dead-strip them.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PATH_RELATIVE_CHECKED: extern "C" fn(f64, f64) -> *mut StringHeader =
     js_path_relative_checked;
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_PATH_WIN32_RELATIVE_CHECKED: extern "C" fn(f64, f64) -> *mut StringHeader =
     js_path_win32_relative_checked;
 

@@ -8,7 +8,7 @@ use perry_diagnostics::{
 };
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use super::deps::{
@@ -70,7 +70,7 @@ fn collect_ts_files(path: &PathBuf) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     if path.is_file() {
-        if path.extension().is_some_and(|ext| ext == "ts") {
+        if is_checkable_ts_file(path) {
             files.push(path.clone());
         }
         return Ok(files);
@@ -88,15 +88,25 @@ fn collect_ts_files(path: &PathBuf) -> Result<Vec<PathBuf>> {
             continue;
         }
 
-        if path.is_file() && path.extension().is_some_and(|ext| ext == "ts") {
-            // Skip declaration files
-            if !path.to_string_lossy().ends_with(".d.ts") {
-                files.push(path.to_path_buf());
-            }
+        if path.is_file() && is_checkable_ts_file(path) {
+            files.push(path.to_path_buf());
         }
     }
 
     Ok(files)
+}
+
+/// A TypeScript source the checker should visit: `.ts`/`.mts`/`.cts`,
+/// excluding declaration files (`.d.ts`/`.d.mts`/`.d.cts`).
+fn is_checkable_ts_file(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    if !matches!(ext, "ts" | "mts" | "cts") {
+        return false;
+    }
+    let name = path.to_string_lossy();
+    !(name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts"))
 }
 
 pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) -> Result<()> {
@@ -111,7 +121,14 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         args.input.canonicalize().unwrap_or(args.input.clone())
     };
 
-    let files = collect_ts_files(&project_root)?;
+    // A file input checks exactly that file; `project_root` (its parent)
+    // still anchors project-level context. A directory input is walked.
+    let collection_root = if args.input.is_file() {
+        &args.input
+    } else {
+        &project_root
+    };
+    let files = collect_ts_files(collection_root)?;
 
     if files.is_empty() {
         match format {
@@ -194,9 +211,22 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         ) {
             Ok(result) => result,
             Err(e) => {
-                if verbose > 0 {
-                    eprintln!("Parse error in {}: {}", canonical.display(), e);
-                }
+                checked_files += 1;
+                // A file that does not parse is a check FAILURE, not a file to
+                // skip. Before this, the error was printed only under `-v` and
+                // the file was dropped without touching `all_diagnostics`, so
+                // `error_count()` stayed 0 and `perry check` reported "All
+                // checks passed!" with exit 0 on syntactically invalid code —
+                // while `perry compile` correctly rejected the same file.
+                // Record it as a real diagnostic so the text summary, the JSON
+                // `success` field and the exit code all agree.
+                all_diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticCode::ParseError,
+                        format!("{}: {}", canonical.display(), e),
+                    )
+                    .build(),
+                );
                 continue;
             }
         };
@@ -715,4 +745,48 @@ fn issue_to_diagnostic(issue: &CompatibilityIssue) -> Diagnostic {
     };
 
     severity_fn(code, format!("{}{}", issue.message, location)).build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ESM-only projects author their sources entirely in `.mts`; the
+    /// checker's file discovery must see them (it matched only `.ts`, so
+    /// `perry check src` reported "No TypeScript files found").
+    #[test]
+    fn checkable_files_include_mts_and_cts_but_not_declarations() {
+        assert!(is_checkable_ts_file(Path::new("src/main.ts")));
+        assert!(is_checkable_ts_file(Path::new("src/main.mts")));
+        assert!(is_checkable_ts_file(Path::new("src/main.cts")));
+        assert!(!is_checkable_ts_file(Path::new("src/types.d.ts")));
+        assert!(!is_checkable_ts_file(Path::new("src/types.d.mts")));
+        assert!(!is_checkable_ts_file(Path::new("src/types.d.cts")));
+        assert!(!is_checkable_ts_file(Path::new("src/data.json")));
+        assert!(!is_checkable_ts_file(Path::new("src/no_extension")));
+    }
+
+    /// `perry check src/main.mts` must check exactly that file — a file
+    /// input previously fell back to walking its parent directory because
+    /// `run` handed `collect_ts_files` the project root instead of the file.
+    #[test]
+    fn file_input_collects_only_that_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let main = dir.path().join("main.mts");
+        let other = dir.path().join("other.mts");
+        std::fs::write(&main, "export {};\n").expect("write main.mts");
+        std::fs::write(&other, "export {};\n").expect("write other.mts");
+
+        let files = collect_ts_files(&main).expect("collect from file input");
+        assert_eq!(files, vec![main.clone()], "file input yields only itself");
+
+        let mut walked =
+            collect_ts_files(&dir.path().to_path_buf()).expect("collect from directory input");
+        walked.sort();
+        assert_eq!(
+            walked,
+            vec![main, other],
+            "directory input walks all sources"
+        );
+    }
 }

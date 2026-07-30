@@ -415,8 +415,50 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module
                     .typed_f64_receiver_methods
                     .contains_key(&(class.name.clone(), method.name.clone())),
+                None,
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
+            // Representation-selection Phase 5a: the additive `internal`
+            // proven-`this` clone. Same HIR, same ABI, same shadow-bound
+            // tagged-at-rest receiver slot — only `this.field` lowering
+            // differs (bare fixed-offset access instead of the per-access
+            // guard diamond). Reached ONLY from the two call sites that
+            // already prove the receiver's exact shape; never registered into
+            // a runtime vtable.
+            if let Some(fact) = cross_module
+                .pshape_methods
+                .get(&(class.name.clone(), method.name.clone()))
+            {
+                compile_method(
+                    llmod,
+                    class,
+                    method,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    module_global_types,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                    None,
+                    false,
+                    Some(fact.clone()),
+                )
+                .with_context(|| {
+                    format!(
+                        "lowering proven-`this` clone of method '{}::{}'",
+                        class.name, method.name
+                    )
+                })?;
+            }
         }
         for member in class
             .computed_members
@@ -444,6 +486,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| {
                 format!(
@@ -508,6 +551,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
         }
@@ -560,6 +604,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| format!("lowering setter '{}::{}'", class.name, prop))?;
         }
@@ -654,6 +699,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
         }
@@ -1812,10 +1858,23 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         }
     }
-    for (func_id, src) in &hir.closure_source_text {
-        if registered_fn_ids.contains(func_id) || !materialized_closure_ids.contains(func_id) {
-            continue;
-        }
+    // Sorted, NOT raw `HashMap` iteration (#7038). The loop above walks
+    // `hir.functions` (a `Vec`) and is already deterministic; this one keyed off
+    // the map's iteration order, so the `@.str.N` numbering of the emitted
+    // string constants was a per-process permutation. Same input, different
+    // `.ll` on every run — which silently invalidates any A/B that compares raw
+    // IR, a technique several representation and GC investigations relied on.
+    // Emission order is the only thing that changes; sorting by `FuncId` makes
+    // it stable without altering what is emitted.
+    let mut materialized_closure_sources: Vec<(&perry_hir::types::FuncId, &String)> = hir
+        .closure_source_text
+        .iter()
+        .filter(|(func_id, _)| {
+            !registered_fn_ids.contains(*func_id) && materialized_closure_ids.contains(*func_id)
+        })
+        .collect();
+    materialized_closure_sources.sort_by_key(|(func_id, _)| **func_id);
+    for (func_id, src) in materialized_closure_sources {
         let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
         user_fn_source.push((sym, src.clone()));
     }

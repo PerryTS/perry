@@ -33,7 +33,7 @@
 //! (`for (;;) {}`, `while (cond) {}`) — the #74 repro case — as the only
 //! class that still receives the barrier.
 
-use perry_hir::{Expr, Stmt};
+use perry_hir::{CompareOp, Expr, Stmt, UnaryOp};
 use std::collections::HashSet;
 
 /// True when the body needs an `asm sideeffect` barrier inserted. This is
@@ -50,6 +50,147 @@ pub(crate) fn body_needs_asm_barrier(body: &[Stmt]) -> bool {
     let mut body_locals: HashSet<u32> = HashSet::new();
     collect_body_declared_locals(body, &mut body_locals);
     !body_writes_outside(body, &body_locals)
+}
+
+/// True when the loop body may allocate (or otherwise call into the runtime and
+/// trip a GC), so a moving-GC back-edge poll (`js_gc_loop_safepoint`) must be
+/// emitted to drain any deferred minor. Reuses the LLVM-purity whitelist: a body
+/// that is fully LLVM-pure performs no call / allocation / heap mutation, so it
+/// can never cross a nursery trigger and defer a collection — the poll would be
+/// a guaranteed no-op that only defeats vectorization. Conservative in the SAFE
+/// direction: anything not provably pure is treated as "may allocate" and gets
+/// the poll. A spurious poll costs a little vectorization; a missing one only
+/// delays a deferred minor to the next safepoint (bounded by the moving-GC hard
+/// cap) — never a correctness or UAF hazard.
+pub(crate) fn loop_may_allocate(body: &[Stmt], controls: &[&Expr]) -> bool {
+    !body.iter().all(stmt_alloc_free) || controls.iter().any(|expr| !expr_alloc_free(expr))
+}
+
+/// Like `stmt_is_pure`, but the question is narrower — "can this allocate (or
+/// call into the runtime and trip a GC)?" — so it additionally accepts element
+/// ACCESS that never allocates: array/typed-array element READS and in-place
+/// numeric updates never allocate, and typed-array element WRITES store into a
+/// fixed-size backing buffer that never grows. Generic `IndexSet` is NOT
+/// accepted: a plain JS-array index write can grow (reallocate) the backing
+/// store. This lets a `for (…) acc += arr[i]` reduction stay poll-free (LLVM can
+/// vectorize) while `keep.push({…})` (a Call) still gets its poll.
+fn stmt_alloc_free(s: &Stmt) -> bool {
+    match s {
+        Stmt::Expr(e) => expr_alloc_free(e),
+        Stmt::Let { init, .. } => init.as_ref().is_none_or(expr_alloc_free),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_alloc_free(condition)
+                && then_branch.iter().all(stmt_alloc_free)
+                && else_branch
+                    .as_ref()
+                    .is_none_or(|b| b.iter().all(stmt_alloc_free))
+        }
+        Stmt::While { condition, body } => {
+            expr_alloc_free(condition) && body.iter().all(stmt_alloc_free)
+        }
+        Stmt::DoWhile { body, condition } => {
+            expr_alloc_free(condition) && body.iter().all(stmt_alloc_free)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_none_or(stmt_alloc_free)
+                && condition.as_ref().is_none_or(expr_alloc_free)
+                && update.as_ref().is_none_or(expr_alloc_free)
+                && body.iter().all(stmt_alloc_free)
+        }
+        Stmt::Labeled { body, .. } => stmt_alloc_free(body),
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
+        _ => false,
+    }
+}
+
+fn expr_alloc_free(e: &Expr) -> bool {
+    match e {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::BigInt(_)
+        | Expr::String(_)
+        | Expr::This
+        | Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::ClassRef(_)
+        | Expr::EnumMember { .. } => true,
+        // Typed/buffer reads are fixed-layout numeric loads. Generic
+        // IndexGet/IndexUpdate are deliberately excluded: proxies, accessors,
+        // and coercion hooks can run user code and allocate.
+        Expr::BufferIndexGet { buffer, index } => expr_alloc_free(buffer) && expr_alloc_free(index),
+        Expr::Uint8ArrayGet { array, index } => expr_alloc_free(array) && expr_alloc_free(index),
+        // Typed-array element WRITES store into a fixed-size backing buffer that
+        // never grows/reallocates. (Generic `IndexSet` is deliberately absent —
+        // a plain JS-array write can grow the array and allocate.)
+        Expr::BufferIndexSet {
+            buffer,
+            index,
+            value,
+        } => expr_alloc_free(buffer) && expr_alloc_free(index) && expr_alloc_free(value),
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => expr_alloc_free(array) && expr_alloc_free(index) && expr_alloc_free(value),
+        Expr::LocalSet(_, val) => expr_alloc_free(val),
+        Expr::Compare {
+            op: CompareOp::Eq | CompareOp::Ne,
+            left,
+            right,
+        }
+        | Expr::Logical { left, right, .. } => expr_alloc_free(left) && expr_alloc_free(right),
+        Expr::Unary {
+            op: UnaryOp::Not,
+            operand,
+        }
+        | Expr::TypeOf(operand)
+        | Expr::Void(operand) => expr_alloc_free(operand),
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_alloc_free(condition) && expr_alloc_free(then_expr) && expr_alloc_free(else_expr),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    use perry_hir::BinaryOp;
+
+    #[test]
+    fn generic_index_update_keeps_the_loop_safepoint() {
+        let update = Expr::IndexUpdate {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(0)),
+            op: BinaryOp::Add,
+            prefix: false,
+        };
+        assert!(loop_may_allocate(&[Stmt::Expr(update)], &[]));
+    }
+
+    #[test]
+    fn allocating_loop_control_keeps_the_loop_safepoint() {
+        let condition = Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(0)),
+        };
+        assert!(loop_may_allocate(&[], &[&condition]));
+    }
 }
 
 fn stmt_is_pure(s: &Stmt) -> bool {

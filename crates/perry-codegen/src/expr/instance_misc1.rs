@@ -1406,9 +1406,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // The store keeps the raw-slot plain-finite discipline (an
             // Inf-crossing update side-exits to the by-name setter, which
             // performs the layout downgrade the GC scan relies on).
-            if let Expr::LocalGet(recv_id) = object.as_ref() {
-                if ctx.repsel_context_allows_canonical_i32 {
-                    let fact = ctx.native_facts.shape_proven_ptr_local(*recv_id).cloned();
+            // (Phase 5a's proven `this` never claims numeric fields, so this
+            // site remains Phase-3b-local-only in practice.)
+            {
+                let fact = ctx.ptr_shape_receiver_fact(object.as_ref()).cloned();
+                {
                     if let Some(fact) = fact {
                         if fact.numeric_fields.contains(property.as_str()) {
                             if let Some(field_index) =

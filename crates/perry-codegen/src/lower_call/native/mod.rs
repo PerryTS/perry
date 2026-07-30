@@ -383,6 +383,69 @@ pub(crate) fn lower_native_method_call(
     // inline .length guard checks ptr < 4096, and TAG_UNDEFINED's
     // lower 48 bits = 1).
     let Some(recv) = object else {
+        // `import { promises } from "node:fs"` / `"node:stream"`: the HIR
+        // routes the binding to the `<mod>/promises` SUBMODULE (module_decl's
+        // named-import table), so the call arrives as a receiver-less
+        // `NativeMethodCall { module: "fs/promises", method }`. Dispatch it on
+        // the populated submodule namespace singleton — its members are the
+        // real promise-returning thunks. Without this arm the call fell to the
+        // TAG_UNDEFINED sentinel below and `promises.realpath(p)` resolved
+        // `undefined` (the compiled CLI's file cache then normalized every path to
+        // `undefined` and each later fs call threw).
+        let normalized_module = module.strip_prefix("node:").unwrap_or(module);
+        let promises_submod_key = match normalized_module {
+            "fs/promises" => Some("fs_promises"),
+            "stream/promises" => Some("stream_promises"),
+            _ => None,
+        };
+        if let Some(submod_key) = promises_submod_key {
+            let submod_label = crate::expr::emit_string_literal_global(ctx, submod_key);
+            let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
+            let recv_box = {
+                let blk = ctx.block();
+                if let Some(s) = install_sym {
+                    blk.call_void(s, &[]);
+                }
+                blk.call(
+                    DOUBLE,
+                    "js_node_submodule_namespace",
+                    &[(PTR, &submod_label), (I32, &submod_key.len().to_string())],
+                )
+            };
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                {
+                    let blk = ctx.block();
+                    for (i, value) in lowered_args.iter().enumerate() {
+                        let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                        blk.store(DOUBLE, value, &slot);
+                    }
+                }
+                (buf, n.to_string())
+            };
+            let method_idx = ctx.strings.intern(method);
+            let entry = ctx.strings.entry(method_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len = entry.byte_len.to_string();
+            return Ok(ctx.block().call(
+                DOUBLE,
+                "js_native_call_method",
+                &[
+                    (DOUBLE, &recv_box),
+                    (PTR, &bytes_global),
+                    (I64, &name_len),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            ));
+        }
         // Named/value-form imports of node-core native-module functions
         // (`import { realpathSync } from "fs"; realpathSync(p)`) reach here
         // as a receiver-less `NativeMethodCall` with no static-table row.

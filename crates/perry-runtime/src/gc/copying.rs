@@ -26,7 +26,19 @@ pub(crate) struct CopyingPointerSet {
 impl CopyingPointerSet {
     pub(super) fn new() -> Self {
         let (malloc_registry_available, malloc_registry_empty_at_start) = MALLOC_STATE.with(|s| {
-            let s = s.borrow();
+            let mut s = s.borrow_mut();
+            // Moving-nursery mode (`PERRY_GC_MOVING_LOOP_POLLS`): eagerly build the
+            // malloc registry so this copying minor can CLASSIFY malloc-tracked
+            // objects and evacuate, instead of hitting
+            // `MallocRegistryUnavailable` and falling back to a non-moving minor
+            // (which reclaims ~nothing on reallocation-heavy async/Map/generator
+            // code — measured: broad3 192 MiB / 100 fallbacks). The
+            // O(malloc-objects) rebuild is paid back by the RSS win. Default
+            // (non-moving) copied minors keep the lazy behavior — see
+            // `ensure_set_built`'s "keep copied-minor from rebuilding" note.
+            if super::gc_moving_loop_polls_enabled() && !s.objects.is_empty() {
+                super::malloc::ensure_set_built(&mut s);
+            }
             (s.malloc_registry_available(), s.objects.is_empty())
         });
         let malloc_registry_rebuild_count_start = MALLOC_REGISTRY_REBUILD_COUNT.with(|c| c.get());
@@ -446,14 +458,62 @@ impl CopyingNurseryCollector {
         })
     }
 
+    /// Follow the forwarding chain for a raw metadata key/address the SAME
+    /// way the evacuation verifier does (`verify::try_rewrite_raw_addr`), so
+    /// the post-copy rewrite pass and the verifier never DISAGREE about a
+    /// moved address (#scavenge-cause).
+    ///
+    /// The old body classified `addr` via `self.ptrs.classify()` and bailed to
+    /// `None` whenever that returned `None`. But the verifier follows the
+    /// forwarding pointer gated only by its live census, so any from-space key
+    /// the classifier rejected stayed *un-rekeyed* in a runtime mutable
+    /// metadata table (e.g. `shapes.entries`, keyed by keys-array heap address)
+    /// — and the verifier then aborted on that still-stale forwarded key
+    /// (`slot=0x0 ... in runtime mutable root scanner`). Because
+    /// `rewrite_raw_addr` is the single shared path for every metadata scanner
+    /// (shapes, map/set, symbol, proxy, weakref, descriptor/class registries,
+    /// …), the disagreement is fixed for all of them at once.
+    ///
+    /// Gate on a heap-region check instead of `classify`: `GC_FLAG_FORWARDED`
+    /// is set ONLY by `set_forwarding_address`, and during this rewrite pass
+    /// the from-space is still intact and page-registered
+    /// (`copying_reset_from_spaces_and_flip` runs strictly later — after both
+    /// this rewrite pass and the verify pass), so any address in a known heap
+    /// region carrying that flag IS genuinely forwarded. Mirrors
+    /// `try_rewrite_raw_addr`'s 64-hop cap and `next == 0 || next == current`
+    /// stops, returning `rewrote.then_some(current)` (Some only when the
+    /// address actually moved).
     pub(super) fn rewrite_raw_addr(&self, addr: usize) -> Option<usize> {
-        let ptr = self.ptrs.classify(addr)?;
-        unsafe {
-            if (*ptr.header).gc_flags & GC_FLAG_FORWARDED == 0 {
-                return None;
-            }
-            Some(forwarding_address(ptr.header) as usize)
+        if addr < GC_HEADER_SIZE {
+            return None;
         }
+        let mut current = addr;
+        let mut rewrote = false;
+        for _ in 0..64 {
+            if current < GC_HEADER_SIZE {
+                return rewrote.then_some(current);
+            }
+            let header_addr = current - GC_HEADER_SIZE;
+            if matches!(
+                crate::arena::classify_heap_space(header_addr),
+                crate::arena::HeapSpace::Unknown
+            ) {
+                return rewrote.then_some(current);
+            }
+            let header = header_addr as *mut GcHeader;
+            unsafe {
+                if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
+                    return rewrote.then_some(current);
+                }
+                let next = forwarding_address(header) as usize;
+                if next == 0 || next == current {
+                    return rewrote.then_some(current);
+                }
+                current = next;
+                rewrote = true;
+            }
+        }
+        rewrote.then_some(current)
     }
 
     pub(super) fn mark_addr(&mut self, addr: usize) -> Option<usize> {
@@ -1131,6 +1191,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
         super::verify::verify_marked_heap_report_nonfatal("copying-minor");
     }
+
+    // #7035: whole-heap from-space scan. MUST run here — after the rewrite
+    // pass, before from-space is reset — and it is deliberately independent of
+    // the root enumeration the rewrite pass and the evacuation verifier share.
+    super::fromspace_scan::run_fromspace_scan();
 
     crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
     finalize_dead_copied_minor_from_space_side_allocations();

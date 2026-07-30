@@ -62,7 +62,7 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
 
 // Referenced only from the prebuilt `perry-ext-http-server` archive, so the
 // auto-optimize LTO pass would otherwise dead-strip it. Pin it.
-#[used]
+#[cfg_attr(feature = "keepalive-anchors", used)]
 static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u32) -> *const u8 =
     js_value_buffer_or_typedarray_data;
 

@@ -190,6 +190,32 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // `--opt-report` (#6952): promote to the env var the codegen collectors
+    // read, single-threaded before rayon spawns the module workers — the same
+    // discipline as `--debug-symbols` and `--trace llvm` above. `PERRY_NO_CACHE`
+    // goes with it because the per-module object cache short-circuits codegen
+    // for unchanged modules, and a skipped `compile_module` records nothing:
+    // the report would come up empty on the second run of an unchanged file.
+    // The flag is deliberately NOT part of the object-cache key — it changes
+    // no emitted byte, it only forces codegen to actually run.
+    let opt_report_format =
+        args.opt_report
+            .or_else(|| match std::env::var("PERRY_OPT_REPORT").as_deref() {
+                Ok("json") => Some(OptReportFormat::Json),
+                Ok("1") | Ok("text") => Some(OptReportFormat::Text),
+                _ => None,
+            });
+    if let Some(fmt) = opt_report_format {
+        std::env::set_var(
+            "PERRY_OPT_REPORT",
+            match fmt {
+                OptReportFormat::Json => "json",
+                OptReportFormat::Text => "text",
+            },
+        );
+        std::env::set_var("PERRY_NO_CACHE", "1");
+    }
+
     // Canonicalize the input path first so its `.parent()` is an absolute directory.
     // Without this, a bare filename like `perry demo.ts` produced `Path::new("").parent()`
     // → fallback `"."`, and the walk-up loops below (package.json + perry.toml discovery)
@@ -830,8 +856,24 @@ pub fn run_with_parse_cache(
             .filter(|f| f.is_exported)
             .map(|f| &f.name)
             .collect();
+        // Alias exports bound to DECLARED functions (`export const decodeSync =
+        // decodeUnknownSync` / `export { impl as api }`) land in BOTH
+        // `exported_objects` and `exported_functions` (HIR records the alias
+        // with the origin FuncId, gated on `lookup_func`, so const-closures
+        // never appear here). Their cross-module symbol resolves through
+        // origin-name mapping to the FUNCTION BODY, not a var getter —
+        // classifying them as vars made consumers 0-arg "getter"-call the
+        // symbol, silently EXECUTING the function at import-read time
+        // (Effect's `decodeSync` ran `decodeUnknownSync(undefined)` during
+        // module init → "Cannot read properties of undefined (reading
+        // 'checks')").
+        let function_alias_names: std::collections::HashSet<&String> = hir_module
+            .exported_functions
+            .iter()
+            .map(|(n, _)| n)
+            .collect();
         for obj_name in &hir_module.exported_objects {
-            if is_function_decl.contains(obj_name) {
+            if is_function_decl.contains(obj_name) || function_alias_names.contains(obj_name) {
                 continue;
             }
             let key = (path_str.clone(), obj_name.clone());
@@ -1867,6 +1909,30 @@ pub fn run_with_parse_cache(
                         global.id
                     );
                     perry_codegen::NamespaceEntryKind::LocalVar { global_name: gname }
+                } else if let Some(func) = target_hir
+                    .exported_functions
+                    .iter()
+                    .find(|(n, _)| n == &fe.source_local || n == &fe.name)
+                    .and_then(|(_, fid)| target_hir.functions.iter().find(|f| f.id == *fid))
+                {
+                    // Alias export bound to a declared function
+                    // (`export const decodeEffect = decodeUnknownEffect`).
+                    // The ForeignVar fallback below getter-CALLS
+                    // `perry_fn_<mod>__<alias>` — but for aliases that symbol
+                    // is the #460 forwarding wrapper (the function body), so
+                    // the populator EXECUTED the function with zeroed args at
+                    // module init (Effect SchemaParser: decodeUnknownEffect
+                    // ran during init → "Cannot read properties of undefined
+                    // (reading 'checks')"). Resolve to the ORIGIN function's
+                    // closure singleton instead, matching plain declarations.
+                    let scoped = format!(
+                        "perry_fn_{}__{}",
+                        sanitize_module_name(&target_hir.name),
+                        sanitize_module_name(&func.name)
+                    );
+                    perry_codegen::NamespaceEntryKind::LocalFunction {
+                        wrap_symbol: format!("__perry_wrap_{}", scoped),
+                    }
                 } else {
                     // Best-effort: treat unknown locals as Var sourced
                     // by getter. This covers re-export shapes that the
@@ -1893,6 +1959,22 @@ pub fn run_with_parse_cache(
                         src.classes.iter().find(|c| c.name == fe.source_local)
                     {
                         perry_codegen::NamespaceEntryKind::LocalClass { class_id: class.id }
+                    } else if let Some(func) = src
+                        .exported_functions
+                        .iter()
+                        .find(|(n, _)| n == &fe.source_local || n == &fe.name)
+                        .and_then(|(_, fid)| src.functions.iter().find(|f| f.id == *fid))
+                    {
+                        // Cross-module alias of a declared function — same
+                        // hazard as the local-binding arm above: the
+                        // ForeignVar getter-call would EXECUTE the forwarding
+                        // wrapper. Route to the origin function's closure
+                        // singleton via ForeignFunction under its ORIGIN name.
+                        perry_codegen::NamespaceEntryKind::ForeignFunction {
+                            source_prefix: source_prefix.clone(),
+                            source_local: func.name.clone(),
+                            param_count: func.params.len(),
+                        }
                     } else {
                         perry_codegen::NamespaceEntryKind::ForeignVar {
                             source_prefix: source_prefix.clone(),
@@ -3134,9 +3216,21 @@ pub fn run_with_parse_cache(
                         .cloned();
                     if let Some(ref origin_name) = resolved_origin_name {
                         if origin_name != &exported_name {
-                            import_function_origin_names
-                                .insert(exported_name.clone(), origin_name.clone());
-                            if local_name != exported_name {
+                            // Key by the same rule as `import_function_prefixes`
+                            // above: the LOCAL name for an aliased import, the
+                            // exported name otherwise — the HIR's `ExternFuncRef`
+                            // carries exactly that string. Also inserting an
+                            // aliased import under its EXPORTED name poisons any
+                            // same-file binding that happens to share it:
+                            // `import { XML } from "a"` + `import { XML as C }
+                            // from "b"` (where b's barrel does `export { default
+                            // as XML }`) rewrote a's `XML` suffix to `default`
+                            // and the link failed on `perry_fn_<a>__default`
+                            // (the fast-xml-parser × is-unsafe graph).
+                            if local_name == exported_name {
+                                import_function_origin_names
+                                    .insert(exported_name.clone(), origin_name.clone());
+                            } else {
                                 import_function_origin_names
                                     .insert(local_name.clone(), origin_name.clone());
                             }
@@ -4478,6 +4572,18 @@ pub fn run_with_parse_cache(
 
     if let Some(explain_lowering) = explain_lowering.as_ref() {
         explain_lowering.emit(format)?;
+    }
+
+    // `--opt-report` (#6952). Drained once, after every module's codegen has
+    // finished, and written to stderr so it never contaminates a `--format
+    // json` stdout payload or a piped program output.
+    if let Some(fmt) = opt_report_format {
+        let entries = perry_codegen::opt_report::take_entries();
+        let rendered = match fmt {
+            OptReportFormat::Json => perry_codegen::opt_report::render_json(&entries),
+            OptReportFormat::Text => perry_codegen::opt_report::render_text(&entries),
+        };
+        eprintln!("{rendered}");
     }
 
     // #835 + #846: fold the codegen-side FFI provenance registry into

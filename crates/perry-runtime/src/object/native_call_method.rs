@@ -388,11 +388,28 @@ pub unsafe extern "C" fn js_native_call_method_value(
         }
     }
 
-    let property_key = if is_symbol_key {
-        key
-    } else {
-        crate::object::js_to_property_key(key)
-    };
+    // #6935: on the non-symbol path `js_to_property_key` runs a user
+    // `Symbol.toPrimitive` / `toString` / `valueOf` (and allocates for every
+    // primitive key), so it can trigger a GC that **evacuates** the receiver.
+    // `object` is a raw NaN-boxed Rust local held across it and is dereferenced
+    // by every dispatch arm below. Root it and read it back through the handle.
+    // The inert case (an already-heap string key) keeps the pre-fix shape so
+    // the hot `obj[strKey](...)` dispatch pays nothing.
+    let (property_key, object) =
+        if is_symbol_key || crate::object::property_key_coercion_is_inert(key) {
+            // A heap string is its own property key — `js_to_property_key`
+            // returns the identical NaN-boxed bits without allocating — so the
+            // pre-fix shape is preserved verbatim for the hot path.
+            (key, object)
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let object_handle = scope.root_heap_word_u64(object.to_bits());
+            let property_key = crate::object::js_to_property_key(key);
+            (
+                property_key,
+                f64::from_bits(object_handle.get_heap_word_u64()),
+            )
+        };
     if !is_symbol_key && crate::symbol::js_is_symbol(property_key) != 0 {
         return js_native_call_method_value(object, property_key, args_ptr, args_len);
     }
