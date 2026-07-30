@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 description = "Native TypeScript compiler - CLI driver"
 
+[package.metadata.winresource]
+CompanyName = "PerryTS"
+FileDescription = "Perry native TypeScript compiler"
+LegalCopyright = "Copyright © PerryTS contributors"
+OriginalFilename = "perry.exe"
+ProductName = "Perry"
+
 [lints]
 workspace = true
 
@@ -156,3 +163,6 @@ all-codegen-backends = [
 [dev-dependencies]
 tempfile.workspace = true
 swc_common.workspace = true
+
+[build-dependencies]
+winresource = "0.1.31"

@@ -697,6 +697,61 @@ jobs:
         run: |
           cargo install xwin --locked --version 0.9.0 --root xwin-install --target ${{ matrix.target }}
 
+      # Optional Authenticode signing. Configure a base64-encoded PFX and its
+      # password to enable this; repositories without a certificate continue
+      # to publish the VERSIONINFO-bearing unsigned binary.
+      - name: Sign perry.exe with Authenticode (when configured)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CODE_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_CODE_SIGNING_PFX_BASE64 }}
+          WINDOWS_CODE_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:WINDOWS_CODE_SIGNING_PFX_BASE64) {
+            Write-Host 'WINDOWS_CODE_SIGNING_PFX_BASE64 is not configured; leaving perry.exe unsigned.'
+            exit 0
+          }
+          if (-not $env:WINDOWS_CODE_SIGNING_PFX_PASSWORD) {
+            throw 'WINDOWS_CODE_SIGNING_PFX_BASE64 is configured but WINDOWS_CODE_SIGNING_PFX_PASSWORD is missing.'
+          }
+
+          $binary = "target/${{ matrix.target }}/dist/perry.exe"
+          $certificate = Join-Path $env:RUNNER_TEMP 'perry-code-signing.pfx'
+          try {
+            $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_CODE_SIGNING_PFX_BASE64)
+            [IO.File]::WriteAllBytes($certificate, $certificateBytes)
+
+            $signtoolCommand = Get-Command signtool.exe -ErrorAction SilentlyContinue
+            if ($signtoolCommand) {
+              $signtool = $signtoolCommand.Source
+            } else {
+              $kitsBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+              $signtool = Get-ChildItem "$kitsBin\*\x64\signtool.exe" |
+                Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+            }
+            if (-not $signtool) {
+              throw 'signtool.exe was not found in PATH or the Windows 10 SDK.'
+            }
+
+            & $signtool sign /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 `
+              /d 'Perry native TypeScript compiler' /f $certificate `
+              /p $env:WINDOWS_CODE_SIGNING_PFX_PASSWORD $binary
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool sign failed with exit code $LASTEXITCODE"
+            }
+
+            & $signtool verify /pa /v $binary
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool verify failed with exit code $LASTEXITCODE"
+            }
+          } finally {
+            if (Test-Path $certificate) {
+              Remove-Item -Force $certificate
+            }
+          }
+
       - name: Package release archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

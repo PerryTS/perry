@@ -824,6 +824,31 @@ jobs:
       - name: Build compiler + runtime + Windows UI crates (perry-dev)
         run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-ui-windows -p perry-ui-windows-winui
 
+      - name: Verify perry.exe VERSIONINFO resource
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = 'target/perry-dev/perry.exe'
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $expectedVersion = ($metadata.packages | Where-Object name -eq 'perry').version
+          $version = (Get-Item $binary).VersionInfo
+
+          $expectedFields = @{
+            CompanyName      = 'PerryTS'
+            FileDescription  = 'Perry native TypeScript compiler'
+            OriginalFilename = 'perry.exe'
+            ProductName      = 'Perry'
+          }
+          foreach ($field in $expectedFields.Keys) {
+            if ($version.$field -ne $expectedFields[$field]) {
+              throw "$field missing or incorrect in ${binary}: '$($version.$field)'"
+            }
+          }
+          if (-not $version.FileVersion.StartsWith($expectedVersion) -or
+              -not $version.ProductVersion.StartsWith($expectedVersion)) {
+            throw "VERSIONINFO does not match Cargo version $expectedVersion (file=$($version.FileVersion), product=$($version.ProductVersion))"
+          }
+
   # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
   #
