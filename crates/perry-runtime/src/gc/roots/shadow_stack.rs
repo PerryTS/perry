@@ -302,7 +302,10 @@ pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
         let base = frame_handle as usize;
-        if base + SHADOW_STACK_HEADER_SLOTS > s.slots.len() {
+        // `base >= len`, not `base + HEADER_SLOTS > len`: the addition form
+        // wraps for a handle near `usize::MAX` and lets exactly the corrupted
+        // handles this guard exists for slip through into an unchecked read.
+        if base >= s.slots.len() {
             debug_assert!(false, "shadow-stack pop past end (corrupted frame handle)");
             return;
         }

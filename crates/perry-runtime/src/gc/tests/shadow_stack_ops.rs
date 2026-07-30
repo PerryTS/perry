@@ -458,9 +458,13 @@ fn out_of_range_frame_pop_is_ignored() {
     reset_shadow_stack();
     let h = js_shadow_frame_push(2);
     js_shadow_slot_set(0, 0x7FFD_0000_0000_0001);
-    // A NaN-boxed `undefined` threaded in where the handle belongs.
-    js_shadow_frame_pop(0x7FFC_0000_0000_0001);
-    assert_eq!(shadow_stack_depth(), 1, "frame must still be installed");
+    // A NaN-boxed `undefined` threaded in where the handle belongs, plus the
+    // two handles that would wrap a `base + HEADER_SLOTS` bounds check and slip
+    // past it into an unchecked read.
+    for bogus in [0x7FFC_0000_0000_0001u64, u64::MAX, u64::MAX - 1] {
+        js_shadow_frame_pop(bogus);
+        assert_eq!(shadow_stack_depth(), 1, "frame must still be installed");
+    }
     assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_0000_0001);
     js_shadow_frame_pop(h);
     assert_eq!(shadow_stack_depth(), 0);
