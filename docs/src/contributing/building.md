@@ -2,8 +2,21 @@
 
 ## Prerequisites
 
-- Rust toolchain (stable): [rustup.rs](https://rustup.rs/)
+- Rust toolchain (stable, **≥ 1.94**): [rustup.rs](https://rustup.rs/). The
+  workspace pins no toolchain file, so an older `stable` fails with a
+  `sqlx@0.9.0 requires rustc 1.94.0` MSRV error from deep in the dependency
+  graph. `rustup update stable` resolves it.
 - System C compiler (`cc` on macOS/Linux, MSVC on Windows)
+- **libclang** — the `libsqlite3-sys` build script runs `bindgen`. Missing it
+  aborts the build with `Unable to find libclang`. Install `libclang-dev`
+  (Debian/Ubuntu), `clang-devel` (Fedora) or `clang` (Arch). For a
+  non-standard location set `LIBCLANG_PATH` to the directory holding
+  `libclang.so`; if bindgen then reports `'stdarg.h' file not found`, also set
+  `BINDGEN_EXTRA_CLANG_ARGS="-isystem <clang-resource-dir>/include"`.
+- **clang ≥ 15** — required by Perry's LLVM backend at *compile* time (it emits
+  opaque-pointer IR and runs `clang -c` on it), independent of the linker
+  above. See the [installation guide](../getting-started/installation.md);
+  `perry doctor` reports which clang it resolved.
 
 ## Build
 

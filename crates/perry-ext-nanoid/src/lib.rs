@@ -52,7 +52,7 @@ pub unsafe extern "C" fn js_nanoid_custom(
         return js_nanoid();
     }
 
-    use rand::Rng;
+    use rand::RngExt;
     let mut rng = rand::rng();
     let id: String = (0..size)
         .map(|_| {

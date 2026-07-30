@@ -15,4 +15,4 @@ crate-type = ["rlib", "staticlib"]
 tiny_http = "0.12"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-rand = "0.8"
+rand = "0.10"

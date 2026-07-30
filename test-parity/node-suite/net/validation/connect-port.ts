@@ -6,22 +6,30 @@ import * as net from "node:net";
 const badPorts: any[] = [-1, 65536, 70000, NaN, 2.5];
 
 for (const port of badPorts) {
+  let sock: net.Socket | undefined;
   try {
-    const sock = new net.Socket();
+    sock = new net.Socket();
+    sock.on("error", () => {});
     sock.connect(port, "127.0.0.1");
     console.log("connect", String(port), "=> NO THROW");
   } catch (err: any) {
-    console.log("connect", String(port), "=>", err.name, err.code, "|", err.message);
+    console.log("connect", String(port), "=>", err.name, err.code);
+  } finally {
+    sock?.destroy();
   }
 }
 
 // The net.connect({ port }) options-object overload validates the port the
 // same way (RangeError [ERR_SOCKET_BAD_PORT], "Port" prefix).
 for (const port of [-1, 99999] as any[]) {
+  let sock: net.Socket | undefined;
   try {
-    net.connect({ port, host: "127.0.0.1" });
+    sock = net.connect({ port, host: "127.0.0.1" });
+    sock.on("error", () => {});
     console.log("connect({port})", String(port), "=> NO THROW");
   } catch (err: any) {
-    console.log("connect({port})", String(port), "=>", err.name, err.code, "|", err.message);
+    console.log("connect({port})", String(port), "=>", err.name, err.code);
+  } finally {
+    sock?.destroy();
   }
 }

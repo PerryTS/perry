@@ -1,0 +1,1 @@
+fix(wasm-host): enable wasmi's `simd` feature — real-world wasm payloads are built with SIMD on (Rust wasm32 `+simd128` is the default for wasm-bindgen toolchains), and `new WebAssembly.Module(bytes)` rejected them at load with "unexpected SIMD opcode: 0xfd".

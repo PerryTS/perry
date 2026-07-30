@@ -1,0 +1,1 @@
+fix(runtime, codegen): complete Node 26.5.0 `node:globals` parity, including EventTarget metadata, navigator locale, Promise receiver errors, CommonJS package scope, `node:path` submodules, and Proxy-backed JSON reviver writes. The globals suite now passes all 122 fixtures with no failures, crashes, Node errors, or skips.

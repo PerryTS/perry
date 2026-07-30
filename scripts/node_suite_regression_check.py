@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Regression guard for the print-and-diff node-suite.
 
-Runs `scripts/node_suite_run.py` (pre-warm + fast/slow lanes) and compares the
-per-module pass counts against a committed floor baseline. FAILS (exit 1) if any
-baselined module drops below its floor. Improvements are always accepted and are
-reported as `+N` so the baseline can be ratcheted up over time.
+Runs `scripts/node_suite_run.py` (pre-warm + fast/slow lanes) and compares each
+module's pass and fixture counts against a committed floor baseline. FAILS
+(exit 1) if any baselined module drops below either floor. Improvements are
+always accepted and are reported as `+N` so the baseline can be ratcheted up
+over time.
 
 This exists because the node-suite is NOT part of the per-PR CI gate (the parity
 job is opt-in and runs node 22, while the real oracle is node 26), so a module
@@ -52,15 +53,23 @@ def main():
         print(f"ERROR: runner exited {proc.returncode}", file=sys.stderr)
         return 2
 
-    # Parse "module  pass  total  %" rows from the runner table.
+    # Parse "module  pass  total  %  outcome=count ..." rows from the runner table.
     # The header row ("module  pass  total  %") can't match because pass/total
     # are not digits, so no name-based exclusion is needed — and excluding the
     # name "module" would wrongly drop the real node:module module.
     current = {}
     for line in proc.stdout.splitlines():
-        m = re.match(r"^(\S+)\s+(\d+)\s+(\d+)\s+[\d.]+", line)
+        m = re.match(r"^(\S+)\s+(\d+)\s+(\d+)\s+[\d.]+(?:\s+(.*))?$", line)
         if m:
-            current[m.group(1)] = {"pass": int(m.group(2)), "total": int(m.group(3))}
+            outcomes = {
+                name: int(count)
+                for name, count in re.findall(r"(\w+)=(\d+)", m.group(4) or "")
+            }
+            current[m.group(1)] = {
+                "pass": int(m.group(2)),
+                "total": int(m.group(3)),
+                "outcomes": outcomes,
+            }
 
     regressions, improvements = [], []
     for mod, floor in baseline.items():
@@ -71,8 +80,20 @@ def main():
         if cur["pass"] < floor["pass"]:
             regressions.append(
                 f"{mod}: {cur['pass']}/{cur['total']} < floor {floor['pass']}/{floor['total']}  (-{floor['pass'] - cur['pass']})")
-        elif cur["pass"] > floor["pass"]:
-            improvements.append(f"{mod}: {cur['pass']}/{cur['total']}  (+{cur['pass'] - floor['pass']})")
+        if cur["total"] < floor["total"]:
+            regressions.append(
+                f"{mod}: {cur['total']} fixtures < floor {floor['total']}  (-{floor['total'] - cur['total']})")
+        for outcome, ceiling in floor.get("outcomes", {}).items():
+            count = cur["outcomes"].get(outcome, 0)
+            if count > ceiling:
+                regressions.append(
+                    f"{mod}: {outcome}={count} > ceiling {ceiling}  (+{count - ceiling})")
+        pass_delta = cur["pass"] - floor["pass"]
+        fixture_delta = cur["total"] - floor["total"]
+        if pass_delta > 0 or fixture_delta > 0:
+            improvements.append(
+                f"{mod}: {cur['pass']}/{cur['total']} "
+                f"({pass_delta:+d} passes, {fixture_delta:+d} fixtures)")
 
     # Overall is derived, not stored (avoids cross-PR merge conflicts on a
     # shared aggregate). Compute it from the per-module floors at report time.
