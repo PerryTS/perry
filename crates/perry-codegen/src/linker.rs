@@ -14,7 +14,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 /// Cached result of the pre-flight clang probe — evaluated once per process.
 /// `Some(default_triple)` if the probe succeeded, `None` if it failed.
@@ -306,6 +306,7 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
          (e.g. `apt install clang`, `dnf install clang`, `pacman -S clang`) or set \
          PERRY_LLVM_CLANG to the path of clang. Run `perry doctor` to verify the install."
     })?;
+    ensure_supported_clang(&clang)?;
 
     let plan = build_clang_compile_plan(
         clang.clone(),
@@ -651,6 +652,88 @@ fn build_clang_failure_hint(stderr: &str, clang_version: &str, requested_triple:
     lines.join("\n")
 }
 
+/// Oldest clang release that accepts Perry's opaque-pointer LLVM IR without
+/// an opt-in flag.
+pub const MINIMUM_CLANG_MAJOR: u32 = 15;
+
+/// Return the complete `clang --version` output, preferring stdout but
+/// accepting wrappers that write their version banner to stderr.
+pub fn clang_version_output(clang: &Path) -> Option<String> {
+    let output = Command::new(clang).arg("--version").output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        return Some(stdout);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    (!stderr.is_empty()).then_some(stderr)
+}
+
+/// Parse the major release from standard clang version banners, including
+/// distro-prefixed and Apple clang variants.
+pub fn parse_clang_major_version(version_output: &str) -> Option<u32> {
+    version_output.lines().find_map(|line| {
+        let marker = "clang version ";
+        let start = line.find(marker)? + marker.len();
+        let digits: String = line[start..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            None
+        } else {
+            digits.parse().ok()
+        }
+    })
+}
+
+fn clang_major_version(clang: &Path) -> Option<u32> {
+    clang_version_output(clang).and_then(|output| parse_clang_major_version(&output))
+}
+
+fn ensure_supported_clang(clang: &Path) -> Result<()> {
+    ensure_supported_clang_major(clang, clang_major_version(clang))
+}
+
+fn ensure_supported_clang_major(clang: &Path, major: Option<u32>) -> Result<()> {
+    let Some(major) = major else {
+        // Some toolchain wrappers do not expose a conventional version
+        // banner. Let the real compilation attempt decide whether they work.
+        return Ok(());
+    };
+    if major < MINIMUM_CLANG_MAJOR {
+        bail!(
+            "clang at `{}` is too old ({} < {}). Perry emits opaque-pointer LLVM IR, \
+             which requires clang {} or newer. Install clang-{}+ and put it first on \
+             PATH, or set PERRY_LLVM_CLANG to a supported clang binary.",
+            clang.display(),
+            major,
+            MINIMUM_CLANG_MAJOR,
+            MINIMUM_CLANG_MAJOR,
+            MINIMUM_CLANG_MAJOR,
+        );
+    }
+    Ok(())
+}
+
+fn select_clang_candidate_with<F>(
+    candidates: impl IntoIterator<Item = PathBuf>,
+    mut version_probe: F,
+) -> Option<PathBuf>
+where
+    F: FnMut(&Path) -> Option<u32>,
+{
+    let mut fallback = None;
+    for candidate in candidates {
+        if fallback.is_none() {
+            fallback = Some(candidate.clone());
+        }
+        if version_probe(&candidate).is_some_and(|major| major >= MINIMUM_CLANG_MAJOR) {
+            return Some(candidate);
+        }
+    }
+    fallback
+}
+
 pub fn find_clang() -> Option<PathBuf> {
     // Honor explicit override first — useful on systems with multiple clang
     // installs (e.g. Homebrew LLVM vs Xcode).
@@ -660,21 +743,42 @@ pub fn find_clang() -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    // Check PATH (with .exe extension handling on Windows).
-    if which("clang") {
-        return Some(PathBuf::from("clang"));
+
+    let mut candidates = Vec::new();
+    // Keep the ordinary PATH spelling first when it is already supported.
+    // If it points to clang 14 (Ubuntu 22.04), candidate selection continues
+    // through versioned Debian/Ubuntu binaries before falling back to it.
+    if let Some(candidate) = which_path("clang") {
+        candidates.push(candidate);
     }
+    for major in (MINIMUM_CLANG_MAJOR..=40).rev() {
+        if let Some(candidate) = which_path(&format!("clang-{major}")) {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    // Keep old versioned-only installations discoverable so doctor/compiler
+    // can report "too old" instead of the misleading "clang not found".
+    for major in (3..MINIMUM_CLANG_MAJOR).rev() {
+        if let Some(candidate) = which_path(&format!("clang-{major}")) {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
     // Check well-known install locations.
     #[cfg(windows)]
     {
         // Standalone LLVM installer (llvm.org)
         let standalone = PathBuf::from(r"C:\Program Files\LLVM\bin\clang.exe");
         if standalone.exists() {
-            return Some(standalone);
+            candidates.push(standalone);
         }
         // MSVC Build Tools bundled clang (via "C++ Clang Compiler" component)
         if let Some(path) = find_msvc_bundled_clang() {
-            return Some(path);
+            candidates.push(path);
         }
     }
     #[cfg(not(windows))]
@@ -690,11 +794,24 @@ pub fn find_clang() -> Option<PathBuf> {
         ] {
             let candidate = PathBuf::from(prefix).join("clang");
             if candidate.exists() && is_executable(&candidate) {
-                return Some(candidate);
+                candidates.push(candidate);
+            }
+        }
+        for major in (MINIMUM_CLANG_MAJOR..=40).rev() {
+            let candidate = PathBuf::from(format!("/usr/lib/llvm-{major}/bin/clang"));
+            if candidate.exists() && is_executable(&candidate) && !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+        for major in (3..MINIMUM_CLANG_MAJOR).rev() {
+            let candidate = PathBuf::from(format!("/usr/lib/llvm-{major}/bin/clang"));
+            if candidate.exists() && is_executable(&candidate) && !candidates.contains(&candidate) {
+                candidates.push(candidate);
             }
         }
     }
-    None
+
+    select_clang_candidate_with(candidates, clang_major_version)
 }
 
 /// Search for clang.exe bundled with Visual Studio Build Tools / Community.
@@ -750,26 +867,26 @@ fn find_msvc_bundled_clang() -> Option<PathBuf> {
     None
 }
 
-fn which(name: &str) -> bool {
+fn which_path(name: &str) -> Option<PathBuf> {
     let path_var = match env::var_os("PATH") {
         Some(p) => p,
-        None => return false,
+        None => return None,
     };
     for dir in env::split_paths(&path_var) {
         let candidate = dir.join(name);
         if candidate.exists() && is_executable(&candidate) {
-            return true;
+            return Some(candidate);
         }
         // On Windows, executables have .exe extension
         #[cfg(windows)]
         {
             let with_exe = dir.join(format!("{}.exe", name));
             if with_exe.exists() && is_executable(&with_exe) {
-                return true;
+                return Some(with_exe);
             }
         }
     }
-    false
+    None
 }
 
 #[cfg(unix)]
@@ -811,8 +928,8 @@ fn find_llvm_tool(tool: &str) -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    if which(tool) {
-        return Some(PathBuf::from(tool));
+    if let Some(path) = which_path(tool) {
+        return Some(path);
     }
     None
 }
@@ -964,6 +1081,62 @@ mod tests {
 
     fn version_block(target_line: &str) -> String {
         format!("clang version 18.0.0\n{}\nThread model: posix", target_line)
+    }
+
+    #[test]
+    fn parses_common_clang_version_banners() {
+        assert_eq!(
+            parse_clang_major_version("Ubuntu clang version 14.0.0-1ubuntu1.1"),
+            Some(14)
+        );
+        assert_eq!(
+            parse_clang_major_version("Apple clang version 17.0.0 (clang-1700.0.13.5)"),
+            Some(17)
+        );
+        assert_eq!(
+            parse_clang_major_version("Debian clang version 18.1.8\nTarget: x86_64-linux-gnu"),
+            Some(18)
+        );
+        assert_eq!(parse_clang_major_version("not a clang banner"), None);
+    }
+
+    #[test]
+    fn prefers_supported_versioned_clang_over_old_path_default() {
+        let candidates = vec![
+            PathBuf::from("/usr/bin/clang"),
+            PathBuf::from("/usr/bin/clang-18"),
+            PathBuf::from("/usr/bin/clang-15"),
+        ];
+        let selected =
+            select_clang_candidate_with(candidates, |path| match path.file_name()?.to_str()? {
+                "clang" => Some(14),
+                "clang-18" => Some(18),
+                "clang-15" => Some(15),
+                _ => None,
+            });
+        assert_eq!(selected, Some(PathBuf::from("/usr/bin/clang-18")));
+    }
+
+    #[test]
+    fn retains_first_candidate_to_report_an_old_only_install() {
+        let candidates = vec![
+            PathBuf::from("/usr/bin/clang"),
+            PathBuf::from("/usr/bin/clang-14"),
+        ];
+        let selected = select_clang_candidate_with(candidates, |_| Some(14));
+        assert_eq!(selected, Some(PathBuf::from("/usr/bin/clang")));
+    }
+
+    #[test]
+    fn old_clang_preflight_explains_the_opaque_pointer_requirement() {
+        let error = ensure_supported_clang_major(Path::new("/usr/bin/clang"), Some(14))
+            .expect_err("clang 14 must be rejected");
+        let message = error.to_string();
+        assert!(message.contains("too old (14 < 15)"));
+        assert!(message.contains("opaque-pointer LLVM IR"));
+        assert!(message.contains("PERRY_LLVM_CLANG"));
+        assert!(ensure_supported_clang_major(Path::new("/usr/bin/clang-15"), Some(15)).is_ok());
+        assert!(ensure_supported_clang_major(Path::new("/toolchain-wrapper"), None).is_ok());
     }
 
     #[test]

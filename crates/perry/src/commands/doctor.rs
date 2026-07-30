@@ -71,20 +71,8 @@ fn check_perry_version() -> CheckResult {
 fn check_clang() -> CheckResult {
     match perry_codegen::linker::find_clang() {
         Some(path) => {
-            let version = Command::new(&path)
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|out| {
-                    let s = String::from_utf8_lossy(&out.stdout).to_string();
-                    s.lines().next().map(|l| l.to_string())
-                })
-                .unwrap_or_else(|| path.display().to_string());
-            CheckResult {
-                name: "clang (LLVM codegen)".to_string(),
-                status: CheckStatus::Ok,
-                details: Some(version),
-            }
+            let version_output = perry_codegen::linker::clang_version_output(&path);
+            classify_clang(&path, version_output.as_deref())
         }
         None => {
             let hint = if cfg!(windows) {
@@ -100,6 +88,46 @@ fn check_clang() -> CheckResult {
                 details: Some(hint.to_string()),
             }
         }
+    }
+}
+
+fn classify_clang(path: &std::path::Path, version_output: Option<&str>) -> CheckResult {
+    let version = version_output
+        .and_then(|output| output.lines().next())
+        .unwrap_or("unknown clang version");
+    let major = version_output.and_then(perry_codegen::linker::parse_clang_major_version);
+    if let Some(major) = major {
+        if major < perry_codegen::linker::MINIMUM_CLANG_MAJOR {
+            return CheckResult {
+                name: "clang (LLVM codegen)".to_string(),
+                status: CheckStatus::Error,
+                details: Some(format!(
+                    "{} at {} is too old ({} < {}); install clang-{}+ or set \
+                     PERRY_LLVM_CLANG to a supported binary",
+                    version,
+                    path.display(),
+                    major,
+                    perry_codegen::linker::MINIMUM_CLANG_MAJOR,
+                    perry_codegen::linker::MINIMUM_CLANG_MAJOR,
+                )),
+            };
+        }
+    }
+    if major.is_none() {
+        return CheckResult {
+            name: "clang (LLVM codegen)".to_string(),
+            status: CheckStatus::Warning,
+            details: Some(format!(
+                "could not determine the version of {} (Perry requires clang {}+)",
+                path.display(),
+                perry_codegen::linker::MINIMUM_CLANG_MAJOR,
+            )),
+        };
+    }
+    CheckResult {
+        name: "clang (LLVM codegen)".to_string(),
+        status: CheckStatus::Ok,
+        details: Some(format!("{} ({})", version, path.display())),
     }
 }
 
@@ -359,8 +387,12 @@ pub fn run(args: DoctorArgs, format: OutputFormat, use_color: bool) -> Result<()
         check_compat_reports(),
     ];
 
-    let mut has_errors = false;
-    let mut has_warnings = false;
+    let has_errors = checks
+        .iter()
+        .any(|check| matches!(check.status, CheckStatus::Error));
+    let has_warnings = checks
+        .iter()
+        .any(|check| matches!(check.status, CheckStatus::Warning));
 
     match format {
         OutputFormat::Text => {
@@ -374,14 +406,8 @@ pub fn run(args: DoctorArgs, format: OutputFormat, use_color: bool) -> Result<()
                 let (emoji, color_fn): (_, fn(&str) -> console::StyledObject<&str>) =
                     match check.status {
                         CheckStatus::Ok => (CHECK, |s| style(s).green()),
-                        CheckStatus::Warning => {
-                            has_warnings = true;
-                            (WARN, |s| style(s).yellow())
-                        }
-                        CheckStatus::Error => {
-                            has_errors = true;
-                            (CROSS, |s| style(s).red())
-                        }
+                        CheckStatus::Warning => (WARN, |s| style(s).yellow()),
+                        CheckStatus::Error => (CROSS, |s| style(s).red()),
                     };
 
                 let status_str = match check.status {
@@ -451,4 +477,36 @@ pub fn run(args: DoctorArgs, format: OutputFormat, use_color: bool) -> Result<()
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_clang, CheckStatus};
+    use std::path::Path;
+
+    #[test]
+    fn clang_14_is_a_doctor_error() {
+        let result = classify_clang(
+            Path::new("/usr/bin/clang"),
+            Some("Ubuntu clang version 14.0.0-1ubuntu1.1"),
+        );
+        assert!(matches!(result.status, CheckStatus::Error));
+        let details = result
+            .details
+            .expect("old clang should explain the failure");
+        assert!(details.contains("too old (14 < 15)"));
+        assert!(details.contains("PERRY_LLVM_CLANG"));
+    }
+
+    #[test]
+    fn clang_15_is_accepted_and_unknown_wrappers_warn() {
+        let supported = classify_clang(
+            Path::new("/usr/bin/clang-15"),
+            Some("Debian clang version 15.0.6"),
+        );
+        assert!(matches!(supported.status, CheckStatus::Ok));
+
+        let unknown = classify_clang(Path::new("/opt/toolchain/clang"), Some("custom wrapper"));
+        assert!(matches!(unknown.status, CheckStatus::Warning));
+    }
 }

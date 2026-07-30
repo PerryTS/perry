@@ -1,0 +1,1 @@
+Fixed `perry doctor` and LLVM compilation accepting clang 14 even though Perry's opaque-pointer IR requires clang 15 or newer. Perry now prefers a supported versioned clang binary when the unversioned `clang` on `PATH` is too old, reports old installations clearly in text and JSON output, and fails before surfacing a raw LLVM parse error.
