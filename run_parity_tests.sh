@@ -146,7 +146,7 @@ else
 fi
 
 # Function to run with optional timeout
-# Describe an abnormal Perry exit, or print nothing when the exit is normal.
+# Describe an abnormal process exit, or print nothing when the exit is normal.
 # Bash reports a signal death as 128+signo; `timeout` reports 124.
 perry_abnormal_exit() {
     local code=$1
@@ -283,9 +283,9 @@ stop_tls_upgrade_server() {
 # net.createConnection(host, port) vs Node.js's (port, host)).  For these,
 # instead of comparing to Node.js, we compare Perry's output against a
 # stored expected file in test-parity/expected/<test_name>.txt.
-# Node.js is still run; if it exits non-zero we record NODE_FAIL and skip;
-# if it exits 0 but with a different output we fall through to the expected-
-# file comparison (not a parity fail — the incompatibility is intentional).
+# Node.js is still run; an ordinary non-zero exit remains a valid oracle result
+# and is compared with Perry. Timeouts and signal deaths are NODE_FAIL because
+# they do not produce a completed reference result.
 EXPECTED_DIR="$SCRIPT_DIR/test-parity/expected"
 EXPECTED_EXIT_DIR="$SCRIPT_DIR/test-parity/expected-exit"
 
@@ -418,8 +418,16 @@ normalize_output() {
     local decoded
     decoded=$(printf '%s' "$input" | "$PYTHON_CMD" -c '
 import sys
+skip_unsettled_context = 0
 for raw in sys.stdin:
     line = raw.rstrip("\n").rstrip("\r")
+    if skip_unsettled_context:
+        skip_unsettled_context -= 1
+        continue
+    if line.startswith("Warning: Detected unsettled top-level await at "):
+        print("Warning: Detected unsettled top-level await")
+        skip_unsettled_context = 2
+        continue
     if line.startswith("<Buffer ") and line.endswith(">"):
         hex_part = line[len("<Buffer "):-1].replace(" ", "")
         try:
@@ -497,6 +505,35 @@ for raw in sys.stdin:
         sed -E '/^[[:space:]]+[(].*more identical frames[)]/d' | \
         # Remove trailing empty lines
         sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+}
+
+normalize_failure_output() {
+    printf '%s' "$1" | python3 -c '
+import re
+import sys
+
+lines = sys.stdin.read().splitlines()
+error = re.compile(r"^[A-Za-z]*Error(?: \[[^]]+\])?:")
+index = next((i for i, line in enumerate(lines) if error.match(line)), None)
+if index is None:
+    print("\n".join(lines), end="")
+    raise SystemExit
+
+marker = None
+for i in range(index - 1, -1, -1):
+    if lines[i].startswith("node:") or re.match(r"^file://.*:\d+(?::\d+)?$", lines[i]):
+        marker = i
+        break
+
+prefix = lines[:marker if marker is not None else index]
+while prefix and not prefix[-1]:
+    prefix.pop()
+
+signature = lines[index]
+signature = re.sub(r"^TypeError: [A-Za-z_$][\w$]* is not iterable$", "TypeError: is not iterable", signature)
+signature = re.sub(r"Received function(?: [A-Za-z_$][\w$]*)?$", "Received function", signature).rstrip()
+print("\n".join([*prefix, signature]), end="")
+'
 }
 
 echo "========================================"
@@ -876,20 +913,17 @@ for test_file in "${TEST_FILES[@]}"; do
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"
 
-    if [[ $node_exit -ne 0 && $node_exit -ne 124 ]]; then
-        # Node.js failed — if we have a stored expected-output file for this
-        # test (e.g. because the test uses syntax that this Node version
-        # doesn't support, like `await using` on Node <22.12), fall through
-        # to compile+run Perry and compare against the expected file.
-        # Otherwise record NODE_FAIL and skip.
-        if ! has_expected_output "$test_name"; then
-            echo -e "${YELLOW}SKIP${NC}  $test_id (Node.js error: exit $node_exit)"
-            ((NODE_FAIL++))
-            record_result "$test_id" "node_fail"
-            [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
-            continue
-        fi
-        echo -e "${YELLOW}NOTE${NC}  $test_id (Node.js error: exit $node_exit — using expected-output)"
+    node_crash=$(perry_abnormal_exit "$node_exit")
+    if [[ -n "$node_crash" ]]; then
+        echo -e "${YELLOW}SKIP${NC}  $test_id (Node.js $node_crash)"
+        ((NODE_FAIL++))
+        record_result "$test_id" "node_fail"
+        [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
+        continue
+    fi
+
+    if [[ $node_exit -ne 0 ]] && has_expected_output "$test_name"; then
+        echo -e "${YELLOW}NOTE${NC}  $test_id (Node.js exit $node_exit — using expected-output)"
     fi
 
     # Save Node.js output
@@ -1012,9 +1046,9 @@ for test_file in "${TEST_FILES[@]}"; do
     # before either comparison below: a crashed process usually printed a
     # correct *prefix* of its output and then died, which diffs as a plain
     # "output mismatch" and reads as a cosmetic gap. That is exactly how the
-    # #6271 zlib SIGSEGV hid behind a green-looking label. Node already exited
-    # 0 to reach this point (non-zero Node => node_fail + skip above), so an
-    # abnormal exit here is unambiguously Perry's.
+    # #6271 zlib SIGSEGV hid behind a green-looking label. Node completed
+    # normally to reach this point, although an intentional uncaught throw may
+    # have produced an ordinary non-zero exit.
     #
     # Exception: a test carrying its own expected-output file may legitimately
     # assert a non-zero exit; only *signals*/timeouts are treated as crashes,
@@ -1022,7 +1056,7 @@ for test_file in "${TEST_FILES[@]}"; do
     perry_crash=$(perry_abnormal_exit "$perry_exit")
     if [[ -n "$perry_crash" ]]; then
         echo -e "${RED}CRASH${NC} $test_id (${perry_crash})"
-        echo "       Perry died after printing $(printf '%s' "$perry_output" | grep -c '' || true) line(s); Node exited 0."
+        echo "       Perry died after printing $(printf '%s' "$perry_output" | grep -c '' || true) line(s); Node exited $node_exit."
         echo "       Last Perry line: $(printf '%s' "$perry_output" | tail -1)"
         ((CRASH_FAIL++))
         CRASH_FAILURES+=("$test_id")
@@ -1057,9 +1091,14 @@ for test_file in "${TEST_FILES[@]}"; do
         # Normalize both outputs for comparison
         node_normalized=$(normalize_output "$node_output")
         perry_normalized=$(normalize_output "$perry_output")
+        if [[ "$node_exit" -ne 0 ]]; then
+            node_normalized=$(normalize_failure_output "$node_normalized")
+            perry_normalized=$(normalize_failure_output "$perry_normalized")
+        fi
 
-        # Compare outputs
-        if [[ "$node_normalized" == "$perry_normalized" ]]; then
+        # Exit status is observable behavior too. Comparing only output let a
+        # swallowed throw pass whenever both sides printed the same prefix.
+        if [[ "$node_exit" == "$perry_exit" && "$node_normalized" == "$perry_normalized" ]]; then
             echo -e "${GREEN}PASS${NC}  $test_id"
             ((PARITY_PASS++))
             status="pass"
@@ -1070,6 +1109,8 @@ for test_file in "${TEST_FILES[@]}"; do
             status="parity_fail"
 
             # Show diff for failures (first few lines)
+            echo "       Node exit:   $node_exit"
+            echo "       Perry exit:  $perry_exit"
             echo "       Node.js:    $(echo "$node_output" | head -1)"
             echo "       Perry:  $(echo "$perry_output" | head -1)"
         fi
