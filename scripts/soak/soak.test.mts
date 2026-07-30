@@ -47,10 +47,12 @@ test('cargo config: wrong window and missing unstable gate are findings', () => 
 
 test('npmrc: window must match SOAK_DAYS and fix writes it', () => {
   assert.equal(checkNpmrc('min-release-age=7\n', 'n').length, 0)
+  assert.equal(checkNpmrc('min-release-age = 7\n', 'n').length, 0)
   assert.equal(checkNpmrc('min-release-age=3\n', 'n').length, 1)
   assert.equal(checkNpmrc('# nothing\n', 'n').length, 1)
   assert.match(fixNpmrc('# nothing\n'), /min-release-age=7/)
   assert.match(fixNpmrc('min-release-age=3\n'), /min-release-age=7/)
+  assert.equal(fixNpmrc('min-release-age = 3\n'), 'min-release-age=7\n')
 })
 
 test('workspace yaml: clean fixture passes', () => {

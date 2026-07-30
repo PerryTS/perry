@@ -49,6 +49,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TOML_PATH = path.join(ROOT, 'crates', 'perry', 'well_known_bindings.toml');
 const REGISTRY = 'https://registry.npmjs.org';
 const DEFAULT_SOAK_DAYS = 7;
+const REGISTRY_TIMEOUT_MS = 30_000;
+const TARBALL_TIMEOUT_MS = 60_000;
+const GIT_TIMEOUT_MS = 60_000;
 
 // Perry's own packages have no third-party upstream to pin.
 const SELF_OWNED = (name) => name.startsWith('@perryts/') || name.startsWith('perry/');
@@ -150,7 +153,17 @@ function writePin(raw, name, pin) {
 // ---------------------------------------------------------------------------
 
 async function fetchJson(url) {
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new Error(`${url}: request failed or timed out after ${REGISTRY_TIMEOUT_MS}ms`, {
+      cause: err,
+    });
+  }
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.json();
 }
@@ -166,7 +179,14 @@ function latestStable(packument) {
 }
 
 async function sha256OfTarball(url) {
-  const res = await fetch(url);
+  let res;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(TARBALL_TIMEOUT_MS) });
+  } catch (err) {
+    throw new Error(`${url}: download failed or timed out after ${TARBALL_TIMEOUT_MS}ms`, {
+      cause: err,
+    });
+  }
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const bytes = Buffer.from(await res.arrayBuffer());
   return createHash('sha256').update(bytes).digest('hex');
@@ -319,18 +339,21 @@ function modeMaterialize(name) {
   } else {
     execFileSync('git', ['clone', '--filter=blob:none', '--no-checkout', b.upstream.repo, dest], {
       stdio: 'inherit',
+      timeout: GIT_TIMEOUT_MS,
     });
   }
   const checkout = ref || `v${b.upstream.version}`;
   try {
     execFileSync('git', ['-C', dest, 'fetch', '--depth', '1', 'origin', checkout], {
       stdio: 'inherit',
+      timeout: GIT_TIMEOUT_MS,
     });
     execFileSync('git', ['-C', dest, 'checkout', '--detach', 'FETCH_HEAD'], { stdio: 'inherit' });
   } catch {
     // Publishers without gitHead and without v-prefixed tags: try the bare version tag.
     execFileSync('git', ['-C', dest, 'fetch', '--depth', '1', 'origin', b.upstream.version], {
       stdio: 'inherit',
+      timeout: GIT_TIMEOUT_MS,
     });
     execFileSync('git', ['-C', dest, 'checkout', '--detach', 'FETCH_HEAD'], { stdio: 'inherit' });
   }

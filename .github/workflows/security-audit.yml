@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -131,7 +133,7 @@ jobs:
           for skill in .claude/skills/*/; do
             echo "::group::skillspector ${skill}"
             uv tool run --python 3.12 \
-              --from git+https://github.com/NVIDIA/skillspector@2eb84478 \
+              --from git+https://github.com/NVIDIA/skillspector@2eb844780ab163f01468ecf142c40a2ec0fcaec0 \
               skillspector scan "${skill}" --no-llm
             echo "::endgroup::"
           done
@@ -145,6 +147,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

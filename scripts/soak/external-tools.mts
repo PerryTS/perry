@@ -105,8 +105,10 @@ export function checkPins(tools: Record<string, ToolPin>): string[] {
       ...(pin.integrity ? [pin.integrity] : []),
       ...Object.values(pin.platforms ?? {}).map(p => p.integrity),
     ]
-    if (pin.release === 'asset' && integrities.length === 0) {
-      out.push(`${name}: release asset without any integrity pin`)
+    const downloadable =
+      pin.release === 'asset' || Boolean(pin.purl) || pin.repository?.startsWith('npm:')
+    if (downloadable && integrities.length === 0) {
+      out.push(`${name}: downloadable pin without any integrity pin`)
     }
     for (const sri of integrities) {
       if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(sri)) {
@@ -551,10 +553,11 @@ if [ -n "\${${sentinel}:-}" ] || [ -z "$REAL" ] || ! command -v sfw >/dev/null 2
   echo "${cmd}: not found" >&2; exit 127
 fi
 export ${sentinel}=1
-# Enterprise sfw defaults to BLOCK for non-registry hosts, which breaks
-# ordinary dev flows the day a Socket key lands; free tier hardcodes
-# ignore and disregards the var, so setting it is always safe.
-export SFW_UNKNOWN_HOST_ACTION=ignore
+# Keep enterprise sfw's block-by-default posture. Operators can explicitly
+# allow unknown hosts for a single invocation when the command needs them.
+if [ "\${SFW_ALLOW_UNKNOWN_HOSTS:-}" = "1" ]; then
+  export SFW_UNKNOWN_HOST_ACTION=ignore
+fi
 exec sfw '${cmd}' "$@"
 `
     // Remove the handle before writing: writeFileSync FOLLOWS a symlink, so

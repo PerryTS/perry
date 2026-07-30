@@ -71,7 +71,7 @@ export function checkCargoConfig(body: string, file: string): Finding[] {
 }
 
 export function checkNpmrc(body: string, file: string): Finding[] {
-  const days = /^min-release-age=(\d+)\s*$/m.exec(body)?.[1]
+  const days = /^min-release-age[ \t]*=[ \t]*(\d+)[ \t]*$/m.exec(body)?.[1]
   if (Number(days) === SOAK_DAYS) {
     return []
   }
@@ -435,8 +435,9 @@ export function fixCargoConfig(body: string): string {
 }
 
 export function fixNpmrc(body: string): string {
-  if (/^min-release-age=\d+\s*$/m.test(body)) {
-    return body.replace(/^min-release-age=\d+\s*$/m, `min-release-age=${SOAK_DAYS}`)
+  const key = /^min-release-age[ \t]*=[ \t]*\d+[ \t]*$/m
+  if (key.test(body)) {
+    return body.replace(key, `min-release-age=${SOAK_DAYS}`)
   }
   return `${body.trimEnd()}\nmin-release-age=${SOAK_DAYS}\n`
 }

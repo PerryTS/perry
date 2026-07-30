@@ -28,10 +28,12 @@ test('the repo external-tools.json passes checkPins', () => {
   assert.deepEqual(checkPins(tools), [])
 })
 
-test('checkPins flags missing pins, bad SRIs, and asset entries with no integrity', () => {
+test('checkPins flags missing pins, bad SRIs, and downloadable entries with no integrity', () => {
   assert.equal(checkPins({ a: {} }).length, 1)
   assert.equal(checkPins({ a: { version: '1.0.0', integrity: 'sha256-abc' } }).length, 1)
   assert.equal(checkPins({ a: { version: '1.0.0', release: 'asset' } }).length, 1)
+  assert.equal(checkPins({ a: { purl: 'pkg:npm/a@1.0.0' } }).length, 1)
+  assert.equal(checkPins({ a: { version: '1.0.0', repository: 'npm:a' } }).length, 1)
 })
 
 test('checkPins validates soakBypass dates and arithmetic; expiry is a warning, not a failure', () => {
