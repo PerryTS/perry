@@ -794,8 +794,9 @@ pub struct LoweringContext {
     /// here so the `Expr::New { class_name }` lowering can append
     /// `LocalGet(id)` for each captured id at every construction site.
     pub(crate) class_captures: Vec<(String, Vec<LocalId>)>,
-    /// #6604: capturing class EXPRESSIONS lowered while the CURRENT function
-    /// body is being lowered — `(registration_name, captured_outer_ids)`,
+    /// #6604/#6654: capturing class EXPRESSIONS lowered while the CURRENT
+    /// function body is being lowered —
+    /// `(per_evaluation_owner_local, captured_outer_ids)`,
     /// pushed by `lower_class_expr` (skipped at module top, where
     /// `filter_module_level_captures` already strips module-level ids). The
     /// #6037/#6052 end-of-body capture-refresh machinery previously scanned
@@ -810,7 +811,7 @@ pub struct LoweringContext {
     /// every other body-lowering path must truncate back to its entry mark so
     /// entries (whose ids are only meaningful in THEIR OWN function scope)
     /// never leak into an enclosing body's refresh statements.
-    pub(crate) body_class_expr_captures: Vec<(String, Vec<LocalId>)>,
+    pub(crate) body_class_expr_captures: Vec<(LocalId, Vec<LocalId>)>,
     /// Issue #740: `let_name → class_name` for `let/const/var <name> = <ClassRef>`
     /// initializers. Lets `Expr::New { class_name }` (where `class_name` is
     /// the source-level identifier of an alias binding) resolve to the

@@ -15,6 +15,7 @@ pub fn lower_constructor(
     ctor: &ast::Constructor,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
@@ -209,6 +210,10 @@ pub fn lower_constructor(
         new_body.append(&mut body);
         body = new_body;
     }
+    let class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(class_expr_capture_mark);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
@@ -472,6 +477,7 @@ pub fn lower_class_method_with_name(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
@@ -619,6 +625,10 @@ pub fn lower_class_method_with_name(
         new_body.extend(body);
         body = new_body;
     }
+    let class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(class_expr_capture_mark);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     // Phase 4 (expansion): body-based return-type inference for unannotated
     // methods. Same pattern as `lower_fn_decl`: skip when annotation is
@@ -797,6 +807,7 @@ pub fn lower_setter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
@@ -878,6 +889,10 @@ pub fn lower_setter_method_with_name(
         new_body.append(&mut body);
         body = new_body;
     }
+    let class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(class_expr_capture_mark);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);

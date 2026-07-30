@@ -586,6 +586,15 @@ where
                 f(c);
             }
         }
+        Expr::RefreshClassExprCaptures {
+            class_value,
+            captures,
+        } => {
+            f(class_value);
+            for c in captures {
+                f(c);
+            }
+        }
         Expr::ClassCaptureValue { fallback, .. } => {
             if let Some(fb) = fallback {
                 f(fb);

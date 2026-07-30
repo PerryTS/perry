@@ -1298,26 +1298,16 @@ pub fn lower_fn_body_block_stmt(
         // (`var Comparator = class _Comparator { … }`, argument-position
         // `register(class { … })`, …) need the same assignment-tracking
         // refresh as class declarations: semver assigns the captured
-        // `parseOptions`/`debug` vars AFTER the class, so the snapshot (and
-        // the per-evaluation `__perry_ctor_caps` array, whose stale-undefined
-        // slots the runtime construct path now backfills from this snapshot)
-        // must be re-registered with the live values. Entries were recorded
-        // by `lower_class_expr` under the RESOLVED registration name; no
-        // `append_new_args_stmt` pass — a class expression's construct sites
-        // are either static (binding-name `new C()`, live locals appended at
-        // the site) or dynamic (replayed through the snapshot).
-        for (cname, ids) in ctx
+        // `parseOptions`/`debug` vars AFTER the class, so the evaluated heap
+        // class object's `__perry_ctor_caps` array must be refreshed with the
+        // live values. #6654 records a compiler-private owner local rather
+        // than the shared template name, preserving factory-call isolation.
+        // No `append_new_args_stmt` pass — a class expression's construct
+        // sites are either static (binding-name `new C()`, live locals
+        // appended at the site) or dynamic (replayed from the object's array).
+        let class_expr_entries = ctx
             .body_class_expr_captures
-            .split_off(body_class_expr_captures_mark)
-        {
-            let captures: Vec<Expr> = ids.iter().map(|id| Expr::LocalGet(*id)).collect();
-            let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
-                class_name: cname,
-                captures,
-            });
-            re_reg_capsets.push((re_reg.clone(), ids.iter().copied().collect()));
-            re_regs.push(re_reg);
-        }
+            .split_off(body_class_expr_captures_mark);
         if !re_regs.is_empty() {
             // Audit P0-B: the decl-site snapshot is authoritative at
             // construct time, so keep it TRACKING same-body assignments —
@@ -1332,6 +1322,10 @@ pub fn lower_fn_body_block_stmt(
                 &mut body, &re_regs,
             );
         }
+        crate::lower::expr_function::apply_class_expr_capture_refreshes(
+            &mut body,
+            class_expr_entries,
+        );
     }
     ctx.forward_class_names = saved_forward_class_names;
     ctx.forward_class_decl_depth = saved_forward_class_decl_depth;

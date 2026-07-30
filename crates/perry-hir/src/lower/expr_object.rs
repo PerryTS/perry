@@ -203,6 +203,7 @@ fn lower_method_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
+    let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     // Object-literal methods are NOT implicitly strict (unlike class bodies):
@@ -343,6 +344,10 @@ fn lower_method_prop(
         new_body.append(&mut body);
         body = new_body;
     }
+    let class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(class_expr_capture_mark);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
@@ -501,6 +506,7 @@ fn lower_accessor_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
+    let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     // Accessors in object literals inherit strictness (see lower_method_prop).
@@ -539,11 +545,21 @@ fn lower_accessor_prop(
         }
     }
 
-    let body = if let Some(block) = body {
+    let mut body = if let Some(block) = body {
         lower_fn_body_block_stmt(ctx, block)?
     } else {
         Vec::new()
     };
+    let default_stmts = crate::lower_decl::build_default_param_stmts(&params);
+    if !default_stmts.is_empty() {
+        let mut new_body = default_stmts;
+        new_body.append(&mut body);
+        body = new_body;
+    }
+    let class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(class_expr_capture_mark);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;

@@ -180,23 +180,39 @@ pub(crate) fn lower_class_expr(
     // expressions inside a function body (factories like effect's
     // `make()`), which produce a distinct class object per call.
     let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
-    // #6604: register this capturing class EXPRESSION with the enclosing
+    // #6604/#6654: register this capturing class EXPRESSION with the enclosing
     // body's end-of-body capture-refresh machinery (#6037/#6052), which
     // previously scanned class DECLARATION statements only. Without the
     // refresh, a captured var assigned AFTER the class expression (semver's
     // `var Comparator = class _Comparator { … }; …; var parseOptions =
     // require_parse_options()`) stays `undefined` in the decl-site snapshot,
     // and dynamic construction of the escaped class value replays that stale
-    // snapshot. Recording the RESOLVED registration name here (post
-    // rename/dedup) sidesteps re-deriving it from the AST at body end. Module
-    // top is skipped — module-level ids are stripped from capture lists by
-    // `filter_module_level_captures`, so there is nothing to refresh.
-    if !at_module_top && !captured_args.is_empty() {
-        if let Some(ids) = ctx.lookup_class_captures(&synthetic_name) {
-            ctx.body_class_expr_captures
-                .push((synthetic_name.clone(), ids.to_vec()));
+    // snapshot. #6654 keeps the refresh target in a compiler-private local:
+    // a template-name-keyed snapshot lets a later `make("b")` overwrite the
+    // captures used by the class object returned from `make("a")`. The local
+    // is initialized at the owning body/module entry and assigned the fresh
+    // class object at this exact evaluation site; guarded refreshes therefore
+    // update only the object that was actually evaluated in this invocation.
+    // Module top is skipped — module-level ids are stripped from capture lists
+    // by `filter_module_level_captures`, so there is nothing to refresh.
+    let capture_owner = if !at_module_top && !captured_args.is_empty() {
+        let ids = ctx
+            .lookup_class_captures(&synthetic_name)
+            .map(<[_]>::to_vec)
+            .unwrap_or_default();
+        if ids.is_empty() {
+            None
+        } else {
+            let owner = ctx.define_local(
+                format!("__perry_class_expr_capture_owner_{synthetic_name}"),
+                crate::types::Type::Any,
+            );
+            ctx.body_class_expr_captures.push((owner, ids));
+            Some(owner)
         }
-    }
+    } else {
+        None
+    };
     if !at_module_top
         && (!named_statics.is_empty()
             || !static_symbol_registrations.is_empty()
@@ -251,6 +267,14 @@ pub(crate) fn lower_class_expr(
             });
         }
         seq.extend(computed_member_registrations);
+        let fresh_expr = if let Some(owner) = capture_owner {
+            Expr::Sequence(vec![
+                Expr::LocalSet(owner, Box::new(fresh_expr)),
+                Expr::LocalGet(owner),
+            ])
+        } else {
+            fresh_expr
+        };
         if seq.is_empty() {
             return Ok(fresh_expr);
         }

@@ -68,6 +68,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
 
@@ -344,6 +345,13 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         new_body.append(&mut body);
         body = new_body;
     }
+    let param_class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(class_expr_capture_mark);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(
+        &mut body,
+        param_class_expr_entries,
+    );
 
     // After body lowering, check if any return statement returns a native instance.
     // This handles patterns like: function initDb() { const d = new Database(...); return d; }

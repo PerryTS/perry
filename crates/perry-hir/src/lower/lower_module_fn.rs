@@ -931,6 +931,17 @@ pub fn lower_module_full(
         }
     }
 
+    // #6654: capturing class expressions inside module-level blocks have no
+    // function-body owner to drain their refresh entries. Apply every entry
+    // left after function lowering to module init itself; the compiler-private
+    // owner lets make skipped control-flow paths harmless, while assignment
+    // tracking keeps escaped classes tied to their own evaluated object.
+    let module_class_expr_entries = std::mem::take(&mut ctx.body_class_expr_captures);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(
+        &mut module.init,
+        module_class_expr_entries,
+    );
+
     // #5579: record whether the source references `globalThis`, gating the
     // codegen reflection of top-level `function` declarations onto the global
     // object (see `Module::references_global_this`). The module source is

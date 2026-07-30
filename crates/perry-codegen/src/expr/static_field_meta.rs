@@ -145,6 +145,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
         }
+        // #6654: refresh one evaluated class expression's OWN capture array.
+        // The old end-of-body refresh wrote the shared template-name snapshot,
+        // so `make("b")` could backfill stale slots on the class object returned
+        // by an earlier `make("a")`. Build the replacement array first, then
+        // reload the rooted owner local and let the runtime safely no-op when
+        // this control-flow path never evaluated the class expression.
+        Expr::RefreshClassExprCaptures {
+            class_value,
+            captures,
+        } => {
+            let cap_len = captures.len().to_string();
+            let mut caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
+            ctx.block().call_void("js_tdz_suppress_begin", &[]);
+            for capture in captures {
+                let value = lower_expr(ctx, capture)?;
+                caps_arr = ctx.block().call(
+                    I64,
+                    "js_array_push_f64",
+                    &[(I64, &caps_arr), (DOUBLE, &value)],
+                );
+            }
+            ctx.block().call_void("js_tdz_suppress_end", &[]);
+            let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
+            // Lower after the allocating array operations so a movable class
+            // object is reloaded from its compiler-private rooted local.
+            let owner = lower_expr(ctx, class_value)?;
+            let key_idx = ctx.strings.intern("__perry_ctor_caps");
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+            let key_raw = ctx
+                .block()
+                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+            ctx.block().call_void(
+                "js_class_object_refresh_capture_values",
+                &[(DOUBLE, &owner), (I64, &key_raw), (DOUBLE, &caps_box)],
+            );
+            Ok(owner)
+        }
         // Read slot `index` of the class's decl-site capture snapshot —
         // STATIC method prologue rebinds (no instance to carry the
         // `__perry_cap_*` fields).
@@ -196,11 +235,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             (DOUBLE, fb),
                         ],
                     ),
-                    (None, _) => ctx.block().call(
-                        DOUBLE,
-                        "js_class_capture_value",
-                        &[(crate::types::I32, &cid_str), (crate::types::I32, &idx_str)],
-                    ),
+                    (None, _) => {
+                        let receiver = if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                            ctx.block().load(DOUBLE, &this_slot)
+                        } else {
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_class_capture_value_for_receiver",
+                            &[
+                                (DOUBLE, &receiver),
+                                (crate::types::I32, &cid_str),
+                                (crate::types::I32, &idx_str),
+                            ],
+                        )
+                    }
                 });
             }
             // Class id unknown in this module: keep the fallback if we have one
@@ -395,7 +445,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // inlining can't do once the class escapes its defining scope.
             if !captured_args.is_empty() {
                 let cap_len = captured_args.len().to_string();
-                let mut lowered_caps: Vec<String> = Vec::with_capacity(captured_args.len());
                 let mut caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
                 // #6523: these capture loads are Perry-internal materialization
                 // at the class's DEFINITION site, same as the
@@ -408,7 +457,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // initialization" while merely DEFINING the class. Suppressed
                 // loads snapshot `undefined`; the #6037 refresh statements
                 // re-register the live values right after each captured
-                // binding's initializer runs.
+                // refresh the evaluated object's array right after each
+                // captured binding's initializer runs.
                 ctx.block().call_void("js_tdz_suppress_begin", &[]);
                 for arg in captured_args {
                     let v = lower_expr(ctx, arg)?;
@@ -417,7 +467,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_array_push_f64",
                         &[(I64, &caps_arr), (DOUBLE, &v)],
                     );
-                    lowered_caps.push(v);
                 }
                 ctx.block().call_void("js_tdz_suppress_end", &[]);
                 let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
@@ -431,39 +480,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_object_set_field_by_name",
                     &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
                 );
-                // #685: ALSO register this evaluation's captures as the
-                // template's CLASS_CAPTURE_VALUES snapshot. The static blocks
-                // invoked below run compiled static-method bodies whose
-                // enclosing-scope reads resolve through
-                // `js_param_or_class_capture_value` — i.e. the name-keyed
-                // snapshot — not `__perry_ctor_caps` (that array only feeds
-                // constructor replay). Same write-right-before-use pattern
-                // (and same documented per-evaluation overwrite limitation)
-                // as the shared-template path's `RegisterClassCaptures`.
-                if template_cid != 0 {
-                    let n = lowered_caps.len();
-                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                    for (i, v) in lowered_caps.iter().enumerate() {
-                        let slot =
-                            ctx.block()
-                                .gep(DOUBLE, &buf, &[(crate::types::I64, &i.to_string())]);
-                        ctx.block().store(DOUBLE, v, &slot);
-                    }
-                    let ptr_reg = ctx.block().next_reg();
-                    ctx.block().emit_raw(format!(
-                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                        ptr_reg, n, buf
-                    ));
-                    let len_str = n.to_string();
-                    ctx.block().call_void(
-                        "js_class_register_capture_values",
-                        &[
-                            (crate::types::I32, &tcid_str),
-                            (crate::types::PTR, &ptr_reg),
-                            (crate::types::I64, &len_str),
-                        ],
-                    );
-                }
             }
             let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
             for (key, init) in symbol_statics {

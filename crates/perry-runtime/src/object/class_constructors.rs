@@ -12,6 +12,62 @@ use std::sync::RwLock;
 use super::class_registry::call_vtable_method;
 use super::ObjectHeader;
 
+/// Replace the capture array carried by one heap class-expression value.
+/// Invalid/undefined owners are intentional no-ops: the lowering emits guarded
+/// refresh sites along every assignment path, including paths that skipped the
+/// corresponding class expression.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_CLASS_OBJECT_REFRESH_CAPTURE_VALUES: extern "C" fn(f64, i64, f64) =
+    js_class_object_refresh_capture_values;
+
+#[no_mangle]
+pub extern "C" fn js_class_object_refresh_capture_values(
+    class_value: f64,
+    key: i64,
+    captures: f64,
+) {
+    if key == 0 || !super::class_registry::is_class_object_value(class_value) {
+        return;
+    }
+    let object = crate::value::JSValue::from_bits(class_value.to_bits())
+        .as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if object.is_null() {
+        return;
+    }
+    super::js_object_set_field_by_name(object, key as *const crate::StringHeader, captures);
+}
+
+/// Read a static method capture from the actual receiver when it is a fresh
+/// class-expression object, falling back to the declaration/template snapshot
+/// for ordinary class refs. The per-object path preserves explicit
+/// `undefined` slots and therefore never consults a later evaluation's
+/// name-keyed state.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_CLASS_CAPTURE_VALUE_FOR_RECEIVER: extern "C" fn(f64, u32, u32) -> f64 =
+    js_class_capture_value_for_receiver;
+
+#[no_mangle]
+pub extern "C" fn js_class_capture_value_for_receiver(
+    receiver: f64,
+    class_id: u32,
+    index: u32,
+) -> f64 {
+    if super::class_registry::is_class_object_value(receiver) {
+        let caps_value =
+            super::js_object_get_own_field_or_undef(receiver, b"__perry_ctor_caps".as_ptr(), 17);
+        let caps = crate::value::JSValue::from_bits(caps_value.to_bits());
+        if caps.is_pointer() {
+            let array = caps.as_pointer::<crate::array::ArrayHeader>();
+            if !array.is_null() && index < crate::array::js_array_length(array) {
+                return crate::array::js_array_get_f64(array, index);
+            }
+        }
+    }
+    js_class_capture_value(class_id, index)
+}
+
 /// #1787: per-template constructor function pointers, keyed by the
 /// compile-time class_id. The value is `(fn_ptr, total_param_count)`:
 /// `fn_ptr` is the standalone `<prefix>__<class>_constructor` LLVM symbol

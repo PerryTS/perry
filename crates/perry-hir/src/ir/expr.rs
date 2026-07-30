@@ -440,6 +440,17 @@ pub enum Expr {
         captures: Vec<Expr>,
     },
 
+    /// Refresh the capture array carried by one evaluated `ClassExprFresh`
+    /// object. Unlike `RegisterClassCaptures`, this is keyed by the heap class
+    /// value itself rather than its shared template name, so a later factory
+    /// evaluation cannot overwrite an earlier class object's environment.
+    /// An `undefined` `class_value` is a no-op for paths that did not evaluate
+    /// the corresponding class expression.
+    RefreshClassExprCaptures {
+        class_value: Box<Expr>,
+        captures: Vec<Expr>,
+    },
+
     /// Read slot `index` of a class's decl-site capture snapshot
     /// (`CLASS_CAPTURE_VALUES`, written by `RegisterClassCaptures`). Used by
     /// STATIC method bodies of function-nested capturing classes — statics

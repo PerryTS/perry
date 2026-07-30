@@ -381,17 +381,13 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             vec![Stmt::Return(Some(return_expr))]
         }
     };
-    // #6604: a capturing class expression in an EXPRESSION-bodied arrow
-    // (`x => new (class { … })(x)`) records a body-class-expr entry that no
-    // body twin will drain (the block-bodied arm drains its own inside
-    // `lower_fn_body_block_stmt`; default-param entries are self-truncated by
-    // `get_param_default`). Truncate on exit so the entry — whose ids are
-    // only meaningful in the arrow's own local numbering — never leaks into
-    // the ENCLOSING body's refresh statements. Nothing is lost: a
-    // single-expression body has no later statements that could reassign the
-    // class's captured locals.
-    ctx.body_class_expr_captures
-        .truncate(body_class_expr_captures_mark);
+    // #6654: block-body entries are drained by
+    // `lower_fn_body_block_stmt`; parameter-default entries (and entries from
+    // an expression body) remain in this suffix and must be applied only after
+    // the default/destructuring prologue has been assembled below.
+    let class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(body_class_expr_captures_mark);
     ctx.current_strict = outer_strict;
 
     // Prepend destructuring statements to body
@@ -419,6 +415,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         param_eval_var_stmts.append(&mut body);
         body = param_eval_var_stmts;
     }
+    apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
@@ -596,10 +593,9 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     let scope_mark = ctx.enter_scope();
     // #6604: capturing class EXPRESSIONS lowered in THIS function register
     // from here for the end-of-body refresh (twin of
-    // `lower_fn_body_block_stmt`); the mark sits at scope entry so nothing
-    // recorded for this function can leak into the enclosing body.
-    // (Default-param entries never reach the drain — `get_param_default`
-    // self-truncates.)
+    // `lower_fn_body_block_stmt`); the mark sits at scope entry so parameter
+    // defaults are included and nothing recorded for this function can leak
+    // into the enclosing body.
     let body_class_expr_captures_mark = ctx.body_class_expr_captures.len();
     // A plain function has its own `arguments` object, so a direct `eval`
     // inside its body may reference `arguments` even when the function sits
@@ -765,6 +761,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // #4950: undefined-initialised `Stmt::Let`s for `var`s found nested in
     // compound statements — prepended to the lowered body below.
     let mut nested_var_prologue: Vec<Stmt> = Vec::new();
+    let mut class_expr_entries = Vec::new();
     if let Some(ref block) = fn_expr.function.body {
         // Issue #838 followup (b): pre-register top-level `var` decls in
         // this function body BEFORE lowering any statement. dayjs's
@@ -1246,23 +1243,14 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         // #6604: capturing class EXPRESSIONS lowered directly in this body —
         // the semver/esbuild `__commonJS` wrapper shape `var Comparator =
         // class _Comparator { … }; …; var parseOptions = require_…()` — join
-        // the same refresh machinery as class declarations, so the snapshot
-        // tracks captured vars assigned AFTER the class. Recorded by
-        // `lower_class_expr` under the RESOLVED registration name; see the
-        // block-body twin (`lower_fn_body_block_stmt`) for why no
-        // `append_new_args_stmt` pass runs for expressions.
-        for (cname, ids) in ctx
+        // the same assignment/return placement as class declarations, while
+        // #6654 targets the evaluated heap class object's capture array via a
+        // compiler-private owner local. See the block-body twin
+        // (`lower_fn_body_block_stmt`) for why no `append_new_args_stmt` pass
+        // runs for expressions.
+        class_expr_entries = ctx
             .body_class_expr_captures
-            .split_off(body_class_expr_captures_mark)
-        {
-            let captures: Vec<Expr> = ids.iter().map(|id| Expr::LocalGet(*id)).collect();
-            let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
-                class_name: cname,
-                captures,
-            });
-            re_reg_capsets.push((re_reg.clone(), ids.iter().copied().collect()));
-            re_regs.push(re_reg);
-        }
+            .split_off(body_class_expr_captures_mark);
         if !re_regs.is_empty() {
             // Audit P0-B twin of the block-body path: refresh after every
             // same-body assignment to a captured local so mid-body constructs
@@ -1315,6 +1303,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         new_body.append(&mut body);
         body = new_body;
     }
+    apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
@@ -1498,6 +1487,175 @@ fn compute_closure_captures(
         .collect();
 
     (captures, mutable_captures)
+}
+
+/// Materialize and wire the per-evaluation refresh owners recorded by
+/// `lower_class_expr` into one executable body/module-init region.
+///
+/// Each owner starts as `undefined`, is assigned only when its class
+/// expression actually evaluates, and is refreshed after assignments to any
+/// captured binding plus immediately before returns. Codegen treats an
+/// undefined owner as a no-op, so conditional/skipped evaluations cannot
+/// mutate an object retained by an earlier factory call.
+pub(crate) fn apply_class_expr_capture_refreshes(
+    body: &mut Vec<Stmt>,
+    entries: Vec<(LocalId, Vec<LocalId>)>,
+) {
+    if entries.is_empty() {
+        return;
+    }
+
+    let mut owner_lets = Vec::new();
+    let mut refreshes = Vec::new();
+    let mut refresh_capsets = Vec::new();
+    let mut seen_owners = std::collections::HashSet::new();
+    for (owner, ids) in entries {
+        if seen_owners.insert(owner) {
+            owner_lets.push(Stmt::Let {
+                id: owner,
+                name: format!("__perry_class_expr_capture_owner_{owner}"),
+                ty: crate::types::Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+        }
+        let refresh = Stmt::Expr(Expr::RefreshClassExprCaptures {
+            class_value: Box::new(Expr::LocalGet(owner)),
+            captures: ids.iter().map(|id| Expr::LocalGet(*id)).collect(),
+        });
+        refresh_capsets.push((refresh.clone(), ids.iter().copied().collect()));
+        refreshes.push(refresh);
+    }
+
+    insert_class_capture_refresh_inside_expressions(body, &refresh_capsets);
+    insert_class_capture_refresh_after_assignments(body, &refresh_capsets);
+    insert_class_capture_refresh_before_returns(body, &refreshes);
+    owner_lets.append(body);
+    *body = owner_lets;
+}
+
+/// Insert per-object refreshes immediately after assignment expressions, not
+/// merely after their containing statement. This preserves evaluation order
+/// for expression-bodied arrows and comma/conditional expressions:
+///
+/// `x => (C = class { m(){ return x } }, x = 2, C)`
+///
+/// A statement-level refresh would land after the `return` (unreachable), and
+/// a return-prologue refresh runs before the class is evaluated. Rewriting the
+/// watched `LocalSet` to `(x = value, refresh(owner), x)` keeps the assignment
+/// expression's result while making later subexpressions observe the refreshed
+/// class environment. Closure bodies are intentionally not descended: each
+/// closure lowering region owns its own LocalId space and refresh entries.
+fn insert_class_capture_refresh_inside_expressions(
+    stmts: &mut [Stmt],
+    regs: &[(Stmt, std::collections::HashSet<LocalId>)],
+) {
+    fn visit_expr(expr: &mut Expr, regs: &[(Stmt, std::collections::HashSet<LocalId>)]) {
+        if matches!(expr, Expr::Closure { .. }) {
+            return;
+        }
+        crate::walker::walk_expr_children_mut(expr, &mut |child| visit_expr(child, regs));
+
+        let assigned_id = match expr {
+            Expr::LocalSet(id, _) => *id,
+            _ => return,
+        };
+        let mut refresh_exprs = Vec::new();
+        for (refresh, capset) in regs {
+            if !capset.contains(&assigned_id) {
+                continue;
+            }
+            if let Stmt::Expr(refresh_expr) = refresh {
+                refresh_exprs.push(refresh_expr.clone());
+            }
+        }
+        if refresh_exprs.is_empty() {
+            return;
+        }
+
+        let assignment = std::mem::replace(expr, Expr::Undefined);
+        let mut sequence = Vec::with_capacity(refresh_exprs.len() + 2);
+        sequence.push(assignment);
+        sequence.append(&mut refresh_exprs);
+        // `LocalSet` evaluates to the assigned value. Reloading the local after
+        // side-effect-free capture materialization preserves that result.
+        sequence.push(Expr::LocalGet(assigned_id));
+        *expr = Expr::Sequence(sequence);
+    }
+
+    fn visit_stmt(stmt: &mut Stmt, regs: &[(Stmt, std::collections::HashSet<LocalId>)]) {
+        match stmt {
+            Stmt::Let {
+                init: Some(expr), ..
+            }
+            | Stmt::Expr(expr)
+            | Stmt::Return(Some(expr))
+            | Stmt::Throw(expr) => visit_expr(expr, regs),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                visit_expr(condition, regs);
+                insert_class_capture_refresh_inside_expressions(then_branch, regs);
+                if let Some(branch) = else_branch {
+                    insert_class_capture_refresh_inside_expressions(branch, regs);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                visit_expr(condition, regs);
+                insert_class_capture_refresh_inside_expressions(body, regs);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    visit_stmt(init, regs);
+                }
+                if let Some(condition) = condition {
+                    visit_expr(condition, regs);
+                }
+                if let Some(update) = update {
+                    visit_expr(update, regs);
+                }
+                insert_class_capture_refresh_inside_expressions(body, regs);
+            }
+            Stmt::Labeled { body, .. } => visit_stmt(body, regs),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                insert_class_capture_refresh_inside_expressions(body, regs);
+                if let Some(catch) = catch {
+                    insert_class_capture_refresh_inside_expressions(&mut catch.body, regs);
+                }
+                if let Some(finally) = finally {
+                    insert_class_capture_refresh_inside_expressions(finally, regs);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                visit_expr(discriminant, regs);
+                for case in cases {
+                    if let Some(test) = &mut case.test {
+                        visit_expr(test, regs);
+                    }
+                    insert_class_capture_refresh_inside_expressions(&mut case.body, regs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for stmt in stmts {
+        visit_stmt(stmt, regs);
+    }
 }
 
 /// Insert a class-capture refresh immediately AFTER every statement that

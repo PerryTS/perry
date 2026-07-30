@@ -62,6 +62,7 @@ pub(super) fn lower_nested_fn_decl(
     };
 
     let scope_mark = ctx.enter_scope();
+    let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
 
@@ -194,6 +195,10 @@ pub(super) fn lower_nested_fn_decl(
         new_body.append(&mut body);
         body = new_body;
     }
+    let class_expr_entries = ctx
+        .body_class_expr_captures
+        .split_off(class_expr_capture_mark);
+    crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
