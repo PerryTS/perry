@@ -5,6 +5,10 @@ import { startDnsServer } from "../fixtures/local-dns-server.mjs";
 const server = await startDnsServer("silent");
 try {
   const address = `127.0.0.1:${server.port}`;
+  dns.setServers([address]);
+  if (typeof dnsPromises.setServers === "function") {
+    dnsPromises.setServers([address]);
+  }
   const callbackResolver = new dns.Resolver();
   callbackResolver.setServers([address]);
   const callbackResult = new Promise<string>((resolve) => {

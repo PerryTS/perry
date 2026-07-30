@@ -94,8 +94,9 @@ nameserver.
 Three complete Node rounds ran all 43 fixtures with zero errors, crashes, or
 timeouts and byte-identical aggregate SHA-256
 `e18b3a7e82b9309c1f8db862d25a5ee1ec2210a61a4f0ad09582ebff948a2f2d`. Three
-complete focused Perry runs produced the same **18 pass / 25 diff / 0 compile
-failure / 0 crash / 0 timeout** result. The baseline records `18/43`.
+complete focused Perry runs produced the same **17 pass / 26 diff / 0 compile
+failure / 0 crash / 0 timeout** result after active cancellation idempotence was
+added. The baseline records `17/43`.
 
 One complete alternate-runtime pass produced:
 
