@@ -45,30 +45,55 @@ fn set_object_field(object: f64, name: &str, value: f64) {
 fn property_context_object(id: i64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let context = scope.root_nanbox_f64(boxed_ptr(js_object_alloc(0, 6)));
+    let access_count = scope.root_nanbox_f64(closure_value_with_id(
+        mock_property_access_count as *const u8,
+        0,
+        id,
+    ));
     set_object_field(
         context.get_nanbox_f64(),
         "accessCount",
-        closure_value_with_id(mock_property_access_count as *const u8, 0, id),
+        access_count.get_nanbox_f64(),
     );
+    let reset_accesses = scope.root_nanbox_f64(closure_value_with_id(
+        mock_property_reset_accesses as *const u8,
+        0,
+        id,
+    ));
     set_object_field(
         context.get_nanbox_f64(),
         "resetAccesses",
-        closure_value_with_id(mock_property_reset_accesses as *const u8, 0, id),
+        reset_accesses.get_nanbox_f64(),
     );
+    let mock_implementation = scope.root_nanbox_f64(closure_value_with_id(
+        mock_property_implementation as *const u8,
+        1,
+        id,
+    ));
     set_object_field(
         context.get_nanbox_f64(),
         "mockImplementation",
-        closure_value_with_id(mock_property_implementation as *const u8, 1, id),
+        mock_implementation.get_nanbox_f64(),
     );
+    let mock_implementation_once = scope.root_nanbox_f64(rest_closure_value_with_id(
+        mock_property_implementation_once as *const u8,
+        1,
+        id,
+    ));
     set_object_field(
         context.get_nanbox_f64(),
         "mockImplementationOnce",
-        rest_closure_value_with_id(mock_property_implementation_once as *const u8, 1, id),
+        mock_implementation_once.get_nanbox_f64(),
     );
+    let restore = scope.root_nanbox_f64(closure_value_with_id(
+        mock_property_restore as *const u8,
+        0,
+        id,
+    ));
     set_object_field(
         context.get_nanbox_f64(),
         "restore",
-        closure_value_with_id(mock_property_restore as *const u8, 0, id),
+        restore.get_nanbox_f64(),
     );
 
     let accesses_getter = scope.root_nanbox_f64(closure_value_with_id(
@@ -202,21 +227,23 @@ fn validate_on_access(value: f64, minimum: u64) -> u64 {
 }
 
 fn record_property_access(id: i64, access_type: &str, fallback: f64) -> f64 {
-    let (value, accesses) = PROPERTY_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let Some(state) = states.iter_mut().find(|state| state.id == id) else {
-            return (fallback, undefined_value());
+    let (value, accesses, scheduled_index) = PROPERTY_STATES.with(|states| {
+        let states = states.borrow();
+        let Some(state) = states.iter().find(|state| state.id == id) else {
+            return (fallback, undefined_value(), None);
         };
-        let value = state
+        let scheduled = state
             .once
             .iter()
-            .position(|once| once.access_index == state.access_count)
-            .map(|index| state.once.remove(index).value)
-            .unwrap_or(fallback);
-        (value, state.accesses)
+            .find(|once| once.access_index == state.access_count);
+        (
+            scheduled.map(|once| once.value).unwrap_or(fallback),
+            state.accesses,
+            scheduled.map(|once| once.access_index),
+        )
     });
     if !is_array_value(accesses) {
-        return value;
+        return fallback;
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -244,6 +271,15 @@ fn record_property_access(id: i64, access_type: &str, fallback: f64) -> f64 {
     PROPERTY_STATES.with(|states| {
         if let Some(state) = states.borrow_mut().iter_mut().find(|state| state.id == id) {
             state.accesses = accesses_value;
+            if let Some(access_index) = scheduled_index {
+                if let Some(index) = state
+                    .once
+                    .iter()
+                    .position(|once| once.access_index == access_index)
+                {
+                    state.once.remove(index);
+                }
+            }
             state.access_count += 1;
         }
     });

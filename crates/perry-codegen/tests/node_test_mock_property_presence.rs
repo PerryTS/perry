@@ -119,12 +119,12 @@ fn property_mock_abi_carries_source_argument_presence() {
         .collect::<Vec<_>>();
     assert_eq!(calls.len(), 2, "expected two property-mock calls:\n{ir}");
     assert!(
-        calls[0].contains("i32 0"),
+        calls[0].contains("i32 0)"),
         "omitted value must carry presence=false:\n{}",
         calls[0]
     );
     assert!(
-        calls[1].contains("i32 1"),
+        calls[1].contains("i32 1)"),
         "explicit undefined must carry presence=true:\n{}",
         calls[1]
     );
