@@ -431,3 +431,137 @@ fn registered_root_operands_are_reloaded_rather_than_rooted() {
          the literal must not get a slot of its own, got {pushes}:\n{ir}"
     );
 }
+
+// ---------------------------------------------------------------- #7114 ----
+//
+// The other half of the same claim, and the one that was missing. `new C(...)`
+// (above) suppressed the string literal AND re-loaded it. `lower_exprs_rooted`
+// — the helper behind `lower_operand_pair_rooted`, the array-literal element
+// list and the string-concat chain — suppressed it and reused the register.
+//
+// So `console.log("acc:" + run(1e7))` loaded the literal's handle before the
+// call and masked the cached register to a pointer after it. The handle global
+// is a registered root that evacuation rewrites, the register is not, and the
+// concat read the string's pre-move address: an empty line, exit code 0.
+
+/// An operand that is statically NUMERIC *and* can collect, so `"lit" + it`
+/// takes the fused `js_string_concat_value` path — the exact expression form
+/// #7114 was reported against.
+///
+/// A non-`Add` `Expr::Binary` is numeric by construction (`is_numeric_expr`),
+/// and it is GC-capable whenever an operand is not an inert primitive, which an
+/// object literal is not. That is the same pairing as the reported repro, where
+/// the sibling was a `number`-returning call whose body allocated.
+fn allocating_numeric() -> Expr {
+    Expr::Binary {
+        op: perry_hir::BinaryOp::Sub,
+        left: Box::new(allocating()),
+        right: Box::new(Expr::Number(0.0)),
+    }
+}
+
+/// `"acc:" + <allocating numeric>` — the reported shape.
+///
+/// The invariant: **no operand register may outlive a collection point.** The
+/// literal is not rooted (it does not need to be — it is already a registered
+/// root and can never be swept), so the only thing that makes it correct is
+/// that its `load` is emitted BELOW the sibling that collects.
+#[test]
+fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
+    let ir = ir_for(
+        "concat_reload.ts",
+        vec![Stmt::Expr(Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::String("acc:".to_string())),
+            right: Box::new(allocating_numeric()),
+        })],
+    );
+
+    let concat = ir
+        .find("call i64 @js_string_concat_value(")
+        .unwrap_or_else(|| panic!("expected the fused string+value concat:\n{ir}"));
+    let alloc = ir[..concat]
+        .rfind("call i64 @js_object_alloc(")
+        .unwrap_or_else(|| panic!("the sibling operand must allocate:\n{ir}"));
+    let handle_load = ir[..concat]
+        .rfind("load double, ptr @concat_reload_ts_.str.")
+        .unwrap_or_else(|| panic!("the literal must come from its handle global:\n{ir}"));
+
+    assert!(
+        handle_load > alloc,
+        "#7114: the handle load that feeds the concat must sit BELOW the \
+         allocating sibling. Loading it above and masking the cached register \
+         below is what made `console.log(\"acc:\" + run(1e7))` print an empty \
+         line — the handle global is a registered root that an evacuating \
+         cycle REWRITES, and the pre-call register keeps the pre-move \
+         address:\n{ir}"
+    );
+
+    assert_eq!(
+        ir.matches("call i32 @js_gc_temp_root_push").count(),
+        0,
+        "and it must cost no runtime call. A registered root already has \
+         liveness; all it was missing is the re-derivation, which is the load \
+         that was going to be emitted anyway:\n{ir}"
+    );
+}
+
+/// The gate. Nothing after the literal can collect, so nothing may move, so the
+/// register is still the value the call observes — and the IR must be exactly
+/// what it was before #6951 and before #7114: ONE load, no second one.
+///
+/// Without this half the "fix" could be an unconditional re-load, which would
+/// pay for the reported bug on every `"user_" + i` in the codebase.
+#[test]
+fn string_literal_concat_operand_is_not_re_derived_when_nothing_collects() {
+    let ir = ir_for(
+        "concat_noreload.ts",
+        vec![Stmt::Expr(Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::String("acc:".to_string())),
+            right: Box::new(Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left: Box::new(Expr::Number(1.0)),
+                right: Box::new(Expr::Number(2.0)),
+            }),
+        })],
+    );
+
+    assert_eq!(
+        ir.matches("load double, ptr @concat_noreload_ts_.str.")
+            .count(),
+        1,
+        "a comparison over two immediates runs no user code and allocates \
+         nothing, so the literal must be loaded exactly once:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_gc_temp_root_push"),
+        "and no rooting at all:\n{ir}"
+    );
+}
+
+/// The same helper, reached from its other caller: an array literal's element
+/// list. `["lit", allocating()]` holds the literal across the element that
+/// collects, and the array's own store must receive the re-derived address.
+#[test]
+fn string_literal_array_element_is_re_derived_below_an_allocating_element() {
+    let ir = ir_for(
+        "array_reload.ts",
+        vec![Stmt::Expr(Expr::Array(vec![
+            Expr::String("lit".to_string()),
+            allocating(),
+        ]))],
+    );
+
+    let handle_pat = "load double, ptr @array_reload_ts_.str.";
+    let loads: Vec<usize> = ir.match_indices(handle_pat).map(|(i, _)| i).collect();
+    let element_alloc = ir
+        .find("call i64 @js_object_alloc(")
+        .unwrap_or_else(|| panic!("element 1 must allocate:\n{ir}"));
+
+    assert!(
+        loads.iter().any(|&l| l > element_alloc),
+        "#7114: element 0's handle must be re-derived below element 1's \
+         allocation before it is stored into the array:\n{ir}"
+    );
+}
