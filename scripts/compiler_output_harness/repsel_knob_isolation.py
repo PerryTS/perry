@@ -105,12 +105,22 @@ class Knob:
     #: Derived signals from [`DERIVED_SIGNALS`] that also mean "a site of this
     #: representation exists in this workload".
     signals: tuple[str, ...] = ()
+    #: Keys this knob may legitimately take DOWN but never up, because the
+    #: analysis it gates FEEDS them. Each entry carries the reason; an
+    #: undocumented one is a leak, not a dependency.
+    #:
+    #: This is the one place the "a knob owns exactly one representation" rule
+    #: bends, and it bends for a real reason: a representation whose proof is
+    #: withdrawn cannot be selected. Allowing only the downward direction keeps
+    #: it from becoming a licence — a knob that ADDS promotions of another
+    #: representation is still a leak.
+    downstream: tuple[tuple[str, str], ...] = ()
     #: What the knob is, for the report.
     what: str = ""
 
     @property
     def owned(self) -> tuple[str, ...]:
-        return self.keys + self.signals
+        return self.keys + self.signals + tuple(k for k, _ in self.downstream)
 
 
 #: The knob table. Kept HERE and not in the baseline JSON, for the same reason
@@ -121,11 +131,13 @@ KNOBS: tuple[Knob, ...] = (
         "PERRY_CANONICAL_I32_LOCALS",
         ("canonical-i32", "canonical-u32"),
         ("spec-abi-i32-slot",),
+        (),
         "repsel Phase 1 — canonical unboxed i32/u32 slots",
     ),
     Knob(
         "PERRY_CANONICAL_STR_LOCALS",
         ("canonical-str",),
+        (),
         (),
         "repsel Phase 3a — canonical (tagged-at-rest) Str slots",
     ),
@@ -133,11 +145,13 @@ KNOBS: tuple[Knob, ...] = (
         "PERRY_PTR_SHAPE_LOCALS",
         ("ptr-shape", "ptr-shape-consumed"),
         ("consumed-receiver",),
+        (),
         "repsel Phase 3b/5a — Ptr<Shape> receivers",
     ),
     Knob(
         "PERRY_PTR_NUMARRAY_LOCALS",
         ("ptr-numarray",),
+        (),
         (),
         "repsel Phase 4a.3 — Ptr<NumArray> locals",
     ),
@@ -145,10 +159,22 @@ KNOBS: tuple[Knob, ...] = (
         "PERRY_INT_VALUED_LOCALS",
         ("int-valued-ta",),
         (),
+        (
+            (
+                "canonical-i32",
+                "`int_valued_ta_locals` is merged into `integer_locals` "
+                "(`collectors/hir_facts.rs`), which is the candidate set canonical-i32 "
+                "admission draws from. With the knob off the local is no longer PROVEN "
+                "integer, so canonical-i32 cannot select it — a withdrawn proof, not a "
+                "second representation being switched off. Measured on "
+                "`fixture_int_valued_ta`: canonical-i32 3 -> 2.",
+            ),
+        ),
         "native-i32 residency for int-TA-seeded locals (#6898)",
     ),
     Knob(
         "PERRY_STATIC_STRING_LOWERING",
+        (),
         (),
         (),
         "#7128 — string fast paths keyed on a value's STATIC string type. Not "
@@ -359,9 +385,22 @@ def _verdict(
             off = results[(n, f"{knob.env}=0")]
 
             lost = False
+            downstream = dict(knob.downstream)
             for key in CENSUS_KEYS:
                 if key in knob.keys:
                     lost = lost or off.counts[key] < base.counts[key]
+                    continue
+                if key in downstream:
+                    # Only the downward direction, and only with a reason on
+                    # record. An UPWARD move means the knob is creating
+                    # promotions of another representation, which no proof
+                    # dependency can explain.
+                    if off.counts[key] > base.counts[key]:
+                        failures.append(
+                            f"COUNT LEAK: {knob.env}=0 RAISED {key} on {n} "
+                            f"({base.counts[key]} -> {off.counts[key]}). A withdrawn proof "
+                            "can only remove promotions; this knob is adding them."
+                        )
                     continue
                 if off.counts[key] != base.counts[key]:
                     failures.append(
@@ -385,8 +424,10 @@ def _verdict(
                 continue
             differs = off.digest != base.digest
             moved_objects += int(differs)
-            promotes = sum(base.counts[k] for k in knob.keys) + sum(
-                base.signals[s] for s in knob.signals
+            promotes = (
+                sum(base.counts[k] for k in knob.keys)
+                + sum(base.signals[s] for s in knob.signals)
+                + sum(base.counts[k] for k, _ in knob.downstream)
             )
             # A knob that owns no census key is not a representation, so
             # "promotes nothing" is true of every workload and rule 2 would
@@ -423,6 +464,16 @@ def _verdict(
         print(row)
     print()
 
+    documented = [(k, key, why) for k in knobs for key, why in k.downstream]
+    if documented:
+        print("Documented proof dependencies (a knob may only LOWER these)")
+        print("----------------------------------------------------------")
+        for knob, key, why in documented:
+            print(f"  {knob.env}=0 may lower {key}:")
+            for line in _wrap(why):
+                print(f"      {line}")
+        print()
+
     if notes:
         for note in notes:
             print(note)
@@ -446,6 +497,12 @@ def _verdict(
         return 0
     print("Knob isolation OK: every knob moves its own representation and nothing else.")
     return 0
+
+
+def _wrap(text: str, width: int = 74) -> list[str]:
+    import textwrap
+
+    return textwrap.wrap(" ".join(text.split()), width=width)
 
 
 def self_test(_args: argparse.Namespace) -> int:
@@ -567,6 +624,35 @@ def self_test(_args: argparse.Namespace) -> int:
         static,
     )
     verdict = _capture(_verdict, workloads, (static,), moved, ns)
+    assert verdict.code == 1 and "COUNT LEAK" in verdict.out, verdict.out
+
+    # A documented proof dependency may lower the downstream key and only that.
+    intk = next(k for k in KNOBS if k.env == "PERRY_INT_VALUED_LOCALS")
+    assert dict(intk.downstream).get("canonical-i32"), "the dependency must carry a reason"
+    down_ok = table(
+        {"w": arm({"int-valued-ta": 1, "canonical-i32": 3}, "aa"), "v": arm({}, "bb")},
+        {"w": arm({"int-valued-ta": 0, "canonical-i32": 2}, "cc"), "v": arm({}, "bb")},
+        intk,
+    )
+    verdict = _capture(_verdict, workloads, (intk,), down_ok, ns)
+    assert verdict.code == 0, verdict.out
+    # …but never raise it. A knob that ADDS another representation's promotions
+    # is a leak no withdrawn proof can explain.
+    down_bad = table(
+        {"w": arm({"int-valued-ta": 1, "canonical-i32": 3}, "aa"), "v": arm({}, "bb")},
+        {"w": arm({"int-valued-ta": 0, "canonical-i32": 4}, "cc"), "v": arm({}, "bb")},
+        intk,
+    )
+    verdict = _capture(_verdict, workloads, (intk,), down_bad, ns)
+    assert verdict.code == 1 and "RAISED" in verdict.out, verdict.out
+    # An UNDOCUMENTED cross-representation move is still a leak: the Str knob
+    # has no dependency on canonical-i32, so the identical shape must go red.
+    undocumented = table(
+        {"w": arm({"canonical-str": 1, "canonical-i32": 3}, "aa"), "v": arm({}, "bb")},
+        {"w": arm({"canonical-str": 0, "canonical-i32": 2}, "cc"), "v": arm({}, "bb")},
+        strk,
+    )
+    verdict = _capture(_verdict, workloads, (strk,), undocumented, ns)
     assert verdict.code == 1 and "COUNT LEAK" in verdict.out, verdict.out
 
     print("repsel knob-isolation self-test OK")
