@@ -57,6 +57,26 @@ containment, not the barrier, is the real wall in minified dependency code. The
 locals in `vscode-jsonrpc`'s `linkedMap.js` that are selected and consumed zero
 times. Barrier narrowing is now done; the next win is containment (Track D).
 
+## Template-change canary
+
+The `require` / `"name"` arm is coupled to `cjs_wrap`'s preamble template by
+nothing but a matching binding name, initializer shape and property key. Rename
+the local, change the key, or bind it through anything but a function
+declaration and the exemption silently stops applying — nothing breaks, no test
+fails, and the barrier re-arms for 100 % of CommonJS modules. Since that site is
+the one arming every module, silent drift costs the whole win with no symptom:
+the "gate that cannot fail" shape CLAUDE.md documents.
+
+`cjs_wrap::preamble_canary_tests` runs the real template through the real
+recogniser (wrap -> parse -> lower -> `module_has_ptr_shape_barrier`) and
+asserts the barrier is not armed, plus two anti-vacuity guards: the wrapped
+source must still *contain* the `defineProperty(require, …)` site, so the test
+cannot pass trivially the day the template drops it and leaves that recogniser
+arm as unnoticed dead code; and a positive control proves the same chain still
+reports a genuine `delete`. Verified red under four independent perturbations —
+template key renamed, template site deleted, recogniser `REQUIRE_KEY` changed,
+recogniser `EXPORTS_KEY` changed — with the positive control green in all four.
+
 ## Adjacent question: does the barrier walk run before or after DCE?
 
 After — but Perry performs no dead-code elimination in a default build, so the
@@ -77,7 +97,8 @@ measurable, so it is recorded here rather than filed.
 
 ## Validation
 
-`cargo test -p perry-codegen --lib` 417 passed (11 new, sabotage-verified red
+`cargo test -p perry-codegen --lib` 417 passed (11 new) plus 2 canary tests in
+`perry` (11 new, sabotage-verified red
 against the unfixed rule while the negative tests stay green); census gate
 green with `batch` `ptr-shape` = 2 asserted against its floor;
 `gc_repsel_matrix.sh --arms all --pressure 8` FAIL=0 with the `requires=move`
