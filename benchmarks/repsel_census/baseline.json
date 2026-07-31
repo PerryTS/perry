@@ -23,7 +23,43 @@
         "int-valued-ta": 0,
         "spec-abi": 1
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {
+        "ptr_shape_get_number": 2,
+        "ptr_shape_set": 1,
+        "ptr_shape_method": 1
+      }
+    },
+    {
+      "name": "fixture_ptr_shape_sites",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape_sites.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-shape-consumed": 1,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 1,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-slot": 1,
+        "int-valued-ta": 0,
+        "spec-abi": 1
+      },
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {
+        "ptr_shape_get_number": 1,
+        "class_field_get_number.shape_proven_load": 1,
+        "ptr_shape_set": 1,
+        "ptr_shape_update": 1,
+        "ptr_shape_method": 1
+      }
     },
     {
       "name": "fixture_ptr_numarray",
@@ -47,7 +83,8 @@
         "int-valued-ta": 0,
         "spec-abi": 2
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "fixture_canonical_slots",
@@ -71,7 +108,8 @@
         "int-valued-ta": 0,
         "spec-abi": 3
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "fixture_int_valued_ta",
@@ -95,7 +133,8 @@
         "int-valued-ta": 1,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "fixture_spec_abi_taptr",
@@ -119,7 +158,8 @@
         "int-valued-ta": 0,
         "spec-abi": 1
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "batch",
@@ -145,6 +185,11 @@
       },
       "unconsumed_mechanisms": {
         "module_init_context": 1
+      },
+      "consumption_sites": {
+        "ptr_shape_get_number": 1,
+        "ptr_shape_set": 2,
+        "class_field_get.shape_proven_load": 2
       }
     },
     {
@@ -169,7 +214,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_02_loop_overhead",
@@ -193,7 +239,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_03_array_write",
@@ -217,7 +264,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_04_array_read",
@@ -241,7 +289,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_05_fibonacci",
@@ -265,7 +314,8 @@
         "int-valued-ta": 0,
         "spec-abi": 1
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_06_math_intensive",
@@ -289,7 +339,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_07_object_create",
@@ -315,7 +366,8 @@
       },
       "unconsumed_mechanisms": {
         "scalar_replaced": 1
-      }
+      },
+      "consumption_sites": {}
     },
     {
       "name": "suite_08_string_concat",
@@ -339,7 +391,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_09_method_calls",
@@ -365,6 +418,11 @@
       },
       "unconsumed_mechanisms": {
         "module_init_context": 1
+      },
+      "consumption_sites": {
+        "class_field_get.shape_proven_load": 1,
+        "ptr_shape_get_number": 1,
+        "ptr_shape_set": 1
       }
     },
     {
@@ -389,7 +447,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_11_prime_sieve",
@@ -413,7 +472,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_12_binary_trees",
@@ -439,7 +499,8 @@
       },
       "unconsumed_mechanisms": {
         "scalar_replaced": 1
-      }
+      },
+      "consumption_sites": {}
     },
     {
       "name": "suite_13_factorial",
@@ -463,7 +524,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_14_closure",
@@ -487,7 +549,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_15_mandelbrot",
@@ -511,7 +574,8 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_16_matrix_multiply",
@@ -535,7 +599,8 @@
         "int-valued-ta": 0,
         "spec-abi": 1
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     },
     {
       "name": "suite_17_loop_data_dependent",
@@ -559,8 +624,9 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {}
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {}
     }
   ],
-  "generated_at": "2026-07-31T04:32:15.277779Z"
+  "generated_at": "2026-07-31T05:04:11.802330Z"
 }

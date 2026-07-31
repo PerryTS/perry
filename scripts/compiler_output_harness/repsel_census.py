@@ -132,6 +132,31 @@ CONSUMPTION_INSTRUMENTED: dict[str, str] = {
     "ptr-shape": "ptr-shape-consumed",
 }
 
+#: Every codegen lowering that consumes a `Ptr<Shape>` proof, and where it
+#: lives. **Held in code, never in the baseline** -- same reason as
+#: [`LIVENESS_FLOORS`].
+#:
+#: The census counts promoted VALUES, so one recorder is enough to mark a value
+#: consumed. That makes per-site rot invisible: five of these six could stop
+#: firing and every count would be unchanged. When coverage was first measured,
+#: two had **never fired on any workload in the corpus** --
+#: `class_field_get_number.shape_proven_load` and `ptr_shape_update` -- so a
+#: break in either would have gone unnoticed indefinitely. Both are reachable;
+#: `fixture_ptr_shape_sites.ts` was written to reach them.
+#:
+#: [`check_consumption_site_coverage`] fails a run where any site recorded
+#: nothing corpus-wide, and `census_from_report` rejects a site this table does
+#: not name -- a new consumption lowering must be registered here, not silently
+#: absorbed into an existing count.
+CONSUMPTION_SITES: dict[str, str] = {
+    "class_field_get_number.shape_proven_load": "expr/property_get/helpers.rs",
+    "ptr_shape_get_number": "expr/property_get/helpers.rs",
+    "class_field_get.shape_proven_load": "expr/property_get.rs",
+    "ptr_shape_set": "expr/property_set.rs",
+    "ptr_shape_update": "expr/instance_misc1.rs",
+    "ptr_shape_method": "lower_call/property_get/dynamic_dispatch.rs",
+}
+
 #: `SlotRep` debug spelling -> census key, for the `canonical-slot` analysis.
 CANONICAL_REPS = {
     "I32": "canonical-i32",
@@ -163,6 +188,10 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
     # fixture's `p` is a function-body local with an in-loop field store, so it
     # is consumed; verified against emitted IR, not against this counter.
     "fixture_ptr_shape": {"ptr-shape": 1, "ptr-shape-consumed": 1},
+    # Written for the two consumption sites nothing else in the corpus reached.
+    # Its value is the SITE coverage it provides (checked separately); the
+    # count floor here just keeps it honest as a promotion too.
+    "fixture_ptr_shape_sites": {"ptr-shape": 1, "ptr-shape-consumed": 1},
     "fixture_ptr_numarray": {"ptr-numarray": 1},
     "fixture_canonical_slots": {
         "canonical-i32": 1,
@@ -279,8 +308,10 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
     # population. It is reported separately instead (`consumed_receiver`).
     consumed_receiver = 0
     unconsumed_mechanisms: dict[str, int] = {}
+    consumption_sites: dict[str, int] = {}
     seen_consumed: set[tuple[str, Any]] = set()
     unknown_consumed: set[str] = set()
+    unknown_sites: set[str] = set()
     for entry in entries:
         analysis = entry.get("analysis")
         outcome = entry.get("outcome")
@@ -288,6 +319,11 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
             if analysis not in CONSUMPTION_INSTRUMENTED:
                 unknown_consumed.add(str(analysis))
                 continue
+            site = entry.get("site")
+            if site is None or site not in CONSUMPTION_SITES:
+                unknown_sites.add(str(site))
+            else:
+                consumption_sites[site] = consumption_sites.get(site, 0) + 1
             if entry.get("position") != "local":
                 consumed_receiver += 1
                 continue
@@ -300,6 +336,14 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
         elif outcome == "unconsumed":
             rule = str(entry.get("rule") or "<unnamed>")
             unconsumed_mechanisms[rule] = unconsumed_mechanisms.get(rule, 0) + 1
+    if unknown_sites:
+        raise HarnessError(
+            f"--opt-report recorded consumption at unregistered site(s) "
+            f"{sorted(unknown_sites)}. Add them to CONSUMPTION_SITES: a lowering "
+            "that consumes a representation without being registered cannot be "
+            "checked for liveness, and folding it into an existing count is how "
+            "a recorder stops firing without anyone noticing."
+        )
     if unknown_consumed:
         raise HarnessError(
             f"--opt-report recorded consumption for analysis/analyses "
@@ -326,6 +370,7 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
         "candidates": candidates,
         "unconsumed_mechanisms": unconsumed_mechanisms,
         "consumed_receiver": consumed_receiver,
+        "consumption_sites": consumption_sites,
     }
 
 
@@ -554,6 +599,34 @@ def check_consumption_invariant(observed: dict[str, dict[str, Any]]) -> list[str
     return failures
 
 
+def check_consumption_site_coverage(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """Every registered consumption lowering must fire somewhere in the corpus.
+
+    The consumed COUNT is per value, so one working recorder marks a value
+    consumed and the other five could rot silently. This is the site-level
+    analogue of [`check_instrument_liveness`]: a recorder that never fires is
+    either dead or unexercised, and both are things the census should say out
+    loud rather than average away.
+
+    Not hypothetical. When per-site coverage was first measured, four of six
+    recorders fired and two -- `class_field_get_number.shape_proven_load` and
+    `ptr_shape_update` -- had never fired on any workload here.
+    """
+    totals = {site: 0 for site in CONSUMPTION_SITES}
+    for entry in observed.values():
+        for site, n in entry.get("consumption_sites", {}).items():
+            if site in totals:
+                totals[site] += int(n)
+    return [
+        f"consumption site {site!r} ({CONSUMPTION_SITES[site]}) recorded nothing "
+        "across the entire corpus. Either the lowering no longer fires, or its "
+        "recorder was removed, or no workload reaches it — and the promotion "
+        "counts look identical in all three cases."
+        for site in CONSUMPTION_SITES
+        if totals[site] == 0
+    ]
+
+
 def check_unconsumed_is_explained(observed: dict[str, dict[str, Any]]) -> list[str]:
     """A workload with wasted promotions must be able to NAME a mechanism.
 
@@ -692,6 +765,14 @@ def render_consumption_report(
             f"  (plus {receiver} consumption(s) of a proven `this` receiver, which is "
             "never counted as a selection at all — see CONSUMPTION_INSTRUMENTED)"
         )
+    sites: dict[str, int] = {site: 0 for site in CONSUMPTION_SITES}
+    for entry in observed.values():
+        for site, n in entry.get("consumption_sites", {}).items():
+            if site in sites:
+                sites[site] += int(n)
+    lines.append("  consumption sites exercised by the corpus:")
+    for site, n in sorted(sites.items(), key=lambda kv: (-kv[1], kv[0])):
+        lines.append(f"    {site:<42} {n}" + ("   <- NEVER FIRES" if n == 0 else ""))
     uninstrumented = [k for k in CENSUS_KEYS if k not in CONSUMPTION_INSTRUMENTED
                       and not k.endswith("-consumed")]
     lines.append(
@@ -799,6 +880,7 @@ def census(args: argparse.Namespace) -> int:
     # consistency assertion about the counter, not a corpus-wide claim.
     invariant = check_consumption_invariant(observed)
     unexplained = check_unconsumed_is_explained(observed)
+    site_gaps = check_consumption_site_coverage(observed) if not partial else []
 
     if partial:
         print(
@@ -819,6 +901,7 @@ def census(args: argparse.Namespace) -> int:
         ("UNREACHED BY EVERY ANALYSIS", unreached),
         ("CONSUMPTION COUNTER IS INCOHERENT", invariant),
         ("WASTED PROMOTION WITH NO NAMED MECHANISM", unexplained),
+        ("CONSUMPTION SITE NEVER EXERCISED", site_gaps),
     ):
         if not problems:
             continue
@@ -872,6 +955,7 @@ def _update(
         workload["candidates"] = observed[name]["candidates"]
         # Context, never gated: which mechanism ate each wasted promotion.
         workload["unconsumed_mechanisms"] = observed[name].get("unconsumed_mechanisms", {})
+        workload["consumption_sites"] = observed[name].get("consumption_sites", {})
     baseline["generated_at"] = utc_now()
     path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {path.relative_to(REPO_ROOT)} ({len(workloads)} workload(s)).")
@@ -991,11 +1075,14 @@ def self_test(_args: argparse.Namespace) -> int:
             {"analysis": "ptr-shape", "outcome": "selected", "rep": "Ptr<Shape>"},
             # `acc`: consumed at three access sites, but it is ONE value.
             {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
-             "position": "local", "local_id": 9, "function": "totalsRow"},
+             "position": "local", "local_id": 9, "function": "totalsRow",
+             "site": "ptr_shape_set"},
             {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
-             "position": "local", "local_id": 9, "function": "totalsRow"},
+             "position": "local", "local_id": 9, "function": "totalsRow",
+             "site": "ptr_shape_get_number"},
             {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
-             "position": "local", "local_id": 9, "function": "totalsRow"},
+             "position": "local", "local_id": 9, "function": "totalsRow",
+             "site": "ptr_shape_update"},
             # `totals`: proven, counted as a win, dropped by the context gate.
             {"analysis": "ptr-shape", "outcome": "unconsumed", "rep": "Ptr<Shape>",
              "position": "local", "local_id": 4, "function": "module_init",
@@ -1003,7 +1090,8 @@ def self_test(_args: argparse.Namespace) -> int:
             # A proven `this`, which was never selected: must NOT inflate the
             # consumed column, or the invariant below stops holding.
             {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
-             "position": "param", "local_id": None, "function": "C.m"},
+             "position": "param", "local_id": None, "function": "C.m",
+             "site": "ptr_shape_method"},
         ],
     }
     result = census_from_report(wasted)
@@ -1037,7 +1125,8 @@ def self_test(_args: argparse.Namespace) -> int:
     rogue = json.loads(json.dumps(wasted))
     rogue["entries"].append(
         {"analysis": "canonical-slot", "outcome": "consumed", "rep": "I32",
-         "position": "local", "local_id": 1, "function": "f"}
+         "position": "local", "local_id": 1, "function": "f",
+         "site": "ptr_shape_set"}
     )
     try:
         census_from_report(rogue)
@@ -1075,6 +1164,34 @@ def self_test(_args: argparse.Namespace) -> int:
     assert not check_unconsumed_is_explained(
         {"w": {"counts": {"ptr-shape": 1, "ptr-shape-consumed": 1}, "unconsumed_mechanisms": {}}}
     ), "nothing wasted means nothing to explain"
+
+    # Per-site liveness: a recorder that never fires must be red, even though
+    # every promotion count is unchanged.
+    assert not check_consumption_site_coverage(
+        {"w": {"consumption_sites": {s: 1 for s in CONSUMPTION_SITES}}}
+    )
+    for missing in CONSUMPTION_SITES:
+        gaps = check_consumption_site_coverage(
+            {"w": {"consumption_sites": {s: 1 for s in CONSUMPTION_SITES if s != missing}}}
+        )
+        assert any(missing in g for g in gaps), (missing, gaps)
+
+    # A consumption recorded at an unregistered site (or with no site at all)
+    # must raise rather than be absorbed into an existing count.
+    for bad_site in ("brand_new_lowering", None):
+        rogue = json.loads(json.dumps(wasted))
+        for e in rogue["entries"]:
+            if e["outcome"] == "consumed":
+                if bad_site is None:
+                    e.pop("site", None)
+                else:
+                    e["site"] = bad_site
+        try:
+            census_from_report(rogue)
+        except HarnessError:
+            pass
+        else:  # pragma: no cover
+            raise AssertionError(f"unregistered consumption site {bad_site!r} accepted")
 
     print("repsel census self-test OK")
     return 0

@@ -360,6 +360,15 @@ pub struct Entry {
     /// TypeErrors), so this is populated for allocation sites and `None` for
     /// ordinary locals — HIR drops positions at lowering.
     pub byte_offset: Option<u32>,
+    /// For [`Outcome::Consumed`]: which codegen lowering applied the proof
+    /// (`ptr_shape_set`, `ptr_shape_update`, …). `None` for every other
+    /// outcome.
+    ///
+    /// A first-class field rather than prose inside `detail`, because the
+    /// census gates on it: each recorder must fire somewhere in the corpus, or
+    /// it is a site nobody has ever watched work. Two of the six were in
+    /// exactly that state when this field was added.
+    pub site: Option<String>,
 }
 
 impl Entry {
@@ -406,20 +415,16 @@ impl Entry {
             self.analysis,
             self.outcome,
             self.rule.clone(),
-            // `detail` participates for CONSUMED entries only, where it names
-            // the lowering that applied the proof. One value consumed at three
-            // access sites is genuinely three facts worth reporting, and
-            // collapsing them here would leave the census's own per-value
-            // reduction untestable end-to-end — an unexercised branch standing
-            // between the compiler and the number that gets published.
+            // `site` participates for CONSUMED entries only. One value consumed
+            // at three access sites is genuinely three facts worth reporting:
+            // the census gates on per-site coverage, and collapsing them here
+            // would both hide that and leave the census's own per-value
+            // reduction untestable end-to-end.
             //
             // Every other outcome keeps the pre-existing identity, so denial
             // and selection tallies (and therefore the baseline's `candidates`
             // column) are unchanged.
-            match self.outcome {
-                Outcome::Consumed => self.detail.clone(),
-                _ => None,
-            },
+            self.site.clone(),
         )
     }
 }
@@ -635,6 +640,7 @@ pub(crate) fn deny(d: Denial<'_>) {
         invoked_per_element: per_element,
         detail: d.detail,
         byte_offset: d.byte_offset,
+        site: None,
     });
 }
 
@@ -664,6 +670,7 @@ pub(crate) fn deny_named(function: &str, region: RegionKind, d: Denial<'_>) {
         invoked_per_element: None,
         detail: d.detail,
         byte_offset: d.byte_offset,
+        site: None,
     });
 }
 
@@ -721,6 +728,7 @@ pub(crate) fn select(
         invoked_per_element: per_element,
         detail,
         byte_offset: None,
+        site: None,
     });
 }
 
@@ -756,6 +764,7 @@ pub(crate) fn select_explicit(
         invoked_per_element: None,
         detail: None,
         byte_offset: None,
+        site: None,
     });
 }
 
@@ -824,6 +833,7 @@ pub(crate) fn consume(
         invoked_per_element: None,
         detail: Some(format!("consumed at {site}")),
         byte_offset: None,
+        site: Some(site.to_string()),
     });
 }
 
@@ -871,6 +881,7 @@ pub(crate) fn unconsumed(u: Unconsumed<'_>) {
         invoked_per_element: None,
         detail: u.detail,
         byte_offset: None,
+        site: None,
     });
 }
 
@@ -910,6 +921,7 @@ mod tests {
             invoked_per_element: per_element.map(str::to_string),
             detail: None,
             byte_offset: None,
+            site: None,
         }
     }
 

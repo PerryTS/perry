@@ -389,6 +389,7 @@ mod tests {
             invoked_per_element: None,
             detail: None,
             byte_offset: None,
+            site: None,
         }
     }
 
@@ -411,6 +412,7 @@ mod tests {
             invoked_per_element: None,
             detail: None,
             byte_offset: None,
+            site: None,
         }
     }
 
@@ -531,6 +533,9 @@ mod tests {
     fn with_outcome(analysis: Analysis, name: &str, outcome: Outcome, rule: Option<&str>) -> Entry {
         let mut e = selected(analysis, name, "Ptr<Shape>");
         e.outcome = outcome;
+        if outcome == Outcome::Consumed {
+            e.site = Some("ptr_shape_set".to_string());
+        }
         e.rule = rule.map(str::to_string);
         e.reason = rule.map(|_| "the context gate dropped it".to_string());
         e.issue = rule.map(|_| "#7109".to_string());
