@@ -13,10 +13,10 @@ was not, on ELF:
 records the **source basename** of the translation unit into the object as an
 `STT_FILE` symbol, so two identical compiles differed by exactly the digits of
 the pid and the clock (#7131 — 26/26 census workloads nondeterministic on a
-Raspberry Pi 5, 10 bytes apart on `suite_01_startup`). Mach-O keeps that name
-in the debug map rather than the `.o`, which is why macOS looked clean while
-carrying the same defect. `#7135` fixed it by content-addressing the `.ll`
-basename; this module is the check that says so, and keeps saying so.
+Raspberry Pi 5, ~10 bytes apart on `suite_01_startup`). Mach-O does not record
+that name in the `.o` at all, which is why macOS looked clean while carrying the
+same defect. #7135 fixed it by content-addressing the `.ll` basename; this
+module is the check that says so, and keeps saying so.
 
 Measured properties of the ELF path, so a future reader does not have to
 re-derive which names matter (aarch64 Debian clang 19.1.7, no `-g`):
@@ -28,8 +28,13 @@ re-derive which names matter (aarch64 Debian clang 19.1.7, no `-g`):
 * `ld -r` (the multi-codegen-unit merge, #5391) records neither its input nor
   its output paths.
 
-So the `.o` and partial-link staging names may keep their uniquifying counter —
-only the `.ll` name had to become a function of content.
+So only the `.ll` name had to become a function of content — and, symmetrically,
+every *output* name must stay unique per **process**, not merely per call. #7135
+content-addressed both and dropped the pid from the `.o`; two `perry` processes
+compiling identical IR then agreed on the object path and deleted it out from
+under each other, because the counter that was left is per-process state that
+every process starts at 0. This check found that, because it runs its repeats
+concurrently — a serial check never opens the window.
 
 Why this is a check and not a comment: the property is invisible on the host
 most of this project's compiler work happens on. A macOS-only reviewer cannot
@@ -40,7 +45,10 @@ survived from #509 to #7131. Run it on Linux.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import platform
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
@@ -85,9 +93,12 @@ def nondeterminism_report(varied: list[str], total: int, *, repeat: int = 2) -> 
     )
 
 
-def _digest_objects(paths: list[str]) -> str:
-    import hashlib
+def digest_objects(paths: list[str]) -> str:
+    """SHA-256 over every object a compile emitted, in a stable order.
 
+    Shared with the knob-isolation gate so "the objects are the same" means one
+    thing in this package rather than two implementations that could drift.
+    """
     h = hashlib.sha256()
     for path in sorted(paths):
         h.update(Path(path).read_bytes())
@@ -155,9 +166,6 @@ def check_determinism(args: argparse.Namespace) -> int:
     print(f"host:     {platform.system()} {platform.machine()}")
     print(f"corpus:   {len(workloads)} workload(s) x {repeat} compile(s)\n")
 
-    import shutil
-    import tempfile
-
     tmp = Path(tempfile.mkdtemp(prefix="repsel-determinism-"))
     try:
         # Repeats run through the same pool as the corpus on purpose: two
@@ -174,7 +182,7 @@ def check_determinism(args: argparse.Namespace) -> int:
                 timeout=args.compile_timeout,
                 object_out=tmp / workload["name"] / str(index) / "out.o",
             )
-            return workload["name"], _digest_objects(census["objects"])
+            return workload["name"], digest_objects(census["objects"])
 
         with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
             observed = list(pool.map(run, jobs))

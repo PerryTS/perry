@@ -79,13 +79,13 @@ from typing import Any
 
 from .capture import resolve_perry
 from .common import HarnessError, REPO_ROOT
-from .repsel_determinism import nondeterminism_report
 from .repsel_census import (
     CENSUS_KEYS,
     DEFAULT_BASELINE,
     compile_and_census,
     load_baseline,
 )
+from .repsel_determinism import digest_objects, nondeterminism_report
 
 
 #: `SpecParamRep::label()` spelling for a canonical-i32 parameter slot.
@@ -219,13 +219,6 @@ def _spec_abi_i32_slots(report: dict[str, Any]) -> int:
     return total
 
 
-def _digest(paths: list[str]) -> str:
-    h = hashlib.sha256()
-    for path in sorted(paths):
-        h.update(Path(path).read_bytes())
-    return h.hexdigest()
-
-
 def _compile_arm(
     perry: list[str],
     source: Path,
@@ -249,7 +242,7 @@ def _compile_arm(
             "spec-abi-i32-slot": _spec_abi_i32_slots(report),
             "consumed-receiver": int(census.get("consumed_receiver", 0)),
         },
-        digest=_digest(census["objects"]),
+        digest=digest_objects(census["objects"]),
         objects=list(census["objects"]),
     )
 
