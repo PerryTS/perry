@@ -922,63 +922,78 @@ fn writable_lifecycle_flags_reflect_end_and_finish() {
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
-    let closure = js_closure_alloc(write_capture as *const u8, 0);
+    let closure = scope.root_raw_mut_ptr(js_closure_alloc(write_capture as *const u8, 0));
     crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
     js_object_set_field_by_name(
         opts.get_raw_mut_ptr(),
         hidden_key(b"write"),
-        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+        box_pointer(closure.get_raw_const_ptr()),
     );
-    let stream = js_node_stream_writable_new(box_pointer(opts.get_raw_const_ptr()));
-    let handle = raw_ptr_from_value(stream) as i64;
-    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let stream = scope.root_nanbox_f64(js_node_stream_writable_new(box_pointer(
+        opts.get_raw_const_ptr(),
+    )));
+    let handle = || raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
+    let object = || raw_ptr_from_value(stream.get_nanbox_f64()) as *const ObjectHeader;
 
-    assert_eq!(js_node_stream_method_writable(handle).to_bits(), TAG_TRUE);
+    assert_eq!(js_node_stream_method_writable(handle()).to_bits(), TAG_TRUE);
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, hidden_key(b"writable")).to_bits(),
+        js_object_get_field_by_name_f64(object(), hidden_key(b"writable")).to_bits(),
         TAG_TRUE
     );
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, hidden_key(b"closed")).to_bits(),
+        js_object_get_field_by_name_f64(object(), hidden_key(b"closed")).to_bits(),
         TAG_FALSE
     );
     assert_eq!(
-        js_node_stream_method_writable_ended(handle).to_bits(),
+        js_node_stream_method_writable_ended(handle()).to_bits(),
         TAG_FALSE
     );
     assert_eq!(
-        js_node_stream_method_writable_finished(handle).to_bits(),
+        js_node_stream_method_writable_finished(handle()).to_bits(),
         TAG_FALSE
     );
 
-    let finish =
-        box_pointer(js_closure_alloc(capture_finish_listener as *const u8, 0) as *const u8);
-    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
-    let _ = js_node_stream_method_on(handle, string_value("finish"), finish);
-    let _ = js_node_stream_method_on(handle, string_value("close"), close);
+    let finish = scope.root_raw_mut_ptr(js_closure_alloc(capture_finish_listener as *const u8, 0));
+    let close = scope.root_raw_mut_ptr(js_closure_alloc(capture_close_listener as *const u8, 0));
+    let finish_event = scope.root_nanbox_f64(string_value("finish"));
+    let close_event = scope.root_nanbox_f64(string_value("close"));
+    let _ = js_node_stream_method_on(
+        handle(),
+        finish_event.get_nanbox_f64(),
+        box_pointer(finish.get_raw_const_ptr()),
+    );
+    let _ = js_node_stream_method_on(
+        handle(),
+        close_event.get_nanbox_f64(),
+        box_pointer(close.get_raw_const_ptr()),
+    );
 
-    let _ = js_node_stream_method_end(handle, string_value("done"));
-    assert_eq!(js_node_stream_method_writable(handle).to_bits(), TAG_FALSE);
+    let done = scope.root_nanbox_f64(string_value("done"));
+    let _ = js_node_stream_method_end(handle(), done.get_nanbox_f64());
     assert_eq!(
-        js_node_stream_method_writable_ended(handle).to_bits(),
+        js_node_stream_method_writable(handle()).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_writable_ended(handle()).to_bits(),
         TAG_TRUE
     );
     assert_eq!(
-        js_node_stream_method_writable_finished(handle).to_bits(),
+        js_node_stream_method_writable_finished(handle()).to_bits(),
         TAG_FALSE
     );
 
     let _ = crate::promise::js_promise_run_microtasks();
     assert_eq!(
-        js_node_stream_method_writable_finished(handle).to_bits(),
+        js_node_stream_method_writable_finished(handle()).to_bits(),
         TAG_TRUE
     );
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, hidden_key(b"writableFinished")).to_bits(),
+        js_object_get_field_by_name_f64(object(), hidden_key(b"writableFinished")).to_bits(),
         TAG_TRUE
     );
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, hidden_key(b"closed")).to_bits(),
+        js_object_get_field_by_name_f64(object(), hidden_key(b"closed")).to_bits(),
         TAG_TRUE
     );
     WRITABLE_FINISH_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
@@ -1048,11 +1063,16 @@ fn stream_destroy_with_error_marks_errored_state() {
         hidden_key(b"destroy"),
     ));
     let err = scope.root_nanbox_f64(string_value("boom"));
-    let error_listener = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let handle = raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
-    let _ = js_node_stream_method_on(handle, string_value("error"), error_listener);
+    let error_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let error_event = scope.root_nanbox_f64(string_value("error"));
+    let handle = || raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
+    let _ = js_node_stream_method_on(
+        handle(),
+        error_event.get_nanbox_f64(),
+        box_pointer(error_listener.get_raw_const_ptr()),
+    );
 
-    assert_eq!(js_node_stream_method_errored(handle).to_bits(), TAG_NULL);
+    assert_eq!(js_node_stream_method_errored(handle()).to_bits(), TAG_NULL);
     let args = [err.get_nanbox_f64()];
     let ret = unsafe {
         crate::closure::js_native_call_value(destroy.get_nanbox_f64(), args.as_ptr(), args.len())
@@ -1069,7 +1089,7 @@ fn stream_destroy_with_error_marks_errored_state() {
         TAG_TRUE
     );
     assert_eq!(
-        js_node_stream_method_errored(handle).to_bits(),
+        js_node_stream_method_errored(handle()).to_bits(),
         err.get_nanbox_f64().to_bits()
     );
 }
@@ -1108,12 +1128,17 @@ fn readable_aborted_reflects_destroy_before_end() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)));
     let err = scope.root_nanbox_f64(string_value("abort"));
-    let error_listener = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let handle = raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
-    let _ = js_node_stream_method_on(handle, string_value("error"), error_listener);
+    let error_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let error_event = scope.root_nanbox_f64(string_value("error"));
+    let handle = || raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
+    let _ = js_node_stream_method_on(
+        handle(),
+        error_event.get_nanbox_f64(),
+        box_pointer(error_listener.get_raw_const_ptr()),
+    );
 
     assert_eq!(
-        js_node_stream_method_readable_aborted(handle).to_bits(),
+        js_node_stream_method_readable_aborted(handle()).to_bits(),
         TAG_FALSE
     );
     assert_eq!(
@@ -1125,9 +1150,9 @@ fn readable_aborted_reflects_destroy_before_end() {
         TAG_FALSE
     );
 
-    let _ = js_node_stream_method_destroy(handle, err.get_nanbox_f64());
+    let _ = js_node_stream_method_destroy(handle(), err.get_nanbox_f64());
     assert_eq!(
-        js_node_stream_method_readable_aborted(handle).to_bits(),
+        js_node_stream_method_readable_aborted(handle()).to_bits(),
         TAG_TRUE
     );
     assert_eq!(
@@ -1140,18 +1165,23 @@ fn readable_aborted_reflects_destroy_before_end() {
     );
     let _ = crate::promise::js_promise_run_microtasks();
     assert_eq!(
-        js_node_stream_method_readable_aborted(handle).to_bits(),
+        js_node_stream_method_readable_aborted(handle()).to_bits(),
         TAG_TRUE
     );
 
     let ended = scope.root_nanbox_f64(js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)));
-    let error_listener = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let ended_handle = raw_ptr_from_value(ended.get_nanbox_f64()) as i64;
-    let _ = js_node_stream_method_on(ended_handle, string_value("error"), error_listener);
-    let _ = js_node_stream_method_push(ended_handle, f64::from_bits(TAG_NULL));
-    let _ = js_node_stream_method_destroy(ended_handle, err.get_nanbox_f64());
+    let ended_error_listener =
+        scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let ended_handle = || raw_ptr_from_value(ended.get_nanbox_f64()) as i64;
+    let _ = js_node_stream_method_on(
+        ended_handle(),
+        error_event.get_nanbox_f64(),
+        box_pointer(ended_error_listener.get_raw_const_ptr()),
+    );
+    let _ = js_node_stream_method_push(ended_handle(), f64::from_bits(TAG_NULL));
+    let _ = js_node_stream_method_destroy(ended_handle(), err.get_nanbox_f64());
     assert_eq!(
-        js_node_stream_method_readable_aborted(ended_handle).to_bits(),
+        js_node_stream_method_readable_aborted(ended_handle()).to_bits(),
         TAG_FALSE
     );
 }
@@ -1159,39 +1189,53 @@ fn readable_aborted_reflects_destroy_before_end() {
 #[test]
 fn stream_native_receiver_methods_update_hidden_state() {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let stream = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
+    let emitting = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
         TAG_UNDEFINED,
     )));
     let err = scope.root_nanbox_f64(string_value("boom"));
-    let cb = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let handle = raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
-    let _ = js_node_stream_method_on(handle, string_value("error"), cb);
+    let error_event = scope.root_nanbox_f64(string_value("error"));
+    let emit_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let emitting_handle = || raw_ptr_from_value(emitting.get_nanbox_f64()) as i64;
+    let _ = js_node_stream_method_on(
+        emitting_handle(),
+        error_event.get_nanbox_f64(),
+        box_pointer(emit_listener.get_raw_const_ptr()),
+    );
 
     assert_eq!(
-        js_node_stream_method_emit(handle, string_value("error"), err.get_nanbox_f64()).to_bits(),
+        js_node_stream_method_emit(
+            emitting_handle(),
+            error_event.get_nanbox_f64(),
+            err.get_nanbox_f64(),
+        )
+        .to_bits(),
         TAG_TRUE
     );
-    assert!(js_node_stream_hidden_error_after_read(stream.get_nanbox_f64()).is_some());
+    assert!(js_node_stream_hidden_error_after_read(emitting.get_nanbox_f64()).is_some());
 
-    let stream = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
+    let ended = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
         TAG_UNDEFINED,
     )));
-    let handle = raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
-    let _ = js_node_stream_method_end(handle, f64::from_bits(TAG_UNDEFINED));
+    let ended_handle = || raw_ptr_from_value(ended.get_nanbox_f64()) as i64;
+    let _ = js_node_stream_method_end(ended_handle(), f64::from_bits(TAG_UNDEFINED));
     assert!(js_node_stream_is_stub_ended_after_read(
-        stream.get_nanbox_f64()
+        ended.get_nanbox_f64()
     ));
 
-    let stream = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
+    let destroyed = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
         TAG_UNDEFINED,
     )));
-    let cb = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let handle = raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
-    let _ = js_node_stream_method_on(handle, string_value("error"), cb);
-    let _ = js_node_stream_method_destroy(handle, err.get_nanbox_f64());
-    assert!(readable_hidden_error(stream.get_nanbox_f64()).is_none());
+    let destroy_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let destroyed_handle = || raw_ptr_from_value(destroyed.get_nanbox_f64()) as i64;
+    let _ = js_node_stream_method_on(
+        destroyed_handle(),
+        error_event.get_nanbox_f64(),
+        box_pointer(destroy_listener.get_raw_const_ptr()),
+    );
+    let _ = js_node_stream_method_destroy(destroyed_handle(), err.get_nanbox_f64());
+    assert!(readable_hidden_error(destroyed.get_nanbox_f64()).is_none());
     let _ = crate::promise::js_promise_run_microtasks();
-    assert!(js_node_stream_hidden_error_after_read(stream.get_nanbox_f64()).is_some());
+    assert!(js_node_stream_hidden_error_after_read(destroyed.get_nanbox_f64()).is_some());
 }
 
 #[test]

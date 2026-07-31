@@ -452,6 +452,10 @@ extern "C" fn read_records_this(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn read_throws(closure: *const ClosureHeader, _size: f64) -> f64 {
+    crate::exception::js_throw(crate::closure::js_closure_get_capture_f64(closure, 0))
+}
+
 extern "C" fn transform_upper_callback(
     _closure: *const ClosureHeader,
     chunk: f64,
@@ -841,6 +845,61 @@ fn compose_snapshot_stage_error_reaches_only_composite_listener() {
     let uncaught = UNCAUGHT_STREAM_ERROR_COUNT.with(|count| *count.borrow());
     assert_eq!((errors, uncaught), (1, 0));
     crate::os::test_clear_process_event_listeners();
+}
+
+#[test]
+fn compose_snapshot_read_throw_returns_errored_composite() {
+    ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"read-boom".as_ptr(),
+        9,
+    ));
+    let error = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::error::js_error_new_with_message(message.get_raw_mut_ptr()) as i64,
+    ));
+    let options = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
+    let read = scope.root_raw_mut_ptr(js_closure_alloc(read_throws as *const u8, 1));
+    crate::closure::js_register_closure_arity(read_throws as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(read.get_raw_mut_ptr(), 0, error.get_nanbox_f64());
+    js_object_set_field_by_name(
+        options.get_raw_mut_ptr(),
+        hidden_key(b"read"),
+        box_pointer(read.get_raw_const_ptr()),
+    );
+    let source = scope.root_nanbox_f64(js_node_stream_readable_new(box_pointer(
+        options.get_raw_const_ptr(),
+    )));
+    let chunk = scope.root_nanbox_f64(string_value("x"));
+    let _ = push_chunk(source.get_nanbox_f64(), chunk.get_nanbox_f64());
+    let stage = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
+        TAG_UNDEFINED,
+    )));
+    let mut args = crate::array::js_array_alloc(2);
+    args = crate::array::js_array_push_f64(args, source.get_nanbox_f64());
+    args = crate::array::js_array_push_f64(args, stage.get_nanbox_f64());
+    let args = scope.root_raw_mut_ptr(args);
+
+    let composite = catch_pipeline_throw(|| js_node_stream_compose_args(args.get_raw_const_ptr()))
+        .expect("compose should convert a source read throw into a stream error");
+    let composite = scope.root_nanbox_f64(composite);
+    assert!(!has_truthy_hidden(
+        composite.get_nanbox_f64(),
+        hidden_key(b"__perryStreamComposePriming")
+    ));
+
+    let listener = scope.root_raw_mut_ptr(js_closure_alloc(capture_error_listener as *const u8, 0));
+    crate::closure::js_register_closure_arity(capture_error_listener as *const u8, 1);
+    let error_event = scope.root_nanbox_f64(string_value("error"));
+    let _ = js_node_stream_method_on(
+        raw_ptr_from_value(composite.get_nanbox_f64()) as i64,
+        error_event.get_nanbox_f64(),
+        box_pointer(listener.get_raw_const_ptr()),
+    );
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    ERROR_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    assert!(stream_destroyed(composite.get_nanbox_f64()));
 }
 
 #[test]

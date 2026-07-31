@@ -1239,11 +1239,25 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
                 hidden_key(b"__perryStreamComposePriming"),
                 f64::from_bits(TAG_TRUE),
             );
-            prime_composed_duplex_from_source(
-                composite.get_nanbox_f64(),
-                source.get_nanbox_f64(),
-                stages_value.get_nanbox_f64(),
-            );
+            let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+            let primed = catch_pipeline_throw(|| {
+                prime_composed_duplex_from_source(
+                    composite.get_nanbox_f64(),
+                    source.get_nanbox_f64(),
+                    stages_value.get_nanbox_f64(),
+                );
+                f64::from_bits(TAG_UNDEFINED)
+            });
+            crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
+            if let Err(err) = primed {
+                let err = scope.root_nanbox_f64(err);
+                fail_composed_duplex(
+                    composite.get_nanbox_f64(),
+                    source.get_nanbox_f64(),
+                    stages_value.get_nanbox_f64(),
+                    err.get_nanbox_f64(),
+                );
+            }
             set_hidden_value(
                 composite.get_nanbox_f64(),
                 hidden_key(b"__perryStreamComposePriming"),
@@ -1253,6 +1267,7 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
                 composite.get_nanbox_f64(),
                 hidden_key(b"__perryStreamComposePendingError"),
             ) {
+                let err = scope.root_nanbox_f64(err);
                 set_hidden_value(
                     composite.get_nanbox_f64(),
                     hidden_key(b"__perryStreamComposePendingError"),
@@ -1262,7 +1277,7 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
                     composite.get_nanbox_f64(),
                     source.get_nanbox_f64(),
                     stages_value.get_nanbox_f64(),
-                    err,
+                    err.get_nanbox_f64(),
                 );
             }
         }

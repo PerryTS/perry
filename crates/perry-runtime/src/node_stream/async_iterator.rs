@@ -878,8 +878,7 @@ mod fifo_pending_tests {
 
     #[test]
     fn retained_source_rejection_finishes_iterator_and_destroys_stream() {
-        let chunks = crate::array::js_array_alloc(0);
-        let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+        let stream = readable_from_chunks(crate::array::js_array_alloc(0));
         let iterator = build_readable_async_iterator(stream, true);
         let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
         js_closure_set_capture_f64(rejected, 0, iterator);
