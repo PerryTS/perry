@@ -183,6 +183,51 @@ removing either mechanism recorder, counting per access site, folding
 proven-`this` consumption into the local column, and deleting the consumed
 liveness minimum each turn the gate red.
 
+## Knob isolation (#7128)
+
+The census answers "how much does each representation promote". It cannot, on
+its own, answer "is knob X evidence about representation X" — and for two of the
+five knobs it was not:
+
+- `PERRY_CANONICAL_I32_LOCALS=0` also turned off **every `Ptr<Shape>`
+  consumption**, because the four ordinary-body `FnCtx` construction sites
+  computed the `Ptr<Shape>` context flag from the canonical-i32 env read. Census
+  under that knob read `ptr-shape: 7 selected, 0 consumed`. On this corpus it
+  moved the object on `batch`, `suite_09_method_calls` and
+  `fixture_ptr_shape_sites` for `Ptr<Shape>` reasons alone.
+- `PERRY_CANONICAL_STR_LOCALS=0` also turned off three lowerings that never
+  consult a selected `Str` local, so it changed the emitted object on **23 of
+  the 26** workloads — 20 of which promote no `canonical-str` at all.
+
+```bash
+python3 scripts/compiler_output_regression.py census-knob-isolation \
+    --perry <path/to/perry> --jobs 4
+```
+
+Per knob, with that knob at `0` and every other at its default:
+
+1. no census key outside the knob's own may change;
+2. a workload whose representation promotes nothing must emit a
+   **byte-identical** object;
+3. the knob must still be live — take a promotion away somewhere, and change
+   some object.
+
+Rule 1 catches the first defect, rule 2 the second (it leaves every count
+untouched). Two controls guard the diff: the compiler must be deterministic
+(**it is not on aarch64 Linux** — the LLVM module name embeds pid + nanotime, so
+the emission half is skipped there rather than reporting 26 phantoms), and both
+`X=1` and an env var the compiler does not read must reproduce the default
+object bit-for-bit.
+
+One documented exception, downward only: `PERRY_INT_VALUED_LOCALS=0` lowers
+`canonical-i32` on `fixture_int_valued_ta` (3 → 2), because
+`int_valued_ta_locals` is merged into `integer_locals`, the candidate set
+canonical-i32 draws from. A withdrawn proof cannot be selected. A knob that
+*raises* another representation's count is still a leak.
+
+`--jobs` compiles arms in parallel; the whole corpus × 6 knobs × 4 arms is about
+20 s on an M1.
+
 ## Editing the fixtures
 
 Don't tidy them. Every one is written against a specific collector's rules and

@@ -179,6 +179,7 @@ ARMS=(
 "loop_polls|PERRY_GC_MOVING_LOOP_POLLS=1|%P% %E% PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_FORCE_EVACUATE=1|move|defer the alloc-point collection to a loop back-edge precise-root safepoint, where the copying minor may MOVE survivors"
 "rep_i32_off|PERRY_CANONICAL_I32_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 1 OFF x evacuation"
 "rep_str_off|PERRY_CANONICAL_STR_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 3a OFF x evacuation"
+"rep_str_static_off|PERRY_STATIC_STRING_LOWERING=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|#7128 static-string lowerings OFF x evacuation -- the inline StringRef retag, the proven-heap operand handle and the tag-dispatched .length. Split off PERRY_CANONICAL_STR_LOCALS because they key on a value's static string type, not on a selected Str local; this arm is what keeps the off-state exercised."
 "rep_ptr_shape_off|PERRY_PTR_SHAPE_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 3b OFF x evacuation"
 "rep_ptr_numarray_off|PERRY_PTR_NUMARRAY_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 4a.3 OFF x evacuation"
 "rep_spec_abi_off|PERRY_SPECIALIZED_ABI=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 2 OFF x evacuation"

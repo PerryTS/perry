@@ -149,10 +149,9 @@ pub(crate) use repsel_gates::{static_string_lowering_enabled, RepselContextFlags
 pub(crate) use slot_rep::{
     canonical_i32_locals_enabled, canonical_local_i32_slot, canonical_str_locals_enabled,
     collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,
-    deny_canonical_context, deny_canonical_i32, load_canonical_local_boxed,
-    local_is_canonical_str, local_rep_is_canonical_i32, note_canonical_local,
-    ptr_shape_context_rule_text, store_canonical_local_from_double, CanonicalI32Denial, SlotRep,
-    PTR_SHAPE_SCALAR_REPLACED,
+    deny_canonical_context, deny_canonical_i32, load_canonical_local_boxed, local_is_canonical_str,
+    local_rep_is_canonical_i32, note_canonical_local, ptr_shape_context_rule_text,
+    store_canonical_local_from_double, CanonicalI32Denial, SlotRep, PTR_SHAPE_SCALAR_REPLACED,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
