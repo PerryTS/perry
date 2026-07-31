@@ -332,7 +332,11 @@ extern "C" fn mock_timers_enable(_closure: *const ClosureHeader, options: f64) -
 }
 
 extern "C" fn mock_timers_tick(_closure: *const ClosureHeader, ms: f64) -> f64 {
-    let delay = validate_mock_timer_number("time", ms);
+    let delay = if is_undefined_value(ms) {
+        1.0
+    } else {
+        validate_mock_timer_number("time", ms)
+    };
     crate::timer::js_mock_timers_tick(delay);
     undefined_value()
 }
@@ -372,7 +376,7 @@ fn validate_mock_timer_number(arg: &str, value: f64) -> f64 {
 
 fn parse_mock_timer_options(options: f64) -> (u32, f64) {
     let mut apis_value = options;
-    let mut now = crate::timer::js_mock_timers_real_now_ms();
+    let mut now = 0.0;
     let js = JSValue::from_bits(options.to_bits());
     if js.is_undefined() {
         return (crate::timer::MOCK_TIMERS_ALL_APIS, now);

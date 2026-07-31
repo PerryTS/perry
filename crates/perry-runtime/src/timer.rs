@@ -662,37 +662,25 @@ pub fn js_mock_timers_tick(ms: f64) {
 
 pub fn js_mock_timers_run_all() {
     ensure_mock_timers_enabled();
-    const RUN_LIMIT: usize = 100_000;
-    for _ in 0..RUN_LIMIT {
-        let next_due = {
-            let state = MOCK_TIMERS.lock().unwrap();
-            state
-                .callbacks
-                .iter()
-                .filter(|timer| !timer.cleared)
-                .map(|timer| timer.due_ms)
-                .chain(
-                    state
-                        .intervals
-                        .iter()
-                        .filter(|timer| !timer.cleared)
-                        .map(|timer| timer.next_ms),
-                )
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        };
-        let Some(target) = next_due else {
-            return;
-        };
+    let longest_due = {
+        let state = MOCK_TIMERS.lock().unwrap();
+        state
+            .callbacks
+            .iter()
+            .filter(|timer| !timer.cleared)
+            .map(|timer| timer.due_ms)
+            .chain(
+                state
+                    .intervals
+                    .iter()
+                    .filter(|timer| !timer.cleared)
+                    .map(|timer| timer.next_ms),
+            )
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    };
+    if let Some(target) = longest_due {
         mock_timers_advance_to(target);
-        let has_more = {
-            let state = MOCK_TIMERS.lock().unwrap();
-            state.callbacks.iter().any(|timer| !timer.cleared)
-        };
-        if !has_more {
-            return;
-        }
     }
-    throw_mock_timer_invalid_state("Invalid state: MockTimers runAll() reached the timer limit");
 }
 
 fn schedule_mock_callback_timer(
