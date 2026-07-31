@@ -14,3 +14,7 @@ partial file.
 
 This restores object-hash A/B on Linux (`repsel_census`, `census-knob-isolation
 --require-emission`, and every "did emission change" claim).
+
+Content-addressed `.ll` files are no longer unlinked after a successful compile:
+concurrent identical-IR workers share that path, so a per-call delete could race
+clang opening the source.

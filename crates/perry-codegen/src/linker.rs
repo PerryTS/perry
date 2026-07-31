@@ -449,8 +449,13 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     let bytes = fs::read(&obj_path)
         .with_context(|| format!("Failed to read clang output at {}", obj_path.display()))?;
 
-    // Clean up temp files on success — unless PERRY_LLVM_KEEP_IR is set, in
-    // which case we leave the .ll around for debugging and print the path.
+    // Clean up on success. The content-addressed `.ll` is **shared** across
+    // concurrent `compile_ll_to_object` calls with identical IR (#7131), so we
+    // must NOT delete it here — a sibling worker may still have clang open on
+    // that path (CodeRabbit). Only the unique `.o` is removed. The `.ll` is
+    // left in the process temp dir (same content is reused on cache misses;
+    // OS temp cleanup / `PERRY_LLVM_KEEP_IR` handle the rest). When KEEP_IR is
+    // set we also retain the object and write compile metadata.
     let keep = env::var_os("PERRY_LLVM_KEEP_IR").is_some();
     if keep {
         let _ = fs::write(&plan.stderr_remarks_path, &output.stderr);
@@ -463,7 +468,6 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
             metadata_path.display()
         );
     } else {
-        let _ = fs::remove_file(&plan.ll_path);
         let _ = fs::remove_file(&plan.obj_path);
     }
 
