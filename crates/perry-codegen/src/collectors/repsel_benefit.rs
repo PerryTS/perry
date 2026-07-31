@@ -78,8 +78,12 @@
 //!   parameter `n` is the single most common loop in JavaScript; classifying
 //!   its guard as a double consumer would refuse nearly every counter in the
 //!   corpus to buy nothing measurable.
-//! * **A write of a local into its own slot is neutral** (`iter = iter + 1`),
-//!   because the value never leaves the representation it arrived in.
+//! * **A write of a local into its own slot never costs** (`iter = iter + 1`),
+//!   because the value never leaves the representation it arrived in — but it
+//!   still *counts as a benefit* when it lands in an i32-consuming position.
+//!   `seed = (Math.imul(seed, K) + C) & 0x7fffffff` is a local whose only read
+//!   is inside its own assignment and whose whole reason to want an i32 slot
+//!   is that read.
 //!
 //! A missed refusal is today's behaviour. A spurious refusal is a lost
 //! promotion, so the model is built to err in the first direction.
@@ -167,12 +171,19 @@ impl<'a> Model<'a> {
     }
 
     fn read(&mut self, id: u32, ctx: UseCtx, depth: u32) {
-        if self.self_target == Some(id) {
-            return;
-        }
+        // A read of a local inside its own assignment is representation-
+        // PRESERVING, so it is never a cost — `iter = iter + 1` costs one
+        // instruction whichever slot `iter` lives in. It is still a benefit
+        // when it lands in an i32-consuming position, and suppressing that
+        // half was wrong: `seed = (Math.imul(seed, K) + C) & 0x7fffffff` is a
+        // local whose ONLY read is inside its own assignment and whose whole
+        // reason to want an i32 slot is that read
+        // (`benchmarks/suite/17_loop_data_dependent.ts`, and every FNV /
+        // xorshift mixer in the corpus).
+        let is_self = self.self_target == Some(id);
         match ctx {
             UseCtx::Int => self.entry(id).int_reads += 1,
-            UseCtx::Double if depth >= 1 => self.entry(id).hot_double_reads += 1,
+            UseCtx::Double if depth >= 1 && !is_self => self.entry(id).hot_double_reads += 1,
             _ => {}
         }
     }

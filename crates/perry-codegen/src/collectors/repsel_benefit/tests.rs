@@ -403,6 +403,53 @@ fn math_imul_operand_is_a_benefit() {
     assert!(!out.contains(&1), "Math.imul operand refused: {out:?}");
 }
 
+/// `seed = (Math.imul(seed, K) + C) & 0x7fffffff` — a local whose ONLY read is
+/// inside its own assignment, in an i32-consuming position. The self-target
+/// exemption must suppress the COST half and not the BENEFIT half:
+/// `17_loop_data_dependent`'s LCG seed and every FNV/xorshift mixer in the
+/// corpus have exactly this shape, and also divide the value out as a double
+/// once per iteration.
+#[test]
+fn a_self_write_in_an_i32_position_is_still_a_benefit() {
+    // 1 = seed (already holds parallel-shadow i32 storage via its `&` write)
+    let strictly: HashSet<u32> = [1u32].into_iter().collect();
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(42))),
+        for_loop(
+            let_mut(2, Some(Expr::Integer(0))),
+            cmp(get(2), Expr::Integer(64)),
+            inc(2),
+            vec![
+                set(
+                    1,
+                    bin(
+                        BinaryOp::BitAnd,
+                        Expr::MathImul(Box::new(get(1)), Box::new(Expr::Integer(1103515245))),
+                        Expr::Integer(0x7fff_ffff),
+                    ),
+                ),
+                Stmt::Expr(call(vec![bin(
+                    BinaryOp::Div,
+                    get(1),
+                    Expr::Number(2147483647.0),
+                )])),
+            ],
+        ),
+    ];
+    let (_, _, unsigned, int_valued_ta) = no_i32_storage();
+    let empty = HashSet::new();
+    let out = collect_unprofitable_canonical_i32_locals(
+        &stmts,
+        &I32StorageFacts {
+            index_used: &empty,
+            strictly_bounded: &strictly,
+            unsigned: &unsigned,
+            int_valued_ta: &int_valued_ta,
+        },
+    );
+    assert!(!out.contains(&1), "self-written i32 mixer refused: {out:?}");
+}
+
 /// An expression form the model does not understand contributes neither side.
 /// A refusal rule must under-approximate the cost: a missed refusal is today's
 /// behaviour, a spurious one is a lost promotion.
