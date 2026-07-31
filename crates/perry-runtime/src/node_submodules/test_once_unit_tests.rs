@@ -30,6 +30,7 @@ fn mock_state_with_calls(call_count: usize, implementation: f64) -> MockState {
     }
     MockState {
         id: 1,
+        tracked: true,
         original: implementation,
         implementation,
         once: Vec::new(),

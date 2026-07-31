@@ -315,6 +315,7 @@ enum MockRestoreTarget {
 
 struct MockState {
     id: i64,
+    tracked: bool,
     original: f64,
     implementation: f64,
     once: Vec<(usize, f64)>,
@@ -584,6 +585,7 @@ fn create_mock_function(original: f64, implementation: f64, restore: MockRestore
     MOCK_STATES.with(|states| {
         states.borrow_mut().push(MockState {
             id,
+            tracked: true,
             original: original.get_nanbox_f64(),
             implementation: implementation.get_nanbox_f64(),
             once: Vec::new(),
@@ -1053,22 +1055,22 @@ extern "C" fn mock_setter_thunk(
 }
 
 extern "C" fn mock_reset_thunk(_closure: *const ClosureHeader) -> f64 {
+    restore_tracked_mocks();
     MOCK_STATES.with(|states| {
         for state in states.borrow_mut().iter_mut() {
-            state.implementation = state.original;
-            state.once.clear();
-            reset_mock_state_calls(state);
+            state.tracked = false;
         }
     });
-    property_mock::restore_all();
+    crate::timer::js_mock_timers_reset();
     undefined_value()
 }
 
-extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
+fn restore_tracked_mocks() {
     let ids = MOCK_STATES.with(|states| {
         states
             .borrow()
             .iter()
+            .filter(|state| state.tracked)
             .map(|state| state.id)
             .collect::<Vec<_>>()
     });
@@ -1076,6 +1078,10 @@ extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
         restore_mock_state(id);
     }
     property_mock::restore_all();
+}
+
+extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
+    restore_tracked_mocks();
     undefined_value()
 }
 
