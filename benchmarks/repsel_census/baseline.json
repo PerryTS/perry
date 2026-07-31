@@ -173,15 +173,15 @@
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
-        "spec-abi-entry": 1,
+        "spec-abi-entry": 2,
         "spec-abi-taptr-slot": 0
       },
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 5,
+        "canonical-slot": 7,
         "int-valued-ta": 0,
-        "spec-abi": 4
+        "spec-abi": 5
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {}
@@ -375,7 +375,7 @@
         "ptr-shape": 0,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 2,
+        "canonical-i32": 1,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
@@ -400,7 +400,7 @@
         "ptr-shape": 1,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 2,
+        "canonical-i32": 1,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
@@ -533,7 +533,7 @@
         "ptr-shape": 1,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 2,
+        "canonical-i32": 1,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
@@ -560,7 +560,7 @@
         "ptr-shape": 0,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 2,
+        "canonical-i32": 1,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
@@ -585,7 +585,7 @@
         "ptr-shape": 0,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 2,
+        "canonical-i32": 1,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
@@ -610,7 +610,7 @@
         "ptr-shape": 0,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 6,
+        "canonical-i32": 3,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
@@ -678,5 +678,5 @@
       "consumption_sites": {}
     }
   ],
-  "generated_at": "2026-07-31T06:45:01.246943Z"
+  "generated_at": "2026-07-31T09:26:30.260742Z"
 }
