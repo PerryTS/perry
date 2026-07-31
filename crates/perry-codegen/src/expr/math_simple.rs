@@ -1141,11 +1141,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &module_v), (DOUBLE, &name_v)],
             ))
         }
-        Expr::WebAssemblyInstantiate(bytes) => {
-            let v = lower_expr(ctx, bytes)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_webassembly_instantiate", &[(DOUBLE, &v)]))
+        Expr::WebAssemblyInstantiate { bytes, imports } => {
+            let bytes = lower_expr(ctx, bytes)?;
+            let imports = match imports {
+                Some(imports) => lower_expr(ctx, imports)?,
+                None => crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_webassembly_instantiate",
+                &[(DOUBLE, &bytes), (DOUBLE, &imports)],
+            ))
         }
         Expr::WebAssemblyCallExport {
             instance,

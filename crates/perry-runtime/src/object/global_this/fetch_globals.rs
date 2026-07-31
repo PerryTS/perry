@@ -566,6 +566,28 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     args_len: usize,
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let wasi_parent = super::super::native_module::bound_native_callable_module_and_method(
+        parent_val,
+    )
+    .or_else(|| {
+        let obj = subclass_this_object_ptr(this_box)?;
+        let cid = crate::object::js_object_get_class_id(obj);
+        super::super::native_module::bound_native_callable_module_and_method(
+            crate::object::class_registry::js_get_dynamic_parent_value(cid),
+        )
+    });
+    if wasi_parent.is_some_and(|(module, method)| {
+        super::super::native_module::normalize_native_module_alias(&module) == "wasi"
+            && method == "WASI"
+    }) {
+        let arg0 = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            undef
+        };
+        crate::wasi::js_wasi_init_subclass(this_box, arg0);
+        return undef;
+    }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
     // constructor returns a fresh NaN-boxed cell and does NOT mutate the
     // implicit `this`, so the ordinary dispatch below would drop that cell and

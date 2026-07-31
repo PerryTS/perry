@@ -183,6 +183,9 @@ extern "C" {
     fn perry_wasm_host_instance_new(module: *mut c_void, out_err: *mut *mut c_char) -> *mut c_void;
     #[allow(dead_code)]
     fn perry_wasm_host_instance_drop(inst: *mut c_void);
+    fn perry_wasm_host_instance_memory_len(inst: *mut c_void) -> usize;
+    fn perry_wasm_host_instance_memory_copy(inst: *mut c_void, out: *mut u8, len: usize) -> usize;
+    fn perry_wasm_host_instance_take_exit_code(inst: *mut c_void, out_code: *mut i32) -> i32;
     fn perry_wasm_host_call_export(
         inst: *mut c_void,
         name: *const c_char,
@@ -520,19 +523,104 @@ pub extern "C" fn js_webassembly_module_custom_sections(module_jsval: f64, name_
     array_value(arr)
 }
 
-/// `WebAssembly.instantiate(bytes)` — synchronous on SUCCESS, returning an
-/// opaque handle (NaN-boxed pointer) suitable for `callExport`. This is the
-/// Perry MVP shape, **not** the standard `Promise<{module,instance}>`; the
-/// standard async surface is tracked as follow-up work (see issue #76).
-///
-/// Failures return a REJECTED PROMISE instead of `undefined` (#6558):
-/// TypeError for a non-buffer argument, CompileError for invalid bytes,
-/// LinkError for instantiation failure. `await`-shaped consumers (the
-/// standard spelling) then land in their own `catch` path instead of
-/// crashing on `undefined.instance`, and the MVP handle shape is unchanged
-/// on the success path.
+fn copy_instance_memory(inst: *mut c_void, buffer: f64) {
+    let ptr = unbox_pointer(buffer) as *mut crate::buffer::BufferHeader;
+    if ptr.is_null() || !crate::buffer::is_array_buffer(ptr as usize) {
+        return;
+    }
+    let len = unsafe { (*ptr).length.max(0) as usize };
+    unsafe {
+        perry_wasm_host_instance_memory_copy(inst, crate::buffer::buffer_data_mut(ptr), len);
+    }
+}
+
+extern "C" fn js_wasm_export_call_0(closure: *const crate::closure::ClosureHeader) -> f64 {
+    let inst = crate::closure::js_closure_get_capture_f64(closure, 0) as usize as *mut c_void;
+    let name = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let buffer = crate::closure::js_closure_get_capture_f64(closure, 2);
+    let instance = crate::closure::js_closure_get_capture_f64(closure, 3);
+    let result = call_export_n(nanbox_pointer_raw(inst), name, &[]);
+    copy_instance_memory(inst, buffer);
+    let mut exit_code = 0;
+    if unsafe { perry_wasm_host_instance_take_exit_code(inst, &mut exit_code) } != 0 {
+        let instance = unbox_pointer(instance) as *mut crate::object::ObjectHeader;
+        if !instance.is_null() {
+            object_set(instance, b"__wasiProcExitCode", exit_code as f64);
+        }
+        exit_code as f64
+    } else {
+        result
+    }
+}
+
+fn make_export_function(inst: *mut c_void, name: &[u8], memory_buffer: f64, instance: f64) -> f64 {
+    let closure = crate::closure::js_closure_alloc(js_wasm_export_call_0 as *const u8, 4);
+    if closure.is_null() {
+        return nanbox_undefined();
+    }
+    crate::closure::js_register_closure_arity(js_wasm_export_call_0 as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(closure, 0, inst as usize as f64);
+    crate::closure::js_closure_set_capture_f64(closure, 1, string_value(name));
+    crate::closure::js_closure_set_capture_f64(closure, 2, memory_buffer);
+    crate::closure::js_closure_set_capture_f64(closure, 3, instance);
+    crate::object::set_bound_native_closure_name(
+        closure,
+        std::str::from_utf8(name).unwrap_or("wasm"),
+    );
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn make_instance_result(module: *mut c_void, inst: *mut c_void) -> f64 {
+    let memory_len = unsafe { perry_wasm_host_instance_memory_len(inst) };
+    let memory_buffer = if memory_len == 0 {
+        nanbox_undefined()
+    } else {
+        let buffer = crate::buffer::js_array_buffer_new(memory_len.min(i32::MAX as usize) as i32);
+        let value = crate::value::js_nanbox_pointer(buffer as i64);
+        copy_instance_memory(inst, value);
+        value
+    };
+    let instance = crate::object::js_object_alloc(0, 0);
+    let instance_value = object_value(instance);
+    let exports = crate::object::js_object_alloc(0, 0);
+    let exports_len = unsafe { perry_wasm_host_module_exports_len(module) };
+    for index in 0..exports_len {
+        let mut name: *const c_char = std::ptr::null();
+        let mut name_len = 0usize;
+        let mut kind = 0u8;
+        if unsafe {
+            perry_wasm_host_module_export_at(module, index, &mut name, &mut name_len, &mut kind)
+        } == 0
+            || name.is_null()
+        {
+            continue;
+        }
+        let name = unsafe { std::slice::from_raw_parts(name as *const u8, name_len) };
+        let value = match kind {
+            WASM_EXTERN_KIND_FUNCTION => {
+                make_export_function(inst, name, memory_buffer, instance_value)
+            }
+            WASM_EXTERN_KIND_MEMORY => {
+                let memory = crate::object::js_object_alloc(0, 0);
+                object_set(memory, b"buffer", memory_buffer);
+                object_value(memory)
+            }
+            _ => nanbox_undefined(),
+        };
+        object_set(exports, name, value);
+    }
+    object_set(instance, b"exports", object_value(exports));
+    let result = crate::object::js_object_alloc(0, 0);
+    object_set(result, b"module", make_module_object(module));
+    object_set(result, b"instance", instance_value);
+    object_value(result)
+}
+
+/// `WebAssembly.instantiate(bytes, imports?)` returns the standard instance
+/// result shape. The host links imported functions by module/name; the
+/// imports object is already evaluated by codegen and kept for API parity.
 #[no_mangle]
-pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64) -> f64 {
+pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, _imports_jsval: f64) -> f64 {
     let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
         return rejected_promise_value(wasm_type_error_value(
             "WebAssembly.instantiate: argument must be a Uint8Array or ArrayBuffer",
@@ -549,17 +637,15 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64) -> f64 {
     }
     let mut err2: *mut c_char = std::ptr::null_mut();
     let inst = unsafe { perry_wasm_host_instance_new(module, &mut err2) };
-    // Drop the module: the instance holds its own reference internally via
-    // wasmi's Arc. Leaks the wrapper but not the wasm module data.
-    unsafe { perry_wasm_host_module_drop(module) };
     if inst.is_null() {
+        unsafe { perry_wasm_host_module_drop(module) };
         return rejected_promise_value(wasm_error_value_from_host(
             b"LinkError",
             err2,
             "WebAssembly.instantiate(): instantiation failed",
         ));
     }
-    nanbox_pointer_raw(inst as *const c_void)
+    make_instance_result(module, inst)
 }
 
 /// `WebAssembly.callExport(handle, name, ...args)` — invoke an exported

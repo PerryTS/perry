@@ -410,7 +410,7 @@ extern "C" fn webassembly_instantiate_thunk(
     _closure: *const crate::closure::ClosureHeader,
     bytes: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_instantiate(bytes)
+    crate::webassembly::js_webassembly_instantiate(bytes, undefined())
 }
 
 #[cfg(not(feature = "wasm-host"))]
@@ -570,6 +570,26 @@ fn wasm_memory_descriptor_pages(descriptor: f64) -> Result<u32, MemoryCtorError>
 fn wasm_memory_new_buffer(pages: u32) -> f64 {
     let buf = crate::buffer::js_array_buffer_new((pages * WASM_PAGE_BYTES) as i32);
     crate::value::js_nanbox_pointer(buf as i64)
+}
+
+pub(crate) fn js_webassembly_memory_from_descriptor(descriptor: f64) -> f64 {
+    let pages = match wasm_memory_descriptor_pages(descriptor) {
+        Ok(pages) => pages,
+        Err(MemoryCtorError::Type(msg)) => {
+            super::super::object_ops::throw_object_type_error(msg.as_bytes())
+        }
+        Err(MemoryCtorError::Range(msg)) => {
+            let message_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+            let err = crate::error::js_rangeerror_new(message_ptr);
+            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        }
+    };
+    let obj = js_object_alloc(0, 1);
+    if obj.is_null() {
+        return undefined();
+    }
+    js_object_set_field_by_name(obj, named_key(b"buffer"), wasm_memory_new_buffer(pages));
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 extern "C" fn webassembly_memory_ctor_thunk(

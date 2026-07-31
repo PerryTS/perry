@@ -688,7 +688,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
-    module.declare_function("js_webassembly_instantiate", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_webassembly_instantiate", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_wasi_emit_warning", DOUBLE, &[]);
     module.declare_function("js_webassembly_call_export_0", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_webassembly_call_export_1",

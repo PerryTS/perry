@@ -8,6 +8,12 @@ where
     F: FnMut(&mut Expr),
 {
     match expr {
+        Expr::WebAssemblyInstantiate { bytes, imports } => {
+            f(bytes);
+            if let Some(imports) = imports {
+                f(imports);
+            }
+        }
         // ─── Pure leaves: no Expr children ────────────────────────────────
         Expr::Undefined
         | Expr::Null
@@ -199,7 +205,6 @@ where
         | Expr::WebAssemblyModuleNew(v)
         | Expr::WebAssemblyModuleExports(v)
         | Expr::WebAssemblyModuleImports(v)
-        | Expr::WebAssemblyInstantiate(v)
         | Expr::Atob(v)
         | Expr::Btoa(v)
         | Expr::TextEncoderEncode(v)

@@ -434,6 +434,9 @@ pub extern "C" fn js_create_native_module_namespace(
             .unwrap_or("")
     };
     let module_name = normalize_native_module_alias(module_name);
+    if module_name == "wasi" {
+        crate::wasi::emit_wasi_static_warning();
+    }
     if should_cache_native_module_namespace(module_name) {
         if let Some(bits) =
             NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(module_name).copied())
@@ -534,6 +537,7 @@ pub(crate) fn cjs_default_base_module(module_name: &str) -> Option<&'static str>
         "sea.default" => Some("sea"),
         "url.default" => Some("url"),
         "util.default" => Some("util"),
+        "wasi.default" => Some("wasi"),
         _ => None,
     }
 }
@@ -561,6 +565,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "sea" => Some("sea.default"),
         "url" => Some("url.default"),
         "util" => Some("util.default"),
+        "wasi" => Some("wasi.default"),
         _ => None,
     }
 }
@@ -587,6 +592,10 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
         "process" => Some(js_create_native_module_namespace(
             b"process".as_ptr(),
             "process".len(),
+        )),
+        "wasi" => Some(js_create_native_module_namespace(
+            b"wasi.default".as_ptr(),
+            "wasi.default".len(),
         )),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "node-pty"
         | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl"

@@ -475,6 +475,13 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
 }
 
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
+    if class_id == crate::wasi::CLASS_ID_WASI {
+        crate::wasi::ensure_wasi_prototype_for_subclass();
+        let proto = class_prototype_object(class_id);
+        return (!proto.is_null())
+            .then(|| crate::value::js_nanbox_pointer(proto as i64))
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
     if class_id == 0 || class_name_for_id(class_id).is_none() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

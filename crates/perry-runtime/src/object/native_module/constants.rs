@@ -189,7 +189,11 @@ pub(crate) unsafe fn get_native_module_constant(
     };
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
-    let module_name = cjs_default_base.unwrap_or(module_name);
+    let module_name = if module_name == "wasi.default" {
+        "wasi"
+    } else {
+        cjs_default_base.unwrap_or(module_name)
+    };
     if module_name == "process.namespace" && property == "default" {
         return cjs_default_export_value("process");
     }
@@ -730,7 +734,7 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "test" => crate::node_test::property(property),
         "wasi" => match property {
-            "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
+            "default" if !is_cjs_default_object => cjs_default_export_value("wasi"),
             _ => None,
         },
         "vm" => match property {

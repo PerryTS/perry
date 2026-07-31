@@ -23,6 +23,7 @@ pub(crate) fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "sys"
             | "url"
             | "util"
+            | "wasi"
     )
 }
 

@@ -93,7 +93,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::WebAssemblyModuleExports(..)
         | Expr::WebAssemblyModuleImports(..)
         | Expr::WebAssemblyModuleCustomSections { .. }
-        | Expr::WebAssemblyInstantiate(..)
+        | Expr::WebAssemblyInstantiate { .. }
         | Expr::WebAssemblyCallExport { .. }
         | Expr::JsonStringifyFull(..)
         | Expr::MapNew => super::math_simple::lower(ctx, expr),

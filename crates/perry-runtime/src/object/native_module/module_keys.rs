@@ -1839,6 +1839,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "vm.constants" => Some(VM_CONSTANTS_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
+        "wasi" => Some(&[b"WASI", b"default"]),
+        "wasi.default" => Some(&[b"WASI"]),
         "zlib" => Some(&[b"codes"]),
         "tls" => Some(&[
             b"checkServerIdentity",

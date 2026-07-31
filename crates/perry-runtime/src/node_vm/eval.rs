@@ -481,6 +481,13 @@ fn eval_expr(expr: &str, env: &EvalEnv) -> f64 {
     if let Ok(n) = expr.parse::<f64>() {
         return number_value(n);
     }
+    if let Some(descriptor) = expr
+        .strip_prefix("new WebAssembly.Memory(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .and_then(eval_object_or_array_literal)
+    {
+        return crate::object::js_webassembly_memory_from_descriptor(descriptor);
+    }
     if let Some(value) = eval_object_or_array_literal(expr) {
         return value;
     }

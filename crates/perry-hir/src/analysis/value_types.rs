@@ -1353,7 +1353,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         }
         Expr::AsyncFirstCall { .. }
         | Expr::AsyncGenResume { .. }
-        | Expr::WebAssemblyInstantiate(_)
+        | Expr::WebAssemblyInstantiate { .. }
         | Expr::WebCryptoDigest { .. }
         | Expr::WebCryptoImportKey { .. }
         | Expr::WebCryptoExportKey { .. }

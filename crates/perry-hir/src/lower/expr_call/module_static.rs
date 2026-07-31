@@ -144,9 +144,11 @@ pub(super) fn try_module_static_methods(
                     }
                     "instantiate" if !args.is_empty() => {
                         ctx.uses_webassembly = true;
-                        return Ok(Ok(Expr::WebAssemblyInstantiate(Box::new(
-                            args.into_iter().next().unwrap(),
-                        ))));
+                        let mut args = args.into_iter();
+                        return Ok(Ok(Expr::WebAssemblyInstantiate {
+                            bytes: Box::new(args.next().unwrap()),
+                            imports: args.next().map(Box::new),
+                        }));
                     }
                     "callExport" if args.len() >= 2 => {
                         ctx.uses_webassembly = true;
@@ -596,9 +598,11 @@ pub(super) fn try_module_static_methods(
                         }
                         "instantiate" if !args.is_empty() => {
                             ctx.uses_webassembly = true;
-                            return Ok(Ok(Expr::WebAssemblyInstantiate(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
+                            let mut args = args.into_iter();
+                            return Ok(Ok(Expr::WebAssemblyInstantiate {
+                                bytes: Box::new(args.next().unwrap()),
+                                imports: args.next().map(Box::new),
+                            }));
                         }
                         "callExport" if args.len() >= 2 => {
                             ctx.uses_webassembly = true;

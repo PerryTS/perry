@@ -7,7 +7,11 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     // can be minted via the codegen NativeModuleRef fast path without any
     // namespace object existing. Install here too.
     install_native_module_vtable();
-    let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
+    let module_name = if module_name == "wasi.default" {
+        "wasi"
+    } else {
+        cjs_default_base_module(module_name).unwrap_or(module_name)
+    };
     let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
     // node:inspector/promises is the callback namespace with Session replaced.
