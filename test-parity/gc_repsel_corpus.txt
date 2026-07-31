@@ -68,6 +68,26 @@ test_gap_repsel_proven_this_frozen
 # per-PR when `evac_minor` joins PR_ARMS.
 test_gap_gc_ta_ctor_source_rooting
 
+# --- String-literal operand re-derivation (#7114) ----------------------------
+# Not a representation file either, so registered explicitly per the header
+# rule. `"acc:" + run(n)` loads the literal's `__perry_init_strings_*` handle
+# BEFORE the call and masks the cached register AFTER it. The handle global is a
+# registered root that evacuation REWRITES, so the register keeps the pre-move
+# address and the concat silently produced an empty string -- exit code 0, no
+# diagnostic. Verified on main (ff85fd483) to FAIL at DEFAULT GC settings, with
+# no arm env at all, so it bites on `default` and `shipped_default` as well as
+# on the %E% arms.
+#
+# LIVE BY CONSTRUCTION, AND ONLY ONCE PER RUN. Every literal in a module is
+# materialized together by `__perry_init_strings_*` before user code runs, so
+# the first evacuating cycle relocates all of them at once and afterwards they
+# are old-gen and a nursery scavenge cannot move them again. The probe is
+# therefore the FIRST statement of the file -- keep it first. Measured on main,
+# `--release`, default settings: N=100 000 passes (7 cycles, 590 472 scavenged
+# -- it collected and it moved, just not before the concat), N=150 000 is the
+# first failing size, and the file ships at N=400 000 for margin.
+test_gap_gc_string_literal_operand_rooting
+
 # --- Scalar-replaced object/array locals (#6968) -----------------------------
 # Not a representation of its own: escape analysis DELETES the object and keeps
 # one entry-block alloca per field/element. Those allocas belong to no HIR
