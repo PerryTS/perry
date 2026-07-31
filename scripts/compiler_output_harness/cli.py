@@ -7,6 +7,8 @@ from .capture import capture, capture_suite, verify_existing
 from .common import DEFAULT_BENCHMARK_RUNS, HarnessError
 from .repsel_census import census
 from .repsel_census import self_test as census_self_test
+from .repsel_determinism import DEFAULT_REPEAT, check_determinism
+from .repsel_determinism import self_test as determinism_self_test
 from .repsel_knob_isolation import check_isolation
 from .repsel_knob_isolation import self_test as isolation_self_test
 from .spec import WORKLOADS
@@ -145,11 +147,6 @@ def build_parser() -> argparse.ArgumentParser:
     iso_p.add_argument("--knob", action="append", help="restrict to named knob(s)")
     iso_p.add_argument("--compile-timeout", type=int, default=300)
     iso_p.add_argument("--jobs", type=int, default=4, help="parallel compiles")
-    iso_p.add_argument(
-        "--require-emission",
-        action="store_true",
-        help="fail instead of skipping when the host cannot emit objects deterministically",
-    )
     iso_p.add_argument("--keep-objects", action="store_true")
     iso_p.set_defaults(func=check_isolation)
 
@@ -158,6 +155,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="check the knob-isolation verdict logic without compiling",
     )
     iso_self_p.set_defaults(func=isolation_self_test)
+
+    # Emission determinism (#7131). The precondition every object-hash A/B in
+    # this repo assumes and that nothing checked until it was false for months
+    # on Linux only.
+    det_p = sub.add_parser(
+        "census-determinism",
+        help="assert the compiler emits byte-identical objects for identical inputs",
+    )
+    det_p.add_argument("--perry")
+    det_p.add_argument("--baseline")
+    det_p.add_argument("--workload", action="append", help="restrict to named workload(s)")
+    det_p.add_argument(
+        "--repeat", type=int, default=DEFAULT_REPEAT, help="compiles per workload (min 2)"
+    )
+    det_p.add_argument("--compile-timeout", type=int, default=300)
+    det_p.add_argument("--jobs", type=int, default=4, help="parallel compiles")
+    det_p.set_defaults(func=check_determinism)
+
+    det_self_p = sub.add_parser(
+        "census-determinism-self-test",
+        help="check the determinism verdict logic without compiling",
+    )
+    det_self_p.set_defaults(func=determinism_self_test)
 
     return parser
 
