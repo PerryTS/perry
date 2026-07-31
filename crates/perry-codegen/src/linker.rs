@@ -96,8 +96,9 @@ fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()
                     return Ok(());
                 }
             }
-            fs::write(ll_path, ll_text.as_bytes())
-                .with_context(|| format!("Failed to write temp .ll file at {}", ll_path.display()))
+            fs::write(ll_path, ll_text.as_bytes()).with_context(|| {
+                format!("Failed to write temp .ll file at {}", ll_path.display())
+            })
         }
     }
 }
