@@ -21,7 +21,18 @@ No such file or directory (os error 2)
 
 This is #509 again, one scope out: the pid that used to prevent it was removed
 as collateral. It bites any parallel build of the same input — including every
-A/B harness in `scripts/compiler_output_harness/`. After the fix, 0 of 12.
+A/B harness in `scripts/compiler_output_harness/`.
+
+Both platforms, four concurrent compiles of one census fixture, before → after:
+
+| host | `a3b31c0d8` | this branch |
+|---|---|---|
+| macOS `arm64` | **8 / 12 failed** | 0 / 12 |
+| Raspberry Pi 5, aarch64 Linux | **3 / 16 failed** | 0 / 16 |
+
+It is a race, so the rate is timing-dependent — the slower host loses fewer. It
+is also why this was found by running the determinism repeats *concurrently*
+rather than in sequence: a serial check never opens the window.
 
 The atomic-write staging file had the same defect (two processes reach
 `…​.ll.tmp.0` with the same hash and the same counter, and `File::create`
@@ -70,18 +81,34 @@ knob is judged.
 ### Verified
 
 Red-then-green on a Raspberry Pi 5 (aarch64 Linux) across all 26 census
-workloads, three arms built sequentially from one target dir with distinct
-binary hashes:
+workloads. Three arms built sequentially from one target dir — same toolchain by
+construction — with three distinct binary hashes:
 
-| arm | serial | concurrent |
-|---|---|---|
-| `22367565f` (before #7135) | **26/26 nondeterministic** | — |
-| `a3b31c0d8` (#7135 merged) | 26/26 identical | **fails: object-path collision** |
-| this branch | 26/26 identical | 26/26 identical |
+| arm | `census-determinism` |
+|---|---|
+| `22367565f` (before #7135) | exit 1 — **26/26 nondeterministic** |
+| `a3b31c0d8` (#7135 as merged) | exit 0 — 26/26 identical |
+| this branch | exit 0 — 26/26 identical (also at `--repeat 3 --jobs 3`) |
+
+`suite_01_startup`, compiled twice serially, with the mechanism visible:
+
+```
+pre : objects DIFFER in 12 bytes
+      STT_FILE  perry_llvm_217502_1785528949373123236_0.ll
+      STT_FILE  perry_llvm_217533_1785528951945773193_0.ll
+post: objects IDENTICAL
+      STT_FILE  perry_llvm_2791e842224ea99c.ll   (both runs)
+```
 
 macOS (`Darwin arm64`): 26/26 workloads × 3 compiles → one hash each, so the
 #7039 closure-iteration-order fix has not regressed. Mach-O does not record the
-`.ll` basename at all, which is why the original defect was invisible there.
+`.ll` basename at all (verified directly), which is why the original defect was
+invisible there.
+
+**No behavioural change**, by the strongest available measure: across all 26
+workloads the objects emitted by `a3b31c0d8` and by this branch are
+**byte-identical, 0/26 differences**. This change renames temp files and nothing
+else, and the emitted bytes say so.
 
 `cargo fmt`: `linker.rs` was left unformatted by #7135, so `lint` is red on
 `main` independently of this change; formatting it is included here.
