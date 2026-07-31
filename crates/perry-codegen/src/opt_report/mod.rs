@@ -532,6 +532,24 @@ fn current_module() -> String {
     })
 }
 
+/// Kind of the lowering region currently being emitted, for the one
+/// [`select_explicit`] caller that knows its function name but not its region
+/// kind (`slot_rep::note_canonical_local`, which holds only an `FnCtx`).
+///
+/// Same rule [`scope_or_unknown`] states for consumption: the region is taken
+/// from the ambient scope rather than re-derived from a function name, which is
+/// what makes `region == module-init` trustworthy. Before #7109 the caller
+/// passed a hard-coded `Function`, which was invisible only because module-init
+/// and closure bodies could not select a canonical rep at all.
+pub(crate) fn current_region() -> RegionKind {
+    SCOPE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|sc| sc.region)
+            .unwrap_or(RegionKind::Function)
+    })
+}
+
 /// Bracket a lowering region so collector denials inside it are attributed to
 /// `function`. No-op (and allocation-free) when the report is off.
 pub(crate) fn enter(module: &str, function: &str, region: RegionKind) -> ScopeGuard {

@@ -206,6 +206,19 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
     "fixture_loop_bounded_i32": {"canonical-i32": 3},
     "fixture_int_valued_ta": {"int-valued-ta": 1},
     "fixture_spec_abi_taptr": {"spec-abi-entry": 1, "spec-abi-taptr-slot": 1},
+    # #7109. The same three reps as `fixture_canonical_slots`, but this fixture
+    # declares no function, method or closure at all, so every count it reports
+    # had to come from the module-init `FnCtx` in `codegen/entry.rs`. Before
+    # #7109 that context hard-coded `repsel_context_allows_canonical_{i32,str}:
+    # false` and the fixture measured 0/0/0 on all three keys — which is what
+    # makes these floors falsifiable rather than decorative: restoring the
+    # entry.rs gate takes exactly this fixture red while every function-body
+    # fixture stays green.
+    "fixture_module_init_canonical": {
+        "canonical-i32": 1,
+        "canonical-u32": 1,
+        "canonical-str": 1,
+    },
 }
 
 #: Workloads allowed to produce **zero candidates** — no analysis considered any
@@ -217,9 +230,11 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
 #: there is no rule to point at and nothing to argue with. Before #7106's
 #: follow-up, **8 of the 18 real workloads were in that state** — every one
 #: because its hot loop is at module top level, which `codegen/entry.rs`
-#: excludes from canonical selection before any per-value rule runs. The
+#: excluded from canonical selection before any per-value rule ran. The
 #: promotion counts were identical either way, which is exactly why the census
-#: alone could not see it.
+#: alone could not see it. #7109 removed that exclusion: those top-level values
+#: are now selected rather than denied, and `canonical-i32` went from promoting
+#: in 2 of 18 real workloads to 17 of 18.
 #:
 #: An entry here must name a program that genuinely has nothing to analyse.
 ZERO_CANDIDATE_ALLOWLIST: dict[str, str] = {

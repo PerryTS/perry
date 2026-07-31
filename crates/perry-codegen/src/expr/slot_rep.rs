@@ -250,12 +250,14 @@ fn repsel_debug_enabled() -> bool {
 pub(crate) fn note_canonical_local(ctx: &FnCtx<'_>, id: u32, name: &str, rep: SlotRep) {
     // `--opt-report` (#6952) shares this one call site with PERRY_REPSEL_DEBUG
     // so a canonical local can never show up in one mechanism and not the
-    // other. `FnCtx` already knows the function and module, so no ambient
-    // scope is needed here.
+    // other. `FnCtx` already knows the function and module; the region KIND is
+    // taken from the ambient scope, because `FnCtx` does not carry it and a
+    // hard-coded `Function` would now mislabel every module-init selection
+    // (#7109) — the exact region whose promotions are the interesting ones.
     if crate::opt_report::enabled() {
         crate::opt_report::select_explicit(
             &ctx.source_function,
-            crate::opt_report::RegionKind::Function,
+            crate::opt_report::current_region(),
             crate::opt_report::Position::Local,
             name,
             Some(id),

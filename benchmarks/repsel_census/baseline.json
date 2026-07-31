@@ -186,6 +186,30 @@
       "unconsumed_mechanisms": {}
     },
     {
+      "name": "fixture_module_init_canonical",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_module_init_canonical.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      },
+      "unconsumed_mechanisms": {}
+    },
+    {
       "name": "batch",
       "role": "corpus",
       "source": "benchmarks/app-patterns/kernels/batch.ts",
