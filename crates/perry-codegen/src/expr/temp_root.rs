@@ -393,6 +393,25 @@ pub(crate) struct RootedOperands {
 ///
 /// This is the same staleness #6981 reports one layer in (a raw typed-array
 /// pointer passed under the specialized ABI).
+///
+/// # Why the sibling literal forms are deliberately absent
+///
+/// `Expr::WtfString` (a lone-surrogate literal) and `Expr::I18nString` lower to
+/// exactly the same thing as `Expr::String` — one load of a
+/// `__perry_init_strings_*` handle global, registered with
+/// `js_gc_register_global_root` by the same loop, `is_wtf8` or not
+/// (`codegen/string_pool.rs`). They would be sound here. They are not listed
+/// because [`operand_needs_root`] does not suppress them either, so they take a
+/// real temp root — and **`Root` is strictly stronger than `Reload`**: it
+/// supplies liveness, a rewritten location and the call-time value on its own,
+/// where `Reload` borrows the first from the handle global.
+///
+/// The failure mode to guard against is not the asymmetry, it is *half*-closing
+/// it: adding a literal form to [`operand_needs_root`]'s suppression list
+/// without adding it here leaves it on `Reuse`, which is #7114 for that form.
+/// `wtf8_literal_operand_is_rooted_not_merely_reused` in
+/// `tests/temp_root_operand_temporaries.rs` pins the current answer so that edit
+/// goes red instead of shipping another silent wrong answer.
 pub(crate) fn operand_is_reloadable(expr: &Expr) -> bool {
     // ONLY provably immutable sources. A string literal always re-lowers to a
     // load of the same `__perry_init_strings_*` handle, so re-reading it can

@@ -565,3 +565,48 @@ fn string_literal_array_element_is_re_derived_below_an_allocating_element() {
          allocation before it is stored into the array:\n{ir}"
     );
 }
+
+/// The sibling literal forms, and why the asymmetry in `operand_is_reloadable`
+/// is deliberate rather than an oversight (raised on #7116).
+///
+/// A WTF-8 literal — a lone surrogate — lowers to exactly the same thing as
+/// `Expr::String`: one load of a `__perry_init_strings_*` handle global that
+/// `js_gc_register_global_root` registered. It is nonetheless **not** in the
+/// suppression list, so it takes a real temp root rather than a re-load, and
+/// that is strictly stronger: `Root` supplies liveness, a rewritten location
+/// and the call-time value on its own.
+///
+/// The hazard worth gating is not the asymmetry but *half*-closing it. Adding a
+/// literal form to `operand_needs_root`'s suppression list without also adding
+/// it to `operand_is_reloadable` drops it to `Reuse` — #7114, for that form —
+/// and no other test in this file would notice. This one goes red.
+#[test]
+fn wtf8_literal_operand_is_rooted_not_merely_reused() {
+    // 0xED 0xA0 0x80 is U+D800 in WTF-8: a lone surrogate, which is what routes
+    // a literal to `Expr::WtfString` instead of `Expr::String`.
+    let ir = ir_for(
+        "wtf8_operand.ts",
+        vec![Stmt::Expr(Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::WtfString(vec![0xED, 0xA0, 0x80])),
+            right: Box::new(allocating_numeric()),
+        })],
+    );
+
+    let push = ir
+        .find("call i32 @js_gc_temp_root_push")
+        .unwrap_or_else(|| panic!("a WTF-8 literal operand must be ROOTED:\n{ir}"));
+    let alloc = ir
+        .find("call i64 @js_object_alloc(")
+        .unwrap_or_else(|| panic!("the sibling operand must allocate:\n{ir}"));
+    let get = ir
+        .find("call i64 @js_gc_temp_root_get")
+        .unwrap_or_else(|| panic!("and re-read after it:\n{ir}"));
+
+    assert!(
+        push < alloc && alloc < get,
+        "order must be push -> allocating sibling -> re-read. Anything else \
+         means the WTF-8 literal is being carried across the collection point \
+         in a register, which is #7114 for lone-surrogate literals:\n{ir}"
+    );
+}
