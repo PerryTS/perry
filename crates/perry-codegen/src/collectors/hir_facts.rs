@@ -378,12 +378,38 @@ pub(crate) fn collect_type_facts(
             binding_types,
             spec_ta_lens,
         );
+        // `--opt-report` (#6952) / promotion census (#7035): the win column
+        // for this analysis, recorded at the ONE site where a candidate
+        // actually becomes a fact, so the report can never claim a promotion
+        // the codegen did not take (or miss one it did). Both name walks are
+        // skipped entirely when the report is off.
+        let (names, depths) = if crate::opt_report::enabled() {
+            (
+                super::ptr_shape_report::local_names(stmts),
+                super::ptr_shape_report::loop_depths(stmts),
+            )
+        } else {
+            (HashMap::new(), HashMap::new())
+        };
         for id in extra {
             if !boxed_vars.contains(&id) && !module_globals.contains_key(&id) {
                 integer_locals.insert(id);
                 // Retained as its own fact for repsel Phase 1 eligibility —
                 // see `RepresentationFacts::int_valued_ta_locals`.
                 int_valued_ta_locals.insert(id);
+                if crate::opt_report::enabled() {
+                    let fallback = format!("<local {id}>");
+                    let name = names.get(&id).map(String::as_str).unwrap_or(&fallback);
+                    crate::opt_report::select(
+                        crate::opt_report::Position::Local,
+                        name,
+                        Some(id),
+                        crate::opt_report::Analysis::IntValuedTa,
+                        "IntValued",
+                        depths.get(&id).copied().unwrap_or(0),
+                        None,
+                    );
+                }
             }
         }
     }

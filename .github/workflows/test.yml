@@ -1138,6 +1138,124 @@ jobs:
           path: target/compiler-output-regression/
 
   # ---------------------------------------------------------------------------
+  # Representation-selection promotion census (#7035)
+  #
+  # Counts, per workload and PER REPRESENTATION, how many values got each
+  # unboxed representation, and compares each count against a ratcheted floor
+  # (benchmarks/repsel_census/baseline.json).
+  #
+  # Why this job exists: #7034 discovered by hand-instrumenting the compiler
+  # that `Ptr<Shape>` promotes NOTHING on `batch.ts` — the object-heavy
+  # workload it exists for — and that only 3 of 17 suite benchmarks promote a
+  # single shape local each. Nothing in CI could have told anyone that.
+  #
+  # Why it can fail (CLAUDE.md, "Four ways a gate can be unable to fail"):
+  # floors alone would not be enough, because the honest floor for
+  # `Ptr<Shape>` on real code is zero today and a zero floor can never go red.
+  # The corpus therefore includes hand-written liveness fixtures whose
+  # minimums live in `scripts/compiler_output_harness/repsel_census.py`, NOT in
+  # the regenerable baseline, plus a corpus-wide assertion that no census key
+  # reads zero everywhere. Verified by sabotage in both directions: each of
+  # PERRY_PTR_SHAPE_LOCALS / PERRY_PTR_NUMARRAY_LOCALS /
+  # PERRY_CANONICAL_I32_LOCALS / PERRY_CANONICAL_STR_LOCALS /
+  # PERRY_INT_VALUED_LOCALS set to 0 turns this job red; the default build is
+  # green.
+  #
+  # DELIBERATELY NOT a required status check on its first landing — a gate
+  # that has never been green would block every open PR. Promoting it is a
+  # follow-up, and CLAUDE.md failure mode (2) is what happens if that
+  # follow-up is skipped.
+  # ---------------------------------------------------------------------------
+  repsel-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+      # The census only needs codegen (`--no-link`), never a linked binary, so
+      # it cannot be fooled by a stale libperry_runtime.a. Auto-optimize is off
+      # because it rebuilds runtime libs the census never links.
+      PERRY_NO_AUTO_OPTIMIZE: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache sccache objects
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Verdict logic first, cheaply: if the census can't tell a regression
+      # from a pass, the compile-based run below is not worth the minutes.
+      - name: Census verdict self-test
+        run: |
+          python3 scripts/compiler_output_regression.py census-self-test
+          python3 -m unittest tests.test_repsel_census
+
+      - name: Build compiler
+        run: cargo build -p perry
+
+      - name: Promotion census
+        run: |
+          python3 scripts/compiler_output_regression.py census \
+            --perry target/debug/perry \
+            --keep-reports target/repsel-census/reports \
+            --gate
+
+      # Prove the gate's subject was live: with `Ptr<Shape>` selection
+      # disabled the census MUST go red. A census that reports zero and exits
+      # green is worth nothing, and this step is what stops that from being
+      # possible. `!` because a green run here is the failure.
+      - name: Sabotage check (the gate must be able to fail)
+        run: |
+          set +e
+          out="$(python3 scripts/compiler_output_regression.py census \
+            --perry target/debug/perry \
+            --env PERRY_PTR_SHAPE_LOCALS=0 \
+            --gate 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          # Exit 1 is the gate's verdict; exit 2 is a harness error (a compile
+          # that fell over, a schema mismatch). Only the former proves the
+          # census observed the sabotage, so insist on the code AND the reason.
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Sabotage run exited $status, expected 1 (a gate verdict)."
+            echo "::error::Exit 0 means the census cannot see Ptr<Shape> promotion at all."
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q "fixture_ptr_shape: ptr-shape promoted 0"; then
+            echo "::error::Sabotage run failed for some reason OTHER than the"
+            echo "::error::ptr-shape fixture losing its promotion. The gate is red,"
+            echo "::error::but not for the reason that proves its subject was live."
+            exit 1
+          fi
+          echo "Census correctly went red with PERRY_PTR_SHAPE_LOCALS=0."
+
+      - name: Upload census reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: repsel-census
+          path: target/repsel-census/
+
+  # ---------------------------------------------------------------------------
   # Native ABI evidence packet
   #
   # Full material-performance packet for the type-lowering gate. This is heavier

@@ -262,14 +262,22 @@ pub fn render_json(entries: &[Entry]) -> String {
         summary: JsonSummary {
             selected: tallies.values().map(|t| t.selected).sum(),
             denied: tallies.values().map(|t| t.denied).sum(),
-            by_analysis: tallies
+            // Enumerate `Analysis::ALL`, not the analyses that happen to have
+            // entries: an analysis that recorded nothing must appear with an
+            // explicit `0`. A consumer cannot tell an absent key from a zero
+            // one, and "zero promotions" is precisely the fact this report
+            // exists to make visible (#7034 §0; census #7035).
+            by_analysis: Analysis::ALL
                 .iter()
-                .map(|(a, t)| JsonAnalysis {
-                    analysis: a.as_str(),
-                    target_rep: a.target_rep(),
-                    rule_source: a.rule_source(),
-                    selected: t.selected,
-                    denied: t.denied,
+                .map(|a| {
+                    let t = tallies.get(a).cloned().unwrap_or_default();
+                    JsonAnalysis {
+                        analysis: a.as_str(),
+                        target_rep: a.target_rep(),
+                        rule_source: a.rule_source(),
+                        selected: t.selected,
+                        denied: t.denied,
+                    }
                 })
                 .collect(),
         },
@@ -409,6 +417,52 @@ mod tests {
         assert_eq!(ptr_shape["selected"], 0);
         assert_eq!(ptr_shape["denied"], 1);
         assert_eq!(ptr_shape["target_rep"], "Ptr<Shape>");
+    }
+
+    /// #7035: a census consumer must be able to read "this representation
+    /// promoted nothing" straight off the JSON. An analysis with no entries at
+    /// all therefore has to render as an explicit zero row, because an absent
+    /// key and a zero key are indistinguishable downstream — and "absent" is
+    /// exactly what a dead instrument produces.
+    #[test]
+    fn json_lists_every_analysis_even_with_no_entries() {
+        let entries = vec![selected(Analysis::CanonicalSlot, "i", "I32")];
+        let json: serde_json::Value = serde_json::from_str(&render_json(&entries)).unwrap();
+        let rows = json["summary"]["by_analysis"].as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            Analysis::ALL.len(),
+            "every analysis must have a row; got:\n{rows:#?}"
+        );
+        for analysis in Analysis::ALL {
+            let row = rows
+                .iter()
+                .find(|r| r["analysis"] == analysis.as_str())
+                .unwrap_or_else(|| panic!("{} row missing", analysis.as_str()));
+            assert_eq!(row["target_rep"], analysis.target_rep());
+        }
+        let numarray = rows
+            .iter()
+            .find(|r| r["analysis"] == "ptr-numarray")
+            .unwrap();
+        assert_eq!(numarray["selected"], 0);
+        assert_eq!(numarray["denied"], 0);
+    }
+
+    /// Every analysis must render a distinct `analysis` key: the census keys
+    /// its per-representation counts off this string, so a duplicate would
+    /// silently merge two representations into one number — the aggregate
+    /// that #7034 warns hides the interesting signal.
+    #[test]
+    fn analysis_keys_are_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for analysis in Analysis::ALL {
+            assert!(
+                seen.insert(analysis.as_str()),
+                "duplicate analysis key {}",
+                analysis.as_str()
+            );
+        }
     }
 
     /// The per-element column must be visible in text — it is the honest

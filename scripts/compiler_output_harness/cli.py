@@ -5,6 +5,8 @@ import sys
 
 from .capture import capture, capture_suite, verify_existing
 from .common import DEFAULT_BENCHMARK_RUNS, HarnessError
+from .repsel_census import census
+from .repsel_census import self_test as census_self_test
 from .spec import WORKLOADS
 
 
@@ -92,6 +94,40 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--gate", action="store_true")
     verify_p.add_argument("--print-summary", action="store_true")
     verify_p.set_defaults(func=verify_existing)
+
+    # Representation-selection promotion census (#7035). Shares this harness's
+    # process plumbing but not its workload spec: the census corpus is chosen
+    # for representation coverage, whereas `workloads.toml` is tuned for
+    # vectorization and IR-shape gates.
+    census_p = sub.add_parser(
+        "census",
+        help="count how many values got each unboxed representation, against a ratcheted floor",
+    )
+    census_p.add_argument("--perry")
+    census_p.add_argument("--baseline")
+    census_p.add_argument(
+        "--workload",
+        action="append",
+        help="restrict to named workload(s); disables the corpus-wide liveness assertions",
+    )
+    census_p.add_argument(
+        "--env",
+        action="append",
+        metavar="KEY=VALUE",
+        help="extra environment for the compiler (used to sabotage a representation on purpose)",
+    )
+    census_p.add_argument("--keep-reports", help="write each raw --opt-report JSON to this dir")
+    census_p.add_argument("--compile-timeout", type=int, default=300)
+    census_p.add_argument(
+        "--update", action="store_true", help="rewrite the baseline floors from observation"
+    )
+    census_p.add_argument("--gate", action="store_true", help="exit nonzero on a regression")
+    census_p.set_defaults(func=census)
+
+    census_self_p = sub.add_parser(
+        "census-self-test", help="check the census verdict logic without compiling"
+    )
+    census_self_p.set_defaults(func=census_self_test)
 
     return parser
 

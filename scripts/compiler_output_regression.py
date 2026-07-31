@@ -55,6 +55,16 @@ from compiler_output_harness.common import (
     utc_now,
     write_text,
 )
+from compiler_output_harness.repsel_census import (
+    CENSUS_KEYS,
+    LIVENESS_FLOORS,
+    census,
+    census_from_report,
+    check_instrument_liveness,
+    check_liveness_fixtures,
+    check_workload,
+    load_baseline,
+)
 from compiler_output_harness.spec import (
     DEFAULT_SPEC_PATH,
     SPEC,

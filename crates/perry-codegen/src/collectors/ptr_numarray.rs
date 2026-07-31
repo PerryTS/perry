@@ -100,6 +100,7 @@ use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, LogicalOp, Stmt, UnaryOp};
 
 use super::ModuleDispatchFacts;
+use crate::opt_report;
 
 /// `PERRY_PTR_NUMARRAY_LOCALS` gate. Enabled by default; `=0`/`off`/`false`
 /// disables numeric-array pointer-local selection (every access keeps the
@@ -164,7 +165,37 @@ pub(crate) fn expr_is_numarray_prototype_index_barrier(expr: &Expr) -> bool {
 
 /// Compile-time visibility: one stderr line per proven local, plus a
 /// process-wide running count. Only under `PERRY_REPSEL_DEBUG=1`.
-fn note_num_array_local(id: u32, fact: &NumArrayLocal) {
+///
+/// Also feeds the `--opt-report` win column (#6952), exactly like
+/// [`super::ptr_shape::note_ptr_shape_local`] does. Until #7035 this analysis
+/// recorded **denials only**: `opt_report` had a `PtrNumArray` variant and a
+/// `Ptr<NumArray>` target-rep string, but no `select` call site anywhere in
+/// the tree — so its `selected` tally was a counter that could not be
+/// incremented, and "`Ptr<NumArray>`: 0 promoted" was indistinguishable from
+/// "the instrument is dead". That is CLAUDE.md's failure mode (4): the gate
+/// runs but its subject never did.
+fn note_num_array_local(
+    id: u32,
+    fact: &NumArrayLocal,
+    names: &HashMap<u32, String>,
+    depths: &HashMap<u32, u32>,
+) {
+    if opt_report::enabled() {
+        let fallback = format!("<local {id}>");
+        let name = names.get(&id).map(String::as_str).unwrap_or(&fallback);
+        opt_report::select(
+            opt_report::Position::Local,
+            name,
+            Some(id),
+            opt_report::Analysis::PtrNumArray,
+            "Ptr<NumArray>",
+            depths.get(&id).copied().unwrap_or(0),
+            Some(format!(
+                "{:?} density, proven initial length {}",
+                fact.density, fact.proven_initial_length
+            )),
+        );
+    }
     if !repsel_debug_enabled() {
         return;
     }
@@ -226,12 +257,24 @@ pub(crate) fn collect_num_array_locals(
         disqualified,
         ..
     } = walk;
+    // `--opt-report` (#6952): binding names and loop depths for the win
+    // column. Both walks are pure overhead when the report is off, so they
+    // are only built when it is on — the returned facts are identical either
+    // way.
+    let (names, depths) = if opt_report::enabled() {
+        (
+            super::ptr_shape_report::local_names(stmts),
+            super::ptr_shape_report::loop_depths(stmts),
+        )
+    } else {
+        (HashMap::new(), HashMap::new())
+    };
     let mut out = HashMap::new();
     for (id, fact) in candidates {
         if disqualified.contains(&id) || let_counts.get(&id).copied().unwrap_or(0) != 1 {
             continue;
         }
-        note_num_array_local(id, &fact);
+        note_num_array_local(id, &fact, &names, &depths);
         out.insert(id, fact);
     }
     out

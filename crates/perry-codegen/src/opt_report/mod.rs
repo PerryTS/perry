@@ -189,20 +189,47 @@ pub enum Analysis {
     /// `collectors/ptr_shape.rs` — shape-proven object locals (RFC Phase 3b).
     PtrShape,
     /// `collectors/ptr_numarray.rs` — `number[]` locals (RFC Phase 4a.3).
+    ///
+    /// The explicit rename keeps the serialized spelling identical to
+    /// [`Analysis::as_str`]. Without it serde's kebab-case derive spells this
+    /// variant `ptr-num-array` in `Entry::analysis` while the summary row says
+    /// `ptr-numarray`, so one analysis appears under two names in a single
+    /// JSON document and a consumer keying on either sees half the data.
+    #[serde(rename = "ptr-numarray")]
     PtrNumArray,
     /// `expr/slot_rep.rs` — canonical i32/u32/Str locals (RFC Phase 1 / 3a).
     CanonicalSlot,
+    /// `collectors/int_valued_ta_locals.rs` — locals held native-i32 despite a
+    /// possibly-out-of-bounds int typed-array read (RFC Phase 2, wrap-i32).
+    IntValuedTa,
     /// `codegen/typed_abi.rs` — specialized-ABI / typed-clone entries
     /// (RFC Phase 2).
     SpecAbi,
 }
 
 impl Analysis {
+    /// Every representation analysis that records into this report, in a
+    /// stable order.
+    ///
+    /// The JSON summary and the promotion census (#7035) enumerate *this*
+    /// list rather than the analyses that happen to appear in a build's
+    /// entries. An analysis with no entries at all must render as an explicit
+    /// `0`, never as an absent key: "missing" and "zero" look identical to a
+    /// consumer, and the entire point of this report is that zero is visible.
+    pub const ALL: [Analysis; 5] = [
+        Analysis::PtrShape,
+        Analysis::PtrNumArray,
+        Analysis::CanonicalSlot,
+        Analysis::IntValuedTa,
+        Analysis::SpecAbi,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Analysis::PtrShape => "ptr-shape",
             Analysis::PtrNumArray => "ptr-numarray",
             Analysis::CanonicalSlot => "canonical-slot",
+            Analysis::IntValuedTa => "int-valued-ta",
             Analysis::SpecAbi => "spec-abi",
         }
     }
@@ -214,6 +241,7 @@ impl Analysis {
             Analysis::PtrShape => "Ptr<Shape>",
             Analysis::PtrNumArray => "Ptr<NumArray>",
             Analysis::CanonicalSlot => "I32/U32/Str",
+            Analysis::IntValuedTa => "IntValued",
             Analysis::SpecAbi => "specialized ABI",
         }
     }
@@ -225,6 +253,7 @@ impl Analysis {
             Analysis::PtrShape => "collectors/ptr_shape.rs",
             Analysis::PtrNumArray => "collectors/ptr_numarray.rs",
             Analysis::CanonicalSlot => "expr/slot_rep.rs",
+            Analysis::IntValuedTa => "collectors/int_valued_ta_locals.rs",
             Analysis::SpecAbi => "codegen/typed_abi.rs",
         }
     }
@@ -734,6 +763,22 @@ mod tests {
     #[test]
     fn deeper_loops_outrank_shallower_ones() {
         assert!(entry("f", 3, None).rank() < entry("f", 1, None).rank());
+    }
+
+    /// One analysis, one spelling. The summary rows use [`Analysis::as_str`]
+    /// and the per-entry `analysis` field uses serde; a consumer that keys on
+    /// the serde spelling (the census does, to split canonical-slot into its
+    /// three reps) must find the same string in both places.
+    #[test]
+    fn serialized_analysis_matches_as_str() {
+        for analysis in Analysis::ALL {
+            let serialized = serde_json::to_string(&analysis).unwrap();
+            assert_eq!(
+                serialized.trim_matches('"'),
+                analysis.as_str(),
+                "serde and as_str disagree for {analysis:?}"
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,512 @@
+{
+  "schema_version": 1,
+  "workloads": [
+    {
+      "name": "fixture_ptr_shape",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 1,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 1
+      }
+    },
+    {
+      "name": "fixture_ptr_numarray",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_ptr_numarray.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-i32": 2,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 1,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 1,
+        "ptr-numarray": 1,
+        "canonical-slot": 2,
+        "int-valued-ta": 0,
+        "spec-abi": 2
+      }
+    },
+    {
+      "name": "fixture_canonical_slots",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_canonical_slots.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 2,
+        "canonical-u32": 1,
+        "canonical-str": 1,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 3,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 4,
+        "int-valued-ta": 0,
+        "spec-abi": 3
+      }
+    },
+    {
+      "name": "fixture_int_valued_ta",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_int_valued_ta.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 1,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 1,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 1,
+        "int-valued-ta": 1,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "fixture_spec_abi_taptr",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_spec_abi_taptr.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 2,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 1,
+        "spec-abi-taptr-slot": 2
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 2,
+        "int-valued-ta": 0,
+        "spec-abi": 1
+      }
+    },
+    {
+      "name": "batch",
+      "role": "corpus",
+      "source": "benchmarks/app-patterns/kernels/batch.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 3,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 4,
+        "ptr-numarray": 0,
+        "canonical-slot": 3,
+        "int-valued-ta": 0,
+        "spec-abi": 3
+      }
+    },
+    {
+      "name": "suite_01_startup",
+      "role": "corpus",
+      "source": "benchmarks/suite/01_startup.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_02_loop_overhead",
+      "role": "corpus",
+      "source": "benchmarks/suite/02_loop_overhead.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_03_array_write",
+      "role": "corpus",
+      "source": "benchmarks/suite/03_array_write.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_04_array_read",
+      "role": "corpus",
+      "source": "benchmarks/suite/04_array_read.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_05_fibonacci",
+      "role": "corpus",
+      "source": "benchmarks/suite/05_fibonacci.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 1
+      }
+    },
+    {
+      "name": "suite_06_math_intensive",
+      "role": "corpus",
+      "source": "benchmarks/suite/06_math_intensive.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_07_object_create",
+      "role": "corpus",
+      "source": "benchmarks/suite/07_object_create.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_08_string_concat",
+      "role": "corpus",
+      "source": "benchmarks/suite/08_string_concat.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_09_method_calls",
+      "role": "corpus",
+      "source": "benchmarks/suite/09_method_calls.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_10_nested_loops",
+      "role": "corpus",
+      "source": "benchmarks/suite/10_nested_loops.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_11_prime_sieve",
+      "role": "corpus",
+      "source": "benchmarks/suite/11_prime_sieve.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_12_binary_trees",
+      "role": "corpus",
+      "source": "benchmarks/suite/12_binary_trees.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_13_factorial",
+      "role": "corpus",
+      "source": "benchmarks/suite/13_factorial.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_14_closure",
+      "role": "corpus",
+      "source": "benchmarks/suite/14_closure.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_15_mandelbrot",
+      "role": "corpus",
+      "source": "benchmarks/suite/15_mandelbrot.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    },
+    {
+      "name": "suite_16_matrix_multiply",
+      "role": "corpus",
+      "source": "benchmarks/suite/16_matrix_multiply.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 3,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 3,
+        "int-valued-ta": 0,
+        "spec-abi": 1
+      }
+    },
+    {
+      "name": "suite_17_loop_data_dependent",
+      "role": "corpus",
+      "source": "benchmarks/suite/17_loop_data_dependent.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 1,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      }
+    }
+  ],
+  "generated_at": "2026-07-31T01:39:37.595749Z"
+}
