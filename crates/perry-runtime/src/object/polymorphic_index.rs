@@ -109,17 +109,28 @@ fn numeric_key_i32_index(value: f64) -> Option<i32> {
 pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> f64 {
     let raw = if (obj_handle as u64) >> 48 >= 0x7FF8 {
         // NaN-boxed: only POINTER_TAG (0x7FFD) and STRING_TAG (0x7FFF) carry a
-        // heap pointer in the low 48 bits. INT32 (0x7FFE), BIGINT (0x7FFA) and
-        // the undefined/null/bool tags (0x7FFC) are PRIMITIVES — indexing them
-        // yields `undefined` per JS (`(983055)[0] === undefined`). Treating an
-        // INT32's integer payload as a pointer derefs a wild address → SIGSEGV.
-        // This is the Next.js app-page-turbo render crash: a NaN-boxed-int
-        // receiver (0xf000f = 983055) indexed inside a class `get` method
-        // (js_object_get_index_polymorphic read its GcHeader at raw-8). Reject
-        // non-pointer/non-string NaN-boxed receivers up front (cross-platform —
-        // not dependent on a heap-address floor).
+        // heap pointer in the low 48 bits. INT32 (0x7FFE) is usually a primitive
+        // number — BUT a registered **class-ref** is also INT32-tagged, and
+        // `C[k]` with a non-string key (object ToPropertyKey, numeric static
+        // name, …) reaches this helper from codegen's IndexGet last-resort
+        // path. Class refs must NOT be rejected as primitives: route them
+        // through `js_dyn_index_get`, which has the dedicated class-ref arm
+        // (static methods / CLASS_DYNAMIC_PROPS / ToString key). (#6945)
+        // BIGINT (0x7FFA) and the undefined/null/bool tags (0x7FFC) remain
+        // primitives — indexing them yields `undefined` per JS. Treating an
+        // INT32 *number* payload as a pointer would SIGSEGV (Next.js
+        // app-page-turbo: 0xf000f indexed inside a class `get`); only a
+        // *registered* class-id takes the class-ref arm.
         match (obj_handle as u64) >> 48 {
             0x7FFD | 0x7FFF => (obj_handle as u64) & 0x0000_FFFF_FFFF_FFFF,
+            0x7FFE => {
+                let class_id = (obj_handle as u64 & 0xFFFF_FFFF) as u32;
+                if class_id != 0 && crate::object::class_registry::is_class_id_registered(class_id)
+                {
+                    return crate::value::js_dyn_index_get(f64::from_bits(obj_handle as u64), idx);
+                }
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
             _ => return f64::from_bits(crate::value::TAG_UNDEFINED),
         }
     } else {

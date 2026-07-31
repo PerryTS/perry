@@ -269,6 +269,45 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // #6945: a non-string, non-numeric index must run ToPropertyKey (object
+    // keys invoke `toString`/`valueOf`/`@@toPrimitive`; booleans/null/
+    // undefined/bigint stringify) before the by-name get. The arms below
+    // cast `index as i32` / `format!("{}", index)`, which treat an object
+    // NaN-box as a float and never call user coercion — so
+    // `proto[{toString(){return "k"}}]` missed a write that
+    // `proto.k` / `proto["k"]` could see. Mirrors the set-side
+    // `js_jsvalue_to_string` path in `js_dyn_index_set`.
+    {
+        let idx_js = JSValue::from_bits(idx_bits);
+        // INT32-tagged keys are integer property names (and class-ref values
+        // used as keys, rare); pure f64 numbers keep the element path. Every
+        // other tag is a ToPropertyKey case.
+        if !idx_js.is_number() && !idx_js.is_int32() {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
+            // Prefer `js_to_property_key` so a Symbol-returning toString is
+            // preserved (and then routed via the symbol arm). Root the
+            // coerced key: ToPropertyKey can allocate / run user JS.
+            let key = unsafe { crate::object::js_to_property_key(index) };
+            let key_h = scope.root_nanbox_f64(key);
+            let key = key_h.get_nanbox_f64();
+            if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+                let recv_bits = crate::value::js_nanbox_pointer(
+                    recv.get_raw_const_ptr::<crate::object::ObjectHeader>() as i64,
+                );
+                return unsafe { crate::symbol::js_object_get_symbol_property(recv_bits, key) };
+            }
+            let key_ptr =
+                crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+            if key_ptr.is_null() {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
+            return crate::object::js_object_get_field_by_name_f64(
+                recv.get_raw_const_ptr::<crate::object::ObjectHeader>(),
+                key_ptr,
+            );
+        }
+    }
     let idx_i32 = if index.is_nan() || index.is_infinite() {
         return f64::from_bits(TAG_UNDEFINED);
     } else {

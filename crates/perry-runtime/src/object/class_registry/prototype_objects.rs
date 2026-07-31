@@ -352,17 +352,33 @@ unsafe fn resolve_proto_chain_field_inner(
         // getter was invisible to `instance.name` (winston:
         // `Object.defineProperty(Logger.prototype, 'transports', { get })`,
         // read as `this.transports`, came back `undefined` → `.length` threw).
-        // Check the decl-proto object for an ACCESSOR only: it is allocated
-        // WITH this `class_id` (`js_object_alloc(class_id, 0)`), so routing its
-        // DATA reads back through `js_object_get_field_by_name` would re-enter
-        // this same walk for the same id and recurse infinitely (a Transform
-        // subclass's `_read` lookup stack-overflowed → SIGSEGV). Class methods /
-        // data are already covered by the vtable + `class_prototype_object`
-        // path below, so the accessor-only probe here is sufficient.
-        if let Some(receiver) = receiver {
-            let decl_proto = class_decl_prototype_object(cid);
-            if !decl_proto.is_null() {
+        // Decl-proto object (`CLASS_DECL_PROTOTYPE_OBJECTS`) is where a user
+        // `Object.defineProperty(ClassName.prototype, name, { get })` installs
+        // its accessor AND where a runtime `C.prototype[k] = v` (computed /
+        // dynamic index write) stores an OWN data field. It is allocated WITH
+        // this `class_id` (`js_object_alloc(class_id, 0)`), so routing DATA
+        // reads back through `js_object_get_field_by_name` would re-enter this
+        // same walk for the same id and recurse infinitely (a Transform
+        // subclass's `_read` lookup stack-overflowed → SIGSEGV).
+        //
+        // Accessors: fire with the instance as receiver.
+        // Own data fields: read via `own_data_field_by_name` only (no class-id
+        // re-walk) so a computed prototype write is visible as
+        // `(new C()).name` (#6945). Class methods / vtable data still come
+        // from the vtable + `class_prototype_object` path below.
+        let decl_proto = class_decl_prototype_object(cid);
+        if !decl_proto.is_null() {
+            if let Some(receiver) = receiver {
                 if let Some(value) = inherited_proto_accessor_value(decl_proto, key, receiver) {
+                    return Some(value);
+                }
+            }
+            // #6945: own data property written onto the reflective prototype
+            // (computed / dynamic-key set) — never re-enter by-name get.
+            if let Some(value) =
+                unsafe { super::super::field_get_set::own_data_field_by_name(decl_proto, key) }
+            {
+                if !value.is_undefined() {
                     return Some(value);
                 }
             }
