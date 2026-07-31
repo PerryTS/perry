@@ -180,6 +180,29 @@ pub(super) fn emit_guarded_direct_method_call(
     let expected_class_id = *ctx.class_ids.get(receiver_class_name)?;
     let keys_global_name = ctx.class_keys_globals.get(receiver_class_name)?.clone();
 
+    // Representation-selection Phase 5a: the proven-`this` clone for this
+    // (class, method), when the emission loop produced one.
+    //
+    // Computed ONCE here rather than per-arm because the justification is the
+    // same for every block this helper emits below: they are all dominated by
+    // the `js_method_direct_shape_guard` /
+    // `js_typed_feedback_method_direct_call_guard` branch, which matched the
+    // exact class id AND the keys token. A `pshape_methods` hit additionally
+    // proves `receiver_class_name` DECLARES `property` (the map holds own
+    // declarations of module-local classes only), so the clone's `this` is
+    // exactly the class it was compiled for and can never be a subclass
+    // instance.
+    //
+    // The `perry_static_` exclusion is carried forward from the guard-free
+    // site (the #1787 static-receiver bug): those targets need
+    // `js_class_static_method_call`, not a plain `call double`, and no
+    // proven-`this` clone is ever emitted for them.
+    let pshape_fn: Option<String> = (!direct_fn.starts_with("perry_static_")
+        && ctx
+            .pshape_methods
+            .contains_key(&(receiver_class_name.to_string(), property.to_string())))
+    .then(|| crate::collectors::pshape_method_name(direct_fn));
+
     let expected_class_id_str = expected_class_id.to_string();
     let expected_keys_slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
     let expected_keys = ctx.block().load(I64, &expected_keys_slot);
@@ -246,7 +269,9 @@ pub(super) fn emit_guarded_direct_method_call(
     ctx.current_block = fast_idx;
     let fast_value = {
         if let Some((typed_fn, typed_formal_count, receiver_info)) = typed_f64_receiver_direct_fn {
-            let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
+            let generic_body_fn = pshape_fn
+                .clone()
+                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -374,7 +399,9 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_direct_fn {
-            let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
+            let generic_body_fn = pshape_fn
+                .clone()
+                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -459,7 +486,9 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_i32_direct_fn {
-            let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
+            let generic_body_fn = pshape_fn
+                .clone()
+                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -546,7 +575,9 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_i1_direct_fn {
-            let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
+            let generic_body_fn = pshape_fn
+                .clone()
+                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -646,7 +677,9 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_string_direct_fn {
-            let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
+            let generic_body_fn = pshape_fn
+                .clone()
+                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -758,18 +791,12 @@ pub(super) fn emit_guarded_direct_method_call(
             // needs no such guard because it never claims `JsNumber` — its
             // bare loads carry generic `JsValue` semantics (see
             // `collectors/proven_this.rs`).
-            // The `perry_static_` exclusion is carried forward from the
-            // guard-free site (the #1787 static-receiver bug): those targets
-            // need `js_class_static_method_call`, not a plain `call double`,
-            // and no proven-`this` clone is ever emitted for them. Belt and
-            // braces — a static's registry key is distinct from an instance
-            // method's, so the two maps cannot currently disagree.
-            let pshape_target = (!direct_fn.starts_with("perry_static_")
-                && ctx
-                    .pshape_methods
-                    .contains_key(&(receiver_class_name.to_string(), property.to_string())))
-            .then(|| crate::collectors::pshape_method_name(direct_fn));
-            let target = pshape_target.as_deref().unwrap_or(direct_fn);
+            //
+            // `pshape_fn` (computed once at the top of this function, where the
+            // `perry_static_` exclusion and the declaring-class argument are
+            // written out) is the same clone the typed arms above now route
+            // their generic fallbacks to.
+            let target = pshape_fn.as_deref().unwrap_or(direct_fn);
             ctx.block().call(DOUBLE, target, direct_arg_slices)
         }
     };

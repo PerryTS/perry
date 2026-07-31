@@ -870,6 +870,25 @@ pub(crate) fn try_lower_instance_method_call(
                     .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
                     ctx.note_ptr_shape_consumed(object, "ptr_shape_method");
+                    // Representation-selection Phase 5a: the proven-`this`
+                    // clone, when one was emitted. Hoisted above the
+                    // typed-receiver branch because BOTH exits of this block
+                    // are guard-free under the same Phase 3b proof — the
+                    // typed-receiver arm's own generic fallback used to call
+                    // the guard-ridden public body while the plain exit 25
+                    // lines below routed to the clone, so a proven receiver
+                    // whose ARGUMENTS happened to be non-plain-double silently
+                    // lost the receiver proof too.
+                    //
+                    // A `pshape_methods` hit additionally proves `class_name`
+                    // DECLARES `property` — so the clone's `this` is exactly
+                    // the class it was compiled for and cannot be a subclass
+                    // instance.
+                    let pshape_target = ctx
+                        .pshape_methods
+                        .contains_key(&(class_name.clone(), property.to_string()))
+                        .then(|| crate::collectors::pshape_method_name(&fallback_fn));
+                    let generic_target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
                     // Prefer the typed-receiver clone (bare gep+load field
                     // access inside the body) when one exists: the receiver
                     // is proven, so only the ARGUMENT value classes need
@@ -920,7 +939,7 @@ pub(crate) fn try_lower_instance_method_call(
                         let typed_end = ctx.block().label.clone();
                         ctx.block().br(&merge_label);
                         ctx.current_block = generic_idx;
-                        let v_generic = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                        let v_generic = ctx.block().call(DOUBLE, generic_target, &arg_slices);
                         let generic_end = ctx.block().label.clone();
                         ctx.block().br(&merge_label);
                         ctx.current_block = merge_idx;
@@ -934,19 +953,12 @@ pub(crate) fn try_lower_instance_method_call(
                         return Ok(Some(merged));
                     }
                     // Representation-selection Phase 5a: route to the
-                    // proven-`this` clone when one exists. The receiver is
-                    // already proven here (no guard is emitted on this path at
-                    // all), and a `pshape_methods` hit additionally proves
-                    // `class_name` DECLARES `property` — so the clone's `this`
-                    // is exactly the class it was compiled for and cannot be a
-                    // subclass instance. Same ABI, so the call is unchanged
-                    // apart from the callee name.
-                    let pshape_target = ctx
-                        .pshape_methods
-                        .contains_key(&(class_name.clone(), property.to_string()))
-                        .then(|| crate::collectors::pshape_method_name(&fallback_fn));
-                    let target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
-                    let direct = ctx.block().call(DOUBLE, target, &arg_slices);
+                    // proven-`this` clone when one exists (`generic_target`,
+                    // resolved at the top of this block). The receiver is
+                    // already proven here — no guard is emitted on this path at
+                    // all. Same ABI, so the call is unchanged apart from the
+                    // callee name.
+                    let direct = ctx.block().call(DOUBLE, generic_target, &arg_slices);
                     return Ok(Some(direct));
                 }
                 if let Some(guarded) = emit_guarded_direct_method_call(

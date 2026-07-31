@@ -25,6 +25,8 @@ mod mutation;
 mod not_bigint_locals;
 mod pointer_locals;
 mod proven_this;
+#[cfg(test)]
+mod proven_this_routing_tests;
 mod ptr_numarray;
 mod ptr_shape;
 mod ptr_shape_report;
