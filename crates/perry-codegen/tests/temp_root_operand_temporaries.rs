@@ -488,6 +488,51 @@ fn init_ir(ir: &str) -> &str {
     function_ir(ir, "define i32 @main(")
 }
 
+/// The scoping itself, made falsifiable.
+///
+/// Everything below rests on `init_ir` genuinely narrowing the search. If it
+/// silently returned the whole module the ordering assertions would go back to
+/// being satisfiable by an unrelated function's IR and nothing else in this file
+/// would notice — so the narrowing is asserted directly: the slice is one
+/// function, strictly smaller than the module, and it does NOT reach
+/// `__perry_init_strings_*`, which is the other function in these modules that
+/// touches the same handle globals.
+#[test]
+fn init_ir_slices_only_the_function_under_test() {
+    let ir = ir_for(
+        "scope_check.ts",
+        vec![Stmt::Expr(Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::String("acc:".to_string())),
+            right: Box::new(allocating_numeric()),
+        })],
+    );
+    let f = init_ir(&ir);
+
+    assert!(
+        f.starts_with("define i32 @main("),
+        "the slice must begin at the function it names:\n{f}"
+    );
+    assert_eq!(
+        f.matches("\ndefine ").count(),
+        0,
+        "and end before the next one — exactly one function in the slice:\n{f}"
+    );
+    assert!(
+        f.len() < ir.len(),
+        "a slice the size of the module is not a slice"
+    );
+    assert!(
+        ir.contains("define void @__perry_init_strings_"),
+        "precondition: the module really does contain another function that \
+         touches the same handle globals, otherwise this test proves nothing"
+    );
+    assert!(
+        !f.contains("__perry_init_strings_scope_check_ts_chunk"),
+        "and the slice must not reach it (#7116):\n{f}"
+    );
+}
+
 /// `"acc:" + <allocating numeric>` — the reported shape.
 ///
 /// The invariant: **no operand register may outlive a collection point.** The
