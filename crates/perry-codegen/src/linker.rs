@@ -20,15 +20,88 @@ use anyhow::{anyhow, bail, Context, Result};
 /// `Some(default_triple)` if the probe succeeded, `None` if it failed.
 static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();
 
-/// Strictly-monotonic per-process counter mixed into temp .ll/.o paths so two
-/// rayon codegen workers calling `compile_ll_to_object` concurrently can never
-/// land on the same path. SystemTime::now().as_nanos() alone isn't enough —
-/// macOS clocks resolve to microseconds, and rayon happily schedules sibling
-/// modules within the same microsecond, producing identical paths. When that
-/// happens, both workers overwrite the same .ll, both invoke clang on it, and
-/// both read back identical bytes — leaving sibling .o files with one
-/// module's symbols stamped onto the other's filename. (Closes #509.)
+/// Strictly-monotonic per-process counter mixed into **output** temp paths
+/// (`.o`, multi-unit partial-link staging, etc.) so two rayon codegen workers
+/// can never clobber each other's objects. (Closes #509.)
+///
+/// The **input** `.ll` basename is deliberately **not** mixed with this
+/// counter or wall-clock time: clang records the source path into the emitted
+/// object (on ELF, into the object bytes themselves), so a pid/nanos/counter
+/// in the `.ll` name made two identical compiles produce different objects on
+/// Linux (#7131). The `.ll` is content-addressed instead; uniqueness of
+/// concurrent same-content writes is handled by an atomic rename.
 static TEMP_NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// FNV-1a 64-bit over `ll_text`. Stable across platforms and rustc versions
+/// (unlike `DefaultHasher`), used only to content-address temp IR filenames so
+/// clang embeds a deterministic source path (#7131). Collision risk is
+/// acceptable for `/tmp` scratch files of compiler IR.
+fn ll_content_hash(ll_text: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in ll_text.as_bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
+/// Content-addressed `.ll` path + unique `.o` path under `tmp_dir`.
+///
+/// The `.ll` basename is a function of the IR bytes alone so two compiles of
+/// the same module record the same source name in the object (Linux ELF
+/// determinism, #7131). The `.o` basename still carries a per-call counter so
+/// concurrent workers never race the clang output file (#509).
+/// Returns `(ll_path, obj_path, counter)` — `counter` is also used for the
+/// atomic-write staging filename.
+fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str) -> (PathBuf, PathBuf, u64) {
+    let hash = ll_content_hash(ll_text);
+    let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ll_path = tmp_dir.join(format!("perry_llvm_{hash:016x}.ll"));
+    let obj_path = tmp_dir.join(format!("perry_llvm_{hash:016x}_{counter:x}.o"));
+    (ll_path, obj_path, counter)
+}
+
+/// Write `ll_text` to a content-addressed path. Concurrent workers with the
+/// same IR may race; we write via a unique `.tmp` then `rename` into place so
+/// readers never see a partial file. A lost race (dest already exists) is fine
+/// — the winner already wrote the same content.
+fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()> {
+    // Fast path: already present (common under parallel multi-module compile
+    // when two units share nothing but we re-hit the same hash only on true
+    // content match — overwrite is still safe because the content is identical).
+    if ll_path.is_file() {
+        // Refresh contents in case a stale hash collision left wrong bytes
+        // (vanishingly rare). Same-content rewrite is a no-op for readers that
+        // already hold a descriptor open.
+        if let Ok(existing) = fs::read(ll_path) {
+            if existing == ll_text.as_bytes() {
+                return Ok(());
+            }
+        }
+    }
+    let tmp = ll_path.with_extension(format!("ll.tmp.{counter}"));
+    {
+        let mut f = fs::File::create(&tmp)
+            .with_context(|| format!("Failed to create temp .ll file at {}", tmp.display()))?;
+        f.write_all(ll_text.as_bytes())?;
+    }
+    match fs::rename(&tmp, ll_path) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // Another worker won the rename, or dest exists. Prefer dest if it
+            // already has the right bytes; otherwise fall back to a direct write.
+            let _ = fs::remove_file(&tmp);
+            if let Ok(existing) = fs::read(ll_path) {
+                if existing == ll_text.as_bytes() {
+                    return Ok(());
+                }
+            }
+            fs::write(ll_path, ll_text.as_bytes()).with_context(|| {
+                format!("Failed to write temp .ll file at {}", ll_path.display())
+            })
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ClangCompilePlan {
@@ -292,24 +365,10 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     ensure_supported_clang(&clang)?;
 
     let tmp_dir = env::temp_dir();
-    let pid = std::process::id();
-    // Per-call unique counter — strictly monotonic, no collisions across
-    // rayon workers in the same process. We still mix in the wall-clock
-    // nanos for cross-process distinctness (two `perry` invocations can
-    // share /tmp), but the counter is what guarantees in-process safety.
-    let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let wall_nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let ll_path = tmp_dir.join(format!("perry_llvm_{}_{}_{}.ll", pid, wall_nonce, counter));
-    let obj_path = tmp_dir.join(format!("perry_llvm_{}_{}_{}.o", pid, wall_nonce, counter));
-
-    {
-        let mut f = fs::File::create(&ll_path)
-            .with_context(|| format!("Failed to create temp .ll file at {}", ll_path.display()))?;
-        f.write_all(ll_text.as_bytes())?;
-    }
+    // #7131: content-address the `.ll` basename (clang embeds it into the
+    // object on ELF). #509: keep the `.o` unique via the per-call counter.
+    let (ll_path, obj_path, write_nonce) = llvm_temp_paths(&tmp_dir, ll_text);
+    write_ll_atomically(&ll_path, ll_text, write_nonce)?;
 
     let plan = build_clang_compile_plan(
         clang.clone(),
@@ -1421,16 +1480,8 @@ mod tests {
     fn temp_nonce_counter_is_unique_across_concurrent_calls() {
         // Regression test for #509: two rayon workers calling
         // `compile_ll_to_object` concurrently must NOT generate the same
-        // temp-file path. Pre-fix, the path was `perry_llvm_<pid>_<nanos>`
-        // where `nanos` came from `SystemTime::now().as_nanos()`. On macOS
-        // that resolves to microseconds, so two threads racing the path
-        // construction in the same microsecond produced identical paths,
-        // both overwrote the same .ll, and both clang invocations compiled
-        // the same IR — leaving sibling .o files with identical bytes.
-        //
-        // The fix mixes `TEMP_NONCE_COUNTER.fetch_add(1, Relaxed)` into
-        // the path. We verify here that 256 concurrent fetches produce
-        // 256 distinct values, regardless of clock resolution.
+        // **output** temp-file path. The counter is mixed into the `.o`
+        // basename (the `.ll` is content-addressed — see #7131).
         use std::collections::HashSet;
         use std::thread;
 
@@ -1456,5 +1507,50 @@ mod tests {
             all.len(),
             unique.len(),
         );
+    }
+
+    #[test]
+    fn ll_temp_basename_is_content_addressed_not_clocked() {
+        // #7131: two calls with identical IR must produce the same `.ll`
+        // basename (so clang embeds a deterministic source path). The `.o`
+        // basename still differs via the counter.
+        let tmp = env::temp_dir();
+        let ir = "define void @f() {\n  ret void\n}\n";
+        let (ll_a, obj_a, _) = llvm_temp_paths(&tmp, ir);
+        let (ll_b, obj_b, _) = llvm_temp_paths(&tmp, ir);
+        assert_eq!(
+            ll_a.file_name(),
+            ll_b.file_name(),
+            "same IR must share the content-addressed .ll basename"
+        );
+        assert_ne!(
+            obj_a.file_name(),
+            obj_b.file_name(),
+            ".o basenames must stay unique across calls (#509)"
+        );
+        // Different IR → different .ll basename.
+        let (ll_c, _, _) = llvm_temp_paths(&tmp, "define void @g() {\n  ret void\n}\n");
+        assert_ne!(ll_a.file_name(), ll_c.file_name());
+        // No pid / wall-clock digits of variable width — only hex hash.
+        let name = ll_a.file_name().unwrap().to_string_lossy();
+        assert!(
+            name.starts_with("perry_llvm_") && name.ends_with(".ll"),
+            "unexpected .ll name: {name}"
+        );
+        let hex = name
+            .trim_start_matches("perry_llvm_")
+            .trim_end_matches(".ll");
+        assert_eq!(hex.len(), 16, "hash must be 16 lowercase hex digits: {hex}");
+        assert!(
+            hex.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash must be hex: {hex}"
+        );
+    }
+
+    #[test]
+    fn ll_content_hash_is_stable_for_fixed_input() {
+        // Pin the FNV-1a value so a future hash swap is intentional.
+        assert_eq!(ll_content_hash(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(ll_content_hash("a"), 0xaf63_dc4c_8601_ec8c);
     }
 }
