@@ -244,10 +244,24 @@ REFUSAL_FLOORS: dict[str, dict[str, int]] = {
     # (`totalIter + iter`, `px - WIDTH / 2.0`). Pinned at the exact count, so
     # losing any one goes red rather than degrading to "still nonzero".
     "suite_15_mandelbrot": {"no_i32_consuming_use": 3},
-    # `i` in `result = result + (1.0 / i)`: the same shape one workload over,
-    # which is what says the rule generalises rather than pattern-matching
-    # 15_mandelbrot.
+    # Every OTHER workload whose canonical-i32 floor this change lowered, so
+    # that no lowered floor rests on observation alone (CodeRabbit on #7132). A
+    # floor that fell because a promotion was deliberately refused must be
+    # paired with the assertion that it is still being refused; otherwise the
+    # lower floor silently accommodates a DIFFERENT promotion going missing.
+    # These are also what says the rule generalises rather than pattern-matching
+    # `15_mandelbrot`: six programs, four distinct syntactic shapes.
+    #
+    #   06  `result = result + (1.0 / i)`   — f64 divide operand
+    #   07  `new Point(i, i + 1)`           — constructor argument
+    #   12  `new Point3D(i, i + 1, i + 2)`  — constructor argument
+    #   13  `sum = sum + (i % 1000)`        — boxed accumulator join
+    #   14  `sum = sum + compute(i)`        — call argument
     "suite_06_math_intensive": {"no_i32_consuming_use": 1},
+    "suite_07_object_create": {"no_i32_consuming_use": 1},
+    "suite_12_binary_trees": {"no_i32_consuming_use": 1},
+    "suite_13_factorial": {"no_i32_consuming_use": 1},
+    "suite_14_closure": {"no_i32_consuming_use": 1},
     # `mixedWithFloat`'s `hit`, the hand-written minimal case. It sits beside
     # `iterate`'s `iter` in the same file, admitted by the same #7110 interval
     # proof and differing only in what consumes it — so this floor and that

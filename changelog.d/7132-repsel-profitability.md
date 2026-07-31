@@ -14,10 +14,9 @@
   loop-induction interval proves `iter ∈ [0, 100]` and #7121 let that proof
   reach the module-init body, so `iter` took a canonical i32 slot — and an
   integer compare cannot fuse with an FP compare. The loop splits into **two
-  blocks totalling 14 instructions**, plus a `ucvtf` at `totalIter = totalIter
-  + iter`. 2 instructions × 8,011,148 innermost iterations ≈ 16.0M, against a
-  measured +15.63M. `px` and `py` are the same shape one level out
-  (`px - WIDTH / 2.0`).
+  blocks totalling 14 instructions**, plus a `ucvtf` where the accumulator
+  joins. 2 instructions × 8,011,148 innermost iterations ≈ 16.0M, against a
+  measured +15.63M. `px` and `py` are the same shape one level out.
 
   **The defect was not the proof.** The proof is correct. The Let-site
   eligibility gate in `stmt/let_stmt.rs` was a conjunction of "may we?" terms
