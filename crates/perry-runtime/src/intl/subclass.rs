@@ -52,24 +52,68 @@ pub(super) fn locale_instance_tag(value: f64) -> Option<String> {
     get_string_field(obj, "__localeFull")
 }
 
-/// The compiled function pointers of every `Intl.*` service constructor thunk.
+/// The compiled function pointers of every `Intl.*` service constructor thunk,
+/// paired with the `__intlKind` brand string each stamps on its instances.
 /// Used by [`is_intl_constructor_value`] to recognize a `class X extends
 /// Intl.<Ctor>` parent value from its closure so `super(...)` can construct it
 /// correctly (with `new.target` set) rather than tripping the
-/// `require_new_target` guard.
-fn intl_constructor_func_ptrs() -> [*const u8; 10] {
+/// `require_new_target` guard, and by [`intl_instanceof`] to brand-match
+/// subclass instances (#6960).
+fn intl_constructor_entries() -> [(*const u8, &'static str); 10] {
     [
-        super::number_format_constructor_thunk as *const u8,
-        super::date_time_format_constructor_thunk as *const u8,
-        super::collator_constructor_thunk as *const u8,
-        super::segmenter_constructor_thunk as *const u8,
-        super::list_format_constructor_thunk as *const u8,
-        super::relative_time_format_constructor_thunk as *const u8,
-        super::plural_rules_constructor_thunk as *const u8,
-        super::duration_format::constructor_thunk as *const u8,
-        super::display_names::constructor_thunk as *const u8,
-        super::locale::locale_constructor_thunk as *const u8,
+        (
+            super::number_format_constructor_thunk as *const u8,
+            "NumberFormat",
+        ),
+        (
+            super::date_time_format_constructor_thunk as *const u8,
+            "DateTimeFormat",
+        ),
+        (super::collator_constructor_thunk as *const u8, "Collator"),
+        (super::segmenter_constructor_thunk as *const u8, "Segmenter"),
+        (
+            super::list_format_constructor_thunk as *const u8,
+            "ListFormat",
+        ),
+        (
+            super::relative_time_format_constructor_thunk as *const u8,
+            "RelativeTimeFormat",
+        ),
+        (
+            super::plural_rules_constructor_thunk as *const u8,
+            "PluralRules",
+        ),
+        (
+            super::duration_format::constructor_thunk as *const u8,
+            "DurationFormat",
+        ),
+        (
+            super::display_names::constructor_thunk as *const u8,
+            "DisplayNames",
+        ),
+        (
+            super::locale::locale_constructor_thunk as *const u8,
+            "Locale",
+        ),
     ]
+}
+
+/// If `parent_val` is an `Intl.*` service constructor closure, return the
+/// `__intlKind` brand string it stamps on instances (`"NumberFormat"`, …).
+fn intl_constructor_kind(parent_val: f64) -> Option<&'static str> {
+    let jsval = JSValue::from_bits(parent_val.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let closure = jsval.as_pointer() as *const ClosureHeader;
+    if closure.is_null() {
+        return None;
+    }
+    let fp = unsafe { (*closure).func_ptr };
+    intl_constructor_entries()
+        .iter()
+        .find(|(p, _)| *p == fp)
+        .map(|(_, kind)| *kind)
 }
 
 /// `true` when `parent_val` is (the closure for) an `Intl.*` service
@@ -78,16 +122,7 @@ fn intl_constructor_func_ptrs() -> [*const u8; 10] {
 /// without a `new.target` and throw "Constructor Intl.X requires 'new'"; this
 /// lets the super-call path recognize the parent and construct it properly.
 pub(crate) fn is_intl_constructor_value(parent_val: f64) -> bool {
-    let jsval = JSValue::from_bits(parent_val.to_bits());
-    if !jsval.is_pointer() {
-        return false;
-    }
-    let closure = jsval.as_pointer() as *const ClosureHeader;
-    if closure.is_null() {
-        return false;
-    }
-    let fp = unsafe { (*closure).func_ptr };
-    intl_constructor_func_ptrs().iter().any(|p| *p == fp)
+    intl_constructor_kind(parent_val).is_some()
 }
 
 /// `class X extends Intl.<Ctor>` super-call handling. An `Intl.*` service
@@ -132,46 +167,88 @@ pub(crate) unsafe fn intl_subclass_super(
 /// is an Intl service constructor. Intl instances are plain heap objects whose
 /// `[[Prototype]]` is set to `Intl.<Ctor>.prototype` (via
 /// `object_set_static_prototype`), but the generic dynamic-`instanceof` path has
-/// no class-id for them and no generic prototype walk, so it returned `false`
-/// even though `Object.getPrototypeOf(inst) === Intl.<Ctor>.prototype`. Walk the
-/// value's static-prototype chain and compare each link against the
-/// constructor's `.prototype`. Returns `None` when `type_ref` is not an Intl
-/// constructor (caller keeps its existing resolution); `Some(bool)` otherwise.
+/// no class-id for them, so without this hook a direct instance returned
+/// `false` even though `Object.getPrototypeOf(inst) === Intl.<Ctor>.prototype`.
+///
+/// Two recognition arms (#6960):
+///
+/// 1. **Brand** — `intl_subclass_super` copies the constructor's `__intlKind`
+///    field onto the subclass `this`, so a `class X extends Intl.NumberFormat`
+///    instance carries the same brand as a direct instance even when the
+///    prototype chain is not yet wired through `Intl.NumberFormat.prototype`
+///    (Perry's class-registry parent edge only tracks class-id parents, and
+///    Intl constructors are closures). Mirrors the Temporal brand-cell arm.
+/// 2. **Prototype walk** — OrdinaryHasInstance via
+///    `js_object_get_prototype_of`, covering direct instances and any subclass
+///    whose `X.prototype` *is* linked to `Intl.<Ctor>.prototype`.
+///
+/// Returns `None` when `type_ref` is not an Intl constructor (caller keeps its
+/// existing resolution); `Some(bool)` otherwise.
 pub(crate) fn intl_instanceof(value: f64, type_ref: f64) -> Option<bool> {
-    if !is_intl_constructor_value(type_ref) {
+    let Some(expected_kind) = intl_constructor_kind(type_ref) else {
         return None;
+    };
+    // OrdinaryHasInstance step 3: a non-Object left operand is never an
+    // instance. Guard before any walk — primitives would either throw
+    // (null/undefined) or climb a wrapper chain (string/symbol) and spuriously
+    // match.
+    {
+        let jv = JSValue::from_bits(value.to_bits());
+        if jv.is_null()
+            || jv.is_undefined()
+            || jv.is_bool()
+            || jv.is_int32()
+            || jv.is_any_string()
+            || jv.is_bigint()
+            || unsafe { crate::symbol::js_is_symbol(value) != 0 }
+        {
+            return Some(false);
+        }
+    }
+    // Brand arm: subclass instances re-homed by `intl_subclass_super`.
+    if let Some(obj) = object_ptr_from_value(value) {
+        if get_string_field(obj, KEY_KIND).as_deref() == Some(expected_kind) {
+            return Some(true);
+        }
     }
     let jsval = JSValue::from_bits(type_ref.to_bits());
     let closure = jsval.as_pointer::<u8>() as usize;
     let proto = crate::closure::closure_get_dynamic_prop(closure, "prototype");
-    let proto_js = JSValue::from_bits(proto.to_bits());
-    if !proto_js.is_pointer() {
+    let target = proto_identity_addr(proto);
+    if target == 0 {
         return Some(false);
     }
-    let target_bits = proto.to_bits();
-    // Walk `value`'s [[Prototype]] chain (bounded against cycles).
-    let mut cur = value.to_bits();
+    // Prototype-walk arm: direct instances (and any fully-linked subclass).
+    let mut cur = crate::object::js_object_get_prototype_of(value);
     for _ in 0..64 {
-        let top16 = cur >> 48;
-        let raw = if top16 == 0x7FFD {
-            (cur & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else if top16 == 0 {
-            cur as usize
-        } else {
-            return Some(false);
-        };
-        if raw < 0x10000 {
+        if JSValue::from_bits(cur.to_bits()).is_null() {
             return Some(false);
         }
-        match crate::object::prototype_chain::object_static_prototype(raw) {
-            Some(p) => {
-                if p == target_bits {
-                    return Some(true);
-                }
-                cur = p;
-            }
-            None => return Some(false),
+        let cur_addr = proto_identity_addr(cur);
+        if cur_addr == 0 {
+            return Some(false);
         }
+        if cur_addr == target {
+            return Some(true);
+        }
+        cur = crate::object::js_object_get_prototype_of(cur);
     }
     Some(false)
+}
+
+/// Normalize a value to its heap-pointer address for prototype identity
+/// comparison — a NaN-boxed `POINTER_TAG` value or a raw heap pointer both
+/// resolve to their address; any non-pointer yields 0. Mirrors the helper in
+/// `object/instanceof.rs` (kept local so this module stays free of a private
+/// cross-crate dependency on that helper).
+fn proto_identity_addr(v: f64) -> usize {
+    let bits = v.to_bits();
+    let top16 = bits >> 48;
+    if top16 == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if top16 == 0 && bits >= 0x1000 {
+        bits as usize
+    } else {
+        0
+    }
 }
