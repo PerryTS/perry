@@ -70,7 +70,7 @@
 //! `sum = sum + <integer>`" as an i32 proof is a silent wrong answer, not a
 //! missed optimization. Bounding an accumulator needs the loop's *trip count*
 //! multiplied by a magnitude bound on the step expression — strictly more
-//! analysis than this module does, and out of scope here.
+//! analysis than this module does; #7123 specifies it.
 //!
 //! Consumed only by the canonical-i32 gate (`canonical_safe_local` in
 //! `stmt/let_stmt.rs`), never by the parallel-shadow `needs_i32_slot` gate, so

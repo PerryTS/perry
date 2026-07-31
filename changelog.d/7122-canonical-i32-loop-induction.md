@@ -56,7 +56,7 @@ i32 slot would print a wrapped negative. "Every write is `sum = sum + <integer>`
 is not an i32 proof, and a rule that treated it as one would be a silent wrong
 answer rather than a missed optimization. Bounding an accumulator needs the
 loop's trip count multiplied by a magnitude bound on the step expression —
-strictly more analysis, and filed separately.
+strictly more analysis, and filed as #7123.
 
 The `not_index_used_or_bounded` denial reason now says this, so the report
 distinguishes "not implemented yet" from "must not be promoted".
