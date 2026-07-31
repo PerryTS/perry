@@ -111,6 +111,29 @@ report *no consumption data* rather than a zero
 (`CONSUMPTION_INSTRUMENTED` in the script), because "uninstrumented" and "never
 applied" are exactly the pair this census exists to keep apart.
 
+## The one check that catches an EXTRA promotion
+
+Every number above is a promotion count and every gate on it is a **floor**, so
+the census can only ever go red when a representation stops firing. #7128 is the
+opposite failure: `benchmarks/suite/15_mandelbrot.ts` promoted three counters it
+should not have — all three provably i32-bounded, none ever used as an integer —
+and paid **+14.87% instructions retired** for them, measured on a quiet
+Raspberry Pi 5 at a 0.02% noise floor. No floor in this file can go red for
+that; more promotions always reads as an improvement.
+
+So the deliberate refusal gets a minimum of its own. `REFUSAL_FLOORS` (in
+`scripts/compiler_output_harness/repsel_census.py`, in code and not in the
+baseline, for the same reason as `LIVENESS_FLOORS`) says how many times the
+`no_i32_consuming_use` rule must fire per workload. Deleting
+`crates/perry-codegen/src/collectors/repsel_benefit.rs` takes `15_mandelbrot`
+from three refusals to zero and the census red.
+
+`fixture_loop_bounded_i32.ts` carries the paired case: `iterate()`'s counter and
+`mixedWithFloat()`'s counter are admitted by the identical #7110 interval proof
+and differ only in what consumes them. One must promote (its `canonical-i32`
+liveness floor) and one must be refused (its refusal floor), so neither an
+always-yes nor an always-no rule can satisfy the file.
+
 ## How it cannot quietly pass
 
 Read CLAUDE.md, "★ Four ways a gate can be unable to fail". The fourth applies

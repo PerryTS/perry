@@ -109,6 +109,29 @@ control flow (a value's representation at a `catch` join is the meet over all po
 paths — in practice `Boxed` unless all throwing paths agree). The inference treats each of these as
 a hard meet-to-`Boxed` edge; none of them may be "optimized through."
 
+**Profitability is a second, separate question (#7128).** Everything above answers *may we
+select this representation*. Nothing in it answers *should we*, and the two have different
+failure modes: an unsound selection is a wrong answer, an unprofitable one is a slower answer
+that no test can see. #7128 measured the consequence — after #7110 widened the i32 range proof
+and #7121 removed the module-init exclusion, `benchmarks/suite/15_mandelbrot.ts` promoted three
+provably-bounded loop counters, none of which is ever used as an integer, and paid **+14.87%
+instructions retired** for them (invisible in wall time: the workload is FP-latency-bound).
+
+For an i32-range value, `double` is a lossless and equal-cost representation of `+`, `-` and
+comparison. `I32` only *buys* something where the consumer cannot take a double without a
+conversion — array/typed-array indexing, bitwise operands, `Math.imul` — which is the same list
+§5.3 already gives for where `I32` semantics are exact. It becomes a *cost* the moment any hot
+consumer needs the double back. So selection carries one profitability term alongside the
+soundness terms: a value written after its declaration, with no i32-consuming read anywhere and
+at least one double-consuming read inside a loop, stays `Boxed`
+(`collectors/repsel_benefit.rs`). The term only ever refuses, so every uncertainty resolves
+toward "not a cost"; a missed refusal is the pre-existing behaviour.
+
+The same shape exists for the other representations and is not yet modelled: #7128 found every
+`__pshape` clone dead-stripped before the object (finding C) and `Ptr<NumArray>` emitting nothing
+outside its own fixture (finding D). Both are "selected, and no byte changed" — the cheap end of
+the same gap.
+
 ### 5.3 Representation-selected lowering & operation semantics
 Locals and params get native slots per representation; loop phis are typed; ops stay native
 end-to-end. **Operation semantics are representation-preserving — lowering may never change an
