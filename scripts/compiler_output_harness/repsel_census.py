@@ -257,13 +257,20 @@ def compile_and_census(
             "--no-link",
             "--no-cache",
         ]
-        result = run_command(
-            cmd,
-            cwd=tmpdir,
-            env=env,
-            timeout=timeout,
-            check=True,
-        )
+        try:
+            result = run_command(
+                cmd,
+                cwd=tmpdir,
+                env=env,
+                timeout=timeout,
+                check=True,
+            )
+        except OSError as exc:
+            # A missing/unusable compiler must exit 2 (harness error), NOT 1
+            # (gate verdict). CI's sabotage step asserts on exit 1 plus the
+            # reason string precisely so a broken toolchain can never be
+            # mistaken for "the census correctly went red".
+            raise HarnessError(f"could not run the compiler {perry[0]!r}: {exc}") from exc
     payload = _extract_json(result.stderr)
     if keep_report is not None:
         keep_report.parent.mkdir(parents=True, exist_ok=True)
