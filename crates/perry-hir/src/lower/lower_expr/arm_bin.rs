@@ -40,7 +40,9 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         // created by the native constructor fast path, so it has no HIR class
         // id for generic `instanceof` to discover; preserve the inherited
         // brand directly at the shared lowering point.
-        if matches!(bin.right.as_ref(), ast::Expr::Ident(ident) if ident.sym.as_ref() == "EventEmitter") {
+        if matches!(bin.right.as_ref(), ast::Expr::Ident(ident)
+            if matches!(ctx.lookup_native_module(ident.sym.as_ref()), Some(("events", Some("EventEmitter")))))
+        {
             if let ast::Expr::Ident(session) = bin.left.as_ref() {
                 if matches!(ctx.lookup_native_instance(session.sym.as_ref()), Some(("inspector", "Session"))) {
                     return Ok(Expr::Bool(true));

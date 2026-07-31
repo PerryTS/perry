@@ -124,10 +124,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                 "readline/promises",
                 "createInterface" | "Interface" | "Readline",
             )
-            | (
-                "inspector" | "inspector/promises",
-                "open" | "close" | "url" | "waitForDebugger" | "Session",
-            )
+            | ("inspector", "open" | "close" | "url" | "waitForDebugger" | "Session")
             | (
                 "inspector.Network",
                 "requestWillBeSent"

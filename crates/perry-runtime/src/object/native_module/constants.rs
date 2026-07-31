@@ -484,11 +484,16 @@ pub(crate) unsafe fn get_native_module_constant(
             }
             // Node's promise entry point spreads the callback namespace and
             // replaces only Session, so read the callback export itself.
-            _ => cjs_default_export_value("inspector").map(|callback| {
-                let raw = (callback.to_bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+            _ => {
                 let name = crate::string::js_string_from_bytes(property.as_ptr(), property.len() as u32);
-                crate::object::js_object_get_field_by_name_f64(raw, name)
-            }),
+                let callback = cjs_default_export_value("inspector")?;
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let callback = scope.root_nanbox_f64(callback);
+                let raw = (callback.get_nanbox_u64() & crate::value::POINTER_MASK)
+                    as *const crate::ObjectHeader;
+                let value = crate::object::js_object_get_field_by_name_f64(raw, name);
+                (value.to_bits() != crate::value::TAG_UNDEFINED).then_some(value)
+            }
         },
         "process" => crate::process::process_metadata_property(property),
         "dns" => match property {

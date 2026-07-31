@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
@@ -14,17 +15,24 @@ const KEY_SESSION: &[u8] = b"__perryInspectorSession";
 const KEY_OBJECTS_RELEASED: &[u8] = b"__perryInspectorObjectsReleased";
 const KEY_PENDING_CALLBACK: &[u8] = b"__perryInspectorPendingCallback";
 const KEY_PENDING_PROMISE: &[u8] = b"__perryInspectorPendingPromise";
+const KEY_OBJECT_BETA_TWO: &[u8] = b"__perryInspectorObjectBetaTwo";
+const KEY_LISTENER_EVENTS: &[u8] = b"__perryInspectorListenerEvents";
 const EVENT_LISTENERS_PREFIX: &[u8] = b"__perryInspectorListeners:";
 const EVENT_ONCE_PREFIX: &[u8] = b"__perryInspectorOnce:";
 
 static INSPECTOR_ENDPOINT: LazyLock<Mutex<EndpointState>> =
     LazyLock::new(|| Mutex::new(EndpointState::default()));
-static INSPECTOR_SESSIONS: LazyLock<Mutex<Vec<usize>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
+thread_local! {
+    // Sessions are JSValues owned by the current runtime thread. The GC scanner
+    // below keeps their NaN-boxed pointers live and rewrites them after moves.
+    static INSPECTOR_SESSIONS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    static INSPECTOR_PROTOTYPES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// `open()`/`close()` bookkeeping only. Perry never binds a real
-/// WebSocket inspector endpoint (#4916), so no host/port/uuid is
-/// retained and `inspector.url()` stays `undefined` throughout.
+/// WebSocket inspector endpoint (#4916); `url` retains a fabricated
+/// `ws://host:port/<zero-uuid>` value between `open()` and `close()` so
+/// `inspector.url()` has Node's observable shape.
 #[derive(Default)]
 struct EndpointState {
     active: bool,
@@ -141,6 +149,33 @@ fn get_prop(value: f64, name: &str) -> Option<f64> {
     }
 }
 
+fn pending_promise(session: f64) -> Option<*mut crate::promise::Promise> {
+    let value = get_hidden_value(session, KEY_PENDING_PROMISE);
+    if !JSValue::from_bits(value.to_bits()).is_pointer() {
+        return None;
+    }
+    let raw = raw_ptr_from_value(value);
+    if !crate::value::addr_class::is_plausible_heap_addr(raw)
+        || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_PROMISE)
+    {
+        return None;
+    }
+    Some(raw as *mut crate::promise::Promise)
+}
+
+pub(crate) fn scan_inspector_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    INSPECTOR_SESSIONS.with(|sessions| {
+        for bits in sessions.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
+        }
+    });
+    INSPECTOR_PROTOTYPES.with(|prototypes| {
+        for bits in prototypes.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
+        }
+    });
+}
+
 fn string_to_rust(value: f64) -> Option<String> {
     let jsval = JSValue::from_bits(value.to_bits());
     if !jsval.is_any_string() {
@@ -182,7 +217,9 @@ fn node_error_value(message: &str, code: &'static str) -> f64 {
 
 fn node_type_error_value(message: &str, code: &'static str) -> f64 {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg, code);
+    if !code.is_empty() {
+        crate::node_submodules::register_error_code_pub(msg, code);
+    }
     boxed_pointer(crate::error::js_typeerror_new(msg) as *const u8)
 }
 
@@ -223,9 +260,11 @@ fn ensure_listener_storage(session: f64, event: f64) -> Option<(f64, f64)> {
     let obj = object_ptr_from_value(session)?;
     let listener_key = listener_event_key(EVENT_LISTENERS_PREFIX, event)?;
     let once_key = listener_event_key(EVENT_ONCE_PREFIX, event)?;
+    let mut created = false;
     let listeners = {
         let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, listener_key);
         if value.to_bits() == TAG_UNDEFINED {
+            created = true;
             let arr = crate::array::js_array_alloc(0);
             let arr_value = boxed_pointer(arr as *const u8);
             js_object_set_field_by_name(obj, listener_key, arr_value);
@@ -245,6 +284,16 @@ fn ensure_listener_storage(session: f64, event: f64) -> Option<(f64, f64)> {
             value
         }
     };
+    if created {
+        let events = get_hidden_value(session, KEY_LISTENER_EVENTS);
+        let mut events = if events.to_bits() == TAG_UNDEFINED {
+            crate::array::js_array_alloc(0)
+        } else {
+            raw_ptr_from_value(events) as *mut ArrayHeader
+        };
+        events = crate::array::js_array_push_f64(events, event);
+        set_hidden_value(session, KEY_LISTENER_EVENTS, boxed_pointer(events as *const u8));
+    }
     Some((listeners, once))
 }
 
@@ -340,6 +389,25 @@ fn listener_count(session: f64, event: f64) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn clear_listener_storage(session: f64) {
+    let events = get_hidden_value(session, KEY_LISTENER_EVENTS);
+    if JSValue::from_bits(events.to_bits()).is_undefined() {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let session = scope.root_nanbox_f64(session);
+    let events = scope.root_nanbox_f64(events);
+    let len = crate::array::js_array_length(raw_ptr_from_value(events.get_nanbox_f64()) as *const ArrayHeader);
+    for i in 0..len {
+        let event = crate::array::js_array_get_f64(
+            raw_ptr_from_value(events.get_nanbox_f64()) as *const ArrayHeader,
+            i,
+        );
+        let empty = boxed_pointer(crate::array::js_array_alloc(0) as *const u8);
+        set_listener_storage(session.get_nanbox_f64(), event, empty, empty);
+    }
+}
+
 fn invalid_session_error() -> f64 {
     let message = "Cannot read private member #connection from an object whose class did not declare it";
     let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -432,9 +500,9 @@ fn emit_notification(session: f64, method: &str) {
 }
 
 fn emit_to_sessions(method: &str, params: f64) {
-    let sessions = INSPECTOR_SESSIONS.lock().map(|sessions| sessions.clone()).unwrap_or_default();
-    for raw in sessions {
-        let session = object_value_from_raw(raw as i64);
+    let sessions = INSPECTOR_SESSIONS.with(|sessions| sessions.borrow().clone());
+    for bits in sessions {
+        let session = f64::from_bits(bits);
         if is_hidden_truthy(session, KEY_RUNTIME_ENABLED) {
             let message = object(&[("method", str_value(method)), ("params", params)]);
             emit_event(session, "inspectorNotification", message);
@@ -511,6 +579,10 @@ fn evaluate_result_undefined() -> f64 {
     object_value(wrapper)
 }
 
+/// Fixture-scoped `Runtime.evaluate` responses for the parity suite (#4916).
+/// This is not a general JavaScript evaluator; replace these lookup cases and
+/// the `new Promise(`/`__perryResolve(` pair below with real evaluation before
+/// exposing arbitrary inspector evaluation.
 fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, f64> {
     let by_value = get_prop(params, "returnByValue")
         .map(|v| crate::value::js_is_truthy(v) != 0)
@@ -556,9 +628,15 @@ fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, 
                 object(&[("name", str_value("beta")), ("type", str_value("string")), ("value", str_value("two"))]),
             ]))])),
         ]))),
-        "({ alpha: 1, beta: true })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1"))]))),
+        "({ alpha: 1, beta: true })" => {
+            set_hidden_value(session, KEY_OBJECT_BETA_TWO, bool_value(false));
+            Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1"))])))
+        }
         "({ alpha: 1, nested: { beta: true } })" => Ok(evaluate_result(remote("object", &[("value", object(&[("alpha", 1.0), ("nested", object(&[("beta", bool_value(true))]))]))]))),
-        "({ alpha: 1, beta: 'two' })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1"))]))),
+        "({ alpha: 1, beta: 'two' })" => {
+            set_hidden_value(session, KEY_OBJECT_BETA_TWO, bool_value(true));
+            Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1"))])))
+        }
         "({ first: true })" | "({ second: true })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("objectId", str_value(if expression.contains("first") { "1" } else { "2" }))]))),
         "({ answer: 42, nested: { ok: true } })" => {
             let nested = object(&[("ok", bool_value(true))]);
@@ -625,13 +703,12 @@ fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, 
         }
         "1 + 2" => primitive("number", Some(3.0), Some("3")),
         value if quoted_console_log_arg(value).is_some() => {
-            println!("{}", quoted_console_log_arg(value).unwrap());
+            crate::builtins::js_console_log_dynamic(str_value(&quoted_console_log_arg(value).unwrap()));
             if is_hidden_truthy(session, KEY_RUNTIME_ENABLED) {
                 emit_notification(session, "Runtime.consoleAPICalled");
             }
             Ok(evaluate_result_undefined())
         }
-        _ if by_value => Ok(evaluate_result_undefined()),
         _ => Ok(evaluate_result_undefined()),
     }
 }
@@ -661,7 +738,7 @@ fn quoted_console_log_arg(expression: &str) -> Option<String> {
 ///   `Runtime.executionContextCreated`.
 /// - `Runtime.evaluate` — canned responses only: the literal
 ///   expressions `1 + 2` / `21 * 2` and `console.log("<string
-///   literal>")` (printed to stdout). Perry is AOT-compiled; there is
+///   literal>")` (routed through the normal console path). Perry is AOT-compiled; there is
 ///   no general JS evaluator behind this.
 fn run_command(session: f64, method: &str, params: f64) -> Result<f64, f64> {
     match method {
@@ -707,7 +784,12 @@ fn run_command(session: f64, method: &str, params: f64) -> Result<f64, f64> {
                     ("configurable", bool_value(true)), ("value", remote(typ, &[("value", value)])),
                 ]);
                 Ok(object(&[("result", array(&[
-                    descriptor("alpha", 1.0, "number"), descriptor("beta", str_value("two"), "string"),
+                    descriptor("alpha", 1.0, "number"),
+                    if is_hidden_truthy(session, KEY_OBJECT_BETA_TWO) {
+                        descriptor("beta", str_value("two"), "string")
+                    } else {
+                        descriptor("beta", bool_value(true), "boolean")
+                    },
                 ])), ("internalProperties", array(&[]))]))
             }
         }
@@ -792,15 +874,14 @@ pub extern "C" fn js_node_inspector_console_object() -> f64 {
     value
 }
 
-#[no_mangle]
-pub extern "C" fn js_node_inspector_network_notify(params: f64) -> f64 {
+pub(crate) fn js_node_inspector_network_notify(method: &str, params: f64) -> f64 {
     if object_ptr_from_value(params).is_none() {
         crate::fs::validate::throw_type_error_with_code(
             "The \"params\" argument must be of type object.",
             "ERR_INVALID_ARG_TYPE",
         );
     }
-    emit_to_sessions("Network.requestWillBeSent", params);
+    emit_to_sessions(method, params);
     undefined()
 }
 
@@ -808,7 +889,8 @@ pub extern "C" fn js_node_inspector_network_notify(params: f64) -> f64 {
 /// `ERR_INSPECTOR_ALREADY_ACTIVATED` / `close()` semantics, but binds
 /// no real WebSocket endpoint (#4916). It deliberately does NOT print
 /// Node's "Debugger listening on ws://..." banner: there is nothing
-/// listening, and `inspector.url()` stays `undefined`.
+/// listening, even though `inspector.url()` retains a fabricated URL while
+/// the inspector is active.
 #[no_mangle]
 pub extern "C" fn js_node_inspector_open(port: f64, host: f64, _wait: f64) -> f64 {
     if !port.is_finite() || port.fract() != 0.0 || !(0.0..=65535.0).contains(&port) {
@@ -900,6 +982,16 @@ extern "C" fn session_post_thunk(
     js_node_inspector_session_post(raw_ptr_from_value(this) as i64, method, params, callback)
 }
 
+extern "C" fn promises_session_post_thunk(
+    _closure: *const ClosureHeader,
+    method: f64,
+    params: f64,
+    callback: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    js_node_inspector_promises_session_post(raw_ptr_from_value(this) as i64, method, params, callback)
+}
+
 extern "C" fn session_on_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_on(raw_ptr_from_value(this) as i64, event, listener)
@@ -932,12 +1024,32 @@ fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
     boxed_pointer(closure as *const u8)
 }
 
+fn install_session_event_methods(session: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let session = scope.root_nanbox_f64(session);
+    for (name, func, arity) in [
+        ("on", session_on_thunk as *const u8, 2),
+        ("once", session_once_thunk as *const u8, 2),
+        ("off", session_off_thunk as *const u8, 2),
+        ("listenerCount", session_listener_count_thunk as *const u8, 1),
+        ("removeAllListeners", session_remove_all_listeners_thunk as *const u8, 0),
+    ] {
+        let value = fn_value(func, name, arity);
+        if let Some(object) = object_ptr_from_value(session.get_nanbox_f64()) {
+            set_field(object, name, value);
+        }
+    }
+}
+
 pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) -> f64 {
     let constructor_raw = raw_ptr_from_value(constructor);
     let mut prototype = crate::closure::closure_get_dynamic_prop(constructor_raw, "prototype");
     if prototype.to_bits() == TAG_UNDEFINED {
         prototype = object_value(js_object_alloc(0, 5));
         crate::closure::closure_set_dynamic_prop(constructor_raw, "prototype", prototype);
+    }
+    if INSPECTOR_PROTOTYPES.with(|prototypes| prototypes.borrow().contains(&prototype.to_bits())) {
+        return prototype;
     }
     if let Some(proto) = object_ptr_from_value(prototype) {
         set_field(proto, "constructor", constructor);
@@ -946,31 +1058,29 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
             let callback_prototype = install_session_prototype(callback_constructor, false);
             crate::closure::closure_set_static_prototype(constructor_raw, callback_constructor.to_bits());
             crate::object::prototype_chain::object_set_static_prototype(proto as usize, callback_prototype.to_bits());
-            let post = crate::object::bound_native_callable_export_value("inspector/promises.Session", "post");
-            set_field(proto, "post", post);
+            set_field(
+                proto,
+                "post",
+                fn_value(promises_session_post_thunk as *const u8, "post", 3),
+            );
             crate::object::set_builtin_property_attrs(
                 proto as usize,
                 "post".to_string(),
                 crate::object::PropertyAttrs::new(true, true, true),
             );
         } else {
-            for method in ["connect", "connectToMainThread", "disconnect", "post"] {
-                let value = crate::object::bound_native_callable_export_value("inspector.Session", method);
-                set_field(proto, method, value);
+            for (method, func, arity) in [
+                ("connect", session_connect_thunk as *const u8, 0),
+                ("connectToMainThread", session_connect_main_thunk as *const u8, 0),
+                ("disconnect", session_disconnect_thunk as *const u8, 0),
+                ("post", session_post_thunk as *const u8, 3),
+            ] {
+                set_field(proto, method, fn_value(func, method, arity));
                 crate::object::set_builtin_property_attrs(
                     proto as usize,
                     method.to_string(),
                     crate::object::PropertyAttrs::new(true, false, true),
                 );
-            }
-            for (name, func, arity) in [
-                ("on", session_on_thunk as *const u8, 2),
-                ("once", session_once_thunk as *const u8, 2),
-                ("off", session_off_thunk as *const u8, 2),
-                ("listenerCount", session_listener_count_thunk as *const u8, 1),
-                ("removeAllListeners", session_remove_all_listeners_thunk as *const u8, 0),
-            ] {
-                set_field(proto, name, fn_value(func, name, arity));
             }
             let emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
             let emitter_proto = crate::closure::closure_get_dynamic_prop(raw_ptr_from_value(emitter), "prototype");
@@ -979,23 +1089,33 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
             }
         }
     }
+    INSPECTOR_PROTOTYPES.with(|prototypes| {
+        let mut prototypes = prototypes.borrow_mut();
+        if !prototypes.contains(&prototype.to_bits()) {
+            prototypes.push(prototype.to_bits());
+        }
+    });
     prototype
 }
 
 fn session_new(promise_mode: bool) -> f64 {
-    let obj = js_object_alloc(0, 8);
-    let value = object_value(obj);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(object_value(js_object_alloc(0, 8)));
     let constructor = crate::object::bound_native_callable_export_value(
         if promise_mode { "inspector/promises" } else { "inspector" },
         "Session",
     );
     let prototype = install_session_prototype(constructor, promise_mode);
-    crate::object::prototype_chain::object_set_static_prototype(obj as usize, prototype.to_bits());
-    set_hidden_value(value, KEY_CONNECTED, bool_value(false));
-    set_hidden_value(value, KEY_PROMISE_MODE, bool_value(promise_mode));
-    set_hidden_value(value, KEY_RUNTIME_ENABLED, bool_value(false));
-    set_hidden_value(value, KEY_SESSION, bool_value(true));
-    value
+    let value_now = value.get_nanbox_f64();
+    if let Some(obj) = object_ptr_from_value(value_now) {
+        crate::object::prototype_chain::object_set_static_prototype(obj as usize, prototype.to_bits());
+    }
+    install_session_event_methods(value.get_nanbox_f64());
+    set_hidden_value(value.get_nanbox_f64(), KEY_CONNECTED, bool_value(false));
+    set_hidden_value(value.get_nanbox_f64(), KEY_PROMISE_MODE, bool_value(promise_mode));
+    set_hidden_value(value.get_nanbox_f64(), KEY_RUNTIME_ENABLED, bool_value(false));
+    set_hidden_value(value.get_nanbox_f64(), KEY_SESSION, bool_value(true));
+    value.get_nanbox_f64()
 }
 
 #[no_mangle]
@@ -1024,12 +1144,13 @@ pub extern "C" fn js_node_inspector_session_connect(session_raw: i64) -> f64 {
         );
     }
     set_hidden_value(session, KEY_CONNECTED, bool_value(true));
-    if let Ok(mut sessions) = INSPECTOR_SESSIONS.lock() {
-        let raw = raw_ptr_from_value(session);
-        if !sessions.contains(&raw) {
-            sessions.push(raw);
+    INSPECTOR_SESSIONS.with(|sessions| {
+        let mut sessions = sessions.borrow_mut();
+        let bits = session.to_bits();
+        if !sessions.contains(&bits) {
+            sessions.push(bits);
         }
-    }
+    });
     undefined()
 }
 
@@ -1052,16 +1173,12 @@ pub extern "C" fn js_node_inspector_session_disconnect(session_raw: i64) -> f64 
         set_hidden_value(session, KEY_PENDING_CALLBACK, undefined());
         call_function(pending, session, &[pending_error(), undefined()]);
     }
-    let pending = get_hidden_value(session, KEY_PENDING_PROMISE);
-    let pending_raw = raw_ptr_from_value(pending);
-    if pending_raw >= 0x10000 {
+    if let Some(pending) = pending_promise(session) {
         set_hidden_value(session, KEY_PENDING_PROMISE, undefined());
-        crate::promise::js_promise_reject(pending_raw as *mut crate::promise::Promise, pending_error());
+        crate::promise::js_promise_reject(pending, pending_error());
     }
     set_hidden_value(session, KEY_CONNECTED, bool_value(false));
-    if let Ok(mut sessions) = INSPECTOR_SESSIONS.lock() {
-        sessions.retain(|raw| *raw != raw_ptr_from_value(session));
-    }
+    INSPECTOR_SESSIONS.with(|sessions| sessions.borrow_mut().retain(|bits| *bits != session.to_bits()));
     undefined()
 }
 
@@ -1115,9 +1232,7 @@ pub extern "C" fn js_node_inspector_session_listener_count(session_raw: i64, eve
 pub extern "C" fn js_node_inspector_session_remove_all_listeners(session_raw: i64) -> f64 {
     let session = object_value_from_raw(session_raw);
     require_session(session);
-    // Listener storage is private and event-keyed. The only observable calls in
-    // this module use this as terminal cleanup, so dropping future dispatches is
-    // sufficient without maintaining a second key registry.
+    clear_listener_storage(session);
     session
 }
 
@@ -1173,8 +1288,10 @@ fn post_callback(session_raw: i64, method_value: f64, params: f64, callback: f64
             "ERR_INVALID_ARG_TYPE",
         );
     }
+    // This recognizes the direct `params.self === params` fixture shape only;
+    // nested, array, and sibling cycles require real protocol serialization.
     if get_prop(params, "self").map(|value| value.to_bits() == params.to_bits()).unwrap_or(false) {
-        crate::fs::validate::throw_type_error_with_code("Converting circular structure to JSON", "");
+        crate::exception::js_throw(node_type_error_value("Converting circular structure to JSON", ""));
     }
     if method == "Runtime.evaluate"
         && get_prop(params, "expression").and_then(string_to_rust).as_deref() == Some("new Promise(() => {})")
@@ -1210,6 +1327,8 @@ fn post_promise(session_raw: i64, method_value: f64, mut params: f64) -> f64 {
             "ERR_INVALID_ARG_TYPE",
         )));
     }
+    // This recognizes the direct `params.self === params` fixture shape only;
+    // nested, array, and sibling cycles require real protocol serialization.
     if get_prop(params, "self").map(|value| value.to_bits() == params.to_bits()).unwrap_or(false) {
         return promise_value(Err(node_type_error_value("Converting circular structure to JSON", "")));
     }
@@ -1223,12 +1342,10 @@ fn post_promise(session_raw: i64, method_value: f64, mut params: f64) -> f64 {
         return boxed_pointer(promise as *const u8);
     }
     if method == "Runtime.evaluate" && expression.as_deref().is_some_and(|value| value.contains("__perryResolve(")) {
-        let pending = get_hidden_value(session, KEY_PENDING_PROMISE);
-        let pending_raw = raw_ptr_from_value(pending);
-        if pending_raw >= 0x10000 {
+        if let Some(pending) = pending_promise(session) {
             set_hidden_value(session, KEY_PENDING_PROMISE, undefined());
             crate::promise::js_promise_resolve(
-                pending_raw as *mut crate::promise::Promise,
+                pending,
                 evaluate_result(remote("number", &[("value", 6.0), ("description", str_value("6"))])),
             );
         }

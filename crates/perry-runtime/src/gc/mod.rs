@@ -498,6 +498,9 @@ pub fn gc_init() {
     // under concurrent load) must rewrite the cell, or the body's next
     // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
     gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
+    // Connected inspector sessions are retained only by the inspector's
+    // thread-local registry while they receive protocol notifications.
+    gc_register_mutable_root_scanner(crate::node_inspector::scan_inspector_roots_mut);
     // Issue #1790 (epic #1785 class-object dispatch / design #1772): the class
     // static-inheritance side-tables CLASS_PROTOTYPE_OBJECTS and
     // CLASS_PARENT_CLOSURES hold the heap parent (`class Sub extends make(...)`
