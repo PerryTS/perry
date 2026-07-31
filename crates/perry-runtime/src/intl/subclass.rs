@@ -238,16 +238,22 @@ pub(crate) fn intl_instanceof(value: f64, type_ref: f64) -> Option<bool> {
 
 /// Normalize a value to its heap-pointer address for prototype identity
 /// comparison — a NaN-boxed `POINTER_TAG` value or a raw heap pointer both
-/// resolve to their address; any non-pointer yields 0. Mirrors the helper in
-/// `object/instanceof.rs` (kept local so this module stays free of a private
-/// cross-crate dependency on that helper).
+/// resolve to their address; any non-pointer / non-heap yields 0. Mirrors
+/// `object/instanceof.rs::proto_identity_addr` but routes the floor check
+/// through the canonical `is_plausible_heap_addr` predicate so handle-band
+/// rejection stays single-sourced.
 fn proto_identity_addr(v: f64) -> usize {
     let bits = v.to_bits();
     let top16 = bits >> 48;
-    if top16 == 0x7FFD {
+    let addr = if top16 == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if top16 == 0 && bits >= 0x1000 {
+    } else if top16 == 0 {
         bits as usize
+    } else {
+        return 0;
+    };
+    if crate::value::addr_class::is_plausible_heap_addr(addr) {
+        addr
     } else {
         0
     }

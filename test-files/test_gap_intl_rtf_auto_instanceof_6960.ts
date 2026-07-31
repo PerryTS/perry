@@ -37,9 +37,11 @@ console.log("quarter 0:", rtf.format(0, "quarter"));
 const always = new Intl.RelativeTimeFormat("en", { numeric: "always" });
 console.log("always day -1:", always.format(-1, "day"));
 
-// short style auto forms abbreviate week/year
+// short style auto forms abbreviate week/month/quarter/year
 const short = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "short" });
 console.log("short week -1:", short.format(-1, "week"));
+console.log("short month 0:", short.format(0, "month"));
+console.log("short quarter 1:", short.format(1, "quarter"));
 console.log("short year  1:", short.format(1, "year"));
 console.log("short day  -1:", short.format(-1, "day"));
 
