@@ -1,0 +1,90 @@
+name: Node Compat Matrix Guard
+
+# Gates scripts/node_compat_matrix.mjs --check: a breadth sweep over every
+# require("module").builtinModules entry, both import forms (M and node:M),
+# against a PINNED, SRI-verified Node oracle (external-tools.json tools.node,
+# currently 26.5.1). It compares Perry's export-SHAPE fingerprint per module
+# to the oracle's and FAILS if any baselined cell got strictly worse or a
+# prefix-parity invariant broke (test-parity/node-compat-matrix.baseline.json).
+# The systematic form of tracker #812. Behavioral parity stays in the
+# node-suite (node-suite-guard.yml) — this is shape breadth, one pinned oracle.
+#
+# Its OWN job on purpose: the runner downloads the pinned Node dist tarball
+# (~40MB) and verifies it, which must not slow the main cargo-test job. The
+# node used by setup-node here only EXECUTES the .mjs; the oracle Node is the
+# pinned dist the runner fetches + SRI-verifies itself.
+#
+# Decoupled from the (not-yet-enabled) merge queue like node-suite-guard.yml:
+# runs nightly + on demand today, and the merge_group trigger is INERT until a
+# maintainer enables the merge queue in branch protection.
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly, offset from node-suite-guard (37 4) and the Core Subset Radar
+    # (17 3) to avoid overlap.
+    - cron: "57 4 * * *"
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-compat-matrix-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_CACHE_SIZE: "2G"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  node-compat-matrix:
+    # macOS arm64 to MATCH the committed darwin-arm64 baseline
+    # (test-parity/node-compat-matrix.baseline.json). The gate now refuses a
+    # cross-platform comparison outright (checkAgainstBaseline rejects a
+    # platform/nodeVersion mismatch), so a darwin baseline must be gated on a
+    # darwin-arm64 runner — an ubuntu (linux-x64) runner would fail the scope
+    # guard rather than silently compare platform-dependent fingerprints.
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Read-only job (build + verify); don't leave the GITHUB_TOKEN in
+          # the local git config (least privilege — OWASP / CodeRabbit).
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js (executes the runner; oracle is the pinned dist)
+        uses: actions/setup-node@v7
+        with:
+          # Single source of truth: .node-version at the repo root. This node
+          # only RUNS node_compat_matrix.mjs; the compat oracle is the pinned
+          # Node the runner downloads + SRI-verifies from external-tools.json.
+          node-version-file: .node-version
+
+      - name: Build Perry release binary
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+
+      - name: Node builtin compat matrix guard (--check, pinned oracle)
+        # Fails (exit 1) if any baselined cell got strictly worse or a
+        # prefix-parity invariant broke; improvements are accepted. The runner
+        # downloads + SRI-verifies the pinned Node dist under .cache/node-pin/.
+        run: |
+          set -euo pipefail
+          echo '### Node builtin compat matrix guard' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/node_compat_matrix.mjs --check \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
