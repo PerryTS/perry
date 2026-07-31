@@ -300,13 +300,15 @@ impl<'a> Model<'a> {
             Expr::Closure { .. } => {}
             // Everything else: recurse neutrally. Under-approximating the cost
             // is the safe direction for a rule that can only refuse.
-            _ => {
-                let saved = self.self_target.take();
-                perry_hir::walker::walk_expr_children(e, &mut |child| {
-                    self.expr(child, UseCtx::Neutral, depth)
-                });
-                self.self_target = saved;
-            }
+            //
+            // `self_target` is deliberately carried THROUGH an unmodelled node
+            // rather than cleared: `t = <unmodelled>(t / 2.0)` is still a write
+            // of `t` into its own slot, and clearing the marker would turn it
+            // into a cost. A nested `LocalSet` re-targets the marker for its
+            // own RHS and restores it, so the invariant holds either way.
+            _ => perry_hir::walker::walk_expr_children(e, &mut |child| {
+                self.expr(child, UseCtx::Neutral, depth)
+            }),
         }
     }
 

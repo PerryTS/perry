@@ -450,6 +450,38 @@ fn a_self_write_in_an_i32_position_is_still_a_benefit() {
     assert!(!out.contains(&1), "self-written i32 mixer refused: {out:?}");
 }
 
+/// The self-write exemption survives an unmodelled wrapper. `t = void (t / 2.0)`
+/// is still a write of `t` into its own slot; if the marker were cleared on the
+/// way down, an unmodelled node anywhere above a `/` would silently turn a
+/// self-write into a refusal.
+///
+/// The second local in the same position is the anti-vacuity control: the `/`
+/// under the wrapper really does reach the model as a cost, so a green verdict
+/// for `t` is the exemption working and not the walk stopping early.
+#[test]
+fn a_self_write_through_an_unmodelled_node_is_still_not_a_cost() {
+    // 1 = t (self-written), 2 = other (read in the same expression)
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        let_mut(2, Some(Expr::Integer(0))),
+        Stmt::Expr(inc(2)),
+        Stmt::While {
+            condition: cmp(get(1), Expr::Integer(100)),
+            body: vec![set(
+                1,
+                Expr::Void(Box::new(bin(
+                    BinaryOp::Div,
+                    bin(BinaryOp::Add, get(1), get(2)),
+                    Expr::Number(2.0),
+                ))),
+            )],
+        },
+    ];
+    let out = run(&stmts, &HashSet::new());
+    assert!(!out.contains(&1), "wrapped self-write refused: {out:?}");
+    assert!(out.contains(&2), "control local not refused: {out:?}");
+}
+
 /// An expression form the model does not understand contributes neither side.
 /// A refusal rule must under-approximate the cost: a missed refusal is today's
 /// behaviour, a spurious one is a lost promotion.
