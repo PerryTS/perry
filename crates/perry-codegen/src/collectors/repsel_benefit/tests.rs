@@ -106,6 +106,7 @@ fn run(stmts: &[Stmt], index_used: &HashSet<u32>) -> HashSet<u32> {
 /// ```text
 /// let totalIter = 0;
 /// for (let py = 0; py < 800; py++) {
+///   const cy = (py - 400.0) * 4.0;
 ///   for (let px = 0; px < 800; px++) {
 ///     const cx = (px - 400.0) * 4.0;
 ///     let iter = 0;
@@ -120,7 +121,7 @@ fn run(stmts: &[Stmt], index_used: &HashSet<u32>) -> HashSet<u32> {
 /// consumed only as doubles inside a loop. This is the +14.87% regression.
 #[test]
 fn mandelbrot_iter_is_refused() {
-    // 1 = totalIter, 2 = py, 3 = px, 4 = cx, 5 = iter
+    // 1 = totalIter, 2 = py, 3 = px, 4 = cx, 5 = iter, 6 = cy
     let inner_while = Stmt::While {
         condition: Expr::Logical {
             op: LogicalOp::And,
@@ -147,18 +148,36 @@ fn mandelbrot_iter_is_refused() {
         // totalIter = totalIter + iter  →  iter read into a boxed accumulator
         set(1, bin(BinaryOp::Add, get(1), get(5))),
     ];
+    // The py loop carries its own `const cy = (py - 400.0) * 4.0`, exactly as
+    // the source does. Leaving it out is how the first version of this test
+    // passed for `px` and `iter` while `py` stayed promoted — the reduction
+    // was wrong, not the model.
+    let py_body = vec![
+        Stmt::Let {
+            id: 6,
+            name: "cy".into(),
+            ty: HirType::Number,
+            mutable: false,
+            init: Some(bin(
+                BinaryOp::Mul,
+                bin(BinaryOp::Sub, get(2), Expr::Number(400.0)),
+                Expr::Number(4.0),
+            )),
+        },
+        for_loop(
+            let_mut(3, Some(Expr::Integer(0))),
+            cmp(get(3), Expr::Integer(800)),
+            inc(3),
+            px_body,
+        ),
+    ];
     let stmts = vec![
         let_mut(1, Some(Expr::Integer(0))),
         for_loop(
             let_mut(2, Some(Expr::Integer(0))),
             cmp(get(2), Expr::Integer(800)),
             inc(2),
-            vec![for_loop(
-                let_mut(3, Some(Expr::Integer(0))),
-                cmp(get(3), Expr::Integer(800)),
-                inc(3),
-                px_body,
-            )],
+            py_body,
         ),
     ];
 
