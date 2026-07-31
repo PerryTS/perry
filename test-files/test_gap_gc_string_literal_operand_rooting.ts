@@ -84,7 +84,13 @@ console.log("hoisted:" + hoisted);
 
 // Shape coverage. All four route through `lower_exprs_rooted`, the helper that
 // suppressed the literal without re-deriving it; each pairs a literal operand
-// with an allocating sibling in a different lowering path.
+// with an allocating sibling in a different lowering path. They are NOT live
+// here (see the note above), so they do not re-prove the bug — but each was
+// promoted to first position in its own file and A/B'd on main at N = 400 000:
+// the array-element list (`["arr", run(N)].join("|")`) and the template literal
+// (`` `tpl:${run(N)}` ``) both printed an empty line on ff85fd483 and match
+// after the fix; `run(N) + ":right"` and `"a" + "b" + run(N)` were already
+// correct there, because in those orders the literal is loaded after the call.
 //   literal on the RIGHT      -> js_value_concat_string
 console.log(run(1000) + ":right");
 //   literal + literal, allocating sibling further along the chain
