@@ -524,6 +524,7 @@ fn self_referencing_new_argument_is_still_a_cost() {
                     args: vec![get(1)],
                     type_args: vec![],
                     byte_offset: 0,
+                    cap_args_appended: 0,
                 },
             )],
         },
