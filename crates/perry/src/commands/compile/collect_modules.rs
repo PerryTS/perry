@@ -58,6 +58,29 @@ use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
+/// Is there a `node_modules/<pkg>` directory on disk reachable from the
+/// build? Used to tell "perry served this bare import from a bundled
+/// binding because there was no local copy" apart from "perry
+/// auto-preferred the binding over the user's installed copy" — only the
+/// latter warrants the partial-binding note. Walks the ancestor
+/// `node_modules` chains of both the entry file and the importing module
+/// (mirroring the resolver's own search roots), so pnpm/nested layouts
+/// are covered.
+fn node_modules_copy_on_disk(pkg_name: &str, entry_path: &Path, importer: &Path) -> bool {
+    let mut starts = vec![entry_path];
+    if importer != entry_path {
+        starts.push(importer);
+    }
+    for start in starts {
+        for node_modules in super::resolve::ancestor_node_modules_dirs(start) {
+            if node_modules.join(pkg_name).is_dir() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Next.js wall 54 (part 2): recursively gather every `*.js` file under `dir`
 /// (page/route loaders + turbopack chunks). Symlinks are not followed; errors
 /// reading a subdirectory are skipped silently (best-effort discovery).
@@ -1180,6 +1203,48 @@ fn collect_module_one(
 
         if import.is_native {
             import.module_kind = ModuleKind::NativeRust;
+
+            // "Just works" safety marker (#466 follow-up): perry is about to
+            // serve this bare import from a bundled `perry-ext-*` binding.
+            // When the binding is a well-known *partial* drop-in AND the user
+            // actually has a `node_modules/<pkg>` copy on disk, perry is
+            // silently auto-preferring an incomplete wrapper over their real
+            // dependency. Surface that: record it for a post-collect note, and
+            // — under the strict opt-in — refuse rather than auto-prefer.
+            let is_bare = !import.source.starts_with('.') && !import.source.starts_with('/');
+            if is_bare {
+                let (pkg_name, _) = parse_package_specifier(&import.source);
+                if let Some(binding) = super::well_known::lookup_well_known(&pkg_name) {
+                    // Node builtins (net/http/zlib/events/…) are always native
+                    // and have no meaningful npm copy to shadow — skip them.
+                    if !binding.node_builtin
+                        && !binding.is_faithful()
+                        && node_modules_copy_on_disk(&pkg_name, entry_path, &canonical)
+                    {
+                        if std::env::var_os("PERRY_REQUIRE_FAITHFUL_BINDINGS").is_some() {
+                            anyhow::bail!(
+                                "`{pkg}` resolves to the bundled native binding \
+                                 `{krate}`, which is a PARTIAL drop-in (not the full \
+                                 npm API), but a `node_modules/{pkg}` copy is installed \
+                                 and `PERRY_REQUIRE_FAITHFUL_BINDINGS` is set. Refusing \
+                                 to auto-prefer the partial binding.\n\
+                                 \n\
+                                 Either add `{pkg}` to `perry.compilePackages` (+ \
+                                 `perry.allow.compilePackages`) to AOT-compile the real \
+                                 JavaScript, or unset PERRY_REQUIRE_FAITHFUL_BINDINGS to \
+                                 accept the partial binding.\n\
+                                 \n\
+                                 (imported from {importer})",
+                                pkg = pkg_name,
+                                krate = binding.krate,
+                                importer = canonical.display(),
+                            );
+                        }
+                        ctx.partial_binding_autoprefers.insert(pkg_name);
+                    }
+                }
+            }
+
             if import.source == "perry/ui" {
                 ctx.needs_ui = true;
             }

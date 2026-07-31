@@ -40,6 +40,12 @@ lib = "perry_ext_dotenv"
 # Tracking issue for the migration; surfaced in error messages
 # when the bundled .a is missing at link time.
 tracking = "#466"
+# `compat` — how faithful this wrapper is to the npm package's public
+# API (see `BindingCompat` in well_known.rs). `full` = audited complete
+# drop-in, safe to auto-prefer over an on-disk node_modules copy.
+# ABSENT ⇒ conservative `partial` default. dotenv's surface is the small,
+# fully-ported `config()`/`parse()` pair.
+compat = "full"
 
 [bindings.dotenv.upstream]
 version = "17.4.2"
@@ -52,6 +58,9 @@ date = "2026-07-30"
 crate = "perry-ext-nanoid"
 lib = "perry_ext_nanoid"
 tracking = "#466"
+# Full drop-in: the complete `nanoid()` / `customAlphabet` / `urlAlphabet`
+# surface is ported.
+compat = "full"
 
 [bindings.nanoid.upstream]
 version = "6.0.0"
@@ -64,6 +73,8 @@ date = "2026-07-30"
 crate = "perry-ext-uuid"
 lib = "perry_ext_uuid"
 tracking = "#466"
+# Full drop-in: v1/v3/v4/v5/v7 generators + parse/stringify/validate/version.
+compat = "full"
 
 [bindings.uuid.upstream]
 version = "14.0.1"
@@ -76,6 +87,9 @@ date = "2026-07-30"
 crate = "perry-ext-slugify"
 lib = "perry_ext_slugify"
 tracking = "#466"
+# Full drop-in: the single `slugify(str, opts)` entry point with the
+# documented option bag (replacement/remove/lower/strict/locale/trim).
+compat = "full"
 
 [bindings.slugify.upstream]
 version = "1.6.9"
@@ -135,6 +149,10 @@ date = "2026-07-30"
 crate = "perry-ext-lru-cache"
 lib = "perry_ext_lru_cache"
 tracking = "#466"
+# PARTIAL (explicit): the wrapper's store is numeric-value-oriented and
+# does not faithfully reproduce lru-cache's full generic/option surface.
+# Kept off the auto-prefer faithful path until the port is completed.
+compat = "partial"
 
 [bindings.lru-cache.upstream]
 version = "11.5.2"
@@ -562,6 +580,9 @@ tracking = "#867"
 crate = "perry-ext-node-forge"
 lib = "perry_ext_node_forge"
 tracking = "#466"
+# PARTIAL (explicit): only the PKI subset (RSA keygen, X.509 build/sign,
+# PEM round-trips) is ported — forge's cipher/md/util/asn1 surface is not.
+compat = "partial"
 
 # Upstream provenance pin (see PR #7031 / docs upstream-pins.md).
 [bindings.node-forge.upstream]
@@ -583,6 +604,10 @@ date = "2026-07-30"
 crate = "perry-ext-undici"
 lib = "perry_ext_undici"
 tracking = "#466"
+# PARTIAL (explicit): ProxyAgent / Agent / setGlobalDispatcher /
+# getGlobalDispatcher + native `fetch` are real; `request` and the
+# pool/mock/stream surface are not implemented.
+compat = "partial"
 
 # Upstream provenance pin (see PR #7031 / docs upstream-pins.md). undici's
 # stable dispatcher API (ProxyAgent/Agent/setGlobalDispatcher) is unchanged

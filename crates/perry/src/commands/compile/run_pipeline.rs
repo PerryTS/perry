@@ -361,6 +361,24 @@ pub fn run_with_parse_cache(
         format,
     )?;
 
+    // "Just works" transparency (#466 follow-up): when perry auto-preferred a
+    // bundled PARTIAL well-known binding over a `node_modules/<pkg>` copy the
+    // user actually installed, say so once per package. The build still
+    // succeeds (this is the zero-config path); the note points at the escape
+    // hatch for anyone who needs the full npm surface.
+    if matches!(format, OutputFormat::Text) && !ctx.partial_binding_autoprefers.is_empty() {
+        for pkg in &ctx.partial_binding_autoprefers {
+            let krate = self::well_known::lookup_well_known(pkg)
+                .map(|b| b.krate.clone())
+                .unwrap_or_else(|| format!("perry-ext-{pkg}"));
+            eprintln!(
+                "  note: serving `{pkg}` from the bundled native binding `{krate}` \
+                 (a partial drop-in), ignoring your installed `node_modules/{pkg}`. \
+                 Add `{pkg}` to `perry.compilePackages` to AOT-compile the real JS instead."
+            );
+        }
+    }
+
     run_post_collect_preflight(&args, &mut ctx, format)?;
 
     // #2309: tree-shake the final module graph — prune unreachable
