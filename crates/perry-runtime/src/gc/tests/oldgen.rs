@@ -1142,6 +1142,13 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
 /// `restore_surviving_dirty_coverage`. This is the under-remembering
 /// (use-after-free) guard for Fix 2: if any minor dropped the edge, the
 /// child would be swept and the RS root mark below would not reach it.
+///
+/// The loop tracks the child through the parent's SLOT, never through the
+/// pre-collection Rust local. With the conservative native-stack scan off —
+/// precise roots only, which is what production runs — the copying minor is
+/// eligible and RELOCATES the child on every cycle, rewriting the parent's
+/// slot. A test that re-read the raw local would be reading a stale address,
+/// which is the exact defect class this suite exists to catch.
 #[test]
 fn test_minor_preserves_old_to_young_edge_across_minors() {
     let _isolation = copying_nursery_isolation_lock();
@@ -1172,8 +1179,10 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
         other_old.push(h);
     }
 
-    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+    // Re-derived from the parent's slot after every minor (see the loop), so
+    // both are `mut`: a relocating minor moves the child.
+    let mut child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let mut child_header = unsafe { header_from_user_ptr(child as *const u8) };
     assert!(crate::arena::pointer_in_nursery(child));
     unsafe {
         *fields = ptr_bits(child);
@@ -1185,22 +1194,58 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
         "barrier must record the old→young edge"
     );
 
+    // Cycles that actually exercised the old→young RS edge. Asserted non-zero
+    // below so the loop cannot go vacuous if the child is tenured early.
+    let mut rs_covered_cycles = 0;
+
     for cycle in 0..4 {
         let trace = collect_minor_trace(GcTriggerKind::Direct);
         assert_eq!(
             trace.old_to_young_rebuild_objects_scanned, 0,
             "cycle {cycle}: minor must skip the whole-heap RS rebuild"
         );
+
+        // Follow the edge through the parent's SLOT — the authoritative root —
+        // rather than through the pre-collection local. A relocating minor
+        // moves the child and rewrites this slot; that rewrite is the property
+        // under test, not a nuisance.
+        let slot = unsafe { *fields };
+        let slot_child = (slot & POINTER_MASK) as usize;
+        assert_eq!(
+            slot,
+            ptr_bits(slot_child),
+            "cycle {cycle}: the parent's slot must still hold a tagged pointer"
+        );
+        if trace.copying_nursery.copied_objects == 0
+            && trace.copying_nursery.promoted_objects == 0
+        {
+            assert_eq!(
+                slot_child, child,
+                "cycle {cycle}: a minor that moved nothing must leave the parent's slot intact"
+            );
+        }
+        child = slot_child;
+        child_header = unsafe { header_from_user_ptr(child as *const u8) };
+
+        if !crate::arena::pointer_in_nursery(child) {
+            // The child aged out: a relocating minor TENURED it into the old
+            // gen. The edge is now old→old, so the remembered set correctly
+            // retires it and RS coverage no longer applies. The
+            // under-remembering property still has to hold, and here it means
+            // the child is live old-gen memory rather than swept.
+            assert!(
+                crate::arena::pointer_in_old_gen(child),
+                "cycle {cycle}: a child that left the nursery must be in the old gen, \
+                 not swept out from under the parent's slot"
+            );
+            break;
+        }
+
         // The child (reachable only via the old parent) must still be covered
         // by the remembered set: RS root marking reaches and marks it.
         assert!(
             remembered_set_size() > 0,
             "cycle {cycle}: old→young edge must survive the minor"
-        );
-        assert_eq!(
-            unsafe { *fields },
-            ptr_bits(child),
-            "cycle {cycle}: non-moving minor must leave the parent's slot intact"
         );
         clear_marks();
         let valid_ptrs = build_valid_pointer_set();
@@ -1219,7 +1264,14 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
             // from the remembered set alone (not a stale mark).
             (*child_header).gc_flags &= !GC_FLAG_MARKED;
         }
+        rs_covered_cycles += 1;
     }
+
+    assert!(
+        rs_covered_cycles >= 2,
+        "the loop must actually exercise the old→young edge across repeated \
+         minors; only {rs_covered_cycles} cycle(s) did"
+    );
 
     unsafe {
         (*parent_header).gc_flags &= !GC_FLAG_PINNED;
