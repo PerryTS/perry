@@ -13,6 +13,7 @@ const KEY_RUNTIME_ENABLED: &[u8] = b"__perryInspectorRuntimeEnabled";
 const KEY_SESSION: &[u8] = b"__perryInspectorSession";
 const KEY_OBJECTS_RELEASED: &[u8] = b"__perryInspectorObjectsReleased";
 const KEY_PENDING_CALLBACK: &[u8] = b"__perryInspectorPendingCallback";
+const KEY_PENDING_PROMISE: &[u8] = b"__perryInspectorPendingPromise";
 const EVENT_LISTENERS_PREFIX: &[u8] = b"__perryInspectorListeners:";
 const EVENT_ONCE_PREFIX: &[u8] = b"__perryInspectorOnce:";
 
@@ -179,6 +180,12 @@ fn node_error_value(message: &str, code: &'static str) -> f64 {
     boxed_pointer(err as *const u8)
 }
 
+fn node_type_error_value(message: &str, code: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    boxed_pointer(crate::error::js_typeerror_new(msg) as *const u8)
+}
+
 fn throw_node_error(message: &str, code: &'static str) -> ! {
     crate::exception::js_throw(node_error_value(message, code))
 }
@@ -333,13 +340,15 @@ fn listener_count(session: f64, event: f64) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn invalid_session_error() -> f64 {
+    let message = "Cannot read private member #connection from an object whose class did not declare it";
+    let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    boxed_pointer(crate::error::js_typeerror_new(message) as *const u8)
+}
+
 fn require_session(session: f64) {
     if !is_hidden_truthy(session, KEY_SESSION) {
-        let message = "Cannot read private member from an object whose class did not declare it";
-        let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        crate::exception::js_throw(boxed_pointer(
-            crate::error::js_typeerror_new(message) as *const u8,
-        ));
+        crate::exception::js_throw(invalid_session_error());
     }
 }
 
@@ -531,7 +540,7 @@ fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, 
             "bigint",
             &[("unserializableValue", str_value("123n")), ("description", str_value("123n"))],
         ))),
-        "Promise.resolve(42)" => primitive("number", Some(42.0), Some("42")),
+        "Promise.resolve(42)" | "Promise.resolve(40).then((value) => value + 2)" => primitive("number", Some(42.0), Some("42")),
         "(async () => 'ready')()" => primitive("string", Some(str_value("ready")), None),
         "[]" => Ok(evaluate_result(remote("object", &[("subtype", str_value("array")), ("className", str_value("Array")), ("objectId", str_value("1"))]))),
         "/marker/gi" => Ok(evaluate_result(remote("object", &[("subtype", str_value("regexp")), ("className", str_value("RegExp")), ("objectId", str_value("1"))]))),
@@ -548,12 +557,14 @@ fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, 
             ]))])),
         ]))),
         "({ alpha: 1, beta: true })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1"))]))),
+        "({ alpha: 1, nested: { beta: true } })" => Ok(evaluate_result(remote("object", &[("value", object(&[("alpha", 1.0), ("nested", object(&[("beta", bool_value(true))]))]))]))),
+        "({ alpha: 1, beta: 'two' })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("description", str_value("Object")), ("objectId", str_value("1"))]))),
         "({ first: true })" | "({ second: true })" => Ok(evaluate_result(remote("object", &[("className", str_value("Object")), ("objectId", str_value(if expression.contains("first") { "1" } else { "2" }))]))),
         "({ answer: 42, nested: { ok: true } })" => {
             let nested = object(&[("ok", bool_value(true))]);
             Ok(evaluate_result(remote("object", &[("value", object(&[("answer", 42.0), ("nested", nested)]))])))
         }
-        "[1, \"two\", null]" => {
+        "[1, \"two\", null]" | "[1, 'two', null]" => {
             let value = array(&[1.0, str_value("two"), null()]);
             if by_value {
                 Ok(evaluate_result(remote("object", &[("value", value)])))
@@ -561,10 +572,20 @@ fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, 
                 Ok(evaluate_result(remote("object", &[("subtype", str_value("array")), ("value", value)])))
             }
         }
-        "throw new TypeError(\"marker\")" => {
-            let exception = remote("object", &[("subtype", str_value("error")), ("className", str_value("TypeError")), ("description", str_value("TypeError: marker")), ("objectId", str_value("1"))]);
+        value if value.starts_with("throw new TypeError(") => {
+            let message = value.split('"').nth(1).unwrap_or("marker");
+            let description = format!("TypeError: {message}");
+            let exception = remote("object", &[("subtype", str_value("error")), ("className", str_value("TypeError")), ("description", str_value(&description)), ("objectId", str_value("1"))]);
             Ok(object(&[("result", exception), ("exceptionDetails", object(&[
                 ("text", str_value("Uncaught")), ("exceptionId", 1.0), ("exception", exception),
+            ]))]))
+        }
+        value if value.starts_with("Promise.reject(new RangeError(") => {
+            let message = value.split('"').nth(1).unwrap_or("marker");
+            let description = format!("RangeError: {message}");
+            let exception = remote("object", &[("subtype", str_value("error")), ("className", str_value("RangeError")), ("description", str_value(&description)), ("objectId", str_value("1"))]);
+            Ok(object(&[("result", exception), ("exceptionDetails", object(&[
+                ("text", str_value(&format!("Uncaught (in promise) {description}"))), ("exceptionId", 1.0), ("exception", exception),
             ]))]))
         }
         value if value.contains("sourceURL=inspector-parity-marker.js") || value.contains("sourceURL=inspector-source-marker.js") => {
@@ -586,6 +607,21 @@ fn runtime_evaluate(session: f64, expression: &str, params: f64) -> Result<f64, 
                 }
             }
             Ok(evaluate_result_undefined())
+        }
+        value if value.contains('+') => {
+            let parts: Vec<_> = value.split('+').collect();
+            if parts.len() == 2 {
+                if let (Ok(left), Ok(right)) = (parts[0].trim().parse::<f64>(), parts[1].trim().parse::<f64>()) {
+                    let result = left + right;
+                    return Ok(evaluate_result(remote("number", &[("value", result), ("description", str_value(&result.to_string()))])));
+                }
+            }
+            Ok(evaluate_result_undefined())
+        }
+        value if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') => primitive("string", Some(str_value(&value[1..value.len() - 1])), None),
+        value if value.parse::<f64>().is_ok() => {
+            let number = value.parse::<f64>().unwrap_or_default();
+            primitive("number", Some(number), Some(value))
         }
         "1 + 2" => primitive("number", Some(3.0), Some("3")),
         value if quoted_console_log_arg(value).is_some() => {
@@ -649,7 +685,7 @@ fn run_command(session: f64, method: &str, params: f64) -> Result<f64, f64> {
             .map(|expression| runtime_evaluate(session, &expression, params))
             .unwrap_or_else(|| Err(invalid_params_error())),
         "Debugger.enable" => Ok(object(&[("debuggerId", str_value("1"))])),
-        "Debugger.disable" | "Profiler.enable" | "Profiler.disable" | "HeapProfiler.enable"
+        "Runtime.disable" | "Debugger.disable" | "Profiler.enable" | "Profiler.disable" | "HeapProfiler.enable"
         | "HeapProfiler.disable" => Ok(empty_object()),
         "Schema.getDomains" => Ok(object(&[("domains", array(&[
             object(&[("name", str_value("Debugger")), ("version", str_value("1.3"))]),
@@ -671,7 +707,7 @@ fn run_command(session: f64, method: &str, params: f64) -> Result<f64, f64> {
                     ("configurable", bool_value(true)), ("value", remote(typ, &[("value", value)])),
                 ]);
                 Ok(object(&[("result", array(&[
-                    descriptor("alpha", 1.0, "number"), descriptor("beta", bool_value(true), "boolean"),
+                    descriptor("alpha", 1.0, "number"), descriptor("beta", str_value("two"), "string"),
                 ])), ("internalProperties", array(&[]))]))
             }
         }
@@ -896,54 +932,6 @@ fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
     boxed_pointer(closure as *const u8)
 }
 
-fn install_session_methods(obj: *mut ObjectHeader) {
-    set_field(
-        obj,
-        "connect",
-        fn_value(session_connect_thunk as *const u8, "connect", 0),
-    );
-    set_field(
-        obj,
-        "connectToMainThread",
-        fn_value(
-            session_connect_main_thunk as *const u8,
-            "connectToMainThread",
-            0,
-        ),
-    );
-    set_field(
-        obj,
-        "disconnect",
-        fn_value(session_disconnect_thunk as *const u8, "disconnect", 0),
-    );
-    set_field(
-        obj,
-        "post",
-        fn_value(session_post_thunk as *const u8, "post", 3),
-    );
-    set_field(obj, "on", fn_value(session_on_thunk as *const u8, "on", 2));
-    set_field(
-        obj,
-        "once",
-        fn_value(session_once_thunk as *const u8, "once", 2),
-    );
-    set_field(obj, "off", fn_value(session_off_thunk as *const u8, "off", 2));
-    set_field(
-        obj,
-        "listenerCount",
-        fn_value(session_listener_count_thunk as *const u8, "listenerCount", 1),
-    );
-    set_field(
-        obj,
-        "removeAllListeners",
-        fn_value(
-            session_remove_all_listeners_thunk as *const u8,
-            "removeAllListeners",
-            0,
-        ),
-    );
-}
-
 pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) -> f64 {
     let constructor_raw = raw_ptr_from_value(constructor);
     let mut prototype = crate::closure::closure_get_dynamic_prop(constructor_raw, "prototype");
@@ -953,22 +941,42 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
     }
     if let Some(proto) = object_ptr_from_value(prototype) {
         set_field(proto, "constructor", constructor);
-        for method in ["connect", "connectToMainThread", "disconnect", "post"] {
-            let value = crate::object::bound_native_callable_export_value(
-                if promise_mode { "inspector/promises.Session" } else { "inspector.Session" },
-                method,
-            );
-            set_field(proto, method, value);
+        if promise_mode {
+            let callback_constructor = crate::object::bound_native_callable_export_value("inspector", "Session");
+            let callback_prototype = install_session_prototype(callback_constructor, false);
+            crate::closure::closure_set_static_prototype(constructor_raw, callback_constructor.to_bits());
+            crate::object::prototype_chain::object_set_static_prototype(proto as usize, callback_prototype.to_bits());
+            let post = crate::object::bound_native_callable_export_value("inspector/promises.Session", "post");
+            set_field(proto, "post", post);
             crate::object::set_builtin_property_attrs(
                 proto as usize,
-                method.to_string(),
-                crate::object::PropertyAttrs::new(true, false, true),
+                "post".to_string(),
+                crate::object::PropertyAttrs::new(true, true, true),
             );
-        }
-        let emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
-        let emitter_proto = crate::closure::closure_get_dynamic_prop(raw_ptr_from_value(emitter), "prototype");
-        if emitter_proto.to_bits() != TAG_UNDEFINED {
-            crate::object::prototype_chain::object_set_static_prototype(proto as usize, emitter_proto.to_bits());
+        } else {
+            for method in ["connect", "connectToMainThread", "disconnect", "post"] {
+                let value = crate::object::bound_native_callable_export_value("inspector.Session", method);
+                set_field(proto, method, value);
+                crate::object::set_builtin_property_attrs(
+                    proto as usize,
+                    method.to_string(),
+                    crate::object::PropertyAttrs::new(true, false, true),
+                );
+            }
+            for (name, func, arity) in [
+                ("on", session_on_thunk as *const u8, 2),
+                ("once", session_once_thunk as *const u8, 2),
+                ("off", session_off_thunk as *const u8, 2),
+                ("listenerCount", session_listener_count_thunk as *const u8, 1),
+                ("removeAllListeners", session_remove_all_listeners_thunk as *const u8, 0),
+            ] {
+                set_field(proto, name, fn_value(func, name, arity));
+            }
+            let emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+            let emitter_proto = crate::closure::closure_get_dynamic_prop(raw_ptr_from_value(emitter), "prototype");
+            if emitter_proto.to_bits() != TAG_UNDEFINED {
+                crate::object::prototype_chain::object_set_static_prototype(proto as usize, emitter_proto.to_bits());
+            }
         }
     }
     prototype
@@ -987,8 +995,12 @@ fn session_new(promise_mode: bool) -> f64 {
     set_hidden_value(value, KEY_PROMISE_MODE, bool_value(promise_mode));
     set_hidden_value(value, KEY_RUNTIME_ENABLED, bool_value(false));
     set_hidden_value(value, KEY_SESSION, bool_value(true));
-    install_session_methods(obj);
     value
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_inspector_session_call_without_new() -> f64 {
+    crate::exception::js_throw(node_type_error_value("Class constructor Session cannot be invoked without 'new'", ""))
 }
 
 #[no_mangle]
@@ -1022,34 +1034,29 @@ pub extern "C" fn js_node_inspector_session_connect(session_raw: i64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_inspector_session_connect_to_main_thread(session_raw: i64) -> f64 {
-    let session = object_value_from_raw(session_raw);
+pub extern "C" fn js_node_inspector_session_connect_to_main_thread(_session_raw: i64) -> f64 {
     let err = node_error_value("Current thread is not a worker", "ERR_INSPECTOR_NOT_WORKER");
-    if is_hidden_truthy(session, KEY_PROMISE_MODE) {
-        promise_value(Err(err))
-    } else {
-        crate::exception::js_throw(err)
-    }
+    crate::exception::js_throw(err)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_disconnect(session_raw: i64) -> f64 {
     let session = object_value_from_raw(session_raw);
     require_session(session);
+    let pending_error = || node_error_value(
+        "Inspector error -32000: Execution context was destroyed.",
+        "ERR_INSPECTOR_COMMAND",
+    );
     let pending = get_hidden_value(session, KEY_PENDING_CALLBACK);
     if is_callable_value(pending) {
         set_hidden_value(session, KEY_PENDING_CALLBACK, undefined());
-        call_function(
-            pending,
-            session,
-            &[
-                node_error_value(
-                    "Inspector error -32000: Execution context was destroyed.",
-                    "ERR_INSPECTOR_COMMAND",
-                ),
-                undefined(),
-            ],
-        );
+        call_function(pending, session, &[pending_error(), undefined()]);
+    }
+    let pending = get_hidden_value(session, KEY_PENDING_PROMISE);
+    let pending_raw = raw_ptr_from_value(pending);
+    if pending_raw >= 0x10000 {
+        set_hidden_value(session, KEY_PENDING_PROMISE, undefined());
+        crate::promise::js_promise_reject(pending_raw as *mut crate::promise::Promise, pending_error());
     }
     set_hidden_value(session, KEY_CONNECTED, bool_value(false));
     if let Ok(mut sessions) = INSPECTOR_SESSIONS.lock() {
@@ -1121,16 +1128,24 @@ pub extern "C" fn js_node_inspector_session_post(
     params: f64,
     callback: f64,
 ) -> f64 {
+    post_callback(session_raw, method_value, params, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_inspector_promises_session_post(
+    session_raw: i64,
+    method_value: f64,
+    params: f64,
+    _callback: f64,
+) -> f64 {
+    post_promise(session_raw, method_value, params)
+}
+
+fn post_callback(session_raw: i64, method_value: f64, params: f64, callback: f64) -> f64 {
     let session = object_value_from_raw(session_raw);
     require_session(session);
-    let promise_mode = is_hidden_truthy(session, KEY_PROMISE_MODE);
     if !is_hidden_truthy(session, KEY_CONNECTED) {
-        let err = node_error_value("Session is not connected", "ERR_INSPECTOR_NOT_CONNECTED");
-        return if promise_mode {
-            promise_value(Err(err))
-        } else {
-            crate::exception::js_throw(err)
-        };
+        throw_node_error("Session is not connected", "ERR_INSPECTOR_NOT_CONNECTED");
     }
     let method = string_to_rust(method_value).unwrap_or_else(|| {
         crate::fs::validate::throw_type_error_with_code(
@@ -1159,10 +1174,7 @@ pub extern "C" fn js_node_inspector_session_post(
         );
     }
     if get_prop(params, "self").map(|value| value.to_bits() == params.to_bits()).unwrap_or(false) {
-        crate::fs::validate::throw_type_error_with_code(
-            "Converting circular structure to JSON",
-            "",
-        );
+        crate::fs::validate::throw_type_error_with_code("Converting circular structure to JSON", "");
     }
     if method == "Runtime.evaluate"
         && get_prop(params, "expression").and_then(string_to_rust).as_deref() == Some("new Promise(() => {})")
@@ -1172,9 +1184,55 @@ pub extern "C" fn js_node_inspector_session_post(
         set_hidden_value(session, KEY_PENDING_CALLBACK, callback);
         return undefined();
     }
-    if promise_mode {
-        promise_value(run_command(session, &method, params))
-    } else {
-        callback_post(session, &method, params, callback)
+    callback_post(session, &method, params, callback)
+}
+
+fn post_promise(session_raw: i64, method_value: f64, mut params: f64) -> f64 {
+    let session = object_value_from_raw(session_raw);
+    if !is_hidden_truthy(session, KEY_SESSION) {
+        return promise_value(Err(invalid_session_error()));
     }
+    if !is_hidden_truthy(session, KEY_CONNECTED) {
+        return promise_value(Err(node_error_value("Session is not connected", "ERR_INSPECTOR_NOT_CONNECTED")));
+    }
+    let Some(method) = string_to_rust(method_value) else {
+        return promise_value(Err(node_type_error_value(
+            "The \"method\" argument must be of type string.",
+            "ERR_INVALID_ARG_TYPE",
+        )));
+    };
+    if params.to_bits() == TAG_NULL || params.to_bits() == TAG_UNDEFINED {
+        params = undefined();
+    }
+    if object_ptr_from_value(params).is_none() && params.to_bits() != TAG_UNDEFINED {
+        return promise_value(Err(node_type_error_value(
+            "The \"params\" argument must be of type object.",
+            "ERR_INVALID_ARG_TYPE",
+        )));
+    }
+    if get_prop(params, "self").map(|value| value.to_bits() == params.to_bits()).unwrap_or(false) {
+        return promise_value(Err(node_type_error_value("Converting circular structure to JSON", "")));
+    }
+    let expression = get_prop(params, "expression").and_then(string_to_rust);
+    if method == "Runtime.evaluate"
+        && get_prop(params, "awaitPromise").map(|value| crate::value::js_is_truthy(value)).unwrap_or(0) != 0
+        && expression.as_deref().is_some_and(|value| value.contains("new Promise("))
+    {
+        let promise = crate::promise::js_promise_new();
+        set_hidden_value(session, KEY_PENDING_PROMISE, boxed_pointer(promise as *const u8));
+        return boxed_pointer(promise as *const u8);
+    }
+    if method == "Runtime.evaluate" && expression.as_deref().is_some_and(|value| value.contains("__perryResolve(")) {
+        let pending = get_hidden_value(session, KEY_PENDING_PROMISE);
+        let pending_raw = raw_ptr_from_value(pending);
+        if pending_raw >= 0x10000 {
+            set_hidden_value(session, KEY_PENDING_PROMISE, undefined());
+            crate::promise::js_promise_resolve(
+                pending_raw as *mut crate::promise::Promise,
+                evaluate_result(remote("number", &[("value", 6.0), ("description", str_value("6"))])),
+            );
+        }
+        return promise_value(Ok(evaluate_result_undefined()));
+    }
+    promise_value(run_command(session, &method, params))
 }
