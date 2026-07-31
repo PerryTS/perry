@@ -247,18 +247,29 @@ Every object comparison on this page assumes the compiler is a function of its
 inputs. On ELF it was not: the temp `.ll` name carried pid + wall-clock nanos,
 and clang records a translation unit's **source basename** into the object as an
 `STT_FILE` symbol, so two identical compiles differed by exactly those digits —
-26/26 census workloads on a Raspberry Pi 5, 10 bytes apart on
-`suite_01_startup`. Mach-O keeps that name in the debug map instead of the `.o`,
-which is why macOS looked clean while carrying the same defect. #7135
-content-addressed the `.ll` basename.
+26/26 census workloads on a Raspberry Pi 5, 12 bytes apart on `suite_01_startup`:
+
+```
+run1  STT_FILE  perry_llvm_217502_1785528949373123236_0.ll
+run2  STT_FILE  perry_llvm_217533_1785528951945773193_0.ll
+```
+
+Mach-O does not record that name in the `.o` at all, which is why macOS looked
+clean while carrying the same defect — and why this cannot be reviewed on a Mac.
+#7135 content-addressed the `.ll` basename.
 
 Check it before trusting any object-level result on a host you have not measured
-on:
+on (the whole corpus twice is ~7 s):
 
 ```bash
 python3 scripts/compiler_output_regression.py census-determinism \
     --perry <path/to/perry> --repeat 2 --jobs 4
 ```
+
+Repeats run **concurrently** on purpose. Identical IR now shares one
+content-addressed `.ll`, so racing it is part of the subject — and that is what
+caught #7135's other half, where the `.o` name lost its pid and two `perry`
+processes compiling the same file deleted each other's object.
 
 The knob-isolation gate runs the same control inline and **fails** on a
 disagreement. It used to skip its emission half instead, which meant the half
