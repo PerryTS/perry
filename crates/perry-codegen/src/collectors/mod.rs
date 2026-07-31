@@ -30,6 +30,7 @@ mod ptr_shape;
 mod ptr_shape_report;
 mod ptr_shape_returns;
 mod refs;
+mod repsel_benefit;
 mod scalar_method_dispatch;
 mod scalar_methods;
 mod shadow_slots;

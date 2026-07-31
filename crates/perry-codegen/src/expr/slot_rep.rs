@@ -306,6 +306,10 @@ pub(crate) struct CanonicalI32Denial {
     pub closure_referenced: bool,
     pub array_row_alias: bool,
     pub not_index_used_or_bounded: bool,
+    /// #7128: every range proof passed, and the promotion would still emit
+    /// more work than the box. Distinct from every other field here, which
+    /// records a *provability* failure.
+    pub no_i32_consuming_use: bool,
     pub context: Option<&'static str>,
 }
 
@@ -388,6 +392,21 @@ impl CanonicalI32Denial {
                 Some(NOT_BOUNDED_ISSUE),
             ));
         }
+        if self.no_i32_consuming_use {
+            return Some((
+                "no_i32_consuming_use",
+                "provable, but not profitable: the local is written after its \
+                 declaration, no read of it anywhere is consumed as an i32 (no \
+                 array index, no bitwise operand, no `Math.imul`), and at least \
+                 one read inside a loop needs the double back. The i32 slot \
+                 would emit a `sitofp` per iteration and buy nothing — this is \
+                 the +14.87% instructions #7128 measured on 15_mandelbrot, \
+                 where the mixed representation also costs the loop its fused \
+                 single-block exit test",
+                Tier::CompilerLimitation,
+                Some(NO_BENEFIT_ISSUE),
+            ));
+        }
         // Everything value-level passed; only the context gate is left.
         self.context.map(|rule| {
             let (reason, issue) = context_rule_text(rule);
@@ -423,6 +442,9 @@ pub(crate) fn deny_canonical_i32(ctx: &FnCtx<'_>, id: u32, name: &str, denial: C
 const MODULE_GLOBAL_ISSUE: &str = "#7109";
 /// Tracking issue for the index-use / i32-bound precondition.
 const NOT_BOUNDED_ISSUE: &str = "#7110";
+/// Tracking issue for the profitability refusal — the one denial in this list
+/// that is not a failed proof.
+const NO_BENEFIT_ISSUE: &str = "#7128";
 
 /// `(reason, issue)` for a context-level denial rule.
 fn context_rule_text(rule: &str) -> (&'static str, &'static str) {
@@ -905,6 +927,7 @@ mod repsel_denial_tests {
             closure_referenced: false,
             array_row_alias: false,
             not_index_used_or_bounded: false,
+            no_i32_consuming_use: false,
             context: None,
         }
     }
@@ -966,6 +989,7 @@ mod repsel_denial_tests {
             closure_referenced: true,
             array_row_alias: true,
             not_index_used_or_bounded: true,
+            no_i32_consuming_use: true,
             context: Some(MODULE_INIT_CONTEXT),
         };
         assert_eq!(all.verdict().map(|v| v.0), Some("declared_bigint"));
@@ -977,6 +1001,7 @@ mod repsel_denial_tests {
             ("module_global", "closure_referenced"),
             ("closure_referenced", "array_row_alias"),
             ("array_row_alias", "not_index_used_or_bounded"),
+            ("not_index_used_or_bounded", "no_i32_consuming_use"),
         ];
         let mut d = all;
         for (named, next) in order {
@@ -988,10 +1013,40 @@ mod repsel_denial_tests {
                 "module_global" => d.module_global = false,
                 "closure_referenced" => d.closure_referenced = false,
                 "array_row_alias" => d.array_row_alias = false,
+                "not_index_used_or_bounded" => d.not_index_used_or_bounded = false,
                 _ => unreachable!(),
             }
             assert_eq!(d.verdict().map(|v| v.0), Some(next));
         }
+    }
+
+    /// #7128: a local that passed every range proof and lost only to the
+    /// profitability model names that, and not the context gate — otherwise
+    /// `15_mandelbrot`'s `iter` would report `module_init_context`, which is
+    /// exactly the rule #7121 removed, sending the next reader back to a bug
+    /// that is already fixed.
+    #[test]
+    fn the_profitability_refusal_outranks_the_context_rule() {
+        let d = CanonicalI32Denial {
+            no_i32_consuming_use: true,
+            context: Some(MODULE_INIT_CONTEXT),
+            ..passing()
+        };
+        let (rule, _, _, issue) = d.verdict().expect("a profitability denial");
+        assert_eq!(rule, "no_i32_consuming_use");
+        assert_eq!(issue, Some("#7128"));
+    }
+
+    /// …but a failed PROOF still outranks a failed benefit check: "we cannot"
+    /// is more fundamental, and more actionable, than "we should not".
+    #[test]
+    fn a_failed_range_proof_outranks_the_profitability_refusal() {
+        let d = CanonicalI32Denial {
+            not_index_used_or_bounded: true,
+            no_i32_consuming_use: true,
+            ..passing()
+        };
+        assert_eq!(d.verdict().map(|v| v.0), Some("not_index_used_or_bounded"));
     }
 
     /// Body-context reasons map onto stable rule names; a permitting context

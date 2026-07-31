@@ -1275,11 +1275,24 @@ pub(crate) fn lower_let(
     let canonical_safe_local = i32_safe_local
         || ctx.native_facts.int_valued_ta_locals().contains(&id)
         || ctx.native_facts.loop_bounded_i32_locals().contains(&id);
+    // And one PROFITABILITY term, which is not a safety term at all (#7128).
+    // Every rule above answers "may we?"; this one answers "should we?". A
+    // local written after its declaration, with no i32-consuming read anywhere
+    // and at least one double-consuming read inside a loop, pays a
+    // `sitofp`/`uitofp` per iteration and buys nothing back — measured at
+    // +14.87% instructions retired on `benchmarks/suite/15_mandelbrot.ts`,
+    // where the mixed representation additionally costs the loop its
+    // single-basic-block `fcmp`/`fccmp` exit. See `collectors/repsel_benefit.rs`.
+    let unprofitable = ctx
+        .native_facts
+        .unprofitable_canonical_i32_locals()
+        .contains(&id);
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.
     let canonical_i32_value_eligible = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
+        && !unprofitable
         && init_in_i32_range
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
@@ -1321,6 +1334,7 @@ pub(crate) fn lower_let(
                 closure_referenced: ctx.repsel_closure_ref_locals.contains(&id),
                 array_row_alias: ctx.array_row_aliases.contains_key(&id),
                 not_index_used_or_bounded: !canonical_safe_local,
+                no_i32_consuming_use: unprofitable,
                 context: ctx.repsel_context_denial,
             },
         );

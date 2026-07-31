@@ -55,6 +55,15 @@ pub(crate) struct RepresentationFacts {
     /// — it never widens the parallel-shadow `needs_i32_slot` gate. See
     /// `collectors/loop_bounded_i32.rs`.
     pub loop_bounded_i32_locals: HashSet<u32>,
+    /// Locals whose canonical-i32 promotion is PROVABLE but not PROFITABLE
+    /// (#7128): written after declaration, no i32-consuming read anywhere in
+    /// the body, and at least one double-consuming read inside a loop — so the
+    /// i32 slot only ever converts back, emitting strictly more work than the
+    /// boxed representation. A refusal set, subtracted from the canonical-i32
+    /// eligibility conjunction and from nothing else. See
+    /// `collectors/repsel_benefit.rs` for the +14.87% `15_mandelbrot`
+    /// measurement that motivates it.
+    pub unprofitable_canonical_i32_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +174,10 @@ impl TypeFacts {
 
     pub(crate) fn loop_bounded_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.loop_bounded_i32_locals
+    }
+
+    pub(crate) fn unprofitable_canonical_i32_locals(&self) -> &HashSet<u32> {
+        &self.representation.unprofitable_canonical_i32_locals
     }
 
     pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
@@ -456,6 +469,26 @@ pub(crate) fn collect_type_facts(
         clamp_fn_ids,
         strict_int_ta_views,
     );
+    // #7128: the profitability half of canonical-i32 selection. Every term
+    // above answers "may we?"; this one answers "should we?", and it is
+    // computed here — after the storage facts it consults — rather than folded
+    // into any of them, so a future widening of a range proof cannot silently
+    // move the benefit verdict (and vice versa). Skipped entirely when
+    // canonical selection is off: that arm selects nothing, so a refusal set
+    // for it would be dead work.
+    let unprofitable_canonical_i32_locals = if crate::expr::canonical_i32_locals_enabled() {
+        super::repsel_benefit::collect_unprofitable_canonical_i32_locals(
+            stmts,
+            &super::repsel_benefit::I32StorageFacts {
+                index_used: &index_used_locals,
+                strictly_bounded: &strictly_i32_bounded_locals,
+                unsigned: &unsigned_i32_locals,
+                int_valued_ta: &int_valued_ta_locals,
+            },
+        )
+    } else {
+        HashSet::new()
+    };
     let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
     let non_escaping_news = super::escape_news::collect_non_escaping_news(
         stmts,
@@ -525,6 +558,7 @@ pub(crate) fn collect_type_facts(
             not_bigint_locals,
             int_valued_ta_locals,
             loop_bounded_i32_locals,
+            unprofitable_canonical_i32_locals,
         },
         arrays: array_facts,
         effect: effect_facts,
