@@ -261,6 +261,27 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(entries, list):
         raise HarnessError("--opt-report JSON has no entries list")
 
+    # Two spellings of one fact: CONSUMPTION_INSTRUMENTED here, and
+    # `Analysis::records_consumption()` in the compiler. A duplicated predicate
+    # that can drift is worth more than a duplicated predicate that cannot, only
+    # if something checks it — so check it.
+    drift = [
+        row["analysis"]
+        for row in rows
+        if isinstance(row, dict)
+        and "records_consumption" in row
+        and bool(row["records_consumption"])
+        != (row.get("analysis") in CONSUMPTION_INSTRUMENTED)
+    ]
+    if drift:
+        raise HarnessError(
+            f"CONSUMPTION_INSTRUMENTED disagrees with the compiler's "
+            f"Analysis::records_consumption() for {sorted(drift)}. One of the two "
+            "tables was updated and the other was not; whichever is stale, the "
+            "census is now reporting consumption data it does not have (or hiding "
+            "data it does)."
+        )
+
     missing_consumption = [
         a for a in CONSUMPTION_INSTRUMENTED if "consumed" not in by_analysis.get(a, {})
     ]
@@ -308,8 +329,12 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
     # population. It is reported separately instead (`consumed_receiver`).
     consumed_receiver = 0
     unconsumed_mechanisms: dict[str, int] = {}
+    # Keyed by analysis as well as by rule. `unconsumed_mechanisms` alone is
+    # rule-keyed, and with a second instrumented analysis a gap in analysis A
+    # would be excused by a mechanism recorded for analysis B.
+    unconsumed_by_analysis: dict[str, int] = {}
     consumption_sites: dict[str, int] = {}
-    seen_consumed: set[tuple[str, Any]] = set()
+    seen_consumed: set[tuple[str, Any, Any]] = set()
     unknown_consumed: set[str] = set()
     unknown_sites: set[str] = set()
     for entry in entries:
@@ -334,8 +359,18 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
             seen_consumed.add(key)
             counts[CONSUMPTION_INSTRUMENTED[analysis]] += 1
         elif outcome == "unconsumed":
+            # Counted per VALUE, not per access site, so these totals are
+            # directly comparable with the selected/consumed columns beside
+            # them. `report_ptr_shape_context_drop` fires at every access site
+            # of a dropped local, but an unconsumed entry carries no `site`, so
+            # `Entry::dedup_key` in the compiler already collapses them: on
+            # `batch`, `totals` has two access sites and reports ONE
+            # `module_init_context`. Verified, not assumed.
             rule = str(entry.get("rule") or "<unnamed>")
             unconsumed_mechanisms[rule] = unconsumed_mechanisms.get(rule, 0) + 1
+            unconsumed_by_analysis[str(analysis)] = (
+                unconsumed_by_analysis.get(str(analysis), 0) + 1
+            )
     if unknown_sites:
         raise HarnessError(
             f"--opt-report recorded consumption at unregistered site(s) "
@@ -369,6 +404,7 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
         "counts": counts,
         "candidates": candidates,
         "unconsumed_mechanisms": unconsumed_mechanisms,
+        "unconsumed_by_analysis": unconsumed_by_analysis,
         "consumed_receiver": consumed_receiver,
         "consumption_sites": consumption_sites,
     }
@@ -647,21 +683,24 @@ def check_unconsumed_is_explained(observed: dict[str, dict[str, Any]]) -> list[s
     failures: list[str] = []
     for name, entry in sorted(observed.items()):
         counts = entry["counts"]
-        wasted = sum(
-            int(counts.get(a, 0)) - int(counts.get(k, 0))
-            for a, k in CONSUMPTION_INSTRUMENTED.items()
-        )
-        if wasted <= 0:
-            continue
-        if sum(int(v) for v in entry.get("unconsumed_mechanisms", {}).values()) > 0:
-            continue
-        failures.append(
-            f"{name}: {wasted} selected promotion(s) were not consumed, and not one "
-            "of them names a mechanism. A wasted promotion with no rule attached is "
-            "the state this census was built to end: it reads exactly like an honest "
-            "zero. Either a mechanism recorder was removed, or a new way to drop a "
-            "proof exists and needs one."
-        )
+        by_analysis = entry.get("unconsumed_by_analysis", {})
+        # Per analysis, never summed. Aggregating would let a mechanism recorded
+        # for one representation excuse a silent gap in another, and would let a
+        # negative gap cancel a positive one, the moment a second analysis is
+        # instrumented.
+        for analysis, consumed_key in CONSUMPTION_INSTRUMENTED.items():
+            wasted = int(counts.get(analysis, 0)) - int(counts.get(consumed_key, 0))
+            if wasted <= 0:
+                continue
+            if int(by_analysis.get(analysis, 0)) > 0:
+                continue
+            failures.append(
+                f"{name}: {wasted} selected {analysis} promotion(s) were not consumed, "
+                "and not one of them names a mechanism. A wasted promotion with no rule "
+                "attached is the state this census was built to end: it reads exactly "
+                "like an honest zero. Either a mechanism recorder was removed, or a new "
+                "way to drop a proof exists and needs one."
+            )
     return failures
 
 
@@ -773,8 +812,11 @@ def render_consumption_report(
     lines.append("  consumption sites exercised by the corpus:")
     for site, n in sorted(sites.items(), key=lambda kv: (-kv[1], kv[0])):
         lines.append(f"    {site:<42} {n}" + ("   <- NEVER FIRES" if n == 0 else ""))
-    uninstrumented = [k for k in CENSUS_KEYS if k not in CONSUMPTION_INSTRUMENTED
-                      and not k.endswith("-consumed")]
+    # Derived from the table, not from a "-consumed" name suffix: a future
+    # consumed key spelled differently would otherwise be reported as NOT
+    # INSTRUMENTED, which is the opposite of the truth.
+    instrumented = set(CONSUMPTION_INSTRUMENTED) | set(CONSUMPTION_INSTRUMENTED.values())
+    uninstrumented = [k for k in CENSUS_KEYS if k not in instrumented]
     lines.append(
         "  NOT INSTRUMENTED (no consumption data, reported as absent not as zero): "
         + ", ".join(uninstrumented)
@@ -1027,7 +1069,12 @@ def self_test(_args: argparse.Namespace) -> int:
         ({"schema_version": 99}, "schema drift"),
         (
             {
-                "schema_version": 1,
+                # MUST track SUPPORTED_REPORT_SCHEMA. At schema 1 this fixture
+                # raised on schema drift before it ever reached the
+                # missing-analyses branch, so the case passed for the wrong
+                # reason and the branch it names went unexercised (caught in
+                # review of #7117).
+                "schema_version": SUPPORTED_REPORT_SCHEMA,
                 "summary": {"by_analysis": [{"analysis": "ptr-shape", "selected": 0, "denied": 0}]},
                 "entries": [],
             },
@@ -1158,12 +1205,24 @@ def self_test(_args: argparse.Namespace) -> int:
             "w": {
                 "counts": {"ptr-shape": 2, "ptr-shape-consumed": 1},
                 "unconsumed_mechanisms": {"module_init_context": 1},
+                "unconsumed_by_analysis": {"ptr-shape": 1},
             }
         }
     )
     assert not check_unconsumed_is_explained(
         {"w": {"counts": {"ptr-shape": 1, "ptr-shape-consumed": 1}, "unconsumed_mechanisms": {}}}
     ), "nothing wasted means nothing to explain"
+    # The explanation must be keyed to the analysis that has the gap. A
+    # mechanism belonging to some OTHER analysis must not excuse it.
+    assert check_unconsumed_is_explained(
+        {
+            "w": {
+                "counts": {"ptr-shape": 2, "ptr-shape-consumed": 1},
+                "unconsumed_mechanisms": {"module_init_context": 1},
+                "unconsumed_by_analysis": {"ptr-numarray": 1},
+            }
+        }
+    ), "a mechanism from a different analysis must not excuse the gap"
 
     # Per-site liveness: a recorder that never fires must be red, even though
     # every promotion count is unchanged.

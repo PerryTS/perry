@@ -428,10 +428,53 @@ class Consumption(unittest.TestCase):
                     "w": {
                         "counts": {"ptr-shape": 2, "ptr-shape-consumed": 1},
                         "unconsumed_mechanisms": {"scalar_replaced": 1},
+                        "unconsumed_by_analysis": {"ptr-shape": 1},
                     }
                 }
             )
         )
+
+    def test_a_mechanism_from_another_analysis_does_not_excuse_the_gap(self):
+        """The explanation must belong to the analysis that has the gap.
+
+        `unconsumed_mechanisms` is keyed by rule name only. Summing it across
+        analyses would let a mechanism recorded for `ptr-numarray` excuse a
+        silent `ptr-shape` gap the moment a second analysis is instrumented.
+        """
+        self.assertTrue(
+            CENSUS.check_unconsumed_is_explained(
+                {
+                    "w": {
+                        "counts": {"ptr-shape": 2, "ptr-shape-consumed": 1},
+                        "unconsumed_mechanisms": {"some_other_rule": 3},
+                        "unconsumed_by_analysis": {"ptr-numarray": 3},
+                    }
+                }
+            )
+        )
+
+    def test_the_instrumentation_tables_must_not_drift(self):
+        """`CONSUMPTION_INSTRUMENTED` here vs `records_consumption()` in Rust.
+
+        Two spellings of one fact. A duplicated predicate is tolerable only if
+        something checks it -- the census refuses a report whose compiler-side
+        flag disagrees with its own table.
+        """
+        payload = report(selected={"ptr-shape": 1}, entries=[win("ptr-shape", "Ptr<Shape>")])
+        for row in payload["summary"]["by_analysis"]:
+            row["records_consumption"] = row["analysis"] in CENSUS.CONSUMPTION_INSTRUMENTED
+        CENSUS.census_from_report(payload)  # agrees: fine
+
+        for row in payload["summary"]["by_analysis"]:
+            if row["analysis"] == "ptr-shape":
+                row["records_consumption"] = False
+        with self.assertRaises(HarnessError):
+            CENSUS.census_from_report(payload)
+
+        for row in payload["summary"]["by_analysis"]:
+            row["records_consumption"] = True
+        with self.assertRaises(HarnessError):
+            CENSUS.census_from_report(payload)
 
     def test_the_instrumentation_table_lives_in_code_not_the_baseline(self):
         """Same rule as LIVENESS_FLOORS and ZERO_CANDIDATE_ALLOWLIST.

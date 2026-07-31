@@ -65,9 +65,18 @@ of them is recorded at the site where the proof is dropped:
 reproducible without the report at all: compile the workload twice, once with
 `PERRY_PTR_SHAPE_LOCALS=0`, and compare the objects.
 
+`--no-link` does **not** honour `-o`: the object goes to a per-run temp
+directory and the path is printed. So capture the printed path in each arm and
+compare those — comparing the `-o` arguments compares two files that were never
+created.
+
 ```bash
-perry compile <src> -o /tmp/x --no-link --no-cache          # prints the .o path
-PERRY_PTR_SHAPE_LOCALS=0 perry compile <src> -o /tmp/x --no-link --no-cache
+obj() {  # echo the object path this compile actually wrote
+  "$@" --no-link --no-cache 2>&1 | sed -n 's/^Wrote object file: //p'
+}
+a=$(obj perry compile <src> -o /tmp/ignored)
+b=$(PERRY_PTR_SHAPE_LOCALS=0 obj perry compile <src> -o /tmp/ignored)
+cmp "$a" "$b" && echo "IDENTICAL — the promotion emitted nothing"
 ```
 
 Byte-identical objects mean the promotions the report counted as wins changed

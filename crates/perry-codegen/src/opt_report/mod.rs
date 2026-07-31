@@ -246,6 +246,33 @@ impl Analysis {
         }
     }
 
+    /// Whether codegen records CONSUMPTION for this analysis — i.e. whether a
+    /// `consumed: 0` on its row means "nothing was applied" or merely "nobody
+    /// measured".
+    ///
+    /// The distinction has to be a property of the analysis, not something a
+    /// reader infers from the numbers. Without it the text report cannot print
+    /// a consumption line for an analysis whose promotions were ALL wasted
+    /// (`selected > 0, consumed == 0`) — the worst case this outcome exists to
+    /// expose — because a printed zero would be indistinguishable from the
+    /// false zero it would have to print for an uninstrumented analysis.
+    ///
+    /// The census keeps the same table (`CONSUMPTION_INSTRUMENTED`) and
+    /// cross-checks it against this flag, so the two cannot drift.
+    pub fn records_consumption(self) -> bool {
+        match self {
+            Analysis::PtrShape => true,
+            // Canonical i32/u32 MOVE the storage, so consumption is structural
+            // rather than a separate event. Canonical `Str` does not move
+            // storage and genuinely can be selected-and-unconsumed, but its
+            // consumers are the string-op lowerings and are not instrumented.
+            Analysis::PtrNumArray
+            | Analysis::CanonicalSlot
+            | Analysis::IntValuedTa
+            | Analysis::SpecAbi => false,
+        }
+    }
+
     /// The file whose rules produced the denial, cited in the report so the
     /// rule numbers are checkable against source.
     pub fn rule_source(self) -> &'static str {
@@ -389,12 +416,20 @@ impl Entry {
     /// (a boxed entry plus a typed clone), which would otherwise double-count
     /// every denial in it.
     ///
-    /// `outcome` is part of the key, and must stay part of it: a `Consumed`
-    /// entry and the `Selected` entry for the same value agree on every other
-    /// field (both carry `rule: None`), so without it the consumption record
-    /// for a value collapses into its selection record and the consumed tally
-    /// is structurally pinned at zero — a dead counter of exactly the kind
-    /// this outcome exists to expose.
+    /// Two elements below are load-bearing, for different pairs:
+    ///
+    /// - **`site`** separates a `Consumed` entry from the `Selected` entry for
+    ///   the same value (only consumed entries carry one), and separates the
+    ///   several sites that consumed one value from each other. It is what the
+    ///   per-site coverage gate counts.
+    /// - **`outcome`** separates an `Unconsumed` entry from a `Denied` one.
+    ///   Both carry `rule: Some(..)` and neither carries a `site`, so they are
+    ///   otherwise identical whenever the two rule vocabularies happen to
+    ///   collide — and "the proof was made and dropped" versus "the proof was
+    ///   never made" are opposite claims about the same binding.
+    ///
+    /// They are not redundant with each other: removing either silently merges
+    /// a pair of entries that mean different things.
     fn dedup_key(
         &self,
     ) -> (
@@ -968,12 +1003,11 @@ mod tests {
 
     /// The trap this outcome exists to avoid, at the data-structure level.
     ///
-    /// A `Consumed` entry and the `Selected` entry for the same value agree on
-    /// module, function, name, position, analysis AND rule (both `None`). If
-    /// `outcome` is not part of the identity, `take_entries` drops every
-    /// consumption record as a duplicate of its own selection and the consumed
-    /// tally is pinned at zero — a dead counter that looks like an honest
-    /// "nothing was consumed".
+    /// Built the way the RECORDERS build them — a consumed entry always carries
+    /// a `site` — so the test cannot pass on a shape the compiler never emits.
+    /// An earlier version omitted the site and was therefore vacuous: it
+    /// asserted a property that `outcome` alone provided, while the real
+    /// separation in a live build comes from `site`.
     #[test]
     fn dedup_key_separates_a_consumption_from_its_own_selection() {
         let mut selected = entry("f", 0, None);
@@ -981,6 +1015,7 @@ mod tests {
         selected.rule = None;
         let mut consumed = selected.clone();
         consumed.outcome = Outcome::Consumed;
+        consumed.site = Some("ptr_shape_set".into());
         assert_ne!(
             selected.dedup_key(),
             consumed.dedup_key(),
@@ -997,16 +1032,39 @@ mod tests {
         assert_eq!(kept, 2, "de-duplication swallowed the consumption record");
     }
 
-    /// An `Unconsumed` record must likewise not collapse into the `Denied`
-    /// record for the same value: they carry opposite meanings (the proof was
-    /// made and dropped vs the proof was never made) and a workload can
-    /// legitimately produce both for one binding under different analyses.
+    /// One value consumed at several sites must stay several entries: the
+    /// per-site coverage gate counts them, and collapsing them would hide a
+    /// recorder that stopped firing.
+    #[test]
+    fn dedup_key_separates_two_sites_that_consumed_one_value() {
+        let mut a = entry("f", 0, None);
+        a.outcome = Outcome::Consumed;
+        a.rule = None;
+        a.site = Some("ptr_shape_set".into());
+        let mut b = a.clone();
+        b.site = Some("ptr_shape_update".into());
+        assert_ne!(a.dedup_key(), b.dedup_key());
+    }
+
+    /// The pair `outcome` actually defends, and the only one it defends alone.
+    ///
+    /// A denial and an unconsumed record both carry `rule: Some(..)` and
+    /// neither carries a `site`, so with a shared rule name every other element
+    /// of the key matches. "The proof was never made" and "the proof was made
+    /// and thrown away" are opposite claims, and one would silently eat the
+    /// other.
     #[test]
     fn dedup_key_separates_an_unconsumed_record_from_a_denial() {
         let denied = entry("f", 0, None);
+        assert_eq!(denied.outcome, Outcome::Denied);
+        assert!(denied.rule.is_some() && denied.site.is_none());
         let mut unconsumed = denied.clone();
         unconsumed.outcome = Outcome::Unconsumed;
-        assert_ne!(denied.dedup_key(), unconsumed.dedup_key());
+        assert_ne!(
+            denied.dedup_key(),
+            unconsumed.dedup_key(),
+            "with a shared rule name these differ ONLY by outcome"
+        );
     }
 
     #[test]
