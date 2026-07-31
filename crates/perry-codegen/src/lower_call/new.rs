@@ -138,11 +138,14 @@ pub(crate) fn lower_new_member_captured(
 /// - a **rooted** argument is re-read from its slot, because the slot is a
 ///   *mutable* root that an evacuating cycle rewrites in place, leaving the
 ///   register pushed beforehand stale;
-/// - an argument that was NOT rooted because it reads a registered root (a
-///   shadow-slotted local, a module global, a string literal) is **re-loaded**.
-///   Those are never swept, but evacuation rewrote their storage too, so the
-///   cached register points at where the value used to be. Re-lowering emits
-///   the load again and costs no runtime call.
+/// - an argument that was NOT rooted because it reads an *immutable* registered
+///   root — a string literal, the only `temp_root::operand_is_reloadable` case
+///   — is **re-loaded**. It is never swept, but evacuation rewrote its handle
+///   global too, so the cached register points at where the string used to be.
+///   Re-lowering emits the load again and costs no runtime call. (A
+///   shadow-slotted local or a module global is a registered root as well, but
+///   a *mutable* one, so it takes a temp-root slot instead: re-deriving it
+///   would observe an assignment made after the call-time value was taken.)
 ///
 /// Called after the instance allocation and again before the late consumers
 /// that sit behind further arbitrary lowering (field initializers, an inlined

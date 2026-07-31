@@ -20,6 +20,30 @@
 //! evacuating cycle rewrites it and the register pushed beforehand is stale.
 //! That is also why this is preferable to widening conservative scanning —
 //! conservative roots have to pin, precise ones can move.
+//!
+//! # The invariant (#7114)
+//!
+//! **No operand register may outlive a collection point. After the last thing
+//! that can collect, every operand is either re-read from a root the collector
+//! rewrote or re-derived from immutable storage — never reused.**
+//!
+//! A root buys three things, and they are not the same thing:
+//!
+//!  1. **liveness** — the object is marked instead of swept;
+//!  2. **a rewritten location** — a slot evacuation updates to the new address;
+//!  3. **the value the consuming call observes** — which is (2) only if the
+//!     code that resumes after the safepoint *reads that location again*.
+//!
+//! #7114 is what dropping (3) on its own looks like. A string literal is a load
+//! from a `__perry_init_strings_*` handle global that
+//! `js_gc_register_global_root` registered, so it has (1) and (2) for free —
+//! and `console.log("acc:" + run(1e7))` still printed an empty line, because
+//! the register loaded *before* `run` held the pre-move address. Exit code 0,
+//! no diagnostic, no crash.
+//!
+//! [`operand_protection`] is the single place that decides which of the three
+//! strategies an operand needs. Both helper families in this module route
+//! through it; before #7114 they answered it separately and disagreed.
 
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
@@ -262,10 +286,12 @@ fn any_later_ref_may_trigger_gc(ctx: &FnCtx<'_>, exprs: &[&Expr], i: usize) -> b
 /// Lower `exprs` left to right, keeping each already-evaluated value precisely
 /// rooted across the evaluation of the ones that follow (#6951).
 ///
-/// Returns the lowered values — **re-read from their roots**, so they are
-/// valid after an evacuating cycle — and the guard index the caller must pass
-/// to [`temp_root_release`] once the consuming call has run. `None` means
-/// nothing needed protecting and no runtime calls were emitted.
+/// Returns the lowered values — **re-read from their roots, or re-derived from
+/// their immutable storage** ([`OperandProtection`]), so they are valid after
+/// an evacuating cycle — and the guard index the caller must pass to
+/// [`temp_root_release`] once the consuming call has run. `None` means nothing
+/// needed a temp-root slot; it does NOT mean nothing was re-read, because the
+/// [`OperandProtection::Reload`] half emits no runtime call at all.
 pub(crate) fn lower_exprs_rooted(
     ctx: &mut FnCtx<'_>,
     exprs: &[&Expr],
@@ -273,38 +299,43 @@ pub(crate) fn lower_exprs_rooted(
     let mut values = Vec::with_capacity(exprs.len());
     let mut slots: Vec<Option<String>> = Vec::with_capacity(exprs.len());
     let mut guard: Option<String> = None;
+    let mut reload: Vec<bool> = Vec::with_capacity(exprs.len());
     for (i, expr) in exprs.iter().enumerate() {
         let value = super::lower_expr(ctx, expr)?;
-        // A value that provably cannot be a heap reference roots nothing, so a
-        // slot for it is pure TLS traffic. This is the gate that keeps
-        // `total + s.length` and other numeric operand pairs at their old IR.
-        //
-        // A string literal is skipped for the opposite reason: it is a load
-        // from a module global that `__perry_init_strings_*` registered with
-        // `js_gc_register_global_root`, so it already has a precise root and
-        // the sweep can never take it. (A register loaded from that global is
-        // still stale after an *evacuating* cycle — but that is true of every
-        // `Expr::String` use in the compiler, not something this site
-        // introduces, and it is not the hazard #6951 is about.) Template
-        // literals are mostly literal parts, so this matters.
-        let needs_root = !super::expr_is_known_non_pointer_shadow_value(ctx, expr)
-            && !matches!(expr, Expr::String(_));
-        if needs_root && any_later_ref_may_trigger_gc(ctx, exprs, i) {
-            let idx = temp_root_push_double(ctx, &value);
-            // The FIRST slot pushed is the guard: truncating it drops every
-            // slot above it too, so one call releases the whole group.
-            if guard.is_none() {
-                guard = Some(idx.clone());
+        // `any_later_ref_may_trigger_gc` is the *window*: can anything between
+        // this operand and the consuming call collect? [`operand_protection`]
+        // turns that window into the one strategy this operand needs.
+        let collects = any_later_ref_may_trigger_gc(ctx, exprs, i);
+        match operand_protection(ctx, expr, collects) {
+            OperandProtection::Root => {
+                let idx = temp_root_push_double(ctx, &value);
+                // The FIRST slot pushed is the guard: truncating it drops every
+                // slot above it too, so one call releases the whole group.
+                if guard.is_none() {
+                    guard = Some(idx.clone());
+                }
+                slots.push(Some(idx));
+                reload.push(false);
             }
-            slots.push(Some(idx));
-        } else {
-            slots.push(None);
+            OperandProtection::Reload => {
+                slots.push(None);
+                reload.push(true);
+            }
+            OperandProtection::Reuse => {
+                slots.push(None);
+                reload.push(false);
+            }
         }
         values.push(value);
     }
-    for (value, slot) in values.iter_mut().zip(slots.iter()) {
-        if let Some(idx) = slot {
-            *value = temp_root_get_double(ctx, idx);
+    for (i, value) in values.iter_mut().enumerate() {
+        if let Some(idx) = slots[i].clone() {
+            *value = temp_root_get_double(ctx, &idx);
+        } else if reload[i] {
+            // #7114: no runtime call — just the load that was already emitted,
+            // emitted again below the collection point so it observes the
+            // address evacuation wrote back into the handle global.
+            *value = super::lower_expr(ctx, exprs[i])?;
         }
     }
     Ok((values, guard))
@@ -426,8 +457,8 @@ impl RootedOperands {
         value: &str,
         collects: bool,
     ) {
-        let needs_root = collects && operand_needs_root(ctx, operand);
-        if needs_root {
+        let protection = operand_protection(ctx, operand, collects);
+        if protection == OperandProtection::Root {
             let idx = temp_root_push_double(ctx, value);
             // The FIRST slot pushed is the guard: truncating it drops every
             // slot above it too, so one call releases the whole group.
@@ -439,7 +470,7 @@ impl RootedOperands {
             self.slots.push(None);
         }
         self.reloadable
-            .push(!needs_root && collects && operand_is_reloadable(operand));
+            .push(protection == OperandProtection::Reload);
         self.values.push(value.to_string());
     }
 
@@ -600,6 +631,69 @@ pub(crate) fn operand_needs_root(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     // the second. Rooting is the only thing that gives both, so they pay for a
     // slot.
     !matches!(expr, Expr::String(_))
+}
+
+/// What an already-lowered operand needs so that the consuming call observes a
+/// valid, current address across a following collection point.
+///
+/// See the module header for the three properties a root buys. Each variant is
+/// the cheapest strategy that supplies all three for its class of operand:
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum OperandProtection {
+    /// Push a temp-root slot and re-read it. The only strategy that gives
+    /// liveness *and* a rewritten location *and* the call-time value, so it is
+    /// what every operand with no other root gets — and also what a local or a
+    /// module global gets, because those are mutable and re-deriving them would
+    /// observe a later assignment instead of the value the call was given.
+    Root,
+    /// Emit no runtime call; re-derive the operand below the collection point.
+    /// For operands whose storage is a registered root the collector rewrites
+    /// **and** which are immutable, so re-lowering provably yields the same
+    /// value at the corrected address. Only [`operand_is_reloadable`] answers
+    /// yes here, and only for a string literal.
+    Reload,
+    /// Reuse the register. Correct in exactly two cases: nothing between this
+    /// operand and its consumer can collect, or the value provably is not a
+    /// heap reference and relocation cannot invalidate it.
+    Reuse,
+}
+
+/// THE decision. Every operand-protection helper in this module routes through
+/// it, so "root, re-derive, or reuse?" is answered in exactly one place.
+///
+/// It used to be answered in two, and they disagreed. [`RootedOperands`] paired
+/// its suppression of string literals with the compensating re-load;
+/// [`lower_exprs_rooted`] suppressed them and reused the register. That is
+/// #7114: `"acc:" + run(1e7)` lowers through `lower_string_coerce_concat` →
+/// `lower_operand_pair_rooted` → `lower_exprs_rooted`, the literal's handle was
+/// loaded before the call and masked to a pointer after it, and once `run` drove
+/// an evacuating minor the concat read the string's *old* address — printing an
+/// empty line and exiting 0.
+///
+/// Keeping the two predicates but calling them from two places is what let the
+/// pair drift, so the fix is the single call site, not a second copy of the
+/// re-load.
+pub(crate) fn operand_protection(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+    collects: bool,
+) -> OperandProtection {
+    if !collects {
+        // Nothing can be swept and nothing can move before the consumer runs,
+        // so the register still holds the value the call observes. This is the
+        // gate that keeps `total + s.length`, `f(x, y)` and `[1, 2, 3]` at
+        // exactly the IR they emitted before #6951.
+        return OperandProtection::Reuse;
+    }
+    if operand_needs_root(ctx, expr) {
+        return OperandProtection::Root;
+    }
+    if operand_is_reloadable(expr) {
+        return OperandProtection::Reload;
+    }
+    // Suppressed by `expr_is_known_non_pointer_shadow_value`: not a heap
+    // reference, so there is nothing for the collector to move.
+    OperandProtection::Reuse
 }
 
 /// Open an expression-scope temp-root barrier for a call/constructor whose
