@@ -361,16 +361,27 @@ fn typed_clone_fallback_routes_to_proven_this_clone() {
 #[test]
 fn proven_this_clone_binds_its_receiver_slot() {
     let ir = emit(&guarded_site_module(), false);
-    for name in pshape_definitions(&ir) {
-        let start = ir
-            .find(&format!("@{name}("))
-            .and_then(|i| ir[i..].find('{').map(|j| i + j))
-            .unwrap_or_else(|| panic!("clone {name} has no body"));
-        let body_end = ir[start..]
-            .find("\n}")
-            .map(|e| start + e)
-            .unwrap_or(ir.len());
-        let body = &ir[start..body_end];
+    let names = pshape_definitions(&ir);
+    assert!(
+        !names.is_empty(),
+        "nothing to check — no proven-`this` clone was emitted at all"
+    );
+    for name in names {
+        // Anchor on the DEFINITION line, not the first mention: a routed call
+        // site names the same symbol and appears earlier in the module, so
+        // `find("@{name}(")` alone would slice the caller's body and then
+        // "pass" by finding some other function's receiver bind.
+        let def_line = ir
+            .lines()
+            .position(|l| l.starts_with("define") && l.contains(&format!("@{name}(")))
+            .unwrap_or_else(|| panic!("clone {name} has no definition line"));
+        let body: String = ir
+            .lines()
+            .skip(def_line)
+            .take_while(|l| *l != "}")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = body.as_str();
         let store = body
             .find("store double %this_arg")
             .unwrap_or_else(|| panic!("{name}: receiver is never stored to a slot:\n{body}"));
