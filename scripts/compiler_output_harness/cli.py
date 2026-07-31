@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--print-summary", action="store_true")
     verify_p.set_defaults(func=verify_existing)
 
-    # Representation-selection promotion census (#7035). Shares this harness's
+    # Representation-selection promotion census (#7106). Shares this harness's
     # process plumbing but not its workload spec: the census corpus is chosen
     # for representation coverage, whereas `workloads.toml` is tuned for
     # vectorization and IR-shape gates.

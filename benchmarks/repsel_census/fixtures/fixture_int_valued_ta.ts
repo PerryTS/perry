@@ -1,4 +1,4 @@
-// Liveness fixture for the `int-valued-ta` census key (#7035).
+// Liveness fixture for the `int-valued-ta` census key (#7106).
 //
 // `collectors/int_valued_ta_locals.rs` admits a local as native-i32 even when
 // one of its writes is a POSSIBLY-OUT-OF-BOUNDS int typed-array read — the

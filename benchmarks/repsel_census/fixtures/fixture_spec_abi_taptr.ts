@@ -1,5 +1,5 @@
 // Liveness fixture for the `spec-abi-entry` and `spec-abi-taptr-slot` census
-// keys (#7035).
+// keys (#7106).
 //
 // `TaPtr` is one of the six unboxed representations, but unlike the others it
 // is a *parameter* rep rather than a local rep: it lives inside a specialized

@@ -1,4 +1,4 @@
-"""Representation-selection promotion census (#7035).
+"""Representation-selection promotion census (#7106).
 
 Perry's performance story rests on six unboxed representations. Until #7034
 nobody knew how many values each one actually promotes on real code, because
@@ -396,7 +396,7 @@ def check_instrument_liveness(observed: dict[str, dict[str, Any]]) -> list[str]:
     """No census key may read zero across the ENTIRE corpus.
 
     A key that is zero everywhere is indistinguishable from a counter nobody
-    increments — which is literally what `Ptr<NumArray>` was before #7035: an
+    increments — which is literally what `Ptr<NumArray>` was before #7106: an
     `Analysis` variant with a `target_rep` string and no `select()` call site
     anywhere in the tree.
     """
@@ -519,7 +519,7 @@ def census(args: argparse.Namespace) -> int:
     if args.update:
         return _update(baseline, baseline_path, observed, workloads)
 
-    print("Representation-selection promotion census (#7035)")
+    print("Representation-selection promotion census (#7106)")
     print("=================================================\n")
     print(render_table(baseline, observed))
     print("\nPromotion coverage on non-fixture workloads")

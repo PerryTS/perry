@@ -1138,7 +1138,7 @@ jobs:
           path: target/compiler-output-regression/
 
   # ---------------------------------------------------------------------------
-  # Representation-selection promotion census (#7035)
+  # Representation-selection promotion census (#7106)
   #
   # Counts, per workload and PER REPRESENTATION, how many values got each
   # unboxed representation, and compares each count against a ratcheted floor

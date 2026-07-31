@@ -1,8 +1,8 @@
-// Liveness fixture for the `Ptr<NumArray>` census key (#7035).
+// Liveness fixture for the `Ptr<NumArray>` census key (#7106).
 //
 // Written to satisfy `collectors/ptr_numarray.rs` in full so a zero count
 // means the counter is dead, not that the corpus is uninteresting. This one
-// matters more than most: before #7035 `opt_report` had a `PtrNumArray`
+// matters more than most: before #7106 `opt_report` had a `PtrNumArray`
 // analysis variant and a `Ptr<NumArray>` target-rep string, but there was no
 // `select()` call site for it anywhere in the tree. Its `selected` tally was a
 // number that could not be incremented.

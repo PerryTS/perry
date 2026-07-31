@@ -378,7 +378,7 @@ pub(crate) fn collect_type_facts(
             binding_types,
             spec_ta_lens,
         );
-        // `--opt-report` (#6952) / promotion census (#7035): the win column
+        // `--opt-report` (#6952) / promotion census (#7106): the win column
         // for this analysis, recorded at the ONE site where a candidate
         // actually becomes a fact, so the report can never claim a promotion
         // the codegen did not take (or miss one it did). Both name walks are

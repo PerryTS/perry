@@ -1,4 +1,4 @@
-# Representation-selection promotion census (#7035)
+# Representation-selection promotion census (#7106)
 
 How many values actually get each of Perry's unboxed representations, per
 workload, with a ratcheted floor so a drop turns a build red.
@@ -54,7 +54,7 @@ Three separate mechanisms, in increasing order of paranoia:
 3. **A corpus-wide instrument check**: a census key that reads zero in *every*
    workload fails the run. A counter that is zero because nothing promoted and
    one that is zero because nobody increments it look identical; this
-   distinguishes them. `Ptr<NumArray>` was in the second state until #7035 — it
+   distinguishes them. `Ptr<NumArray>` was in the second state until #7106 — it
    had an `Analysis` variant, a `Ptr<NumArray>` target-rep string, and no
    `select()` call site anywhere in the tree.
 

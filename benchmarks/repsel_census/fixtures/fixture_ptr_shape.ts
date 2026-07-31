@@ -1,4 +1,4 @@
-// Liveness fixture for the `Ptr<Shape>` census key (#7035).
+// Liveness fixture for the `Ptr<Shape>` census key (#7106).
 //
 // This file exists to make one assertion checkable: that the census can
 // observe a `Ptr<Shape>` promotion AT ALL. A census key that reads zero

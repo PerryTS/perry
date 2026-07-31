@@ -2,7 +2,7 @@ Added a representation-selection **promotion census**: a per-workload,
 per-representation count of how many values actually get each unboxed
 representation, gated against a ratcheted baseline
 (`python3 scripts/compiler_output_regression.py census --gate`, new
-non-required `repsel-census` CI job). #7034 had to hand-instrument the compiler
+non-required `repsel-census` CI job, #7106). #7034 had to hand-instrument the compiler
 to discover that `Ptr<Shape>` promotes **nothing at all** on `batch.ts` — the
 object-heavy workload it exists for — and that only 3 of 17 suite benchmarks
 promote a single shape local each; nothing in CI could have surfaced that.

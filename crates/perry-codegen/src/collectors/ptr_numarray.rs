@@ -167,7 +167,7 @@ pub(crate) fn expr_is_numarray_prototype_index_barrier(expr: &Expr) -> bool {
 /// process-wide running count. Only under `PERRY_REPSEL_DEBUG=1`.
 ///
 /// Also feeds the `--opt-report` win column (#6952), exactly like
-/// [`super::ptr_shape::note_ptr_shape_local`] does. Until #7035 this analysis
+/// [`super::ptr_shape::note_ptr_shape_local`] does. Until #7106 this analysis
 /// recorded **denials only**: `opt_report` had a `PtrNumArray` variant and a
 /// `Ptr<NumArray>` target-rep string, but no `select` call site anywhere in
 /// the tree — so its `selected` tally was a counter that could not be

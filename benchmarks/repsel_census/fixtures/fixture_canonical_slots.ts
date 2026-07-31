@@ -1,4 +1,4 @@
-// Liveness fixture for the three canonical-slot census keys (#7035):
+// Liveness fixture for the three canonical-slot census keys (#7106):
 // `canonical-i32`, `canonical-u32` and `canonical-str`.
 //
 // These are the reps `expr/slot_rep.rs` selects. Splitting them into three

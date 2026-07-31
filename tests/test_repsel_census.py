@@ -1,4 +1,4 @@
-"""Unit tests for the representation-selection promotion census (#7035).
+"""Unit tests for the representation-selection promotion census (#7106).
 
 The census is a gate, so most of these tests assert the FAILING direction.
 CLAUDE.md's "Four ways a gate can be unable to fail" is the design brief: a

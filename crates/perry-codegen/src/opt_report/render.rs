@@ -266,7 +266,7 @@ pub fn render_json(entries: &[Entry]) -> String {
             // entries: an analysis that recorded nothing must appear with an
             // explicit `0`. A consumer cannot tell an absent key from a zero
             // one, and "zero promotions" is precisely the fact this report
-            // exists to make visible (#7034 §0; census #7035).
+            // exists to make visible (#7034 §0; census #7106).
             by_analysis: Analysis::ALL
                 .iter()
                 .map(|a| {
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(ptr_shape["target_rep"], "Ptr<Shape>");
     }
 
-    /// #7035: a census consumer must be able to read "this representation
+    /// #7106: a census consumer must be able to read "this representation
     /// promoted nothing" straight off the JSON. An analysis with no entries at
     /// all therefore has to render as an explicit zero row, because an absent
     /// key and a zero key are indistinguishable downstream — and "absent" is

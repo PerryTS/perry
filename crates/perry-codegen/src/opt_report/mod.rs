@@ -211,7 +211,7 @@ impl Analysis {
     /// Every representation analysis that records into this report, in a
     /// stable order.
     ///
-    /// The JSON summary and the promotion census (#7035) enumerate *this*
+    /// The JSON summary and the promotion census (#7106) enumerate *this*
     /// list rather than the analyses that happen to appear in a build's
     /// entries. An analysis with no entries at all must render as an explicit
     /// `0`, never as an absent key: "missing" and "zero" look identical to a
