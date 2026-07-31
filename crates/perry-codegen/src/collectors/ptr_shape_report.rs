@@ -283,6 +283,38 @@ pub(super) const GATE_DISABLED: ShapeDenial = ShapeDenial {
 
 // ── Recording ──────────────────────────────────────────────────────────────
 
+thread_local! {
+    /// #7034 §4: the return-shape module pre-pass re-runs the WHOLE Phase 3b
+    /// proof over each candidate producer's body, before codegen has entered
+    /// any region. Those runs are a proof query, not a compilation decision:
+    /// left unsuppressed they would double-count every win and attribute
+    /// every denial to no region at all. The real per-region pass reports the
+    /// same bodies later, so nothing is lost.
+    static SUPPRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// True while a [`SuppressScope`] is alive on this thread.
+pub(super) fn suppressed() -> bool {
+    SUPPRESS.with(|s| s.get())
+}
+
+/// RAII: silence `--opt-report` / `PERRY_REPSEL_DEBUG` recording for the
+/// duration of a speculative proof query. Restores the previous state, so
+/// nesting is safe.
+pub(super) struct SuppressScope(bool);
+
+impl SuppressScope {
+    pub(super) fn new() -> Self {
+        SuppressScope(SUPPRESS.with(|s| s.replace(true)))
+    }
+}
+
+impl Drop for SuppressScope {
+    fn drop(&mut self) {
+        SUPPRESS.with(|s| s.set(self.0));
+    }
+}
+
 /// Record one denied `Ptr<Shape>` candidate.
 pub(super) fn deny_local(
     id: u32,
@@ -293,7 +325,7 @@ pub(super) fn deny_local(
 ) {
     // Guard here, not just inside `opt_report::deny`: the arguments below
     // allocate, and they are evaluated before the callee can early-return.
-    if !opt_report::enabled() {
+    if !opt_report::enabled() || suppressed() {
         return;
     }
     let fallback = format!("<local {id}>");
@@ -315,7 +347,7 @@ pub(super) fn deny_local(
 
 /// Record an allocation site that never became a candidate (rule 1).
 pub(super) fn deny_alloc_site(site: &NewSite) {
-    if !opt_report::enabled() {
+    if !opt_report::enabled() || suppressed() {
         return;
     }
     opt_report::deny(Denial {

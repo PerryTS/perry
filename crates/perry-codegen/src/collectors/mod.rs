@@ -27,6 +27,7 @@ mod proven_this;
 mod ptr_numarray;
 mod ptr_shape;
 mod ptr_shape_report;
+mod ptr_shape_returns;
 mod refs;
 mod scalar_method_dispatch;
 mod scalar_methods;

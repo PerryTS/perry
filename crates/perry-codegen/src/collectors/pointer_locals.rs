@@ -181,6 +181,31 @@ impl HirTypeFacts for PointerAnalysisFacts<'_> {
     }
 }
 
+/// Types that can NEVER hold a heap pointer, and therefore cost a local its
+/// shadow-stack slot in [`collect_pointer_typed_locals`].
+///
+/// **This is the single definition.** It used to be a nested `fn` inside
+/// `collect_pointer_typed_locals`; it is module-level and `pub(crate)` because
+/// anything that decides a value may be treated as a rooted pointer has to
+/// agree with the pass that actually assigns the root slot. A second copy
+/// drifting by one `Type` variant would mean a value this collector left
+/// unrooted while another pass treated it as a live, movable pointer — a
+/// use-after-move under the evacuating minor (#7019), not a cosmetic
+/// inconsistency. `collectors/ptr_shape_returns.rs` (#7034 §4) is the current
+/// second caller.
+pub(crate) fn is_definitely_non_pointer_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Number
+            | Type::Int32
+            | Type::Boolean
+            | Type::Null
+            | Type::Void
+            | Type::Never
+            | Type::Symbol
+    ) || matches!(ty, Type::Union(variants) if variants.iter().all(is_definitely_non_pointer_type))
+}
+
 pub fn collect_pointer_typed_locals(
     params: &[perry_hir::Param],
     stmts: &[perry_hir::Stmt],
@@ -220,19 +245,6 @@ pub fn collect_pointer_typed_locals(
                 | Type::Any
                 | Type::Unknown
         ) || matches!(ty, Type::Union(variants) if variants.iter().any(is_ptr_typed))
-    }
-
-    fn is_definitely_non_pointer_type(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Number
-                | Type::Int32
-                | Type::Boolean
-                | Type::Null
-                | Type::Void
-                | Type::Never
-                | Type::Symbol
-        ) || matches!(ty, Type::Union(variants) if variants.iter().all(is_definitely_non_pointer_type))
     }
 
     fn expr_value_type(

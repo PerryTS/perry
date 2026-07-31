@@ -79,6 +79,13 @@ pub struct ModuleDispatchFacts {
     /// module therefore disables proven-`this` clones **that contain a
     /// `this.field` write**; read-only clones are unaffected.
     freeze_barrier_sites: bool,
+    /// Representation-selection Phase 3b, #7034 §4: **return-shape facts**.
+    /// `FuncId` -> the exact class every value this module-level function can
+    /// return. Populated only for functions that provably hand back a FRESH,
+    /// UNALIASED object of one class on every return path
+    /// (`collectors/ptr_shape_returns.rs`); a call to such a function is then
+    /// a rule-1 provenance seed exactly as `new C(...)` is.
+    return_shape_functions: HashMap<u32, String>,
 }
 
 impl Default for ModuleDispatchFacts {
@@ -91,6 +98,7 @@ impl Default for ModuleDispatchFacts {
             shape_barrier_sites: true,
             numarray_prototype_index_barriers: true,
             freeze_barrier_sites: true,
+            return_shape_functions: HashMap::new(),
         }
     }
 }
@@ -155,6 +163,16 @@ impl ModuleDispatchFacts {
     pub(crate) fn has_opaque_prototype_mutation(&self) -> bool {
         self.opaque_prototype_mutation
     }
+
+    /// Representation-selection Phase 3b, #7034 §4: the exact class a call to
+    /// module function `func_id` provably returns, when that call is a rule-1
+    /// provenance seed. `None` for every other function — including every
+    /// function in a module that carries a §5.2 barrier.
+    pub(crate) fn return_shape_class(&self, func_id: u32) -> Option<&str> {
+        self.return_shape_functions
+            .get(&func_id)
+            .map(String::as_str)
+    }
 }
 
 /// Scan a whole module — top-level init, every function, and every class body
@@ -167,6 +185,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         shape_barrier_sites: false,
         numarray_prototype_index_barriers: false,
         freeze_barrier_sites: false,
+        return_shape_functions: HashMap::new(),
     };
 
     note_stmts(&hir.init, &mut facts);
@@ -199,6 +218,15 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
             note_expr_tree(&member.key_expr, &mut facts);
         }
     }
+
+    // Representation-selection Phase 3b, #7034 §4. Computed LAST, and read
+    // through the partially-built `facts` — the barrier flags above must
+    // already be final, because a §5.2 barrier anywhere in the module denies
+    // every return-shape fact. `facts.return_shape_functions` is still empty
+    // while this runs, so the per-function proof (which re-enters
+    // `collect_shape_proven_ptr_locals`) can never seed itself recursively.
+    facts.return_shape_functions =
+        super::ptr_shape_returns::collect_return_shape_functions(&facts, hir);
 
     facts
 }
@@ -614,6 +642,7 @@ mod tests {
             shape_barrier_sites: false,
             numarray_prototype_index_barriers: false,
             freeze_barrier_sites: false,
+            return_shape_functions: HashMap::new(),
         }
     }
 

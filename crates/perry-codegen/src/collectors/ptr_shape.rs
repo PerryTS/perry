@@ -26,14 +26,28 @@
 //!    constructors cannot return an override object). Anon-shape literals
 //!    (`{k: v}` closed shapes) and `{}` builder sites also lower to
 //!    `Expr::New { class_name: "__AnonShape_…" }`, so records qualify through
-//!    the same test.
+//!    the same test. Since #7034 §4 a direct call to a module function
+//!    carrying a **return-shape fact** is provenance of the same strength —
+//!    that fact certifies the callee hands back a freshly allocated, unaliased
+//!    `C` on every return path (`collectors/ptr_shape_returns.rs`).
 //! 2. **Containment**: every use of the local is a declared-chain field
 //!    read/write/update or a vetted method call. Any other use — reassignment,
-//!    closure capture, call argument, array/object element, return, throw,
+//!    closure capture, call argument, array/object element, throw,
 //!    `delete`, freeze/seal, aliasing — disqualifies. The object is therefore
 //!    unreachable from anywhere except this local, so no §5.2 barrier
 //!    (defineProperty / delete / setPrototypeOf / Proxy / mutating Reflect)
 //!    can reach it *through an alias*.
+//!
+//!    **Exception — the return position (#7034 §4).** `return <the local>`
+//!    does NOT disqualify. Containment exists to bound the object's aliases
+//!    *while this function still reads it*, and a `return` is a terminator:
+//!    every use of the local in this body either precedes it on that path or
+//!    is unreachable from it, the sole exception being a `finally` block —
+//!    which still runs before the caller resumes, and whose uses this same
+//!    walk checks anyway. The caller cannot have touched the object yet, so
+//!    no shape transition can have happened at any access this pass licenses.
+//!    Returns nested inside a CLOSURE body are not exempt: that value escapes
+//!    at an unbounded later time (`UseWalk::in_closure`).
 //! 3. **`this`-flow containment**: the constructor chain, chain field
 //!    initializers, and every method called on the local are walked with a
 //!    strict `this`-usage discipline (field access on `this`, vetted
@@ -169,6 +183,11 @@ fn note_ptr_shape_local(
     names: &HashMap<u32, String>,
     depths: &HashMap<u32, u32>,
 ) {
+    // #7034 §4: `report::suppressed()` is set while the return-shape module
+    // pre-pass re-runs this proof speculatively — see `SuppressScope`.
+    if report::suppressed() {
+        return;
+    }
     if opt_report::enabled() {
         let fallback = format!("<local {id}>");
         let name = names.get(&id).map(String::as_str).unwrap_or(&fallback);
@@ -265,6 +284,15 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     // async-to-generator transform).
     let mut candidates: HashMap<u32, String> = HashMap::new();
     super::find_new_candidates(stmts, boxed_vars, module_globals, &mut candidates);
+    // #7034 §4: `const r = producer(...)` where `producer` carries a
+    // return-shape fact is provenance of `new`-strength (module doc, rule 1).
+    let return_seeded = super::ptr_shape_returns::find_return_shape_candidates(
+        stmts,
+        boxed_vars,
+        module_globals,
+        module_dispatch,
+        &mut candidates,
+    );
     if candidates.is_empty() {
         return HashMap::new();
     }
@@ -326,6 +354,8 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         const_local_inits: HashMap::new(),
         disq_reasons: HashMap::new(),
         escape_ctx: report::ESC_BARE_REFERENCE,
+        return_seeded: &return_seeded,
+        in_closure: false,
     };
     walk.walk_stmts(stmts);
     let UseWalk {
@@ -421,18 +451,31 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             .filter(|(_, r)| *r == id)
             .map(|(m, _)| *m)
             .collect();
-        let numeric_fields = prove_numeric_fields(
-            &chain,
-            &members,
-            &store_records,
-            field_stores.get(id).map(Vec::as_slice).unwrap_or(&[]),
-            new_args.get(id).copied().unwrap_or(&[]),
-            called,
-            &super_call_args,
-            &internally_invoked,
-            not_bigint_locals,
-            &const_local_inits,
-        );
+        // #7034 §4: a return-shape-seeded candidate NEVER claims numeric
+        // fields. The numeric proof is an EXHAUSTIVE-reachable-store proof,
+        // and the producer's own stores (`acc.weight = …` inside the callee)
+        // are not in this region at all — claiming `JsNumber` off the
+        // constructor's stores alone would let a guard-free `load double` in
+        // a number context read a slot the producer had put a string in. The
+        // shape proof by itself still retires the whole guard diamond; this
+        // is the same stand-down `collectors/proven_this.rs` makes, for the
+        // same reason.
+        let numeric_fields = if return_seeded.contains(id) {
+            HashSet::new()
+        } else {
+            prove_numeric_fields(
+                &chain,
+                &members,
+                &store_records,
+                field_stores.get(id).map(Vec::as_slice).unwrap_or(&[]),
+                new_args.get(id).copied().unwrap_or(&[]),
+                called,
+                &super_call_args,
+                &internally_invoked,
+                not_bigint_locals,
+                &const_local_inits,
+            )
+        };
         let fact = PtrShapeLocal {
             class_name: class_name.clone(),
             numeric_fields,
@@ -610,6 +653,15 @@ struct UseWalk<'a> {
     /// Parent arms narrow it (`return`, call argument, array element, …) so
     /// the report can say *how* the object escaped, not just that it did.
     escape_ctx: ShapeDenial,
+    /// #7034 §4: candidates whose provenance is a return-shape-carrying CALL
+    /// rather than a `new`. Their `Let` init is an `Expr::Call`, which rule 1
+    /// would otherwise reject as `LET_INIT_NOT_NEW`.
+    return_seeded: &'a HashSet<u32>,
+    /// #7034 §4: are we inside a closure body? A `return <candidate>` there
+    /// escapes at an unbounded later time, so the return exemption (module
+    /// doc, rule 2) does NOT apply — only the enclosing function's own
+    /// returns are terminators for this local's lifetime.
+    in_closure: bool,
 }
 
 impl<'a> UseWalk<'a> {
@@ -676,6 +728,20 @@ impl<'a> UseWalk<'a> {
                         }
                         return;
                     }
+                    // #7034 §4: a return-shape-seeded candidate's provenance
+                    // is the CALL. It records no `new_args` — the constructor
+                    // ran in the callee, so the numeric-field proof stands
+                    // down for these candidates entirely (see the `'cand`
+                    // loop). The argument expressions are ordinary values;
+                    // walk them so OTHER candidates passed there still escape.
+                    if self.return_seeded.contains(id) {
+                        if let Some(Expr::Call { args, .. }) = init.as_ref() {
+                            for a in args {
+                                self.with_ctx(report::ESC_CALL_ARGUMENT, |w| w.walk_expr(a));
+                            }
+                            return;
+                        }
+                    }
                     // A candidate whose Let init is not the New (var-redecl
                     // seed) is not provenance-stable.
                     self.disq(*id, report::LET_INIT_NOT_NEW);
@@ -724,6 +790,19 @@ impl<'a> UseWalk<'a> {
             Stmt::Throw(e) => self.with_ctx(report::ESC_THROWN, |w| w.walk_expr(e)),
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
+                    // #7034 §4: `return <tracked local>` is exempt — see the
+                    // module doc, rule 2. Only the bare form: `return {a: o}`
+                    // or `return f(o)` embeds the object in a value whose
+                    // other references this walk has not bounded, and a
+                    // return inside a closure body is not a terminator for
+                    // the enclosing function's local.
+                    if !self.in_closure {
+                        if let Expr::LocalGet(id) = e {
+                            if self.tracked_root(*id).is_some() {
+                                return;
+                            }
+                        }
+                    }
                     self.with_ctx(report::ESC_RETURN, |w| w.walk_expr(e));
                 }
             }
@@ -1012,7 +1091,10 @@ impl<'a> UseWalk<'a> {
                 for c in captures.iter().chain(mutable_captures.iter()) {
                     self.disq(*c, report::ESC_CLOSURE_CAPTURE);
                 }
+                let outer = self.in_closure;
+                self.in_closure = true;
                 self.walk_stmts(body);
+                self.in_closure = outer;
             }
             // Everything else: recurse into children; a bare LocalGet of a
             // candidate in any unhandled position hits the LocalGet arm above

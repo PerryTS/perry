@@ -30,6 +30,15 @@ test_gap_repsel_canonical_str_locals
 test_gap_repsel_ptr_shape_locals
 test_gap_repsel_ptr_shape_barriers
 
+# --- Phase 3b / #7034 §4: return-shape facts --------------------------------
+# Both halves of the return escape: producer-side locals whose only escape is
+# `return o`, and caller-side bindings seeded by a return-shape-carrying call.
+# `survivesGc` deliberately holds a call-seeded local live across 60 000
+# escaping allocations, so the evacuating arms have something to move under it
+# — the caller's bound slot is the only rewritable root for that object, which
+# is exactly the claim this phase's GC contract makes.
+test_gap_repsel_return_shape
+
 # --- Phase 4a / 4a.3: Ptr<NumArray> numeric arrays (#6915, #6916) -----------
 test_gap_repsel_p4a_holes_axis
 test_gap_repsel_p4a_inline_tiers

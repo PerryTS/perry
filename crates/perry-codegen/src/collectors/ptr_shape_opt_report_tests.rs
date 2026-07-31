@@ -108,6 +108,12 @@ fn run(stmts: &[Stmt], classes: &HashMap<String, &Class>) -> HashMap<u32, PtrSha
 
 /// A contained local is promoted AND reported as a win; an escaping one
 /// is denied AND reported with rule 2 naming the return position.
+///
+/// #7034 §4 narrowed what "the return position" means: a BARE `return o` is
+/// now exempt (`ptr_shape.rs` rule 2, and
+/// `ptr_shape_returns_tests::returned_local_is_promoted`). The escaping local
+/// here therefore returns the object through a CONDITIONAL, which is what the
+/// rule still denies and still reports as a return escape.
 #[test]
 fn contained_local_wins_and_returned_local_is_denied_with_its_rule() {
     let c = class_with_fields("C", &["x"]);
@@ -119,7 +125,11 @@ fn contained_local_wins_and_returned_local_is_denied_with_its_rule() {
         store_x(1),
         let_c(2, "escaped"),
         store_x(2),
-        Stmt::Return(Some(Expr::LocalGet(2))),
+        Stmt::Return(Some(Expr::Conditional {
+            condition: Box::new(Expr::Bool(true)),
+            then_expr: Box::new(Expr::LocalGet(2)),
+            else_expr: Box::new(Expr::Undefined),
+        })),
     ];
 
     let session = Session::start();
@@ -301,7 +311,12 @@ fn nothing_is_recorded_when_the_report_is_off() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![let_c(1, "escaped"), Stmt::Return(Some(Expr::LocalGet(1)))];
+    // A container return, not a bare one: #7034 §4 exempts `return o`, and
+    // this test's subject is the report gate, not the proof.
+    let stmts = vec![
+        let_c(1, "escaped"),
+        Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)]))),
+    ];
 
     // Take the same lock the enabled sessions use — otherwise a
     // concurrently-running enabled test would make this one flaky, since

@@ -116,7 +116,7 @@
       "role": "corpus",
       "source": "benchmarks/app-patterns/kernels/batch.ts",
       "floors": {
-        "ptr-shape": 0,
+        "ptr-shape": 2,
         "ptr-numarray": 0,
         "canonical-i32": 3,
         "canonical-u32": 0,
@@ -126,7 +126,7 @@
         "spec-abi-taptr-slot": 0
       },
       "candidates": {
-        "ptr-shape": 4,
+        "ptr-shape": 5,
         "ptr-numarray": 0,
         "canonical-slot": 3,
         "int-valued-ta": 0,
@@ -508,5 +508,5 @@
       }
     }
   ],
-  "generated_at": "2026-07-31T01:39:37.595749Z"
+  "generated_at": "2026-07-31T02:23:42.048018Z"
 }
