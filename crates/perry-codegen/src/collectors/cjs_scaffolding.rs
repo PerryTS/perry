@@ -28,8 +28,9 @@
 //! * `target` is `Expr::LocalGet(id)`;
 //! * the module binds `id` with a `Stmt::Let` named `exports` (resp.
 //!   `require`);
-//! * **no** `Stmt::Let` binding of `id` anywhere in the module has an
-//!   `Expr::New { .. }` initializer;
+//! * **every** `Stmt::Let` binding of `id` in the module has an initializer in
+//!   [`init_is_never_a_seed`]'s whitelist (`PropertyGet` / `Closure` /
+//!   `Undefined` / absent);
 //! * `key` is the string literal `"__esModule"` (resp. `"name"`).
 //!
 //! Every other `defineProperty` target, every other key, every computed key,
@@ -43,15 +44,15 @@
 //! object it mutates *is* the object that local holds. Two independent facts
 //! rule that out:
 //!
-//! * **The target is not a candidate.** `Ptr<Shape>` candidates are seeded
-//!   exclusively by [`super::find_new_candidates`], which matches
-//!   `Stmt::Let { init: Some(Expr::New { .. }), .. }`. The third clause of the
-//!   predicate above checks precisely the negation of that seed, so an
-//!   exempted target can never be promoted. (In practice `require` is bound to
-//!   a `Closure` and `exports` to `PropertyGet(__cjs_module, "exports")` —
-//!   neither is a `New` — but the check is on the HIR, not on that
-//!   expectation, so a future wrap-template change degrades to *no exemption*
-//!   rather than to an unsound one.)
+//! * **The target is not a candidate.** `Ptr<Shape>` candidates are seeded by
+//!   [`super::find_new_candidates`] from `Stmt::Let { init: Some(Expr::New
+//!   { .. }), .. }`. The third clause above admits only initializers that are
+//!   not fresh allocations at all — a field read, a function value, or nothing
+//!   — so an exempted target can never be promoted, and, being a whitelist,
+//!   it stays true if the seed set widens (#7034 §4's return-shape calls).
+//!   The check is on the HIR, not on an expectation about the wrap template,
+//!   so a future template change degrades to *no exemption* rather than to an
+//!   unsound one.
 //! * **No promoted object can reach the target.** Rule 2 (containment) admits
 //!   a local only when *every* use of it is a declared-chain field
 //!   read/write/update or a vetted method call; reassignment, aliasing,
@@ -149,16 +150,8 @@ pub(super) fn collect(module: &Module) -> CjsScaffolding {
     }
 
     CjsScaffolding {
-        exports: acc
-            .exports
-            .difference(&acc.new_initialized)
-            .copied()
-            .collect(),
-        require: acc
-            .require
-            .difference(&acc.new_initialized)
-            .copied()
-            .collect(),
+        exports: acc.exports.difference(&acc.disqualified).copied().collect(),
+        require: acc.require.difference(&acc.disqualified).copied().collect(),
     }
 }
 
@@ -166,9 +159,9 @@ pub(super) fn collect(module: &Module) -> CjsScaffolding {
 struct Acc {
     exports: HashSet<u32>,
     require: HashSet<u32>,
-    /// Every local with an `Expr::New` initializer — i.e. every local
-    /// [`super::find_new_candidates`] can seed. Subtracted from both sets.
-    new_initialized: HashSet<u32>,
+    /// Every local with an initializer outside [`init_is_never_a_seed`]'s
+    /// whitelist. Subtracted from both sets.
+    disqualified: HashSet<u32>,
 }
 
 impl Acc {
@@ -185,10 +178,31 @@ impl Acc {
             }
             _ => {}
         }
-        if matches!(init, Some(Expr::New { .. })) {
-            self.new_initialized.insert(*id);
+        if !init_is_never_a_seed(init.as_ref()) {
+            self.disqualified.insert(*id);
         }
     }
+}
+
+/// Can this initializer never make its local a `Ptr<Shape>` provenance seed?
+///
+/// Deliberately a **whitelist** of the three shapes `cjs_wrap` actually emits
+/// for its scaffolding bindings, not a blacklist of `Expr::New`. Rule 1's seed
+/// set is a moving target — #7034 §4 added return-shape facts so that a call to
+/// a proven function *is* a provenance seed, and that machinery
+/// (`ModuleDispatchFacts::return_shape_class`) already exists. A blacklist would
+/// silently widen this exemption the day such a seed is wired into
+/// [`super::find_new_candidates`]; a whitelist fails closed instead.
+///
+/// * `PropertyGet` — `var exports = __cjs_module.exports`. A field read of an
+///   existing object, never a fresh allocation.
+/// * `Closure` — `function require(specifier) { … }`. A function value.
+/// * `Undefined` / no initializer — the hoisted `var` pre-declaration.
+fn init_is_never_a_seed(init: Option<&Expr>) -> bool {
+    matches!(
+        init,
+        None | Some(Expr::Undefined) | Some(Expr::PropertyGet { .. }) | Some(Expr::Closure { .. })
+    )
 }
 
 /// A statement list plus every closure body reachable from it.
@@ -444,24 +458,50 @@ mod tests {
         )]));
     }
 
-    /// The soundness hinge: a binding named `exports` that is `new`-initialized
-    /// IS a rule-1 `Ptr<Shape>` candidate, so it never gets the exemption.
+    /// A user binding that happens to be named `exports`, initialized by
+    /// something outside the scaffolding whitelist, is never exempt.
+    ///
+    /// `new` is the soundness hinge today: such a binding IS a rule-1
+    /// `Ptr<Shape>` candidate. `Call` guards the forward direction — #7034 §4's
+    /// return-shape facts already make a call to a proven function a provenance
+    /// seed, so a blacklist of `Expr::New` would silently widen this exemption
+    /// the day that seed is wired into `find_new_candidates`.
     #[test]
-    fn a_new_initialized_exports_binding_is_not_exempt() {
-        let module_with_new_exports = {
+    fn an_exports_binding_outside_the_init_whitelist_is_not_exempt() {
+        let inits = [
+            anon_shape("__AnonShape_user", Vec::new()),
+            Expr::Call {
+                callee: Box::new(Expr::LocalGet(77)),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            },
+        ];
+        for init in inits {
             let mut m = perry_hir::Module::new("m.ts");
-            m.init.push(let_stmt(
-                EXPORTS_ID,
-                "exports",
-                anon_shape("__AnonShape_user", Vec::new()),
-            ));
+            m.init.push(let_stmt(EXPORTS_ID, "exports", init.clone()));
             m.init.push(define_property(
                 Expr::LocalGet(EXPORTS_ID),
                 Expr::String(EXPORTS_KEY.to_string()),
             ));
-            m
-        };
-        assert!(collect_module_dispatch_facts(&module_with_new_exports).has_shape_barrier_sites());
+            assert!(
+                collect_module_dispatch_facts(&m).has_shape_barrier_sites(),
+                "expected a barrier for an `exports` bound to {init:?}"
+            );
+        }
+    }
+
+    /// A LATER binding of the same id outside the whitelist disqualifies the
+    /// scaffolding binding too — `var` redeclaration reuses the `LocalId`.
+    #[test]
+    fn a_disqualifying_rebinding_of_the_exports_id_removes_the_exemption() {
+        let mut extra = scaffolding_sites();
+        extra.push(let_stmt(
+            EXPORTS_ID,
+            "exports",
+            anon_shape("__AnonShape_user", Vec::new()),
+        ));
+        assert!(barrier(extra));
     }
 
     /// Untouched barrier families: the exemption is scoped to

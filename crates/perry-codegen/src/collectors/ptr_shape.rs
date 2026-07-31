@@ -74,11 +74,13 @@
 //!    `defineProperty` sites every `cjs_wrap`-compiled CommonJS module
 //!    carries — Perry's own preamble `Object.defineProperty(require, 'name',
 //!    …)` and the transpiler's `Object.defineProperty(exports, "__esModule",
-//!    …)` — target module scaffolding that provably has no `Expr::New`
-//!    binding, so rule 1 can never seed it and rule 2's containment keeps
-//!    every promoted object out of it. Nothing else is exempt: any other
-//!    target, any other key, a computed key, or any other barrier family
-//!    still arms the kill.
+//!    …)` — target module scaffolding whose every binding initializer is a
+//!    field read, a function value, or nothing, so rule 1 can never seed it
+//!    and rule 2's containment keeps every promoted object out of it. That
+//!    initializer test is a whitelist, so widening rule 1's seed set (#7034
+//!    §4's return-shape calls) cannot silently widen the exemption. Nothing
+//!    else is exempt: any other target, any other key, a computed key, or any
+//!    other barrier family still arms the kill.
 //!
 //! ## Numeric-proven fields
 //!
