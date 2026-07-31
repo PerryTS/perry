@@ -41,9 +41,13 @@
 
   | workload | before | after | Δ |
   |---|---|---|---|
-  | `15_mandelbrot` | 120,738,726 | 105,110,137 | **−12.94%** |
-  | `11_prime_sieve` (the #7121 win) | 2,597,174,368 | 2,597,174,368 | 0.00% |
-  | `08_string_concat` (the #7121 `Str` win) | 30,281,732 | 30,281,732 | 0.00% |
+  | `15_mandelbrot` | 120,738,701 | 105,110,087 | **−12.94%** |
+  | `11_prime_sieve` (the #7121 win) | 2,597,182,143 | 2,597,177,676 | −0.00% |
+  | `08_string_concat` (the #7121 `Str` win) | 30,281,798 | 30,281,711 | −0.00% |
+
+  Both #7121 wins re-measured against the `at7122` arm with this compiler:
+  canonical `Str` **−4.12%**, canonical i32 **−1.05%**. They hold by
+  construction — the linked binary for each is byte-identical to `main`'s.
 
   Over the whole 26-workload census corpus the emitted object changes on
   **exactly one** program, and there its disassembly is byte-identical to the
