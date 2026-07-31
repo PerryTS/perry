@@ -460,6 +460,34 @@ fn allocating_numeric() -> Expr {
     }
 }
 
+/// The IR of ONE generated function, sliced out of the module.
+///
+/// `ir_for` / `ir_for_new` return the **whole module**, and an assertion about
+/// instruction ORDER over a whole module is satisfiable by an unrelated
+/// function's IR: `ir.find("call i64 @js_object_alloc(")` answers with whichever
+/// function happens to come first in the file, not with the operand under test.
+/// A test that passes that way has proved nothing, which is exactly what it was
+/// written to rule out (raised on #7116).
+///
+/// Every ordering assertion in the #7114 section goes through here, and pairs
+/// the ordering with an exact *count* of the operand-specific opcode inside the
+/// slice — order plus count is what makes "this is the operand I meant" a
+/// property of the test rather than of the module layout.
+fn function_ir<'a>(ir: &'a str, define_prefix: &str) -> &'a str {
+    let start = ir
+        .find(define_prefix)
+        .unwrap_or_else(|| panic!("no `{define_prefix}` in module IR:\n{ir}"));
+    let body = &ir[start..];
+    let end = body.find("\n}\n").map(|e| e + 2).unwrap_or(body.len());
+    &body[..end]
+}
+
+/// The function a `module_with_init` / `module_with_new` statement lowers into.
+/// Module-level `init` statements are emitted into the entry module's `@main`.
+fn init_ir(ir: &str) -> &str {
+    function_ir(ir, "define i32 @main(")
+}
+
 /// `"acc:" + <allocating numeric>` — the reported shape.
 ///
 /// The invariant: **no operand register may outlive a collection point.** The
@@ -477,15 +505,37 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
         })],
     );
 
-    let concat = ir
-        .find("call i64 @js_string_concat_value(")
-        .unwrap_or_else(|| panic!("expected the fused string+value concat:\n{ir}"));
-    let alloc = ir[..concat]
+    // Scoped to @main, so nothing below can be satisfied by another function's
+    // IR, and count-anchored, so "the concat" and "the sibling's allocation"
+    // are unambiguous rather than "whichever matched first".
+    let f = init_ir(&ir);
+    let handle = "load double, ptr @concat_reload_ts_.str.";
+    assert_eq!(
+        f.matches("call i64 @js_string_concat_value(").count(),
+        1,
+        "exactly one fused string+value concat in @main:\n{f}"
+    );
+    assert_eq!(
+        f.matches("call i64 @js_object_alloc(").count(),
+        1,
+        "exactly one allocating sibling in @main:\n{f}"
+    );
+    assert_eq!(
+        f.matches(handle).count(),
+        2,
+        "the literal's handle must be loaded TWICE in @main: once where the \
+         operand is lowered, and once re-derived below the collection point. \
+         One load is the #7114 bug; three means something else is re-lowering \
+         it:\n{f}"
+    );
+
+    let concat = f.find("call i64 @js_string_concat_value(").unwrap();
+    let alloc = f[..concat]
         .rfind("call i64 @js_object_alloc(")
-        .unwrap_or_else(|| panic!("the sibling operand must allocate:\n{ir}"));
-    let handle_load = ir[..concat]
-        .rfind("load double, ptr @concat_reload_ts_.str.")
-        .unwrap_or_else(|| panic!("the literal must come from its handle global:\n{ir}"));
+        .unwrap_or_else(|| panic!("the sibling must allocate before the concat:\n{f}"));
+    let handle_load = f[..concat]
+        .rfind(handle)
+        .unwrap_or_else(|| panic!("the literal must come from its handle global:\n{f}"));
 
     assert!(
         handle_load > alloc,
@@ -494,11 +544,11 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
          below is what made `console.log(\"acc:\" + run(1e7))` print an empty \
          line — the handle global is a registered root that an evacuating \
          cycle REWRITES, and the pre-call register keeps the pre-move \
-         address:\n{ir}"
+         address:\n{f}"
     );
 
     assert_eq!(
-        ir.matches("call i32 @js_gc_temp_root_push").count(),
+        f.matches("call i32 @js_gc_temp_root_push").count(),
         0,
         "and it must cost no runtime call. A registered root already has \
          liveness; all it was missing is the re-derivation, which is the load \
@@ -527,16 +577,17 @@ fn string_literal_concat_operand_is_not_re_derived_when_nothing_collects() {
         })],
     );
 
+    let f = init_ir(&ir);
     assert_eq!(
-        ir.matches("load double, ptr @concat_noreload_ts_.str.")
+        f.matches("load double, ptr @concat_noreload_ts_.str.")
             .count(),
         1,
         "a comparison over two immediates runs no user code and allocates \
-         nothing, so the literal must be loaded exactly once:\n{ir}"
+         nothing, so the literal must be loaded exactly once:\n{f}"
     );
     assert!(
-        !ir.contains("call i32 @js_gc_temp_root_push"),
-        "and no rooting at all:\n{ir}"
+        !f.contains("call i32 @js_gc_temp_root_push"),
+        "and no rooting at all:\n{f}"
     );
 }
 
@@ -553,16 +604,26 @@ fn string_literal_array_element_is_re_derived_below_an_allocating_element() {
         ]))],
     );
 
+    let f = init_ir(&ir);
     let handle_pat = "load double, ptr @array_reload_ts_.str.";
-    let loads: Vec<usize> = ir.match_indices(handle_pat).map(|(i, _)| i).collect();
-    let element_alloc = ir
-        .find("call i64 @js_object_alloc(")
-        .unwrap_or_else(|| panic!("element 1 must allocate:\n{ir}"));
+    assert_eq!(
+        f.matches("call i64 @js_object_alloc(").count(),
+        1,
+        "exactly one allocating element in @main:\n{f}"
+    );
+    assert_eq!(
+        f.matches(handle_pat).count(),
+        2,
+        "element 0's handle must be loaded twice in @main: the original \
+         lowering and the re-derivation below element 1's allocation:\n{f}"
+    );
 
+    let loads: Vec<usize> = f.match_indices(handle_pat).map(|(i, _)| i).collect();
+    let element_alloc = f.find("call i64 @js_object_alloc(").unwrap();
     assert!(
-        loads.iter().any(|&l| l > element_alloc),
-        "#7114: element 0's handle must be re-derived below element 1's \
-         allocation before it is stored into the array:\n{ir}"
+        loads[0] < element_alloc && loads[1] > element_alloc,
+        "#7114: one load above element 1's allocation and one below it, so the \
+         value stored into the array is the post-relocation address:\n{f}"
     );
 }
 
@@ -593,20 +654,33 @@ fn wtf8_literal_operand_is_rooted_not_merely_reused() {
         })],
     );
 
-    let push = ir
-        .find("call i32 @js_gc_temp_root_push")
-        .unwrap_or_else(|| panic!("a WTF-8 literal operand must be ROOTED:\n{ir}"));
-    let alloc = ir
-        .find("call i64 @js_object_alloc(")
-        .unwrap_or_else(|| panic!("the sibling operand must allocate:\n{ir}"));
-    let get = ir
-        .find("call i64 @js_gc_temp_root_get")
-        .unwrap_or_else(|| panic!("and re-read after it:\n{ir}"));
+    let f = init_ir(&ir);
+    assert_eq!(
+        f.matches("call i32 @js_gc_temp_root_push").count(),
+        1,
+        "exactly one temp root in @main — the WTF-8 operand's. Zero means it \
+         was suppressed without a compensating re-derivation (#7114 for \
+         lone-surrogate literals); more than one means this assertion is no \
+         longer about the operand it names:\n{f}"
+    );
+    assert_eq!(
+        f.matches("call i64 @js_gc_temp_root_get").count(),
+        1,
+        "and exactly one re-read of it:\n{f}"
+    );
+    assert_eq!(
+        f.matches("call i64 @js_object_alloc(").count(),
+        1,
+        "exactly one allocating sibling in @main:\n{f}"
+    );
 
+    let push = f.find("call i32 @js_gc_temp_root_push").unwrap();
+    let alloc = f.find("call i64 @js_object_alloc(").unwrap();
+    let get = f.find("call i64 @js_gc_temp_root_get").unwrap();
     assert!(
         push < alloc && alloc < get,
         "order must be push -> allocating sibling -> re-read. Anything else \
          means the WTF-8 literal is being carried across the collection point \
-         in a register, which is #7114 for lone-surrogate literals:\n{ir}"
+         in a register, which is #7114 for lone-surrogate literals:\n{f}"
     );
 }
