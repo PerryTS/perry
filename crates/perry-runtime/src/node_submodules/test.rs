@@ -17,6 +17,9 @@ use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
 use crate::value::{JSValue, POINTER_MASK, TAG_UNDEFINED};
 
+#[path = "test_property.rs"]
+mod property_mock;
+
 const REPORTER_SPEC: i32 = 0;
 const REPORTER_TAP: i32 = 1;
 const REPORTER_DOT: i32 = 2;
@@ -713,25 +716,6 @@ fn create_mock_function(original: f64, implementation: f64, restore: MockRestore
     function.get_nanbox_f64()
 }
 
-fn create_restore_context(restore: MockRestoreTarget) -> f64 {
-    let id = next_mock_id();
-    let calls = boxed_ptr(crate::array::js_array_alloc(0));
-    let context = mock_context_object(id, calls, false);
-    MOCK_STATES.with(|states| {
-        states.borrow_mut().push(MockState {
-            id,
-            original: undefined_value(),
-            implementation: undefined_value(),
-            once: Vec::new(),
-            calls,
-            context,
-            function: undefined_value(),
-            restore,
-        });
-    });
-    context
-}
-
 fn reset_mock_state_calls(state: &mut MockState) {
     state.calls = boxed_ptr(crate::array::js_array_alloc(0));
     update_mock_context_calls(state.context, state.calls);
@@ -1144,22 +1128,6 @@ extern "C" fn mock_setter_thunk(
     )
 }
 
-extern "C" fn mock_property_thunk(
-    _closure: *const ClosureHeader,
-    target: f64,
-    property: f64,
-    value: f64,
-) -> f64 {
-    let property = property_name(property);
-    let original = get_property_value(target, &property);
-    set_property_value(target, &property, value);
-    create_restore_context(MockRestoreTarget::ObjectProperty {
-        target,
-        property,
-        original,
-    })
-}
-
 extern "C" fn mock_reset_thunk(_closure: *const ClosureHeader) -> f64 {
     MOCK_STATES.with(|states| {
         for state in states.borrow_mut().iter_mut() {
@@ -1168,6 +1136,7 @@ extern "C" fn mock_reset_thunk(_closure: *const ClosureHeader) -> f64 {
             reset_mock_state_calls(state);
         }
     });
+    property_mock::restore_all();
     undefined_value()
 }
 
@@ -1182,6 +1151,7 @@ extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
     for id in ids {
         restore_mock_state(id);
     }
+    property_mock::restore_all();
     undefined_value()
 }
 
@@ -1234,11 +1204,7 @@ fn mock_object_value() -> f64 {
             "setter",
             closure_value(mock_setter_thunk as *const u8, 4),
         );
-        set_field(
-            mock,
-            "property",
-            closure_value(mock_property_thunk as *const u8, 3),
-        );
+        set_field(mock, "property", property_mock::tracker_property_value());
         set_field(
             mock,
             "reset",
@@ -1691,7 +1657,17 @@ pub extern "C" fn js_node_test_mock_setter(
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_property(target: f64, property: f64, value: f64) -> f64 {
-    mock_property_thunk(std::ptr::null(), target, property, value)
+    property_mock::create(target, property, true, value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_test_mock_property_with_presence(
+    target: f64,
+    property: f64,
+    value: f64,
+    value_present: i32,
+) -> f64 {
+    property_mock::create(target, property, value_present != 0, value)
 }
 
 #[no_mangle]
@@ -1810,6 +1786,7 @@ pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             }
         }
     });
+    property_mock::scan_roots_mut(visitor);
 }
 
 #[cfg(test)]

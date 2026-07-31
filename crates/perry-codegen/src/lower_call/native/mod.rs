@@ -122,6 +122,39 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
+    // `MockTracker.property(object, name[, value])` must distinguish an
+    // omitted third argument from an explicitly supplied `undefined`.
+    // Generic native-table lowering pads both shapes to the same three f64
+    // values, so pass the source argument-presence bit through a dedicated
+    // ABI. Node uses omission to select the original property value while
+    // explicit `undefined` is a real replacement value.
+    if matches!(module, "test" | "node:test") && object.is_none() && method == "property" {
+        let mut lowered = Vec::with_capacity(args.len());
+        for arg in args {
+            lowered.push(lower_expr(ctx, arg)?);
+        }
+        let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let target = lowered.first().unwrap_or(&undefined);
+        let property = lowered.get(1).unwrap_or(&undefined);
+        let value = lowered.get(2).unwrap_or(&undefined);
+        let value_present = if args.len() > 2 { "1" } else { "0" };
+        ctx.pending_declares.push((
+            "js_node_test_mock_property_with_presence".to_string(),
+            DOUBLE,
+            vec![DOUBLE, DOUBLE, DOUBLE, I32],
+        ));
+        return Ok(ctx.block().call(
+            DOUBLE,
+            "js_node_test_mock_property_with_presence",
+            &[
+                (DOUBLE, target),
+                (DOUBLE, property),
+                (DOUBLE, value),
+                (I32, value_present),
+            ],
+        ));
+    }
+
     // Generic native module dispatch (receiver-less): fastify, mysql2,
     // ws, pg, ioredis, mongodb, better-sqlite3, etc. These were in the
     // old Cranelift codegen's dispatch table but lost in the v0.5.0
