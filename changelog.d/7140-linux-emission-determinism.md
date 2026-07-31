@@ -108,7 +108,10 @@ invisible there.
 **No behavioural change**, by the strongest available measure: across all 26
 workloads the objects emitted by `a3b31c0d8` and by this branch are
 **byte-identical, 0/26 differences**. This change renames temp files and nothing
-else, and the emitted bytes say so.
+else, and the emitted bytes say so. The GC x representation-selection matrix
+against the pinned Node 26.5.1 oracle agrees —
+`gc_repsel_matrix.sh --arms all --pressure 8` on the Pi:
+`PASS=426 UNVER=119 XFAIL=1 FAIL=0` over 546 rows.
 
 `cargo fmt`: `linker.rs` was left unformatted by #7135, so `lint` is red on
 `main` independently of this change; formatting it is included here.
