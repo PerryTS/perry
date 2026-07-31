@@ -58,8 +58,8 @@
 //! depends on a local having been selected. They keep a kill switch of their
 //! own rather than riding on `Str`'s, so that `PERRY_CANONICAL_STR_LOCALS`
 //! means what it says. `PERRY_PTR_SHAPE_THIS` is a sub-knob of
-//! `PERRY_PTR_SHAPE_LOCALS` (Phase 5a's `__pshape` clones only) and is honoured
-//! by the same collector.
+//! `PERRY_PTR_SHAPE_LOCALS` (Phase 5a's proven-`this` method clones only) and is
+//! honoured by the same collector.
 
 use super::slot_rep::{
     body_context_denial, canonical_i32_locals_enabled, canonical_str_locals_enabled,
