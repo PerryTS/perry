@@ -221,6 +221,42 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
     },
 }
 
+#: Minimum number of times a deliberate REFUSAL rule must fire, per workload.
+#: **Held in code, never in the baseline**, for the same reason as
+#: [`LIVENESS_FLOORS`], and gated separately.
+#:
+#: Every other number in this census is a promotion count, and every gate on it
+#: is a floor — which can only catch a promotion that STOPPED happening. #7128
+#: is the opposite failure: `benchmarks/suite/15_mandelbrot.ts` promoted three
+#: counters it should not have, and paid **+14.87% instructions retired** for
+#: them on a quiet Raspberry Pi 5 at a 0.02% noise floor. No floor anywhere in
+#: this file can go red for that, because more promotions always reads as an
+#: improvement.
+#:
+#: So the refusal itself gets a minimum. Reverting
+#: `collectors/repsel_benefit.rs` takes `15_mandelbrot` from three
+#: `no_i32_consuming_use` denials to zero and this check goes red — which is
+#: the only direction in which the census can currently observe an
+#: unprofitable promotion at all.
+REFUSAL_FLOORS: dict[str, dict[str, int]] = {
+    # `py`, `px` and `iter`: all three proven by #7110's loop-induction
+    # interval, all three consumed only as doubles inside a loop
+    # (`totalIter + iter`, `px - WIDTH / 2.0`). Pinned at the exact count, so
+    # losing any one goes red rather than degrading to "still nonzero".
+    "suite_15_mandelbrot": {"no_i32_consuming_use": 3},
+    # `i` in `result = result + (1.0 / i)`: the same shape one workload over,
+    # which is what says the rule generalises rather than pattern-matching
+    # 15_mandelbrot.
+    "suite_06_math_intensive": {"no_i32_consuming_use": 1},
+    # `mixedWithFloat`'s `hit`, the hand-written minimal case. It sits beside
+    # `iterate`'s `iter` in the same file, admitted by the same #7110 interval
+    # proof and differing only in what consumes it — so this floor and that
+    # fixture's `canonical-i32: 3` liveness floor cannot both be satisfied by a
+    # rule that is simply always-yes or always-no.
+    "fixture_loop_bounded_i32": {"no_i32_consuming_use": 1},
+}
+
+
 #: Workloads allowed to produce **zero candidates** — no analysis considered any
 #: value in them. Held in code for the same reason as [`LIVENESS_FLOORS`]: it is
 #: an assertion about the compiler, and `--update` must not be able to widen it.
@@ -350,6 +386,7 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
     # population. It is reported separately instead (`consumed_receiver`).
     consumed_receiver = 0
     unconsumed_mechanisms: dict[str, int] = {}
+    denial_rules: dict[str, int] = {}
     # Keyed by analysis as well as by rule. `unconsumed_mechanisms` alone is
     # rule-keyed, and with a second instrumented analysis a gap in analysis A
     # would be excused by a mechanism recorded for analysis B.
@@ -392,6 +429,16 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
             unconsumed_by_analysis[str(analysis)] = (
                 unconsumed_by_analysis.get(str(analysis), 0) + 1
             )
+        elif outcome == "denied":
+            # #7128. Denials are context, never a floor — with ONE exception,
+            # `no_i32_consuming_use`, which is not a failed proof but a
+            # deliberate REFUSAL of a provable promotion. A refusal cannot be
+            # gated by a promotion floor, because floors are minimums and the
+            # regression it prevents is an EXTRA promotion. So the rule is
+            # counted here and given its own minimum in [`REFUSAL_FLOORS`].
+            denial_rules[str(entry.get("rule") or "<unnamed>")] = (
+                denial_rules.get(str(entry.get("rule") or "<unnamed>"), 0) + 1
+            )
     if unknown_sites:
         raise HarnessError(
             f"--opt-report recorded consumption at unregistered site(s) "
@@ -425,6 +472,7 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
         "counts": counts,
         "candidates": candidates,
         "unconsumed_mechanisms": unconsumed_mechanisms,
+        "denial_rules": denial_rules,
         "unconsumed_by_analysis": unconsumed_by_analysis,
         "consumed_receiver": consumed_receiver,
         "consumption_sites": consumption_sites,
@@ -653,6 +701,37 @@ def check_liveness_fixtures(observed: dict[str, dict[str, Any]]) -> list[str]:
                     f"{key} value(s); it is written to promote at least {minimum}. "
                     "Either the representation stopped firing or the census counter "
                     "for it is dead."
+                )
+    return failures
+
+
+def check_refusal_floors(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """Every deliberate refusal must still be firing where it was measured.
+
+    The mirror image of [`check_liveness_fixtures`]. That one asks "is the
+    representation still being promoted"; this asks "is the promotion still
+    being refused where refusing it was worth 14.87% of the instructions".
+
+    Independent of the baseline file on purpose — see [`REFUSAL_FLOORS`].
+    """
+    failures: list[str] = []
+    for name, minimums in REFUSAL_FLOORS.items():
+        if name not in observed:
+            failures.append(
+                f"refusal workload {name!r} did not run; the census cannot claim "
+                "to observe a refusal it never measured"
+            )
+            continue
+        rules = observed[name].get("denial_rules", {})
+        for rule, minimum in minimums.items():
+            seen = int(rules.get(rule, 0))
+            if seen < minimum:
+                failures.append(
+                    f"{name}: rule {rule!r} refused {seen} promotion(s), and must "
+                    f"refuse at least {minimum}. Either the profitability model "
+                    "stopped firing (collectors/repsel_benefit.rs) or the workload "
+                    "changed shape; an unprofitable promotion is invisible to every "
+                    "floor in this census, which is why this check exists."
                 )
     return failures
 
@@ -985,6 +1064,7 @@ def census(args: argparse.Namespace) -> int:
         regressions += reg
         improvements += imp
     liveness = check_liveness_fixtures(observed) if not partial else []
+    refusals = check_refusal_floors(observed) if not partial else []
     dead = check_instrument_liveness(observed) if not partial else []
     unreached = check_analysis_reach(observed) if not partial else []
     # Always checked, even for a --workload subset: it is an internal
@@ -1009,6 +1089,7 @@ def census(args: argparse.Namespace) -> int:
     for label, problems in (
         ("REGRESSION", regressions),
         ("DEAD INSTRUMENT", liveness + dead),
+        ("REFUSAL NO LONGER FIRING", refusals),
         ("UNREACHED BY EVERY ANALYSIS", unreached),
         ("CONSUMPTION COUNTER IS INCOHERENT", invariant),
         ("WASTED PROMOTION WITH NO NAMED MECHANISM", unexplained),
@@ -1130,6 +1211,30 @@ def self_test(_args: argparse.Namespace) -> int:
 
     dead = check_instrument_liveness({"w": {"counts": counts}})
     assert any("ptr-shape" in d for d in dead), dead
+
+    # #7128: the refusal check must go red when the rule stops firing, and
+    # green only when it fires at least as often as it was measured to.
+    target = next(iter(REFUSAL_FLOORS))
+    minimums = REFUSAL_FLOORS[target]
+    rule, minimum = next(iter(minimums.items()))
+    all_silent = {
+        name: {"counts": counts, "denial_rules": {}} for name in REFUSAL_FLOORS
+    }
+    silent = check_refusal_floors(all_silent)
+    assert any(rule in f and target in f for f in silent), silent
+    all_firing = {
+        name: {"counts": counts, "denial_rules": dict(mins)}
+        for name, mins in REFUSAL_FLOORS.items()
+    }
+    assert not check_refusal_floors(all_firing), all_firing
+    one_short = dict(all_firing)
+    one_short[target] = {
+        "counts": counts,
+        "denial_rules": {rule: minimum - 1},
+    }
+    assert check_refusal_floors(one_short), "one short of the floor must be red"
+    absent = check_refusal_floors({})
+    assert any(target in f for f in absent), absent
 
     failures = check_liveness_fixtures({"fixture_ptr_shape": {"counts": counts}})
     assert any("fixture_ptr_shape" in f for f in failures), failures

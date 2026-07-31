@@ -91,6 +91,18 @@ def consumed_entry(
     }
 
 
+def denied_entry(analysis: str, rule: str, local_id=1) -> dict:
+    return {
+        "analysis": analysis,
+        "outcome": "denied",
+        "rep": "Boxed",
+        "position": "local",
+        "local_id": local_id,
+        "function": "module_init",
+        "rule": rule,
+    }
+
+
 def unconsumed_entry(analysis: str, rule: str, local_id=1) -> dict:
     return {
         "analysis": analysis,
@@ -714,6 +726,71 @@ class ReportExtraction(unittest.TestCase):
         """
         with self.assertRaises(HarnessError):
             CENSUS._extract_json("nothing here\n")
+
+
+class RefusalFloors(unittest.TestCase):
+    """#7128: the one gate in this census that catches an EXTRA promotion.
+
+    Every other check here is a floor on promotions, and a floor cannot go red
+    when a compiler promotes more. `15_mandelbrot` promoted three counters it
+    should not have and paid +14.87% instructions retired for them; these tests
+    are the ones that turn red if that refusal stops firing.
+    """
+
+    def test_denied_entries_are_counted_by_rule(self):
+        payload = report(
+            denied={"canonical-slot": 3},
+            entries=[
+                denied_entry("canonical-slot", "no_i32_consuming_use", local_id=1),
+                denied_entry("canonical-slot", "no_i32_consuming_use", local_id=2),
+                denied_entry("canonical-slot", "not_index_used_or_bounded", local_id=3),
+            ],
+        )
+        rules = CENSUS.census_from_report(payload)["denial_rules"]
+        self.assertEqual(rules["no_i32_consuming_use"], 2)
+        self.assertEqual(rules["not_index_used_or_bounded"], 1)
+
+    def test_a_silent_refusal_is_red(self):
+        observed = {
+            name: {"counts": {}, "denial_rules": {}} for name in CENSUS.REFUSAL_FLOORS
+        }
+        failures = CENSUS.check_refusal_floors(observed)
+        self.assertTrue(failures, "a refusal that stopped firing must be red")
+        self.assertIn("suite_15_mandelbrot", " ".join(failures))
+
+    def test_one_short_of_the_floor_is_red(self):
+        """Pinned at the exact count, so losing ONE of the three is red.
+
+        `15_mandelbrot` refuses `py`, `px` and `iter`. A rule that kept
+        refusing only `iter` would leave two per-iteration `sitofp`s behind and
+        still report a nonzero refusal count.
+        """
+        observed = {
+            name: {"counts": {}, "denial_rules": dict(mins)}
+            for name, mins in CENSUS.REFUSAL_FLOORS.items()
+        }
+        observed["suite_15_mandelbrot"]["denial_rules"]["no_i32_consuming_use"] = 2
+        self.assertTrue(CENSUS.check_refusal_floors(observed))
+
+    def test_meeting_every_floor_is_green(self):
+        observed = {
+            name: {"counts": {}, "denial_rules": dict(mins)}
+            for name, mins in CENSUS.REFUSAL_FLOORS.items()
+        }
+        self.assertEqual(CENSUS.check_refusal_floors(observed), [])
+
+    def test_a_workload_that_did_not_run_is_red(self):
+        """A refusal the census never measured is not a refusal it observed."""
+        self.assertTrue(CENSUS.check_refusal_floors({}))
+
+    def test_the_refusal_generalises_beyond_one_workload(self):
+        """Two different programs, so the rule cannot be a 15_mandelbrot patch.
+
+        If someone narrows the model until only `15_mandelbrot` is refused,
+        `06_math_intensive` (`result = result + (1.0 / i)`) goes red.
+        """
+        self.assertGreaterEqual(len(CENSUS.REFUSAL_FLOORS), 2)
+        self.assertIn("suite_06_math_intensive", CENSUS.REFUSAL_FLOORS)
 
 
 if __name__ == "__main__":
