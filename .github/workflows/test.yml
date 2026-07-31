@@ -1216,10 +1216,24 @@ jobs:
       - name: Census verdict self-test
         run: |
           python3 scripts/compiler_output_regression.py census-self-test
+          python3 scripts/compiler_output_regression.py census-knob-isolation-self-test
+          python3 scripts/compiler_output_regression.py census-determinism-self-test
           python3 -m unittest tests.test_repsel_census
 
       - name: Build compiler
         run: cargo build -p perry
+
+      # #7131. Every object comparison in this job (and in every
+      # representation-selection A/B this repo has taken) assumes the compiler
+      # is a function of its inputs. On ELF it was not — for months, and only
+      # on ELF, which is why macOS review never saw it. This runner is x86_64
+      # Linux, so it is the host that can actually observe a relapse.
+      - name: Emission determinism
+        run: |
+          python3 scripts/compiler_output_regression.py census-determinism \
+            --perry target/debug/perry \
+            --repeat 2 \
+            --jobs 4
 
       - name: Promotion census
         run: |

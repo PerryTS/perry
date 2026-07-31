@@ -54,8 +54,9 @@
   cannot be selected. A knob that *raises* another representation's count is
   still a leak.
 
-  Object emission is **nondeterministic on aarch64 Linux** (the LLVM temp module
-  name embeds pid + nanotime and lands in the ELF object — filed as #7131), so
-  the emission half detects the host and skips rather than reporting 26 phantom
-  diffs. `--require-emission` turns that into a failure where determinism is
-  expected.
+  Object emission was **nondeterministic on aarch64 Linux** when this gate
+  landed (the temp `.ll` name embedded pid + nanotime and clang records a unit's
+  source basename into the ELF object — filed as #7131), so the emission half
+  detected the host and skipped rather than reporting 26 phantom diffs. #7135
+  fixed the cause and the skip was removed: a determinism disagreement is now a
+  hard failure on every host.

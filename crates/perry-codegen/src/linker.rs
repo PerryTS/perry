@@ -30,6 +30,23 @@ static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();
 /// in the `.ll` name made two identical compiles produce different objects on
 /// Linux (#7131). The `.ll` is content-addressed instead; uniqueness of
 /// concurrent same-content writes is handled by an atomic rename.
+///
+/// Which names actually reach the object, measured rather than assumed
+/// (aarch64 Debian clang 19.1.7, ELF, no `-g`) — so nobody has to re-derive
+/// this when reviewing a temp-path change:
+///
+/// | name                            | recorded in the `.o`?          |
+/// |---------------------------------|--------------------------------|
+/// | `.ll` **basename**              | YES — `STT_FILE` in `.symtab`  |
+/// | `.ll` **directory**, process CWD| no (needs DWARF, i.e. `-g`)    |
+/// | `-o` output path                | no                             |
+/// | `ld -r` input / output paths    | no (`compile_units_to_object`) |
+///
+/// That is the whole reason only the `.ll` basename had to change: the counter
+/// may stay in every *output* name, where it costs nothing and still closes
+/// #509. The one caveat is `PERRY_DEBUG_SYMBOLS`, which adds `-g` and pulls the
+/// absolute `.ll` path plus `DW_AT_comp_dir` into DWARF — objects built with it
+/// are reproducible only for a fixed `TMPDIR` and working directory.
 static TEMP_NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// FNV-1a 64-bit over `ll_text`. Stable across platforms and rustc versions
