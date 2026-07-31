@@ -77,6 +77,13 @@ dispatch whose hot arm derives both handles with a bare
 write-barrier count are unchanged (9 and 3 in both arms) — canonical `Str` is
 tagged-at-rest and does not move storage.
 
+Measured after the fact (#7123): that loop scaled to 3 000 000 iterations, timed
+by the program's own `Date.now()` delta over 20 interleaved pairs on an M1 under
+load, goes **74 ms → 69 ms (−6.8 %)**, distributions 72–79 ms vs 68–72 ms. It is
+the only timing claim attached to this change, and it is confined to the idiom
+the change targets — the other 29 of 39 workloads compile to a byte-identical
+object.
+
 ## Also
 
 `note_canonical_local` reported a hard-coded `RegionKind::Function` to
