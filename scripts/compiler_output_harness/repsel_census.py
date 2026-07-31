@@ -441,6 +441,8 @@ def compile_and_census(
     timeout: int,
     extra_env: dict[str, str] | None = None,
     keep_report: Path | None = None,
+    object_out: Path | None = None,
+    with_report: bool = False,
 ) -> dict[str, Any]:
     """Compile `source` with `--opt-report=json --no-link` and reduce it.
 
@@ -448,6 +450,14 @@ def compile_and_census(
     census never needs `libperry_runtime.a` and cannot be fooled by a stale
     one. `--no-cache` is redundant (`--opt-report` forces it) but stated so the
     intent survives a change upstream.
+
+    `object_out` keeps the emitted object instead of discarding it with the temp
+    directory — the knob-isolation gate (#7128) needs the bytes, because a knob
+    can leave every census count untouched and still change what ships (which is
+    exactly what `PERRY_CANONICAL_STR_LOCALS` did on 24 of 26 workloads).
+    `with_report` returns the raw payload alongside the counts for the same
+    reason: some representation sites (a specialized entry's `i32` parameter
+    slot, a proven-`this` receiver) are not counted by any census key.
     """
     if not source.exists():
         raise HarnessError(f"census source not found: {source}")
@@ -458,11 +468,16 @@ def compile_and_census(
         env.update(extra_env)
     with tempfile.TemporaryDirectory(prefix="repsel-census-") as tmp:
         tmpdir = Path(tmp)
+        if object_out is not None:
+            object_out.parent.mkdir(parents=True, exist_ok=True)
+            out_path = object_out
+        else:
+            out_path = tmpdir / "census.o"
         cmd = perry + [
             "compile",
             str(source),
             "-o",
-            str(tmpdir / "census.o"),
+            str(out_path),
             "--opt-report=json",
             "--no-link",
             "--no-cache",
@@ -486,8 +501,41 @@ def compile_and_census(
         keep_report.parent.mkdir(parents=True, exist_ok=True)
         keep_report.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     census = census_from_report(payload)
+    if with_report:
+        census["report"] = payload
+    if object_out is not None:
+        # Take the paths the compiler SAYS it wrote rather than assuming `-o`
+        # named them: a multi-module compile emits several, and an earlier
+        # version of this A/B hashed an empty directory and reported "all
+        # identical" (#7121). An arm that produces no object is a harness
+        # error, not a silent pass.
+        census["objects"] = _written_objects(result.stdout)
     census["source"] = str(source.relative_to(REPO_ROOT))
     return census
+
+
+#: `run_pipeline.rs` prints one of these per emitted artifact, on stdout.
+_WROTE_OBJECT = re.compile(r"^(?:Wrote object file|Stored cached object): (.+)$", re.M)
+
+
+def _written_objects(stdout: str) -> list[str]:
+    """Every object path the compiler reported writing, in emission order.
+
+    Raises rather than returning `[]`: "no objects" and "identical objects" are
+    the same answer to an object-level A/B, and the empty one is always wrong.
+    """
+    paths = [m.group(1).strip() for m in _WROTE_OBJECT.finditer(stdout)]
+    if not paths:
+        raise HarnessError(
+            "the compiler reported writing no object file. An object-level A/B "
+            "over zero objects reports 'identical' for every arm, which is the "
+            "vacuous comparison this harness exists to avoid.\n"
+            f"stdout tail:\n{stdout[-2000:]}"
+        )
+    missing = [p for p in paths if not Path(p).is_file()]
+    if missing:
+        raise HarnessError(f"compiler reported objects that do not exist: {missing}")
+    return paths
 
 
 def _extract_json(stderr: str) -> dict[str, Any]:

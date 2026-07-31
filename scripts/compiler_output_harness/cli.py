@@ -7,6 +7,8 @@ from .capture import capture, capture_suite, verify_existing
 from .common import DEFAULT_BENCHMARK_RUNS, HarnessError
 from .repsel_census import census
 from .repsel_census import self_test as census_self_test
+from .repsel_knob_isolation import check_isolation
+from .repsel_knob_isolation import self_test as isolation_self_test
 from .spec import WORKLOADS
 
 
@@ -128,6 +130,34 @@ def build_parser() -> argparse.ArgumentParser:
         "census-self-test", help="check the census verdict logic without compiling"
     )
     census_self_p.set_defaults(func=census_self_test)
+
+    # Knob isolation (#7128). Runs the census corpus once per bisection knob and
+    # asserts each knob moves only its own representation — the property every
+    # knob-based A/B silently assumes and that nothing checked until two knobs
+    # were caught moving two representations each.
+    iso_p = sub.add_parser(
+        "census-knob-isolation",
+        help="assert each representation knob moves only its own representation",
+    )
+    iso_p.add_argument("--perry")
+    iso_p.add_argument("--baseline")
+    iso_p.add_argument("--workload", action="append", help="restrict to named workload(s)")
+    iso_p.add_argument("--knob", action="append", help="restrict to named knob(s)")
+    iso_p.add_argument("--compile-timeout", type=int, default=300)
+    iso_p.add_argument("--jobs", type=int, default=4, help="parallel compiles")
+    iso_p.add_argument(
+        "--require-emission",
+        action="store_true",
+        help="fail instead of skipping when the host cannot emit objects deterministically",
+    )
+    iso_p.add_argument("--keep-objects", action="store_true")
+    iso_p.set_defaults(func=check_isolation)
+
+    iso_self_p = sub.add_parser(
+        "census-knob-isolation-self-test",
+        help="check the knob-isolation verdict logic without compiling",
+    )
+    iso_self_p.set_defaults(func=isolation_self_test)
 
     return parser
 
