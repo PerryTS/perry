@@ -290,6 +290,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             crate::value::TAG_FALSE
         });
     }
+    // #6558 sibling: `mod instanceof WebAssembly.Module` for the wasm-host
+    // module wrapper. Its `[[Prototype]]` does not reach the namespace ctor's
+    // `.prototype`, so brand-check it by the `__wasmKind` tag instead. Only a
+    // positive match short-circuits here; a miss returns `None` so the value
+    // still flows to the prototype walk below (how `WebAssembly.Memory`
+    // instances resolve, and how a foreign object answers `false`).
+    if let Some(true) = super::global_this::webassembly_value_ctor_instanceof(value, type_ref) {
+        return f64::from_bits(crate::value::TAG_TRUE);
+    }
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
         if module == "stream"
             && matches!(

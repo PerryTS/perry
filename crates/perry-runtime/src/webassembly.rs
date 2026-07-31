@@ -306,6 +306,10 @@ fn make_module_object(module: *mut c_void) -> f64 {
     let obj = crate::object::js_object_alloc(0, 2);
     object_set_string(obj, b"__wasmKind", b"module");
     object_set(obj, b"__wasmModulePtr", module as usize as f64);
+    // Record this host pointer as a genuine module instance so the
+    // `instanceof WebAssembly.Module` brand check can distinguish it from a
+    // user object that merely copies the `__wasmKind`/`__wasmModulePtr` fields.
+    crate::object::register_wasm_module_ptr(module as usize);
     object_value(obj)
 }
 

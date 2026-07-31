@@ -52,3 +52,21 @@ show("custom missing count", WebAssembly.Module.customSections(customModule, "no
 
 const compiled = await WebAssembly.compile(addBytes);
 show("compile exports", exportSummary(compiled));
+
+// A constructed / compiled module is recognized by `instanceof
+// WebAssembly.Module`, and is NOT a sibling constructor's instance.
+show("module instanceof Module", addModule instanceof WebAssembly.Module);
+show("compiled instanceof Module", compiled instanceof WebAssembly.Module);
+show("module not instanceof Memory", addModule instanceof WebAssembly.Memory);
+
+// A plain object that merely copies the internal brand fields is NOT a
+// module — the brand is a live host pointer this runtime handed out, not a
+// user-writable string/number property.
+const forged = { __wasmKind: "module", __wasmModulePtr: 1 } as unknown;
+show("forged not instanceof Module", forged instanceof WebAssembly.Module);
+
+// `WebAssembly.Memory` instances are recognized too (they link
+// `Memory.prototype` through the construct path).
+const memory = new WebAssembly.Memory({ initial: 1 });
+show("memory instanceof Memory", memory instanceof WebAssembly.Memory);
+show("memory not instanceof Module", memory instanceof WebAssembly.Module);
