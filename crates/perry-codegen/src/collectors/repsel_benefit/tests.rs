@@ -469,16 +469,79 @@ fn a_self_write_in_an_i32_position_is_still_a_benefit() {
     assert!(!out.contains(&1), "self-written i32 mixer refused: {out:?}");
 }
 
-/// The self-write exemption survives an unmodelled wrapper. `t = void (t / 2.0)`
-/// is still a write of `t` into its own slot; if the marker were cleared on the
-/// way down, an unmodelled node anywhere above a `/` would silently turn a
-/// self-write into a refusal.
-///
-/// The second local in the same position is the anti-vacuity control: the `/`
-/// under the wrapper really does reach the model as a cost, so a green verdict
-/// for `t` is the exemption working and not the walk stopping early.
+/// `x = x / 2` — a self-write whose VALUE is a double. The exemption is about
+/// the representation flow, not the syntactic shape `t = … t …`: `/` is
+/// floating-point in JS whatever its operands, so an i32 slot for `x` would
+/// `sitofp` out and `fptosi` back on every iteration and buy nothing. Raised
+/// by CodeRabbit on #7132; it fails against the first version of the
+/// exemption, which keyed on the shape.
 #[test]
-fn a_self_write_through_an_unmodelled_node_is_still_not_a_cost() {
+fn self_divide_is_still_a_cost() {
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(64))),
+        Stmt::While {
+            condition: cmp(get(1), Expr::Integer(1)),
+            body: vec![set(1, bin(BinaryOp::Div, get(1), Expr::Number(2.0)))],
+        },
+    ];
+    let out = run(&stmts, &HashSet::new());
+    assert!(
+        out.contains(&1),
+        "self-divided counter must still be refused: {out:?}"
+    );
+}
+
+/// `x = f(x)` — the same point through the other code path. Perry's calling
+/// convention passes NaN-boxed doubles, so the argument position materializes
+/// even though the value comes straight back into `x`'s own slot.
+#[test]
+fn self_referencing_call_argument_is_still_a_cost() {
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        Stmt::While {
+            condition: cmp(get(1), Expr::Integer(100)),
+            body: vec![set(1, call(vec![get(1)]))],
+        },
+    ];
+    let out = run(&stmts, &HashSet::new());
+    assert!(
+        out.contains(&1),
+        "self-referencing call argument must still be refused: {out:?}"
+    );
+}
+
+/// …and `x = new C(x)` likewise, since `new` has its own arm.
+#[test]
+fn self_referencing_new_argument_is_still_a_cost() {
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        Stmt::While {
+            condition: cmp(get(1), Expr::Integer(100)),
+            body: vec![set(
+                1,
+                Expr::New {
+                    class_name: "C".into(),
+                    args: vec![get(1)],
+                    type_args: vec![],
+                    byte_offset: 0,
+                },
+            )],
+        },
+    ];
+    let out = run(&stmts, &HashSet::new());
+    assert!(
+        out.contains(&1),
+        "self-referencing new argument must still be refused: {out:?}"
+    );
+}
+
+/// The exemption still holds through a representation-PRESERVING chain that
+/// the model does not otherwise model: `t = -(t + other)` keeps `t` in its own
+/// slot. The second local is the anti-vacuity control — it is read in the same
+/// expression and is NOT a self-write, so it must be refused; a green verdict
+/// for `t` therefore cannot come from the walk stopping early.
+#[test]
+fn a_self_write_through_a_preserving_chain_is_still_not_a_cost() {
     // 1 = t (self-written), 2 = other (read in the same expression)
     let stmts = vec![
         let_mut(1, Some(Expr::Integer(0))),
@@ -488,16 +551,15 @@ fn a_self_write_through_an_unmodelled_node_is_still_not_a_cost() {
             condition: cmp(get(1), Expr::Integer(100)),
             body: vec![set(
                 1,
-                Expr::Void(Box::new(bin(
-                    BinaryOp::Div,
-                    bin(BinaryOp::Add, get(1), get(2)),
-                    Expr::Number(2.0),
-                ))),
+                Expr::Unary {
+                    op: perry_hir::UnaryOp::Neg,
+                    operand: Box::new(bin(BinaryOp::Add, get(1), get(2))),
+                },
             )],
         },
     ];
     let out = run(&stmts, &HashSet::new());
-    assert!(!out.contains(&1), "wrapped self-write refused: {out:?}");
+    assert!(!out.contains(&1), "preserving self-write refused: {out:?}");
     assert!(out.contains(&2), "control local not refused: {out:?}");
 }
 

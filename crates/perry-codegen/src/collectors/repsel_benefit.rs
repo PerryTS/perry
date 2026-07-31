@@ -85,6 +85,14 @@
 //!   is inside its own assignment and whose whole reason to want an i32 slot
 //!   is that read.
 //!
+//!   The exemption is about the *representation flow*, not the syntactic shape
+//!   `t = … t …`: it is cleared on the way through any operation that forces a
+//!   materialization (a `/` or `**` operand, a call or `new` argument), so
+//!   `x = x / 2` and `x = f(x)` are still costs. Those genuinely convert out
+//!   and back on every iteration, which is the failure mode this module
+//!   exists to refuse — re-entering through the exemption instead of through
+//!   the original path.
+//!
 //! A missed refusal is today's behaviour. A spurious refusal is a lost
 //! promotion, so the model is built to err in the first direction.
 //!
@@ -161,7 +169,10 @@ struct Model<'a> {
     storage: &'a I32StorageFacts<'a>,
     tallies: std::collections::HashMap<u32, Tally>,
     /// The local currently being written, if the walk is inside the RHS of
-    /// `LocalSet(t, …)`. A read of `t` there is representation-preserving.
+    /// `LocalSet(t, …)` **and** has not yet passed through an operation that
+    /// forces a representation change. See [`Model::forced_double`]: the
+    /// exemption is for values that flow back into their own slot without
+    /// leaving their representation, not for the syntactic shape `t = … t …`.
     self_target: Option<u32>,
 }
 
@@ -171,14 +182,18 @@ impl<'a> Model<'a> {
     }
 
     fn read(&mut self, id: u32, ctx: UseCtx, depth: u32) {
-        // A read of a local inside its own assignment is representation-
-        // PRESERVING, so it is never a cost — `iter = iter + 1` costs one
-        // instruction whichever slot `iter` lives in. It is still a benefit
-        // when it lands in an i32-consuming position, and suppressing that
-        // half was wrong: `seed = (Math.imul(seed, K) + C) & 0x7fffffff` is a
-        // local whose ONLY read is inside its own assignment and whose whole
-        // reason to want an i32 slot is that read
-        // (`benchmarks/suite/17_loop_data_dependent.ts`, and every FNV /
+        // A read of a local inside its own assignment is not a cost WHEN the
+        // value flows back into the same slot without leaving its
+        // representation — `iter = iter + 1` costs one instruction whichever
+        // slot `iter` lives in. `self_target` is cleared on the way through any
+        // operation that forces a materialization ([`Model::forced_double`]),
+        // so `x = x / 2` and `x = f(x)` are still costs: those really do
+        // `sitofp` out and convert back on every iteration.
+        //
+        // The exemption never suppresses the BENEFIT half:
+        // `seed = (Math.imul(seed, K) + C) & 0x7fffffff` is a local whose ONLY
+        // read is inside its own assignment and whose whole reason to want an
+        // i32 slot is that read (`17_loop_data_dependent`, and every FNV /
         // xorshift mixer in the corpus).
         let is_self = self.self_target == Some(id);
         match ctx {
@@ -186,6 +201,19 @@ impl<'a> Model<'a> {
             UseCtx::Double if depth >= 1 && !is_self => self.entry(id).hot_double_reads += 1,
             _ => {}
         }
+    }
+
+    /// Descend into a position whose `Double` context is **forced by the
+    /// operation** rather than inherited from a slot: a `/` or `**` operand, or
+    /// a call / `new` argument. The value is genuinely materialized as an f64
+    /// there, so the self-write exemption must not survive the descent —
+    /// otherwise `x = x / 2` and `x = f(x)` would read as free, and an i32 slot
+    /// for `x` would pay a conversion per iteration and buy nothing, which is
+    /// the exact failure this whole module exists to refuse.
+    fn forced_double(&mut self, e: &Expr, depth: u32) {
+        let saved = self.self_target.take();
+        self.expr(e, UseCtx::Double, depth);
+        self.self_target = saved;
     }
 
     /// The context a value acquires by being stored into `target`.
@@ -232,6 +260,18 @@ impl<'a> Model<'a> {
                 self.expr(object, UseCtx::Neutral, depth);
                 self.expr(index, UseCtx::Int, depth);
             }
+            // `/` and `**` are floating-point in JS regardless of their
+            // operands, so an i32 operand is materialized here whatever the
+            // surrounding context says — including inside the local's own
+            // assignment.
+            Expr::Binary {
+                op: BinaryOp::Div | BinaryOp::Pow,
+                left,
+                right,
+            } => {
+                self.forced_double(left, depth);
+                self.forced_double(right, depth);
+            }
             Expr::Binary { op, left, right } => {
                 let child = match op {
                     // Bitwise operands are ToInt32-coerced by the language, so
@@ -242,13 +282,10 @@ impl<'a> Model<'a> {
                     | BinaryOp::Shl
                     | BinaryOp::Shr
                     | BinaryOp::UShr => UseCtx::Int,
-                    // `/` and `**` are floating-point in JS regardless of the
-                    // operands, so an i32 operand must be converted.
-                    BinaryOp::Div | BinaryOp::Pow => UseCtx::Double,
                     // Additive / multiplicative chains inherit their root:
                     // `a[i * 4 + k]` keeps `i` and `k` integral, `sum + i * 2`
                     // makes them doubles.
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod => ctx,
+                    _ => ctx,
                 };
                 self.expr(left, child, depth);
                 self.expr(right, child, depth);
@@ -272,16 +309,17 @@ impl<'a> Model<'a> {
                 self.expr(b, UseCtx::Int, depth);
             }
             // Perry's calling convention passes NaN-boxed doubles, so every
-            // argument position converts an i32 operand back.
+            // argument position converts an i32 operand back — `x = f(x)`
+            // included, which is why these go through `forced_double`.
             Expr::Call { callee, args, .. } => {
                 self.expr(callee, UseCtx::Neutral, depth);
                 for a in args {
-                    self.expr(a, UseCtx::Double, depth);
+                    self.forced_double(a, depth);
                 }
             }
             Expr::New { args, .. } => {
                 for a in args {
-                    self.expr(a, UseCtx::Double, depth);
+                    self.forced_double(a, depth);
                 }
             }
             Expr::Conditional {
