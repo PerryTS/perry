@@ -7,6 +7,7 @@
       "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape.ts",
       "floors": {
         "ptr-shape": 1,
+        "ptr-shape-consumed": 1,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -21,7 +22,8 @@
         "canonical-slot": 1,
         "int-valued-ta": 0,
         "spec-abi": 1
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "fixture_ptr_numarray",
@@ -29,6 +31,7 @@
       "source": "benchmarks/repsel_census/fixtures/fixture_ptr_numarray.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 1,
         "canonical-i32": 2,
         "canonical-u32": 0,
@@ -43,7 +46,8 @@
         "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 2
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "fixture_canonical_slots",
@@ -51,6 +55,7 @@
       "source": "benchmarks/repsel_census/fixtures/fixture_canonical_slots.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 2,
         "canonical-u32": 1,
@@ -65,7 +70,8 @@
         "canonical-slot": 6,
         "int-valued-ta": 0,
         "spec-abi": 3
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "fixture_int_valued_ta",
@@ -73,6 +79,7 @@
       "source": "benchmarks/repsel_census/fixtures/fixture_int_valued_ta.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 1,
         "canonical-u32": 0,
@@ -87,7 +94,8 @@
         "canonical-slot": 3,
         "int-valued-ta": 1,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "fixture_spec_abi_taptr",
@@ -95,6 +103,7 @@
       "source": "benchmarks/repsel_census/fixtures/fixture_spec_abi_taptr.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 2,
         "canonical-u32": 0,
@@ -109,7 +118,8 @@
         "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 1
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "batch",
@@ -117,6 +127,7 @@
       "source": "benchmarks/app-patterns/kernels/batch.ts",
       "floors": {
         "ptr-shape": 2,
+        "ptr-shape-consumed": 1,
         "ptr-numarray": 0,
         "canonical-i32": 3,
         "canonical-u32": 0,
@@ -131,6 +142,9 @@
         "canonical-slot": 5,
         "int-valued-ta": 0,
         "spec-abi": 3
+      },
+      "unconsumed_mechanisms": {
+        "module_init_context": 1
       }
     },
     {
@@ -139,6 +153,7 @@
       "source": "benchmarks/suite/01_startup.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -153,7 +168,8 @@
         "canonical-slot": 0,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_02_loop_overhead",
@@ -161,6 +177,7 @@
       "source": "benchmarks/suite/02_loop_overhead.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -175,7 +192,8 @@
         "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_03_array_write",
@@ -183,6 +201,7 @@
       "source": "benchmarks/suite/03_array_write.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 1,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -197,7 +216,8 @@
         "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_04_array_read",
@@ -205,6 +225,7 @@
       "source": "benchmarks/suite/04_array_read.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 1,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -219,7 +240,8 @@
         "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_05_fibonacci",
@@ -227,6 +249,7 @@
       "source": "benchmarks/suite/05_fibonacci.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -241,7 +264,8 @@
         "canonical-slot": 1,
         "int-valued-ta": 0,
         "spec-abi": 1
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_06_math_intensive",
@@ -249,6 +273,7 @@
       "source": "benchmarks/suite/06_math_intensive.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -263,7 +288,8 @@
         "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_07_object_create",
@@ -271,6 +297,7 @@
       "source": "benchmarks/suite/07_object_create.ts",
       "floors": {
         "ptr-shape": 1,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -285,6 +312,9 @@
         "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
+      },
+      "unconsumed_mechanisms": {
+        "scalar_replaced": 1
       }
     },
     {
@@ -293,6 +323,7 @@
       "source": "benchmarks/suite/08_string_concat.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -307,7 +338,8 @@
         "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_09_method_calls",
@@ -315,6 +347,7 @@
       "source": "benchmarks/suite/09_method_calls.ts",
       "floors": {
         "ptr-shape": 1,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -329,6 +362,9 @@
         "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
+      },
+      "unconsumed_mechanisms": {
+        "module_init_context": 1
       }
     },
     {
@@ -337,6 +373,7 @@
       "source": "benchmarks/suite/10_nested_loops.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 1,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -351,7 +388,8 @@
         "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_11_prime_sieve",
@@ -359,6 +397,7 @@
       "source": "benchmarks/suite/11_prime_sieve.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -373,7 +412,8 @@
         "canonical-slot": 4,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_12_binary_trees",
@@ -381,6 +421,7 @@
       "source": "benchmarks/suite/12_binary_trees.ts",
       "floors": {
         "ptr-shape": 1,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -395,6 +436,9 @@
         "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
+      },
+      "unconsumed_mechanisms": {
+        "scalar_replaced": 1
       }
     },
     {
@@ -403,6 +447,7 @@
       "source": "benchmarks/suite/13_factorial.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -417,7 +462,8 @@
         "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_14_closure",
@@ -425,6 +471,7 @@
       "source": "benchmarks/suite/14_closure.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -439,7 +486,8 @@
         "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_15_mandelbrot",
@@ -447,6 +495,7 @@
       "source": "benchmarks/suite/15_mandelbrot.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -461,7 +510,8 @@
         "canonical-slot": 7,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_16_matrix_multiply",
@@ -469,6 +519,7 @@
       "source": "benchmarks/suite/16_matrix_multiply.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
         "canonical-i32": 3,
         "canonical-u32": 0,
@@ -483,7 +534,8 @@
         "canonical-slot": 7,
         "int-valued-ta": 0,
         "spec-abi": 1
-      }
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "suite_17_loop_data_dependent",
@@ -491,6 +543,7 @@
       "source": "benchmarks/suite/17_loop_data_dependent.ts",
       "floors": {
         "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
         "ptr-numarray": 1,
         "canonical-i32": 0,
         "canonical-u32": 0,
@@ -505,8 +558,9 @@
         "canonical-slot": 5,
         "int-valued-ta": 0,
         "spec-abi": 0
-      }
+      },
+      "unconsumed_mechanisms": {}
     }
   ],
-  "generated_at": "2026-07-31T03:14:57.355324Z"
+  "generated_at": "2026-07-31T04:32:15.277779Z"
 }

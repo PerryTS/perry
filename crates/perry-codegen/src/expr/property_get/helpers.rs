@@ -433,6 +433,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         .map(|fact| fact.class_name == class_name && fact.numeric_fields.contains(property))
         .unwrap_or(false);
     if ptr_shape_numeric {
+        ctx.note_ptr_shape_consumed(object.as_ref(), "class_field_get_number.shape_proven_load");
         let recv_box = lower_expr(ctx, object)?;
         let field_idx_str = field_index.to_string();
         let header_skip =
@@ -504,6 +505,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         .map(|fact| fact.class_name == class_name)
         .unwrap_or(false);
     if ptr_shape_proven_shape {
+        ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_get_number");
         let recv_box = lower_expr(ctx, object)?;
         let field_idx_str = field_index.to_string();
         let header_skip =

@@ -1316,6 +1316,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .filter(|fact| fact.class_name == class_name)
                             .cloned();
                         if let Some(fact) = ptr_shape_fact {
+                            ctx.note_ptr_shape_consumed(
+                                object.as_ref(),
+                                "class_field_get.shape_proven_load",
+                            );
                             let recv_box = lower_expr(ctx, object)?;
                             let field_idx_str = field_index.to_string();
                             let header_skip =

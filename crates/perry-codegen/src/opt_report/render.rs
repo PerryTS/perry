@@ -14,7 +14,14 @@ use super::{Analysis, Entry, Outcome, Tier};
 
 /// Bump when a field is removed or its meaning changes. Additive fields do
 /// not require a bump — consumers must ignore unknown keys.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// v2 (#7106 follow-up) splits a promotion's *selection* from its
+/// *consumption*. `selected` keeps its old meaning (an analysis proved the
+/// value) but explicitly stops implying that codegen emitted anything for it;
+/// `consumed` / `unconsumed` carry that. A consumer that keyed performance
+/// claims off `selected` under v1 was reading a number that does not mean what
+/// it looks like, so this is a meaning change and takes a bump.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// How many denials to show per tier before collapsing the tail. The cold
 /// tail is real information but it is not the actionable part.
@@ -24,6 +31,12 @@ const MAX_ROWS_PER_TIER: usize = 25;
 struct AnalysisTally {
     selected: usize,
     denied: usize,
+    /// Selected values codegen actually applied the representation to.
+    consumed: usize,
+    /// Selected values codegen reached and dropped the proof for, with a named
+    /// mechanism. `selected - consumed - unconsumed` is the residue: values
+    /// with no access site at all, which no mechanism can be blamed for.
+    unconsumed: usize,
 }
 
 impl AnalysisTally {
@@ -39,6 +52,8 @@ fn tally(entries: &[Entry]) -> BTreeMap<Analysis, AnalysisTally> {
         match e.outcome {
             Outcome::Selected => slot.selected += 1,
             Outcome::Denied => slot.denied += 1,
+            Outcome::Consumed => slot.consumed += 1,
+            Outcome::Unconsumed => slot.unconsumed += 1,
         }
     }
     out
@@ -94,6 +109,19 @@ pub fn render_text(entries: &[Entry]) -> String {
             t.denied,
             t.candidates(),
         );
+        if t.consumed > 0 || t.unconsumed > 0 {
+            let _ = writeln!(
+                out,
+                "  {:<16} {:>4} of those selections were CONSUMED by codegen{}",
+                "",
+                t.consumed,
+                if t.unconsumed > 0 {
+                    format!(", {} dropped unused", t.unconsumed)
+                } else {
+                    String::new()
+                },
+            );
+        }
     }
     let _ = writeln!(
         out,
@@ -121,6 +149,49 @@ pub fn render_text(entries: &[Entry]) -> String {
             "    Every candidate was denied; the rules are in {}.\n",
             analysis.rule_source(),
         );
+    }
+
+    // ── Wasted promotions ──────────────────────────────────────────────────
+    // A selection that codegen dropped is worse than a denial: a denial names a
+    // rule and shows up as a zero, while this shows up as a WIN. #7107 found by
+    // reading IR that `batch.ts` reports two `Ptr<Shape>` promotions and applies
+    // one. Nothing in the report said so.
+    let wasted: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| e.outcome == Outcome::Unconsumed)
+        .collect();
+    if !wasted.is_empty() {
+        let _ = writeln!(
+            out,
+            "Selected but NOT consumed ({}) — counted as wins, emitted nothing",
+            wasted.len(),
+        );
+        out.push_str("--------------------------------------------------------------\n");
+        for e in wasted.iter().take(MAX_ROWS_PER_TIER) {
+            let _ = writeln!(
+                out,
+                "  {} :: {} `{}` -> {} (in {} {})",
+                e.module,
+                e.position.as_str(),
+                e.name,
+                e.rep,
+                e.region.as_str(),
+                e.function,
+            );
+            if let Some(rule) = &e.rule {
+                let _ = writeln!(out, "      dropped by {rule}");
+            }
+            if let Some(reason) = &e.reason {
+                let _ = writeln!(out, "      {reason}");
+            }
+            if let Some(issue) = &e.issue {
+                let _ = writeln!(out, "      tracking: {issue}");
+            }
+        }
+        if wasted.len() > MAX_ROWS_PER_TIER {
+            let _ = writeln!(out, "  ... and {} more", wasted.len() - MAX_ROWS_PER_TIER);
+        }
+        out.push('\n');
     }
 
     // ── Denials, ranked, grouped by actionability tier ─────────────────────
@@ -236,12 +307,16 @@ struct JsonAnalysis<'a> {
     rule_source: &'a str,
     selected: usize,
     denied: usize,
+    consumed: usize,
+    unconsumed: usize,
 }
 
 #[derive(Debug, serde::Serialize)]
 struct JsonSummary<'a> {
     selected: usize,
     denied: usize,
+    consumed: usize,
+    unconsumed: usize,
     by_analysis: Vec<JsonAnalysis<'a>>,
 }
 
@@ -262,6 +337,8 @@ pub fn render_json(entries: &[Entry]) -> String {
         summary: JsonSummary {
             selected: tallies.values().map(|t| t.selected).sum(),
             denied: tallies.values().map(|t| t.denied).sum(),
+            consumed: tallies.values().map(|t| t.consumed).sum(),
+            unconsumed: tallies.values().map(|t| t.unconsumed).sum(),
             // Enumerate `Analysis::ALL`, not the analyses that happen to have
             // entries: an analysis that recorded nothing must appear with an
             // explicit `0`. A consumer cannot tell an absent key from a zero
@@ -277,6 +354,8 @@ pub fn render_json(entries: &[Entry]) -> String {
                         rule_source: a.rule_source(),
                         selected: t.selected,
                         denied: t.denied,
+                        consumed: t.consumed,
+                        unconsumed: t.unconsumed,
                     }
                 })
                 .collect(),
@@ -447,6 +526,105 @@ mod tests {
             .unwrap();
         assert_eq!(numarray["selected"], 0);
         assert_eq!(numarray["denied"], 0);
+    }
+
+    fn with_outcome(analysis: Analysis, name: &str, outcome: Outcome, rule: Option<&str>) -> Entry {
+        let mut e = selected(analysis, name, "Ptr<Shape>");
+        e.outcome = outcome;
+        e.rule = rule.map(str::to_string);
+        e.reason = rule.map(|_| "the context gate dropped it".to_string());
+        e.issue = rule.map(|_| "#7109".to_string());
+        e
+    }
+
+    /// The headline case. A selected-and-dropped promotion must be visible as
+    /// such: before this, `batch.ts` reported two `Ptr<Shape>` wins, applied
+    /// one, and nothing in the report said so.
+    #[test]
+    fn a_selected_but_unconsumed_promotion_is_stated_explicitly() {
+        let entries = vec![
+            selected(Analysis::PtrShape, "acc", "Ptr<Shape>"),
+            selected(Analysis::PtrShape, "totals", "Ptr<Shape>"),
+            with_outcome(Analysis::PtrShape, "acc", Outcome::Consumed, None),
+            with_outcome(
+                Analysis::PtrShape,
+                "totals",
+                Outcome::Unconsumed,
+                Some("module_init_context"),
+            ),
+        ];
+        let text = render_text(&entries);
+        assert!(
+            text.contains("Selected but NOT consumed (1)"),
+            "the wasted promotion must have its own headline; got:\n{text}"
+        );
+        assert!(
+            text.contains("dropped by module_init_context"),
+            "the mechanism must be named, not just the count; got:\n{text}"
+        );
+        assert!(
+            text.contains("1 of those selections were CONSUMED by codegen"),
+            "the summary must separate selection from consumption; got:\n{text}"
+        );
+    }
+
+    /// A build where every promotion is applied must NOT grow the section —
+    /// otherwise it is noise and stops being read.
+    #[test]
+    fn the_wasted_section_is_absent_when_everything_was_consumed() {
+        let entries = vec![
+            selected(Analysis::PtrShape, "acc", "Ptr<Shape>"),
+            with_outcome(Analysis::PtrShape, "acc", Outcome::Consumed, None),
+        ];
+        let text = render_text(&entries);
+        assert!(!text.contains("Selected but NOT consumed"), "got:\n{text}");
+    }
+
+    /// The census keys its consumed column off these fields. A report that
+    /// counts consumption internally but does not SERIALIZE it leaves the
+    /// census unable to tell a wasted promotion from an applied one — which is
+    /// the entire failure being fixed.
+    #[test]
+    fn json_carries_consumed_and_unconsumed_per_analysis() {
+        let entries = vec![
+            selected(Analysis::PtrShape, "acc", "Ptr<Shape>"),
+            selected(Analysis::PtrShape, "totals", "Ptr<Shape>"),
+            with_outcome(Analysis::PtrShape, "acc", Outcome::Consumed, None),
+            with_outcome(
+                Analysis::PtrShape,
+                "totals",
+                Outcome::Unconsumed,
+                Some("module_init_context"),
+            ),
+        ];
+        let json: serde_json::Value = serde_json::from_str(&render_json(&entries)).unwrap();
+        assert_eq!(json["summary"]["consumed"], 1);
+        assert_eq!(json["summary"]["unconsumed"], 1);
+        let row = json["summary"]["by_analysis"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["analysis"] == "ptr-shape")
+            .expect("ptr-shape row");
+        assert_eq!(row["selected"], 2, "selection keeps its old meaning");
+        assert_eq!(row["consumed"], 1, "and no longer implies application");
+        assert_eq!(row["unconsumed"], 1);
+        // Every analysis must carry the field, so an uninstrumented one reads
+        // as an explicit zero rather than an absent key.
+        for a in json["summary"]["by_analysis"].as_array().unwrap() {
+            assert!(a.get("consumed").is_some(), "missing consumed on {a:?}");
+        }
+    }
+
+    /// `selected` is what a v1 consumer keyed performance claims off, and its
+    /// meaning changed: it no longer implies emitted bytes. That is a schema
+    /// break, not an additive field.
+    #[test]
+    fn splitting_selection_from_consumption_bumped_the_schema() {
+        assert!(
+            SCHEMA_VERSION >= 2,
+            "the consumed/unconsumed split changes what `selected` means"
+        );
     }
 
     /// Every analysis must render a distinct `analysis` key: the census keys

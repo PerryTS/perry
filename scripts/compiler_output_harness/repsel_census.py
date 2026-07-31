@@ -79,7 +79,7 @@ BASELINE_SCHEMA_VERSION = 1
 
 #: The `--opt-report` JSON schema this census understands. A bump upstream must
 #: be a loud failure here, not a silently-empty census.
-SUPPORTED_REPORT_SCHEMA = 1
+SUPPORTED_REPORT_SCHEMA = 2
 
 #: Every analysis the report is expected to enumerate. Kept in lockstep with
 #: `perry_codegen::opt_report::Analysis::ALL`; a missing row means the compiler
@@ -94,8 +94,14 @@ EXPECTED_ANALYSES = (
 )
 
 #: Census keys, one per representation, in report order.
+#:
+#: `ptr-shape-consumed` is a SEPARATE key from `ptr-shape`, deliberately. See
+#: [`CONSUMPTION_INSTRUMENTED`]: `ptr-shape` keeps its old meaning (the analysis
+#: proved this many values) and its old ratcheted floors, which must not be
+#: reinterpreted retroactively. The new key answers the different question.
 CENSUS_KEYS: tuple[str, ...] = (
     "ptr-shape",
+    "ptr-shape-consumed",
     "ptr-numarray",
     "canonical-i32",
     "canonical-u32",
@@ -104,6 +110,27 @@ CENSUS_KEYS: tuple[str, ...] = (
     "spec-abi-entry",
     "spec-abi-taptr-slot",
 )
+
+#: Analyses whose CONSUMPTION is instrumented in the compiler, mapped to their
+#: census key. **Held in code, never in the baseline.**
+#:
+#: A promotion is `selected` when an analysis proves a value. It is `consumed`
+#: only when codegen goes on to emit the representation-specific form for it.
+#: The two were conflated until #7107 read the emitted IR by hand and found
+#: that `batch.ts` reports two `Ptr<Shape>` promotions and applies exactly one:
+#: `totals` is proven, reported as a win, and keeps the guarded diamond at
+#: every access site. The whole 1,532-byte binary saving came from the other.
+#:
+#: This table is why the census does not simply grow a `-consumed` column for
+#: every representation. An uninstrumented analysis would report `consumed: 0`,
+#: which is indistinguishable from "instrumented and never applied" — the exact
+#: ambiguity this census exists to remove, reintroduced one level down. So
+#: `consumed` is reported ONLY for analyses that record it, and
+#: [`check_consumption_instrumentation`] fails if the compiler starts emitting
+#: consumption for an analysis this table does not know about.
+CONSUMPTION_INSTRUMENTED: dict[str, str] = {
+    "ptr-shape": "ptr-shape-consumed",
+}
 
 #: `SlotRep` debug spelling -> census key, for the `canonical-slot` analysis.
 CANONICAL_REPS = {
@@ -129,7 +156,13 @@ TAPTR_LABEL = re.compile(r"^ta\d+(?:x-?\d+)?$")
 #: least this many values of this representation.* That is the assertion that
 #: the instrument is alive, separate from any claim about real-world code.
 LIVENESS_FLOORS: dict[str, dict[str, int]] = {
-    "fixture_ptr_shape": {"ptr-shape": 1},
+    # The consumed minimum is what makes the consumption counter falsifiable.
+    # `ptr-shape: 1` alone cannot fail when the counter is dead, and a
+    # `ptr-shape-consumed` floor of 0 could never go red either -- which is the
+    # state every non-fixture workload in this corpus is genuinely in. The
+    # fixture's `p` is a function-body local with an in-loop field store, so it
+    # is consumed; verified against emitted IR, not against this counter.
+    "fixture_ptr_shape": {"ptr-shape": 1, "ptr-shape-consumed": 1},
     "fixture_ptr_numarray": {"ptr-numarray": 1},
     "fixture_canonical_slots": {
         "canonical-i32": 1,
@@ -199,6 +232,16 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(entries, list):
         raise HarnessError("--opt-report JSON has no entries list")
 
+    missing_consumption = [
+        a for a in CONSUMPTION_INSTRUMENTED if "consumed" not in by_analysis.get(a, {})
+    ]
+    if missing_consumption:
+        raise HarnessError(
+            f"--opt-report omitted the `consumed` tally for {missing_consumption}. "
+            "The census counts consumption, not selection; a report that cannot "
+            "distinguish them is the instrument this census replaced."
+        )
+
     counts = {key: 0 for key in CENSUS_KEYS}
     counts["ptr-shape"] = int(by_analysis["ptr-shape"]["selected"])
     counts["ptr-numarray"] = int(by_analysis["ptr-numarray"]["selected"])
@@ -228,6 +271,44 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
             "its promotions vanish from the census"
         )
 
+    # Consumption, counted from ENTRIES rather than the summary tally, and only
+    # for values in a `local` position. Phase 5a's proven-`this` receiver is a
+    # real consumption of the same representation but was never `select()`ed, so
+    # folding it in here would make `consumed` exceed `selected` and quietly
+    # break the one invariant that says the two columns describe the same
+    # population. It is reported separately instead (`consumed_receiver`).
+    consumed_receiver = 0
+    unconsumed_mechanisms: dict[str, int] = {}
+    seen_consumed: set[tuple[str, Any]] = set()
+    unknown_consumed: set[str] = set()
+    for entry in entries:
+        analysis = entry.get("analysis")
+        outcome = entry.get("outcome")
+        if outcome == "consumed":
+            if analysis not in CONSUMPTION_INSTRUMENTED:
+                unknown_consumed.add(str(analysis))
+                continue
+            if entry.get("position") != "local":
+                consumed_receiver += 1
+                continue
+            # One value consumed at five access sites is ONE consumed value.
+            key = (str(analysis), entry.get("local_id"), entry.get("function"))
+            if key in seen_consumed:
+                continue
+            seen_consumed.add(key)
+            counts[CONSUMPTION_INSTRUMENTED[analysis]] += 1
+        elif outcome == "unconsumed":
+            rule = str(entry.get("rule") or "<unnamed>")
+            unconsumed_mechanisms[rule] = unconsumed_mechanisms.get(rule, 0) + 1
+    if unknown_consumed:
+        raise HarnessError(
+            f"--opt-report recorded consumption for analysis/analyses "
+            f"{sorted(unknown_consumed)}, which CONSUMPTION_INSTRUMENTED does not "
+            "know about. Add a census key for it: an instrumented analysis whose "
+            "consumption is not counted is a promotion the census still cannot "
+            "tell apart from a wasted one."
+        )
+
     canonical_total = sum(counts[k] for k in CANONICAL_REPS.values())
     reported = int(by_analysis["canonical-slot"]["selected"])
     if canonical_total != reported:
@@ -240,7 +321,12 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
         row: int(by_analysis[row]["selected"]) + int(by_analysis[row]["denied"])
         for row in EXPECTED_ANALYSES
     }
-    return {"counts": counts, "candidates": candidates}
+    return {
+        "counts": counts,
+        "candidates": candidates,
+        "unconsumed_mechanisms": unconsumed_mechanisms,
+        "consumed_receiver": consumed_receiver,
+    }
 
 
 # ── Running the compiler ───────────────────────────────────────────────────
@@ -442,6 +528,70 @@ def check_instrument_liveness(observed: dict[str, dict[str, Any]]) -> list[str]:
     ]
 
 
+def check_consumption_invariant(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """`consumed` may never exceed `selected` for the same representation.
+
+    Not a style rule — it is the assertion that the two columns describe one
+    population. If consumption is ever recorded for a value that was never
+    selected (Phase 5a's proven-`this` receiver is exactly such a value), the
+    consumed column stops meaning "of the promotions we counted, this many were
+    applied" and starts meaning nothing in particular, while still looking like
+    an improvement.
+    """
+    failures: list[str] = []
+    for name, entry in sorted(observed.items()):
+        counts = entry["counts"]
+        for analysis, consumed_key in CONSUMPTION_INSTRUMENTED.items():
+            selected = int(counts.get(analysis, 0))
+            consumed = int(counts.get(consumed_key, 0))
+            if consumed > selected:
+                failures.append(
+                    f"{name}: {consumed_key} is {consumed} but only {selected} "
+                    f"{analysis} value(s) were selected. Consumption is being counted "
+                    "for values outside the selected population, so the column no "
+                    "longer means what its name says."
+                )
+    return failures
+
+
+def check_unconsumed_is_explained(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """A workload with wasted promotions must be able to NAME a mechanism.
+
+    `selected > consumed` says the compiler proved values and emitted nothing
+    for them. That on its own is a number; it is not yet information. The
+    mechanism recorders (`module_init_context`, `scalar_replaced`, …) are what
+    turn it into something a reader can act on or argue with.
+
+    Without this check, deleting a mechanism recorder is invisible: the
+    consumed column is unchanged, the floors still pass, and the census goes
+    green having lost the only part of the finding that says WHY. That is
+    CLAUDE.md failure mode 4 — the gate runs but its subject did not.
+
+    A residue is allowed: `selected - consumed` may exceed the named
+    mechanisms, because a promotion with no access site at all is dropped by
+    nobody. What is not allowed is wasted promotions and ZERO named mechanisms.
+    """
+    failures: list[str] = []
+    for name, entry in sorted(observed.items()):
+        counts = entry["counts"]
+        wasted = sum(
+            int(counts.get(a, 0)) - int(counts.get(k, 0))
+            for a, k in CONSUMPTION_INSTRUMENTED.items()
+        )
+        if wasted <= 0:
+            continue
+        if sum(int(v) for v in entry.get("unconsumed_mechanisms", {}).values()) > 0:
+            continue
+        failures.append(
+            f"{name}: {wasted} selected promotion(s) were not consumed, and not one "
+            "of them names a mechanism. A wasted promotion with no rule attached is "
+            "the state this census was built to end: it reads exactly like an honest "
+            "zero. Either a mechanism recorder was removed, or a new way to drop a "
+            "proof exists and needs one."
+        )
+    return failures
+
+
 def check_analysis_reach(observed: dict[str, dict[str, Any]]) -> list[str]:
     """Every corpus workload must be REACHED by at least one analysis.
 
@@ -506,6 +656,48 @@ def render_table(
         lines.append("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip())
         if index == 0:
             lines.append("  ".join("-" * w for w in widths))
+    return "\n".join(lines)
+
+
+def render_consumption_report(
+    baseline: dict[str, Any], observed: dict[str, dict[str, Any]]
+) -> str:
+    """Selected vs CONSUMED, and the named mechanism for every wasted promotion.
+
+    This is the honest version of the promotion table. `selected` counts
+    `select()` calls; `consumed` counts values codegen actually emitted the
+    representation for. Where they differ, the difference is the compiler
+    proving things it then throws away.
+    """
+    lines = []
+    for analysis, consumed_key in CONSUMPTION_INSTRUMENTED.items():
+        selected = sum(int(e["counts"].get(analysis, 0)) for e in observed.values())
+        consumed = sum(int(e["counts"].get(consumed_key, 0)) for e in observed.values())
+        lines.append(
+            f"  {analysis:<22} {selected} selected, {consumed} consumed "
+            f"({selected - consumed} proven and thrown away)"
+        )
+    mechanisms: dict[str, int] = {}
+    receiver = 0
+    for entry in observed.values():
+        for rule, n in entry.get("unconsumed_mechanisms", {}).items():
+            mechanisms[rule] = mechanisms.get(rule, 0) + int(n)
+        receiver += int(entry.get("consumed_receiver", 0))
+    if mechanisms:
+        lines.append("  mechanisms that dropped a selected promotion:")
+        for rule, n in sorted(mechanisms.items(), key=lambda kv: (-kv[1], kv[0])):
+            lines.append(f"    {rule:<24} {n}")
+    if receiver:
+        lines.append(
+            f"  (plus {receiver} consumption(s) of a proven `this` receiver, which is "
+            "never counted as a selection at all — see CONSUMPTION_INSTRUMENTED)"
+        )
+    uninstrumented = [k for k in CENSUS_KEYS if k not in CONSUMPTION_INSTRUMENTED
+                      and not k.endswith("-consumed")]
+    lines.append(
+        "  NOT INSTRUMENTED (no consumption data, reported as absent not as zero): "
+        + ", ".join(uninstrumented)
+    )
     return "\n".join(lines)
 
 
@@ -584,6 +776,9 @@ def census(args: argparse.Namespace) -> int:
     print("Representation-selection promotion census (#7106)")
     print("=================================================\n")
     print(render_table(baseline, observed))
+    print("\nSelected vs consumed")
+    print("--------------------")
+    print(render_consumption_report(baseline, observed))
     print("\nPromotion coverage on non-fixture workloads")
     print("------------------------------------------")
     print(render_zero_report(baseline, observed))
@@ -600,6 +795,10 @@ def census(args: argparse.Namespace) -> int:
     liveness = check_liveness_fixtures(observed) if not partial else []
     dead = check_instrument_liveness(observed) if not partial else []
     unreached = check_analysis_reach(observed) if not partial else []
+    # Always checked, even for a --workload subset: it is an internal
+    # consistency assertion about the counter, not a corpus-wide claim.
+    invariant = check_consumption_invariant(observed)
+    unexplained = check_unconsumed_is_explained(observed)
 
     if partial:
         print(
@@ -618,6 +817,8 @@ def census(args: argparse.Namespace) -> int:
         ("REGRESSION", regressions),
         ("DEAD INSTRUMENT", liveness + dead),
         ("UNREACHED BY EVERY ANALYSIS", unreached),
+        ("CONSUMPTION COUNTER IS INCOHERENT", invariant),
+        ("WASTED PROMOTION WITH NO NAMED MECHANISM", unexplained),
     ):
         if not problems:
             continue
@@ -669,6 +870,8 @@ def _update(
             )
         workload["floors"] = {key: int(counts.get(key, 0)) for key in CENSUS_KEYS}
         workload["candidates"] = observed[name]["candidates"]
+        # Context, never gated: which mechanism ate each wasted promotion.
+        workload["unconsumed_mechanisms"] = observed[name].get("unconsumed_mechanisms", {})
     baseline["generated_at"] = utc_now()
     path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {path.relative_to(REPO_ROOT)} ({len(workloads)} workload(s)).")
@@ -685,12 +888,20 @@ def self_test(_args: argparse.Namespace) -> int:
     is that it passes on a good tree is a gate nobody has watched fail.
     """
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "summary": {
             "selected": 3,
             "denied": 1,
             "by_analysis": [
-                {"analysis": a, "target_rep": a, "rule_source": "x", "selected": s, "denied": d}
+                {
+                    "analysis": a,
+                    "target_rep": a,
+                    "rule_source": "x",
+                    "selected": s,
+                    "denied": d,
+                    "consumed": 0,
+                    "unconsumed": 0,
+                }
                 for a, s, d in (
                     ("ptr-shape", 0, 1),
                     ("ptr-numarray", 1, 0),
@@ -710,6 +921,7 @@ def self_test(_args: argparse.Namespace) -> int:
     result = census_from_report(report)
     counts = result["counts"]
     assert counts["ptr-shape"] == 0, counts
+    assert counts["ptr-shape-consumed"] == 0, counts
     assert counts["canonical-i32"] == 1, counts
     assert counts["canonical-str"] == 1, counts
     assert counts["canonical-u32"] == 0, counts
@@ -744,6 +956,125 @@ def self_test(_args: argparse.Namespace) -> int:
             pass
         else:  # pragma: no cover - the assertion IS the test
             raise AssertionError(f"census_from_report accepted {why}")
+
+    # ── The consumption column, asserted failing-direction first ───────────
+    #
+    # The whole point of this column is a promotion that is SELECTED and then
+    # emitted nothing. Build exactly that report and check the census can see
+    # it, because the pre-#7107 instrument could not.
+    wasted = {
+        "schema_version": 2,
+        "summary": {
+            "selected": 2,
+            "denied": 0,
+            "by_analysis": [
+                {
+                    "analysis": a,
+                    "target_rep": a,
+                    "rule_source": "x",
+                    "selected": sel,
+                    "denied": 0,
+                    "consumed": con,
+                    "unconsumed": unc,
+                }
+                for a, sel, con, unc in (
+                    ("ptr-shape", 2, 1, 1),
+                    ("ptr-numarray", 0, 0, 0),
+                    ("canonical-slot", 0, 0, 0),
+                    ("int-valued-ta", 0, 0, 0),
+                    ("spec-abi", 0, 0, 0),
+                )
+            ],
+        },
+        "entries": [
+            {"analysis": "ptr-shape", "outcome": "selected", "rep": "Ptr<Shape>"},
+            {"analysis": "ptr-shape", "outcome": "selected", "rep": "Ptr<Shape>"},
+            # `acc`: consumed at three access sites, but it is ONE value.
+            {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
+             "position": "local", "local_id": 9, "function": "totalsRow"},
+            {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
+             "position": "local", "local_id": 9, "function": "totalsRow"},
+            {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
+             "position": "local", "local_id": 9, "function": "totalsRow"},
+            # `totals`: proven, counted as a win, dropped by the context gate.
+            {"analysis": "ptr-shape", "outcome": "unconsumed", "rep": "Ptr<Shape>",
+             "position": "local", "local_id": 4, "function": "module_init",
+             "rule": "module_init_context"},
+            # A proven `this`, which was never selected: must NOT inflate the
+            # consumed column, or the invariant below stops holding.
+            {"analysis": "ptr-shape", "outcome": "consumed", "rep": "Ptr<Shape>",
+             "position": "param", "local_id": None, "function": "C.m"},
+        ],
+    }
+    result = census_from_report(wasted)
+    counts = result["counts"]
+    assert counts["ptr-shape"] == 2, counts
+    assert counts["ptr-shape-consumed"] == 1, (
+        "three access sites on ONE local must count as one consumed value, and a "
+        "proven `this` must not count at all"
+    )
+    assert result["consumed_receiver"] == 1, result
+    assert result["unconsumed_mechanisms"] == {"module_init_context": 1}, result
+
+    # A floor on the consumed column must be able to go red while the SELECTED
+    # column stays green. That is the regression the pre-#7107 census could not
+    # express at all: `batch` selects 2 either way.
+    regressions, _ = check_workload(
+        "batch", {"ptr-shape": 2, "ptr-shape-consumed": 2}, counts
+    )
+    assert any("ptr-shape-consumed" in r for r in regressions), regressions
+    regressions, _ = check_workload("batch", {"ptr-shape": 2}, counts)
+    assert not regressions, "the selected column alone cannot see the drop"
+
+    # Consumption recorded for a value that was never selected is incoherent.
+    assert check_consumption_invariant(
+        {"w": {"counts": {"ptr-shape": 0, "ptr-shape-consumed": 1}}}
+    ), "consumed > selected must be a failure"
+    assert not check_consumption_invariant({"w": {"counts": counts}})
+
+    # An analysis that starts recording consumption without a census key must
+    # be loud, not silently uncounted.
+    rogue = json.loads(json.dumps(wasted))
+    rogue["entries"].append(
+        {"analysis": "canonical-slot", "outcome": "consumed", "rep": "I32",
+         "position": "local", "local_id": 1, "function": "f"}
+    )
+    try:
+        census_from_report(rogue)
+    except HarnessError:
+        pass
+    else:  # pragma: no cover - the assertion IS the test
+        raise AssertionError("uninstrumented consumption was silently dropped")
+
+    # A report that cannot distinguish selection from consumption is the OLD
+    # instrument, and must be rejected rather than read as "nothing consumed".
+    v1 = json.loads(json.dumps(wasted))
+    for row in v1["summary"]["by_analysis"]:
+        del row["consumed"]
+    try:
+        census_from_report(v1)
+    except HarnessError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("a report with no consumed tally was accepted")
+
+    # A wasted promotion that names no mechanism must be red: that is what
+    # deleting a drop-recorder looks like, and the consumed column alone
+    # cannot see it.
+    assert check_unconsumed_is_explained(
+        {"w": {"counts": {"ptr-shape": 2, "ptr-shape-consumed": 1}, "unconsumed_mechanisms": {}}}
+    ), "a wasted promotion with no named mechanism must fail"
+    assert not check_unconsumed_is_explained(
+        {
+            "w": {
+                "counts": {"ptr-shape": 2, "ptr-shape-consumed": 1},
+                "unconsumed_mechanisms": {"module_init_context": 1},
+            }
+        }
+    )
+    assert not check_unconsumed_is_explained(
+        {"w": {"counts": {"ptr-shape": 1, "ptr-shape-consumed": 1}, "unconsumed_mechanisms": {}}}
+    ), "nothing wasted means nothing to explain"
 
     print("repsel census self-test OK")
     return 0

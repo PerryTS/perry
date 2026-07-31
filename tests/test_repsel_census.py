@@ -39,10 +39,14 @@ def report(
     selected: dict[str, int] | None = None,
     denied: dict[str, int] | None = None,
     entries: list[dict] | None = None,
-    schema_version: int = 1,
+    consumed: dict[str, int] | None = None,
+    unconsumed: dict[str, int] | None = None,
+    schema_version: int = 2,
 ) -> dict:
     selected = selected or {}
     denied = denied or {}
+    consumed = consumed or {}
+    unconsumed = unconsumed or {}
     return {
         "schema_version": schema_version,
         "summary": {
@@ -55,6 +59,8 @@ def report(
                     "rule_source": "x.rs",
                     "selected": selected.get(analysis, 0),
                     "denied": denied.get(analysis, 0),
+                    "consumed": consumed.get(analysis, 0),
+                    "unconsumed": unconsumed.get(analysis, 0),
                 }
                 for analysis in CENSUS.EXPECTED_ANALYSES
             ],
@@ -65,6 +71,29 @@ def report(
 
 def win(analysis: str, rep: str) -> dict:
     return {"analysis": analysis, "outcome": "selected", "rep": rep}
+
+
+def consumed_entry(analysis: str, local_id, function: str = "f", position: str = "local") -> dict:
+    return {
+        "analysis": analysis,
+        "outcome": "consumed",
+        "rep": "Ptr<Shape>",
+        "position": position,
+        "local_id": local_id,
+        "function": function,
+    }
+
+
+def unconsumed_entry(analysis: str, rule: str, local_id=1) -> dict:
+    return {
+        "analysis": analysis,
+        "outcome": "unconsumed",
+        "rep": "Ptr<Shape>",
+        "position": "local",
+        "local_id": local_id,
+        "function": "module_init",
+        "rule": rule,
+    }
 
 
 class CensusExtraction(unittest.TestCase):
@@ -117,7 +146,7 @@ class CensusExtraction(unittest.TestCase):
 
     def test_schema_drift_is_loud(self):
         with self.assertRaises(HarnessError):
-            CENSUS.census_from_report(report(schema_version=2))
+            CENSUS.census_from_report(report(schema_version=99))
 
     def test_a_missing_analysis_row_is_an_error_not_a_zero(self):
         """An absent key and a zero key are indistinguishable downstream.
@@ -267,6 +296,207 @@ class AnalysisReach(unittest.TestCase):
             for w in baseline["workloads"]
         }
         self.assertFalse(CENSUS.check_analysis_reach(observed))
+
+
+class Consumption(unittest.TestCase):
+    """Selection vs consumption (#7107).
+
+    Every test here is written so that it FAILS if consumption collapses back
+    into selection -- which is the shape the census had before, and which was
+    green while `batch.ts` proved two `Ptr<Shape>` values and applied one.
+    """
+
+    def test_consumption_is_counted_separately_from_selection(self):
+        counts = CENSUS.census_from_report(
+            report(
+                selected={"ptr-shape": 2},
+                consumed={"ptr-shape": 1},
+                unconsumed={"ptr-shape": 1},
+                entries=[
+                    win("ptr-shape", "Ptr<Shape>"),
+                    win("ptr-shape", "Ptr<Shape>"),
+                    consumed_entry("ptr-shape", 9, "totalsRow"),
+                    unconsumed_entry("ptr-shape", "module_init_context", 4),
+                ],
+            )
+        )
+        self.assertEqual(counts["counts"]["ptr-shape"], 2)
+        self.assertEqual(counts["counts"]["ptr-shape-consumed"], 1)
+        self.assertEqual(
+            counts["unconsumed_mechanisms"], {"module_init_context": 1}
+        )
+
+    def test_one_value_consumed_at_many_sites_counts_once(self):
+        """`acc` is read at three access sites; it is one promoted value.
+
+        Counting access sites would make the consumed column drift upward with
+        program size and eventually exceed `selected`, at which point it stops
+        describing the same population and the comparison is meaningless.
+        """
+        counts = CENSUS.census_from_report(
+            report(
+                selected={"ptr-shape": 1},
+                consumed={"ptr-shape": 3},
+                entries=[win("ptr-shape", "Ptr<Shape>")]
+                + [consumed_entry("ptr-shape", 9, "totalsRow") for _ in range(3)],
+            )
+        )
+        self.assertEqual(counts["counts"]["ptr-shape-consumed"], 1)
+
+    def test_a_proven_this_receiver_does_not_inflate_the_consumed_column(self):
+        """Phase 5a consumes the representation for a value never selected.
+
+        `suite_09_method_calls` emits two `__pshape` clones whose bodies consume
+        the proof for `this`. Counting those would report 2 consumed against 1
+        selected -- an "improvement" produced entirely by dead code, since those
+        clones have zero call sites.
+        """
+        counts = CENSUS.census_from_report(
+            report(
+                selected={"ptr-shape": 1},
+                consumed={"ptr-shape": 2},
+                entries=[
+                    win("ptr-shape", "Ptr<Shape>"),
+                    consumed_entry("ptr-shape", None, "C.m", position="param"),
+                    consumed_entry("ptr-shape", None, "C.n", position="param"),
+                ],
+            )
+        )
+        self.assertEqual(counts["counts"]["ptr-shape-consumed"], 0)
+        self.assertEqual(counts["consumed_receiver"], 2)
+
+    def test_consumed_above_selected_is_incoherent(self):
+        self.assertTrue(
+            CENSUS.check_consumption_invariant(
+                {"w": {"counts": {"ptr-shape": 1, "ptr-shape-consumed": 2}}}
+            )
+        )
+
+    def test_a_report_without_a_consumed_tally_is_rejected(self):
+        payload = report(selected={"ptr-shape": 1})
+        for row in payload["summary"]["by_analysis"]:
+            row.pop("consumed")
+        with self.assertRaises(HarnessError):
+            CENSUS.census_from_report(payload)
+
+    def test_consumption_for_an_uninstrumented_analysis_is_loud(self):
+        payload = report(
+            selected={"canonical-slot": 1},
+            entries=[
+                {"analysis": "canonical-slot", "outcome": "selected", "rep": "I32"},
+                consumed_entry("canonical-slot", 1),
+            ],
+        )
+        with self.assertRaises(HarnessError):
+            CENSUS.census_from_report(payload)
+
+    def test_a_consumed_floor_can_fail_while_the_selected_floor_passes(self):
+        """The regression the old census could not express.
+
+        `batch` selects 2 `Ptr<Shape>` values whether or not codegen applies
+        either of them. Only the consumed column moves.
+        """
+        counts = {"ptr-shape": 2, "ptr-shape-consumed": 0}
+        regressions, _ = CENSUS.check_workload(
+            "batch", {"ptr-shape": 2, "ptr-shape-consumed": 1}, counts
+        )
+        self.assertTrue(any("ptr-shape-consumed" in r for r in regressions))
+        regressions, _ = CENSUS.check_workload("batch", {"ptr-shape": 2}, counts)
+        self.assertFalse(regressions)
+
+    def test_wasted_promotions_must_name_a_mechanism(self):
+        self.assertTrue(
+            CENSUS.check_unconsumed_is_explained(
+                {
+                    "w": {
+                        "counts": {"ptr-shape": 2, "ptr-shape-consumed": 1},
+                        "unconsumed_mechanisms": {},
+                    }
+                }
+            )
+        )
+        self.assertFalse(
+            CENSUS.check_unconsumed_is_explained(
+                {
+                    "w": {
+                        "counts": {"ptr-shape": 2, "ptr-shape-consumed": 1},
+                        "unconsumed_mechanisms": {"scalar_replaced": 1},
+                    }
+                }
+            )
+        )
+
+    def test_the_instrumentation_table_lives_in_code_not_the_baseline(self):
+        """Same rule as LIVENESS_FLOORS and ZERO_CANDIDATE_ALLOWLIST.
+
+        `--update` regenerates the baseline from observation. If which analyses
+        are instrumented were regenerable, a build that stopped recording
+        consumption would rewrite itself into a permanently-green gate.
+        """
+        source = (
+            CENSUS.REPO_ROOT / "scripts/compiler_output_harness/repsel_census.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("CONSUMPTION_INSTRUMENTED: dict[str, str] = {", source)
+        baseline = json.loads(
+            (CENSUS.REPO_ROOT / "benchmarks/repsel_census/baseline.json").read_text()
+        )
+        self.assertNotIn("consumption_instrumented", baseline)
+
+    def test_every_instrumented_analysis_has_a_census_key(self):
+        for analysis, key in CENSUS.CONSUMPTION_INSTRUMENTED.items():
+            self.assertIn(analysis, CENSUS.CENSUS_KEYS)
+            self.assertIn(key, CENSUS.CENSUS_KEYS)
+
+    def test_every_instrumented_analysis_has_a_nonzero_consumed_liveness_floor(self):
+        """The gate on the gate.
+
+        A `-consumed` floor of zero can never go red, exactly as a zero
+        `ptr-shape` floor cannot -- which is why #7104 introduced the fixtures
+        in the first place. Deleting the consumed minimum from LIVENESS_FLOORS
+        would leave every other check intact and every census run green, so the
+        minimum's EXISTENCE has to be asserted somewhere that is not itself the
+        baseline.
+        """
+        for analysis, consumed_key in CENSUS.CONSUMPTION_INSTRUMENTED.items():
+            with_floor = [
+                fixture
+                for fixture, minimums in CENSUS.LIVENESS_FLOORS.items()
+                if int(minimums.get(consumed_key, 0)) > 0
+            ]
+            self.assertTrue(
+                with_floor,
+                f"{analysis} records consumption but no liveness fixture asserts a "
+                f"nonzero {consumed_key}. Without one the consumed column is a "
+                "counter nobody has watched go red.",
+            )
+
+    def test_the_shipped_baseline_shows_a_consumed_gap(self):
+        """The finding itself, pinned.
+
+        If this ever passes trivially because every workload consumes what it
+        selects, that is a real improvement -- delete the test and say so in the
+        PR. What it must not do is silently stop being true because the counter
+        died.
+        """
+        baseline = json.loads(
+            (CENSUS.REPO_ROOT / "benchmarks/repsel_census/baseline.json").read_text()
+        )
+        floors = {w["name"]: w["floors"] for w in baseline["workloads"]}
+        selected = sum(f.get("ptr-shape", 0) for f in floors.values())
+        consumed = sum(f.get("ptr-shape-consumed", 0) for f in floors.values())
+        self.assertGreater(selected, 0)
+        self.assertGreater(consumed, 0, "the consumed counter must not be dead")
+        self.assertGreaterEqual(selected, consumed)
+        self.assertEqual(
+            floors["batch"]["ptr-shape"],
+            2,
+            "#7107's ratcheted selection floor must not be reinterpreted",
+        )
+        self.assertEqual(
+            floors["batch"]["ptr-shape-consumed"],
+            1,
+            "batch proves two Ptr<Shape> values and applies one",
+        )
 
 
 class Baseline(unittest.TestCase):

@@ -383,6 +383,50 @@ fn context_rule_text(rule: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// `Ptr<Shape>` consumption rule: the object was scalar-replaced, so there is
+/// no object left for the representation to be applied to.
+///
+/// Not a defect. Scalar replacement (`collectors/escape_news.rs`) is a strictly
+/// better outcome than promotion when it applies — the allocation disappears
+/// entirely — and the two passes are complementary: one in-loop field store is
+/// enough to flip a workload from scalar-replaced to `Ptr<Shape>`-consumed.
+/// What is a defect is that it is INDISTINGUISHABLE in the report from a
+/// promotion that was wasted, and the two mean opposite things.
+pub(crate) const PTR_SHAPE_SCALAR_REPLACED: &str = "scalar_replaced";
+
+/// `(reason, issue)` for a rule that stopped a *selected* `Ptr<Shape>` proof
+/// from being consumed by codegen.
+pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static str) {
+    match rule {
+        MODULE_INIT_CONTEXT => (
+            "module-init / program-entry bodies set \
+             `repsel_context_allows_canonical_i32: false` (codegen/entry.rs), and \
+             `FnCtx::ptr_shape_receiver_fact` returns None for the whole body when \
+             that flag is clear — so the shape proof was made, counted as a win, \
+             and then dropped at every access site",
+            "#7109",
+        ),
+        PTR_SHAPE_SCALAR_REPLACED => (
+            "the object was scalar-replaced (collectors/escape_news.rs): its fields \
+             became allocas and the allocation was deleted, so no property access \
+             ever reaches a representation-selection lowering. A better outcome \
+             than promotion, but the report counted a promotion that emitted \
+             nothing",
+            PTR_SHAPE_SCALAR_REPLACED_ISSUE,
+        ),
+        _ => (
+            "async / generator bodies set `repsel_context_allows_canonical_i32: \
+             false`, and `FnCtx::ptr_shape_receiver_fact` returns None for the \
+             whole body when that flag is clear — the async-to-generator transform \
+             owns those body locals",
+            "#6328",
+        ),
+    }
+}
+
+/// Tracking issue for the scalar-replacement consumption mechanism.
+const PTR_SHAPE_SCALAR_REPLACED_ISSUE: &str = "#7115";
+
 pub(crate) fn deny_canonical_context(
     ctx: &FnCtx<'_>,
     id: u32,

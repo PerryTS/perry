@@ -223,6 +223,8 @@ pub(crate) fn method_proven_this(
         class_name: class.name.clone(),
         // See the module doc: never claimed for a proven `this`.
         numeric_fields: HashSet::new(),
+        // Phase 5a's promoted value is the receiver, not a named binding.
+        report_name: crate::opt_report::enabled().then(|| String::from("this")),
     })
 }
 
@@ -274,6 +276,7 @@ mod tests {
         let fact = || PtrShapeLocal {
             class_name: "C".to_string(),
             numeric_fields: HashSet::new(),
+            report_name: None,
         };
         let k = |m: &str| ("C".to_string(), m.to_string());
         let mut method_names = HashMap::new();

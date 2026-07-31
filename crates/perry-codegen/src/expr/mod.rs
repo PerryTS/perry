@@ -141,8 +141,9 @@ pub(crate) use slot_rep::{
     canonical_str_locals_enabled, collect_canonical_str_ineligible_locals,
     collect_closure_referenced_locals, deny_canonical_context, deny_canonical_i32,
     load_canonical_local_boxed, local_is_canonical_str, local_rep_is_canonical_i32,
-    note_canonical_local, report_context_denial, store_canonical_local_from_double,
-    CanonicalI32Denial, SlotRep, MODULE_INIT_CONTEXT,
+    note_canonical_local, ptr_shape_context_rule_text, report_context_denial,
+    store_canonical_local_from_double, CanonicalI32Denial, SlotRep, MODULE_INIT_CONTEXT,
+    PTR_SHAPE_SCALAR_REPLACED,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
@@ -1499,6 +1500,15 @@ impl<'a> FnCtx<'a> {
         e: &perry_hir::Expr,
     ) -> Option<&crate::collectors::PtrShapeLocal> {
         if !self.repsel_context_allows_canonical_i32 {
+            // #7106 follow-up: this early return is the whole of mechanism 2.
+            // The fact EXISTS — `collect_shape_proven_ptr_locals` already ran
+            // and already recorded a `select()` for it — and every access site
+            // below silently falls through to the guarded diamond. Recording
+            // it is what stops a proven-and-wasted value from reading exactly
+            // like a proven-and-applied one in the census.
+            if crate::opt_report::enabled() {
+                self.report_ptr_shape_context_drop(e);
+            }
             return None;
         }
         match e {
@@ -1506,6 +1516,93 @@ impl<'a> FnCtx<'a> {
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }
+    }
+
+    /// The `Ptr<Shape>` fact for `e` ignoring the context gate — the proof the
+    /// analysis actually produced, as opposed to the proof codegen is allowed
+    /// to act on. Report-only.
+    fn ptr_shape_fact_ignoring_context(
+        &self,
+        e: &perry_hir::Expr,
+    ) -> Option<&crate::collectors::PtrShapeLocal> {
+        match e {
+            perry_hir::Expr::LocalGet(id) => self.native_facts.shape_proven_ptr_local(*id),
+            perry_hir::Expr::This => self.proven_this.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Record that a selected `Ptr<Shape>` proof was dropped by the context
+    /// gate (`repsel_context_allows_canonical_i32 == false`).
+    ///
+    /// Deliberately silent when the context permits the representation and only
+    /// the `PERRY_CANONICAL_I32_LOCALS` bisection knob turned it off: that arm
+    /// must produce the default build's entries minus the selections, never a
+    /// class of entry the default build cannot emit (same rule as
+    /// `slot_rep::body_context_denial`).
+    fn report_ptr_shape_context_drop(&self, e: &perry_hir::Expr) {
+        let Some(rule) = self.repsel_context_denial else {
+            return;
+        };
+        let Some(fact) = self.ptr_shape_fact_ignoring_context(e) else {
+            return;
+        };
+        let (position, fallback) = match e {
+            perry_hir::Expr::This => (crate::opt_report::Position::Param, "this"),
+            _ => (crate::opt_report::Position::Local, "<local>"),
+        };
+        let local_id = match e {
+            perry_hir::Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        };
+        let name = fact.report_name.as_deref().unwrap_or(fallback);
+        let (reason, issue) = crate::expr::ptr_shape_context_rule_text(rule);
+        crate::opt_report::unconsumed(crate::opt_report::Unconsumed {
+            position,
+            name,
+            local_id,
+            analysis: crate::opt_report::Analysis::PtrShape,
+            rep: "Ptr<Shape>",
+            rule,
+            reason,
+            tier: crate::opt_report::Tier::CompilerLimitation,
+            issue: Some(issue),
+            detail: Some(format!(
+                "proven Ptr<Shape> of class {}; every access site keeps the guard diamond",
+                fact.class_name
+            )),
+        });
+    }
+
+    /// Record that codegen COMMITTED to a `Ptr<Shape>` lowering for `e`.
+    ///
+    /// Call from the taken branch of a site that has already decided to emit
+    /// the guard-free form — never from the accessor, which answers `Some` at
+    /// sites that then reject the fact on a class or numeric-field mismatch and
+    /// emit the guarded diamond anyway.
+    pub(crate) fn note_ptr_shape_consumed(&self, e: &perry_hir::Expr, site: &'static str) {
+        if !crate::opt_report::enabled() {
+            return;
+        }
+        let Some(fact) = self.ptr_shape_fact_ignoring_context(e) else {
+            return;
+        };
+        let (position, fallback) = match e {
+            perry_hir::Expr::This => (crate::opt_report::Position::Param, "this"),
+            _ => (crate::opt_report::Position::Local, "<local>"),
+        };
+        let local_id = match e {
+            perry_hir::Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        };
+        crate::opt_report::consume(
+            position,
+            fact.report_name.as_deref().unwrap_or(fallback),
+            local_id,
+            crate::opt_report::Analysis::PtrShape,
+            "Ptr<Shape>",
+            site,
+        );
     }
 
     pub fn next_loop_proof_scope_id(&mut self) -> u32 {

@@ -1417,6 +1417,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     property,
                                 )
                             {
+                                ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_update");
                                 let recv_box = lower_expr(ctx, object)?;
                                 let field_idx_str = field_index.to_string();
                                 let header_skip = crate::target_layout::object_header_size_bytes(

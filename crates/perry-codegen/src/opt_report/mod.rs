@@ -296,9 +296,27 @@ impl Tier {
 #[serde(rename_all = "kebab-case")]
 pub enum Outcome {
     /// The proof succeeded — the value got an unboxed representation.
+    ///
+    /// **Selection is not application.** A `Selected` entry says an analysis
+    /// proved the value; it says nothing about whether codegen went on to emit
+    /// anything different for it. See [`Outcome::Consumed`].
     Selected,
     /// The proof failed — the value stays `Boxed`.
     Denied,
+    /// Codegen actually *applied* a selected proof: it emitted the
+    /// representation-specific, guard-free form at a real access site.
+    ///
+    /// This is the outcome that corresponds to emitted bytes. #7107 found by
+    /// reading IR that `batch.ts` reports two `Ptr<Shape>` promotions while one
+    /// of them (`totals`) keeps the guarded diamond at every access site — the
+    /// entire binary saving came from the other. Counting `select()` calls
+    /// cannot see that; counting consumption can.
+    Consumed,
+    /// Codegen reached a selected value and **dropped the proof**, emitting the
+    /// same code it would have emitted without the analysis. `rule` names the
+    /// mechanism; a selected value that is never consumed and never explicitly
+    /// dropped simply had no access site to apply the proof at.
+    Unconsumed,
 }
 
 /// One reported value.
@@ -361,14 +379,47 @@ impl Entry {
     /// Identity for de-duplication. A function can be lowered more than once
     /// (a boxed entry plus a typed clone), which would otherwise double-count
     /// every denial in it.
-    fn dedup_key(&self) -> (String, String, String, Position, Analysis, Option<String>) {
+    ///
+    /// `outcome` is part of the key, and must stay part of it: a `Consumed`
+    /// entry and the `Selected` entry for the same value agree on every other
+    /// field (both carry `rule: None`), so without it the consumption record
+    /// for a value collapses into its selection record and the consumed tally
+    /// is structurally pinned at zero — a dead counter of exactly the kind
+    /// this outcome exists to expose.
+    fn dedup_key(
+        &self,
+    ) -> (
+        String,
+        String,
+        String,
+        Position,
+        Analysis,
+        Outcome,
+        Option<String>,
+        Option<String>,
+    ) {
         (
             self.module.clone(),
             self.function.clone(),
             self.name.clone(),
             self.position,
             self.analysis,
+            self.outcome,
             self.rule.clone(),
+            // `detail` participates for CONSUMED entries only, where it names
+            // the lowering that applied the proof. One value consumed at three
+            // access sites is genuinely three facts worth reporting, and
+            // collapsing them here would leave the census's own per-value
+            // reduction untestable end-to-end — an unexercised branch standing
+            // between the compiler and the number that gets published.
+            //
+            // Every other outcome keeps the pre-existing identity, so denial
+            // and selection tallies (and therefore the baseline's `candidates`
+            // column) are unchanged.
+            match self.outcome {
+                Outcome::Consumed => self.detail.clone(),
+                _ => None,
+            },
         )
     }
 }
@@ -708,6 +759,121 @@ pub(crate) fn select_explicit(
     });
 }
 
+// ── Consumption (#7106 follow-up) ──────────────────────────────────────────
+//
+// `select()` records that an analysis PROVED a value. Whether codegen then
+// emitted anything different for it is a separate question with a separate
+// answer, and the two were conflated until #7107 read the IR by hand.
+//
+// Nothing here may be recorded from a `select()`-adjacent site. Both entry
+// points below are called from the codegen sites that *commit* to (or *drop*)
+// the representation-specific lowering — the same `if` whose taken branch is
+// what makes the guard diamond disappear from the emitted module. That is what
+// keeps the count checkable against IR instead of against another counter.
+
+/// Module / function / region of the lowering region currently being emitted.
+///
+/// Consumption is recorded from inside body lowering, which always runs under
+/// the region scope its caller opened (`enter_region` / `enter_closure` guards
+/// are held across the whole `lower_*` call). Taking the region from the
+/// ambient scope rather than re-deriving it from a function name is what makes
+/// `region == module-init` trustworthy — and module-init is the context whose
+/// promotions are the ones that go unconsumed.
+fn scope_or_unknown() -> (String, String, RegionKind) {
+    SCOPE.with(|s| match s.borrow().as_ref() {
+        Some(sc) => (sc.module.clone(), sc.function.clone(), sc.region),
+        None => (
+            String::from("<unknown>"),
+            String::from("<unknown>"),
+            RegionKind::Function,
+        ),
+    })
+}
+
+/// Record that codegen applied a selected proof at a real access site.
+///
+/// `site` names the lowering that consumed it (`class_field_get`,
+/// `class_method_call`, …) so a reader can find the emitted sequence.
+pub(crate) fn consume(
+    position: Position,
+    name: &str,
+    local_id: Option<u32>,
+    analysis: Analysis,
+    rep: &str,
+    site: &str,
+) {
+    if !enabled() {
+        return;
+    }
+    let (module, function, region) = scope_or_unknown();
+    push(Entry {
+        module,
+        function,
+        region,
+        position,
+        name: name.to_string(),
+        local_id,
+        analysis,
+        outcome: Outcome::Consumed,
+        rep: rep.to_string(),
+        rule: None,
+        reason: None,
+        tier: None,
+        issue: None,
+        loop_depth: 0,
+        invoked_per_element: None,
+        detail: Some(format!("consumed at {site}")),
+        byte_offset: None,
+    });
+}
+
+/// Everything an unconsumed record needs beyond the ambient scope.
+pub(crate) struct Unconsumed<'a> {
+    pub position: Position,
+    pub name: &'a str,
+    pub local_id: Option<u32>,
+    pub analysis: Analysis,
+    pub rep: &'a str,
+    /// The mechanism that dropped the proof, e.g. `module_init_context`.
+    pub rule: &'a str,
+    pub reason: &'a str,
+    pub tier: Tier,
+    pub issue: Option<&'a str>,
+    pub detail: Option<String>,
+}
+
+/// Record that codegen reached a selected value and dropped its proof.
+///
+/// The distinction from [`deny`] is the whole point: a denial says the analysis
+/// refused to prove the value, so no representation was ever selected. This
+/// says the analysis DID prove it, the report counted it as a win, and codegen
+/// then emitted byte-for-byte what it would have emitted anyway.
+pub(crate) fn unconsumed(u: Unconsumed<'_>) {
+    if !enabled() {
+        return;
+    }
+    let (module, function, region) = scope_or_unknown();
+    push(Entry {
+        module,
+        function,
+        region,
+        position: u.position,
+        name: u.name.to_string(),
+        local_id: u.local_id,
+        analysis: u.analysis,
+        outcome: Outcome::Unconsumed,
+        rep: u.rep.to_string(),
+        rule: Some(u.rule.to_string()),
+        reason: Some(u.reason.to_string()),
+        tier: Some(u.tier),
+        issue: u.issue.map(str::to_string),
+        loop_depth: 0,
+        invoked_per_element: None,
+        detail: u.detail,
+        byte_offset: None,
+    });
+}
+
 /// Drain every recorded entry, de-duplicated and ranked. Called once by the
 /// CLI after module codegen finishes.
 pub fn take_entries() -> Vec<Entry> {
@@ -786,6 +952,49 @@ mod tests {
         let a = entry("f", 0, None);
         let b = entry("f", 0, None);
         assert_eq!(a.dedup_key(), b.dedup_key());
+    }
+
+    /// The trap this outcome exists to avoid, at the data-structure level.
+    ///
+    /// A `Consumed` entry and the `Selected` entry for the same value agree on
+    /// module, function, name, position, analysis AND rule (both `None`). If
+    /// `outcome` is not part of the identity, `take_entries` drops every
+    /// consumption record as a duplicate of its own selection and the consumed
+    /// tally is pinned at zero — a dead counter that looks like an honest
+    /// "nothing was consumed".
+    #[test]
+    fn dedup_key_separates_a_consumption_from_its_own_selection() {
+        let mut selected = entry("f", 0, None);
+        selected.outcome = Outcome::Selected;
+        selected.rule = None;
+        let mut consumed = selected.clone();
+        consumed.outcome = Outcome::Consumed;
+        assert_ne!(
+            selected.dedup_key(),
+            consumed.dedup_key(),
+            "a consumption must survive de-duplication against its selection"
+        );
+
+        let kept = {
+            let mut seen = std::collections::HashSet::new();
+            [selected, consumed]
+                .into_iter()
+                .filter(|e| seen.insert(e.dedup_key()))
+                .count()
+        };
+        assert_eq!(kept, 2, "de-duplication swallowed the consumption record");
+    }
+
+    /// An `Unconsumed` record must likewise not collapse into the `Denied`
+    /// record for the same value: they carry opposite meanings (the proof was
+    /// made and dropped vs the proof was never made) and a workload can
+    /// legitimately produce both for one binding under different analyses.
+    #[test]
+    fn dedup_key_separates_an_unconsumed_record_from_a_denial() {
+        let denied = entry("f", 0, None);
+        let mut unconsumed = denied.clone();
+        unconsumed.outcome = Outcome::Unconsumed;
+        assert_ne!(denied.dedup_key(), unconsumed.dedup_key());
     }
 
     #[test]

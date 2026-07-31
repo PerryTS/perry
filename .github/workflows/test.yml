@@ -1149,6 +1149,16 @@ jobs:
   # workload it exists for — and that only 3 of 17 suite benchmarks promote a
   # single shape local each. Nothing in CI could have told anyone that.
   #
+  # What it counts is CONSUMPTION, not selection. An analysis proving a value
+  # and codegen emitting something for it are different events, and #7107 found
+  # by reading IR that `batch.ts` proves two `Ptr<Shape>` values and applies
+  # one: `totals` is proven, reported as a win, and keeps the guarded diamond at
+  # every access site. `07_object_create` and `12_binary_trees` are worse -- they
+  # report a promotion each while `PERRY_PTR_SHAPE_LOCALS=0` produces a
+  # byte-identical object. So `ptr-shape` and `ptr-shape-consumed` are separate
+  # columns with separate floors, and every unconsumed promotion must name the
+  # mechanism that ate it (#7109 / #7115).
+  #
   # Why it can fail (CLAUDE.md, "Four ways a gate can be unable to fail"):
   # floors alone would not be enough, because the honest floor for
   # `Ptr<Shape>` on real code is zero today and a zero floor can never go red.
@@ -1244,6 +1254,16 @@ jobs:
             echo "::error::Sabotage run failed for some reason OTHER than the"
             echo "::error::ptr-shape fixture losing its promotion. The gate is red,"
             echo "::error::but not for the reason that proves its subject was live."
+            exit 1
+          fi
+          # The consumed column is a SEPARATE counter fed from separate codegen
+          # sites, so it needs its own liveness assertion. A `ptr-shape-consumed`
+          # that stayed at its floor while `ptr-shape` went to zero would be a
+          # number disconnected from the compiler -- and it is the column the
+          # performance claims now rest on.
+          if ! printf '%s' "$out" | grep -q "fixture_ptr_shape: ptr-shape-consumed promoted 0"; then
+            echo "::error::ptr-shape went to zero but ptr-shape-consumed did not."
+            echo "::error::The consumption counter is not tracking the compiler."
             exit 1
           fi
           echo "Census correctly went red with PERRY_PTR_SHAPE_LOCALS=0."

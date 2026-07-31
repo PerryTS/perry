@@ -554,6 +554,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .map(|fact| fact.class_name == class_name)
                             .unwrap_or(false);
                         if ptr_shape_proven {
+                            ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_set");
                             let header_skip =
                                 crate::target_layout::object_header_size_bytes(ctx.target_triple)
                                     .to_string();

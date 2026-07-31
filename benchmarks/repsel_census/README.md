@@ -29,6 +29,58 @@ produced a byte-identical binary.
 
 The census makes that a standing, visible, gated number instead of a discovery.
 
+## Selected is not consumed
+
+The census counts **consumed** promotions, not selected ones, and the two
+columns are separate on purpose.
+
+`select()` fires when an analysis *proves* a value. Whether codegen then emits
+anything different for it is a different question, and for `Ptr<Shape>` the
+answer is usually no:
+
+| workload | `ptr-shape` | `ptr-shape-consumed` | mechanism |
+|---|---|---|---|
+| `fixture_ptr_shape` | 1 | 1 | — |
+| `batch` | 2 | 1 | `module_init_context` |
+| `suite_07_object_create` | 1 | 0 | `scalar_replaced` |
+| `suite_09_method_calls` | 1 | 0 | `module_init_context` |
+| `suite_12_binary_trees` | 1 | 0 | `scalar_replaced` |
+
+Six proven, two applied. A promotion goes unconsumed three ways, and every one
+of them is recorded at the site where the proof is dropped:
+
+1. **`module_init_context`** (#7109) — `codegen/entry.rs` sets
+   `repsel_context_allows_canonical_i32: false` for module-init and
+   program-entry bodies, and `FnCtx::ptr_shape_receiver_fact` returns `None` for
+   the whole body when that flag is clear. Every access site falls back to the
+   guarded diamond.
+2. **`async_body` / `generator_body`** (#6328) — the same flag, cleared for a
+   different reason.
+3. **`scalar_replaced`** (#7115) — `collectors/escape_news.rs` deleted the
+   object outright. This one is the *better* outcome, not a defect; it is listed
+   because "scalar-replaced" and "promoted but wasted" used to render
+   identically and mean opposite things.
+
+**Ground truth is the emitted IR, never a counter.** Every verdict above is
+reproducible without the report at all: compile the workload twice, once with
+`PERRY_PTR_SHAPE_LOCALS=0`, and compare the objects.
+
+```bash
+perry compile <src> -o /tmp/x --no-link --no-cache          # prints the .o path
+PERRY_PTR_SHAPE_LOCALS=0 perry compile <src> -o /tmp/x --no-link --no-cache
+```
+
+Byte-identical objects mean the promotions the report counted as wins changed
+nothing. `07_object_create` and `12_binary_trees` are byte-identical today.
+`09_method_calls` differs, but only by two `__pshape` clones with **zero call
+sites** — which is why the census reports its consumption as 0 and the object
+A/B alone would have been misleading.
+
+Only `ptr-shape` has consumption instrumentation. The other seven census keys
+report *no consumption data* rather than a zero
+(`CONSUMPTION_INSTRUMENTED` in the script), because "uninstrumented" and "never
+applied" are exactly the pair this census exists to keep apart.
+
 ## How it cannot quietly pass
 
 Read CLAUDE.md, "★ Four ways a gate can be unable to fail". The fourth applies
@@ -74,11 +126,30 @@ Three separate mechanisms, in increasing order of paranoia:
    Only `suite_01_startup` is allowlisted: it is a lone `console.log`, with no
    bindings for any analysis to consider.
 
+5. **Consumption coherence checks.** `consumed` may never exceed `selected` for
+   the same representation — they must describe one population, and Phase 5a's
+   proven-`this` receiver is consumed without ever being selected, so folding it
+   in would silently break that. One value consumed at five access sites counts
+   once. And a workload with wasted promotions must NAME at least one mechanism.
+
+   That last one is what makes deleting a drop-recorder visible. Without it the
+   consumed column would not move, every floor would still pass, and the census
+   would go green having lost the only part of the finding that says *why* —
+   CLAUDE.md failure mode 4, one level in.
+
 Sabotage-verified in both directions. Each of `PERRY_PTR_SHAPE_LOCALS=0`,
 `PERRY_PTR_NUMARRAY_LOCALS=0`, `PERRY_CANONICAL_I32_LOCALS=0`,
 `PERRY_CANONICAL_STR_LOCALS=0` and `PERRY_INT_VALUED_LOCALS=0` turns the census
 red; the default build is green. CI re-runs the first of those on every job so
-the property is checked, not just claimed once.
+the property is checked, not just claimed once, and additionally asserts that
+`ptr-shape-consumed` goes to zero with it — the consumed column is fed from
+separate codegen sites and needs its own liveness proof.
+
+The consumption machinery was sabotage-verified the same way: dropping
+`outcome` from `Entry::dedup_key`, removing all six consumption recorders,
+removing either mechanism recorder, counting per access site, folding
+proven-`this` consumption into the local column, and deleting the consumed
+liveness minimum each turn the gate red.
 
 ## Editing the fixtures
 

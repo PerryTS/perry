@@ -869,6 +869,7 @@ pub(crate) fn try_lower_instance_method_call(
                     .map(|fact| fact.class_name == class_name)
                     .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
+                    ctx.note_ptr_shape_consumed(object, "ptr_shape_method");
                     // Prefer the typed-receiver clone (bare gep+load field
                     // access inside the body) when one exists: the receiver
                     // is proven, so only the ARGUMENT value classes need

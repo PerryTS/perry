@@ -782,6 +782,22 @@ pub(crate) fn lower_let(
             let scalar_data = collect_scalar_class_data(ctx, class_name);
 
             if let Some((all_fields, ctor)) = scalar_data {
+                // #7106 follow-up, mechanism 3: this binding is about to stop
+                // being an object at all. If `Ptr<Shape>` also proved it, the
+                // report already counted a promotion that cannot emit
+                // anything — no property access will ever reach a
+                // representation-selection lowering, because there is no
+                // property access left. On `07_object_create` and
+                // `12_binary_trees` that is literally the case: `--opt-report`
+                // says `selected=1` while both arms of a
+                // PERRY_PTR_SHAPE_LOCALS A/B emit byte-identical objects.
+                //
+                // Scalar replacement winning here is the BETTER outcome, not a
+                // defect; the defect is that it was indistinguishable in the
+                // report from a proof that was simply wasted.
+                if crate::opt_report::enabled() {
+                    note_ptr_shape_scalar_replaced(ctx, id, name);
+                }
                 // Create per-field allocas. For synthetic anonymous-shape
                 // classes, scalar replacement may only need fields that are
                 // observed after construction; unused constructor stores still
@@ -1921,4 +1937,34 @@ fn record_pod_rejection(ctx: &mut FnCtx<'_>, id: u32, reason: String) {
         false,
         vec![format!("reason={}", reason)],
     );
+}
+
+/// #7106 follow-up: record that a `Ptr<Shape>`-proven local was scalar-replaced,
+/// so its promotion can never be consumed.
+///
+/// Report-only; the caller has already gated on `opt_report::enabled()`. The
+/// fact is read through the context-free accessor on purpose — whether the
+/// enclosing body would have ALLOWED consumption is a different mechanism with
+/// a different rule name, and a value can lose to both.
+fn note_ptr_shape_scalar_replaced(ctx: &crate::expr::FnCtx<'_>, id: u32, name: &str) {
+    let Some(fact) = ctx.native_facts.shape_proven_ptr_local(id) else {
+        return;
+    };
+    let (reason, issue) =
+        crate::expr::ptr_shape_context_rule_text(crate::expr::PTR_SHAPE_SCALAR_REPLACED);
+    crate::opt_report::unconsumed(crate::opt_report::Unconsumed {
+        position: crate::opt_report::Position::Local,
+        name,
+        local_id: Some(id),
+        analysis: crate::opt_report::Analysis::PtrShape,
+        rep: "Ptr<Shape>",
+        rule: crate::expr::PTR_SHAPE_SCALAR_REPLACED,
+        reason,
+        tier: crate::opt_report::Tier::CompilerLimitation,
+        issue: Some(issue),
+        detail: Some(format!(
+            "class {} scalar-replaced into per-field allocas; the allocation is gone",
+            fact.class_name
+        )),
+    });
 }
