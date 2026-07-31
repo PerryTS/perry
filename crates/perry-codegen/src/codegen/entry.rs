@@ -669,25 +669,25 @@ pub(super) fn compile_module_entry(
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
         );
-        // #7106: the two screens the `Stmt::Let` denial consults, so the
-        // module-init denial count excludes locals a PERMITTING context would
-        // have rejected anyway (closure-captured; string-ineligible). Both sets
-        // are read exclusively behind the `repsel_context_allows_*` flags,
-        // which are `false` here, so populating them changes no emitted byte —
-        // and they are only collected when the report is on, so an ordinary
-        // build does no extra walking.
-        let (repsel_report_closure_refs, repsel_report_str_ineligible) =
-            if crate::opt_report::enabled() {
-                (
-                    crate::expr::collect_closure_referenced_locals(&hir.init),
-                    crate::expr::collect_canonical_str_ineligible_locals(&hir.init),
-                )
-            } else {
-                (
-                    std::collections::HashSet::new(),
-                    std::collections::HashSet::new(),
-                )
-            };
+        // #7109: the program-entry body participates in canonical (i32/u32/Str)
+        // selection on exactly the per-value rules a function body uses. There
+        // is no structural context reason to deny — see
+        // `expr::MODULE_INIT_CONTEXT` for the audit — so the only remaining
+        // gates are the two bisection env knobs.
+        let repsel_allows = crate::expr::canonical_i32_locals_enabled();
+        let repsel_str_allows = crate::expr::canonical_str_locals_enabled();
+        // The two value-level screens the `Stmt::Let` site consults (#7106
+        // collected them for the report only; now they are load-bearing).
+        let repsel_closure_refs = if repsel_allows || repsel_str_allows {
+            crate::expr::collect_closure_referenced_locals(&hir.init)
+        } else {
+            std::collections::HashSet::new()
+        };
+        let repsel_str_ineligible = if repsel_str_allows {
+            crate::expr::collect_canonical_str_ineligible_locals(&hir.init)
+        } else {
+            std::collections::HashSet::new()
+        };
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
         let mut ctx = FnCtx {
@@ -790,22 +790,24 @@ pub(super) fn compile_module_entry(
             class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             local_slot_reps: HashMap::new(),
-            // Representation-selection Phase 1: module-init contexts keep the
-            // boxed/parallel-shadow model (top-level locals interleave with
-            // import/init machinery; the win lives in function bodies).
-            //
-            // #7106: that exclusion used to be invisible. It is taken here,
-            // before any per-value rule runs, so a program whose whole hot loop
-            // sits at module top level recorded neither a selection nor a
-            // denial — the report simply showed no candidates, which reads
-            // identically to "this program has no values worth promoting".
-            // Naming the rule makes the `Stmt::Let` site emit one denial per
-            // would-be-eligible top-level local instead.
-            repsel_context_allows_canonical_i32: false,
-            repsel_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
-            repsel_closure_ref_locals: repsel_report_closure_refs,
-            repsel_context_allows_canonical_str: false,
-            repsel_str_ineligible_locals: repsel_report_str_ineligible,
+            // #7109: this entry body selects canonical i32/u32/Str on the same
+            // per-value rules as a function body. Phase 1 (#6903) excluded it
+            // on the premise that "the win lives in function bodies"; 9 of the
+            // 17 suite benchmarks put their entire hot loop at module top
+            // level, so it does not. `expr::MODULE_INIT_CONTEXT` carries the
+            // audit of every entry-body property that made the exclusion look
+            // load-bearing.
+            repsel_context_allows_canonical_i32: repsel_allows,
+            repsel_context_denial: None,
+            // Ptr<Shape> stays off here, on its own flag now: Phase 5a reused
+            // the canonical-i32 gate, and #6991 is a live rooting bug for a
+            // compiled receiver held across the globalThis-population
+            // collection — which runs around module init.
+            repsel_context_allows_ptr_shape: false,
+            repsel_ptr_shape_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
+            repsel_closure_ref_locals: repsel_closure_refs,
+            repsel_context_allows_canonical_str: repsel_str_allows,
+            repsel_str_ineligible_locals: repsel_str_ineligible,
             spec_abi_functions: &cross_module.spec_abi_functions,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),
@@ -1327,25 +1329,25 @@ pub(super) fn compile_module_entry(
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
         );
-        // #7106: the two screens the `Stmt::Let` denial consults, so the
-        // module-init denial count excludes locals a PERMITTING context would
-        // have rejected anyway (closure-captured; string-ineligible). Both sets
-        // are read exclusively behind the `repsel_context_allows_*` flags,
-        // which are `false` here, so populating them changes no emitted byte —
-        // and they are only collected when the report is on, so an ordinary
-        // build does no extra walking.
-        let (repsel_report_closure_refs, repsel_report_str_ineligible) =
-            if crate::opt_report::enabled() {
-                (
-                    crate::expr::collect_closure_referenced_locals(&hir.init),
-                    crate::expr::collect_canonical_str_ineligible_locals(&hir.init),
-                )
-            } else {
-                (
-                    std::collections::HashSet::new(),
-                    std::collections::HashSet::new(),
-                )
-            };
+        // #7109: the module-init body participates in canonical (i32/u32/Str)
+        // selection on exactly the per-value rules a function body uses. There
+        // is no structural context reason to deny — see
+        // `expr::MODULE_INIT_CONTEXT` for the audit — so the only remaining
+        // gates are the two bisection env knobs.
+        let repsel_allows = crate::expr::canonical_i32_locals_enabled();
+        let repsel_str_allows = crate::expr::canonical_str_locals_enabled();
+        // The two value-level screens the `Stmt::Let` site consults (#7106
+        // collected them for the report only; now they are load-bearing).
+        let repsel_closure_refs = if repsel_allows || repsel_str_allows {
+            crate::expr::collect_closure_referenced_locals(&hir.init)
+        } else {
+            std::collections::HashSet::new()
+        };
+        let repsel_str_ineligible = if repsel_str_allows {
+            crate::expr::collect_canonical_str_ineligible_locals(&hir.init)
+        } else {
+            std::collections::HashSet::new()
+        };
         let mut ctx = FnCtx {
             func: init_fn,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1446,22 +1448,24 @@ pub(super) fn compile_module_entry(
             class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             local_slot_reps: HashMap::new(),
-            // Representation-selection Phase 1: module-init contexts keep the
-            // boxed/parallel-shadow model (top-level locals interleave with
-            // import/init machinery; the win lives in function bodies).
-            //
-            // #7106: that exclusion used to be invisible. It is taken here,
-            // before any per-value rule runs, so a program whose whole hot loop
-            // sits at module top level recorded neither a selection nor a
-            // denial — the report simply showed no candidates, which reads
-            // identically to "this program has no values worth promoting".
-            // Naming the rule makes the `Stmt::Let` site emit one denial per
-            // would-be-eligible top-level local instead.
-            repsel_context_allows_canonical_i32: false,
-            repsel_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
-            repsel_closure_ref_locals: repsel_report_closure_refs,
-            repsel_context_allows_canonical_str: false,
-            repsel_str_ineligible_locals: repsel_report_str_ineligible,
+            // #7109: this entry body selects canonical i32/u32/Str on the same
+            // per-value rules as a function body. Phase 1 (#6903) excluded it
+            // on the premise that "the win lives in function bodies"; 9 of the
+            // 17 suite benchmarks put their entire hot loop at module top
+            // level, so it does not. `expr::MODULE_INIT_CONTEXT` carries the
+            // audit of every entry-body property that made the exclusion look
+            // load-bearing.
+            repsel_context_allows_canonical_i32: repsel_allows,
+            repsel_context_denial: None,
+            // Ptr<Shape> stays off here, on its own flag now: Phase 5a reused
+            // the canonical-i32 gate, and #6991 is a live rooting bug for a
+            // compiled receiver held across the globalThis-population
+            // collection — which runs around module init.
+            repsel_context_allows_ptr_shape: false,
+            repsel_ptr_shape_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
+            repsel_closure_ref_locals: repsel_closure_refs,
+            repsel_context_allows_canonical_str: repsel_str_allows,
+            repsel_str_ineligible_locals: repsel_str_ineligible,
             spec_abi_functions: &cross_module.spec_abi_functions,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),

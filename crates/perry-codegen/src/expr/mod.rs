@@ -798,11 +798,40 @@ pub(crate) struct FnCtx<'a> {
     pub local_slot_reps: std::collections::HashMap<u32, SlotRep>,
 
     /// Whether this function context permits canonical-i32 storage selection.
-    /// False for async / generator / `was_plain_async` bodies (the async-to-
-    /// generator transform boxes body locals into shared cells) and for module
-    /// init. Checked at the `Stmt::Let` eligibility site together with the
-    /// `PERRY_CANONICAL_I32_LOCALS` env gate.
+    /// False for async / generator / `was_plain_async` bodies — the async-to-
+    /// generator transform boxes body locals into shared cells, which the
+    /// canonical model must not touch. Checked at the `Stmt::Let` eligibility
+    /// site together with the `PERRY_CANONICAL_I32_LOCALS` env gate.
+    ///
+    /// #7109: module-init / program-entry bodies are no longer excluded. They
+    /// are ordinary straight-line synchronous bodies lowered by the same
+    /// `stmt::lower_stmts_inner` as a function body, so the same per-value
+    /// rules decide. See [`crate::expr::MODULE_INIT_CONTEXT`] for the audit and
+    /// for what stays excluded there.
     pub repsel_context_allows_canonical_i32: bool,
+
+    /// Whether this context permits codegen to ACT on a `Ptr<Shape>` receiver
+    /// proof ([`FnCtx::ptr_shape_receiver_fact`]).
+    ///
+    /// Split out from `repsel_context_allows_canonical_i32` by #7109. Phase 5a
+    /// reused that flag, so lifting the module-init gate for canonical i32/Str
+    /// would silently have turned guard-free `Ptr<Shape>` field access on in
+    /// entry bodies too — a different representation, with a live rooting bug
+    /// of its own (#6991: a compiled receiver goes stale across the
+    /// `globalThis`-population collection, which is exactly what runs around
+    /// module init). The two are now independent, and this one keeps the
+    /// pre-#7109 value everywhere: `false` in entry bodies, and elsewhere the
+    /// same "sync body AND `PERRY_CANONICAL_I32_LOCALS` on" condition it had
+    /// when it was the same field. Re-coupling it to `PERRY_PTR_SHAPE_LOCALS`
+    /// instead is #7115-adjacent follow-up work, deliberately not done here.
+    pub repsel_context_allows_ptr_shape: bool,
+
+    /// Why this context forbids codegen from acting on a `Ptr<Shape>` receiver
+    /// proof, for the `--opt-report` unconsumed-promotion record; `None` when it
+    /// permits it. Same split as `repsel_context_allows_ptr_shape` — before
+    /// #7109 this read `repsel_context_denial`, which no longer names a rule in
+    /// entry bodies because canonical selection is allowed there now.
+    pub repsel_ptr_shape_context_denial: Option<&'static str>,
 
     /// Why this context forbids canonical (i32/u32/Str) selection, for
     /// `--opt-report` (#6952) and the promotion census (#7106); `None` when it
@@ -847,9 +876,10 @@ pub(crate) struct FnCtx<'a> {
 
     /// Representation-selection Phase 3a: whether this function context
     /// permits canonical-Str selection. Mirrors
-    /// `repsel_context_allows_canonical_i32` (sync bodies only, no module
-    /// init) but gated on `PERRY_CANONICAL_STR_LOCALS` instead, so the two
-    /// phases can be A/B-tested independently.
+    /// `repsel_context_allows_canonical_i32` (sync bodies only; #7109 lifted
+    /// the module-init exclusion from both together) but gated on
+    /// `PERRY_CANONICAL_STR_LOCALS` instead, so the two phases can be
+    /// A/B-tested independently.
     pub repsel_context_allows_canonical_str: bool,
 
     /// Phase 3a eligibility pre-pass result
@@ -1499,7 +1529,7 @@ impl<'a> FnCtx<'a> {
         &self,
         e: &perry_hir::Expr,
     ) -> Option<&crate::collectors::PtrShapeLocal> {
-        if !self.repsel_context_allows_canonical_i32 {
+        if !self.repsel_context_allows_ptr_shape {
             // #7106 follow-up: this early return is the whole of mechanism 2.
             // The fact EXISTS — `collect_shape_proven_ptr_locals` already ran
             // and already recorded a `select()` for it — and every access site
@@ -1533,7 +1563,7 @@ impl<'a> FnCtx<'a> {
     }
 
     /// Record that a selected `Ptr<Shape>` proof was dropped by the context
-    /// gate (`repsel_context_allows_canonical_i32 == false`).
+    /// gate (`repsel_context_allows_ptr_shape == false`).
     ///
     /// Deliberately silent when the context permits the representation and only
     /// the `PERRY_CANONICAL_I32_LOCALS` bisection knob turned it off: that arm
@@ -1541,7 +1571,7 @@ impl<'a> FnCtx<'a> {
     /// class of entry the default build cannot emit (same rule as
     /// `slot_rep::body_context_denial`).
     fn report_ptr_shape_context_drop(&self, e: &perry_hir::Expr) {
-        let Some(rule) = self.repsel_context_denial else {
+        let Some(rule) = self.repsel_ptr_shape_context_denial else {
             return;
         };
         let Some(fact) = self.ptr_shape_fact_ignoring_context(e) else {

@@ -114,12 +114,63 @@ pub(crate) enum SlotRep {
     Str,
 }
 
-/// The `repsel_context_denial` rule for a module-init / program-entry body.
+/// The context rule for a module-init / program-entry body.
 ///
-/// Both entry contexts (`codegen/entry.rs`) exclude canonical selection
-/// wholesale, so every top-level local stays boxed no matter what the per-value
-/// rules would have said. Naming the rule is what turns that from an invisible
-/// zero into a counted denial (#7106).
+/// ## History
+///
+/// Phase 1 (#6903) excluded both entry contexts (`codegen/entry.rs`) from
+/// canonical selection wholesale, on the stated premise that "top-level locals
+/// interleave with import/init machinery; the win lives in function bodies".
+/// Phase 3a (#6909) copied the exclusion for `Str`. Neither commit records a
+/// hazard — it is a scoping decision, and the premise is false for the corpus
+/// Perry is measured on: 9 of the 17 `benchmarks/suite` workloads put their
+/// entire hot loop at module top level, `08_string_concat`'s `result` being
+/// Phase 3a's own motivating `+=` self-append shape (#7109).
+///
+/// ## Why lifting it for canonical i32/u32/Str is sound
+///
+/// An entry body is lowered by the same `stmt::lower_stmts_inner` as a function
+/// body, into an ordinary straight-line LLVM function (`main` or
+/// `<prefix>__init`). Every property that made the exclusion look necessary is
+/// already covered by a value-level rule or is not a difference at all:
+///
+/// * **Module globals.** A top-level binding read from any function, method or
+///   closure body — or exported — is backed by a `@perry_global_*` cell
+///   (`codegen/module_globals_emit.rs`), and `!ctx.module_globals.contains_key`
+///   has excluded those since Phase 1.
+/// * **Block-scoped top-level lets that escape into a closure.** Those are not
+///   globalized; they are boxed (`ctx.boxed_vars`) or land in
+///   `repsel_closure_ref_locals` — two more pre-existing value-level rules.
+/// * **The init prelude.** `mark_entry_init_boundary` splices post-init setup
+///   after the GC/string-pool prelude; canonical slots are entry allocas with a
+///   constant `store i32 0`, exactly like the boxed path's `TAG_UNDEFINED`
+///   store, and both go through `entry_allocas_push_store`.
+/// * **The module-init shadow frame.** `enable_module_init_shadow_frame` binds
+///   only pointer-typed locals (`collect_pointer_typed_locals`). An `I32`/`U32`
+///   local is a number and was never bound; a `Str` local does not move storage
+///   at all, so its binding is untouched.
+/// * **Top-level `await`.** Codegen lowers `Expr::Await` to an in-frame polling
+///   loop — module init is never rewritten into a generator state machine, so
+///   the async-to-generator hazard that `body_context_denial` guards does not
+///   arise here.
+/// * **Init unrolling.** `unroll_static_loops` refreshes local ids per copy, so
+///   an unrolled init declares fresh bindings, same as an unrolled function.
+/// * **Entry-only emission** (`emit_namespace_populator`,
+///   `init_static_fields_*`, `emit_script_global_function_decls`,
+///   `register_module_globals_as_gc_roots`) reads `@perry_global_*` cells and
+///   never `ctx.locals`.
+///
+/// ## What is still excluded, and why
+///
+/// `Ptr<Shape>` receiver proofs. Phase 5a reused
+/// `repsel_context_allows_canonical_i32` as its context gate, so lifting that
+/// flag would silently have enabled guard-free `this.field` / `obj.field`
+/// lowering in entry bodies as a side effect of an unrelated phase. That is not
+/// a representation this issue measured, and #6991 is an open rooting bug in
+/// exactly that position: a compiled receiver goes stale across the
+/// `globalThis`-population collection, which runs around module init. So the
+/// flag is split (`repsel_context_allows_ptr_shape`) and entry bodies keep
+/// `Ptr<Shape>` off, still naming this rule in `--opt-report`.
 pub(crate) const MODULE_INIT_CONTEXT: &str = "module_init_context";
 
 /// Why an ordinary body context forbids canonical (i32/u32/Str) selection, or

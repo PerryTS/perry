@@ -947,6 +947,11 @@ pub(super) fn compile_closure(
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
+        // #7109: Phase 5a's Ptr<Shape> context gate, split out of
+        // `repsel_context_allows_canonical_i32`. Ordinary bodies keep the
+        // exact pre-split value; only entry bodies diverge.
+        repsel_context_allows_ptr_shape: repsel_allows,
+        repsel_ptr_shape_context_denial: repsel_context_denial,
         repsel_context_denial,
         repsel_closure_ref_locals: repsel_closure_refs,
         repsel_context_allows_canonical_str: repsel_str_allows,
