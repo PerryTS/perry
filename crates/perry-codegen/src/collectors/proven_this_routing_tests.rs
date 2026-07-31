@@ -273,6 +273,131 @@ fn counter_class() -> Class {
     )
 }
 
+/// `class Point { x; y; constructor(x, y); norm2(): number }` — the shape of
+/// `benchmarks/repsel_census/fixtures/fixture_ptr_shape.ts`, whose whole purpose
+/// is to satisfy every rule in `collectors/ptr_shape.rs` so a local can actually
+/// be shape-proven. `norm2` returns `number` and reads only declared fields, so
+/// the typed-receiver clone is eligible and its arm runs first — the same
+/// shadowing that hid the guarded site, on the other routing site.
+fn point_class() -> Class {
+    let ctor = func(
+        95,
+        "constructor",
+        vec![param(80, "x", Type::Number), param(81, "y", Type::Number)],
+        Type::Void,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "x".to_string(),
+                value: Box::new(Expr::LocalGet(80)),
+            }),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "y".to_string(),
+                value: Box::new(Expr::LocalGet(81)),
+            }),
+        ],
+    );
+    let norm2 = func(
+        96,
+        "norm2",
+        Vec::new(),
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(this_get("x")),
+                right: Box::new(this_get("x")),
+            }),
+            right: Box::new(Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(this_get("y")),
+                right: Box::new(this_get("y")),
+            }),
+        }))],
+    );
+    let mut c = class(
+        102,
+        "Point",
+        vec![field("x", Type::Number), field("y", Type::Number)],
+        vec![norm2],
+    );
+    c.constructor = Some(ctor);
+    c
+}
+
+/// A module whose `probe()` holds a Phase 3b **shape-proven local**: a single
+/// `Let` initialised by `new` (provenance), only ever field-accessed and
+/// method-called, never reassigned, captured, passed, returned or aliased
+/// (containment). That combination is what routes through the guard-FREE site
+/// in `lower_call/property_get/dynamic_dispatch.rs`, which is a different code
+/// path from `guarded_site_module`'s typed parameter.
+fn ptr_shape_local_module() -> Module {
+    let mut m = Module::new("pshape_local.ts");
+    m.classes = vec![point_class()];
+    m.functions = vec![func(
+        1,
+        "probe",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 3,
+                name: "total".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "p".to_string(),
+                ty: Type::Named("Point".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Point".to_string(),
+                    args: vec![Expr::Number(3.0), Expr::Number(4.0)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            // `p.x = p.x + 1` — a declared-field read and write, which keeps the
+            // local inside the proof.
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(2)),
+                property: "x".to_string(),
+                value: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(2)),
+                        property: "x".to_string(),
+                        byte_offset: 0,
+                    }),
+                    right: Box::new(Expr::Number(1.0)),
+                }),
+            }),
+            // The method result is accumulated into a separate local, exactly as
+            // `fixture_ptr_shape.ts` does. Returning `p.norm2()` directly puts a
+            // `LocalGet(p)` inside the `Return` expression, which the
+            // containment walk treats as an escape — the receiver of a call is
+            // not distinguished there — and the local silently stops being
+            // shape-proven.
+            Stmt::Expr(Expr::LocalSet(
+                3,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(call(Expr::LocalGet(2), "norm2", Vec::new())),
+                }),
+            )),
+            Stmt::Return(Some(Expr::LocalGet(3))),
+        ],
+    )];
+    m.init_kind = ModuleInitKind::Eager;
+    m
+}
+
 /// A module whose `probe(c: Counter)` calls both methods on a statically-typed
 /// parameter. A typed parameter is not a Phase 3b shape-proven local (no
 /// provenance, no containment), so both calls go through the *guarded* site:
@@ -351,6 +476,38 @@ fn typed_clone_fallback_routes_to_proven_this_clone() {
     );
 }
 
+/// Regression (#7128), Phase 3b guard-free site: a shape-proven LOCAL whose
+/// method also has a typed-receiver clone must still route to the proven-`this`
+/// clone.
+///
+/// `lower_call/property_get/dynamic_dispatch.rs` had the defect in its purest
+/// form — the block routed to the clone on its plain exit, but the
+/// typed-receiver arm 25 lines above called the guard-ridden public body from
+/// its own generic fallback. Both exits are guard-free under the identical
+/// Phase 3b proof, so a proven receiver whose ARGUMENTS happened to be
+/// non-plain-double silently lost the receiver proof as well.
+#[test]
+fn ptr_shape_local_typed_fallback_routes_to_proven_this_clone() {
+    let ir = emit(&ptr_shape_local_module(), false);
+    let defs = pshape_definitions(&ir);
+    let calls = pshape_call_targets(&ir);
+    let norm2 = defs
+        .iter()
+        .find(|d| d.contains("__norm2__pshape"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no proven-`this` clone emitted for `norm2` — the Phase 3b \
+                 fixture no longer satisfies the shape proof, so this test \
+                 would pass vacuously. defined={defs:?}"
+            )
+        });
+    assert!(
+        calls.iter().any(|c| c == norm2),
+        "a shape-proven local's method call must route to the proven-`this` \
+         clone from the guard-free site too. defined={defs:?} called={calls:?}"
+    );
+}
+
 /// The routed call must still hand the callee a shadow-bound receiver slot.
 ///
 /// #6925 kept the clone's `(double this, …)` ABI and its shadow-bound,
@@ -360,7 +517,9 @@ fn typed_clone_fallback_routes_to_proven_this_clone() {
 /// remains true, so assert it at the callee rather than trusting the comment.
 #[test]
 fn proven_this_clone_binds_its_receiver_slot() {
-    let ir = emit(&guarded_site_module(), false);
+    let mut ir = emit(&guarded_site_module(), false);
+    ir.push('\n');
+    ir.push_str(&emit(&ptr_shape_local_module(), false));
     let names = pshape_definitions(&ir);
     assert!(
         !names.is_empty(),

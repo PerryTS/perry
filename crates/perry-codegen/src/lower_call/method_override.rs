@@ -203,6 +203,12 @@ pub(super) fn emit_guarded_direct_method_call(
             .contains_key(&(receiver_class_name.to_string(), property.to_string())))
     .then(|| crate::collectors::pshape_method_name(direct_fn));
 
+    // The body a failed typed guard falls back to. Arm-invariant (both inputs
+    // are), so it is resolved once here rather than five times below.
+    let generic_body_fn: String = pshape_fn
+        .clone()
+        .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
+
     let expected_class_id_str = expected_class_id.to_string();
     let expected_keys_slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
     let expected_keys = ctx.block().load(I64, &expected_keys_slot);
@@ -269,9 +275,6 @@ pub(super) fn emit_guarded_direct_method_call(
     ctx.current_block = fast_idx;
     let fast_value = {
         if let Some((typed_fn, typed_formal_count, receiver_info)) = typed_f64_receiver_direct_fn {
-            let generic_body_fn = pshape_fn
-                .clone()
-                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -399,9 +402,6 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_direct_fn {
-            let generic_body_fn = pshape_fn
-                .clone()
-                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -486,9 +486,6 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_i32_direct_fn {
-            let generic_body_fn = pshape_fn
-                .clone()
-                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -575,9 +572,6 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_i1_direct_fn {
-            let generic_body_fn = pshape_fn
-                .clone()
-                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
@@ -677,9 +671,6 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else if let Some((typed_fn, typed_param_reps)) = typed_string_direct_fn {
-            let generic_body_fn = pshape_fn
-                .clone()
-                .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
