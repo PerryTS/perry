@@ -140,6 +140,28 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
     "fixture_spec_abi_taptr": {"spec-abi-entry": 1, "spec-abi-taptr-slot": 1},
 }
 
+#: Workloads allowed to produce **zero candidates** — no analysis considered any
+#: value in them. Held in code for the same reason as [`LIVENESS_FLOORS`]: it is
+#: an assertion about the compiler, and `--update` must not be able to widen it.
+#:
+#: A promotion count of zero is a fact about the corpus. Zero *candidates* is a
+#: fact about the compiler: it says no analysis reached the program at all, so
+#: there is no rule to point at and nothing to argue with. Before #7106's
+#: follow-up, **8 of the 18 real workloads were in that state** — every one
+#: because its hot loop is at module top level, which `codegen/entry.rs`
+#: excludes from canonical selection before any per-value rule runs. The
+#: promotion counts were identical either way, which is exactly why the census
+#: alone could not see it.
+#:
+#: An entry here must name a program that genuinely has nothing to analyse.
+ZERO_CANDIDATE_ALLOWLIST: dict[str, str] = {
+    "suite_01_startup": (
+        'a single `console.log("started")` — the program declares no bindings '
+        "at all, so there is legitimately nothing for any representation "
+        "analysis to consider"
+    ),
+}
+
 
 # ── Report -> census ───────────────────────────────────────────────────────
 
@@ -420,6 +442,39 @@ def check_instrument_liveness(observed: dict[str, dict[str, Any]]) -> list[str]:
     ]
 
 
+def check_analysis_reach(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """Every corpus workload must be REACHED by at least one analysis.
+
+    The census counts promotions, so it can say "this workload promoted
+    nothing". It cannot, on its own, say whether that is because every rule
+    considered the values and said no, or because no rule ever ran. A denial
+    names a rule and can be argued with; zero candidates names nothing.
+
+    That distinction is not academic: it is how the module-init exclusion in
+    `codegen/entry.rs` stayed invisible through #7034 and #7104. Both readings
+    produce the identical promotion table.
+
+    So: a workload whose candidate total is zero across every analysis fails,
+    unless it is in [`ZERO_CANDIDATE_ALLOWLIST`] with a stated reason.
+    """
+    failures: list[str] = []
+    for name, entry in sorted(observed.items()):
+        candidates = entry.get("candidates", {})
+        if sum(int(v) for v in candidates.values()) > 0:
+            continue
+        if name in ZERO_CANDIDATE_ALLOWLIST:
+            continue
+        failures.append(
+            f"{name}: zero candidates across every analysis — no representation "
+            "analysis considered a single value in this workload. That is not "
+            '"considered and denied", it is "never looked at", and it is the '
+            "state the census cannot distinguish from an honest zero. Either "
+            "an analysis regressed, or the workload genuinely has nothing to "
+            "analyse and belongs in ZERO_CANDIDATE_ALLOWLIST with a reason."
+        )
+    return failures
+
+
 # ── Rendering ──────────────────────────────────────────────────────────────
 
 
@@ -544,6 +599,7 @@ def census(args: argparse.Namespace) -> int:
         improvements += imp
     liveness = check_liveness_fixtures(observed) if not partial else []
     dead = check_instrument_liveness(observed) if not partial else []
+    unreached = check_analysis_reach(observed) if not partial else []
 
     if partial:
         print(
@@ -561,6 +617,7 @@ def census(args: argparse.Namespace) -> int:
     for label, problems in (
         ("REGRESSION", regressions),
         ("DEAD INSTRUMENT", liveness + dead),
+        ("UNREACHED BY EVERY ANALYSIS", unreached),
     ):
         if not problems:
             continue

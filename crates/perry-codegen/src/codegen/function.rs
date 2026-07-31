@@ -657,12 +657,18 @@ pub(super) fn compile_function(
         && !f.is_async
         && !f.is_generator
         && !f.was_plain_async;
-    let repsel_closure_refs = if repsel_allows || repsel_str_allows {
+    // #7106: when the context forbids selection for a STRUCTURAL reason, the
+    // `Stmt::Let` site still reports one denial per would-be-eligible local, so
+    // "async bodies are excluded" is a counted rule rather than a silent zero.
+    let repsel_context_denial =
+        crate::expr::body_context_denial(f.is_async, f.is_generator, f.was_plain_async);
+    let report_denial = crate::expr::report_context_denial(repsel_context_denial);
+    let repsel_closure_refs = if repsel_allows || repsel_str_allows || report_denial {
         crate::expr::collect_closure_referenced_locals(&f.body)
     } else {
         std::collections::HashSet::new()
     };
-    let repsel_str_ineligible = if repsel_str_allows {
+    let repsel_str_ineligible = if repsel_str_allows || report_denial {
         crate::expr::collect_canonical_str_ineligible_locals(&f.body)
     } else {
         std::collections::HashSet::new()
@@ -774,6 +780,7 @@ pub(super) fn compile_function(
             .collect(),
         i32_counter_slots: spec_i32_param_slots,
         repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_context_denial,
         repsel_closure_ref_locals: repsel_closure_refs,
         repsel_context_allows_canonical_str: repsel_str_allows,
         repsel_str_ineligible_locals: repsel_str_ineligible,

@@ -106,6 +106,48 @@ pub(crate) enum SlotRep {
     Str,
 }
 
+/// The `repsel_context_denial` rule for a module-init / program-entry body.
+///
+/// Both entry contexts (`codegen/entry.rs`) exclude canonical selection
+/// wholesale, so every top-level local stays boxed no matter what the per-value
+/// rules would have said. Naming the rule is what turns that from an invisible
+/// zero into a counted denial (#7106).
+pub(crate) const MODULE_INIT_CONTEXT: &str = "module_init_context";
+
+/// Why an ordinary body context forbids canonical (i32/u32/Str) selection, or
+/// `None` when it permits it.
+///
+/// Structural reasons only — the `PERRY_CANONICAL_{I32,STR}_LOCALS` env gates
+/// are deliberately NOT reported here. Those are bisection knobs, and their
+/// `=0` arms must produce the same report entries as the default build minus
+/// the selections, not a new class of denial the default build never emits.
+pub(crate) fn body_context_denial(
+    is_async: bool,
+    is_generator: bool,
+    was_plain_async: bool,
+) -> Option<&'static str> {
+    if is_async {
+        Some("async_body")
+    } else if is_generator {
+        Some("generator_body")
+    } else if was_plain_async {
+        Some("was_plain_async_body")
+    } else {
+        None
+    }
+}
+
+/// Whether the context-denial screens (`repsel_closure_ref_locals`,
+/// `repsel_str_ineligible_locals`) should be collected even though the context
+/// forbids selection: only when `--opt-report` is on AND there is a structural
+/// reason to report. The screens are read exclusively behind the
+/// `repsel_context_allows_*` flags, so populating them in a denied context
+/// changes no emitted byte — it only makes the denial count exact, by not
+/// counting locals a permitting context would have rejected anyway.
+pub(crate) fn report_context_denial(denial: Option<&'static str>) -> bool {
+    denial.is_some() && crate::opt_report::enabled()
+}
+
 /// `PERRY_CANONICAL_I32_LOCALS` gate. Enabled by default; `=0`/`off`/`false`
 /// disables canonical-i32 storage selection, reverting eligible locals to the
 /// parallel-shadow model. Mirrors `int_valued_ta_locals::enabled` and is keyed
@@ -172,6 +214,199 @@ pub(crate) fn note_canonical_local(ctx: &FnCtx<'_>, id: u32, name: &str, rep: Sl
         "repsel: canonical-{rep:?} local '{name}' (id {id}) in {} [{}] (total {n})",
         ctx.source_function, ctx.module_slug
     );
+}
+
+/// The `--opt-report` denial for a local that satisfied every VALUE-level rule
+/// of a canonical (i32/u32/Str) selection and lost only because the enclosing
+/// context forbids the representation wholesale (#7106).
+///
+/// Counterpart to [`note_canonical_local`]: that records the wins, this records
+/// the class of loss the report was previously blind to. A context gate is
+/// taken before any per-value rule runs, so such a local used to produce no
+/// entry at all — and an absent entry reads exactly like "this program had
+/// nothing to promote". Eight of the eighteen census workloads (#7106) sat in
+/// that state, every one of them because their hot loop is at module top level.
+///
+/// `loop_depth` is the number of loops open at the declaration, which is 0 for
+/// a `for` counter (the target is pushed after its `Let` lowers) and ≥1 only
+/// for a local declared inside a loop body. Reported as-is; it is context in
+/// the JSON, never gated on.
+/// Which value-level canonical-i32 rules a proven-integer local failed, in the
+/// order the report should prefer to name them (#7106).
+///
+/// Every field is a rule the `Stmt::Let` eligibility conjunction already
+/// evaluates; this only carries the individual verdicts out so the report can
+/// say *which* one lost, instead of dropping the whole judgement on the floor.
+pub(crate) struct CanonicalI32Denial {
+    pub bigint: bool,
+    pub init_out_of_range: bool,
+    pub boxed_var: bool,
+    pub module_global: bool,
+    pub closure_referenced: bool,
+    pub array_row_alias: bool,
+    pub not_index_used_or_bounded: bool,
+    pub context: Option<&'static str>,
+}
+
+impl CanonicalI32Denial {
+    /// `(rule, reason, tier, issue)` for the first failing rule, or `None` when
+    /// nothing failed — which can only happen if a caller invokes this for a
+    /// local that was in fact selected, so the report stays silent rather than
+    /// inventing a denial.
+    fn verdict(
+        &self,
+    ) -> Option<(
+        &'static str,
+        &'static str,
+        crate::opt_report::Tier,
+        Option<&'static str>,
+    )> {
+        use crate::opt_report::Tier;
+        if self.bigint {
+            return Some((
+                "declared_bigint",
+                "declared `bigint`; canonical i32 storage would lose the value",
+                Tier::InherentlyPolymorphic,
+                None,
+            ));
+        }
+        if self.init_out_of_range {
+            return Some((
+                "init_outside_i32",
+                "the initializer is an integer literal outside the i32 range",
+                Tier::InherentlyPolymorphic,
+                None,
+            ));
+        }
+        if self.boxed_var {
+            return Some((
+                "boxed_var",
+                "captured by reference into a boxed cell, so its storage is not \
+                 the local slot",
+                Tier::Fixable,
+                None,
+            ));
+        }
+        if self.module_global {
+            return Some((
+                "module_global",
+                "a module-level binding, held in an `@perry_global_*` NaN-boxed \
+                 LLVM global rather than a local slot",
+                Tier::CompilerLimitation,
+                Some(MODULE_GLOBAL_ISSUE),
+            ));
+        }
+        if self.closure_referenced {
+            return Some((
+                "closure_referenced",
+                "referenced from a nested closure; the capture machinery reads \
+                 the boxed double slot",
+                Tier::Fixable,
+                None,
+            ));
+        }
+        if self.array_row_alias {
+            return Some((
+                "array_row_alias",
+                "aliases a flat-const array row, so it is array-valued rather \
+                 than scalar",
+                Tier::CompilerLimitation,
+                None,
+            ));
+        }
+        if self.not_index_used_or_bounded {
+            return Some((
+                "not_index_used_or_bounded",
+                "proven integer-valued, but never used as an array index and \
+                 not provably i32-bounded, so nothing pins its range to 32 bits \
+                 — a bare accumulator or counter lands here",
+                Tier::CompilerLimitation,
+                Some(NOT_BOUNDED_ISSUE),
+            ));
+        }
+        // Everything value-level passed; only the context gate is left.
+        self.context.map(|rule| {
+            let (reason, issue) = context_rule_text(rule);
+            (rule, reason, Tier::CompilerLimitation, Some(issue))
+        })
+    }
+}
+
+/// Record why a proven-integer local did not get canonical-i32 storage.
+pub(crate) fn deny_canonical_i32(ctx: &FnCtx<'_>, id: u32, name: &str, denial: CanonicalI32Denial) {
+    if !crate::opt_report::enabled() {
+        return;
+    }
+    let Some((rule, reason, tier, issue)) = denial.verdict() else {
+        return;
+    };
+    crate::opt_report::deny(crate::opt_report::Denial {
+        position: crate::opt_report::Position::Local,
+        name,
+        local_id: Some(id),
+        analysis: crate::opt_report::Analysis::CanonicalSlot,
+        rule,
+        reason,
+        tier,
+        issue,
+        loop_depth: u32::try_from(ctx.loop_targets.len()).unwrap_or(u32::MAX),
+        detail: Some(String::from("would have selected I32/U32")),
+        byte_offset: None,
+    });
+}
+
+/// Tracking issue for "a module-level binding can never take a canonical slot".
+const MODULE_GLOBAL_ISSUE: &str = "#7109";
+/// Tracking issue for the index-use / i32-bound precondition.
+const NOT_BOUNDED_ISSUE: &str = "#7110";
+
+/// `(reason, issue)` for a context-level denial rule.
+fn context_rule_text(rule: &str) -> (&'static str, &'static str) {
+    match rule {
+        MODULE_INIT_CONTEXT => (
+            "module-init / program-entry bodies are excluded from canonical \
+             storage selection wholesale (codegen/entry.rs), so no per-value \
+             rule ran for this local",
+            "#7109",
+        ),
+        "async_body" | "was_plain_async_body" => (
+            "async bodies route every body local through a shared mutable cell \
+             (the async-to-generator transform), which the canonical model must \
+             not touch",
+            "#6328",
+        ),
+        _ => (
+            "generator bodies route every body local through a shared mutable \
+             cell, which the canonical model must not touch",
+            "#6328",
+        ),
+    }
+}
+
+pub(crate) fn deny_canonical_context(
+    ctx: &FnCtx<'_>,
+    id: u32,
+    name: &str,
+    rule: &'static str,
+    rep: SlotRep,
+) {
+    if !crate::opt_report::enabled() {
+        return;
+    }
+    let (reason, issue) = context_rule_text(rule);
+    crate::opt_report::deny(crate::opt_report::Denial {
+        position: crate::opt_report::Position::Local,
+        name,
+        local_id: Some(id),
+        analysis: crate::opt_report::Analysis::CanonicalSlot,
+        rule,
+        reason,
+        tier: crate::opt_report::Tier::CompilerLimitation,
+        issue: Some(issue),
+        loop_depth: u32::try_from(ctx.loop_targets.len()).unwrap_or(u32::MAX),
+        detail: Some(format!("would have selected {rep:?}")),
+        byte_offset: None,
+    });
 }
 
 /// Rep + i32 slot for a canonical-i32 local; `None` when the local's slot
@@ -545,4 +780,132 @@ pub(crate) fn collect_closure_referenced_locals(stmts: &[perry_hir::Stmt]) -> Ha
         }
     }
     out
+}
+
+#[cfg(test)]
+mod repsel_denial_tests {
+    use super::*;
+
+    /// Nothing failed at all: a caller that asks about a SELECTED local must
+    /// not get a denial invented for it.
+    fn passing() -> CanonicalI32Denial {
+        CanonicalI32Denial {
+            bigint: false,
+            init_out_of_range: false,
+            boxed_var: false,
+            module_global: false,
+            closure_referenced: false,
+            array_row_alias: false,
+            not_index_used_or_bounded: false,
+            context: None,
+        }
+    }
+
+    #[test]
+    fn a_local_that_failed_nothing_produces_no_denial() {
+        assert!(passing().verdict().is_none());
+    }
+
+    #[test]
+    fn the_context_gate_is_reported_when_every_value_rule_passed() {
+        let d = CanonicalI32Denial {
+            context: Some(MODULE_INIT_CONTEXT),
+            ..passing()
+        };
+        let (rule, _, _, issue) = d.verdict().expect("a context denial");
+        assert_eq!(rule, MODULE_INIT_CONTEXT);
+        assert_eq!(issue, Some("#7109"));
+    }
+
+    /// The regression this exists to prevent: a top-level loop counter that is
+    /// index-used and otherwise fully eligible must name the CONTEXT, not fall
+    /// silently out of the report. This is `11_prime_sieve`'s `i`/`j`.
+    #[test]
+    fn an_index_used_top_level_counter_names_the_module_init_rule() {
+        let d = CanonicalI32Denial {
+            not_index_used_or_bounded: false,
+            context: Some(MODULE_INIT_CONTEXT),
+            ..passing()
+        };
+        assert_eq!(d.verdict().map(|v| v.0), Some(MODULE_INIT_CONTEXT));
+    }
+
+    /// A bare accumulator at module top level fails BOTH rules. The
+    /// value-level one is the more actionable, so it wins. This is
+    /// `02_loop_overhead`'s `i`.
+    #[test]
+    fn a_value_rule_outranks_the_context_rule() {
+        let d = CanonicalI32Denial {
+            not_index_used_or_bounded: true,
+            context: Some(MODULE_INIT_CONTEXT),
+            ..passing()
+        };
+        let (rule, _, tier, issue) = d.verdict().expect("a value-level denial");
+        assert_eq!(rule, "not_index_used_or_bounded");
+        assert_eq!(tier, crate::opt_report::Tier::CompilerLimitation);
+        assert_eq!(issue, Some("#7110"));
+    }
+
+    /// Precedence is total and ordered: with every rule failing at once, the
+    /// most actionable one is named.
+    #[test]
+    fn precedence_is_stable_when_several_rules_fail() {
+        let all = CanonicalI32Denial {
+            bigint: true,
+            init_out_of_range: true,
+            boxed_var: true,
+            module_global: true,
+            closure_referenced: true,
+            array_row_alias: true,
+            not_index_used_or_bounded: true,
+            context: Some(MODULE_INIT_CONTEXT),
+        };
+        assert_eq!(all.verdict().map(|v| v.0), Some("declared_bigint"));
+
+        let order = [
+            ("declared_bigint", "init_outside_i32"),
+            ("init_outside_i32", "boxed_var"),
+            ("boxed_var", "module_global"),
+            ("module_global", "closure_referenced"),
+            ("closure_referenced", "array_row_alias"),
+            ("array_row_alias", "not_index_used_or_bounded"),
+        ];
+        let mut d = all;
+        for (named, next) in order {
+            assert_eq!(d.verdict().map(|v| v.0), Some(named));
+            match named {
+                "declared_bigint" => d.bigint = false,
+                "init_outside_i32" => d.init_out_of_range = false,
+                "boxed_var" => d.boxed_var = false,
+                "module_global" => d.module_global = false,
+                "closure_referenced" => d.closure_referenced = false,
+                "array_row_alias" => d.array_row_alias = false,
+                _ => unreachable!(),
+            }
+            assert_eq!(d.verdict().map(|v| v.0), Some(next));
+        }
+    }
+
+    /// Body-context reasons map onto stable rule names; a permitting context
+    /// yields `None` so no denial is recorded for an ordinary sync body.
+    #[test]
+    fn body_contexts_map_to_stable_rule_names() {
+        assert_eq!(body_context_denial(false, false, false), None);
+        assert_eq!(body_context_denial(true, false, false), Some("async_body"));
+        assert_eq!(
+            body_context_denial(false, true, false),
+            Some("generator_body")
+        );
+        assert_eq!(
+            body_context_denial(false, false, true),
+            Some("was_plain_async_body")
+        );
+    }
+
+    /// The screens are only collected when there is a structural reason AND
+    /// the report is on — an ordinary build must do no extra walking.
+    #[test]
+    fn screens_are_not_collected_without_a_structural_reason() {
+        assert!(!report_context_denial(None));
+    }
 }

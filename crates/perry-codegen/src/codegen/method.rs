@@ -400,12 +400,19 @@ pub(super) fn compile_method(
         && !method.is_async
         && !method.is_generator
         && !method.was_plain_async;
-    let repsel_closure_refs = if repsel_allows || repsel_str_allows {
+    // #7106: report the structural context exclusion at the `Stmt::Let` site.
+    let repsel_context_denial = crate::expr::body_context_denial(
+        method.is_async,
+        method.is_generator,
+        method.was_plain_async,
+    );
+    let report_denial = crate::expr::report_context_denial(repsel_context_denial);
+    let repsel_closure_refs = if repsel_allows || repsel_str_allows || report_denial {
         crate::expr::collect_closure_referenced_locals(&method.body)
     } else {
         std::collections::HashSet::new()
     };
-    let repsel_str_ineligible = if repsel_str_allows {
+    let repsel_str_ineligible = if repsel_str_allows || report_denial {
         crate::expr::collect_canonical_str_ineligible_locals(&method.body)
     } else {
         std::collections::HashSet::new()
@@ -517,6 +524,7 @@ pub(super) fn compile_method(
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_context_denial,
         repsel_closure_ref_locals: repsel_closure_refs,
         repsel_context_allows_canonical_str: repsel_str_allows,
         repsel_str_ineligible_locals: repsel_str_ineligible,
@@ -1446,12 +1454,16 @@ pub(super) fn compile_static_method(
         && !f.is_async
         && !f.is_generator
         && !f.was_plain_async;
-    let repsel_closure_refs = if repsel_allows || repsel_str_allows {
+    // #7106: report the structural context exclusion at the `Stmt::Let` site.
+    let repsel_context_denial =
+        crate::expr::body_context_denial(f.is_async, f.is_generator, f.was_plain_async);
+    let report_denial = crate::expr::report_context_denial(repsel_context_denial);
+    let repsel_closure_refs = if repsel_allows || repsel_str_allows || report_denial {
         crate::expr::collect_closure_referenced_locals(&f.body)
     } else {
         std::collections::HashSet::new()
     };
-    let repsel_str_ineligible = if repsel_str_allows {
+    let repsel_str_ineligible = if repsel_str_allows || report_denial {
         crate::expr::collect_canonical_str_ineligible_locals(&f.body)
     } else {
         std::collections::HashSet::new()
@@ -1567,6 +1579,7 @@ pub(super) fn compile_static_method(
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_context_denial,
         repsel_closure_ref_locals: repsel_closure_refs,
         repsel_context_allows_canonical_str: repsel_str_allows,
         repsel_str_ineligible_locals: repsel_str_ineligible,

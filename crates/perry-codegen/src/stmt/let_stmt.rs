@@ -1249,16 +1249,56 @@ pub(crate) fn lower_let(
     // flag-off model stays exactly the pre-phase one.
     let canonical_safe_local =
         i32_safe_local || ctx.native_facts.int_valued_ta_locals().contains(&id);
-    let canonical_i32 = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+    // Split into the VALUE-level proof and the CONTEXT gate so a context-level
+    // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
+    // selection behaviour is unchanged.
+    let canonical_i32_value_eligible = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
         && init_in_i32_range
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && !ctx.i32_counter_slots.contains_key(&id)
-        && ctx.repsel_context_allows_canonical_i32
         && !ctx.repsel_closure_ref_locals.contains(&id)
         && !ctx.array_row_aliases.contains_key(&id);
+    let canonical_i32 = canonical_i32_value_eligible && ctx.repsel_context_allows_canonical_i32;
+    // #7106: name the rule for every PROVEN-INTEGER local that stayed boxed.
+    //
+    // A local that satisfied every value-level rule and lost only to the
+    // context used to produce no report entry at all, which is
+    // indistinguishable from "no candidate existed" — the exact ambiguity the
+    // promotion census was built to remove, one stage upstream. So did a local
+    // that failed a value-level rule: the analysis had a proof obligation and a
+    // verdict, and the report threw the verdict away.
+    //
+    // Scoped to `integer_locals ∪ unsigned_i32_locals` — locals Perry has
+    // already PROVEN integer-valued — so this reports near-misses, not every
+    // binding in the program.
+    if !canonical_i32
+        && (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+        && !ctx.i32_counter_slots.contains_key(&id)
+        && crate::expr::canonical_i32_locals_enabled()
+        && crate::opt_report::enabled()
+    {
+        crate::expr::deny_canonical_i32(
+            ctx,
+            id,
+            name,
+            crate::expr::CanonicalI32Denial {
+                // Ordered most- to least-actionable; the FIRST failing rule is
+                // the one reported, so a local with two problems names the one
+                // worth fixing first.
+                bigint: matches!(refined_ty, perry_hir::types::Type::BigInt),
+                init_out_of_range: !init_in_i32_range,
+                boxed_var: ctx.boxed_vars.contains(&id),
+                module_global: ctx.module_globals.contains_key(&id),
+                closure_referenced: ctx.repsel_closure_ref_locals.contains(&id),
+                array_row_alias: ctx.array_row_aliases.contains_key(&id),
+                not_index_used_or_bounded: !canonical_safe_local,
+                context: ctx.repsel_context_denial,
+            },
+        );
+    }
     if canonical_i32 {
         let rep = if is_unsigned_i32_local {
             crate::expr::SlotRep::U32
@@ -1322,17 +1362,23 @@ pub(crate) fn lower_let(
     // (`+=` self-append, `.length`, `===`/`<`, `charCodeAt`-family), which
     // tag-dispatch on the slot bits inline instead of routing operands
     // through `js_get_string_pointer_unified`. See `expr/slot_rep.rs`.
-    let canonical_str = ctx.repsel_context_allows_canonical_str
-        && matches!(
-            refined_ty,
-            perry_hir::types::Type::String | perry_hir::types::Type::StringLiteral(_)
-        )
-        && !ctx.local_slot_reps.contains_key(&id)
+    // Value-level proof and context gate split, as for canonical-i32 (#7106).
+    let canonical_str_value_eligible = matches!(
+        refined_ty,
+        perry_hir::types::Type::String | perry_hir::types::Type::StringLiteral(_)
+    ) && !ctx.local_slot_reps.contains_key(&id)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && !ctx.repsel_closure_ref_locals.contains(&id)
         && !ctx.repsel_str_ineligible_locals.contains(&id)
         && !ctx.i32_counter_slots.contains_key(&id);
+    let canonical_str = canonical_str_value_eligible && ctx.repsel_context_allows_canonical_str;
+    if canonical_str_value_eligible && !canonical_str && crate::expr::canonical_str_locals_enabled()
+    {
+        if let Some(rule) = ctx.repsel_context_denial {
+            crate::expr::deny_canonical_context(ctx, id, name, rule, crate::expr::SlotRep::Str);
+        }
+    }
     if canonical_str {
         ctx.local_slot_reps.insert(id, crate::expr::SlotRep::Str);
         crate::expr::note_canonical_local(ctx, id, name, crate::expr::SlotRep::Str);

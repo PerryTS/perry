@@ -771,12 +771,21 @@ pub(super) fn compile_closure(
         && !is_async
         && !cross_module.async_step_closures.contains(&func_id)
         && !cross_module.local_generator_funcs.contains(&func_id);
-    let repsel_closure_refs = if repsel_allows || repsel_str_allows {
+    // #7106: report the structural context exclusion at the `Stmt::Let` site.
+    // The closure gate spells its generator/async-step reasons differently from
+    // the body gate, so map them onto the same rule names by hand.
+    let repsel_context_denial = crate::expr::body_context_denial(
+        is_async,
+        cross_module.local_generator_funcs.contains(&func_id),
+        cross_module.async_step_closures.contains(&func_id),
+    );
+    let report_denial = crate::expr::report_context_denial(repsel_context_denial);
+    let repsel_closure_refs = if repsel_allows || repsel_str_allows || report_denial {
         crate::expr::collect_closure_referenced_locals(body)
     } else {
         std::collections::HashSet::new()
     };
-    let repsel_str_ineligible = if repsel_str_allows {
+    let repsel_str_ineligible = if repsel_str_allows || report_denial {
         crate::expr::collect_canonical_str_ineligible_locals(body)
     } else {
         std::collections::HashSet::new()
@@ -938,6 +947,7 @@ pub(super) fn compile_closure(
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
+        repsel_context_denial,
         repsel_closure_ref_locals: repsel_closure_refs,
         repsel_context_allows_canonical_str: repsel_str_allows,
         repsel_str_ineligible_locals: repsel_str_ineligible,

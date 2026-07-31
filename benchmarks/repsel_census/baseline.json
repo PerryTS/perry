@@ -18,7 +18,7 @@
       "candidates": {
         "ptr-shape": 1,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 1,
         "int-valued-ta": 0,
         "spec-abi": 1
       }
@@ -40,7 +40,7 @@
       "candidates": {
         "ptr-shape": 1,
         "ptr-numarray": 1,
-        "canonical-slot": 2,
+        "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 2
       }
@@ -62,7 +62,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 4,
+        "canonical-slot": 6,
         "int-valued-ta": 0,
         "spec-abi": 3
       }
@@ -84,7 +84,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 1,
+        "canonical-slot": 3,
         "int-valued-ta": 1,
         "spec-abi": 0
       }
@@ -106,7 +106,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 2,
+        "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 1
       }
@@ -128,7 +128,7 @@
       "candidates": {
         "ptr-shape": 5,
         "ptr-numarray": 0,
-        "canonical-slot": 3,
+        "canonical-slot": 5,
         "int-valued-ta": 0,
         "spec-abi": 3
       }
@@ -172,7 +172,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -194,7 +194,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 1,
-        "canonical-slot": 0,
+        "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -216,7 +216,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 1,
-        "canonical-slot": 0,
+        "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -238,7 +238,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 1,
         "int-valued-ta": 0,
         "spec-abi": 1
       }
@@ -260,7 +260,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -282,7 +282,7 @@
       "candidates": {
         "ptr-shape": 1,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -304,7 +304,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -326,7 +326,7 @@
       "candidates": {
         "ptr-shape": 1,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -348,7 +348,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 1,
-        "canonical-slot": 0,
+        "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -370,7 +370,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 4,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -392,7 +392,7 @@
       "candidates": {
         "ptr-shape": 1,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -414,7 +414,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 2,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -436,7 +436,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -458,7 +458,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 0,
+        "canonical-slot": 7,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
@@ -480,7 +480,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 0,
-        "canonical-slot": 3,
+        "canonical-slot": 7,
         "int-valued-ta": 0,
         "spec-abi": 1
       }
@@ -502,11 +502,11 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 1,
-        "canonical-slot": 0,
+        "canonical-slot": 5,
         "int-valued-ta": 0,
         "spec-abi": 0
       }
     }
   ],
-  "generated_at": "2026-07-31T02:23:42.048018Z"
+  "generated_at": "2026-07-31T03:14:57.355324Z"
 }

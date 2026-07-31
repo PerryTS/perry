@@ -669,6 +669,25 @@ pub(super) fn compile_module_entry(
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
         );
+        // #7106: the two screens the `Stmt::Let` denial consults, so the
+        // module-init denial count excludes locals a PERMITTING context would
+        // have rejected anyway (closure-captured; string-ineligible). Both sets
+        // are read exclusively behind the `repsel_context_allows_*` flags,
+        // which are `false` here, so populating them changes no emitted byte —
+        // and they are only collected when the report is on, so an ordinary
+        // build does no extra walking.
+        let (repsel_report_closure_refs, repsel_report_str_ineligible) =
+            if crate::opt_report::enabled() {
+                (
+                    crate::expr::collect_closure_referenced_locals(&hir.init),
+                    crate::expr::collect_canonical_str_ineligible_locals(&hir.init),
+                )
+            } else {
+                (
+                    std::collections::HashSet::new(),
+                    std::collections::HashSet::new(),
+                )
+            };
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
         let mut ctx = FnCtx {
@@ -774,10 +793,19 @@ pub(super) fn compile_module_entry(
             // Representation-selection Phase 1: module-init contexts keep the
             // boxed/parallel-shadow model (top-level locals interleave with
             // import/init machinery; the win lives in function bodies).
+            //
+            // #7106: that exclusion used to be invisible. It is taken here,
+            // before any per-value rule runs, so a program whose whole hot loop
+            // sits at module top level recorded neither a selection nor a
+            // denial — the report simply showed no candidates, which reads
+            // identically to "this program has no values worth promoting".
+            // Naming the rule makes the `Stmt::Let` site emit one denial per
+            // would-be-eligible top-level local instead.
             repsel_context_allows_canonical_i32: false,
-            repsel_closure_ref_locals: std::collections::HashSet::new(),
+            repsel_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
+            repsel_closure_ref_locals: repsel_report_closure_refs,
             repsel_context_allows_canonical_str: false,
-            repsel_str_ineligible_locals: std::collections::HashSet::new(),
+            repsel_str_ineligible_locals: repsel_report_str_ineligible,
             spec_abi_functions: &cross_module.spec_abi_functions,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),
@@ -1299,6 +1327,25 @@ pub(super) fn compile_module_entry(
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
         );
+        // #7106: the two screens the `Stmt::Let` denial consults, so the
+        // module-init denial count excludes locals a PERMITTING context would
+        // have rejected anyway (closure-captured; string-ineligible). Both sets
+        // are read exclusively behind the `repsel_context_allows_*` flags,
+        // which are `false` here, so populating them changes no emitted byte —
+        // and they are only collected when the report is on, so an ordinary
+        // build does no extra walking.
+        let (repsel_report_closure_refs, repsel_report_str_ineligible) =
+            if crate::opt_report::enabled() {
+                (
+                    crate::expr::collect_closure_referenced_locals(&hir.init),
+                    crate::expr::collect_canonical_str_ineligible_locals(&hir.init),
+                )
+            } else {
+                (
+                    std::collections::HashSet::new(),
+                    std::collections::HashSet::new(),
+                )
+            };
         let mut ctx = FnCtx {
             func: init_fn,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1402,10 +1449,19 @@ pub(super) fn compile_module_entry(
             // Representation-selection Phase 1: module-init contexts keep the
             // boxed/parallel-shadow model (top-level locals interleave with
             // import/init machinery; the win lives in function bodies).
+            //
+            // #7106: that exclusion used to be invisible. It is taken here,
+            // before any per-value rule runs, so a program whose whole hot loop
+            // sits at module top level recorded neither a selection nor a
+            // denial — the report simply showed no candidates, which reads
+            // identically to "this program has no values worth promoting".
+            // Naming the rule makes the `Stmt::Let` site emit one denial per
+            // would-be-eligible top-level local instead.
             repsel_context_allows_canonical_i32: false,
-            repsel_closure_ref_locals: std::collections::HashSet::new(),
+            repsel_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
+            repsel_closure_ref_locals: repsel_report_closure_refs,
             repsel_context_allows_canonical_str: false,
-            repsel_str_ineligible_locals: std::collections::HashSet::new(),
+            repsel_str_ineligible_locals: repsel_report_str_ineligible,
             spec_abi_functions: &cross_module.spec_abi_functions,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),

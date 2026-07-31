@@ -58,6 +58,22 @@ Three separate mechanisms, in increasing order of paranoia:
    had an `Analysis` variant, a `Ptr<NumArray>` target-rep string, and no
    `select()` call site anywhere in the tree.
 
+4. **An analysis-reach check**: a corpus workload whose *candidate* total is
+   zero across every analysis fails the run, unless it is named in
+   `ZERO_CANDIDATE_ALLOWLIST` (in the script, not the baseline) with a reason.
+
+   Mechanisms 1–3 are all about promotion counts, and promotion counts cannot
+   see this. "Considered and denied" names a rule you can argue with; "zero
+   candidates" names nothing — and the two produce an identical census table.
+   When #7104 landed, **8 of the 18 real workloads were in the second state**,
+   every one because its hot loop is at module top level and
+   `codegen/entry.rs` excludes module-init contexts from canonical selection
+   before any per-value rule runs (#7109). Nothing in the census could have
+   told the difference; the follow-up records those as denials so it can.
+
+   Only `suite_01_startup` is allowlisted: it is a lone `console.log`, with no
+   bindings for any analysis to consider.
+
 Sabotage-verified in both directions. Each of `PERRY_PTR_SHAPE_LOCALS=0`,
 `PERRY_PTR_NUMARRAY_LOCALS=0`, `PERRY_CANONICAL_I32_LOCALS=0`,
 `PERRY_CANONICAL_STR_LOCALS=0` and `PERRY_INT_VALUED_LOCALS=0` turns the census
@@ -95,3 +111,20 @@ masked-window / buffer-view `TaPtr` *region* machinery
 (`stmt/masked_window_region.rs`). It is region-shaped rather than a per-value
 promotion and has no `opt_report` analysis, so the census makes no claim about
 it. `spec-abi-taptr-slot` covers `TaPtr` only in its parameter form.
+
+### What a zero in the `candidates` column still cannot tell you
+
+The analysis-reach check above is per *workload*, not per *analysis*. A single
+analysis can still read zero candidates on a workload for either reason,
+because `--opt-report` records inside the per-value rules — a value filtered
+out before it becomes a candidate produces no entry:
+
+- `Ptr<NumArray>` admits only `number[]` / `Int32Array`-typed bindings, and
+  bails for the whole module on a prototype barrier. `11_prime_sieve`'s
+  `boolean[]` sieve is correctly not a candidate, and correctly invisible.
+- `Ptr<Shape>` gates provenance before the containment walk that records.
+- A function whose call sites were all inlined away never reaches the
+  spec-ABI decision loop at all (`14_closure`).
+
+Tracked as #7112 and #7111. Until those land, read a per-analysis zero as
+"either nothing of this shape, or a pre-filter", never as a denial.

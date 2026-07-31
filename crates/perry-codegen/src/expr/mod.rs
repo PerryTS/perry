@@ -137,10 +137,12 @@ mod shadow_slot;
 mod slot_rep;
 pub(crate) mod temp_root;
 pub(crate) use slot_rep::{
-    canonical_i32_locals_enabled, canonical_local_i32_slot, canonical_str_locals_enabled,
-    collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,
+    body_context_denial, canonical_i32_locals_enabled, canonical_local_i32_slot,
+    canonical_str_locals_enabled, collect_canonical_str_ineligible_locals,
+    collect_closure_referenced_locals, deny_canonical_context, deny_canonical_i32,
     load_canonical_local_boxed, local_is_canonical_str, local_rep_is_canonical_i32,
-    note_canonical_local, store_canonical_local_from_double, SlotRep,
+    note_canonical_local, report_context_denial, store_canonical_local_from_double,
+    CanonicalI32Denial, SlotRep, MODULE_INIT_CONTEXT,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
@@ -800,6 +802,24 @@ pub(crate) struct FnCtx<'a> {
     /// init. Checked at the `Stmt::Let` eligibility site together with the
     /// `PERRY_CANONICAL_I32_LOCALS` env gate.
     pub repsel_context_allows_canonical_i32: bool,
+
+    /// Why this context forbids canonical (i32/u32/Str) selection, for
+    /// `--opt-report` (#6952) and the promotion census (#7106); `None` when it
+    /// permits it.
+    ///
+    /// The two `repsel_context_allows_*` flags are taken *before* any per-value
+    /// rule runs, so a suppressed context recorded nothing at all — neither a
+    /// selection nor a denial. In the report that is indistinguishable from "the
+    /// program has no candidate values", which is exactly the ambiguity the
+    /// census exists to remove, one stage upstream. Carrying the reason lets the
+    /// `Stmt::Let` site record a denial for every local that WOULD have been
+    /// eligible, so "module init is excluded" is a named rule with a count
+    /// instead of a silent zero.
+    ///
+    /// Deliberately `None` when the only thing that is off is the
+    /// `PERRY_CANONICAL_{I32,STR}_LOCALS` env gate: that is a bisection knob,
+    /// and its arms must not grow report entries the default build lacks.
+    pub repsel_context_denial: Option<&'static str>,
 
     /// Representation-selection Phase 5a (`collectors/proven_this.rs`): when
     /// this body is a proven-`this` method clone, the `Ptr<Shape>` proof

@@ -211,6 +211,64 @@ class Verdicts(unittest.TestCase):
         self.assertTrue(all("did not run" in f for f in failures))
 
 
+class AnalysisReach(unittest.TestCase):
+    """`check_analysis_reach` — "never looked at" is not "considered and denied".
+
+    A promotion count of zero is a fact about the corpus. Zero *candidates* is a
+    fact about the compiler, and the two produce an identical census table.
+    """
+
+    @staticmethod
+    def _entry(**candidates: int) -> dict:
+        full = {analysis: 0 for analysis in CENSUS.EXPECTED_ANALYSES}
+        full.update(candidates)
+        return {"counts": {key: 0 for key in CENSUS.CENSUS_KEYS}, "candidates": full}
+
+    def test_a_workload_no_analysis_reached_fails(self):
+        problems = CENSUS.check_analysis_reach({"suite_02_loop_overhead": self._entry()})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("suite_02_loop_overhead", problems[0])
+        self.assertIn("zero candidates", problems[0])
+
+    def test_one_candidate_is_enough_to_be_reached(self):
+        """Even an all-DENIED workload passes: a denial names a rule."""
+        observed = {"suite_02_loop_overhead": self._entry(**{"canonical-slot": 1})}
+        self.assertFalse(CENSUS.check_analysis_reach(observed))
+
+    def test_promoting_nothing_is_not_by_itself_a_failure(self):
+        """The point of the gate is reach, not promotion."""
+        entry = self._entry(**{"ptr-shape": 4})
+        self.assertEqual(sum(entry["counts"].values()), 0)
+        self.assertFalse(CENSUS.check_analysis_reach({"batch": entry}))
+
+    def test_the_allowlist_excuses_only_what_it_names(self):
+        observed = {
+            name: self._entry() for name in ("suite_01_startup", "suite_15_mandelbrot")
+        }
+        problems = CENSUS.check_analysis_reach(observed)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("suite_15_mandelbrot", problems[0])
+
+    def test_every_allowlisted_workload_states_a_reason(self):
+        for name, reason in CENSUS.ZERO_CANDIDATE_ALLOWLIST.items():
+            self.assertTrue(reason.strip(), f"{name} is allowlisted with no reason")
+
+    def test_the_allowlist_lives_in_code_not_the_regenerable_baseline(self):
+        """`--update` must not be able to widen it — same rule as LIVENESS_FLOORS."""
+        baseline = json.loads((REPO_ROOT / "benchmarks/repsel_census/baseline.json").read_text())
+        for workload in baseline["workloads"]:
+            self.assertNotIn("zero_candidates_ok", workload)
+
+    def test_the_shipped_baseline_has_no_unexplained_zero_candidate_workload(self):
+        """The state this gate exists to prevent must not be in the baseline."""
+        baseline = json.loads((REPO_ROOT / "benchmarks/repsel_census/baseline.json").read_text())
+        observed = {
+            w["name"]: {"counts": {}, "candidates": w["candidates"]}
+            for w in baseline["workloads"]
+        }
+        self.assertFalse(CENSUS.check_analysis_reach(observed))
+
+
 class Baseline(unittest.TestCase):
     def test_the_shipped_baseline_loads_and_covers_every_fixture(self):
         data = CENSUS.load_baseline(CENSUS.DEFAULT_BASELINE)
