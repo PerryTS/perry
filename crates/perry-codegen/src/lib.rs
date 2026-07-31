@@ -106,3 +106,20 @@ pub fn iter_native_method_signatures() -> impl Iterator<Item = NativeMethodRef> 
         },
     )
 }
+
+/// #7139 template-change canary: does `hir` carry a `Ptr<Shape>` §5.2 module
+/// barrier (`collectors::ModuleDispatchFacts::shape_barrier_sites`)?
+///
+/// Public **solely** so the `perry` crate's `cjs_wrap` tests can assert that
+/// the CommonJS preamble they emit is still recognised as module scaffolding
+/// by `collectors::cjs_scaffolding` — the recogniser is here, the template is
+/// there, and only `perry` can see both. That coupling is otherwise silent:
+/// a template edit would not break anything, it would just quietly re-arm the
+/// barrier for 100 % of CommonJS modules and evaporate the #7139 win with no
+/// symptom. Same shape as [`iter_native_method_signatures`], which exists for
+/// `perry-api-manifest`'s consistency test.
+///
+/// Not part of any codegen contract; nothing in the compile pipeline calls it.
+pub fn module_has_ptr_shape_barrier(hir: &perry_hir::Module) -> bool {
+    collectors::collect_module_dispatch_facts(hir).has_shape_barrier_sites()
+}
