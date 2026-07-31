@@ -14,10 +14,16 @@ marker alone would have recovered exactly nothing.
 Both sites are now recognised, and only those two. A
 `ObjectDefineProperty(target, key, desc)` node is exempt iff `target` is
 `LocalGet(id)`, the module binds `id` with a `Stmt::Let` named `exports` (resp.
-`require`) that has **no** `Expr::New` initializer anywhere, and `key` is the
-string literal `"__esModule"` (resp. `"name"`). The `New`-init clause is the
-soundness hinge: it is the exact negation of `find_new_candidates`' seed, so an
-exempted target can never itself be a `Ptr<Shape>` local, and rule 2's
+`require`), **every** binding of `id` has an initializer that is not a fresh
+allocation at all (`PropertyGet` / `Closure` / `Undefined` / absent), and `key`
+is the string literal `"__esModule"` (resp. `"name"`).
+
+That initializer test is the soundness hinge, and it is deliberately a
+**whitelist**. Rule 1's seed set is a moving target — #7034 §4 already landed
+return-shape facts under which a call to a proven function *is* a provenance
+seed — so a blacklist of `Expr::New` would silently widen this exemption the
+day such a seed is wired into `find_new_candidates`. A whitelist fails closed:
+an exempted target can never itself be a `Ptr<Shape>` local, and rule 2's
 containment already keeps every promoted object out of any other binding. It is
 checked on the HIR rather than assumed from the wrap template, so a future
 template change degrades to *no exemption*, never to an unsound one.
@@ -71,9 +77,11 @@ measurable, so it is recorded here rather than filed.
 
 ## Validation
 
-`cargo test -p perry-codegen --lib` 416 passed (10 new, all sabotage-verified
-red against the unfixed rule); census gate green with `batch` `ptr-shape` = 2
-asserted against its floor; IR checked at the call sites — the promoted body
+`cargo test -p perry-codegen --lib` 417 passed (11 new, sabotage-verified red
+against the unfixed rule while the negative tests stay green); census gate
+green with `batch` `ptr-shape` = 2 asserted against its floor;
+`gc_repsel_matrix.sh --arms all --pressure 8` FAIL=0 with the `requires=move`
+arms live; emitted IR byte-identical between arms on pure-TS workloads; IR checked at the call sites — the promoted body
 loses 3 `js_typed_feedback_class_field_get_guard`, 1 `…_set_guard`, 3
 `js_typed_feedback_record_fallback_call`, 3 `js_object_get_field_by_name_f64`,
 1 `js_method_direct_shape_guard` and 1 `js_native_call_method_by_id`, and drops
