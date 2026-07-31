@@ -17,3 +17,9 @@ lru = "0.18"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+# Direct handle for the GC-survival test: it forces a minor collection
+# (`perry_runtime::gc::gc_collect_minor`) and drives the write-barrier /
+# shadow-frame guard, mirroring perry-ext-events' scanner test. `default` +
+# `stdlib` keep this copy feature-identical to the shipped runtime (see
+# perry-ext-events/Cargo.toml for the #6303 rationale).
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }

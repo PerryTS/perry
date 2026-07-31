@@ -311,6 +311,15 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "lru-cache",
+        has_receiver: true,
+        method: "peek",
+        class_filter: None,
+        runtime: "js_lru_cache_peek",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== commander (CLI parsing) ==========
     // `new Command()` is dispatched separately by `lower_builtin_new` so it
     // produces a real CommanderHandle instead of an empty placeholder. The

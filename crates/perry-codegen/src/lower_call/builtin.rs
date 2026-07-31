@@ -521,37 +521,21 @@ pub(super) fn lower_builtin_new(
             let result = ctx.block().call(DOUBLE, runtime_fn, &[(DOUBLE, &opts_box)]);
             Ok(Some(result))
         }
-        // lru-cache LRUCache — `new LRUCache({ max: N })`. Runtime takes
-        // a single `max: f64`. Extract the `max` field from the options
-        // literal (handles both raw `Expr::Object(props)` and Phase 3's
-        // `Expr::New { __AnonShape_N }` shape via `extract_options_fields`);
-        // default to 100 when no options literal is detected (matches the
-        // npm `lru-cache` library's behavior for `new LRUCache()` with
-        // missing max — it warns + falls back, we just fall back).
+        // lru-cache LRUCache — `new LRUCache({ max, ttl, updateAgeOnGet })`.
+        // The runtime parses the whole NaN-boxed options object itself
+        // (`js_lru_cache_new(options: f64)`), so we just lower the options
+        // argument and hand it through — no static field extraction, which
+        // means dynamic/variable options objects work too. A missing options
+        // argument passes `undefined`; the runtime falls back to max=100
+        // (matching npm `lru-cache`'s bounded-cache default).
         "LRUCache" => {
-            let max_val = if let Some(opts_arg) = args.first() {
-                let mut found_max: Option<String> = None;
-                if let Some(props) = extract_options_fields(ctx, opts_arg) {
-                    for (k, vexpr) in &props {
-                        if k == "max" {
-                            found_max = Some(lower_expr(ctx, vexpr)?);
-                        } else {
-                            // Lower other fields for side effects (e.g. ttl
-                            // option's setter calls).
-                            let _ = lower_expr(ctx, vexpr)?;
-                        }
-                    }
-                } else {
-                    // Non-literal arg (variable, dynamic shape) — lower for
-                    // side effects only; cannot extract max statically.
-                    let _ = lower_expr(ctx, opts_arg)?;
-                }
-                found_max.unwrap_or_else(|| "100.0".to_string())
+            let opts_val = if let Some(opts_arg) = args.first() {
+                lower_expr(ctx, opts_arg)?
             } else {
-                "100.0".to_string()
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_lru_cache_new", &[(DOUBLE, &max_val)]);
+            let handle = blk.call(I64, "js_lru_cache_new", &[(DOUBLE, &opts_val)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // (`WebSocketServer` is handled by an earlier branch lower in this

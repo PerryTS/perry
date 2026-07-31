@@ -5911,6 +5911,7 @@ version = "0.5.1265"
 dependencies = [
  "lru",
  "perry-ffi",
+ "perry-runtime",
 ]
 
 [[package]]
