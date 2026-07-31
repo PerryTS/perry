@@ -47,3 +47,13 @@
   is precisely what the keys token catches — and whether the typed arm should
   yield to the clone on its *fast* path is a cost-model question for the
   `collectors/repsel_benefit.rs` gate added in #7132.
+
+  Measured on a Raspberry Pi 5 (`perry-dev`, one `CARGO_TARGET_DIR` per arm,
+  identical package sets): `__pshape` call sites go 0 → 2 on
+  `fixture_ptr_shape.ts`, 0 → 2 on `fixture_ptr_shape_sites.ts` and 0 → 1 on
+  `09_method_calls.ts`. The body a routed call enters drops from 304 IR lines
+  with 4 `js_typed_feedback_class_field_*_guard` and 4
+  `js_object_get_field_by_name*` calls to 104 lines with none of either
+  (`Point::norm2`, 19 → 7 opaque `js_*` calls). `cargo test -p perry-codegen
+  --lib` 409/409, `census --gate` OK with every floor held, and the three
+  `Ptr<Shape>`/proven-`this` gap tests byte-identical against `main`.
