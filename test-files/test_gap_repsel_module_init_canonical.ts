@@ -20,9 +20,16 @@
 //   5. GC: a top-level Str accumulator and an object graph must survive a
 //      collection triggered in the middle of module init.
 //
-// Run: node --experimental-strip-types test_gap_repsel_module_init_canonical.ts
-// Also run with PERRY_CANONICAL_I32_LOCALS=0, PERRY_CANONICAL_STR_LOCALS=0 and
-// PERRY_GC_FORCE_EVACUATE=1 — all four must agree byte-for-byte.
+// Run the oracle on the Node pinned in `.node-version` at the repo root (26.5.1
+// at the time of writing) — CI reads that file via `setup-node`, and Node patch
+// releases change observable output, so a different local Node will not match:
+//
+//   node --version   # must equal "v$(tr -d 'v \n' < .node-version)"
+//   node --experimental-strip-types test_gap_repsel_module_init_canonical.ts
+//
+// Also run the compiled binary under PERRY_CANONICAL_I32_LOCALS=0,
+// PERRY_CANONICAL_STR_LOCALS=0 and PERRY_GC_FORCE_EVACUATE=1 — all four must
+// agree with the oracle byte-for-byte.
 
 // ── 1. canonical i32 / u32 at top level ───────────────────────────────────
 const LIMIT = 40;

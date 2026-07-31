@@ -50,12 +50,21 @@ Six proven, two applied. A promotion goes unconsumed three ways, and every one
 of them is recorded at the site where the proof is dropped:
 
 1. **`module_init_context`** (#7109) — `codegen/entry.rs` sets
-   `repsel_context_allows_canonical_i32: false` for module-init and
-   program-entry bodies, and `FnCtx::ptr_shape_receiver_fact` returns `None` for
-   the whole body when that flag is clear. Every access site falls back to the
-   guarded diamond.
-2. **`async_body` / `generator_body`** (#6328) — the same flag, cleared for a
-   different reason.
+   `repsel_context_allows_ptr_shape: false` for module-init and program-entry
+   bodies, and `FnCtx::ptr_shape_receiver_fact` returns `None` for the whole
+   body when that flag is clear. Every access site falls back to the guarded
+   diamond.
+
+   That flag used to be `repsel_context_allows_canonical_i32`, shared with a
+   different representation. #7109 lifted the entry-body exclusion for
+   canonical i32/u32/Str and split the flag rather than dragging `Ptr<Shape>`
+   along with it: #6991 is an open rooting bug for a compiled receiver held
+   across the `globalThis`-population collection, which runs around module
+   init. So this row is unchanged, and it is now the only representation the
+   rule names.
+2. **`async_body` / `generator_body`** (#6328) — the canonical flag, cleared for
+   a different reason. `Ptr<Shape>` reads the same rule name through its own
+   flag.
 3. **`scalar_replaced`** (#7115) — `collectors/escape_news.rs` deleted the
    object outright. This one is the *better* outcome, not a defect; it is listed
    because "scalar-replaced" and "promoted but wasted" used to render
@@ -140,9 +149,11 @@ Three separate mechanisms, in increasing order of paranoia:
    candidates" names nothing — and the two produce an identical census table.
    When #7104 landed, **8 of the 18 real workloads were in the second state**,
    every one because its hot loop is at module top level and
-   `codegen/entry.rs` excludes module-init contexts from canonical selection
-   before any per-value rule runs (#7109). Nothing in the census could have
-   told the difference; the follow-up records those as denials so it can.
+   `codegen/entry.rs` excluded module-init contexts from canonical selection
+   before any per-value rule ran (#7109). Nothing in the census could have told
+   the difference; the follow-up recorded those as denials so it could, and
+   #7109 then removed the exclusion — the same values are now selections, and
+   `canonical-i32` went from promoting in 2 of 18 real workloads to 17 of 18.
 
    Only `suite_01_startup` is allowlisted: it is a lone `console.log`, with no
    bindings for any analysis to consider.
@@ -180,6 +191,12 @@ most of the obvious cleanups disqualify the very local under test — passing a
 local in a loop moves it to the parallel-shadow model, adding a bounds check to
 `fixture_int_valued_ta` moves its locals to the ordinary integer-local path.
 Each file says which edits would silently take it to zero.
+
+`fixture_module_init_canonical.ts` has one extra rule of its own: **it must
+never grow a function, method or closure.** Its whole claim is that every count
+it reports came from the module-init `FnCtx`; moving one loop into a helper
+would make it a duplicate of `fixture_canonical_slots.ts` and leave the entry
+context untested again.
 
 If a fixture legitimately stops exercising its representation, change the
 fixture *and* say so in the PR. Lowering `LIVENESS_FLOORS` instead is how this
