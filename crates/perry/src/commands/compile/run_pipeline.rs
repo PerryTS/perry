@@ -4734,6 +4734,22 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Issue #76 follow-up — auto-provision the wasmi host staticlib. A
+    // program that references `WebAssembly.*` sets `ctx.needs_wasm_runtime`
+    // (feature_detect.rs), which links `libperry_wasm_host.a`. That archive
+    // lives in the standalone `perry-wasm-host` crate and is built by NOTHING
+    // in the normal compile path — not the auto-optimize runtime/stdlib
+    // rebuild, not codegen — so a bare `perry compile` used to die with
+    // `libperry_wasm_host.a not found` until a human ran
+    // `cargo build --release -p perry-wasm-host`. Build it on demand here so
+    // both the symbol-stub scan below and the final link resolve it. No-op
+    // when it already exists (or when the program doesn't use wasm).
+    if (ctx.needs_wasm_runtime || args.enable_wasm_runtime)
+        && find_wasm_host_library(target.as_deref()).is_none()
+    {
+        let _ = build_wasm_host_library(target.as_deref(), format, verbose);
+    }
+
     // Auto-mode: pick the smallest matching (features, panic) profile
     // for this binary and rebuild perry-runtime + perry-stdlib in a
     // hash-keyed target dir. Both halves fall back to the prebuilt full

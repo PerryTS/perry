@@ -1209,6 +1209,110 @@ pub(super) fn find_wasm_host_library(target: Option<&str>) -> Option<PathBuf> {
     find_library(lib_name, target)
 }
 
+/// Auto-provision the wasmi WebAssembly host staticlib (issue #76 follow-up).
+///
+/// A bare `perry compile` of a program that references `WebAssembly.*` sets
+/// `ctx.needs_wasm_runtime`, which pulls `perry-runtime/wasm-host` (so the
+/// runtime carries the `perry_wasm_host_*` extern references) and links
+/// `libperry_wasm_host.a`. But nothing BUILT that staticlib: it lives in the
+/// standalone `perry-wasm-host` crate (isolated so non-wasm builds don't drag
+/// in wasmi), and the auto-optimize runtime/stdlib rebuild never touches it.
+/// The result was a hard `libperry_wasm_host.a not found` error that forced a
+/// manual `cargo build --release -p perry-wasm-host` prebuild.
+///
+/// This builds it on demand from workspace source — a plain leaf
+/// `cargo build --release -p perry-wasm-host` into `target/release` (the same
+/// mechanism `build_missing_prebuilt_ext_lib` uses for CPU-only ext wrappers),
+/// which is exactly where `find_wasm_host_library` then locates it (including
+/// via the `CARGO_MANIFEST_DIR/../../target/release` candidate when perry runs
+/// out-of-tree). Returns the resolved path, or `None` when there's no workspace
+/// source to build from or the build fails (the caller then surfaces the
+/// original not-found guidance). A no-op when the archive already exists —
+/// callers guard on `find_wasm_host_library(...).is_none()` first.
+pub(super) fn build_wasm_host_library(
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> Option<PathBuf> {
+    let workspace_root = find_perry_workspace_root()?;
+    let crate_dir = workspace_root.join("crates").join("perry-wasm-host");
+    if !crate_dir.is_dir() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!(
+                "  wasm-host: skipping auto-build — crate source not found at {}",
+                crate_dir.display()
+            );
+        }
+        return None;
+    }
+
+    if matches!(format, OutputFormat::Text) {
+        println!("  wasm-host: building perry-wasm-host from workspace source");
+    }
+
+    let mut cargo_cmd = Command::new("cargo");
+    cargo_cmd
+        .current_dir(&workspace_root)
+        .arg("build")
+        .arg("--release")
+        .arg("-p")
+        .arg("perry-wasm-host");
+    if let Some(triple) = rust_target_triple(target) {
+        cargo_cmd.arg("--target").arg(triple);
+    }
+
+    match cargo_cmd.status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            if matches!(format, OutputFormat::Text) {
+                eprintln!("  wasm-host: cargo build failed ({status})");
+            }
+            return None;
+        }
+        Err(err) => {
+            if matches!(format, OutputFormat::Text) {
+                eprintln!("  wasm-host: failed to spawn cargo ({err})");
+            }
+            return None;
+        }
+    }
+
+    // Prefer the explicit output path cargo just wrote (respecting
+    // CARGO_TARGET_DIR + cross-target triple subdir) so the returned archive
+    // is unambiguously the one we built. Fall back to the standard search so a
+    // non-standard layout still resolves.
+    let lib_name = match target {
+        Some("windows") | Some("windows-winui") => "perry_wasm_host.lib",
+        #[cfg(target_os = "windows")]
+        None => "perry_wasm_host.lib",
+        _ => "libperry_wasm_host.a",
+    };
+    let mut release_dir = match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(raw) if !raw.is_empty() => {
+            let path = PathBuf::from(raw);
+            if path.is_absolute() {
+                path
+            } else {
+                workspace_root.join(path)
+            }
+        }
+        _ => workspace_root.join("target"),
+    };
+    if let Some(triple) = rust_target_triple(target) {
+        release_dir = release_dir.join(triple);
+    }
+    let built = release_dir.join("release").join(lib_name);
+    if built.exists() {
+        return Some(built);
+    }
+
+    let found = find_wasm_host_library(target);
+    if found.is_none() && matches!(format, OutputFormat::Text) && verbose > 0 {
+        eprintln!("  wasm-host: cargo finished but {lib_name} was not located");
+    }
+    found
+}
+
 /// Find the UI library for linking (optional - only needed when perry/ui is imported).
 ///
 /// HarmonyOS is intentionally absent: there is no `perry-ui-harmonyos`

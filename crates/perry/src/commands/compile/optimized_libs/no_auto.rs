@@ -5,7 +5,9 @@ use std::process::Command;
 
 use crate::OutputFormat;
 
-use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
+use super::super::{
+    find_perry_workspace_root, is_android_target, rust_target_triple, CompilationContext,
+};
 
 /// Resolve well-known wrapper archives without rebuilding runtime/stdlib.
 ///
@@ -173,6 +175,40 @@ pub(crate) fn build_missing_prebuilt_ext_lib(
         .arg(&binding.krate);
     if let Some(triple) = rust_target_triple(target) {
         cargo_cmd.arg("--target").arg(triple);
+    }
+    // Cross-compile envs, mirroring `build_optimized_libs`: without the OHOS
+    // SDK / Android NDK clang on the compile env, a `--target harmonyos` /
+    // Android auto-build of a C-dependent CPU-only wrapper (e.g. sharp) fails
+    // in build.rs before we can fall back. Apply the same target-specific env
+    // the specialized invocation uses so the auto-build can actually succeed.
+    if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
+        match super::super::library_search::find_harmonyos_sdk() {
+            Some(sdk) => {
+                for (k, v) in super::super::library_search::harmonyos_cross_env(&sdk, target) {
+                    cargo_cmd.env(k, v);
+                }
+            }
+            None => {
+                if matches!(format, OutputFormat::Text) && verbose > 0 {
+                    eprintln!(
+                        "  well-known (no-auto): skipping `{}` — OHOS SDK not found (set \
+                         OHOS_SDK_HOME); falling back.",
+                        binding.krate
+                    );
+                }
+                return None;
+            }
+        }
+    }
+    if is_android_target(target) {
+        if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
+            for (k, v) in super::super::library_search::android_cross_env(
+                std::path::Path::new(&ndk),
+                target,
+            ) {
+                cargo_cmd.env(k, v);
+            }
+        }
     }
 
     let status = match cargo_cmd.status() {

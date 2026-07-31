@@ -34,16 +34,23 @@ pub struct WellKnownBinding {
     /// gate in `scripts/binding_pins.mjs`. `None` for entries exempt
     /// from pinning (`node_builtin`, `alias_of`, and perry-owned
     /// packages).
+    // Provenance metadata parsed from `well_known_bindings.toml` and consulted
+    // by the lock-step review gate + unit tests, not by the compile/link path,
+    // so these carry no reader in the `perry` bins build and would trip
+    // `-D dead-code` without an explicit allow.
+    #[allow(dead_code)]
     pub upstream: Option<UpstreamPin>,
     /// `true` when this binding ports a Node.js **builtin** module
     /// (`node:zlib`/`net`/`http`/…) rather than a third-party npm
     /// package. Its upstream is Node core, not an npm dist, so it
     /// carries no npm provenance pin.
+    #[allow(dead_code)]
     pub node_builtin: bool,
     /// When set, this row is an **alias** for another binding (a
     /// package subpath like `mysql2/promise`, or a bare-name alias like
     /// `fetch` → `node-fetch`) and shares that binding's provenance
     /// instead of carrying its own pin.
+    #[allow(dead_code)]
     pub alias_of: Option<String>,
 }
 
