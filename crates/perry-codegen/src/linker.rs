@@ -62,27 +62,61 @@ fn ll_content_hash(ll_text: &str) -> u64 {
     h
 }
 
-/// Content-addressed `.ll` path + unique `.o` path under `tmp_dir`.
+/// Content-addressed `.ll` path + per-process-unique `.o` path under `tmp_dir`.
 ///
-/// The `.ll` basename is a function of the IR bytes alone so two compiles of
-/// the same module record the same source name in the object (Linux ELF
-/// determinism, #7131). The `.o` basename still carries a per-call counter so
-/// concurrent workers never race the clang output file (#509).
-/// Returns `(ll_path, obj_path, counter)` — `counter` is also used for the
-/// atomic-write staging filename.
-fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str) -> (PathBuf, PathBuf, u64) {
+/// The two names are asymmetric **on purpose**, and each half has already been
+/// got wrong once:
+///
+/// * The `.ll` basename is a function of the IR bytes ALONE. clang records a
+///   translation unit's source basename into the object, so anything else in
+///   this name (pid, clock) lands in the shipped bytes — that was #7131.
+/// * The `.o` basename must be unique per *process as well as* per call. The
+///   output path is not recorded anywhere, so uniquifiers are free here, and
+///   they are mandatory: `compile_ll_to_object` deletes the object once it has
+///   read it, so two concurrent `perry` processes compiling identical IR that
+///   agree on the name will delete it out from under each other. The counter
+///   alone does not achieve this — it is per-process state, and every process
+///   starts it at 0, so two processes with the same IR both pick
+///   `..._0.o`. Measured before this was fixed: **8 of 12** concurrent
+///   same-source compiles failed with "Failed to read clang output … No such
+///   file or directory". This is #509 again, one scope out.
+///
+/// `pid` and `counter` are parameters rather than read in here so the property
+/// above is testable without spawning processes.
+fn llvm_temp_paths_for(
+    tmp_dir: &Path,
+    ll_text: &str,
+    pid: u32,
+    counter: u64,
+) -> (PathBuf, PathBuf) {
     let hash = ll_content_hash(ll_text);
-    let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let ll_path = tmp_dir.join(format!("perry_llvm_{hash:016x}.ll"));
-    let obj_path = tmp_dir.join(format!("perry_llvm_{hash:016x}_{counter:x}.o"));
-    (ll_path, obj_path, counter)
+    let obj_path = tmp_dir.join(format!("perry_llvm_{hash:016x}_{pid:x}_{counter:x}.o"));
+    (ll_path, obj_path)
+}
+
+/// `llvm_temp_paths_for` with this process's pid and the next counter value.
+/// Returns `(ll_path, obj_path, pid, counter)` — the last two also name the
+/// atomic-write staging file.
+fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str) -> (PathBuf, PathBuf, u32, u64) {
+    let pid = std::process::id();
+    let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let (ll_path, obj_path) = llvm_temp_paths_for(tmp_dir, ll_text, pid, counter);
+    (ll_path, obj_path, pid, counter)
+}
+
+/// Staging name for the atomic `.ll` write. Must be unique per process for the
+/// same reason the `.o` is: two processes holding identical IR reach this with
+/// the same content hash and the same counter value.
+fn ll_staging_path(ll_path: &Path, pid: u32, counter: u64) -> PathBuf {
+    ll_path.with_extension(format!("ll.tmp.{pid:x}.{counter:x}"))
 }
 
 /// Write `ll_text` to a content-addressed path. Concurrent workers with the
 /// same IR may race; we write via a unique `.tmp` then `rename` into place so
 /// readers never see a partial file. A lost race (dest already exists) is fine
 /// — the winner already wrote the same content.
-fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()> {
+fn write_ll_atomically(ll_path: &Path, ll_text: &str, pid: u32, counter: u64) -> Result<()> {
     // Fast path: already present (common under parallel multi-module compile
     // when two units share nothing but we re-hit the same hash only on true
     // content match — overwrite is still safe because the content is identical).
@@ -96,7 +130,7 @@ fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()
             }
         }
     }
-    let tmp = ll_path.with_extension(format!("ll.tmp.{counter}"));
+    let tmp = ll_staging_path(ll_path, pid, counter);
     {
         let mut f = fs::File::create(&tmp)
             .with_context(|| format!("Failed to create temp .ll file at {}", tmp.display()))?;
@@ -113,9 +147,8 @@ fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()
                     return Ok(());
                 }
             }
-            fs::write(ll_path, ll_text.as_bytes()).with_context(|| {
-                format!("Failed to write temp .ll file at {}", ll_path.display())
-            })
+            fs::write(ll_path, ll_text.as_bytes())
+                .with_context(|| format!("Failed to write temp .ll file at {}", ll_path.display()))
         }
     }
 }
@@ -384,8 +417,8 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     let tmp_dir = env::temp_dir();
     // #7131: content-address the `.ll` basename (clang embeds it into the
     // object on ELF). #509: keep the `.o` unique via the per-call counter.
-    let (ll_path, obj_path, write_nonce) = llvm_temp_paths(&tmp_dir, ll_text);
-    write_ll_atomically(&ll_path, ll_text, write_nonce)?;
+    let (ll_path, obj_path, write_pid, write_nonce) = llvm_temp_paths(&tmp_dir, ll_text);
+    write_ll_atomically(&ll_path, ll_text, write_pid, write_nonce)?;
 
     let plan = build_clang_compile_plan(
         clang.clone(),
@@ -1537,8 +1570,8 @@ mod tests {
         // basename still differs via the counter.
         let tmp = env::temp_dir();
         let ir = "define void @f() {\n  ret void\n}\n";
-        let (ll_a, obj_a, _) = llvm_temp_paths(&tmp, ir);
-        let (ll_b, obj_b, _) = llvm_temp_paths(&tmp, ir);
+        let (ll_a, obj_a, _, _) = llvm_temp_paths(&tmp, ir);
+        let (ll_b, obj_b, _, _) = llvm_temp_paths(&tmp, ir);
         assert_eq!(
             ll_a.file_name(),
             ll_b.file_name(),
@@ -1550,7 +1583,7 @@ mod tests {
             ".o basenames must stay unique across calls (#509)"
         );
         // Different IR → different .ll basename.
-        let (ll_c, _, _) = llvm_temp_paths(&tmp, "define void @g() {\n  ret void\n}\n");
+        let (ll_c, _, _, _) = llvm_temp_paths(&tmp, "define void @g() {\n  ret void\n}\n");
         assert_ne!(ll_a.file_name(), ll_c.file_name());
         // No pid / wall-clock digits of variable width — only hex hash.
         let name = ll_a.file_name().unwrap().to_string_lossy();
@@ -1565,6 +1598,63 @@ mod tests {
         assert!(
             hex.chars().all(|c| c.is_ascii_hexdigit()),
             "hash must be hex: {hex}"
+        );
+    }
+
+    #[test]
+    fn object_temp_name_is_unique_across_processes_but_ll_is_not() {
+        // The regression this test exists for: #7135 content-addressed BOTH
+        // temp names, so the `.o` lost the pid it used to carry. Two `perry`
+        // processes compiling identical IR then agreed on the object path —
+        // and `compile_ll_to_object` deletes the object after reading it, so
+        // they deleted each other's. Measured on macOS before the fix: 8 of 12
+        // concurrent same-source compiles failed with
+        //   Failed to read clang output at …/perry_llvm_<hash>_0.o
+        // Both processes start TEMP_NONCE_COUNTER at 0, so the counter cannot
+        // separate them; only the pid can.
+        let tmp = env::temp_dir();
+        let ir = "define void @f() {\n  ret void\n}\n";
+
+        // Same IR, same counter, DIFFERENT process.
+        let (ll_p1, obj_p1) = llvm_temp_paths_for(&tmp, ir, 1111, 0);
+        let (ll_p2, obj_p2) = llvm_temp_paths_for(&tmp, ir, 2222, 0);
+        assert_eq!(
+            ll_p1.file_name(),
+            ll_p2.file_name(),
+            "the .ll is what clang records into the object; it must stay a pure \
+             function of the IR across processes (#7131)"
+        );
+        assert_ne!(
+            obj_p1.file_name(),
+            obj_p2.file_name(),
+            "two processes with identical IR must NOT share an object path — \
+             they delete it out from under each other (#509 across processes)"
+        );
+
+        // Same process, different call: the counter still has to separate
+        // in-process rayon workers.
+        let (_, obj_c0) = llvm_temp_paths_for(&tmp, ir, 1111, 0);
+        let (_, obj_c1) = llvm_temp_paths_for(&tmp, ir, 1111, 1);
+        assert_ne!(obj_c0.file_name(), obj_c1.file_name());
+
+        // The atomic-write staging name needs the same separation: both
+        // processes reach it with the same hash and the same counter, and
+        // `File::create` truncates.
+        assert_ne!(
+            ll_staging_path(&ll_p1, 1111, 0).file_name(),
+            ll_staging_path(&ll_p1, 2222, 0).file_name(),
+            "staging .tmp name must be per-process"
+        );
+        assert_ne!(
+            ll_staging_path(&ll_p1, 1111, 0).file_name(),
+            ll_staging_path(&ll_p1, 1111, 1).file_name(),
+            "staging .tmp name must be per-call"
+        );
+
+        // …and the staging file must never be mistaken for the real `.ll`.
+        assert_ne!(
+            ll_staging_path(&ll_p1, 1111, 0).file_name(),
+            ll_p1.file_name()
         );
     }
 
