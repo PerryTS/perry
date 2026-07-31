@@ -38,6 +38,17 @@
 //!    (defineProperty / delete / setPrototypeOf / Proxy / mutating Reflect)
 //!    can reach it *through an alias*.
 //!
+//!    **Exception — the array-element position (#7034 §3).** `A.push(<the
+//!    local>)` does NOT disqualify when `A` is an **element-shape-proven
+//!    local array** (`collectors/ptr_shape_elements.rs`): that analysis bounds
+//!    the array's own uses exactly as this rule bounds an object local's, so
+//!    the containment region widens from one local to one local array and
+//!    everything derived from it. `const r = A[i]` at an in-bounds site is
+//!    provenance of the same `new`-strength for the same reason. Group
+//!    integrity is enforced at the end of the `'cand` loop: if any member of
+//!    an element group fails rule 2, every member is dropped, because one
+//!    member adding a property reshapes the objects the others read.
+//!
 //!    **Exception — the return position (#7034 §4).** `return <the local>`
 //!    does NOT disqualify. Containment exists to bound the object's aliases
 //!    *while this function still reads it*, and a `return` is a terminator:
@@ -114,6 +125,7 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Class, Expr, Stmt};
 
+use super::ptr_shape_elements::ElementShapeFacts;
 use super::ptr_shape_report as report;
 use super::ptr_shape_report::ShapeDenial;
 use super::ModuleDispatchFacts;
@@ -275,6 +287,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     classes: &HashMap<String, &Class>,
     module_dispatch: &ModuleDispatchFacts,
     not_bigint_locals: &HashSet<u32>,
+    element_facts: &ElementShapeFacts,
 ) -> HashMap<u32, PtrShapeLocal> {
     if !ptr_shape_locals_enabled() {
         report_early_bail(stmts, boxed_vars, module_globals, report::GATE_DISABLED);
@@ -314,6 +327,16 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         module_dispatch,
         &mut candidates,
     );
+    // #7034 §3: `const r = A[i]` at an in-bounds site on an element-shape-
+    // proven local array is provenance of `new C(...)` strength (module doc,
+    // rule 2's array-element exception). The seeds are already filtered for
+    // boxed / module-global / multi-`Let` ids and for the GC rooting
+    // obligation by `collectors/ptr_shape_elements.rs`.
+    let mut element_seeded: HashSet<u32> = HashSet::new();
+    for (id, class_name) in super::ptr_shape_elements::element_read_seeds(stmts, element_facts) {
+        candidates.insert(id, class_name);
+        element_seeded.insert(id);
+    }
     if candidates.is_empty() {
         return HashMap::new();
     }
@@ -376,6 +399,8 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         disq_reasons: HashMap::new(),
         escape_ctx: report::ESC_BARE_REFERENCE,
         return_seeded: &return_seeded,
+        element_seeded: &element_seeded,
+        element_facts,
         in_closure: false,
     };
     walk.walk_stmts(stmts);
@@ -481,7 +506,12 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         // shape proof by itself still retires the whole guard diamond; this
         // is the same stand-down `collectors/proven_this.rs` makes, for the
         // same reason.
-        let numeric_fields = if return_seeded.contains(id) {
+        let numeric_fields = if return_seeded.contains(id) || element_facts.is_group_member(*id) {
+            // #7034 §3: an element-group member's object is reachable through
+            // the array, so the numeric proof's exhaustive-reachable-store
+            // obligation cannot be discharged from this local's stores alone —
+            // a sibling member's `r.score = "s"` is a store this proof never
+            // sees. Same stand-down as the return-seeded case above.
             HashSet::new()
         } else {
             prove_numeric_fields(
@@ -519,12 +549,51 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         }
         out.insert(*id, fact);
     }
+    // #7034 §3 group integrity. Every member of an element group references
+    // an object the OTHER members also reach, so a member that failed rule 2
+    // — `r.extra = 1`, a closure capture, an opaque call — can transition the
+    // shape of objects the surviving members would then read guard-free. The
+    // group is therefore all-or-nothing. Dropping is the conservative
+    // direction and needs no fixpoint: removing members never admits one.
+    if !element_facts.is_empty() {
+        for (_, members) in element_facts.group_members() {
+            if members.iter().any(|m| !out.contains_key(m)) {
+                // The insert loop above gives every ALIAS of a promoted root
+                // the same fact, because an alias holds the same object. The
+                // removal has to follow: dropping `row` while `const a = row`
+                // keeps a guard-free proof of a shape a sibling just
+                // transitioned is exactly the hole all-or-nothing exists to
+                // close. (CodeRabbit, PR #7149.)
+                let doomed: Vec<u32> = members
+                    .iter()
+                    .copied()
+                    .chain(
+                        roots
+                            .iter()
+                            .filter(|(_, r)| members.contains(r))
+                            .map(|(m, _)| *m),
+                    )
+                    .collect();
+                for m in &doomed {
+                    if out.remove(m).is_some() {
+                        report::deny_local(
+                            *m,
+                            &names,
+                            &depths,
+                            candidates.get(m).map(String::as_str),
+                            report::ESC_ELEMENT_GROUP,
+                        );
+                    }
+                }
+            }
+        }
+    }
     out
 }
 
 /// Collect `Let { mutable: false, init: Some(LocalGet(src)) }` edges — the
 /// alias shape the exact-receiver inliner emits for compound assigns.
-fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
+pub(super) fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
     for s in stmts {
         match s {
             Stmt::Let {
@@ -685,6 +754,13 @@ struct UseWalk<'a> {
     /// rather than a `new`. Their `Let` init is an `Expr::Call`, which rule 1
     /// would otherwise reject as `LET_INIT_NOT_NEW`.
     return_seeded: &'a HashSet<u32>,
+    /// #7034 §3: candidates whose provenance is an in-bounds `A[i]` element
+    /// read. Their `Let` init is an `Expr::IndexGet`, which rule 1 would
+    /// otherwise reject as `LET_INIT_NOT_NEW`.
+    element_seeded: &'a HashSet<u32>,
+    /// #7034 §3: the element-shape-proven arrays of this region. Consulted to
+    /// decide whether a `push` is a contained element position.
+    element_facts: &'a ElementShapeFacts,
     /// #7034 §4: are we inside a closure body? A `return <candidate>` there
     /// escapes at an unbounded later time, so the return exemption (module
     /// doc, rule 2) does NOT apply — only the enclosing function's own
@@ -769,6 +845,15 @@ impl<'a> UseWalk<'a> {
                             }
                             return;
                         }
+                    }
+                    // #7034 §3: an element-read seed's provenance is the
+                    // `A[i]` read. Both operands are bare `LocalGet`s of the
+                    // array and its proven induction variable — neither is a
+                    // `Ptr<Shape>` candidate, so there is nothing to walk.
+                    if self.element_seeded.contains(id)
+                        && matches!(init.as_ref(), Some(Expr::IndexGet { .. }))
+                    {
+                        return;
                     }
                     // A candidate whose Let init is not the New (var-redecl
                     // seed) is not provenance-stable.
@@ -1078,9 +1163,22 @@ impl<'a> UseWalk<'a> {
             Expr::Update { id, .. } => {
                 self.disq(*id, report::ESC_REASSIGNED);
             }
+            // #7034 §3: `A.push(<tracked local>)` is a contained element
+            // position when `A` is element-shape-proven — the array's own uses
+            // are bounded by `collectors/ptr_shape_elements.rs` exactly as
+            // rule 2 bounds an object local's, so no alias escapes the region.
+            // Any other array, any other value shape, keeps today's escape.
+            Expr::ArrayPush { array_id, value } => {
+                self.disq(*array_id, report::ESC_CONTAINER_MUTATOR);
+                if let Expr::LocalGet(v) = value.as_ref() {
+                    if self.element_facts.push_is_contained(*v, *array_id) {
+                        return;
+                    }
+                }
+                self.with_ctx(report::ESC_ELEMENT, |w| w.walk_expr(value));
+            }
             // Id-keyed variants the child walker cannot see.
-            Expr::ArrayPush { array_id, .. }
-            | Expr::ArrayPushSpread { array_id, .. }
+            Expr::ArrayPushSpread { array_id, .. }
             | Expr::ArrayUnshift { array_id, .. }
             | Expr::ArraySplice { array_id, .. }
             | Expr::ArrayCopyWithin { array_id, .. } => {

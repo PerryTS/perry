@@ -621,6 +621,16 @@ mod tests {
             &classes,
             &facts,
             &HashSet::new(),
+            // #7034 §3: this fixture builds no array, so the element facts are
+            // empty either way — computed rather than defaulted so the two
+            // passes cannot drift apart here.
+            &crate::collectors::ptr_shape_elements::collect_element_shape_facts(
+                &promotable_body(),
+                &HashSet::new(),
+                &HashMap::new(),
+                &classes,
+                &facts,
+            ),
         )
         .is_empty()
     }

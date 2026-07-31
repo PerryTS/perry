@@ -529,6 +529,18 @@ pub(crate) fn collect_type_facts(
         .chain(non_escaping_object_literals.keys())
         .copied()
         .collect();
+    // Representation-selection Phase 3b, #7034 §3: element-shape-proven local
+    // arrays. Purely syntactic, and computed FIRST —
+    // `collect_shape_proven_ptr_locals` consumes the facts (push containment,
+    // `A[i]` provenance, group integrity) and never re-enters this analysis,
+    // so the two passes cannot recurse.
+    let element_shape_facts = super::ptr_shape_elements::collect_element_shape_facts(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+    );
     // Representation-selection Phase 3b: shape-proven pointer locals. Gated
     // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
     // inside the collector.
@@ -539,6 +551,7 @@ pub(crate) fn collect_type_facts(
         classes,
         module_dispatch,
         &not_bigint_locals,
+        &element_shape_facts,
     );
     // Representation-selection Phase 4a.3: `Ptr<NumArray>` locals. Gated on
     // `PERRY_PTR_NUMARRAY_LOCALS`, the module-wide §5.2 barrier scan, and the

@@ -30,6 +30,7 @@ mod proven_this;
 mod proven_this_routing_tests;
 mod ptr_numarray;
 mod ptr_shape;
+mod ptr_shape_elements;
 mod ptr_shape_report;
 mod ptr_shape_returns;
 mod refs;

@@ -62,6 +62,36 @@
       }
     },
     {
+      "name": "fixture_ptr_shape_elements",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape_elements.ts",
+      "floors": {
+        "ptr-shape": 3,
+        "ptr-shape-consumed": 3,
+        "ptr-numarray": 0,
+        "canonical-i32": 1,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 1,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 3,
+        "ptr-numarray": 0,
+        "canonical-slot": 2,
+        "int-valued-ta": 0,
+        "spec-abi": 1
+      },
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {
+        "ptr_shape_get_number": 3,
+        "ptr_shape_method": 1,
+        "class_field_get.shape_proven_load": 1,
+        "ptr_shape_set": 2
+      }
+    },
+    {
       "name": "fixture_ptr_numarray",
       "role": "liveness",
       "source": "benchmarks/repsel_census/fixtures/fixture_ptr_numarray.ts",
@@ -678,5 +708,5 @@
       "consumption_sites": {}
     }
   ],
-  "generated_at": "2026-07-31T09:26:30.260742Z"
+  "generated_at": "2026-07-31T21:18:40.428173Z"
 }

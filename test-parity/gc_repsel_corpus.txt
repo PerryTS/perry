@@ -48,6 +48,15 @@ test_gap_repsel_ptr_shape_barriers
 # is exactly the claim this phase's GC contract makes.
 test_gap_repsel_return_shape
 
+# --- Phase 3b / #7034 §3: array-element shape facts -------------------------
+# `rows.push(row)` no longer disqualifies `row`, and `const r = rows[i]` under
+# an `i < rows.length` loop is rule-1 provenance. Every element local is an
+# ordinary shadow-bound NaN-boxed slot re-derived per access, so `churn`
+# deliberately allocates 200 objects BETWEEN two field reads of the same
+# element local: the evacuating arms are the ones that can catch a raw pointer
+# cached across that safepoint.
+test_gap_repsel_ptr_shape_elements
+
 # --- Phase 4a / 4a.3: Ptr<NumArray> numeric arrays (#6915, #6916) -----------
 test_gap_repsel_p4a_holes_axis
 test_gap_repsel_p4a_inline_tiers

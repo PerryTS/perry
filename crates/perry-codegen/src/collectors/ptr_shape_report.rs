@@ -163,10 +163,25 @@ pub(super) const ESC_RETURN: ShapeDenial = ShapeDenial {
 
 pub(super) const ESC_ELEMENT: ShapeDenial = ShapeDenial {
     rule: RULE2,
-    reason: "stored into an array or object (element/property of a container). \
-             Container slots do not carry a shape fact yet.",
+    reason: "stored into a container whose own uses the proof cannot bound. \
+             `A.push(x)` is contained when `A` is an element-shape-proven \
+             local array (#7034 §3: single empty-literal `Let`, only `push` \
+             writes of one class, only `.length` and in-bounds `A[i]` reads, \
+             `return A` aside); object properties and every other container \
+             slot still carry no shape fact.",
     tier: Tier::CompilerLimitation,
     issue: Some("#7034 §3/§5 P4-P5 (elements and fields)"),
+};
+
+pub(super) const ESC_ELEMENT_GROUP: ShapeDenial = ShapeDenial {
+    rule: RULE2,
+    reason: "it shares an element-shape-proven array with a value that failed \
+             containment. One member adding a property reshapes the objects \
+             every other member reads guard-free, so an element group is \
+             all-or-nothing — fix the sibling's escape and this value is \
+             promoted with it.",
+    tier: Tier::Fixable,
+    issue: None,
 };
 
 pub(super) const ESC_THROWN: ShapeDenial = ShapeDenial {

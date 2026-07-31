@@ -1286,6 +1286,18 @@ jobs:
             echo "::error::two of the six recorders had never fired before it existed."
             exit 1
           fi
+          # #7034 §3 (the array-element escape) is a SEPARATE analysis
+          # (collectors/ptr_shape_elements.rs) behind the same knob, and NO
+          # real corpus workload promotes an element local -- so if it stopped
+          # issuing facts entirely, every assertion above would still pass and
+          # this job would stay green. Its own fixture is what makes that
+          # visible.
+          if ! printf '%s' "$out" | grep -q "fixture_ptr_shape_elements: ptr-shape-consumed promoted 0"; then
+            echo "::error::The array-element fixture kept its promotions with"
+            echo "::error::Ptr<Shape> disabled. Either the element analysis is not"
+            echo "::error::behind the knob, or the fixture stopped exercising it."
+            exit 1
+          fi
           echo "Census correctly went red with PERRY_PTR_SHAPE_LOCALS=0."
 
       - name: Upload census reports

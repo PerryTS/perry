@@ -141,6 +141,13 @@ fn promote(
         classes,
         facts,
         &HashSet::new(),
+        &super::super::ptr_shape_elements::collect_element_shape_facts(
+            stmts,
+            &HashSet::new(),
+            &HashMap::new(),
+            classes,
+            facts,
+        ),
     )
 }
 
