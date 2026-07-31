@@ -1256,15 +1256,25 @@ pub(crate) fn lower_let(
     // (array-valued), and async/generator contexts (gated at FnCtx build).
     // See `expr/slot_rep.rs` for the mechanism and range-soundness audit.
     //
-    // Canonical-only safety term: an `int_valued_ta_locals` member (#6898) is
-    // eligible even when neither index-used nor strictly-i32-bounded — its
-    // whole-function proof (every write i32-producing or an int-kind TA read,
-    // every observation ToInt32-coercing) makes canonical-i32 storage
-    // output-invariant with the NaN-safe entry conversion. The parallel-shadow
-    // gate (`needs_i32_slot` below) is deliberately NOT widened, so the
-    // flag-off model stays exactly the pre-phase one.
-    let canonical_safe_local =
-        i32_safe_local || ctx.native_facts.int_valued_ta_locals().contains(&id);
+    // Canonical-only safety terms. The parallel-shadow gate (`needs_i32_slot`
+    // above) is deliberately NOT widened by either, so the flag-off model stays
+    // exactly the pre-phase one.
+    //
+    // * `int_valued_ta_locals` (#6898): every write i32-producing or an int-kind
+    //   TA read, every observation ToInt32-coercing — which makes canonical-i32
+    //   storage output-invariant with the NaN-safe entry conversion.
+    // * `loop_bounded_i32_locals` (#7110): a monotone induction variable whose
+    //   whole reachable interval is a pair of compile-time i32 constants —
+    //   single literal init, every write a step dominated by a constant-bounded
+    //   guard on the immediately enclosing loop. This is the term that admits a
+    //   plain `for (let i = 0; i < 1000000; i++)` counter, which satisfies
+    //   neither `index_used_locals` (nothing is indexed) nor
+    //   `strictly_i32_bounded_locals` (`i++` disqualifies there, #6072).
+    //   See `collectors/loop_bounded_i32.rs` for the interval argument — and
+    //   for why a bare accumulator is NOT admitted by it.
+    let canonical_safe_local = i32_safe_local
+        || ctx.native_facts.int_valued_ta_locals().contains(&id)
+        || ctx.native_facts.loop_bounded_i32_locals().contains(&id);
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.

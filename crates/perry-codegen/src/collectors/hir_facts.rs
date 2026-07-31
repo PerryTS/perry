@@ -47,6 +47,14 @@ pub(crate) struct RepresentationFacts {
     /// strictly-i32-bounded — the box `slot.ts` mix shape (`let l = P[0]` from
     /// an Int32Array PARAM, bitwise-only updates and observations).
     pub int_valued_ta_locals: HashSet<u32>,
+    /// Locals proven to stay inside i32 range by the monotone loop-induction
+    /// argument (#7110): single literal initialiser, every write a step whose
+    /// direction agrees with a constant-bounded guard on the immediately
+    /// enclosing loop, both interval endpoints inside i32. Like
+    /// `int_valued_ta_locals` this is a canonical-storage-only admission term
+    /// — it never widens the parallel-shadow `needs_i32_slot` gate. See
+    /// `collectors/loop_bounded_i32.rs`.
+    pub loop_bounded_i32_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +161,10 @@ impl TypeFacts {
 
     pub(crate) fn int_valued_ta_locals(&self) -> &HashSet<u32> {
         &self.representation.int_valued_ta_locals
+    }
+
+    pub(crate) fn loop_bounded_i32_locals(&self) -> &HashSet<u32> {
+        &self.representation.loop_bounded_i32_locals
     }
 
     pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
@@ -414,6 +426,14 @@ pub(crate) fn collect_type_facts(
         }
     }
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
+    // #7110: the monotone loop-induction i32 range proof. Skipped entirely when
+    // canonical selection is off, so the `PERRY_CANONICAL_I32_LOCALS=0`
+    // bisection arm reproduces the pre-phase model with no analysis run at all.
+    let loop_bounded_i32_locals = if crate::expr::canonical_i32_locals_enabled() {
+        super::loop_bounded_i32::collect_loop_bounded_i32_locals(stmts, compile_time_constants)
+    } else {
+        HashSet::new()
+    };
     let not_bigint_locals =
         super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);
     let (array_facts, effect_facts, materialization_hazards) =
@@ -504,6 +524,7 @@ pub(crate) fn collect_type_facts(
             unsigned_i32_locals,
             not_bigint_locals,
             int_valued_ta_locals,
+            loop_bounded_i32_locals,
         },
         arrays: array_facts,
         effect: effect_facts,

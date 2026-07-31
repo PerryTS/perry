@@ -198,6 +198,12 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
         "canonical-u32": 1,
         "canonical-str": 1,
     },
+    # #7110: every canonical-i32 promotion in this fixture comes from the
+    # loop-induction range proof and from nothing else -- no bitwise mixing, no
+    # `| 0`, no array indexing. Pinned at the exact count it is written to
+    # promote (2 counters + 1 in the accumulator loop), so losing any one of the
+    # three goes red rather than silently degrading to "still nonzero".
+    "fixture_loop_bounded_i32": {"canonical-i32": 3},
     "fixture_int_valued_ta": {"int-valued-ta": 1},
     "fixture_spec_abi_taptr": {"spec-abi-entry": 1, "spec-abi-taptr-slot": 1},
 }

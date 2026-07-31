@@ -20,6 +20,7 @@ mod index_uses;
 mod int_valued_ta_locals;
 mod integer_locals;
 mod local_refs;
+mod loop_bounded_i32;
 mod mutation;
 mod not_bigint_locals;
 mod pointer_locals;

@@ -53,6 +53,14 @@
 //! - `int_valued_ta_locals` (merged into `integer_locals`): every write i32 or
 //!   a possibly-OOB int-TA read whose every observation is ToInt32-coercing;
 //!   NaN-safe entry conversion (`toint32_wrap`) keeps OOB `undefined` → 0.
+//! - `loop_bounded_i32_locals` (#7110): a monotone induction variable whose
+//!   reachable interval is a pair of compile-time i32 constants — single
+//!   literal init, every write a `+k`/`-k` step dominated by a
+//!   constant-bounded guard on the immediately enclosing loop, direction
+//!   agreeing with the guard. A real range argument, not a compatibility
+//!   bound: there is no reachable state in which the value leaves i32. A bare
+//!   accumulator is deliberately NOT admitted — see
+//!   `collectors/loop_bounded_i32.rs`.
 //! - `integer_locals ∩ index_used_locals`: admission accepts `Add/Sub/Mul`
 //!   chains that can in principle exceed i32 — but under the pre-phase shadow
 //!   model every `LocalGet` of such a local ALREADY reads the i32 slot
@@ -317,9 +325,12 @@ impl CanonicalI32Denial {
         if self.not_index_used_or_bounded {
             return Some((
                 "not_index_used_or_bounded",
-                "proven integer-valued, but never used as an array index and \
-                 not provably i32-bounded, so nothing pins its range to 32 bits \
-                 — a bare accumulator or counter lands here",
+                "proven integer-valued, but never used as an array index, not \
+                 provably i32-bounded, and not a constant-bounded loop \
+                 induction variable (#7110), so nothing pins its range to 32 \
+                 bits. A bare accumulator lands here and must: \
+                 `sum = sum + (i % 1000)` over 1e8 iterations really does reach \
+                 4.995e10, so an i32 slot would print a wrapped negative",
                 Tier::CompilerLimitation,
                 Some(NOT_BOUNDED_ISSUE),
             ));

@@ -94,7 +94,7 @@
         "ptr-shape": 0,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 2,
+        "canonical-i32": 3,
         "canonical-u32": 1,
         "canonical-str": 1,
         "int-valued-ta": 0,
@@ -160,6 +160,30 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {}
+    },
+    {
+      "name": "fixture_loop_bounded_i32",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_loop_bounded_i32.ts",
+      "floors": {
+        "ptr-shape": 0,
+        "ptr-shape-consumed": 0,
+        "ptr-numarray": 0,
+        "canonical-i32": 3,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 1,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 0,
+        "ptr-numarray": 0,
+        "canonical-slot": 5,
+        "int-valued-ta": 0,
+        "spec-abi": 4
+      },
+      "unconsumed_mechanisms": {}
     },
     {
       "name": "batch",
@@ -620,7 +644,7 @@
       "candidates": {
         "ptr-shape": 0,
         "ptr-numarray": 1,
-        "canonical-slot": 5,
+        "canonical-slot": 4,
         "int-valued-ta": 0,
         "spec-abi": 0
       },
@@ -628,5 +652,5 @@
       "consumption_sites": {}
     }
   ],
-  "generated_at": "2026-07-31T05:15:37.361861Z"
+  "generated_at": "2026-07-31T05:53:44.935156Z"
 }
