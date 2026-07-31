@@ -61,3 +61,16 @@ mixed[null as any] = "n";
 console.log("bool key:", mixed["true"]);
 console.log("null key:", mixed["null"]);
 console.log("bool via true:", mixed[true as any]);
+
+// @@toPrimitive returning a Symbol must use the symbol store (get + set),
+// not stringify the Symbol (get-side ToPropertyKey parity on set — #7134 CR).
+const sym = Symbol("viaPrim");
+const viaSym: any = {
+  [Symbol.toPrimitive](_hint: string): symbol {
+    return sym;
+  },
+};
+const holder: any = {};
+holder[viaSym] = { tag: 9 };
+console.log("viaPrim set+get:", JSON.stringify(holder[viaSym]));
+console.log("viaPrim symbol key:", JSON.stringify(holder[sym]));

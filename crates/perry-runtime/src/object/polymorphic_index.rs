@@ -10,14 +10,6 @@
 
 use super::*;
 
-unsafe fn property_key_string_ptr(value: f64) -> *mut crate::StringHeader {
-    let key = crate::object::js_to_property_key(value);
-    if crate::symbol::js_is_symbol(key) != 0 {
-        return std::ptr::null_mut();
-    }
-    crate::value::js_jsvalue_to_string(key)
-}
-
 /// `obj[key]` READ through a non-canonical (object / exotic) key, with the
 /// receiver rooted across the coercion (#6935).
 ///
@@ -27,14 +19,27 @@ unsafe fn property_key_string_ptr(value: f64) -> *mut crate::StringHeader {
 /// `valueOf`, allocates, and can trigger a GC that **evacuates** the receiver.
 /// `raw` is a bare `u64` address in a Rust local — not a GC root and not a
 /// shadow slot — so it has to be re-read through a handle afterwards.
+///
+/// #6945 / CodeRabbit: if ToPropertyKey yields a Symbol (e.g. `@@toPrimitive`
+/// returns one), route through the symbol side-table — never stringify the
+/// Symbol and never treat the Symbol case as "no key" (the old
+/// `property_key_string_ptr` null-out silently returned `undefined`).
 unsafe fn rooted_property_key_get(raw: u64, idx: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv = scope.root_raw_mut_ptr(raw as *mut ObjectHeader);
-    let key = property_key_string_ptr(idx);
-    if key.is_null() {
+    let key = crate::object::js_to_property_key(idx);
+    let key_h = scope.root_nanbox_f64(key);
+    let key = key_h.get_nanbox_f64();
+    let recv_bits =
+        crate::value::js_nanbox_pointer(recv.get_raw_const_ptr::<ObjectHeader>() as i64);
+    if crate::symbol::js_is_symbol(key) != 0 {
+        return crate::symbol::js_object_get_symbol_property(recv_bits, key);
+    }
+    let key_ptr = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    if key_ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let key_handle = scope.root_string_ptr(key);
+    let key_handle = scope.root_string_ptr(key_ptr);
     let v = js_object_get_field_by_name(
         recv.get_raw_mut_ptr::<ObjectHeader>(),
         key_handle.get_raw_const_ptr::<crate::StringHeader>(),
@@ -47,20 +52,31 @@ unsafe fn rooted_property_key_get(raw: u64, idx: f64) -> f64 {
 /// This is the corruption half: the coercion sits between the receiver/value
 /// arriving and the store, so pre-fix a stale receiver dropped the write onto a
 /// forwarding stub and a stale `value` planted a dangling pointer *inside* a
-/// live object, outliving the call.
+/// live object, outliving the call. Symbol-yielding ToPropertyKey routes to
+/// the symbol store (#6945 / CodeRabbit).
 unsafe fn rooted_property_key_set(raw: u64, idx: f64, value: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv = scope.root_raw_mut_ptr(raw as *mut ObjectHeader);
     let value_handle = scope.root_nanbox_f64(value);
-    let key = property_key_string_ptr(idx);
-    if key.is_null() {
+    let key = crate::object::js_to_property_key(idx);
+    let key_h = scope.root_nanbox_f64(key);
+    let key = key_h.get_nanbox_f64();
+    let value = value_handle.get_nanbox_f64();
+    let recv_bits =
+        crate::value::js_nanbox_pointer(recv.get_raw_const_ptr::<ObjectHeader>() as i64);
+    if crate::symbol::js_is_symbol(key) != 0 {
+        crate::symbol::js_object_set_symbol_property(recv_bits, key, value);
         return;
     }
-    let key_handle = scope.root_string_ptr(key);
+    let key_ptr = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    if key_ptr.is_null() {
+        return;
+    }
+    let key_handle = scope.root_string_ptr(key_ptr);
     js_object_set_field_by_name(
         recv.get_raw_mut_ptr::<ObjectHeader>(),
         key_handle.get_raw_const_ptr::<crate::StringHeader>(),
-        value_handle.get_nanbox_f64(),
+        value,
     );
 }
 

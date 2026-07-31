@@ -621,18 +621,36 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         );
         return value;
     }
-    // #6935: this is the corruption case. `js_jsvalue_to_string(index)` runs a
-    // user `toString` / `valueOf` for an object index (`obj[{toString(){...}}] = v`)
-    // and allocates for every other shape, so it can GC and EVACUATE. Both the
+    // #6935: ToPropertyKey (below) runs a user `toString` / `valueOf` /
+    // `@@toPrimitive` for an object index (`obj[{toString(){...}}] = v`) and
+    // allocates for every other shape, so it can GC and EVACUATE. Both the
     // receiver `raw_ptr` and the `value` being stored were raw Rust locals
     // across it: a stale receiver dropped the write onto a forwarding stub, and
     // a stale `value` wrote a dangling pointer INTO a live object, where it
     // outlives the call.
+    //
+    // #6945 / CodeRabbit: use `js_to_property_key` (not `js_jsvalue_to_string`)
+    // so an `@@toPrimitive` that returns a Symbol is preserved and routed to
+    // the symbol store — matching the get-side fallback. Stringifying that
+    // Symbol would miss the target property (and Spec ToPropertyKey must not
+    // turn a Symbol result into a string).
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
     let value_handle = scope.root_nanbox_f64(value);
-    let key_ptr = crate::value::js_jsvalue_to_string(index);
+    let key = unsafe { crate::object::js_to_property_key(index) };
+    let key_h = scope.root_nanbox_f64(key);
+    let key = key_h.get_nanbox_f64();
     let value = value_handle.get_nanbox_f64();
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        let recv_bits = crate::value::js_nanbox_pointer(
+            recv.get_raw_const_ptr::<crate::object::ObjectHeader>() as i64,
+        );
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(recv_bits, key, value);
+        }
+        return value;
+    }
+    let key_ptr = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
     if key_ptr.is_null() {
         return value;
     }

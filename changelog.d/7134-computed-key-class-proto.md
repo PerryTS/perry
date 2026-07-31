@@ -23,3 +23,8 @@ Three cooperating gaps:
 
 Regression: `test-files/test_gap_computed_key_class_proto_6945.ts`
 (byte-for-byte vs Node 26.5).
+
+Follow-up (CodeRabbit): set-side dynamic-index fallback and polymorphic
+`rooted_property_key_{get,set}` now use `js_to_property_key` and route a
+Symbol-yielding `@@toPrimitive` through the symbol store (was silently
+undefined / stringified).
