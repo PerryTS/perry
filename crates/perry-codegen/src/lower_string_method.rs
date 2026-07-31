@@ -1462,18 +1462,20 @@ fn proven_heap_string_operand(_ctx: &FnCtx<'_>, e: &Expr) -> bool {
 ///   annotation lie) → the legacy `js_get_string_pointer_unified` (which
 ///   materializes SSO — cold);
 /// - everything else (or flag off) → the legacy unified call, unchanged.
+///
+/// #7128: the two arms are on separate knobs, because only the second one is
+/// about a selected representation. The proven-heap arm keys on the operand's
+/// static type and fires with zero canonical-`Str` locals in the program.
 fn str_operand_handle_tag_dispatched(ctx: &mut FnCtx<'_>, object: &Expr, recv_box: &str) -> String {
     use crate::nanbox::POINTER_MASK_I64;
-    if !crate::expr::canonical_str_locals_enabled() {
-        return unbox_str_handle(ctx.block(), recv_box);
-    }
-    if proven_heap_string_operand(ctx, object) {
+    if crate::expr::static_string_lowering_enabled() && proven_heap_string_operand(ctx, object) {
         let bits = ctx.block().bitcast_double_to_i64(recv_box);
         return ctx.block().and(I64, &bits, POINTER_MASK_I64);
     }
-    let canonical = matches!(
-        object, Expr::LocalGet(id) if crate::expr::local_is_canonical_str(ctx, *id)
-    );
+    let canonical = crate::expr::canonical_str_locals_enabled()
+        && matches!(
+            object, Expr::LocalGet(id) if crate::expr::local_is_canonical_str(ctx, *id)
+        );
     if !canonical {
         return unbox_str_handle(ctx.block(), recv_box);
     }

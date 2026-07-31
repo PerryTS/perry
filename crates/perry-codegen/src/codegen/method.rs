@@ -390,23 +390,17 @@ pub(super) fn compile_method(
         &cross_module.module_dispatch,
     );
 
-    // Representation-selection Phase 1 context gate (see codegen/function.rs).
-    let repsel_allows = crate::expr::canonical_i32_locals_enabled()
-        && !method.is_async
-        && !method.is_generator
-        && !method.was_plain_async;
-    // Phase 3a: same context restrictions, independent env gate.
-    let repsel_str_allows = crate::expr::canonical_str_locals_enabled()
-        && !method.is_async
-        && !method.is_generator
-        && !method.was_plain_async;
-    // #7106: report the structural context exclusion at the `Stmt::Let` site.
-    let repsel_context_denial = crate::expr::body_context_denial(
+    // Representation-selection context gates (see codegen/function.rs).
+    let repsel_flags = crate::expr::RepselContextFlags::for_body(
         method.is_async,
         method.is_generator,
         method.was_plain_async,
     );
-    let report_denial = crate::expr::report_context_denial(repsel_context_denial);
+    let repsel_allows = repsel_flags.allows_canonical_i32;
+    let repsel_str_allows = repsel_flags.allows_canonical_str;
+    // #7106: report the structural context exclusion at the `Stmt::Let` site.
+    let repsel_context_denial = repsel_flags.canonical_denial;
+    let report_denial = repsel_flags.report_denial();
     let repsel_closure_refs = if repsel_allows || repsel_str_allows || report_denial {
         crate::expr::collect_closure_referenced_locals(&method.body)
     } else {
@@ -524,11 +518,12 @@ pub(super) fn compile_method(
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
-        // #7109: Phase 5a's Ptr<Shape> context gate, split out of
-        // `repsel_context_allows_canonical_i32`. Ordinary bodies keep the
-        // exact pre-split value; only entry bodies diverge.
-        repsel_context_allows_ptr_shape: repsel_allows,
-        repsel_ptr_shape_context_denial: repsel_context_denial,
+        // #7109 split the FIELD out of `repsel_context_allows_canonical_i32`;
+        // #7128 split the VALUE, which is what the knob actually reads. Until
+        // then this was still `repsel_allows`, so `PERRY_CANONICAL_I32_LOCALS=0`
+        // disabled every Ptr<Shape> consumption in the program.
+        repsel_context_allows_ptr_shape: repsel_flags.allows_ptr_shape,
+        repsel_ptr_shape_context_denial: repsel_flags.ptr_shape_denial,
         repsel_context_denial,
         repsel_closure_ref_locals: repsel_closure_refs,
         repsel_context_allows_canonical_str: repsel_str_allows,
@@ -1449,20 +1444,14 @@ pub(super) fn compile_static_method(
         &cross_module.module_dispatch,
     );
 
-    // Representation-selection Phase 1 context gate (see codegen/function.rs).
-    let repsel_allows = crate::expr::canonical_i32_locals_enabled()
-        && !f.is_async
-        && !f.is_generator
-        && !f.was_plain_async;
-    // Phase 3a: same context restrictions, independent env gate.
-    let repsel_str_allows = crate::expr::canonical_str_locals_enabled()
-        && !f.is_async
-        && !f.is_generator
-        && !f.was_plain_async;
+    // Representation-selection context gates (see codegen/function.rs).
+    let repsel_flags =
+        crate::expr::RepselContextFlags::for_body(f.is_async, f.is_generator, f.was_plain_async);
+    let repsel_allows = repsel_flags.allows_canonical_i32;
+    let repsel_str_allows = repsel_flags.allows_canonical_str;
     // #7106: report the structural context exclusion at the `Stmt::Let` site.
-    let repsel_context_denial =
-        crate::expr::body_context_denial(f.is_async, f.is_generator, f.was_plain_async);
-    let report_denial = crate::expr::report_context_denial(repsel_context_denial);
+    let repsel_context_denial = repsel_flags.canonical_denial;
+    let report_denial = repsel_flags.report_denial();
     let repsel_closure_refs = if repsel_allows || repsel_str_allows || report_denial {
         crate::expr::collect_closure_referenced_locals(&f.body)
     } else {
@@ -1584,11 +1573,12 @@ pub(super) fn compile_static_method(
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
-        // #7109: Phase 5a's Ptr<Shape> context gate, split out of
-        // `repsel_context_allows_canonical_i32`. Ordinary bodies keep the
-        // exact pre-split value; only entry bodies diverge.
-        repsel_context_allows_ptr_shape: repsel_allows,
-        repsel_ptr_shape_context_denial: repsel_context_denial,
+        // #7109 split the FIELD out of `repsel_context_allows_canonical_i32`;
+        // #7128 split the VALUE, which is what the knob actually reads. Until
+        // then this was still `repsel_allows`, so `PERRY_CANONICAL_I32_LOCALS=0`
+        // disabled every Ptr<Shape> consumption in the program.
+        repsel_context_allows_ptr_shape: repsel_flags.allows_ptr_shape,
+        repsel_ptr_shape_context_denial: repsel_flags.ptr_shape_denial,
         repsel_context_denial,
         repsel_closure_ref_locals: repsel_closure_refs,
         repsel_context_allows_canonical_str: repsel_str_allows,

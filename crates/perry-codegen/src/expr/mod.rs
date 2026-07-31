@@ -131,18 +131,27 @@ pub(crate) use write_barrier::{
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
 mod dispatch;
 mod record_value;
+mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
 mod shadow_slot;
 mod slot_rep;
 pub(crate) mod temp_root;
+// #7128: the env-knob table and the pure `gates -> context flags` derivation.
+// Every `FnCtx` construction site goes through `RepselContextFlags` so that a
+// knob cannot silently acquire a second representation's sites again.
+pub(crate) use repsel_gates::{static_string_lowering_enabled, RepselContextFlags};
+// `body_context_denial` / `report_context_denial` / `MODULE_INIT_CONTEXT` are
+// deliberately NOT re-exported: since #7128 the only legitimate consumer is
+// `repsel_gates::RepselContextFlags::derive`, and a `FnCtx` construction site
+// that reaches for the structural rule directly is exactly how the two gates
+// drifted back into one bool the last two times.
 pub(crate) use slot_rep::{
-    body_context_denial, canonical_i32_locals_enabled, canonical_local_i32_slot,
-    canonical_str_locals_enabled, collect_canonical_str_ineligible_locals,
-    collect_closure_referenced_locals, deny_canonical_context, deny_canonical_i32,
-    load_canonical_local_boxed, local_is_canonical_str, local_rep_is_canonical_i32,
-    note_canonical_local, ptr_shape_context_rule_text, report_context_denial,
-    store_canonical_local_from_double, CanonicalI32Denial, SlotRep, MODULE_INIT_CONTEXT,
+    canonical_i32_locals_enabled, canonical_local_i32_slot, canonical_str_locals_enabled,
+    collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,
+    deny_canonical_context, deny_canonical_i32, load_canonical_local_boxed,
+    local_is_canonical_str, local_rep_is_canonical_i32, note_canonical_local,
+    ptr_shape_context_rule_text, store_canonical_local_from_double, CanonicalI32Denial, SlotRep,
     PTR_SHAPE_SCALAR_REPLACED,
 };
 

@@ -674,8 +674,11 @@ pub(super) fn compile_module_entry(
         // is no structural context reason to deny — see
         // `expr::MODULE_INIT_CONTEXT` for the audit — so the only remaining
         // gates are the two bisection env knobs.
-        let repsel_allows = crate::expr::canonical_i32_locals_enabled();
-        let repsel_str_allows = crate::expr::canonical_str_locals_enabled();
+        // #7128: one derivation, each flag reading its own knob. `Entry`
+        // pins `allows_ptr_shape` off structurally (see below).
+        let repsel_flags = crate::expr::RepselContextFlags::for_entry();
+        let repsel_allows = repsel_flags.allows_canonical_i32;
+        let repsel_str_allows = repsel_flags.allows_canonical_str;
         // The two value-level screens the `Stmt::Let` site consults (#7106
         // collected them for the report only; now they are load-bearing).
         let repsel_closure_refs = if repsel_allows || repsel_str_allows {
@@ -803,8 +806,8 @@ pub(super) fn compile_module_entry(
             // the canonical-i32 gate, and #6991 is a live rooting bug for a
             // compiled receiver held across the globalThis-population
             // collection — which runs around module init.
-            repsel_context_allows_ptr_shape: false,
-            repsel_ptr_shape_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
+            repsel_context_allows_ptr_shape: repsel_flags.allows_ptr_shape,
+            repsel_ptr_shape_context_denial: repsel_flags.ptr_shape_denial,
             repsel_closure_ref_locals: repsel_closure_refs,
             repsel_context_allows_canonical_str: repsel_str_allows,
             repsel_str_ineligible_locals: repsel_str_ineligible,
@@ -1334,8 +1337,11 @@ pub(super) fn compile_module_entry(
         // is no structural context reason to deny — see
         // `expr::MODULE_INIT_CONTEXT` for the audit — so the only remaining
         // gates are the two bisection env knobs.
-        let repsel_allows = crate::expr::canonical_i32_locals_enabled();
-        let repsel_str_allows = crate::expr::canonical_str_locals_enabled();
+        // #7128: one derivation, each flag reading its own knob. `Entry`
+        // pins `allows_ptr_shape` off structurally (see below).
+        let repsel_flags = crate::expr::RepselContextFlags::for_entry();
+        let repsel_allows = repsel_flags.allows_canonical_i32;
+        let repsel_str_allows = repsel_flags.allows_canonical_str;
         // The two value-level screens the `Stmt::Let` site consults (#7106
         // collected them for the report only; now they are load-bearing).
         let repsel_closure_refs = if repsel_allows || repsel_str_allows {
@@ -1461,8 +1467,8 @@ pub(super) fn compile_module_entry(
             // the canonical-i32 gate, and #6991 is a live rooting bug for a
             // compiled receiver held across the globalThis-population
             // collection — which runs around module init.
-            repsel_context_allows_ptr_shape: false,
-            repsel_ptr_shape_context_denial: Some(crate::expr::MODULE_INIT_CONTEXT),
+            repsel_context_allows_ptr_shape: repsel_flags.allows_ptr_shape,
+            repsel_ptr_shape_context_denial: repsel_flags.ptr_shape_denial,
             repsel_closure_ref_locals: repsel_closure_refs,
             repsel_context_allows_canonical_str: repsel_str_allows,
             repsel_str_ineligible_locals: repsel_str_ineligible,

@@ -978,14 +978,27 @@ fn compute_object_cache_key_with_env(
             .unwrap_or(""),
     );
     // Representation-selection Phase 3a — canonical string locals
-    // (tagged-at-rest): `=0`/`off`/`false` reverts the Str-gated lowerings
-    // (`+=` tag-dispatch, inline `.length`, direct string compares, the
-    // char-access receiver fast arm, and the inline StringRef retag) back to
-    // the pre-phase sequences, which changes the emitted IR / .o bytes — a
-    // warm cache must not serve an object built under the other setting.
+    // (tagged-at-rest): `=0`/`off`/`false` reverts the lowerings that consult a
+    // SELECTED `Str` local (`+=` tag-dispatch, direct string compares, the
+    // char-access receiver fast arm) back to the pre-phase sequences, which
+    // changes the emitted IR / .o bytes — a warm cache must not serve an object
+    // built under the other setting.
     h.field(
         "env_canonical_str_locals",
         env_var("PERRY_CANONICAL_STR_LOCALS")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    // #7128 — string fast paths that key on a value's STATIC string type and
+    // never on a canonical-`Str` selection: the inline `StringRef` retag, the
+    // proven-heap string operand handle, and the tag-dispatched `.length`.
+    // They shipped under `PERRY_CANONICAL_STR_LOCALS`, which made that knob
+    // move 24 of 26 census workloads and stop being evidence about the
+    // representation it names. `=0`/`off`/`false` reverts all three, which
+    // changes the emitted IR / .o bytes — so it keys the cache too.
+    h.field(
+        "env_static_string_lowering",
+        env_var("PERRY_STATIC_STRING_LOWERING")
             .as_deref()
             .unwrap_or(""),
     );

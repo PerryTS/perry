@@ -619,6 +619,9 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_CANONICAL_I32_LOCALS",
         // Representation-selection Phase 3a: canonical string locals.
         "PERRY_CANONICAL_STR_LOCALS",
+        // #7128: string fast paths keyed on a value's static string type,
+        // split off the Phase 3a knob so that knob isolates its own rep.
+        "PERRY_STATIC_STRING_LOWERING",
         // Representation-selection Phase 2: specialized calling convention.
         "PERRY_SPECIALIZED_ABI",
         "PERRY_SPECIALIZED_ABI_MAX",

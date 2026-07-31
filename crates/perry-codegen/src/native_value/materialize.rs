@@ -434,14 +434,21 @@ fn materialize_js_value_bits_to_js_value(
 }
 
 /// NaN-box a raw `StringRef` handle (i64 `StringHeader*`) as a boxed string
-/// value. Repsel Phase 3a: with `PERRY_CANONICAL_STR_LOCALS` on (the
-/// default), the hot non-null path is the inline `or STRING_TAG; bitcast`
-/// pair (`expr/nanbox_inline.rs` shape) instead of the opaque
-/// `js_nanbox_string` call; the helper's one semantic addition — a null
-/// handle allocates an empty string — is preserved in a cold arm that still
-/// calls it. Flag off reverts to the pre-phase unconditional call.
+/// value. The hot non-null path is the inline `or STRING_TAG; bitcast` pair
+/// (`expr/nanbox_inline.rs` shape) instead of the opaque `js_nanbox_string`
+/// call; the helper's one semantic addition — a null handle allocates an empty
+/// string — is preserved in a cold arm that still calls it. Flag off reverts
+/// to the pre-phase unconditional call.
+///
+/// #7128: this shipped in Phase 3a behind `PERRY_CANONICAL_STR_LOCALS`, but it
+/// consults **no** canonical-`Str` local — it fires wherever a `StringRef`
+/// materializes, which is most programs. That made the canonical-`Str` knob
+/// useless as a bisection instrument (24 of 26 census workloads emitted
+/// differently under it, including ones that select zero `Str` locals). It is
+/// on `PERRY_STATIC_STRING_LOWERING` now; both default on, so the default
+/// build is unchanged.
 fn nanbox_string_ref_boxed(ctx: &mut FnCtx<'_>, handle: &str) -> String {
-    if !crate::expr::canonical_str_locals_enabled() {
+    if !crate::expr::static_string_lowering_enabled() {
         return ctx
             .block()
             .call(DOUBLE, "js_nanbox_string", &[(I64, handle)]);

@@ -271,9 +271,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(ctx.block().load(DOUBLE, &slot));
                 }
             }
-            // Representation-selection Phase 3a: `.length` on a statically-
-            // string receiver (canonical-Str local, `string[]` element,
-            // string-returning expression). The receiver bits are freshly
+            // `.length` on a statically-string receiver (`string`-typed local,
+            // `string[]` element, string-returning expression). #7128: this
+            // arrived in Phase 3a but keys on `is_string_expr` — the receiver's
+            // static TYPE — and never on a canonical-`Str` selection, so it is
+            // on `PERRY_STATIC_STRING_LOWERING`, not on the `Str` knob.
+            // The receiver bits are freshly
             // produced with no safepoint before the header read (no
             // forwarding hazard — evacuation rewrites slots/returns before
             // the mutator resumes), so the ~18-op generic tower below
@@ -285,7 +288,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // receiver) → the same `js_value_length_f64` slow call the
             // generic tower's slow arm uses.
             {
-                if crate::expr::canonical_str_locals_enabled()
+                if crate::expr::static_string_lowering_enabled()
                     && is_string_expr(ctx, object)
                     && !is_array_expr(ctx, object)
                 {
