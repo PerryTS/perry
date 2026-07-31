@@ -1266,6 +1266,12 @@ jobs:
             echo "::error::The consumption counter is not tracking the compiler."
             exit 1
           fi
+          if ! printf '%s' "$out" | grep -q "CONSUMPTION SITE NEVER EXERCISED"; then
+            echo "::error::No consumption site went dark with Ptr<Shape> disabled."
+            echo "::error::The per-site coverage gate is not tracking the compiler:"
+            echo "::error::two of the six recorders had never fired before it existed."
+            exit 1
+          fi
           echo "Census correctly went red with PERRY_PTR_SHAPE_LOCALS=0."
 
       - name: Upload census reports

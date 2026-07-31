@@ -423,13 +423,21 @@ impl Entry {
     ///   several sites that consumed one value from each other. It is what the
     ///   per-site coverage gate counts.
     /// - **`outcome`** separates an `Unconsumed` entry from a `Denied` one.
-    ///   Both carry `rule: Some(..)` and neither carries a `site`, so they are
-    ///   otherwise identical whenever the two rule vocabularies happen to
-    ///   collide — and "the proof was made and dropped" versus "the proof was
-    ///   never made" are opposite claims about the same binding.
+    ///   Both carry `rule: Some(..)` and neither carries a `site`, so with a
+    ///   shared rule name every other element matches — and "the proof was made
+    ///   and thrown away" versus "the proof was never made" are opposite claims
+    ///   about the same binding.
     ///
-    /// They are not redundant with each other: removing either silently merges
-    /// a pair of entries that mean different things.
+    /// **`outcome` is defensive, and currently cannot be observed to matter.**
+    /// Say so rather than implying coverage that does not exist: today the two
+    /// rule vocabularies are disjoint, and more fundamentally the collision is
+    /// unreachable, because a DENIED value was never selected while an
+    /// UNCONSUMED one always was — no binding can produce both. Removing
+    /// `outcome` from this key therefore turns no gate red, and the only thing
+    /// exercising it is the unit test that constructs the collision by hand.
+    /// It is kept because a dedup key should carry the full discriminant: the
+    /// cost is one tuple element, and the failure mode if a future rule name
+    /// collides is silent data loss in the report that feeds the census.
     fn dedup_key(
         &self,
     ) -> (
@@ -1046,13 +1054,14 @@ mod tests {
         assert_ne!(a.dedup_key(), b.dedup_key());
     }
 
-    /// The pair `outcome` actually defends, and the only one it defends alone.
+    /// The pair `outcome` defends — constructed by hand, because the recorders
+    /// cannot currently produce it.
     ///
-    /// A denial and an unconsumed record both carry `rule: Some(..)` and
-    /// neither carries a `site`, so with a shared rule name every other element
-    /// of the key matches. "The proof was never made" and "the proof was made
-    /// and thrown away" are opposite claims, and one would silently eat the
-    /// other.
+    /// A denied value was never selected and an unconsumed one always was, so
+    /// no binding emits both, and the sabotage arm that strips `outcome` from
+    /// the key leaves the census green. This test is the ONLY thing exercising
+    /// that element; it is deliberately not presented as gate coverage. See
+    /// `dedup_key`'s note.
     #[test]
     fn dedup_key_separates_an_unconsumed_record_from_a_denial() {
         let denied = entry("f", 0, None);

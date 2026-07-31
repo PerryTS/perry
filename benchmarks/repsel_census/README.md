@@ -85,6 +85,18 @@ nothing. `07_object_create` and `12_binary_trees` are byte-identical today.
 sites** — which is why the census reports its consumption as 0 and the object
 A/B alone would have been misleading.
 
+### Per-site coverage
+
+The consumed count is per **value**, so one working recorder is enough to mark a
+value consumed and the other five could rot unnoticed. `CONSUMPTION_SITES` (in
+the script) registers all six, and a site that records nothing corpus-wide fails
+the run.
+
+This is not hypothetical. When coverage was first measured, four fired and two
+had **never fired on any workload here** —
+`class_field_get_number.shape_proven_load` and `ptr_shape_update`. Both were
+reachable; nothing reached them. `fixture_ptr_shape_sites.ts` exists to.
+
 Only `ptr-shape` has consumption instrumentation. The other seven census keys
 report *no consumption data* rather than a zero
 (`CONSUMPTION_INSTRUMENTED` in the script), because "uninstrumented" and "never
