@@ -5,6 +5,7 @@
 //! v0.5.1019 to satisfy the file-size CI gate. mod.rs is a re-export
 //! hub — public-API shape (`crate::collectors::*`) is preserved.
 
+mod cjs_scaffolding;
 mod clamp_detect;
 mod class_accessors;
 mod closures;
