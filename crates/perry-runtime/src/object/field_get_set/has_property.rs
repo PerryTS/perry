@@ -191,33 +191,33 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
 
     let obj_val = JSValue::from_bits(obj.to_bits());
 
-    // `in` runs ToPropertyKey on the key. Object property names are strings, so a
-    // NUMBER key must be coerced to its string form before the lookup — `307 in
-    // {307: …}` is `"307" in {…}` and must be true. Without this the string-only
-    // lookup below never matched a numeric key against a numeric-string property,
-    // so `307 in obj` was false while `"307" in obj` was true. Next.js's
-    // `isRedirectError` does `Number(digest.at(-2)) in RedirectStatusCode` (a
-    // `{307: …, 308: …}` map), so a `redirect()` thrown from a Server Component
-    // was not recognized as a redirect — Next treated it as a real error and a
-    // concurrently-rendered sibling's `session.user` read (guarded by that same
-    // redirect on the happy path) surfaced as a fatal 500 instead of a 307.
-    // (Symbols and strings pass through unchanged; a proxy/handle receiver is
-    // handled below with the coerced key.)
+    // `in` runs ToPropertyKey on the key for EVERY key type: per spec,
+    // `RelationalExpression in ShiftExpression` is `ToPropertyKey(lval)`, so an
+    // object key must have its `Symbol.toPrimitive` / `toString` / `valueOf`
+    // invoked — exactly once, and even when the property is absent, because the
+    // coercion is observable (#6944). Only strings (heap or SSO) and symbols
+    // are already property keys; for them the coercion is identity and
+    // allocates nothing, so it is skipped. Everything else goes through
+    // `js_to_property_key` before the lookup: numbers (`307 in {307: …}` is
+    // `"307" in {…}` — Next.js's `isRedirectError` does `Number(digest.at(-2))
+    // in RedirectStatusCode`), booleans, null, undefined, BigInt, and objects.
+    // (A proxy/handle receiver is handled below with the coerced key.)
     //
-    // #6935: that coercion ALLOCATES the stringified key, so it can trigger a
-    // GC that evacuates the receiver — and `obj` / `obj_val` are raw locals
-    // captured above. (Only the number arm coerces, so no user JS runs here,
-    // but an allocation-triggered evacuation moves the receiver just the same.)
+    // #6935: that coercion ALLOCATES the stringified key, and for an object key
+    // it also runs user JS, so it can trigger a GC that evacuates the receiver
+    // — and `obj` / `obj_val` are raw locals captured above. Root the receiver
+    // across the coercion and read it back through the handle, mirroring
+    // `js_object_get_property_key` / `js_object_set_property_key`.
     let (obj, obj_val, key) = {
         let kv = JSValue::from_bits(key.to_bits());
-        if kv.is_number() {
+        if kv.is_any_string() || unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            (obj, obj_val, key)
+        } else {
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_heap_word_u64(obj.to_bits());
             let key = unsafe { crate::object::js_to_property_key(key) };
             let obj = f64::from_bits(obj_handle.get_heap_word_u64());
             (obj, JSValue::from_bits(obj.to_bits()), key)
-        } else {
-            (obj, obj_val, key)
         }
     };
     let key_val = JSValue::from_bits(key.to_bits());
