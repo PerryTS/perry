@@ -250,20 +250,31 @@ pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
     if let Some(mode) = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()) {
         return mode;
     }
-    // Unit tests root GC-managed pointers as raw locals on the *native* (Rust)
-    // stack, not the shadow stack, so without the conservative native scan any
-    // collection triggered mid-test (e.g. by an allocation in a helper) reclaims
-    // them and a later header deref faults. Default the test build to a full
-    // scan so those locals survive; production keeps live values on the shadow
-    // stack and skips the imprecise, costly native scan.
-    #[cfg(test)]
-    {
-        ConservativeStackScanMode::Full
-    }
-    #[cfg(not(test))]
-    {
-        ConservativeStackScanMode::Auto
-    }
+    // ONE default for every build, tests included.
+    //
+    // The test build used to default to `Full` on the grounds that unit tests
+    // root GC-managed pointers as raw locals on the *native* (Rust) stack
+    // rather than the shadow stack, so the conservative scan was what kept them
+    // alive. That is a description of how some tests were written, not a
+    // requirement of testing, and it had a cost that outweighed the
+    // convenience: it made the test build a DIFFERENT GC configuration from
+    // production. A missing precise root — the #7055 shape — was rescued by the
+    // native scan under test and was a live wrong answer in production, so the
+    // suite filtered out precisely the failure class it exists to catch. It
+    // also made the copying minor ineligible under test
+    // (`CopiedMinorFallbackReason::ConservativeStack`), so relocation was
+    // largely unexercised.
+    //
+    // The correct mechanism already existed and the tests already used it:
+    // `RuntimeHandleScope` / `gc_temp_root_*`, plus the isolation guards, which
+    // pin `Auto` themselves — 351 of the 531 gc tests were already running this
+    // way. Flipping the default cost exactly one test conversion
+    // (`test_minor_preserves_old_to_young_edge_across_minors`, which read a
+    // relocated child through a stale pre-collection local).
+    //
+    // A test that needs the scan *provably* off — not merely resolved off by
+    // today's `Auto` policy — should pin `ConservativeScanDisabledGuard`.
+    ConservativeStackScanMode::Auto
 }
 
 #[inline]

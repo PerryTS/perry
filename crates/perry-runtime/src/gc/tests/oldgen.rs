@@ -751,7 +751,10 @@ fn test_old_page_defrag_re_remembers_young_child_after_collection_clear() {
     }
 
     let _reset = ResetGcTestState;
-    let _scan = ConservativeScanAutoGuard::new();
+    // This test verifies objects it holds only as native-stack locals are
+    // COLLECTED, so the native scan must not rescue them. `Disabled` says that
+    // unconditionally; the default `Auto` merely resolves that way today.
+    let _scan = ConservativeScanDisabledGuard::new();
     let _isolation = copying_nursery_isolation_lock();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");
@@ -1216,8 +1219,7 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
             ptr_bits(slot_child),
             "cycle {cycle}: the parent's slot must still hold a tagged pointer"
         );
-        if trace.copying_nursery.copied_objects == 0
-            && trace.copying_nursery.promoted_objects == 0
+        if trace.copying_nursery.copied_objects == 0 && trace.copying_nursery.promoted_objects == 0
         {
             assert_eq!(
                 slot_child, child,
