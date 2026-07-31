@@ -49,10 +49,12 @@
   construction — the linked binary for each is byte-identical to `main`'s.
 
   Over the whole 26-workload census corpus the emitted object changes on
-  **exactly one** program, and there its disassembly is byte-identical to the
-  pre-#7121 compiler's. The other 9 refused promotions were already emitting
+  **exactly one** benchmark, and there its disassembly is byte-identical to the
+  pre-#7121 compiler's. The other refused promotions were already emitting
   byte-identical code, so the census counts fall (canonical-i32 64 → 55)
-  without a single emitted byte moving.
+  without a single emitted byte moving. Every lowered floor is paired with a
+  `no_i32_consuming_use` minimum, so a floor that fell because a promotion was
+  refused cannot silently accommodate a different promotion going missing.
 
   **Gated.** Every other number in the promotion census is a floor, and a floor
   cannot go red when a compiler promotes *more*. `REFUSAL_FLOORS` in
