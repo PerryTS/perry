@@ -1,4 +1,4 @@
-// Helper for `test_gap_pshape_tower_delete_keys_guard.ts` (#7142).
+// Helper for `test_gap_repsel_pshape_tower_delete.ts` (#7142).
 //
 // This module deliberately contains NO `delete` (and no other §5.2 shape
 // barrier). That is the point: the barrier that stands representation-selection
