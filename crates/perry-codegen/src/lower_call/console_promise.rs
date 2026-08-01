@@ -852,11 +852,52 @@ pub fn try_lower_native_method_str_dispatch(
                     return Ok(Some(reg));
                 }
             }
+            // #7154: `recv.m(f())` evaluates the receiver first and the
+            // arguments second — spec order, and codegen follows it. That left
+            // the receiver in a bare SSA register while every argument was
+            // lowered, and an argument that allocates reaches a back-edge poll
+            // and an evacuating minor. The minor RELOCATES the receiver: the
+            // location it was read from (a closure capture cell, a shadow slot,
+            // a module global) is a root and gets rewritten, but the register is
+            // not a root and keeps naming from-space. The dispatch below then
+            // resolves the method against abandoned memory and throws
+            // `TypeError: value is not a function`.
+            //
+            // This is the site that kept `sfw-registry --help` red under
+            // `PERRY_GC_MOVING_LOOP_POLLS=1` after #7192. zod's
+            // `classic/schemas.ts:301` builds
+            // `inst.regex = (...args) => inst.check(checks.regex(...args))`;
+            // `inst` is read out of the arrow's capture cell, held across
+            // `checks.regex(...args)` (a real user call, so it polls), and then
+            // used as the receiver of `.check`.
+            //
+            // Same shape, same fix as #7192's property/element STORE receiver:
+            // a temp root, not a re-lower. Re-lowering `object` would observe an
+            // assignment made by an argument, which is a miscompile rather than
+            // a rooting fix (see `temp_root::operand_is_reloadable`). Each
+            // argument is likewise rooted before the NEXT one is lowered, so an
+            // earlier argument cannot go stale across a later one.
+            let arg_collects: Vec<bool> = args
+                .iter()
+                .map(|a| crate::expr::temp_root::expr_may_trigger_gc(ctx, a))
+                .collect();
+            let any_arg_collects = arg_collects.iter().any(|&c| c);
+            let operand_exprs: Vec<&Expr> = std::iter::once(object.as_ref())
+                .chain(args.iter())
+                .collect();
+            let mut roots = crate::expr::temp_root::root_operands_begin(args.len() + 1);
             let recv_box = lower_expr(ctx, object)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                lowered_args.push(lower_expr(ctx, a)?);
+            roots.push(ctx, object.as_ref(), &recv_box, any_arg_collects);
+            for (i, a) in args.iter().enumerate() {
+                let v = lower_expr(ctx, a)?;
+                roots.push(ctx, a, &v, arg_collects[i + 1..].iter().any(|&c| c));
             }
+            // Re-read below the last collection point. Mandatory, not
+            // defensive: the temp-root slot is a MUTABLE root, so an evacuating
+            // cycle rewrites it and the register pushed beforehand is stale.
+            let rereads = roots.reread(ctx, &operand_exprs)?;
+            let recv_box = rereads[0].clone();
+            let lowered_args: Vec<String> = rereads[1..].to_vec();
             // Pass a tagged pointer to the immutable StringPool dispatch
             // descriptor. A GC-backed string handle belongs to the main
             // thread's arena and cannot be resolved safely by a
@@ -893,7 +934,7 @@ pub fn try_lower_native_method_str_dispatch(
             // call's location no longer shadows this one.
             crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
             let blk = ctx.block();
-            return Ok(Some(blk.call(
+            let result = blk.call(
                 DOUBLE,
                 "js_typed_feedback_native_call_method_by_id",
                 &[
@@ -903,7 +944,11 @@ pub fn try_lower_native_method_str_dispatch(
                     (PTR, &args_ptr),
                     (I64, &args_len_str),
                 ],
-            )));
+            );
+            // Release AFTER the dispatch, not before: the dispatcher allocates
+            // while it reads these values.
+            roots.release(ctx);
+            return Ok(Some(result));
         }
     }
     Ok(None)

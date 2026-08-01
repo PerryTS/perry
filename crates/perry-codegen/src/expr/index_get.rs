@@ -1987,7 +1987,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let preserve_class_ref_bits =
                     index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let obj_box = lower_expr(ctx, object)?;
+                // #7154: `o[f()]` evaluates the base first and the key second,
+                // leaving the base in a bare SSA register while `f()` runs. An
+                // evacuating minor inside `f()` relocates the base; the location
+                // it was read from is a root and gets rewritten, the register is
+                // not, and the field read then dereferences from-space memory.
+                //
+                // This is the READ counterpart of #7192's `index_set` /
+                // `property_set` receiver guard. zod's `core/checks.ts:68`
+                // (`numericOriginMap[typeof def.value]`) is the instance that
+                // SIGSEGV'd `sfw-registry --help` under
+                // `PERRY_GC_MOVING_LOOP_POLLS=1`: `numericOriginMap` is a module
+                // global (a registered root the collector rewrites) and the key
+                // `typeof def.value` is a property get that can collect.
+                let recv_guard =
+                    super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
                 let key_box = lower_expr(ctx, index)?;
+                let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                 let obj_handle =
@@ -1999,11 +2015,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "object[index]",
                     TypedFeedbackContract::object_get_by_name(),
                 );
-                return Ok(ctx.block().call(
+                let out = ctx.block().call(
                     DOUBLE,
                     "js_typed_feedback_object_get_field_by_name_f64",
                     &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
-                ));
+                );
+                super::temp_root::release_store_operand(ctx, recv_guard);
+                return Ok(out);
             }
             // Last-resort fallback with runtime tag checks on the index.
             // First runtime-check whether the index is a Symbol; if so,
@@ -2011,7 +2029,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // IndexSet branch. Otherwise fall through to string/numeric.
             let preserve_class_ref_bits = index_object_is_class_or_proto_ref(ctx, object.as_ref());
             let obj_box = lower_expr(ctx, object)?;
+            // #7154: same window as the dynamic-string-key arm above — the base
+            // is live in a register while the key expression is lowered, and an
+            // evacuating minor inside the key relocates it.
+            let recv_guard = super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
             let idx_box = lower_expr(ctx, index)?;
+            let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
             // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
             // a TypeError per spec, NOT silently return undefined. The dotted
             // PropertyGet path already guards nullish receivers; the computed
@@ -2114,14 +2137,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block().br(&merge_lbl);
             // Merge.
             ctx.current_block = merge_idx;
-            Ok(ctx.block().phi(
+            let merged = ctx.block().phi(
                 DOUBLE,
                 &[
                     (&v_sym, &sym_end_lbl),
                     (&v_str, &str_end_lbl),
                     (&v_num, &num_end_lbl),
                 ],
-            ))
+            );
+            // Released in the merge block so every arm's getter (any of which
+            // can run a user getter and therefore collect) is still covered.
+            super::temp_root::release_store_operand(ctx, recv_guard);
+            Ok(merged)
         }
 
         // Phase H err: `agg.errors.length` — receiver is

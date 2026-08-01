@@ -85,6 +85,8 @@ second. It is the "assert the gate can fail" arm, and CI runs it next to the
 real corpus.
 """
 import argparse
+import contextlib
+import io
 import os
 import re
 import sys
@@ -758,6 +760,251 @@ define double @perry_fn_selftest__nolabel(double %a) {
 """
 
 
+# ------------------------------------------------- stale-register invariant
+#
+# The check above anchors on a shadow-slot BIND, so it can only see values that
+# are eventually rooted. The residual #7154 offender is not one of those: the
+# receiver of `inst.check(f())` is read out of a closure capture cell, kept in a
+# bare register across `f()`, and never rooted at all. `--stale-registers`
+# checks the more general invariant the module header states:
+#
+#   No register holding a GC pointer may be USED below a collection point.
+#   After the last thing that can collect, every operand is either re-read from
+#   a root the collector rewrote, or re-derived from immutable storage.
+#
+# A "heap-value source" is an instruction that yields a value which may be a GC
+# pointer.  Two kinds:
+#
+#   * an ALLOCATION (ALLOC_RE) -- unambiguously a fresh heap object;
+#   * a ROOT READ -- a load of a location the collector rewrites (a shadow-slot
+#     alloca, a closure capture cell, a temp-root slot, a module global, a
+#     mutable-capture box).  Reading one produces a register that is correct
+#     *now* and stale after the next evacuation, which is precisely the
+#     "property (2) without property (3)" failure `temp_root.rs` describes.
+#
+# `js_closure_get_capture_bits` is the load-bearing one and it is deliberately
+# in NONCOLLECTING (closure/alloc.rs:463 is a raw slot read that cannot
+# allocate) -- being non-collecting is exactly what makes it a root READ rather
+# than a collection point.
+
+# Loads of these globals are root reads: module-level variables live in
+# `@perry_global_*` and are registered roots that evacuation rewrites.
+GLOBAL_ROOT_RE = re.compile(r"@perry_global_[\w.$]+")
+
+# Calls that READ a collector-rewritten location into a register.
+ROOT_READ_CALLS = {
+    "js_closure_get_capture_bits",   # closure/alloc.rs:463 capture cell read
+    "js_closure_get_capture_ptr",
+    "js_gc_temp_root_get",           # a MUTABLE root: rewritten on evacuation
+    "js_box_get_bits",               # box.rs mutable-capture cell read
+    "js_implicit_this_get",          # object/this_binding.rs:160 thread-local
+    "js_new_target_get",
+}
+
+# Argument positions that make a stale pointer FATAL rather than merely wrong:
+# the value is dereferenced as an object.  Used only for ranking, never to
+# suppress -- the check stays one-sided.
+RECEIVER_SINKS = re.compile(
+    r"^js_("
+    r"typed_feedback_native_call_method\w*|native_call_method\w*|"
+    r"native_call_value|object_get_field\w*|object_set_field\w*|"
+    r"object_get_property|object_set_property|put_value_set_dyn_ic|"
+    r"get_value_dyn_ic|closure_call\w*|call_closure|call_function|"
+    r"call_value|invoke_closure|apply_function|"
+    r"array_\w+|map_\w+|set_\w+|typed_feedback_\w*call\w*"
+    r")$"
+)
+
+
+def heap_source_kind(ins, slot_of_alloca):
+    """Classify `ins` as a producer of a possibly-GC-pointer register."""
+    if ins.result is None:
+        return None
+    if ins.callee is not None:
+        if ALLOC_RE.match(ins.callee):
+            return "alloc"
+        if ins.callee in ROOT_READ_CALLS:
+            return "capture" if "capture" in ins.callee else "rootread"
+        return None
+    if "= load " in ins.text:
+        if GLOBAL_ROOT_RE.search(ins.text):
+            return "global"
+        m = re.search(r"load\s+(?:i64|double)\s*,\s*ptr %([\w.$]+)", ins.text)
+        if m and m.group(1) in slot_of_alloca:
+            return "slotload"
+    return None
+
+
+class StaleUse:
+    def __init__(self, module, func, src, kind, use, collectors, reg,
+                 poll_reaching=frozenset()):
+        self.module = module
+        self.func = func
+        self.src = src
+        self.kind = kind
+        self.use = use
+        self.collectors = collectors
+        self.reg = reg
+        self.poll_reaching = poll_reaching
+
+    @property
+    def movers(self):
+        return sorted({c.callee for c in self.collectors
+                       if c.callee == MOVING_POLL or c.callee in self.poll_reaching
+                       or c.callee in POLL_CAPABLE_RUNTIME})
+
+    @property
+    def moving(self):
+        return bool(self.movers)
+
+    @property
+    def fatal_sink(self):
+        return bool(self.use.callee and RECEIVER_SINKS.match(self.use.callee))
+
+
+def check_func_stale(module, f, poll_reaching=frozenset(), moving_only=False):
+    """Report registers holding a heap value that are USED below a collection
+    point without being re-read from a root."""
+    if not f.blocks:
+        return []
+    slot_of_alloca = {}
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            m = BIND_RE.search(ins.text)
+            if m:
+                slot_of_alloca[m.group(2)] = int(m.group(1))
+
+    def_of = {}
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if ins.result:
+                def_of[ins.result] = ins
+
+    idom = dominators(f)
+    out = []
+
+    for b in f.blocks:
+        for src in f.insns[b]:
+            kind = heap_source_kind(src, slot_of_alloca)
+            if kind is None:
+                continue
+            # Forward closure over bit-level/identity ops: the untagged
+            # pointer, the nanbox and the bitcast are all the same address.
+            chain = {src.result}
+            grew = True
+            while grew:
+                grew = False
+                for bb in f.blocks:
+                    for ins in f.insns[bb]:
+                        if (ins.result and ins.result not in chain
+                                and is_transparent(ins)
+                                and uses(ins.text, chain)):
+                            chain.add(ins.result)
+                            grew = True
+            # First real (non-transparent) use of any register in the chain
+            # that sits below a collection point.
+            for bb in f.blocks:
+                if not dominates(idom, src.block, bb):
+                    continue
+                for use in f.insns[bb]:
+                    if use.result in chain or is_transparent(use):
+                        continue
+                    if not uses(use.text, chain):
+                        continue
+                    if use.block == src.block and use.idx <= src.idx:
+                        continue
+                    # `js_shadow_slot_bind(N, ptr %alloca)` names the alloca,
+                    # not the value; a store THROUGH the chain is a use of the
+                    # pointer operand only when the chain is the stored value.
+                    hits = window_hits_generic(f, src, use)
+                    if not hits:
+                        continue
+                    v = StaleUse(module, f.name, src, kind, use, hits,
+                                 src.result, poll_reaching)
+                    if moving_only and not v.moving:
+                        continue
+                    out.append(v)
+                    break
+                else:
+                    continue
+                break
+    return out
+
+
+def window_hits_generic(f, A, B):
+    """Collecting calls on some CFG path from just after A to just before B."""
+    hits = []
+    if A.block == B.block:
+        for c in f.insns[A.block]:
+            if is_collecting(c.callee) and A.idx < c.idx < B.idx:
+                hits.append(c)
+        return hits
+    for c in f.insns[A.block]:
+        if is_collecting(c.callee) and c.idx > A.idx:
+            hits.append(c)
+    for c in f.insns[B.block]:
+        if is_collecting(c.callee) and c.idx < B.idx:
+            hits.append(c)
+    for m_blk in between_blocks(f, A.block, B.block):
+        for c in f.insns[m_blk]:
+            if is_collecting(c.callee):
+                hits.append(c)
+    return hits
+
+
+def run_stale(parsed, poll_reaching, verbose, moving_only, fatal_only,
+              max_stale=None):
+    total = 0
+    per_kind = defaultdict(int)
+    per_sink = defaultdict(int)
+    out = []
+    for mod, fs in parsed:
+        for f in fs:
+            for v in check_func_stale(mod, f, poll_reaching, moving_only):
+                if fatal_only and not v.fatal_sink:
+                    continue
+                total += 1
+                per_kind[v.kind] += 1
+                per_sink[v.use.callee or "store"] += 1
+                cs = sorted({c.callee for c in v.collectors})
+                out.append(
+                    f"{mod}::{f.name}\n"
+                    f"  source ({v.kind}): {v.src.text.strip()}\n"
+                    f"  stale use       : {v.use.text.strip()}\n"
+                    f"  between         : {', '.join(cs[:6])}"
+                    f"{'  (+%d more)' % (len(cs) - 6) if len(cs) > 6 else ''}\n"
+                    f"  MOVING          : "
+                    f"{('YES via ' + ', '.join(v.movers[:3])) if v.moving else 'no'}\n"
+                )
+    if verbose:
+        print("\n".join(out))
+    print(f"=== stale-register uses: {total}")
+    for k, n in sorted(per_kind.items(), key=lambda kv: -kv[1]):
+        print(f"  {n:6d}  source={k}")
+    for k, n in sorted(per_sink.items(), key=lambda kv: -kv[1])[:15]:
+        print(f"  {n:6d}  sink={k}")
+
+    # This mode is a DIAGNOSTIC, and unlike the bind-anchored check it is not
+    # calibrated to zero. The count is dominated by values the checker cannot
+    # prove are pointers, and even the `--fatal-sinks` slice still carries a
+    # known-unfixed class (`js_closure_call*`, #7154), so `!= 0` is the normal
+    # state of a healthy tree. Exiting 1 on any hit would make this a check
+    # that can never pass, which is the same failure as the four "a gate that
+    # cannot fail" hazards in CLAUDE.md read backwards: every caller learns to
+    # ignore the exit status, and the day it means something nobody is looking.
+    # Ranked leads are the product. Gating is opt-in and explicit via
+    # --max-stale, which is how a calibrated slice becomes a ratchet later.
+    if max_stale is not None:
+        if total > max_stale:
+            print(f"error: {total} stale-register use(s), budget is "
+                  f"{max_stale}. Lower the count or raise --max-stale "
+                  "deliberately.", file=sys.stderr)
+            return 1
+        print(f"within budget: {total} <= {max_stale}")
+    return 0
+
+
+
 def _scan(paths, moving_only, anchor):
     """(violations, n_binds) over `paths`."""
     parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
@@ -778,6 +1025,20 @@ def _scan(paths, moving_only, anchor):
         for v in check_func(mod, f, moving_only, poll_reaching, anchor)
     ]
     return found, binds
+
+
+def _stale_probe(path, max_stale):
+    """(reported uses, exit status) from --stale-registers over one file."""
+    parsed = [(os.path.basename(path), parse_file(path))]
+    poll_reaching, _known = compute_poll_reaching(
+        [f for _m, fs in parsed for f in fs])
+    buf = io.StringIO()
+    # Both streams: an over-budget probe is *expected* to print its error, and
+    # that line in the self-test transcript reads like a real failure.
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        rc = run_stale(parsed, poll_reaching, False, False, False, max_stale)
+    m = re.search(r"stale-register uses: (\d+)", buf.getvalue())
+    return (int(m.group(1)) if m else -1), rc
 
 
 def self_test():
@@ -824,6 +1085,32 @@ def self_test():
                   file=sys.stderr)
             ok = False
 
+        # --stale-registers is a diagnostic, so its exit status is asserted
+        # from both ends: the default must NOT go red on a corpus that has
+        # hits, and --max-stale must actually be able to. A budget nobody has
+        # watched fail is a budget that has not been shown to work.
+        n_planted, rc_planted = _stale_probe(planted, None)
+        if n_planted != 2:
+            print(f"self-test FAIL: --stale-registers over the planted fixture "
+                  f"-> {n_planted} uses, expected 2", file=sys.stderr)
+            ok = False
+        if rc_planted != 0:
+            print("self-test FAIL: --stale-registers without --max-stale must "
+                  f"exit 0 (diagnostic), got {rc_planted}", file=sys.stderr)
+            ok = False
+        if _stale_probe(planted, 0)[1] != 1:
+            print("self-test FAIL: --max-stale 0 over the planted fixture must "
+                  "exit 1; the budget cannot fail", file=sys.stderr)
+            ok = False
+        if _stale_probe(planted, 2)[1] != 0:
+            print("self-test FAIL: --max-stale 2 over the planted fixture must "
+                  "exit 0; the budget is off by one", file=sys.stderr)
+            ok = False
+        if _stale_probe(clean, 0) != (0, 0):
+            print("self-test FAIL: --max-stale 0 over the control fixture must "
+                  "report 0 uses and exit 0", file=sys.stderr)
+            ok = False
+
         try:
             _scan([broken], False, "alloc")
         except MalformedIR:
@@ -851,12 +1138,36 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--self-test", action="store_true",
                     help="run the built-in planted/clean fixtures and exit")
+    ap.add_argument("--stale-registers", action="store_true",
+                    help="check the general stale-register invariant instead of "
+                         "the bind-anchored one: report every register holding a "
+                         "GC value that is USED below a collection point without "
+                         "being re-read from a root (#7154). Diagnostic: this "
+                         "mode exits 0 and reports counts unless --max-stale "
+                         "gives it a budget")
+    ap.add_argument("--fatal-sinks", action="store_true",
+                    help="with --stale-registers, keep only uses that "
+                         "DEREFERENCE the stale value (a call receiver/callee), "
+                         "where a relocation is fatal rather than merely wrong")
+    ap.add_argument("--max-stale", type=int, default=None, metavar="N",
+                    help="with --stale-registers, exit 1 when more than N uses "
+                         "are reported. Without it the mode is a ranked lead "
+                         "list, not a pass/fail number, so it exits 0.")
     ap.add_argument("--min-files", type=int, default=1, metavar="N",
                     help="fail unless at least N .ll files were scanned (default 1)")
     ap.add_argument("--min-binds", type=int, default=1, metavar="N",
                     help="fail unless at least N root stores were seen (default 1). "
                          "A clean verdict over zero root stores proves nothing.")
     ns = ap.parse_args()
+
+    # A knob that is silently ignored is a disarmed knob: `--max-stale 0`
+    # without `--stale-registers` would run the bind-anchored check and look
+    # like it enforced a budget, and `--fatal-sinks` alone would look like it
+    # narrowed a report it never reached. Refuse instead (argparse exits 2).
+    if ns.max_stale is not None and not ns.stale_registers:
+        ap.error("--max-stale requires --stale-registers")
+    if ns.fatal_sinks and not ns.stale_registers:
+        ap.error("--fatal-sinks requires --stale-registers")
 
     if ns.self_test:
         return self_test()
@@ -891,6 +1202,9 @@ def main():
         parsed.append((os.path.basename(p), parse_file(p)))
     poll_reaching, _known = compute_poll_reaching(
         [f for _m, fs in parsed for f in fs])
+    if ns.stale_registers:
+        return run_stale(parsed, poll_reaching, verbose, moving_only,
+                         ns.fatal_sinks, ns.max_stale)
     n_binds = sum(
         1
         for _m, fs in parsed
