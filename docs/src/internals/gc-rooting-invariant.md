@@ -140,10 +140,14 @@ python3 scripts/gc_root_dominance_check.py ir-corpus --moving-only \
 ```
 
 It parses the emitted LLVM IR, builds per-function CFGs, computes real
-Cooper/Harvey/Kennedy dominance, and reports any root store that does not
-dominate a preceding collection point. It is one-sided: an unrecognised call
-counts as collecting, so a gap in its model costs a false positive, never a
-missed bug.
+Cooper/Harvey/Kennedy dominance, and reports every **collection point** that can
+run between the instruction producing a GC value and the root store that
+publishes it — that is, a collection point the value's root store does **not**
+dominate, which is exactly the rule at the top of this page. Dominance is what
+makes the report sound in both directions: the producing instruction must
+dominate the bind, so the register being rooted really is the one that
+instruction produced on every path. It is one-sided: an unrecognised call counts
+as collecting, so a gap in its model costs a false positive, never a missed bug.
 
 For a single file you are iterating on:
 
@@ -153,15 +157,35 @@ PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_INLINE_SHADOW_SLOT=0 \
 python3 scripts/gc_root_dominance_check.py .perry-trace/llvm -v
 ```
 
-Both env knobs matter. `PERRY_GC_MOVING_LOOP_POLLS=1` is what puts
-`js_gc_loop_safepoint` in the IR, which the `MOVING` classification keys on;
-without it the corpus **cannot express the bug**. `PERRY_INLINE_SHADOW_SLOT=0`
-makes every root store the `js_shadow_slot_bind` call form the checker anchors
-on.
+Both env knobs matter, for different reasons.
+
+`PERRY_GC_MOVING_LOOP_POLLS=1` is what puts `js_gc_loop_safepoint` in the IR. It
+is the only collection point a **back edge itself** introduces — a loop whose
+body calls nothing that collects still collects, once per iteration, and only
+with this on. So a bug that needs a collection between two points of an
+otherwise inert loop body cannot appear in the corpus without it.
+
+It is **not** what makes the `MOVING` classification work, and it is not the
+only collection point that can run inside a loop — a `POLL_CAPABLE_RUNTIME`
+helper called from a loop body is in-loop too. `movers`
+(`gc_root_dominance_check.py:576-579`) counts `js_gc_loop_safepoint`, anything
+in `poll_reaching`, **and** anything in `POLL_CAPABLE_RUNTIME` — the runtime
+helpers that can re-enter JS, such as `js_object_set_field_by_name`,
+`js_object_get_property` and `js_call_function`. Those are moving with no poll
+anywhere near them. As of this writing all five violations the gate reports are
+`MOVING: YES via js_object_set_field_by_name`; not one of them needs a poll.
+
+So: turn the knob on, because it widens what the corpus can express, but do not
+read a poll-free function as safe.
+
+`PERRY_INLINE_SHADOW_SLOT=0` makes every root store the `js_shadow_slot_bind`
+call form the checker anchors on.
 
 `--stale-registers` (#7206) additionally catches values that are *never* rooted
 — read out of a root and held in a register across a collection point. That is
-the mode that found cases 3 and 4.
+the mode that found cases 3 and 4. It ships and works, but **the gate command
+above does not pass it**: the bind-anchored scan is the arm that is baselined by
+the allowlist, so cases 3 and 4 only surface when you run this mode by hand.
 
 `--unrooted-allocas` (#7207) covers the remaining shape, and is the one the
 bind-anchored check is structurally blind to: the value lives in a plain

@@ -19,8 +19,14 @@
     "green is the thing this file exists to prevent -- if the count went up, a",
     "new violation was introduced.",
     "",
-    "Fingerprint format:  <module>.ll::<function>::<alloc>-><first collector>",
-    "Get it from the checker's own output (`-v` prints one per violation)."
+    "Fingerprint format:",
+    "  <module>.ll::<function>::<alloc>-><alphabetically-first collector>",
+    "The collector is `sorted(set(callees))[0]` over EVERY collector in the",
+    "window -- the alphabetically first, NOT the first one in program order.",
+    "Do not hand-write it from reading the IR; copy it out of the checker's own",
+    "output (`-v` prints one per violation). A hand-derived entry that guesses",
+    "program order matches nothing, and an entry that matches nothing is a",
+    "build failure."
   ],
   "entries": [
     {
