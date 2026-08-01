@@ -4264,11 +4264,35 @@ pub fn run_with_parse_cache(
                 // `_js_ws_connect_start`. Replaying the manifest makes a hit
                 // record exactly what the skipped codegen would have.
                 perry_codegen::ext_registry::replay_ffi_symbols(&ffi_symbols);
+                // #7167: `-o` must name the same file whether the object cache
+                // was warm or cold. A linking compile can hand the linker the
+                // cache path directly — the bytes are the bytes and nothing
+                // else looks at them — but `--no-link` promised the user a file
+                // at `-o`, so a hit has to materialise one there too. Copy
+                // rather than hand back the cache path: the cache entry is
+                // shared with every other build and must not become an output
+                // the user may overwrite or delete.
+                let hit_path = if args.no_link {
+                    fs::copy(&cached_path, &obj_path).map_err(|e| {
+                        format!(
+                            "failed to write cached object to {}: {}",
+                            obj_path.display(),
+                            e
+                        )
+                    })?;
+                    obj_path
+                } else {
+                    cached_path
+                };
                 return Ok(NativeObjectArtifact {
-                    path: cached_path,
+                    path: hit_path,
                     bytes: None,
                     fingerprint: format!("cache:{:016x}", key),
                     cleanup_after_link: false,
+                    // The *cache* was reused either way — that is what the
+                    // hit/miss stats and the `--keep-intermediates` exemption
+                    // are about. The label printed below keys on whether the
+                    // path we are reporting is the cache's or the user's.
                     reused_cache_path: true,
                     stored_cache_path: false,
                 });
@@ -4342,20 +4366,34 @@ pub fn run_with_parse_cache(
                 object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
                 object_cache.store_and_get_path(k, &object_code)
             }) {
-                return Ok(NativeObjectArtifact {
-                    path: cached_path,
-                    bytes: None,
-                    fingerprint: object_fingerprint,
-                    cleanup_after_link: false,
-                    reused_cache_path: false,
-                    stored_cache_path: true,
-                });
+                // #7167: handing back the cache path saves a copy for a
+                // compile that is going to *link* — the linker is the only
+                // reader and the bytes are the bytes. `--no-link` promised the
+                // user a file at `-o`, so it keeps the store (a later build
+                // still hits) but falls through to write the object it just
+                // produced to the destination. Otherwise `-o` would be honoured
+                // only with the cache disabled, which is the cache-warmth
+                // dependence this destination rule exists to avoid.
+                if !args.no_link {
+                    return Ok(NativeObjectArtifact {
+                        path: cached_path,
+                        bytes: None,
+                        fingerprint: object_fingerprint,
+                        cleanup_after_link: false,
+                        reused_cache_path: false,
+                        stored_cache_path: true,
+                    });
+                }
             }
             Ok(NativeObjectArtifact {
                 path: obj_path,
                 bytes: Some(object_code),
                 fingerprint: object_fingerprint,
-                cleanup_after_link: true,
+                // #7167: a staged object is an intermediate; a `--no-link`
+                // object is the product and must never be listed for cleanup.
+                // Nothing consults this before the `--no-link` return today —
+                // it is set correctly so that stays true if cleanup ever moves.
+                cleanup_after_link: !args.no_link,
                 reused_cache_path: false,
                 stored_cache_path: false,
             })
@@ -4434,7 +4472,13 @@ pub fn run_with_parse_cache(
     for artifact in artifacts {
         match format {
             OutputFormat::Text => {
-                let label = if artifact.reused_cache_path {
+                // #7167: on `--no-link` a cache hit is copied out to `-o`, so
+                // the path being reported is a file this compile wrote, not
+                // the cache entry. Say so — "Reused cached object" would name
+                // a path the caller cannot treat as its output, and the census
+                // harness's `_written_objects` (which scrapes exactly these
+                // lines) would see no objects at all from a warm cache.
+                let label = if artifact.reused_cache_path && !args.no_link {
                     "Reused cached object"
                 } else if artifact.stored_cache_path {
                     "Stored cached object"
