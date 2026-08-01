@@ -71,6 +71,17 @@
   identity keys are supported by pointer identity but are not tracked across a
   GC relocation; primitive keys are the GC-safe path.
 
+  Two further divergences, both pre-existing and both found by diffing a
+  compiled probe against the npm package under Node 26.5.1 (41 of 45 output
+  lines are byte-identical, including every option-validation case above):
+
+  - `cache.size` is wired as a *method* row, so `cache.size()` works but
+    npm's `cache.size` property read yields `undefined`. Unchanged here.
+  - npm caches its TTL clock and only refreshes it from a `setTimeout`
+    (its `ttlResolution`), so code that blocks the event loop sees entries
+    stay live indefinitely on npm. This binding reads `performance.now()`
+    on every access, so a blocking loop does observe expiry.
+
   The GC-survival test moved to its own test binary
   (`crates/perry-ext-lru-cache/tests/gc_survival.rs`) and now asserts that
   the collector *relocated* the cached value, not merely that it is still
