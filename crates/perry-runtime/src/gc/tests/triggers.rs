@@ -438,7 +438,10 @@ fn test_effective_arena_trigger_respects_armed_values() {
 fn test_moving_loop_minor_off_by_default_7154() {
     use super::super::policy::moving_loop_polls_enabled_from_env as enabled;
     // Default (unset) is non-evacuating.
-    assert!(!enabled(None), "moving-loop minor must be OFF by default (#7154)");
+    assert!(
+        !enabled(None),
+        "moving-loop minor must be OFF by default (#7154)"
+    );
     // Kill-switch values remain off.
     assert!(!enabled(Some("0")));
     assert!(!enabled(Some("off")));
