@@ -215,19 +215,46 @@ pub(crate) fn print_deferred_eval_notice(format: OutputFormat) {
     // error that throws only if reached.
     let kind_width = sites.iter().map(|s| s.kind.len()).max().unwrap_or(0);
     let loc_width = sites.iter().map(|s| s.location.len()).max().unwrap_or(0);
+    // #7204: the symbol column. An `unimplemented API` line used to name only
+    // a file and a line number, so a shimmed-module member that silently went
+    // missing (`lodash.omit`, served by Perry's partial lodash shim) produced
+    // a notice a reader could not act on — and if the call site swallowed the
+    // deferred throw, the notice was the ONLY evidence the program was broken.
+    let detail_width = sites
+        .iter()
+        .filter_map(|s| s.detail.as_ref())
+        .map(|d| d.len())
+        .max()
+        .unwrap_or(0);
     for s in &sites {
         let disposition = if s.kind.contains("eval") || s.kind.contains("Function") {
             "runtime interpreter (#6559)"
         } else {
             "deferred runtime error (throws only if reached)"
         };
+        let detail = s.detail.as_deref().unwrap_or("");
         eprintln!(
-            "  - {:<kw$}   {:<lw$}   → {disposition}",
+            "  - {:<kw$}   {:<dw$}   {:<lw$}   → {disposition}",
             s.kind,
+            detail,
             s.location,
             kw = kind_width,
+            dw = detail_width,
             lw = loc_width,
         );
+    }
+    // One remedy block per distinct package, not per site — a program calling
+    // four missing lodash helpers needs the `compilePackages` line once.
+    let mut shown: Vec<&str> = Vec::new();
+    for s in &sites {
+        let Some(remedy) = s.remedy.as_deref() else {
+            continue;
+        };
+        if shown.contains(&remedy) {
+            continue;
+        }
+        shown.push(remedy);
+        eprintln!("  {y}{remedy}{r}");
     }
     eprintln!(
         "  Pass {b}--strict-eval{r}/{b}--strict-dynamic-import{r} (or set {b}perry.strict = true{r}) to make these a compile-time error instead."

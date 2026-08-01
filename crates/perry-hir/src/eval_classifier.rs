@@ -397,6 +397,20 @@ pub struct DeferredEvalSite {
     pub kind: String,
     /// `file:line` of the site.
     pub location: String,
+    /// What, specifically, was degraded — for an unimplemented-API site the
+    /// dotted symbol (`lodash.omit`). `None` for surfaces where the kind
+    /// label already says everything there is to say (`eval(...)`).
+    ///
+    /// Without this the notice read `unimplemented API   src/app.ts:3`, which
+    /// names neither the module nor the member. A user whose build printed
+    /// that line had no way to tell which call went missing short of running
+    /// the program and reaching the throw — and a caller that swallows the
+    /// throw never even gets that.
+    pub detail: Option<String>,
+    /// A concrete, copy-pasteable fix for this site, when one exists. Today
+    /// this is the `perry.compilePackages` escape hatch for a member Perry's
+    /// bundled npm shim doesn't implement.
+    pub remedy: Option<String>,
 }
 
 /// Set strict-eval mode for the current compile thread. `true` restores the
@@ -456,8 +470,65 @@ pub fn location_string(source_file_path: &str, byte_offset: u32) -> String {
 /// Build the descriptive message a *deferred* unimplemented-API site throws at
 /// runtime when it is actually reached (#5245). `api` is the dotted display
 /// label (e.g. `process.binding`); `location` is `file:line`.
+///
+/// When `api` names a member of a *bundled npm shim* the message also carries
+/// the fix, because in that case the missing member is not a Perry-wide
+/// limitation the user has to wait on — the real package is one
+/// `perry.compilePackages` entry away. See [`shimmed_package_remedy`].
 pub fn unimplemented_runtime_error_message(api: &str, location: &str) -> String {
-    format!("{api} is not implemented in Perry (ahead-of-time) ({location})")
+    let base = format!("{api} is not implemented in Perry (ahead-of-time) ({location})");
+    match shimmed_package_remedy(api) {
+        Some(remedy) => format!("{base}. {remedy}"),
+        None => base,
+    }
+}
+
+/// The npm package name behind a dotted API label, when that label names a
+/// member of a package Perry serves from a **bundled native shim**.
+///
+/// Returns `None` for Node builtins (`fs.cp` — there is no npm source to
+/// compile instead), for Perry-owned modules (`perry/gc`), and for anything
+/// that isn't in `NATIVE_MODULES`.
+///
+/// The module is the label minus its last dotted segment, so `lodash.omit` →
+/// `lodash` and `decimal.js.foo` → `decimal.js`. A deeper label like
+/// `crypto.subtle.digest` yields `crypto.subtle`, which is not a native module
+/// name, so it correctly falls through to `None`.
+pub fn shimmed_package_module(api: &str) -> Option<&str> {
+    let (module, _member) = api.rsplit_once('.')?;
+    // The gate sites pass whichever spelling the user imported, so normalize
+    // before the builtin check — `is_node_builtin_module` expects a stripped
+    // name and `node:fs.bogus` would otherwise sail past it.
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    if crate::ir::is_node_builtin_module(module) {
+        return None;
+    }
+    // Perry-owned surfaces (`perry`, `perry/thread`, `perry/gc`) have no npm
+    // package behind them — pointing at `compilePackages` would be nonsense.
+    if module == "perry" || module.starts_with("perry/") {
+        return None;
+    }
+    crate::ir::is_native_module(module).then_some(module)
+}
+
+/// The `perry.compilePackages` remedy sentence for an unimplemented member of
+/// a bundled npm shim, or `None` when no such remedy applies.
+///
+/// This is the actionable half of the #463 diagnostic. Perry decides on the
+/// user's behalf to serve a natively-shimmed npm package from its own partial
+/// implementation instead of the installed source; when that implementation is
+/// missing the member the program actually calls, the resulting failure is a
+/// consequence of *Perry's* substitution, and the user can undo it. Saying so
+/// at the point of failure is the difference between a 30-second fix and an
+/// afternoon.
+pub fn shimmed_package_remedy(api: &str) -> Option<String> {
+    let module = shimmed_package_module(api)?;
+    Some(format!(
+        "`{module}` is served by Perry's bundled native shim, which implements only part of \
+         the package's API. To compile the real npm source instead, add it to \
+         `perry.compilePackages` in package.json: {{ \"perry\": {{ \"compilePackages\": \
+         [\"{module}\"] }} }}"
+    ))
 }
 
 /// The single decision point every unimplemented-API gate (#463 sites in
@@ -496,9 +567,23 @@ pub fn check_unimplemented_api(
     }
 
     // Default (defer) mode or the `PERRY_ALLOW_UNIMPLEMENTED` override: record
-    // the site for the visible end-of-compile notice and defer.
-    record_deferred_aot_site(UNIMPLEMENTED_API_KIND, location);
+    // the site for the visible end-of-compile notice and defer. The API name
+    // and the shim remedy ride along so the notice can name what broke and
+    // how to fix it — pre-#7204 it printed only `unimplemented API <file:line>`.
+    record_deferred_unimplemented_api(location, api);
     UnimplementedDecision::DeferToRuntimeError(runtime_msg)
+}
+
+/// Record an unimplemented-API site with the detail the notice needs to be
+/// actionable: the dotted symbol, and the `perry.compilePackages` remedy when
+/// the module is a bundled npm shim.
+pub fn record_deferred_unimplemented_api(location: impl Into<String>, api: &str) {
+    push_deferred_site(DeferredEvalSite {
+        kind: UNIMPLEMENTED_API_KIND.to_string(),
+        location: location.into(),
+        detail: Some(api.to_string()),
+        remedy: shimmed_package_remedy(api),
+    });
 }
 
 /// Record a deferred ahead-of-time-unsupported site for the end-of-compile
@@ -509,10 +594,19 @@ pub fn check_unimplemented_api(
 /// `kind` is the display label of the surface (e.g. `import(...)`); `location`
 /// is `file:line`.
 pub fn record_deferred_aot_site(kind: impl Into<String>, location: impl Into<String>) {
-    let site = DeferredEvalSite {
+    push_deferred_site(DeferredEvalSite {
         kind: kind.into(),
         location: location.into(),
-    };
+        detail: None,
+        remedy: None,
+    });
+}
+
+/// Shared idempotent insert for every `record_deferred_*` entry point.
+/// `detail`/`remedy` are a deterministic function of `(kind, location)`, so
+/// full-struct equality dedupes exactly as the historical `(kind, location)`
+/// comparison did.
+fn push_deferred_site(site: DeferredEvalSite) {
     if let Ok(mut v) = EVAL_DEFERRED_SITES.lock() {
         if !v.contains(&site) {
             v.push(site);
@@ -942,6 +1036,95 @@ mod tests {
         let mine: Vec<_> = sites.iter().filter(|s| s.location == loc).collect();
         assert_eq!(mine.len(), 1, "exactly one recorded site for {loc}");
         assert_eq!(mine[0].kind, UNIMPLEMENTED_API_KIND);
+        // #7204: the recorded site must name the symbol. The notice used to
+        // print only `unimplemented API   <file:line>`, which told a reader
+        // nothing about what had gone missing.
+        assert_eq!(mine[0].detail.as_deref(), Some("process.binding"));
+    }
+
+    /// A member of a **bundled npm shim** carries the `perry.compilePackages`
+    /// remedy — in the recorded notice site AND in the message the deferred
+    /// site throws.
+    ///
+    /// This is the actionable half of #7204. `lodash` is in `NATIVE_MODULES`,
+    /// so Perry serves it from its own partial shim instead of the installed
+    /// package; when the shim is missing the member the program calls, the
+    /// user's fix is one `compilePackages` entry, and nothing in the old
+    /// diagnostic said so. `_.omit(headers, ['host'])` — a real Socket
+    /// Firewall call on every proxied request — is exactly this shape.
+    #[test]
+    fn shimmed_npm_member_carries_the_compile_packages_remedy() {
+        let _sink_guard = lock_eval_sink();
+        set_unimplemented_strict_mode(false);
+        let loc = "/app/shim_remedy_fixture.ts:3";
+        let decision = check_unimplemented_api(
+            "`lodash.omit` is not implemented (#463)",
+            "lodash.omit",
+            loc,
+            0,
+        );
+        match decision {
+            UnimplementedDecision::DeferToRuntimeError(msg) => {
+                assert!(msg.contains("lodash.omit"), "msg: {msg}");
+                assert!(msg.contains("perry.compilePackages"), "msg: {msg}");
+                assert!(msg.contains("bundled native shim"), "msg: {msg}");
+            }
+            other => panic!("expected defer, got {other:?}"),
+        }
+        let sites = take_deferred_eval_sites();
+        let mine: Vec<_> = sites.iter().filter(|s| s.location == loc).collect();
+        assert_eq!(mine.len(), 1, "exactly one recorded site for {loc}");
+        assert_eq!(mine[0].detail.as_deref(), Some("lodash.omit"));
+        let remedy = mine[0]
+            .remedy
+            .as_deref()
+            .expect("a shimmed npm member must carry a remedy");
+        assert!(remedy.contains("compilePackages"), "remedy: {remedy}");
+        assert!(remedy.contains("\"lodash\""), "remedy: {remedy}");
+    }
+
+    /// The remedy applies to bundled npm shims ONLY.
+    ///
+    /// A Node builtin has no npm source to compile instead, and neither does a
+    /// Perry-owned module, so suggesting `compilePackages` for either would
+    /// send the user chasing a fix that cannot exist. Deep labels
+    /// (`crypto.subtle.digest`) resolve to a module name that isn't in
+    /// `NATIVE_MODULES` and fall through the same way.
+    #[test]
+    fn remedy_is_scoped_to_bundled_npm_shims() {
+        assert_eq!(shimmed_package_module("lodash.omit"), Some("lodash"));
+        assert_eq!(
+            shimmed_package_module("dayjs.businessDaysAdd"),
+            Some("dayjs")
+        );
+
+        for api in [
+            // Node builtins — nothing to compile from npm.
+            "fs.bogus",
+            "process.binding",
+            "crypto.hmacSha256",
+            // `node:`-prefixed spelling of the same.
+            "node:fs.bogus",
+            // Perry-owned surfaces.
+            "perry.notReal",
+            "perry/gc.notReal",
+            // Deeper namespaces, and modules Perry doesn't shim at all.
+            "crypto.subtle.digest",
+            "some-random-package.thing",
+            // No dot at all.
+            "bareword",
+        ] {
+            assert_eq!(
+                shimmed_package_module(api),
+                None,
+                "{api} must not offer a compilePackages remedy"
+            );
+            assert_eq!(shimmed_package_remedy(api), None, "{api}");
+            assert!(
+                !unimplemented_runtime_error_message(api, "f.ts:1").contains("compilePackages"),
+                "{api}"
+            );
+        }
     }
 
     /// Strict-unimplemented mode: an unimplemented-API site is refused (the
