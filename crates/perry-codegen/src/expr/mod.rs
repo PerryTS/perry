@@ -1527,6 +1527,12 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 }
 
 impl<'a> FnCtx<'a> {
+    pub(crate) fn has_imported_extern_binding(&self, name: &str) -> bool {
+        self.imported_vars.contains(name)
+            || self.import_function_prefixes.contains_key(name)
+            || self.import_function_v8_specifiers.contains_key(name)
+    }
+
     /// The `Ptr<Shape>` proof for a receiver expression, if any — the single
     /// entry point every representation-selection object site consults.
     ///

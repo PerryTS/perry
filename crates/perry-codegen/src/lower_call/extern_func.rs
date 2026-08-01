@@ -1351,11 +1351,7 @@ pub fn try_lower_extern_func_call(
         // scope in #689 and continue to fall through to `js_jsx`; the runtime
         // returns `undefined` for those unrecognised intrinsic sentinels until
         // the rewriter is extended.
-        "jsx" | "jsxs"
-            if !ctx.imported_vars.contains(name)
-                && !ctx.import_function_prefixes.contains_key(name)
-                && !ctx.import_function_v8_specifiers.contains_key(name) =>
-        {
+        "jsx" | "jsxs" if !ctx.has_imported_extern_binding(name) => {
             if let Some(call) = try_rewrite_perry_tui_jsx_intrinsic(ctx, name == "jsxs", args)? {
                 return Ok(Some(call));
             }

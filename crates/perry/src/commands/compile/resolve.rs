@@ -858,37 +858,39 @@ fn prefer_ts_source_for_package_entry(
     package_dir: &Path,
     normal_entry: PathBuf,
 ) -> Option<PathBuf> {
-    if is_js_file(&normal_entry) {
-        // Try native TypeScript equivalents of the JS entry first, in the
-        // same preference order used by resolve_with_extensions.
-        for ext in ["ts", "tsx", "mts"] {
-            let ts_path = normal_entry.with_extension(ext);
-            if ts_path.is_file() && !is_hybrid_cjs_emit_input(&ts_path) {
-                return Some(ts_path);
-            }
+    if !is_js_file(&normal_entry) {
+        return Some(normal_entry);
+    }
+
+    // Try native TypeScript equivalents of the JS entry first, in the
+    // same preference order used by resolve_with_extensions.
+    for ext in ["ts", "tsx", "mts"] {
+        let ts_path = normal_entry.with_extension(ext);
+        if ts_path.is_file() && !is_hybrid_cjs_emit_input(&ts_path) {
+            return Some(ts_path);
         }
-        // Check src/ directory mirror of lib/ or dist/ path
-        if let Ok(rel) = normal_entry.strip_prefix(package_dir) {
-            let rel_str = rel.to_string_lossy();
-            if rel_str.starts_with("lib") || rel_str.starts_with("dist") {
-                let stripped = if rel_str.starts_with("lib") {
-                    rel.strip_prefix("lib")
-                } else {
-                    rel.strip_prefix("dist")
-                };
-                if let Ok(rest) = stripped {
-                    for ext in ["ts", "tsx", "mts"] {
-                        let src_equiv = package_dir.join("src").join(rest).with_extension(ext);
-                        if src_equiv.is_file() && !is_hybrid_cjs_emit_input(&src_equiv) {
-                            return Some(src_equiv);
-                        }
+    }
+    // Check src/ directory mirror of lib/ or dist/ path
+    if let Ok(rel) = normal_entry.strip_prefix(package_dir) {
+        let rel_str = rel.to_string_lossy();
+        if rel_str.starts_with("lib") || rel_str.starts_with("dist") {
+            let stripped = if rel_str.starts_with("lib") {
+                rel.strip_prefix("lib")
+            } else {
+                rel.strip_prefix("dist")
+            };
+            if let Ok(rest) = stripped {
+                for ext in ["ts", "tsx", "mts"] {
+                    let src_equiv = package_dir.join("src").join(rest).with_extension(ext);
+                    if src_equiv.is_file() && !is_hybrid_cjs_emit_input(&src_equiv) {
+                        return Some(src_equiv);
                     }
                 }
             }
         }
     }
 
-    Some(normal_entry)
+    None
 }
 
 /// Resolve exports field from package.json
