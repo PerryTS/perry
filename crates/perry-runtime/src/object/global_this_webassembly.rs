@@ -584,12 +584,19 @@ pub(crate) fn js_webassembly_memory_from_descriptor(descriptor: f64) -> f64 {
             crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
         }
     };
-    let obj = js_object_alloc(0, 1);
-    if obj.is_null() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 1));
+    if obj.get_raw_mut_ptr::<ObjectHeader>().is_null() {
         return undefined();
     }
-    js_object_set_field_by_name(obj, named_key(b"buffer"), wasm_memory_new_buffer(pages));
-    crate::value::js_nanbox_pointer(obj as i64)
+    let buffer = scope.root_nanbox_f64(wasm_memory_new_buffer(pages));
+    let key = scope.root_string_ptr(named_key(b"buffer"));
+    js_object_set_field_by_name(
+        obj.get_raw_mut_ptr::<ObjectHeader>(),
+        key.get_raw_const_ptr::<crate::StringHeader>(),
+        buffer.get_nanbox_f64(),
+    );
+    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
 extern "C" fn webassembly_memory_ctor_thunk(

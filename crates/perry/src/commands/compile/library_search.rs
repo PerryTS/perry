@@ -1227,8 +1227,9 @@ pub(super) fn find_wasm_host_library(target: Option<&str>) -> Option<PathBuf> {
 /// via the `CARGO_MANIFEST_DIR/../../target/release` candidate when perry runs
 /// out-of-tree). Returns the resolved path, or `None` when there's no workspace
 /// source to build from or the build fails (the caller then surfaces the
-/// original not-found guidance). A no-op when the archive already exists —
-/// callers guard on `find_wasm_host_library(...).is_none()` first.
+/// original not-found guidance). Callers may invoke this even when an archive
+/// exists: Cargo's freshness check is the guard against a stale host archive
+/// missing symbols required by a newly rebuilt runtime.
 pub(super) fn build_wasm_host_library(
     target: Option<&str>,
     format: OutputFormat,

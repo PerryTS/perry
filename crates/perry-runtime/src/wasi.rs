@@ -82,6 +82,10 @@ fn ptr_value(ptr: *mut ObjectHeader) -> f64 {
     f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
 }
 
+fn array_value(ptr: *mut crate::array::ArrayHeader) -> f64 {
+    crate::value::js_nanbox_pointer(ptr as i64)
+}
+
 fn string_value(ptr: *mut StringHeader) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
@@ -108,16 +112,14 @@ fn heap_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let ptr = jsval.as_pointer::<u8>();
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if ptr.is_null() {
         return None;
     }
-    unsafe {
-        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
-            Some(ptr as *mut ObjectHeader)
-        } else {
-            None
-        }
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize)? };
+    if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+        Some(ptr as *mut ObjectHeader)
+    } else {
+        None
     }
 }
 
@@ -127,26 +129,51 @@ fn is_array_value(value: f64) -> bool {
         return false;
     }
     let ptr = jsval.as_pointer::<u8>();
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if ptr.is_null() {
         return false;
     }
-    unsafe {
-        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }.is_some_and(|header| {
         matches!(
-            (*gc_header).obj_type,
+            header.obj_type,
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
         )
-    }
+    })
 }
 
 fn is_object_value(value: f64) -> bool {
     heap_object_ptr(value).is_some()
 }
 
-fn option_field(options: Option<*mut ObjectHeader>, name: &[u8]) -> f64 {
-    options
-        .map(|obj| crate::object::js_object_get_field_by_name_f64(obj, named_key(name)))
-        .unwrap_or_else(undefined)
+fn object_field(object: f64, name: &[u8]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_nanbox_f64(object);
+    let key = scope.root_string_ptr(named_key(name));
+    let Some(obj) = heap_object_ptr(object.get_nanbox_f64()) else {
+        return undefined();
+    };
+    crate::object::js_object_get_field_by_name_f64(obj, key.get_raw_const_ptr::<StringHeader>())
+}
+
+fn set_object_field(object: f64, name: &[u8], value: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_nanbox_f64(object);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_string_ptr(named_key(name));
+    if let Some(obj) = heap_object_ptr(object.get_nanbox_f64()) {
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key.get_raw_const_ptr::<StringHeader>(),
+            value.get_nanbox_f64(),
+        );
+    }
+}
+
+fn option_field(options: f64, name: &[u8]) -> f64 {
+    if is_undefined(options) {
+        undefined()
+    } else {
+        object_field(options, name)
+    }
 }
 
 fn type_error_with_code(message: &str, code: &'static str) -> ! {
@@ -185,7 +212,7 @@ fn invalid_options(value: f64) -> ! {
     type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn validate_optional_fd(options: Option<*mut ObjectHeader>, name: &[u8], label: &str) {
+fn validate_optional_fd(options: f64, name: &[u8], label: &str) {
     let value = option_field(options, name);
     if JSValue::from_bits(value.to_bits()).is_undefined() {
         return;
@@ -196,8 +223,8 @@ fn validate_optional_fd(options: Option<*mut ObjectHeader>, name: &[u8], label: 
 struct ValidatedOptions {
     binding_name: &'static str,
     import_class_id: u32,
-    args: *mut crate::array::ArrayHeader,
-    env: *mut crate::array::ArrayHeader,
+    args: f64,
+    env: f64,
     return_on_exit: bool,
 }
 
@@ -210,18 +237,16 @@ fn option_string(value: f64) -> Vec<u8> {
         .collect()
 }
 
-fn snapshot_args(value: f64) -> *mut crate::array::ArrayHeader {
+fn snapshot_args(value: f64) -> f64 {
     if is_undefined(value) {
-        return crate::array::js_array_alloc(0);
+        return array_value(crate::array::js_array_alloc(0));
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let raw = JSValue::from_bits(value.get_nanbox_f64().to_bits())
         .as_pointer::<crate::array::ArrayHeader>();
     let len = crate::array::js_array_length(raw);
-    let out = scope.root_nanbox_f64(ptr_value(
-        crate::array::js_array_alloc(len) as *mut ObjectHeader
-    ));
+    let out = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc(len)));
     for index in 0..len {
         let raw = JSValue::from_bits(value.get_nanbox_f64().to_bits())
             .as_pointer::<crate::array::ArrayHeader>();
@@ -231,21 +256,17 @@ fn snapshot_args(value: f64) -> *mut crate::array::ArrayHeader {
         let out_ptr = JSValue::from_bits(out.get_nanbox_f64().to_bits())
             .as_pointer::<crate::array::ArrayHeader>()
             as *mut crate::array::ArrayHeader;
-        crate::array::js_array_push_f64(out_ptr, string_value(string));
+        let out_ptr = crate::array::js_array_push_f64(out_ptr, string_value(string));
+        out.set_nanbox_f64(array_value(out_ptr));
     }
-    JSValue::from_bits(out.get_nanbox_f64().to_bits()).as_pointer::<crate::array::ArrayHeader>()
-        as *mut crate::array::ArrayHeader
+    out.get_nanbox_f64()
 }
 
-fn snapshot_env(value: f64) -> *mut crate::array::ArrayHeader {
+fn snapshot_env(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let out = scope.root_nanbox_f64(ptr_value(
-        crate::array::js_array_alloc(0) as *mut ObjectHeader
-    ));
+    let out = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc(0)));
     if is_undefined(value) {
-        return JSValue::from_bits(out.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::array::ArrayHeader>()
-            as *mut crate::array::ArrayHeader;
+        return out.get_nanbox_f64();
     }
     let value = scope.root_nanbox_f64(value);
     let keys = scope.root_nanbox_f64(ptr_value(crate::object::js_object_keys_value(
@@ -261,10 +282,7 @@ fn snapshot_env(value: f64) -> *mut crate::array::ArrayHeader {
         let Some(key) = crate::builtins::jsvalue_string_content(key_value) else {
             continue;
         };
-        let Some(obj) = heap_object_ptr(value.get_nanbox_f64()) else {
-            continue;
-        };
-        let field = crate::object::js_object_get_field_by_name_f64(obj, named_key(key.as_bytes()));
+        let field = object_field(value.get_nanbox_f64(), key.as_bytes());
         if is_undefined(field) {
             continue;
         }
@@ -276,24 +294,24 @@ fn snapshot_env(value: f64) -> *mut crate::array::ArrayHeader {
         let out_ptr = JSValue::from_bits(out.get_nanbox_f64().to_bits())
             .as_pointer::<crate::array::ArrayHeader>()
             as *mut crate::array::ArrayHeader;
-        crate::array::js_array_push_f64(out_ptr, string_value(string));
+        let out_ptr = crate::array::js_array_push_f64(out_ptr, string_value(string));
+        out.set_nanbox_f64(array_value(out_ptr));
     }
-    JSValue::from_bits(out.get_nanbox_f64().to_bits()).as_pointer::<crate::array::ArrayHeader>()
-        as *mut crate::array::ArrayHeader
+    out.get_nanbox_f64()
 }
 
 fn validate_options(options: f64) -> ValidatedOptions {
-    let options_js = JSValue::from_bits(options.to_bits());
-    let options_obj = if options_js.is_undefined() {
-        None
-    } else {
-        heap_object_ptr(options).or_else(|| invalid_options(options))
-    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    let options_js = JSValue::from_bits(options.get_nanbox_f64().to_bits());
+    if !options_js.is_undefined() && heap_object_ptr(options.get_nanbox_f64()).is_none() {
+        invalid_options(options.get_nanbox_f64());
+    }
 
     // Node materializes each configurable option while creating its internal
     // snapshot; preserve that observable getter order rather than caching a
     // single property read.
-    let version_value = option_field(options_obj, b"version");
+    let version_value = option_field(options.get_nanbox_f64(), b"version");
     let Some(version) = crate::builtins::jsvalue_string_content(version_value) else {
         invalid_type("options.version", "string", version_value);
     };
@@ -308,39 +326,42 @@ fn validate_options(options: f64) -> ValidatedOptions {
             type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
         }
     };
-    let _ = option_field(options_obj, b"version");
+    let _ = option_field(options.get_nanbox_f64(), b"version");
 
-    let args_validate = option_field(options_obj, b"args");
+    let args_validate = option_field(options.get_nanbox_f64(), b"args");
     if !is_undefined(args_validate) && !is_array_value(args_validate) {
         invalid_type("options.args", "Array", args_validate);
     }
-    let _ = option_field(options_obj, b"args");
-    let args = snapshot_args(option_field(options_obj, b"args"));
+    let _ = option_field(options.get_nanbox_f64(), b"args");
+    let args = scope.root_nanbox_f64(snapshot_args(option_field(
+        options.get_nanbox_f64(),
+        b"args",
+    )));
 
-    let env_validate = option_field(options_obj, b"env");
+    let env_validate = option_field(options.get_nanbox_f64(), b"env");
     if !is_undefined(env_validate) && !is_object_value(env_validate) {
         invalid_type("options.env", "object", env_validate);
     }
-    let _ = option_field(options_obj, b"env");
-    let env = snapshot_env(option_field(options_obj, b"env"));
+    let _ = option_field(options.get_nanbox_f64(), b"env");
+    let env = scope.root_nanbox_f64(snapshot_env(option_field(options.get_nanbox_f64(), b"env")));
 
-    let preopens_validate = option_field(options_obj, b"preopens");
+    let preopens_validate = option_field(options.get_nanbox_f64(), b"preopens");
     if !is_undefined(preopens_validate) && !is_object_value(preopens_validate) {
         invalid_type("options.preopens", "object", preopens_validate);
     }
-    let _ = option_field(options_obj, b"preopens");
-    let _ = option_field(options_obj, b"preopens");
+    let _ = option_field(options.get_nanbox_f64(), b"preopens");
+    let _ = option_field(options.get_nanbox_f64(), b"preopens");
 
-    validate_optional_fd(options_obj, b"stdin", "options.stdin");
-    validate_optional_fd(options_obj, b"stdout", "options.stdout");
-    validate_optional_fd(options_obj, b"stderr", "options.stderr");
+    validate_optional_fd(options.get_nanbox_f64(), b"stdin", "options.stdin");
+    validate_optional_fd(options.get_nanbox_f64(), b"stdout", "options.stdout");
+    validate_optional_fd(options.get_nanbox_f64(), b"stderr", "options.stderr");
 
-    let return_validate = option_field(options_obj, b"returnOnExit");
+    let return_validate = option_field(options.get_nanbox_f64(), b"returnOnExit");
     if !is_undefined(return_validate) && !JSValue::from_bits(return_validate.to_bits()).is_bool() {
         invalid_type("options.returnOnExit", "boolean", return_validate);
     }
-    let _ = option_field(options_obj, b"returnOnExit");
-    let return_value = option_field(options_obj, b"returnOnExit");
+    let _ = option_field(options.get_nanbox_f64(), b"returnOnExit");
+    let return_value = option_field(options.get_nanbox_f64(), b"returnOnExit");
     let return_on_exit = if is_undefined(return_value) {
         true
     } else {
@@ -350,8 +371,8 @@ fn validate_options(options: f64) -> ValidatedOptions {
     ValidatedOptions {
         binding_name,
         import_class_id,
-        args,
-        env,
+        args: args.get_nanbox_f64(),
+        env: env.get_nanbox_f64(),
         return_on_exit,
     }
 }
@@ -372,7 +393,9 @@ fn closure_rest_value(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn create_import_function(import_obj: *mut ObjectHeader, name: &str) -> f64 {
+fn create_import_function(import_value: f64, name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let import = scope.root_nanbox_f64(import_value);
     let arity = match name {
         "args_get" | "args_sizes_get" | "environ_get" | "environ_sizes_get" | "clock_res_get"
         | "random_get" => 2,
@@ -383,10 +406,15 @@ fn create_import_function(import_obj: *mut ObjectHeader, name: &str) -> f64 {
     // The native thunk has four ABI arguments; keep dispatch from invoking it
     // through a shorter function pointer while exposing Node's public length.
     crate::closure::js_register_closure_arity(js_wasi_import_stub as *const u8, 4);
-    let closure = crate::closure::js_closure_alloc(js_wasi_import_stub as *const u8, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, import_obj as i64);
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        js_wasi_import_stub as *const u8,
+        2,
+    ));
+    let closure_ptr = closure.get_raw_mut_ptr::<ClosureHeader>();
+    let import_ptr = heap_object_ptr(import.get_nanbox_f64()).unwrap_or(std::ptr::null_mut());
+    crate::closure::js_closure_set_capture_ptr(closure_ptr, 0, import_ptr as i64);
     crate::closure::js_closure_set_capture_f64(
-        closure,
+        closure_ptr,
         1,
         WASI_IMPORT_NAMES
             .iter()
@@ -398,26 +426,32 @@ fn create_import_function(import_obj: *mut ObjectHeader, name: &str) -> f64 {
     } else {
         format!("bound {name}")
     };
-    crate::object::set_bound_native_closure_name(closure, &display_name);
-    crate::object::set_builtin_closure_length(closure as usize, arity);
-    crate::object::set_builtin_closure_non_constructable(closure as usize);
-    crate::value::js_nanbox_pointer(closure as i64)
+    crate::object::set_bound_native_closure_name(closure_ptr, &display_name);
+    crate::object::set_builtin_closure_length(closure_ptr as usize, arity);
+    crate::object::set_builtin_closure_non_constructable(closure_ptr as usize);
+    crate::value::js_nanbox_pointer(closure_ptr as i64)
 }
 
-fn create_import_object(class_id: u32) -> *mut ObjectHeader {
-    let obj = crate::object::js_object_alloc(class_id, 0);
+fn create_import_object(class_id: u32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, 0));
     for name in WASI_IMPORT_NAMES {
+        let function = scope.root_nanbox_f64(create_import_function(
+            ptr_value(obj.get_raw_mut_ptr::<ObjectHeader>()),
+            name,
+        ));
+        let key = scope.root_string_ptr(named_key(name.as_bytes()));
         crate::object::js_object_set_field_by_name(
-            obj,
-            named_key(name.as_bytes()),
-            create_import_function(obj, name),
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            key.get_raw_const_ptr::<StringHeader>(),
+            function.get_nanbox_f64(),
         );
     }
-    obj
+    ptr_value(obj.get_raw_mut_ptr::<ObjectHeader>())
 }
 
-fn import_binding_name(import_obj: *mut ObjectHeader) -> &'static str {
-    let binding = import_field(import_obj, FIELD_WASI_BINDING.as_bytes());
+fn import_binding_name(import_value: f64) -> &'static str {
+    let binding = import_field(import_value, FIELD_WASI_BINDING.as_bytes());
     if crate::builtins::jsvalue_string_content(binding).as_deref() == Some("wasi_unstable") {
         "wasi_unstable"
     } else {
@@ -436,36 +470,45 @@ fn ensure_wasi_prototype() {
     let keys = b"constructor\0getImportObject\0start\0initialize\0finalizeBindings\0";
     let proto =
         crate::object::js_object_alloc_with_shape(0x7FFF_FF41, 5, keys.as_ptr(), keys.len() as u32);
+    // Publish the root before allocating any of the method closures. The
+    // class-prototype root is rewritten if those allocations evacuate it.
+    crate::object::class_prototype_object_root_store(CLASS_ID_WASI, proto);
+    let method_scope = crate::gc::RuntimeHandleScope::new();
+    let method = method_scope.root_nanbox_f64(closure_value(
+        js_wasi_get_import_object as *const u8,
+        "getImportObject",
+        0,
+    ));
     crate::object::js_object_set_field(
-        proto,
+        crate::object::class_prototype_object(CLASS_ID_WASI),
         1,
-        JSValue::from_bits(
-            closure_value(js_wasi_get_import_object as *const u8, "getImportObject", 0).to_bits(),
-        ),
+        JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
+    method.set_nanbox_f64(closure_value(js_wasi_start as *const u8, "start", 1));
     crate::object::js_object_set_field(
-        proto,
+        crate::object::class_prototype_object(CLASS_ID_WASI),
         2,
-        JSValue::from_bits(closure_value(js_wasi_start as *const u8, "start", 1).to_bits()),
+        JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
+    method.set_nanbox_f64(closure_value(
+        js_wasi_initialize as *const u8,
+        "initialize",
+        1,
+    ));
     crate::object::js_object_set_field(
-        proto,
+        crate::object::class_prototype_object(CLASS_ID_WASI),
         3,
-        JSValue::from_bits(
-            closure_value(js_wasi_initialize as *const u8, "initialize", 1).to_bits(),
-        ),
+        JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
+    method.set_nanbox_f64(closure_rest_value(
+        js_wasi_finalize_bindings as *const u8,
+        "finalizeBindings",
+        1,
+    ));
     crate::object::js_object_set_field(
-        proto,
+        crate::object::class_prototype_object(CLASS_ID_WASI),
         4,
-        JSValue::from_bits(
-            closure_rest_value(
-                js_wasi_finalize_bindings as *const u8,
-                "finalizeBindings",
-                1,
-            )
-            .to_bits(),
-        ),
+        JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     for name in [
         "constructor",
@@ -475,12 +518,11 @@ fn ensure_wasi_prototype() {
         "finalizeBindings",
     ] {
         crate::object::set_builtin_property_attrs(
-            proto as usize,
+            crate::object::class_prototype_object(CLASS_ID_WASI) as usize,
             name.to_string(),
             crate::object::PropertyAttrs::new(true, false, true),
         );
     }
-    crate::object::class_prototype_object_root_store(CLASS_ID_WASI, proto);
 }
 
 pub(crate) fn ensure_wasi_prototype_for_subclass() {
@@ -488,19 +530,27 @@ pub(crate) fn ensure_wasi_prototype_for_subclass() {
 }
 
 pub(crate) fn attach_wasi_constructor_prototype(constructor_value: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor_value);
     ensure_wasi_prototype();
     let proto = crate::object::class_prototype_object(CLASS_ID_WASI);
     if proto.is_null() {
         return;
     }
-    crate::object::js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    crate::object::js_object_set_field(
+        proto,
+        0,
+        JSValue::from_bits(constructor.get_nanbox_f64().to_bits()),
+    );
+    let constructor_addr =
+        (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
     crate::closure::closure_set_dynamic_prop(
-        (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize,
+        constructor_addr,
         "prototype",
         crate::value::js_nanbox_pointer(proto as i64),
     );
     crate::object::set_builtin_property_attrs(
-        (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize,
+        constructor_addr,
         "prototype".to_string(),
         crate::object::PropertyAttrs::new(false, false, false),
     );
@@ -509,11 +559,18 @@ pub(crate) fn attach_wasi_constructor_prototype(constructor_value: f64) {
 fn emit_wasi_warning() {
     let message = b"WASI is an experimental feature and might change at any time";
     let kind = b"ExperimentalWarning";
-    let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let kind = crate::string::js_string_from_bytes(kind.as_ptr(), kind.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        message.as_ptr(),
+        message.len() as u32,
+    ));
+    let kind = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        kind.as_ptr(),
+        kind.len() as u32,
+    ));
     crate::process::js_process_emit_warning(
-        f64::from_bits(JSValue::string_ptr(message).bits()),
-        f64::from_bits(JSValue::string_ptr(kind).bits()),
+        f64::from_bits(JSValue::string_ptr(message.get_raw_mut_ptr()).bits()),
+        f64::from_bits(JSValue::string_ptr(kind.get_raw_mut_ptr()).bits()),
         undefined(),
     );
 }
@@ -546,18 +603,39 @@ pub(crate) fn is_wasi_instance(value: f64) -> bool {
     let Some(obj) = heap_object_ptr(value) else {
         return false;
     };
-    let class_id = unsafe { (*obj).class_id };
-    class_id == CLASS_ID_WASI
-        || crate::object::get_parent_class_id(class_id)
-            .is_some_and(|parent| parent == CLASS_ID_WASI)
+    let mut class_id = unsafe { (*obj).class_id };
+    for _ in 0..=64 {
+        if class_id == CLASS_ID_WASI {
+            return true;
+        }
+        let Some(parent) = crate::object::get_parent_class_id(class_id) else {
+            return false;
+        };
+        if parent == 0 || parent == class_id {
+            return false;
+        }
+        class_id = parent;
+    }
+    false
 }
 
-pub(crate) unsafe fn is_wasi_import_object(obj: *const ObjectHeader) -> bool {
-    !obj.is_null()
-        && matches!(
+pub(crate) fn is_wasi_import_object(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) })
+    else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    unsafe {
+        matches!(
             (*obj).class_id,
             CLASS_ID_WASI_IMPORT_PREVIEW1 | CLASS_ID_WASI_IMPORT_UNSTABLE
         )
+    }
 }
 
 #[no_mangle]
@@ -571,46 +649,57 @@ pub extern "C" fn js_wasi_constructor_call(_options: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_wasi_new(options: f64) -> f64 {
     let options = validate_options(options);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let args = scope.root_nanbox_f64(options.args);
+    let env = scope.root_nanbox_f64(options.env);
     ensure_wasi_prototype();
-    let import_obj = create_import_object(options.import_class_id);
+    let import = scope.root_nanbox_f64(create_import_object(options.import_class_id));
     set_import_field(
-        import_obj,
+        import.get_nanbox_f64(),
         FIELD_WASI_ARGS.as_bytes(),
-        ptr_value(options.args as *mut ObjectHeader),
+        args.get_nanbox_f64(),
     );
     set_import_field(
-        import_obj,
+        import.get_nanbox_f64(),
         FIELD_WASI_ENV.as_bytes(),
-        ptr_value(options.env as *mut ObjectHeader),
+        env.get_nanbox_f64(),
     );
     set_import_field(
-        import_obj,
+        import.get_nanbox_f64(),
         FIELD_WASI_RETURN_ON_EXIT.as_bytes(),
         bool_value(options.return_on_exit),
     );
-    set_import_field(import_obj, FIELD_WASI_STARTED.as_bytes(), bool_value(false));
-    let binding = crate::string::js_string_from_bytes(
+    set_import_field(
+        import.get_nanbox_f64(),
+        FIELD_WASI_STARTED.as_bytes(),
+        bool_value(false),
+    );
+    let binding = scope.root_string_ptr(crate::string::js_string_from_bytes(
         options.binding_name.as_ptr(),
         options.binding_name.len() as u32,
-    );
+    ));
     set_import_field(
-        import_obj,
+        import.get_nanbox_f64(),
         FIELD_WASI_BINDING.as_bytes(),
-        string_value(binding),
+        string_value(binding.get_raw_mut_ptr()),
     );
     let keys = b"wasiImport\0";
-    let obj = crate::object::js_object_alloc_class_with_keys(
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_class_with_keys(
         CLASS_ID_WASI,
         0,
         1,
         keys.as_ptr(),
         keys.len() as u32,
+    ));
+    crate::object::js_object_set_field(
+        obj.get_raw_mut_ptr::<ObjectHeader>(),
+        0,
+        JSValue::from_bits(import.get_nanbox_f64().to_bits()),
     );
-    crate::object::js_object_set_field(obj, 0, JSValue::from_bits(ptr_value(import_obj).to_bits()));
-    crate::object::js_object_set_field_by_name(
-        obj,
-        named_key(FIELD_WASI_BINDING.as_bytes()),
-        string_value(binding),
+    set_object_field(
+        ptr_value(obj.get_raw_mut_ptr::<ObjectHeader>()),
+        FIELD_WASI_BINDING.as_bytes(),
+        string_value(binding.get_raw_mut_ptr()),
     );
     let new_target = crate::object::js_new_target_value();
     let new_target_js = JSValue::from_bits(new_target.to_bits());
@@ -620,106 +709,106 @@ pub extern "C" fn js_wasi_new(options: f64) -> f64 {
             let prototype = crate::closure::closure_get_dynamic_prop(target, "prototype");
             if heap_object_ptr(prototype).is_some() {
                 crate::object::prototype_chain::object_set_static_prototype(
-                    obj as usize,
+                    obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
                     prototype.to_bits(),
                 );
             }
         }
     }
-    ptr_value(obj)
+    ptr_value(obj.get_raw_mut_ptr::<ObjectHeader>())
 }
 
 pub(crate) unsafe fn js_wasi_init_subclass(this_box: f64, options: f64) {
-    let Some(this) = heap_object_ptr(this_box) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this_box);
+    if heap_object_ptr(this.get_nanbox_f64()).is_none() {
         return;
-    };
-    let wasi = js_wasi_new(options);
-    let Some(wasi) = heap_object_ptr(wasi) else {
+    }
+    let wasi = scope.root_nanbox_f64(js_wasi_new(options));
+    if heap_object_ptr(wasi.get_nanbox_f64()).is_none() {
         return;
-    };
-    let import = crate::object::js_object_get_field_by_name_f64(
-        wasi,
-        named_key(FIELD_WASI_IMPORT.as_bytes()),
-    );
-    crate::object::js_object_set_field_by_name(
-        this,
-        named_key(FIELD_WASI_IMPORT.as_bytes()),
-        import,
+    }
+    let import = scope.root_nanbox_f64(object_field(
+        wasi.get_nanbox_f64(),
+        FIELD_WASI_IMPORT.as_bytes(),
+    ));
+    set_object_field(
+        this.get_nanbox_f64(),
+        FIELD_WASI_IMPORT.as_bytes(),
+        import.get_nanbox_f64(),
     );
 }
 
 #[no_mangle]
 pub extern "C" fn js_wasi_get_import_object(_closure: *const ClosureHeader) -> f64 {
-    let this = crate::object::js_implicit_this_get();
-    let Some(obj) = heap_object_ptr(this) else {
-        let wrapper = crate::object::js_object_alloc(0, 0);
-        crate::object::js_object_set_field_by_name(wrapper, named_key(b"undefined"), undefined());
-        return ptr_value(wrapper);
-    };
-    unsafe {
-        if !is_wasi_instance(this) {
-            let wrapper = crate::object::js_object_alloc(0, 0);
-            crate::object::js_object_set_field_by_name(
-                wrapper,
-                named_key(b"undefined"),
-                undefined(),
-            );
-            return ptr_value(wrapper);
-        }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    if heap_object_ptr(this.get_nanbox_f64()).is_none() || !is_wasi_instance(this.get_nanbox_f64())
+    {
+        let wrapper = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        set_object_field(
+            ptr_value(wrapper.get_raw_mut_ptr::<ObjectHeader>()),
+            b"undefined",
+            undefined(),
+        );
+        return ptr_value(wrapper.get_raw_mut_ptr::<ObjectHeader>());
     }
-    let import_value = crate::object::js_object_get_field_by_name_f64(
-        obj,
-        named_key(FIELD_WASI_IMPORT.as_bytes()),
-    );
-    let Some(import_obj) = heap_object_ptr(import_value) else {
+    let import = scope.root_nanbox_f64(object_field(
+        this.get_nanbox_f64(),
+        FIELD_WASI_IMPORT.as_bytes(),
+    ));
+    if heap_object_ptr(import.get_nanbox_f64()).is_none() {
         return undefined();
-    };
-    let binding = crate::object::js_object_get_field_by_name_f64(
-        obj,
-        named_key(FIELD_WASI_BINDING.as_bytes()),
-    );
+    }
+    let binding = object_field(this.get_nanbox_f64(), FIELD_WASI_BINDING.as_bytes());
     let binding_name =
         if crate::builtins::jsvalue_string_content(binding).as_deref() == Some("wasi_unstable") {
             "wasi_unstable"
         } else {
-            import_binding_name(import_obj)
+            import_binding_name(import.get_nanbox_f64())
         };
-    let wrapper = crate::object::js_object_alloc(0, 0);
-    crate::object::js_object_set_field_by_name(
-        wrapper,
-        named_key(binding_name.as_bytes()),
-        import_value,
+    let wrapper = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    set_object_field(
+        ptr_value(wrapper.get_raw_mut_ptr::<ObjectHeader>()),
+        binding_name.as_bytes(),
+        import.get_nanbox_f64(),
     );
-    ptr_value(wrapper)
+    ptr_value(wrapper.get_raw_mut_ptr::<ObjectHeader>())
 }
 
 #[no_mangle]
 pub extern "C" fn js_wasi_start(_closure: *const ClosureHeader, instance: f64) -> f64 {
-    let wasi = wasi_receiver_or_throw();
-    ensure_wasi_not_started(wasi);
-    let import = wasi_import_or_throw(wasi);
-    let memory = instance_export(instance, b"memory");
-    validate_memory_value(memory);
-    mark_wasi_started(wasi);
-    bind_memory(import, memory);
-    let start = instance_export(instance, b"_start");
-    if !is_callable_value(start) {
-        invalid_type("instance.exports._start", "function", start)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance = scope.root_nanbox_f64(instance);
+    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw());
+    ensure_wasi_not_started(wasi.get_nanbox_f64());
+    let import = scope.root_nanbox_f64(wasi_import_or_throw(wasi.get_nanbox_f64()));
+    let memory = scope.root_nanbox_f64(instance_export(instance.get_nanbox_f64(), b"memory"));
+    validate_memory_value(memory.get_nanbox_f64());
+    mark_wasi_started(wasi.get_nanbox_f64());
+    bind_memory(import.get_nanbox_f64(), memory.get_nanbox_f64());
+    let start = scope.root_nanbox_f64(instance_export(instance.get_nanbox_f64(), b"_start"));
+    if !is_callable_value(start.get_nanbox_f64()) {
+        invalid_type(
+            "instance.exports._start",
+            "function",
+            start.get_nanbox_f64(),
+        )
     }
-    let initialize = instance_export(instance, b"_initialize");
+    let initialize = instance_export(instance.get_nanbox_f64(), b"_initialize");
     if !is_undefined(initialize) {
         invalid_undefined_property("instance.exports._initialize", initialize)
     }
     WASI_EXIT_CODE.with(|slot| slot.set(None));
-    unsafe { crate::closure::js_native_call_value(start, std::ptr::null(), 0) };
+    unsafe { crate::closure::js_native_call_value(start.get_nanbox_f64(), std::ptr::null(), 0) };
     if let Some(code) = WASI_EXIT_CODE.with(|slot| slot.take()) {
         return code as f64;
     }
     // The WASM bridge records its preview1 proc_exit outcome on the instance;
     // ordinary JS `_start` return values are deliberately ignored by Node.
-    let host_exit = crate::object::js_object_get_field_by_name_f64(
-        validate_instance_arg(instance),
-        named_key(b"__wasiProcExitCode"),
+    let host_exit = object_field(
+        validate_instance_arg(instance.get_nanbox_f64()),
+        b"__wasiProcExitCode",
     );
     if host_exit.is_finite() && host_exit.fract() == 0.0 {
         return host_exit;
@@ -729,23 +818,33 @@ pub extern "C" fn js_wasi_start(_closure: *const ClosureHeader, instance: f64) -
 
 #[no_mangle]
 pub extern "C" fn js_wasi_initialize(_closure: *const ClosureHeader, instance: f64) -> f64 {
-    let wasi = wasi_receiver_or_throw();
-    ensure_wasi_not_started(wasi);
-    let import = wasi_import_or_throw(wasi);
-    let memory = instance_export(instance, b"memory");
-    validate_memory_value(memory);
-    mark_wasi_started(wasi);
-    bind_memory(import, memory);
-    let start = instance_export(instance, b"_start");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance = scope.root_nanbox_f64(instance);
+    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw());
+    ensure_wasi_not_started(wasi.get_nanbox_f64());
+    let import = scope.root_nanbox_f64(wasi_import_or_throw(wasi.get_nanbox_f64()));
+    let memory = scope.root_nanbox_f64(instance_export(instance.get_nanbox_f64(), b"memory"));
+    validate_memory_value(memory.get_nanbox_f64());
+    mark_wasi_started(wasi.get_nanbox_f64());
+    bind_memory(import.get_nanbox_f64(), memory.get_nanbox_f64());
+    let start = instance_export(instance.get_nanbox_f64(), b"_start");
     if !is_undefined(start) {
         invalid_undefined_property("instance.exports._start", start)
     }
-    let initialize = instance_export(instance, b"_initialize");
-    if !is_undefined(initialize) && !is_callable_value(initialize) {
-        invalid_type("instance.exports._initialize", "function", initialize)
+    let initialize =
+        scope.root_nanbox_f64(instance_export(instance.get_nanbox_f64(), b"_initialize"));
+    if !is_undefined(initialize.get_nanbox_f64()) && !is_callable_value(initialize.get_nanbox_f64())
+    {
+        invalid_type(
+            "instance.exports._initialize",
+            "function",
+            initialize.get_nanbox_f64(),
+        )
     }
-    if !is_undefined(initialize) {
-        unsafe { crate::closure::js_native_call_value(initialize, std::ptr::null(), 0) };
+    if !is_undefined(initialize.get_nanbox_f64()) {
+        unsafe {
+            crate::closure::js_native_call_value(initialize.get_nanbox_f64(), std::ptr::null(), 0)
+        };
     }
     undefined()
 }
@@ -756,65 +855,64 @@ pub extern "C" fn js_wasi_finalize_bindings(
     instance: f64,
     rest: f64,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance = scope.root_nanbox_f64(instance);
     // Node reads `options.memory` before the receiver/state and instance
     // checks. The rest closure preserves the public arity of one while still
     // accepting the optional second argument.
     let options = rest_argument(rest, 0);
-    let override_memory = finalize_memory_option(options);
-    let wasi = wasi_receiver_or_throw_with_code("ERR_INVALID_ARG_TYPE");
-    ensure_wasi_not_started(wasi);
-    let import = wasi_import_or_throw(wasi);
-    let exported_memory = instance_export(instance, b"memory");
-    let memory = if is_undefined(override_memory) {
-        exported_memory
+    let override_memory = scope.root_nanbox_f64(finalize_memory_option(options));
+    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw_with_code("ERR_INVALID_ARG_TYPE"));
+    ensure_wasi_not_started(wasi.get_nanbox_f64());
+    let import = scope.root_nanbox_f64(wasi_import_or_throw(wasi.get_nanbox_f64()));
+    let exported_memory =
+        scope.root_nanbox_f64(instance_export(instance.get_nanbox_f64(), b"memory"));
+    let memory = if is_undefined(override_memory.get_nanbox_f64()) {
+        exported_memory.get_nanbox_f64()
     } else {
-        override_memory
+        override_memory.get_nanbox_f64()
     };
-    validate_memory_value(memory);
-    mark_wasi_started(wasi);
-    bind_memory(import, memory);
+    let memory = scope.root_nanbox_f64(memory);
+    validate_memory_value(memory.get_nanbox_f64());
+    mark_wasi_started(wasi.get_nanbox_f64());
+    bind_memory(import.get_nanbox_f64(), memory.get_nanbox_f64());
     undefined()
 }
 
-fn wasi_receiver_or_throw() -> *mut ObjectHeader {
+fn wasi_receiver_or_throw() -> f64 {
     wasi_receiver_or_throw_with_code("")
 }
 
-fn wasi_receiver_or_throw_with_code(code: &'static str) -> *mut ObjectHeader {
+fn wasi_receiver_or_throw_with_code(code: &'static str) -> f64 {
     let this = crate::object::js_implicit_this_get();
-    let Some(obj) = heap_object_ptr(this) else {
+    if heap_object_ptr(this).is_none() {
         type_error_with_code("Value of \"this\" must be of type WASI", code);
-    };
-    unsafe {
-        if !is_wasi_instance(this) {
-            type_error_with_code("Value of \"this\" must be of type WASI", code);
-        }
     }
-    obj
+    if !is_wasi_instance(this) {
+        type_error_with_code("Value of \"this\" must be of type WASI", code);
+    }
+    this
 }
 
-fn wasi_import_or_throw(wasi: *mut ObjectHeader) -> *mut ObjectHeader {
-    let import = crate::object::js_object_get_field_by_name_f64(
-        wasi,
-        named_key(FIELD_WASI_IMPORT.as_bytes()),
-    );
-    let Some(import) = heap_object_ptr(import) else {
+fn wasi_import_or_throw(wasi: f64) -> f64 {
+    let import = object_field(wasi, FIELD_WASI_IMPORT.as_bytes());
+    if heap_object_ptr(import).is_none() {
         type_error_with_code("Value of \"this\" must be of type WASI", "ERR_INVALID_THIS")
-    };
+    }
     import
 }
 
-fn wasi_started(wasi: *mut ObjectHeader) -> bool {
+fn wasi_started(wasi: f64) -> bool {
     let import = wasi_import_or_throw(wasi);
     import_started(import)
 }
 
-fn import_started(import: *mut ObjectHeader) -> bool {
+fn import_started(import: f64) -> bool {
     let value = import_field(import, FIELD_WASI_STARTED.as_bytes());
     JSValue::from_bits(value.to_bits()).is_bool() && JSValue::from_bits(value.to_bits()).as_bool()
 }
 
-fn ensure_import_started(import: *mut ObjectHeader) {
+fn ensure_import_started(import: f64) {
     if !import_started(import) {
         crate::fs::validate::throw_error_with_code(
             "WASI instance has not been started",
@@ -823,7 +921,7 @@ fn ensure_import_started(import: *mut ObjectHeader) {
     }
 }
 
-fn ensure_wasi_not_started(obj: *mut ObjectHeader) {
+fn ensure_wasi_not_started(obj: f64) {
     if wasi_started(obj) {
         crate::fs::validate::throw_error_with_code(
             "WASI instance has already started",
@@ -832,33 +930,34 @@ fn ensure_wasi_not_started(obj: *mut ObjectHeader) {
     }
 }
 
-fn mark_wasi_started(wasi: *mut ObjectHeader) {
+fn mark_wasi_started(wasi: f64) {
     let import = wasi_import_or_throw(wasi);
     set_import_field(import, FIELD_WASI_STARTED.as_bytes(), bool_value(true));
 }
 
 fn instance_export(instance: f64, name: &[u8]) -> f64 {
-    let instance = validate_instance_arg(instance);
-    let exports = crate::object::js_object_get_field_by_name_f64(instance, named_key(b"exports"));
-    let Some(exports) = heap_object_ptr(exports) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance = scope.root_nanbox_f64(validate_instance_arg(instance));
+    let exports = scope.root_nanbox_f64(object_field(instance.get_nanbox_f64(), b"exports"));
+    if heap_object_ptr(exports.get_nanbox_f64()).is_none() {
         let message = format!(
             "The \"instance.exports\" property must be of type object. Received {}",
-            crate::fs::validate::describe_received(exports)
+            crate::fs::validate::describe_received(exports.get_nanbox_f64())
         );
         invalid_arg_type(&message)
-    };
-    crate::object::js_object_get_field_by_name_f64(exports, named_key(name))
+    }
+    object_field(exports.get_nanbox_f64(), name)
 }
 
-fn validate_instance_arg(instance: f64) -> *mut ObjectHeader {
-    let Some(obj) = heap_object_ptr(instance) else {
+fn validate_instance_arg(instance: f64) -> f64 {
+    if heap_object_ptr(instance).is_none() {
         let message = format!(
             "The \"instance\" argument must be of type object. Received {}",
             crate::fs::validate::describe_received(instance)
         );
         invalid_arg_type(&message)
-    };
-    obj
+    }
+    instance
 }
 
 fn is_callable_value(value: f64) -> bool {
@@ -867,8 +966,8 @@ fn is_callable_value(value: f64) -> bool {
 }
 
 fn memory_buffer(memory: f64) -> Option<*mut crate::buffer::BufferHeader> {
-    let object = heap_object_ptr(memory)?;
-    let buffer = crate::object::js_object_get_field_by_name_f64(object, named_key(b"buffer"));
+    heap_object_ptr(memory)?;
+    let buffer = object_field(memory, b"buffer");
     let ptr = JSValue::from_bits(buffer.to_bits()).as_pointer::<u8>() as usize;
     crate::buffer::is_array_buffer(ptr).then_some(ptr as *mut crate::buffer::BufferHeader)
 }
@@ -879,7 +978,7 @@ fn validate_memory_value(memory: f64) {
     }
 }
 
-fn bind_memory(import: *mut ObjectHeader, memory: f64) {
+fn bind_memory(import: f64, memory: f64) {
     set_import_field(import, FIELD_WASI_MEMORY.as_bytes(), memory);
 }
 
@@ -896,32 +995,32 @@ fn finalize_memory_option(options: f64) -> f64 {
     if is_undefined(options) {
         return undefined();
     }
-    let Some(options) = heap_object_ptr(options) else {
+    if heap_object_ptr(options).is_none() {
         // Node's null options throw a TypeError without an ERR_* code.
         type_error_with_code("Cannot read properties of null (reading 'memory')", "")
-    };
-    crate::object::js_object_get_field_by_name_f64(options, named_key(b"memory"))
+    }
+    object_field(options, b"memory")
 }
 
-fn import_from_closure(closure: *const ClosureHeader) -> *mut ObjectHeader {
+fn import_from_closure(closure: *const ClosureHeader) -> f64 {
     let this = crate::object::js_implicit_this_get();
     if let Some(obj) = heap_object_ptr(this) {
-        if unsafe { is_wasi_import_object(obj) } {
-            return obj;
+        if is_wasi_import_object(obj) {
+            return this;
         }
     }
-    crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader
+    ptr_value(crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader)
 }
 
-fn import_field(import: *mut ObjectHeader, name: &[u8]) -> f64 {
-    crate::object::js_object_get_field_by_name_f64(import, named_key(name))
+fn import_field(import: f64, name: &[u8]) -> f64 {
+    object_field(import, name)
 }
 
-fn set_import_field(import: *mut ObjectHeader, name: &[u8], value: f64) {
-    crate::object::js_object_set_field_by_name(import, named_key(name), value);
+fn set_import_field(import: f64, name: &[u8], value: f64) {
+    set_object_field(import, name, value);
 }
 
-fn bound_memory(import: *mut ObjectHeader) -> *mut crate::buffer::BufferHeader {
+fn bound_memory(import: f64) -> *mut crate::buffer::BufferHeader {
     let memory = import_field(import, FIELD_WASI_MEMORY.as_bytes());
     let Some(buffer) = memory_buffer(memory) else {
         crate::fs::validate::throw_error_with_code(
@@ -978,7 +1077,7 @@ fn write_u64(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u64) 
     true
 }
 
-fn snapshot_values(import: *mut ObjectHeader, key: &[u8]) -> *mut crate::array::ArrayHeader {
+fn snapshot_values(import: f64, key: &[u8]) -> *mut crate::array::ArrayHeader {
     JSValue::from_bits(import_field(import, key).to_bits())
         .as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader
 }
@@ -992,7 +1091,7 @@ fn snapshot_size(values: *mut crate::array::ArrayHeader) -> usize {
         .sum()
 }
 
-fn snapshot_sizes(import: *mut ObjectHeader, key: &[u8], count: f64, size: f64) -> f64 {
+fn snapshot_sizes(import: f64, key: &[u8], count: f64, size: f64) -> f64 {
     let Some(buffer) = memory_buffer(import_field(import, FIELD_WASI_MEMORY.as_bytes())) else {
         return 28.0;
     };
@@ -1006,7 +1105,7 @@ fn snapshot_sizes(import: *mut ObjectHeader, key: &[u8], count: f64, size: f64) 
     }
 }
 
-fn snapshot_get(import: *mut ObjectHeader, key: &[u8], pointers: f64, strings: f64) -> f64 {
+fn snapshot_get(import: f64, key: &[u8], pointers: f64, strings: f64) -> f64 {
     let memory = import_field(import, FIELD_WASI_MEMORY.as_bytes());
     let Some(buffer) = memory_buffer(memory) else {
         return 28.0;
@@ -1064,46 +1163,67 @@ pub extern "C" fn js_wasi_import_stub(
     arg2: f64,
     arg3: f64,
 ) -> f64 {
-    let import = import_from_closure(closure);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let import = scope.root_nanbox_f64(import_from_closure(closure));
     match import_function_name(closure).trim_start_matches("bound ") {
         "args_sizes_get" => {
             if !is_undefined(arg2) || argument(arg0).is_none() || argument(arg1).is_none() {
                 28.0
             } else {
-                ensure_import_started(import);
-                snapshot_sizes(import, FIELD_WASI_ARGS.as_bytes(), arg0, arg1)
+                ensure_import_started(import.get_nanbox_f64());
+                snapshot_sizes(
+                    import.get_nanbox_f64(),
+                    FIELD_WASI_ARGS.as_bytes(),
+                    arg0,
+                    arg1,
+                )
             }
         }
         "args_get" => {
             if argument(arg0).is_none() || argument(arg1).is_none() {
                 28.0
             } else {
-                ensure_import_started(import);
-                snapshot_get(import, FIELD_WASI_ARGS.as_bytes(), arg0, arg1)
+                ensure_import_started(import.get_nanbox_f64());
+                snapshot_get(
+                    import.get_nanbox_f64(),
+                    FIELD_WASI_ARGS.as_bytes(),
+                    arg0,
+                    arg1,
+                )
             }
         }
         "environ_sizes_get" => {
             if !is_undefined(arg2) || argument(arg0).is_none() || argument(arg1).is_none() {
                 28.0
             } else {
-                ensure_import_started(import);
-                snapshot_sizes(import, FIELD_WASI_ENV.as_bytes(), arg0, arg1)
+                ensure_import_started(import.get_nanbox_f64());
+                snapshot_sizes(
+                    import.get_nanbox_f64(),
+                    FIELD_WASI_ENV.as_bytes(),
+                    arg0,
+                    arg1,
+                )
             }
         }
         "environ_get" => {
             if argument(arg0).is_none() || argument(arg1).is_none() {
                 28.0
             } else {
-                ensure_import_started(import);
-                snapshot_get(import, FIELD_WASI_ENV.as_bytes(), arg0, arg1)
+                ensure_import_started(import.get_nanbox_f64());
+                snapshot_get(
+                    import.get_nanbox_f64(),
+                    FIELD_WASI_ENV.as_bytes(),
+                    arg0,
+                    arg1,
+                )
             }
         }
         "clock_res_get" => {
             if argument(arg0).is_none() || argument(arg1).is_none() {
                 return 28.0;
             }
-            ensure_import_started(import);
-            let memory = import_field(import, FIELD_WASI_MEMORY.as_bytes());
+            ensure_import_started(import.get_nanbox_f64());
+            let memory = import_field(import.get_nanbox_f64(), FIELD_WASI_MEMORY.as_bytes());
             let Some(buffer) = memory_buffer(memory) else {
                 return 28.0;
             };
@@ -1120,8 +1240,8 @@ pub extern "C" fn js_wasi_import_stub(
             {
                 return 28.0;
             }
-            ensure_import_started(import);
-            let memory = import_field(import, FIELD_WASI_MEMORY.as_bytes());
+            ensure_import_started(import.get_nanbox_f64());
+            let memory = import_field(import.get_nanbox_f64(), FIELD_WASI_MEMORY.as_bytes());
             let Some(buffer) = memory_buffer(memory) else {
                 return 28.0;
             };
@@ -1138,8 +1258,8 @@ pub extern "C" fn js_wasi_import_stub(
             let (Some(offset), Some(len)) = (argument(arg0), argument(arg1)) else {
                 return 28.0;
             };
-            ensure_import_started(import);
-            let buffer = bound_memory(import);
+            ensure_import_started(import.get_nanbox_f64());
+            let buffer = bound_memory(import.get_nanbox_f64());
             let buffer_len = unsafe { (*buffer).length } as usize;
             if offset.checked_add(len).is_none_or(|end| end > buffer_len) {
                 return 28.0;
@@ -1166,7 +1286,11 @@ pub extern "C" fn js_wasi_import_stub(
         "proc_exit" => {
             let code = argument(arg0).unwrap_or(0) as i32;
             let return_on_exit = JSValue::from_bits(
-                import_field(import, FIELD_WASI_RETURN_ON_EXIT.as_bytes()).to_bits(),
+                import_field(
+                    import.get_nanbox_f64(),
+                    FIELD_WASI_RETURN_ON_EXIT.as_bytes(),
+                )
+                .to_bits(),
             )
             .as_bool();
             if return_on_exit {

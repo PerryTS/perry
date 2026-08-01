@@ -140,13 +140,17 @@ pub fn instantiate(module: &WasmModuleHandle) -> Result<WasmInstanceHandle, Wasm
                 &import_name,
                 ty.clone(),
                 move |mut caller, params, results| {
-                    if callback_module == "wasi_snapshot_preview1" && callback_name == "proc_exit" {
+                    if matches!(
+                        callback_module.as_str(),
+                        "wasi_snapshot_preview1" | "wasi_unstable"
+                    ) && callback_name == "proc_exit"
+                    {
                         if let Some(Val::I32(code)) = params.first() {
                             caller.data_mut().exit_code = Some(*code);
                         }
                     }
                     for result in results {
-                        *result = Val::I32(0);
+                        *result = Val::default(result.ty());
                     }
                     Ok(())
                 },
@@ -619,6 +623,14 @@ mod tests {
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01,
         0x7f, 0x02, 0x09, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00,
     ];
+    /// `(module (import "env" "f" (func $f (result f64)))
+    ///          (func (export "call") (result f64) call $f))`.
+    const IMPORT_F64_RESULT_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7c,
+        0x02, 0x09, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00,
+        0x07, 0x08, 0x01, 0x04, 0x63, 0x61, 0x6c, 0x6c, 0x00, 0x01, 0x0a, 0x06, 0x01, 0x04, 0x00,
+        0x10, 0x00, 0x0b,
+    ];
     /// `(module (@custom "meta" "\01\02\03"))`.
     const CUSTOM_WASM: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x04, 0x6d, 0x65, 0x74, 0x61,
@@ -648,6 +660,14 @@ mod tests {
         let mut inst = instantiate(&module).expect("instantiate with proc_exit");
         call_export(&mut inst, "_start", &[]).expect("call _start");
         assert_eq!(inst.inner.store.data_mut().exit_code.take(), Some(7));
+    }
+
+    #[test]
+    fn placeholder_import_results_preserve_the_declared_wasm_type() {
+        let module = compile(IMPORT_F64_RESULT_WASM).expect("compile");
+        let mut inst = instantiate(&module).expect("instantiate with f64 import");
+        let result = call_export(&mut inst, "call", &[]).expect("call import");
+        assert_eq!(result, Some(WasmVal::F64(0.0)));
     }
 
     #[test]

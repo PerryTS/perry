@@ -4742,12 +4742,19 @@ pub fn run_with_parse_cache(
     // rebuild, not codegen — so a bare `perry compile` used to die with
     // `libperry_wasm_host.a not found` until a human ran
     // `cargo build --release -p perry-wasm-host`. Build it on demand here so
-    // both the symbol-stub scan below and the final link resolve it. No-op
-    // when it already exists (or when the program doesn't use wasm).
+    // both the symbol-stub scan below and the final link resolve it. Cargo's
+    // freshness check makes this a no-op when it is already current; programs
+    // that do not use wasm skip the check entirely.
     let use_wasm_host = ctx.needs_wasm_runtime || args.enable_wasm_runtime;
     let wasm_host_lib_resolved = if use_wasm_host {
-        find_wasm_host_library(target.as_deref())
-            .or_else(|| build_wasm_host_library(target.as_deref(), format, verbose))
+        // Prefer a Cargo freshness check when workspace source is available.
+        // Merely finding an archive is insufficient after the host ABI grows:
+        // a stale libperry_wasm_host.a can exist while the freshly rebuilt
+        // runtime references newer symbols. Cargo is incremental here, so an
+        // up-to-date host is a cheap no-op. Installed/source-less builds fall
+        // back to their packaged archive.
+        build_wasm_host_library(target.as_deref(), format, verbose)
+            .or_else(|| find_wasm_host_library(target.as_deref()))
     } else {
         None
     };
