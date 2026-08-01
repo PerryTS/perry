@@ -85,7 +85,55 @@ pub extern "C" fn js_child_process_spawn_background(
             None => return std::ptr::null_mut(),
         };
 
-        let mut command = Command::new(&cmd_str);
+        // Parse the env JSON up front so we can read its `PATH` for command
+        // resolution below (an env override with a `PATH` key is what pushes
+        // std onto the `fork`+`exec` fallback for a bare command name).
+        let env_map = {
+            let env_bits = env_json_val.to_bits();
+            if env_bits != TAG_NULL_BITS && env_bits != TAG_UNDEFINED_BITS {
+                extract_string_from_nanboxed(env_json_val).and_then(|env_json| {
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&env_json)
+                        .ok()
+                })
+            } else {
+                None
+            }
+        };
+
+        // Resolve a bare command name to an absolute path so std uses
+        // `posix_spawn` instead of the `fork`+`exec` fallback that an env
+        // override triggers — the macOS fork/dyld deadlock fix (see
+        // `options::cp_command_for_program`). `arg0` preserves argv[0].
+        let mut command = {
+            #[cfg(unix)]
+            {
+                let resolved = if cmd_str.contains('/') {
+                    None
+                } else {
+                    let path = env_map
+                        .as_ref()
+                        .and_then(|m| m.get("PATH"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .or_else(|| std::env::var("PATH").ok())
+                        .unwrap_or_default();
+                    super::cp_resolve_program_path(&cmd_str, &path)
+                };
+                match resolved {
+                    Some(abs) => {
+                        use std::os::unix::process::CommandExt;
+                        let mut c = Command::new(abs);
+                        c.arg0(&cmd_str);
+                        c
+                    }
+                    None => Command::new(&cmd_str),
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                Command::new(&cmd_str)
+            }
+        };
 
         // Add arguments if provided
         if args_ptr != 0 {
@@ -102,18 +150,11 @@ pub extern "C" fn js_child_process_spawn_background(
             }
         }
 
-        // Parse env JSON if provided (not null/undefined)
-        let env_bits = env_json_val.to_bits();
-        if env_bits != TAG_NULL_BITS && env_bits != TAG_UNDEFINED_BITS {
-            if let Some(env_json) = extract_string_from_nanboxed(env_json_val) {
-                if let Ok(map) =
-                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&env_json)
-                {
-                    for (k, v) in map {
-                        if let Some(val_str) = v.as_str() {
-                            command.env(k, val_str);
-                        }
-                    }
+        // Apply the parsed env (string values only), matching prior behavior.
+        if let Some(map) = env_map {
+            for (k, v) in map {
+                if let Some(val_str) = v.as_str() {
+                    command.env(k, val_str);
                 }
             }
         }

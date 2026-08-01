@@ -140,6 +140,12 @@ pub(crate) fn cp_apply_detached(command: &mut Command, opts_val: f64) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        // NOTE: a `pre_exec` closure forces std onto the `fork`+`exec` path
+        // (posix_spawn cannot run arbitrary code), so `detached` children do not
+        // benefit from the posix_spawn fork/dyld-deadlock fix. `setsid` is not
+        // expressible through std's posix_spawn wrapper (no `POSIX_SPAWN_SETSID`
+        // knob), and `detached` is a rare, deliberate full-session-detach —
+        // unlike the common `exec`/`spawn` paths, it is not converted here.
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() < 0 {
@@ -294,6 +300,98 @@ fn cp_default_shell() -> String {
     }
 }
 
+/// Fallback search path when a child's environment carries no `PATH` — the same
+/// default `execvp(3)` uses (`_PATH_DEFPATH`).
+#[cfg(unix)]
+const CP_DEFAULT_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// The child's effective `PATH` for resolving a bare command name. When an `env`
+/// option is present the child's environment *replaces* the parent's (Node
+/// semantics), so its `PATH` — not the parent's — governs the lookup; a missing
+/// `PATH` falls back to the `execvp` default. With no `env` option the parent's
+/// `PATH` applies.
+#[cfg(unix)]
+fn cp_effective_path(opts_val: f64) -> String {
+    if cp_object_ptr(opts_val).is_some() {
+        let env_val = cp_get_field(opts_val, b"env");
+        if cp_object_ptr(env_val).is_some() {
+            if let Some(p) = cp_value_to_string(cp_get_field(env_val, b"PATH")) {
+                if !p.is_empty() {
+                    return p;
+                }
+            }
+            return CP_DEFAULT_PATH.to_string();
+        }
+    }
+    std::env::var("PATH").unwrap_or_else(|_| CP_DEFAULT_PATH.to_string())
+}
+
+/// Whether `path` names an executable regular file (following symlinks).
+#[cfg(unix)]
+fn cp_is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
+        .unwrap_or(false)
+}
+
+/// Resolve a bare command name to an absolute path by walking `path` (a
+/// colon-separated `PATH`), returning the first executable match. An empty
+/// `PATH` element means the current directory (POSIX `execvp` semantics).
+#[cfg(unix)]
+pub(crate) fn cp_resolve_program_path(program: &str, path: &str) -> Option<String> {
+    for dir in path.split(':') {
+        let base = if dir.is_empty() { "." } else { dir };
+        let candidate = std::path::Path::new(base).join(program);
+        if cp_is_executable(&candidate) {
+            return candidate.into_os_string().into_string().ok();
+        }
+    }
+    None
+}
+
+/// Build a `Command` for `program`, resolving a bare command name to its
+/// absolute path in the child's effective `PATH`.
+///
+/// This is the macOS fork/dyld deadlock fix. `std::process::Command` uses
+/// `posix_spawn` only when the program is given as a path *and* no
+/// `pre_exec`/uid/gid closures are set; a bare command name combined with an
+/// `env` option (which triggers `env_clear()`) drops it onto the `fork`+`exec`
+/// fallback (see `library/std/src/sys/pal/unix/process/process_unix.rs`,
+/// `env_saw_path() && !program_is_path()`). On macOS a `fork` from Perry's
+/// multithreaded runtime (async reactor + GC/worker threads) can deadlock the
+/// child post-`exec` in dyld (`RemoteNotificationResponder::
+/// blockOnSynchronousEvent`) when the process is being observed by a Mach
+/// notification port (telemetry, a crash reporter, a debugger): the child
+/// inherits locks/Mach state from parent threads that don't exist after
+/// `fork`. Resolving the name to an absolute path here keeps std on the
+/// `posix_spawn` fast path.
+///
+/// The original name is preserved as `argv[0]` (`arg0`) so the child sees the
+/// same `process.argv[0]` it would have gotten from the bare name. When nothing
+/// resolves we fall back to the bare name unchanged — a genuine `ENOENT` never
+/// `exec`s a real image, so it cannot hit the dyld hang, and the error surface
+/// stays identical.
+pub(crate) fn cp_command_for_program(program: &str, opts_val: f64) -> Command {
+    #[cfg(unix)]
+    {
+        if !program.is_empty() && !program.contains('/') {
+            let path = cp_effective_path(opts_val);
+            if let Some(abs) = cp_resolve_program_path(program, &path) {
+                use std::os::unix::process::CommandExt;
+                let mut command = Command::new(abs);
+                command.arg0(program);
+                return command;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = opts_val;
+    }
+    Command::new(program)
+}
+
 /// Whether a self-launch uses a Node CLI mode that evaluates source text.
 fn cp_should_use_node_interpreter(cmd: &str, args: &[String]) -> bool {
     let is_self = std::env::args().next().as_deref() == Some(cmd)
@@ -347,14 +445,16 @@ pub(crate) fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Com
             line.push(' ');
             line.push_str(a);
         }
-        let mut c = Command::new(shell_bin);
+        // Resolve a bare shell name to an absolute path so std stays on
+        // `posix_spawn` (see `cp_command_for_program`).
+        let mut c = cp_command_for_program(&shell_bin, opts_val);
         #[cfg(windows)]
         c.arg("/d").arg("/s").arg("/c").arg(line);
         #[cfg(not(windows))]
         c.arg("-c").arg(line);
         c
     } else {
-        let mut c = Command::new(program);
+        let mut c = cp_command_for_program(&program, opts_val);
         c.args(args);
         c
     };
@@ -363,6 +463,71 @@ pub(crate) fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Com
     cp_apply_options(&mut command, opts_val);
     cp_apply_detached(&mut command, opts_val);
     command
+}
+
+#[cfg(all(test, unix))]
+mod posix_spawn_tests {
+    use super::{cp_command_for_program, cp_resolve_program_path};
+    use crate::child_process::cp_undefined;
+
+    /// A bare command name in a real `PATH` resolves to an executable absolute
+    /// path — the precondition std needs to pick `posix_spawn` over `fork`.
+    #[test]
+    fn resolves_bare_name_to_absolute_executable() {
+        let resolved = cp_resolve_program_path("sh", "/nonexistent:/bin:/usr/bin")
+            .expect("sh should resolve on a POSIX system");
+        assert!(
+            resolved.starts_with('/'),
+            "expected an absolute path, got {resolved}"
+        );
+        assert!(resolved.ends_with("/sh"));
+        assert!(std::path::Path::new(&resolved).exists());
+    }
+
+    /// A name that cannot be found returns `None` (caller falls back to the bare
+    /// name, which then fails ENOENT before exec'ing any real image).
+    #[test]
+    fn missing_program_does_not_resolve() {
+        assert!(cp_resolve_program_path("perry-definitely-missing-xyz", "/bin:/usr/bin").is_none());
+    }
+
+    /// `cp_command_for_program` rewrites a bare name to an absolute path so std
+    /// stays on `posix_spawn`; an already-absolute program is passed through
+    /// unchanged.
+    #[test]
+    fn command_program_is_absolute_for_bare_name() {
+        let cmd = cp_command_for_program("sh", cp_undefined());
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        assert!(
+            program.starts_with('/') && program.ends_with("/sh"),
+            "bare name should resolve to an absolute path; got {program}"
+        );
+
+        let passthrough = cp_command_for_program("/bin/sh", cp_undefined());
+        assert_eq!(passthrough.get_program().to_string_lossy(), "/bin/sh");
+    }
+
+    /// End-to-end: the resolved (absolute-path, no-`pre_exec`) command spawns via
+    /// std's `posix_spawn` path and captures output correctly. This is exactly
+    /// the shape that deadlocked in dyld when std took the `fork`+`exec` fallback
+    /// on macOS. (Full GC-stress N/N verification uses the compiled repro under
+    /// `PERRY_GC_FORCE_EVACUATE=1`; a raw unit test cannot drive Perry's
+    /// thread-local GC without runtime init.)
+    #[test]
+    fn resolved_command_runs_and_captures_output() {
+        let mut cmd = cp_command_for_program("sh", cp_undefined());
+        assert!(
+            cmd.get_program().to_string_lossy().starts_with('/'),
+            "resolved program must be an absolute path to keep std on posix_spawn"
+        );
+        let out = cmd
+            .arg("-c")
+            .arg("printf ok-%s 42")
+            .output()
+            .expect("spawn resolved sh");
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"ok-42");
+    }
 }
 
 #[cfg(test)]
