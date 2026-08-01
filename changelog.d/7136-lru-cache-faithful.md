@@ -71,4 +71,15 @@
   identity keys are supported by pointer identity but are not tracked across a
   GC relocation; primitive keys are the GC-safe path.
 
+  The GC-survival test moved to its own test binary
+  (`crates/perry-ext-lru-cache/tests/gc_survival.rs`) and now asserts that
+  the collector *relocated* the cached value, not merely that it is still
+  readable — a non-moving collection satisfies the latter without
+  exercising one line of the scanner's forwarding-pointer rewrite
+  (#6942/#6946). It needs its own process to do that: the collector
+  conservatively pins any nursery object a stack word points at, so after
+  even one other test in the same binary the minor reports
+  `copied_objects=0` instead of `1`. Verified in both directions —
+  `PERRY_GEN_GC=0` (non-moving mark-sweep) trips the new assertion.
+
   Tracking: #466 (Phase 5 native bindings). PR #7136.

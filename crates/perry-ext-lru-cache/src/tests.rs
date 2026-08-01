@@ -3,19 +3,18 @@
 //! Every test links `perry-runtime` (the `runtime-link` dev-dep feature)
 //! because the wrapper reaches the runtime for its clock
 //! (`js_performance_now`) and string materialization
-//! (`js_get_string_pointer_unified`). The GC-survival test additionally
-//! drives `perry-runtime`'s collector directly.
+//! (`js_get_string_pointer_unified`), and reaches `perry-runtime`
+//! directly for `js_call_catching` so a rejected constructor option can be
+//! asserted on instead of exiting the process. The GC-survival test lives
+//! in `tests/gc_survival.rs` — see that file for why it needs its own
+//! process.
 
 use super::*;
 use perry_ffi::{alloc_string, nanbox_string_bits, JsValue};
-use std::sync::Mutex;
-
 extern "C" {
+    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
     fn js_object_set_field_by_name(obj: *mut ObjectHeader, key: *const StringHeader, value: f64);
 }
-
-/// Serializes the tests that touch global GC state.
-static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// NaN-boxed `f64` for a freshly allocated JS string with `text`.
 fn string_value(text: &str) -> f64 {
@@ -26,15 +25,25 @@ fn string_value(text: &str) -> f64 {
 
 /// Build a real JS options object carrying `fields`, the way a compiled
 /// `new LRUCache({ … })` object literal reaches the constructor.
+///
+/// The slot count is declared up front rather than using
+/// `perry_ffi::alloc_object()` (which allocates zero inline slots and
+/// grows on the first `js_object_set_field_by_name`). That is not a
+/// stylistic preference: an object built the zero-slot way makes the
+/// copying minor collector walk a bogus slot address and SIGSEGV in
+/// `gc::copying::scan_slot` on the *next* collection in the process
+/// (reproduced with `--test-threads=1`; see the PR discussion). Declaring
+/// the slots avoids the grow path entirely. A compiled object literal
+/// declares its slots the same way, so this is also the more faithful
+/// model of what reaches the constructor.
 fn options(fields: &[(&str, f64)]) -> f64 {
-    let obj = perry_ffi::alloc_object();
-    assert!(obj.is_pointer(), "alloc_object returned a non-object");
-    let ptr = obj.as_pointer::<ObjectHeader>();
+    let ptr = unsafe { js_object_alloc(0, fields.len() as u32) };
+    assert!(!ptr.is_null(), "js_object_alloc returned null");
     for (name, value) in fields {
         let key = alloc_string(name);
         unsafe { js_object_set_field_by_name(ptr, key.as_raw(), *value) };
     }
-    f64::from_bits(obj.bits())
+    f64::from_bits(JsValue::from_object_ptr(ptr).bits())
 }
 
 /// `new LRUCache({ max })` through the real constructor.
@@ -429,66 +438,12 @@ fn non_integer_ttl_is_a_type_error() {
     }
 }
 
-// ── GC rooting: a cached heap value survives a collection ────────────
-
-#[test]
-fn cached_value_survives_gc_cycle() {
-    let _lock = GC_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    // Match the runtime's evacuation preconditions: write barriers active
-    // and a live shadow frame (mirrors perry-ext-events' scanner test).
-    perry_runtime::gc::js_gc_write_barriers_emitted(1);
-    let frame = perry_runtime::gc::js_shadow_frame_push(0);
-    // Both of those are process-global. An assertion below panicking must
-    // not leave write barriers on and a frame pushed for every later test
-    // in this binary, so tear down in `Drop` rather than on the happy path.
-    struct GcStateGuard(u64);
-    impl Drop for GcStateGuard {
-        fn drop(&mut self) {
-            perry_runtime::gc::js_shadow_frame_pop(self.0);
-            perry_runtime::gc::js_gc_write_barriers_emitted(0);
-        }
-    }
-    let _gc_state = GcStateGuard(frame);
-    ensure_gc_scanner();
-
-    let h = new_cache(10.0);
-    // A >5-byte string forces the heap `StringHeader` repr (not inline SSO),
-    // so it is a real collectable allocation. Its ONLY root is the cache.
-    let value = string_value("value-object-1234567890");
-    let before = value.to_bits() & POINTER_MASK;
-    js_lru_cache_set(h, 1.0, value);
-
-    // Reclaims unrooted nursery allocations and evacuates rooted survivors.
-    let _ = perry_runtime::gc::gc_collect_minor();
-
-    let got = js_lru_cache_get(h, 1.0);
-    assert_ne!(
-        got.to_bits(),
-        TAG_UNDEFINED,
-        "cached value was collected — root scanner did not keep it alive"
-    );
-    // Subject-live gate (#6942/#6946). Marking alone would satisfy the
-    // assertions above, and a non-moving collection satisfies them even if
-    // the scanner never rewrites a slot — so this test would keep passing
-    // while covering nothing. Require the evacuation to have actually
-    // relocated the value: the address the cache hands back must differ
-    // from the one it was given. If this fires, the minor did not copy
-    // (`PERRY_GEN_GC=0` routes to non-moving mark-sweep, and barriers-off
-    // falls back the same way) and the rewrite path is untested, not fixed.
-    let after = got.to_bits() & POINTER_MASK;
-    assert_ne!(
-        before, after,
-        "minor GC did not relocate the cached value (0x{before:x}), so this test \
-         never exercised the scanner's forwarding-pointer rewrite"
-    );
-    assert_eq!(
-        read_string_value(got).as_deref(),
-        Some("value-object-1234567890"),
-        "cached value corrupted across GC — slot was not rewritten to the forwarded address"
-    );
-
-    perry_ffi::drop_handle(h);
-}
+// ── GC rooting ───────────────────────────────────────────────────────
+//
+// The cached-value-survives-a-copying-minor test lives in its own test
+// binary (`tests/gc_survival.rs`). It needs a pristine heap to assert
+// that the collector actually *relocated* the value, and it cannot get
+// one here: any earlier test's stack leftovers conservatively pin the
+// string (minor then reports `copied_objects=0`), and driving
+// `gc_collect_minor()` in a binary that has also allocated JS objects
+// SIGSEGVs the copying collector. See that file's module docs.
