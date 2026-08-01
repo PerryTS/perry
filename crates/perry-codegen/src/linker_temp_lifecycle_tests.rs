@@ -13,38 +13,44 @@
 
 use super::*;
 
+// ── Path shape ─────────────────────────────────────────────────────────────
+
 #[test]
 fn scratch_dir_is_per_call_and_per_process_but_the_ll_basename_is_not() {
     // #7144's shape, and the reason it does not undo #7131: the *directory*
-    // carries every uniquifier, the *basename* carries none. clang records
-    // the basename into the object and nothing else (no `-g`), so the two
-    // properties do not compete — a call can own its `.ll` outright and
-    // still emit the same object bytes as any other call with the same IR.
+    // carries every uniquifier, the *basename* carries none. The object records
+    // the basename and nothing else, so the two properties do not compete — a
+    // call can own its `.ll` outright and still emit the same object bytes as
+    // any other call with the same IR.
+    //
+    // This is the structural guarantee the whole fix rests on: no two calls are
+    // ever handed the same `.ll` path, so the unlink has nothing to race.
     let tmp = Path::new("/tmp");
     let ir = "define void @f() {\n  ret void\n}\n";
 
-    let a = llvm_temp_paths_for(tmp, ir, 1111, 0, LlLayout::Scratch);
-    let b = llvm_temp_paths_for(tmp, ir, 1111, 1, LlLayout::Scratch); // same process
-    let c = llvm_temp_paths_for(tmp, ir, 2222, 0, LlLayout::Scratch); // other process
+    let a = llvm_temp_paths_for(tmp, ir, 1111, 0);
+    let b = llvm_temp_paths_for(tmp, ir, 1111, 1); // same process, next call
+    let c = llvm_temp_paths_for(tmp, ir, 2222, 0); // other process, same counter
 
-    let dirs = [&a, &b, &c].map(|p| {
-        p.scratch_dir
-            .clone()
-            .expect("Scratch layout must allocate a private directory")
-    });
-    assert_ne!(dirs[0], dirs[1], "two calls must not share a directory");
-    assert_ne!(dirs[0], dirs[2], "two processes must not share a directory");
+    assert_ne!(
+        a.scratch_dir, b.scratch_dir,
+        "two calls must not share a directory"
+    );
+    assert_ne!(
+        a.scratch_dir, c.scratch_dir,
+        "two processes must not share a directory — every process starts the \
+         counter at 0, so only the pid can separate them (#7140)"
+    );
 
     for p in [&a, &b, &c] {
-        let dir = p.scratch_dir.as_ref().unwrap();
         assert_eq!(
             p.ll_path.parent(),
-            Some(dir.as_path()),
+            Some(p.scratch_dir.as_path()),
             "the .ll must live inside the directory that gets removed"
         );
         assert_eq!(
             p.obj_path.parent(),
-            Some(dir.as_path()),
+            Some(p.scratch_dir.as_path()),
             "the .o must go with it, so one remove_dir_all cleans up"
         );
         assert_eq!(
@@ -53,75 +59,16 @@ fn scratch_dir_is_per_call_and_per_process_but_the_ll_basename_is_not() {
             "the recorded name — the basename — must stay content-only (#7131)"
         );
     }
+    // …and the objects must still not collide, directory or no directory.
+    assert_ne!(a.obj_path.file_name(), c.obj_path.file_name());
 }
 
-#[test]
-fn debug_symbols_keep_a_stable_absolute_ll_path() {
-    // Under `-g` the object names the `.ll` by ABSOLUTE path in DWARF, so
-    // the whole path has to be a function of the IR (else `-g` builds stop
-    // being reproducible for a fixed TMPDIR) and the file has to outlive the
-    // compile (else the debugger has nothing to open). Both follow from
-    // "no scratch directory": #7144 exempts this layout on purpose.
-    let tmp = Path::new("/tmp");
-    let ir = "define void @f() {\n  ret void\n}\n";
-
-    let a = llvm_temp_paths_for(tmp, ir, 1111, 0, LlLayout::DebugShared);
-    let b = llvm_temp_paths_for(tmp, ir, 2222, 7, LlLayout::DebugShared);
-    assert!(
-        a.scratch_dir.is_none() && b.scratch_dir.is_none(),
-        "a per-call directory would put pid/counter into DWARF"
-    );
-    assert_eq!(
-        a.ll_path, b.ll_path,
-        "the DWARF-referenced path must be content-addressed end to end"
-    );
-    assert_eq!(a.ll_path.parent(), Some(tmp));
-    // The object still may not collide across processes (#7140/#509).
-    assert_ne!(a.obj_path.file_name(), b.obj_path.file_name());
-}
-
-#[test]
-fn debug_symbols_layout_and_g_flag_agree() {
-    // The hazard this pins: if the layout said "scratch, delete it" while
-    // clang was still passed `-g`, every debug build would ship DWARF
-    // pointing at a file that no longer exists — and nothing would fail
-    // loudly. One `TempFilePolicy` decides both; this is that contract.
-    let with_g = TempFilePolicy {
-        keep: false,
-        debug_symbols: true,
-    };
-    let without = TempFilePolicy {
-        keep: false,
-        debug_symbols: false,
-    };
-    assert_eq!(with_g.layout(), LlLayout::DebugShared);
-    assert_eq!(without.layout(), LlLayout::Scratch);
-
-    for policy in [with_g, without] {
-        let plan = build_clang_compile_plan(
-            PathBuf::from("clang"),
-            PathBuf::from("/tmp/input.ll"),
-            PathBuf::from("/tmp/output.o"),
-            None,
-            0,
-            0,
-            policy.debug_symbols,
-        );
-        let has_g = plan.clang_args.iter().any(|a| a == "-g");
-        assert_eq!(
-            has_g,
-            policy.layout() == LlLayout::DebugShared,
-            "`-g` is passed iff the `.ll` is retained at a stable path: {policy:?}"
-        );
-    }
-}
-
-// ── Temp-file lifecycle (#7144) ────────────────────────────────────────
+// ── Temp-file lifecycle (#7144) ────────────────────────────────────────────
 //
-// These drive the real `clang`, into a temp root of their own, and assert
-// on what is left in that root. A leak is only observable end-to-end: every
-// path-shape test above passes just as happily against a compiler that
-// never deletes anything, which is exactly how #7144 shipped.
+// These drive the real `clang`, into a temp root of their own, and assert on
+// what is left in that root. A leak is only observable end-to-end: every
+// path-shape test above passes just as happily against a compiler that never
+// deletes anything, which is exactly how #7144 shipped.
 
 /// A fresh, empty directory to use as the temp root, or `None` when this
 /// host has no usable clang and the compile step cannot run at all.
@@ -319,11 +266,15 @@ fn keep_ir_retains_the_whole_scratch_dir() {
 }
 
 #[test]
-fn debug_symbols_retain_the_ll_at_the_path_dwarf_names() {
-    // (b) of #7144, as executable policy rather than a sentence in a doc:
-    // `-g` puts the `.ll`'s absolute path into DWARF, so this layout keeps
-    // the file — flat in the temp root, content-addressed, at exactly the
-    // path the object points at. The `.o` is still cleaned up.
+fn debug_symbols_do_not_change_the_temp_file_lifetime() {
+    // #7144 question (b), answered by measurement rather than by inheriting the
+    // premise. `PERRY_DEBUG_SYMBOLS` was believed to make the `.ll` part of the
+    // shipped object — "`-g` pulls the absolute `.ll` path plus `DW_AT_comp_dir`
+    // into DWARF" — which would have required keeping the file at a stable path
+    // for as long as the object lived. It does not: see
+    // `debug_symbols_do_not_change_what_the_object_records` below and the note
+    // on `TEMP_NONCE_COUNTER`. So `-g` cleans up like everything else, and there
+    // is no second layout left sitting untested.
     let Some(root) = temp_root_if_clang_available("debug") else {
         return;
     };
@@ -331,22 +282,148 @@ fn debug_symbols_retain_the_ll_at_the_path_dwarf_names() {
         keep: false,
         debug_symbols: true,
     };
-    let ir = test_ir(9);
-    compile_ll_to_object_in(&root, &ir, None, policy).expect("compile failed");
+    for nth in 0..2 {
+        compile_ll_to_object_in(&root, &test_ir(9 + nth), None, policy)
+            .unwrap_or_else(|e| panic!("-g compile {nth} failed: {e:#}"));
+        assert_eq!(
+            entries(&root),
+            Vec::<String>::new(),
+            "a -g compile must leave nothing behind either"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
 
-    let left = entries(&root);
-    let expected = llvm_temp_paths_for(&root, &ir, 0, 0, LlLayout::DebugShared);
-    let expected_name = expected.ll_path.file_name().unwrap().to_string_lossy();
+// ── What the object actually records about the `.ll` ───────────────────────
+
+/// The property the whole design rests on, as a test rather than a comment.
+///
+/// Everything above is safe *because* an emitted object records the `.ll`'s
+/// **basename** and never its **directory** — that is what lets a per-call
+/// directory coexist with byte-identical emission (#7131). Until now that was
+/// measured by hand, once, on a Raspberry Pi (#7140), and written down. A
+/// property this load-bearing that no test can restate is one that quietly
+/// stops being true.
+///
+/// ELF is the format that records the basename at all (Mach-O does not, which
+/// is why this defect class is invisible on the machine most of this project's
+/// work happens on), so this cross-compiles: the embedding is a property of the
+/// ELF writer, not of the host or the arch.
+#[test]
+fn the_ll_directory_is_not_recorded_in_the_object_but_the_basename_is() {
+    let Some(root) = temp_root_if_clang_available("elf-record") else {
+        return;
+    };
+    let clang = find_clang().unwrap();
+    let ir = test_ir(1);
+
+    for target in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+        // Same basename, two different directories.
+        let mut objs = Vec::new();
+        for dir_name in ["dirA", "dirB"] {
+            let dir = root.join(format!("{target}-{dir_name}"));
+            fs::create_dir_all(&dir).unwrap();
+            let ll = dir.join("perry_llvm_00000000cafe0001.ll");
+            fs::write(&ll, &ir).unwrap();
+            let Some(obj) = elf_compile(&clang, &ll, target, &dir) else {
+                eprintln!("[linker tests] skipping {target}: clang cannot target it");
+                return;
+            };
+            objs.push(obj);
+        }
+        assert_eq!(
+            objs[0], objs[1],
+            "{target}: the .ll's DIRECTORY must not reach the object — a \
+             per-call scratch dir would otherwise break emission determinism"
+        );
+
+        // Control: the instrument must be able to see a difference at all. If
+        // this ever stops differing, the assertion above proves nothing.
+        let dir = root.join(format!("{target}-control"));
+        fs::create_dir_all(&dir).unwrap();
+        let other = dir.join("perry_llvm_00000000cafe0002.ll");
+        fs::write(&other, &ir).unwrap();
+        let control = elf_compile(&clang, &other, target, &dir).unwrap();
+        assert_ne!(
+            objs[0], control,
+            "{target}: a different .ll BASENAME must change the object — if it \
+             does not, this test cannot detect the directory leaking either"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn debug_symbols_do_not_change_what_the_object_records() {
+    // The measurement that retired the `PERRY_DEBUG_SYMBOLS` exemption. Perry's
+    // codegen emits no `DICompileUnit`/`DIFile`/`!dbg` metadata, and `clang -g`
+    // on a `.ll` lowers debug info that is *in* the IR rather than synthesising
+    // a compile unit for the input file — so `-g` adds no DWARF, and in
+    // particular no record of where the `.ll` was. If Perry ever does emit debug
+    // metadata this goes red, and the temp-file lifetime has to be revisited.
+    let Some(root) = temp_root_if_clang_available("elf-debug") else {
+        return;
+    };
+    let clang = find_clang().unwrap();
+    let target = "x86_64-unknown-linux-gnu";
+
+    let dir = root.join("g");
+    fs::create_dir_all(&dir).unwrap();
+    let ll = dir.join("perry_llvm_00000000cafe0003.ll");
+    fs::write(&ll, test_ir(2)).unwrap();
+
+    let Some(plain) = elf_compile(&clang, &ll, target, &dir) else {
+        eprintln!("[linker tests] skipping: clang cannot target {target}");
+        return;
+    };
+    let with_g = elf_compile_with(&clang, &ll, target, &dir, &["-g"]).unwrap();
     assert_eq!(
-        left,
-        vec![expected_name.to_string()],
-        "a -g build must retain exactly the .ll its DWARF references"
+        plain, with_g,
+        "-g changed the emitted object. Perry's IR has gained debug metadata, \
+         or this clang synthesises a compile unit for .ll input. Either way the \
+         `.ll` may now be referenced by the object and #7144's decision to \
+         delete it unconditionally has to be re-taken."
     );
 
-    // …and re-running must not accumulate a second copy: the name is a
-    // function of the IR, so a `-g` temp dir is bounded by distinct IR
-    // compiled with `-g`, not by the number of compiles.
-    compile_ll_to_object_in(&root, &ir, None, policy).expect("second compile failed");
-    assert_eq!(entries(&root), left);
+    // Control: this comparison must be capable of failing. `-O0` is a flag that
+    // definitely changes the bytes; if even that compares equal, the harness is
+    // not really building two objects.
+    let control = elf_compile_with(&clang, &ll, target, &dir, &["-O0"]).unwrap();
+    assert_ne!(
+        plain, control,
+        "the object comparison cannot distinguish two different compiles, so \
+         the -g assertion above proves nothing"
+    );
     let _ = fs::remove_dir_all(&root);
+}
+
+fn elf_compile(clang: &Path, ll: &Path, target: &str, cwd: &Path) -> Option<Vec<u8>> {
+    elf_compile_with(clang, ll, target, cwd, &[])
+}
+
+/// `clang -c` for an explicit target, returning the object bytes. `None` when
+/// this clang has no backend for `target` (then the caller must skip, not pass).
+fn elf_compile_with(
+    clang: &Path,
+    ll: &Path,
+    target: &str,
+    cwd: &Path,
+    extra: &[&str],
+) -> Option<Vec<u8>> {
+    let obj = cwd.join(format!("out{}.o", extra.join("")));
+    let run = Command::new(clang)
+        .current_dir(cwd)
+        .args(["-c", "-O3"])
+        .args(extra)
+        .arg("-target")
+        .arg(target)
+        .arg(ll)
+        .arg("-o")
+        .arg(&obj)
+        .output()
+        .ok()?;
+    if !run.status.success() {
+        return None;
+    }
+    fs::read(&obj).ok()
 }

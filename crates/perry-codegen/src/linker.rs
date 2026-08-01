@@ -44,49 +44,25 @@ static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();
 ///
 /// That is the whole reason only the `.ll` basename had to change: the counter
 /// may stay in every *output* name, where it costs nothing and still closes
-/// #509. The one caveat is `PERRY_DEBUG_SYMBOLS`, which adds `-g` and pulls the
-/// absolute `.ll` path plus `DW_AT_comp_dir` into DWARF — objects built with it
-/// are reproducible only for a fixed `TMPDIR` and working directory. That
-/// caveat is also why the two layouts in `LlLayout` exist.
+/// #509. And because the *directory* is recorded nowhere, #7144 could put every
+/// compile's `.ll` in a directory of its own and delete it again.
+///
+/// **`PERRY_DEBUG_SYMBOLS` is not an exception**, contrary to what the comment
+/// here used to say. `-g` was assumed to pull the `.ll`'s absolute path plus
+/// `DW_AT_comp_dir` into DWARF, which would have made the file part of the
+/// shipped object and forced it to persist at a stable path. Measured on a real
+/// Perry module (Apple clang 21, `-target x86_64-unknown-linux-gnu` and
+/// `aarch64-unknown-linux-gnu`): the `-g` object is **byte-identical** to the
+/// one without it and carries **no `.debug_*` sections at all**. Perry's codegen
+/// emits no `DICompileUnit`/`DIFile`/`!dbg` metadata, and `clang -g` on a `.ll`
+/// lowers debug info that is in the IR rather than synthesising a compile unit
+/// for the input file. So `-g` records nothing about where the `.ll` lived, and
+/// the temp-file lifetime does not depend on it — see
+/// `debug_symbols_do_not_change_what_the_object_records`. (Not measured on
+/// COFF/Windows.)
 static TEMP_NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Which temp-file layout one `.ll` uses — and, inseparably, whether the file
-/// survives the compile (#7144).
-///
-/// The rule, stated once: **the `.ll` lives at a path whose stability matches
-/// what the emitted object records about it.**
-///
-/// * `Scratch` (default): the object records the translation unit's *basename*
-///   and nothing else — the table above, measured, not assumed. So the basename
-///   must be content-addressed and the *directory* is free. Give every call its
-///   own directory and remove it when the compile succeeds. Nothing is shared,
-///   so the unlink cannot race a sibling worker that computed the same content
-///   hash. That race is why #7135 stopped deleting the `.ll` at all, and why
-///   #7144 then measured one leftover per *distinct IR ever compiled* — 1627
-///   files / 951.8 MB on one dev box after a day, 29 GB on another.
-/// * `DebugShared` (`PERRY_DEBUG_SYMBOLS`): clang also gets `-g`, which puts
-///   the `.ll`'s **absolute** path plus `DW_AT_comp_dir` into DWARF. The file is
-///   then referenced by the shipped object, so it must (a) keep a stable
-///   absolute path — flat in the temp root, content-addressed, exactly the
-///   pre-#7144 layout — and (b) outlive the compile, or a debugger stepping
-///   into generated code has nothing to resolve. These are retained on purpose.
-///   They are bounded by the distinct IR compiled *with `-g`*, and a debug build
-///   asking for debug info is the one case where keeping the source is the
-///   point rather than a leak.
-///
-/// The layout and clang's `-g` flag must never disagree: deleting a `.ll` that
-/// DWARF names by absolute path silently breaks source-level debugging. Both
-/// are therefore derived from one `TempFilePolicy` value at a single call site,
-/// and `debug_symbols_layout_and_g_flag_agree` pins that.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LlLayout {
-    /// Per-call directory, removed on success.
-    Scratch,
-    /// Flat, content-addressed, retained — the object points at it.
-    DebugShared,
-}
-
-/// The two environment inputs that decide what happens to the temp files.
+/// The environment inputs that decide what happens to the temp files.
 ///
 /// Read once, in `compile_ll_to_object`, and threaded down rather than probed
 /// where they are used: the lifecycle is then testable without a test mutating
@@ -94,9 +70,11 @@ enum LlLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TempFilePolicy {
     /// `PERRY_LLVM_KEEP_IR` — retain every intermediate and write the compile
-    /// plan alongside it.
+    /// plan alongside it. The only input that changes the files' lifetime.
     keep: bool,
-    /// `PERRY_DEBUG_SYMBOLS` — clang gets `-g`; see `LlLayout::DebugShared`.
+    /// `PERRY_DEBUG_SYMBOLS` — clang gets `-g`. Carried here only so the flag
+    /// is a parameter rather than an env probe buried in plan construction; it
+    /// deliberately does **not** affect cleanup (see `TEMP_NONCE_COUNTER`).
     debug_symbols: bool,
 }
 
@@ -105,14 +83,6 @@ impl TempFilePolicy {
         Self {
             keep: env::var_os("PERRY_LLVM_KEEP_IR").is_some(),
             debug_symbols: env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
-        }
-    }
-
-    fn layout(self) -> LlLayout {
-        if self.debug_symbols {
-            LlLayout::DebugShared
-        } else {
-            LlLayout::Scratch
         }
     }
 }
@@ -149,40 +119,26 @@ fn ll_content_hash(ll_text: &str) -> u64 {
 ///   same-source compiles failed with "Failed to read clang output … No such
 ///   file or directory". This is #509 again, one scope out.
 ///
-/// Under `LlLayout::Scratch` the two names additionally sit inside a directory
-/// that belongs to this call alone (#7144). The directory name is *not*
-/// content-addressed — it must not be, or two callers would share it again —
-/// and it does not have to be: only the basename reaches the object.
+/// Both names additionally sit inside a `scratch_dir` that belongs to this call
+/// alone (#7144). The directory name is *not* content-addressed — it must not
+/// be, or two callers would share it again and the unlink would be racing a
+/// sibling, which is the corner #7135 painted itself into. And it does not have
+/// to be: only the basename reaches the object.
 ///
 /// `pid` and `counter` are parameters rather than read in here so the property
 /// above is testable without spawning processes.
-fn llvm_temp_paths_for(
-    tmp_dir: &Path,
-    ll_text: &str,
-    pid: u32,
-    counter: u64,
-    layout: LlLayout,
-) -> LlvmTempPaths {
+fn llvm_temp_paths_for(tmp_dir: &Path, ll_text: &str, pid: u32, counter: u64) -> LlvmTempPaths {
     let hash = ll_content_hash(ll_text);
     let ll_name = format!("perry_llvm_{hash:016x}.ll");
     // The `.o` keeps its uniquifiers even inside a private directory. They cost
     // nothing, and the day someone flattens the layout again the object must
     // not silently go back to colliding across processes (#7140).
     let obj_name = format!("perry_llvm_{hash:016x}_{pid:x}_{counter:x}.o");
-    match layout {
-        LlLayout::Scratch => {
-            let scratch = tmp_dir.join(format!("perry_llvm_scratch_{pid:x}_{counter:x}"));
-            LlvmTempPaths {
-                ll_path: scratch.join(&ll_name),
-                obj_path: scratch.join(&obj_name),
-                scratch_dir: Some(scratch),
-            }
-        }
-        LlLayout::DebugShared => LlvmTempPaths {
-            ll_path: tmp_dir.join(&ll_name),
-            obj_path: tmp_dir.join(&obj_name),
-            scratch_dir: None,
-        },
+    let scratch = tmp_dir.join(format!("perry_llvm_scratch_{pid:x}_{counter:x}"));
+    LlvmTempPaths {
+        ll_path: scratch.join(&ll_name),
+        obj_path: scratch.join(&obj_name),
+        scratch_dir: scratch,
     }
 }
 
@@ -190,9 +146,8 @@ fn llvm_temp_paths_for(
 #[derive(Debug, Clone)]
 struct LlvmTempPaths {
     /// Directory owned exclusively by this call, removed once the object bytes
-    /// have been read. `None` under `LlLayout::DebugShared`, where the `.ll` is
-    /// shared between callers and deliberately retained.
-    scratch_dir: Option<PathBuf>,
+    /// have been read.
+    scratch_dir: PathBuf,
     ll_path: PathBuf,
     obj_path: PathBuf,
 }
@@ -200,11 +155,11 @@ struct LlvmTempPaths {
 /// `llvm_temp_paths_for` with this process's pid and the next counter value.
 /// Returns the paths plus `(pid, counter)` — the last two also name the
 /// atomic-write staging file.
-fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str, layout: LlLayout) -> (LlvmTempPaths, u32, u64) {
+fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str) -> (LlvmTempPaths, u32, u64) {
     let pid = std::process::id();
     let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
     (
-        llvm_temp_paths_for(tmp_dir, ll_text, pid, counter, layout),
+        llvm_temp_paths_for(tmp_dir, ll_text, pid, counter),
         pid,
         counter,
     )
@@ -441,10 +396,10 @@ fn build_clang_compile_plan(
     };
 
     let mut clang_args = vec!["-c".to_string(), opt_flag.to_string()];
-    // `-g` and `LlLayout::DebugShared` are two consequences of ONE decision
-    // (`TempFilePolicy::debug_symbols`) and are passed the same value from the
-    // same call site. If they ever disagree, we delete a `.ll` that DWARF names
-    // by absolute path and source-level debugging breaks silently (#7144).
+    // A parameter rather than an env probe so a test can pin what `-g` does
+    // and does not reach — measured in #7144: on a Perry `.ll` it produces a
+    // byte-identical object with no `.debug_*` sections, because Perry's
+    // codegen emits no DI metadata for clang to lower. See `TEMP_NONCE_COUNTER`.
     if debug_symbols {
         clang_args.push("-g".to_string());
     }
@@ -517,16 +472,16 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
 ///
 /// Cleanup policy, in one place:
 ///
-/// * **success**: the object is read into memory and removed; under
-///   `LlLayout::Scratch` the whole per-call directory goes with it, so a
-///   compile leaves nothing behind (#7144).
+/// * **success**: the object is read into memory, and the per-call directory
+///   goes with it — a compile leaves nothing behind (#7144).
 /// * **failure** (clang non-zero, or the object cannot be read): everything is
 ///   left on disk. The error message names the `.ll`, and a failed compile is
 ///   exactly when someone wants to look at the IR that produced it.
 /// * **`PERRY_LLVM_KEEP_IR`**: everything is kept and its location printed,
 ///   plus the compile plan as JSON.
-/// * **`PERRY_DEBUG_SYMBOLS`**: the `.ll` is kept even on success — the object's
-///   DWARF references it by absolute path. See `LlLayout`.
+/// * **`PERRY_DEBUG_SYMBOLS`**: no effect on any of the above. It was believed
+///   to put the `.ll`'s absolute path into DWARF; measured, it does not put
+///   anything there at all. See `TEMP_NONCE_COUNTER`.
 fn compile_ll_to_object_in(
     tmp_dir: &Path,
     ll_text: &str,
@@ -562,17 +517,14 @@ fn compile_ll_to_object_in(
     // object on ELF). #509: keep the `.o` unique via the per-call counter.
     // #7144: put both under a directory this call owns, so the `.ll` can be
     // deleted again without racing a sibling that hashed the same IR.
-    let layout = policy.layout();
-    let (paths, write_pid, write_nonce) = llvm_temp_paths(tmp_dir, ll_text, layout);
+    let (paths, write_pid, write_nonce) = llvm_temp_paths(tmp_dir, ll_text);
     let LlvmTempPaths {
         scratch_dir,
         ll_path,
         obj_path,
     } = paths;
-    if let Some(dir) = &scratch_dir {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("Failed to create temp dir at {}", dir.display()))?;
-    }
+    fs::create_dir_all(&scratch_dir)
+        .with_context(|| format!("Failed to create temp dir at {}", scratch_dir.display()))?;
     write_ll_atomically(&ll_path, ll_text, write_pid, write_nonce)?;
 
     let plan = build_clang_compile_plan(
@@ -680,20 +632,13 @@ fn compile_ll_to_object_in(
             metadata_path.display()
         );
     } else {
-        let _ = fs::remove_file(&plan.obj_path);
-        match &scratch_dir {
-            // Ours alone: `remove_dir_all` rather than unlinking the two names
-            // we know about, so anything clang chose to drop beside them goes
-            // too and the directory cannot survive as an empty husk.
-            Some(dir) => {
-                let _ = fs::remove_dir_all(dir);
-            }
-            // `LlLayout::DebugShared`: the object's DWARF names this `.ll` by
-            // absolute path. Deleting it would leave a debug build that cannot
-            // show the source it was built from — the one case where retaining
-            // the IR is the feature.
-            None => {}
-        }
+        // Ours alone: `remove_dir_all` rather than unlinking the two names we
+        // know about, so anything clang chose to drop beside them goes too and
+        // the directory cannot survive as an empty husk.
+        //
+        // Unconditional, including under `PERRY_DEBUG_SYMBOLS`: `-g` records
+        // nothing about this path, measured — see `TEMP_NONCE_COUNTER`.
+        let _ = fs::remove_dir_all(&scratch_dir);
     }
 
     Ok(bytes)
@@ -1750,8 +1695,8 @@ mod tests {
         // basename still differs via the counter.
         let tmp = env::temp_dir();
         let ir = "define void @f() {\n  ret void\n}\n";
-        let (a, _, _) = llvm_temp_paths(&tmp, ir, LlLayout::Scratch);
-        let (b, _, _) = llvm_temp_paths(&tmp, ir, LlLayout::Scratch);
+        let (a, _, _) = llvm_temp_paths(&tmp, ir);
+        let (b, _, _) = llvm_temp_paths(&tmp, ir);
         let (ll_a, obj_a) = (&a.ll_path, &a.obj_path);
         let (ll_b, obj_b) = (&b.ll_path, &b.obj_path);
         assert_eq!(
@@ -1765,11 +1710,7 @@ mod tests {
             ".o basenames must stay unique across calls (#509)"
         );
         // Different IR → different .ll basename.
-        let (c, _, _) = llvm_temp_paths(
-            &tmp,
-            "define void @g() {\n  ret void\n}\n",
-            LlLayout::Scratch,
-        );
+        let (c, _, _) = llvm_temp_paths(&tmp, "define void @g() {\n  ret void\n}\n");
         assert_ne!(ll_a.file_name(), c.ll_path.file_name());
         // No pid / wall-clock digits of variable width — only hex hash.
         let name = ll_a.file_name().unwrap().to_string_lossy();
@@ -1802,8 +1743,8 @@ mod tests {
         let ir = "define void @f() {\n  ret void\n}\n";
 
         // Same IR, same counter, DIFFERENT process.
-        let p1 = llvm_temp_paths_for(&tmp, ir, 1111, 0, LlLayout::Scratch);
-        let p2 = llvm_temp_paths_for(&tmp, ir, 2222, 0, LlLayout::Scratch);
+        let p1 = llvm_temp_paths_for(&tmp, ir, 1111, 0);
+        let p2 = llvm_temp_paths_for(&tmp, ir, 2222, 0);
         let (ll_p1, obj_p1) = (&p1.ll_path, &p1.obj_path);
         let (ll_p2, obj_p2) = (&p2.ll_path, &p2.obj_path);
         assert_eq!(
@@ -1821,8 +1762,8 @@ mod tests {
 
         // Same process, different call: the counter still has to separate
         // in-process rayon workers.
-        let c0 = llvm_temp_paths_for(&tmp, ir, 1111, 0, LlLayout::Scratch);
-        let c1 = llvm_temp_paths_for(&tmp, ir, 1111, 1, LlLayout::Scratch);
+        let c0 = llvm_temp_paths_for(&tmp, ir, 1111, 0);
+        let c1 = llvm_temp_paths_for(&tmp, ir, 1111, 1);
         assert_ne!(c0.obj_path.file_name(), c1.obj_path.file_name());
 
         // The atomic-write staging name needs the same separation: both
