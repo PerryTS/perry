@@ -192,10 +192,17 @@ fn concurrent_compiles_of_identical_ir_both_succeed_and_leave_nothing() {
     // IR agree on the content-addressed name, so one could unlink it in the
     // window between the other computing the path and clang opening it.
     //
-    // This is why the fix is a private directory rather than a more careful
-    // unlink — there is no shared name left to race over. A "just delete it
-    // again" fix passes the path-shape tests above and fails here, but only
-    // sometimes, which is worse than failing.
+    // What this test does and does not prove, stated because a race test that
+    // is trusted for more than it shows is worse than none. It cannot *decide*
+    // the race: sabotaged to the naive shape (one shared flat `.ll`, unlinked
+    // after use) it went red in one full-suite run and green in the next three
+    // — which is the definition of the window being narrow, not absent. The
+    // guarantee comes from `scratch_dir_is_per_call_and_per_process_…`: no two
+    // calls are ever handed the same `.ll` path, so there is nothing to race
+    // over and no window to lose. This test is the end-to-end complement —
+    // under real concurrency, 8 identical-IR compiles must all succeed, emit
+    // the same bytes, and leave nothing — and it will occasionally catch a
+    // regression the structural test somehow passed.
     use std::thread;
 
     let Some(root) = temp_root_if_clang_available("race") else {
@@ -250,14 +257,40 @@ fn failed_compile_keeps_the_ll_for_diagnosis() {
         "the failure must say where the IR is; got: {message}"
     );
 
-    let left = entries(&root);
-    assert_eq!(left.len(), 1, "expected one retained scratch dir: {left:?}");
-    let kept: Vec<String> = entries(&root.join(&left[0]));
+    // Asserted on the whole tree rather than on the scratch directory: the
+    // claim is "the IR survives a failed compile", and it has to keep meaning
+    // that if the layout is ever rearranged again.
+    let surviving = ll_files_under(&root);
+    assert_eq!(
+        surviving.len(),
+        1,
+        "exactly the failed compile's .ll must survive, found: {surviving:?}"
+    );
     assert!(
-        kept.iter().any(|n| n.ends_with(".ll")),
-        "the .ll must survive a failed compile: {kept:?}"
+        message.contains(&surviving[0].display().to_string()),
+        "the failure must name the file it left: {message}"
     );
     let _ = fs::remove_dir_all(&root);
+}
+
+/// Every `.ll` anywhere under `root`, so a lifetime assertion does not have to
+/// know which layout produced the file.
+fn ll_files_under(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = fs::read_dir(&dir) else { continue };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "ll") {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 #[test]
