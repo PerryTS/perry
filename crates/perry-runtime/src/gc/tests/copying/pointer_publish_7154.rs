@@ -71,8 +71,7 @@ fn test_bound_this_capture_is_traced_after_method_bind_7154() {
     }
 
     // The `this` slot now holds the receiver. The collector must say so.
-    let capture_slot =
-        unsafe { crate::closure::closure_capture_slots_mut(closure) as usize };
+    let capture_slot = unsafe { crate::closure::closure_capture_slots_mut(closure) as usize };
     let enumerated = unsafe { enumerated_child_slots(closure as usize) };
     assert!(
         enumerated.contains(&capture_slot),
@@ -93,12 +92,12 @@ fn test_bound_this_capture_is_traced_after_method_bind_7154() {
          collection cannot expose a missing rewrite (copied_objects=0)"
     );
 
-    let moved_closure = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
+    let moved_closure =
+        (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
     let capture_bits = crate::closure::js_closure_get_capture_bits(moved_closure, 0);
     let recovered = (capture_bits & POINTER_MASK) as usize;
     assert!(
-        crate::arena::classify_heap_generation(recovered)
-            != crate::arena::HeapGeneration::Unknown,
+        crate::arena::classify_heap_generation(recovered) != crate::arena::HeapGeneration::Unknown,
         "#7154: the bound receiver must still be a live heap object after a \
          copying minor (capture bits {capture_bits:#x})"
     );
@@ -121,48 +120,66 @@ fn test_bound_this_capture_is_traced_after_method_bind_7154() {
 /// `js_weakmap_set` overwriting an EXISTING key publishes the new value into
 /// field 1 (+40 from the user pointer — the offset #7154's diagnostic scan
 /// reports) of an already-reachable entry object.
+///
+/// The interesting case is the OLD entry: once the entry has been promoted, an
+/// overwrite creates an old→young edge, and only the write barrier puts that
+/// edge in the remembered set. A raw store leaves the minor blind to it.
 #[test]
 fn test_weakmap_overwrite_value_is_traced_7154() {
-    let _guard = CopyingNurseryTestGuard::new(2);
+    let _guard = CopyingNurseryTestGuard::new(3);
 
-    let map = crate::weakref::js_weakmap_new();
-    js_shadow_slot_set(0, ptr_bits(map as usize));
-    let key = crate::object::js_object_alloc(0, 0);
-    js_shadow_slot_set(1, ptr_bits(key as usize));
+    js_shadow_slot_set(0, ptr_bits(crate::weakref::js_weakmap_new() as usize));
+    js_shadow_slot_set(1, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
 
-    let map_val = f64::from_bits(ptr_bits(map as usize));
-    let key_val = f64::from_bits(ptr_bits(key as usize));
+    let live =
+        |slot: u32| f64::from_bits(ptr_bits((js_shadow_slot_get(slot) & POINTER_MASK) as usize));
 
-    // Insert, then OVERWRITE with a fresh young value: the second call takes the
-    // existing-entry path, which is the one that used a raw store.
+    // Insert, then age the map/key/entry graph until the entry is tenured.
     crate::weakref::js_weakmap_set(
-        map_val,
-        key_val,
+        live(0),
+        live(1),
         f64::from_bits(ptr_bits(crate::object::js_object_alloc(0, 0) as usize)),
     );
-    let map_val = f64::from_bits(ptr_bits((js_shadow_slot_get(0) & POINTER_MASK) as usize));
-    let key_val = f64::from_bits(ptr_bits((js_shadow_slot_get(1) & POINTER_MASK) as usize));
-    let second = crate::object::js_object_alloc(0, 1);
-    crate::weakref::js_weakmap_set(map_val, key_val, f64::from_bits(ptr_bits(second as usize)));
-
-    // Find the entry that now holds `second` and assert its value slot is a
-    // child edge the collector will follow.
-    let stored = crate::weakref::js_weakmap_get(map_val, key_val);
-    assert_eq!(
-        stored.to_bits() & POINTER_MASK,
-        second as u64 & POINTER_MASK,
-        "weakmap overwrite must be observable through `get`"
+    for _ in 0..6 {
+        let _ = gc_collect_minor();
+    }
+    let entry_addr = weak_entry_addr_for(live(0), live(1));
+    assert!(
+        crate::arena::pointer_in_old_gen(entry_addr),
+        "#7154 test setup: the WeakMap entry must be promoted to old-gen so the \
+         overwrite creates an old->young edge (entry at {entry_addr:#x})"
     );
 
+    // OVERWRITE with a fresh young value — the existing-entry path, which is
+    // the one that used a raw store. The value is allocated inline so no named
+    // local holds its address across the collection below.
+    crate::weakref::js_weakmap_set(
+        live(0),
+        live(1),
+        f64::from_bits(ptr_bits(crate::object::js_object_alloc(0, 1) as usize)),
+    );
+
+    let before = crate::weakref::js_weakmap_get(live(0), live(1)).to_bits() & POINTER_MASK;
+    assert!(
+        before != 0,
+        "weakmap overwrite must be observable through `get`"
+    );
+    assert!(
+        crate::arena::pointer_in_nursery(before as usize),
+        "#7154 test setup: the overwritten value must be YOUNG"
+    );
+
+    // Rooted young canary: keeps `copied_objects > 0` true independently of the
+    // subject, so the liveness gate below cannot be satisfied (or dissatisfied)
+    // by the very edge under test.
+    js_shadow_slot_set(2, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert!(
         trace.copying_nursery.copied_objects > 0,
         "#7154 regression test requires a COPYING minor (copied_objects=0)"
     );
 
-    let map_val = f64::from_bits(ptr_bits((js_shadow_slot_get(0) & POINTER_MASK) as usize));
-    let key_val = f64::from_bits(ptr_bits((js_shadow_slot_get(1) & POINTER_MASK) as usize));
-    let after = crate::weakref::js_weakmap_get(map_val, key_val);
+    let after = crate::weakref::js_weakmap_get(live(0), live(1));
     let recovered = (after.to_bits() & POINTER_MASK) as usize;
     assert!(
         recovered != 0
@@ -180,6 +197,34 @@ fn test_weakmap_overwrite_value_is_traced_7154() {
             "#7154: WeakMap value slot still points at a FORWARDED from-space \
              copy — the slot was not rewritten"
         );
+        assert_eq!(
+            (*header).obj_type,
+            GC_TYPE_OBJECT,
+            "#7154: the WeakMap value slot no longer names an object"
+        );
+    }
+}
+
+/// Address of the entry object a WeakMap holds for `key`, found by walking the
+/// map's entries array the same way `js_weakmap_get` does.
+fn weak_entry_addr_for(map: f64, key: f64) -> usize {
+    let map_ptr = (map.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+    unsafe {
+        let entries = crate::object::js_object_get_field(map_ptr, 0);
+        let entries_ptr = (entries.bits() & POINTER_MASK) as *mut crate::array::ArrayHeader;
+        let len = crate::array::js_array_length(entries_ptr) as usize;
+        for i in 0..len {
+            let entry_val = crate::array::js_array_get(entries_ptr, i as u32);
+            let entry = (entry_val.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+            if entry.is_null() {
+                continue;
+            }
+            let stored_key = crate::object::js_object_get_field(entry, 0);
+            if stored_key.bits() == key.to_bits() {
+                return entry as usize;
+            }
+        }
+        0
     }
 }
 
