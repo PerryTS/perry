@@ -319,10 +319,15 @@ fn source_fingerprint_tracks_runtime_and_stdlib_content_not_mtimes() {
         "rewriting identical runtime bytes must not rotate the fingerprint"
     );
 
-    // A content edit to a perry-runtime source file must rotate it.
+    // A content edit to an EXISTING perry-runtime source file must rotate it.
+    // Editing in place (rather than adding a new file) is what makes this
+    // assertion depend on the file CONTENT hash: a fingerprint that hashed only
+    // the path set would still rotate on an added file, and the test could not
+    // fail. See `runtime_source_edit_rotates_build_stamp_and_fails_freshness`
+    // for the same reasoning applied to the freshness gate.
     write_file(
-        &dir.path().join("crates/perry-runtime/src/gc.rs"),
-        b"pub fn collect() {}\n",
+        &dir.path().join("crates/perry-runtime/src/lib.rs"),
+        b"pub fn rt_changed() {}\n",
     );
     let fp_rt = auto_optimized_source_fingerprint(dir.path(), &[]);
     assert_ne!(
@@ -345,9 +350,18 @@ fn source_fingerprint_tracks_runtime_and_stdlib_content_not_mtimes() {
 /// Ties the runtime-source fingerprint to the freshness gate the compile driver
 /// actually consults: a content edit to perry-runtime rotates the build stamp,
 /// so a `target/perry-auto-<hash>` dir stamped for the OLD source can never pass
-/// `auto_optimized_archives_are_fresh` — no manual `rm libperry_runtime.a`. The
-/// stamp is compared before any mtime probe, so this holds even when the edited
-/// file's mtime never advanced past the cached archive.
+/// `auto_optimized_archives_are_fresh` — no manual `rm libperry_runtime.a`.
+///
+/// The stamp gate is the ONLY thing this test lets answer "stale": the archives
+/// are planted *after* the source edit, so every source is older than them and
+/// the mtime half of `auto_optimized_archives_are_fresh` votes "fresh". That
+/// ordering is deliberate — plant them first and the edit's own mtime makes the
+/// gate reject on the mtime path alone, so the assertion would still pass with
+/// the stamp comparison deleted and the test could never fail (the repo's
+/// "a gate must assert its subject was live" rule). It is also the real-world
+/// case the content fingerprint exists for: a `git checkout` / `cp -p` / CI
+/// cache restore hands back sources whose mtimes never advance past a cached
+/// archive.
 #[test]
 fn runtime_source_edit_rotates_build_stamp_and_fails_freshness() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -356,8 +370,16 @@ fn runtime_source_edit_rotates_build_stamp_and_fails_freshness() {
     let fp_before = auto_optimized_source_fingerprint(dir.path(), &[]);
     let stamp_before = auto_optimized_build_stamp("key", None, &[], &[], &fp_before);
 
-    // Plant archives + the stamp recorded for the OLD source, mtimes newer than
-    // the sources so the mtime half of the gate would (wrongly) call them fresh.
+    // Content edit to an EXISTING runtime source file (in place, so the
+    // assertion rides on the content hash rather than on the path set).
+    write_file(
+        &dir.path().join("crates/perry-runtime/src/lib.rs"),
+        b"pub fn rt_v2() {}\n",
+    );
+
+    // Only now plant the archives + the stamp recorded for the PRE-edit source,
+    // so their mtimes are newer than every source and the mtime half of the gate
+    // says "fresh". Anything but the stamp mismatch would let this pass.
     let runtime = dir
         .path()
         .join("target/perry-auto/release/libperry_runtime.a");
@@ -370,12 +392,6 @@ fn runtime_source_edit_rotates_build_stamp_and_fails_freshness() {
     write_file(&stdlib, b"!<arch>\n");
     write_file(&stamp_path, stamp_before.as_bytes());
 
-    // Now a content edit to the runtime. Recompute the stamp the driver would
-    // expect and confirm the gate rejects the archives stamped for the old one.
-    write_file(
-        &dir.path().join("crates/perry-runtime/src/gc.rs"),
-        b"pub fn collect_v2() {}\n",
-    );
     let fp_after = auto_optimized_source_fingerprint(dir.path(), &[]);
     let stamp_after = auto_optimized_build_stamp("key", None, &[], &[], &fp_after);
     assert_ne!(
