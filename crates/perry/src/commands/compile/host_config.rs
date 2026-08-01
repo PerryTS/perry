@@ -57,6 +57,20 @@ fn should_auto_grant_compile_allow(
     has_universal_route && !allow_was_explicit && !env_forces_deny
 }
 
+/// Whether to print the `"*"`-expansion summary. A host that spelled a
+/// wildcard out (`["*"]`, `"auto"`, `"@scope/*"`) always gets the report — it
+/// asked. The implicit auto-compile default reports only when the expansion
+/// actually did something, so a program with no `node_modules` at all does
+/// not gain a line of build output just because the default injects `"*"`
+/// internally.
+fn should_report_wildcard_expansion(
+    auto_default: bool,
+    added: usize,
+    skipped_native: usize,
+) -> bool {
+    !auto_default || added > 0 || skipped_native > 0
+}
+
 pub(super) fn apply_pkg_and_toml_config(
     args: &CompileArgs,
     project_root: &Path,
@@ -716,7 +730,8 @@ pub(super) fn apply_pkg_and_toml_config(
     // packages are skipped, so bundled bindings still win). Opt out with an
     // explicit list, or `compilePackages: false` / `[]` to compile nothing and
     // restore the V8-free gate's "listed only" behavior.
-    if !compile_packages_explicit {
+    let compile_packages_auto_default = !compile_packages_explicit;
+    if compile_packages_auto_default {
         ctx.compile_packages.insert("*".to_string());
     }
     // Universal routing with no explicit allow policy ⇒ universal allow. An
@@ -792,7 +807,16 @@ pub(super) fn apply_pkg_and_toml_config(
         // nonsensical `node_modules/*/` substring).
         ctx.compile_packages
             .retain(|p| p != "*" && !p.ends_with("/*"));
-        if let OutputFormat::Text = format {
+        // Only report the expansion when the host actually asked for a
+        // wildcard, or when the implicit auto-compile default did something.
+        // Otherwise every `perry compile foo.ts` — including programs with no
+        // `node_modules` at all — would gain a new "expanded to 0 installed
+        // package(s)" line purely because the default now injects `"*"`
+        // internally, making an additive default non-additive for the stdout
+        // of every existing build.
+        let report_expansion =
+            should_report_wildcard_expansion(compile_packages_auto_default, added, skipped_native);
+        if matches!(format, OutputFormat::Text) && report_expansion {
             println!(
                 "  Compile package wildcard: expanded to {} installed package(s)",
                 added
@@ -1160,6 +1184,27 @@ mod tests {
         assert!(!should_auto_grant_compile_allow(true, true, false));
         assert!(!should_auto_grant_compile_allow(true, false, true));
         assert!(!should_auto_grant_compile_allow(false, false, false));
+    }
+
+    /// The auto-compile default injects `"*"` for every project, so the
+    /// expansion block now runs on builds that never asked for a wildcard.
+    /// It must stay silent there — otherwise an "additive" default adds a
+    /// line to the stdout of every existing build (including
+    /// `perry compile foo.ts` with no `node_modules` at all).
+    #[test]
+    fn implicit_default_reports_only_when_it_did_something() {
+        assert!(!should_report_wildcard_expansion(true, 0, 0));
+        assert!(should_report_wildcard_expansion(true, 1, 0));
+        assert!(should_report_wildcard_expansion(true, 0, 1));
+    }
+
+    /// A host that spelled the wildcard out asked for the report and gets it
+    /// even when the expansion matched nothing — that zero is the answer to
+    /// their question.
+    #[test]
+    fn explicit_wildcard_always_reports() {
+        assert!(should_report_wildcard_expansion(false, 0, 0));
+        assert!(should_report_wildcard_expansion(false, 3, 2));
     }
 }
 
