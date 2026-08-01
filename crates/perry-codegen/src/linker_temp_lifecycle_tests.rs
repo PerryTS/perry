@@ -385,6 +385,16 @@ fn debug_symbols_do_not_change_what_the_object_records() {
          delete it unconditionally has to be re-taken."
     );
 
+    // Said directly as well as comparatively: no DWARF is emitted at all, so
+    // there is nowhere for a path to have been recorded. An equality assertion
+    // can be defeated by an edit to itself; "this object contains no `.debug_`
+    // section name" is a claim about the artifact.
+    assert!(
+        !contains(&with_g, b".debug_"),
+        "the -g object has .debug_ sections — DWARF is being emitted now, and \
+         `DW_AT_comp_dir` / `DW_AT_name` may point at the temp `.ll`"
+    );
+
     // Control: this comparison must be capable of failing. `-O0` is a flag that
     // definitely changes the bytes; if even that compares equal, the harness is
     // not really building two objects.
@@ -399,6 +409,11 @@ fn debug_symbols_do_not_change_what_the_object_records() {
 
 fn elf_compile(clang: &Path, ll: &Path, target: &str, cwd: &Path) -> Option<Vec<u8>> {
     elf_compile_with(clang, ll, target, cwd, &[])
+}
+
+/// Substring search over raw object bytes — enough to spot an ELF section name.
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 /// `clang -c` for an explicit target, returning the object bytes. `None` when
