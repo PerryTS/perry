@@ -22,7 +22,11 @@
 //! through `decode_root_word`, the same decoder the mark and rewrite paths
 //! share (#6910). Objects that are themselves in from-space are skipped: they
 //! are about to be reclaimed, and a dead object legitimately still points at
-//! its dead peers.
+//! its dead peers. So are owners carrying `GC_FLAG_FORWARDED` — a relocation
+//! stub is dead for the same reason, one step further on, and unlike a
+//! from-space object it can sit in old-gen where the space check does not reach
+//! it. Both skips are counted (`fwd_owners_skipped=`) so a suppressed
+//! population can never read as a fixed one.
 //!
 //! A word whose target carries `GC_FLAG_FORWARDED` is an unambiguous **missing
 //! rewrite**: the object moved this cycle and this reference was not updated.
@@ -75,6 +79,9 @@ pub(crate) struct FromSpaceRef {
 pub(crate) struct FromSpaceScanReport {
     pub(crate) objects_scanned: usize,
     pub(crate) words_scanned: usize,
+    /// Owners skipped because they are themselves FORWARDED (dead relocation
+    /// stubs). Reported so the filter can never be mistaken for a fix.
+    pub(crate) forwarded_owners_skipped: usize,
     pub(crate) missing_rewrites: usize,
     pub(crate) dangling: usize,
     /// Offending slots whose page was NEVER dirtied -> a store path skipped the
@@ -144,6 +151,23 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
     // A from-space object is about to be reclaimed; it may legitimately still
     // reference its dead peers. Only holders that SURVIVE the cycle matter.
     if is_from_space(owner_space) {
+        return;
+    }
+    // ...and a FORWARDED owner is the same thing one step further on: it has
+    // been superseded by its relocated copy, so it is dead by definition, and
+    // its payload legitimately still names pre-move addresses. Old-gen defrag
+    // and array growth both leave such stubs OUTSIDE from-space, where the
+    // check above does not reach them, so every one of them was reported as an
+    // offender. Measured on a Perry-compiled zod workload they were the single
+    // largest population in the residue — all at `2^k - 1` element indices of
+    // repeatedly-grown arrays (the last element written before each capacity
+    // doubling), i.e. pure noise that buried the genuine holders underneath.
+    //
+    // COUNTED, not silently dropped: a filter that shrinks the offender count
+    // without saying so reads exactly like progress, which is the failure mode
+    // this instrument exists to prevent (#6942 / #7024).
+    if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+        report.forwarded_owners_skipped += 1;
         return;
     }
     report.objects_scanned += 1;
@@ -288,10 +312,11 @@ fn report_and_abort(report: &FromSpaceScanReport) -> ! {
 
 pub(super) fn emit_report(report: &FromSpaceScanReport, phase: &str) {
     eprintln!(
-        "[gc-fromspace-scan {}] objects={} words={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
+        "[gc-fromspace-scan {}] objects={} words={} fwd_owners_skipped={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
         phase,
         report.objects_scanned,
         report.words_scanned,
+        report.forwarded_owners_skipped,
         report.missing_rewrites,
         report.dangling,
         report.distinct_owners.len(),
