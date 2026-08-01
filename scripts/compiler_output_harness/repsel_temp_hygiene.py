@@ -80,8 +80,8 @@ MAX_REPORTED = 12
 #:
 #: Anything else found is REPORTED, loudly, and does not fail: as of #7144 the
 #: compile driver leaks a `perry-objs-<pid>-<nanos>/` staging directory on the
-#: `--no-link` path (`run_pipeline.rs` removes it on both *link* exits and there
-#: is no third one), which is a real defect but a different module's, and a gate
+#: `--no-link` path (#7167 — `run_pipeline.rs` removes it on both *link* exits and
+#: there is no third one), which is a real defect but a different module's, and a gate
 #: that goes red for someone else's bug gets muted rather than fixed. Widen this
 #: to "nothing at all" once the driver's path is closed.
 OWNED_PREFIXES = ("perry_llvm", "perry_cgu", "perry_bc")
@@ -152,8 +152,8 @@ def verdict(
             "staging dir;\n"
             "  `run_pipeline.rs` removes it on both *link* exits and `--no-link` "
             "returns\n"
-            "  before either. Reported, not failed: a gate that goes red for "
-            "another\n"
+            "  before either (#7167). Reported, not failed: a gate that goes "
+            "red for another\n"
             "  module's defect gets muted rather than fixed.\n"
         )
 

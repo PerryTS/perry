@@ -319,6 +319,11 @@ changing it:
 * **The `TMPDIR` isolation is load-bearing**, not politeness. Counting entries
   in the shared system temp dir measures every other process on the box.
 
+It fails on the clang driver's own temp names (`perry_llvm_*`, `perry_cgu_*`,
+`perry_bc_*`) and merely *reports* anything else — today that is the compile
+driver's `perry-objs-<pid>-<nanos>/` staging directory, which `--no-link` never
+cleans up (#7167). Widen `OWNED_PREFIXES` to "everything" once that is closed.
+
 No exemption for `PERRY_DEBUG_SYMBOLS`, and that is a change of belief rather
 than a change of policy. `-g` was documented as pulling the `.ll`'s **absolute**
 path plus `DW_AT_comp_dir` into DWARF, which would have made the file part of
