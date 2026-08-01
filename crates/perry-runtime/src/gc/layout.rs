@@ -748,6 +748,20 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             if pointer {
                 if let Some(mask) = masks.get_mut(&parent_user) {
                     mask.set_slot(slot_index);
+                    // A non-empty pointer mask MUST be reflected by SIDE_MASK
+                    // state: `heap_payload_slot_selection` treats POINTER_FREE
+                    // as "no pointers" and skips the WHOLE payload without ever
+                    // consulting the mask. If a stale POINTER_FREE lingers here
+                    // (an array truncated to a numeric/empty prefix flips to
+                    // POINTER_FREE while its element mask is retained), recording
+                    // a pointer would leave every masked element untraced — the
+                    // evacuating minor then reclaims/relocates the child out from
+                    // under the live slot, later read+called as a garbage pointer
+                    // ("value is not a function"). Recording a pointer proves the
+                    // object is not pointer-free, so restore SIDE_MASK.
+                    if (*header)._reserved & GC_LAYOUT_STATE_MASK != GC_LAYOUT_SIDE_MASK {
+                        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+                    }
                 } else if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
                     let mut mask = LayoutSlotMask::Inline(0);
                     mask.set_slot(slot_index);
