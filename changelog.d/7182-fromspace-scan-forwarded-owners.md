@@ -1,0 +1,7 @@
+**`PERRY_GC_FROMSPACE_SCAN` no longer reports dead relocation stubs as offenders.** The scan skips owners that are themselves in from-space — they are about to be reclaimed, so they legitimately still point at their dead peers — but it did not skip owners carrying `GC_FLAG_FORWARDED`. A forwarded object is dead for exactly the same reason, one step further on, and unlike a from-space object it can sit in old-gen where the space check never reaches it. Old-gen defrag and array growth both leave such stubs behind, so every one of them was reported.
+
+On a Perry-compiled zod workload these were the single largest population in the residue after #7179 — all at `2^k - 1` element indices of repeatedly-grown arrays (the last element written before each capacity doubling), i.e. pure noise sitting on top of whatever genuine holders remain. #7154's triage has been reading these counts.
+
+The skip is **counted** (`fwd_owners_skipped=` in the report line), not silent: a filter that shrinks the offender count without saying so reads exactly like progress, which is the failure mode this instrument exists to prevent (#6942, #7024). `fromspace_scan_skips_but_counts_forwarded_owners_7154` asserts both halves — that the identical planted reference is reported while the holder is live and stops being reported once the holder is forwarded, and that the counter moves — and is red on the pre-fix predicate.
+
+Instrument only; no collector behaviour changes.
