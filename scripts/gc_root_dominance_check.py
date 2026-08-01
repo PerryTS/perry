@@ -257,6 +257,17 @@ NONCOLLECTING = {
     "js_array_length",                               # array/indexing.rs:537
     "js_object_mark_class", "js_class_object_pin_parent",
     "js_new_target_get", "js_new_target_set",
+    # closure/unbox.rs:25 -- a tag check on the NaN-boxed callee and a low-48
+    # mask. No allocation, no user code, no poll. It sits between every
+    # dynamic call's last argument and its `js_closure_callN`, so leaving it
+    # out reported the whole argument list of every 1-arg dynamic call as
+    # stale (372 of the 729 fatal sinks) with `MOVING: no`.
+    #
+    # `js_closure_unbox_callee_checked_rebind` is deliberately NOT here: it
+    # calls `clone_closure_rebind_this`, which allocates a replacement closure
+    # (closure/dynamic_props.rs:1040) when the callee captures `this`. That one
+    # IS a collection point, and #7154's fix re-reads the arguments below it.
+    "js_closure_unbox_callee_checked",
     # object/this_binding.rs:160 -- a thread-local cell swap
     "js_implicit_this_set", "js_implicit_this_get",
     "js_gc_note_slot_layout", "js_string_addref_if_heap_string",

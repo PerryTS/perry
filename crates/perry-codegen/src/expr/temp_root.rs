@@ -524,18 +524,40 @@ impl RootedOperands {
         operands: &[&Expr],
     ) -> anyhow::Result<Vec<String>> {
         let mut out = Vec::with_capacity(self.values.len());
-        for (i, original) in self.values.iter().enumerate() {
-            let value = match &self.slots[i] {
-                Some(idx) => {
-                    let idx = idx.clone();
-                    temp_root_get_double(ctx, &idx)
-                }
-                None if self.reloadable[i] => super::lower_expr(ctx, operands[i])?,
-                None => original.clone(),
-            };
-            out.push(value);
+        for i in 0..self.values.len() {
+            out.push(self.reread_one(ctx, operands, i)?);
         }
         Ok(out)
+    }
+
+    /// Re-read ONE operand, at a point the caller picks.
+    ///
+    /// [`RootedOperands::reread`] re-reads the whole group at a single point,
+    /// which is right when one collection point separates the group from its
+    /// consumer. It is wrong when the operands are consumed by *different*
+    /// instructions with a collection point between them — the generic
+    /// dynamic-call lowering is exactly that shape (#7154): the callee and the
+    /// `this` receiver are consumed by `js_closure_unbox_callee_checked_rebind`,
+    /// that rebind CLONES a `this`-capturing closure and therefore allocates,
+    /// and only then does `js_closure_callN` consume the arguments. Re-reading
+    /// the arguments above the rebind would put them right back in the window
+    /// the roots exist to close.
+    ///
+    /// Same three cases as [`RootedOperands::reread`]; see its documentation.
+    pub(crate) fn reread_one(
+        &self,
+        ctx: &mut FnCtx<'_>,
+        operands: &[&Expr],
+        i: usize,
+    ) -> anyhow::Result<String> {
+        Ok(match &self.slots[i] {
+            Some(idx) => {
+                let idx = idx.clone();
+                temp_root_get_double(ctx, &idx)
+            }
+            None if self.reloadable[i] => super::lower_expr(ctx, operands[i])?,
+            None => self.values[i].clone(),
+        })
     }
 
     /// True when this group actually pushed slots — the signal a caller uses to
