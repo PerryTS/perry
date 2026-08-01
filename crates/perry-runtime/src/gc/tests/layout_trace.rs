@@ -261,8 +261,8 @@ fn test_layout_mask_small_mixed_array_scans_exact_pointer_slot() {
 
 #[test]
 fn test_pointer_store_restores_side_mask_from_stale_pointer_free() {
-    // #sfw-registry regression: an array can end up in POINTER_FREE layout
-    // state while still carrying a populated element pointer-mask (e.g. after a
+    // Regression: an array can end up in POINTER_FREE layout state while
+    // still carrying a populated element pointer-mask (e.g. after a
     // numeric-layout rebuild observed a short/empty prefix while the mask
     // lingered). `heap_payload_slot_selection` short-circuits POINTER_FREE and
     // skips the WHOLE payload without consulting the mask, so the evacuating
