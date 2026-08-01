@@ -527,12 +527,16 @@ pub(crate) unsafe fn nm_dispatch_cluster(ctx: &NmCtx, module_name: &str, method_
         }
         ("cluster", "emit") => crate::cluster::js_cluster_emit(arg(0), pack_args_from(1)),
         ("cluster", "eventNames") => crate::cluster::js_cluster_event_names(),
-        ("cluster", "listenerCount") => crate::cluster::js_cluster_listener_count(arg(0)),
+        ("cluster", "listeners") => crate::cluster::js_cluster_listeners(arg(0)),
+        ("cluster", "rawListeners") => crate::cluster::js_cluster_raw_listeners(arg(0)),
+        ("cluster", "setMaxListeners") => crate::cluster::js_cluster_set_max_listeners(arg(0)),
+        ("cluster", "getMaxListeners") => crate::cluster::js_cluster_get_max_listeners(),
+        ("cluster", "listenerCount") => crate::cluster::js_cluster_listener_count(arg(0), arg(1)),
         ("cluster", "removeListener") | ("cluster", "off") => {
             crate::cluster::js_cluster_remove_listener(arg(0), arg(1))
         }
         ("cluster", "removeAllListeners") => {
-            crate::cluster::js_cluster_remove_all_listeners(arg(0))
+            crate::cluster::js_cluster_remove_all_listeners(arg(0), (args_len > 0) as i32)
         }
 
         // #1577: captured-then-called crypto methods (`const f =

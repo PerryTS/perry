@@ -106,6 +106,35 @@ pub(crate) fn cp_signal_from_value(signal: f64) -> i32 {
     CP_SIGTERM
 }
 
+/// Strict signal predicate for argument validation. The execution helper keeps
+/// its historical SIGTERM fallback, while public APIs must reject unknown,
+/// fractional, and non-signal values synchronously like Node.
+pub(crate) fn cp_signal_is_valid(signal: f64) -> bool {
+    let js = JSValue::from_bits(signal.to_bits());
+    if js.is_int32() {
+        let n = js.as_int32();
+        return n == 0 || cp_signal_number(cp_signal_name(n)) == Some(n);
+    }
+    if js.is_number() {
+        let number = js.as_number();
+        let n = number as i32;
+        return number.is_finite()
+            && number >= 0.0
+            && number.fract() == 0.0
+            && (n == 0 || cp_signal_number(cp_signal_name(n)) == Some(n));
+    }
+    js.is_any_string()
+        && cp_value_to_string(signal).is_some_and(|name| cp_signal_number(&name).is_some())
+}
+
+/// Validate the public `ChildProcess#kill([signal])` input before converting
+/// it to an OS signal. `0` is accepted as Node's probe/no-op signal.
+pub(crate) fn cp_validate_signal(signal: f64) {
+    if !JSValue::from_bits(signal.to_bits()).is_undefined() && !cp_signal_is_valid(signal) {
+        crate::fs::validate::throw_type_error_with_code("Unknown signal", "ERR_UNKNOWN_SIGNAL");
+    }
+}
+
 pub(crate) fn cp_read_kill_signal(opts_val: f64) -> i32 {
     if cp_object_ptr(opts_val).is_none() {
         return CP_SIGTERM;

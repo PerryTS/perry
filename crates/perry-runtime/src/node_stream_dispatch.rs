@@ -338,6 +338,12 @@ pub(super) fn register_stub_arities() {
     register(ns_iter_every as *const u8, 2);
     register(ns_iter_flat_map as *const u8, 2);
     register(ns_iter_take as *const u8, 1);
+    register(ns_take_source_next as *const u8, 0);
+    register(ns_take_source_return as *const u8, 0);
+    register(ns_take_source_fulfilled as *const u8, 1);
+    register(ns_take_source_rejected as *const u8, 1);
+    register(ns_take_limit_fulfilled as *const u8, 1);
+    register(ns_take_limit_rejected as *const u8, 1);
     register(ns_iter_drop as *const u8, 1);
     register_consume_arities();
     async_iterator::register_arities();

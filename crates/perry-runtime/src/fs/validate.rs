@@ -192,6 +192,9 @@ pub fn describe_received(value: f64) -> String {
         }
         return format!("type number ({})", n);
     }
+    if crate::promise::js_value_is_promise(value) != 0 {
+        return "an instance of Promise".to_string();
+    }
     if !super::stream::extract_closure_ptr(value).is_null() {
         return "function ".to_string();
     }

@@ -18,6 +18,128 @@ use crate::lower_call::method_override::{
     emit_guarded_direct_method_call, emit_own_method_override_check,
 };
 
+/// #7142: the proven-`this` clone a class-id dispatch-tower case may route to,
+/// plus the keys token the routed path must re-check inline.
+struct TowerPshapeRoute {
+    /// The `{public}__pshape` clone symbol (same `(double this, args…)` ABI as
+    /// the public one — only the body's `this.field` lowering differs).
+    clone_fn: String,
+    /// `@perry_class_keys_<mod>__<Class>`, holding the class's canonical
+    /// keys-array pointer. A receiver still carrying it has the declared packed
+    /// layout; `delete` swaps in a freshly cloned array, which is exactly what
+    /// the inline compare catches.
+    keys_global: String,
+}
+
+/// May this dispatch-tower case take the proven-`this` clone?
+///
+/// Three conditions, and only the FIRST two are about correctness of the
+/// *target*; the layout proof itself is emitted, not decided here.
+///
+/// 1. `owner` is `Some` — the receiver class of this case declares `property`
+///    itself, so the clone's `this` is exactly the class it was compiled for.
+/// 2. a clone was actually emitted for that pair (`pshape_methods`, already
+///    pruned of symbol collisions by `prune_colliding_clones`, #6927).
+/// 3. routing pays (`pshape_tower_routable`) — this site, unlike the two
+///    guard-dominated ones, emits its own shape re-check and must earn it.
+fn tower_pshape_route(
+    ctx: &FnCtx<'_>,
+    owner: Option<&str>,
+    property: &str,
+    fname: &str,
+) -> Option<TowerPshapeRoute> {
+    let owner = owner?;
+    // Carried forward from both existing routing sites (the #1787
+    // static-receiver bug): a `perry_static_*` target needs
+    // `js_class_static_method_call`, not a plain `call double`, and no
+    // proven-`this` clone is ever emitted for one.
+    if fname.starts_with("perry_static_") {
+        return None;
+    }
+    let key = (owner.to_string(), property.to_string());
+    if !ctx.pshape_methods.contains_key(&key) || !ctx.pshape_tower_routable.contains(&key) {
+        return None;
+    }
+    let keys_global = ctx.class_keys_globals.get(owner)?.clone();
+    Some(TowerPshapeRoute {
+        clone_fn: crate::collectors::pshape_method_name(fname),
+        keys_global,
+    })
+}
+
+/// Emit the keys-guarded diamond for one dispatch-tower case: inline shape
+/// re-check → `{public}__pshape` on a match, the unchanged public body
+/// otherwise.
+///
+/// The tower's case block proves `class_id`, which is NOT enough for the
+/// clone's bare fixed-slot accesses — `delete inst.f` compacts the packed slots
+/// while preserving `class_id`. The keys token is what closes that gap, and it
+/// has to be checked *dynamically*: the `delete` shape barrier that stands the
+/// whole analysis down is module-scoped while a receiver can be deleted from
+/// through an alias in another module (#7143), so a static proof would be
+/// exactly the wrong instrument here.
+///
+/// GC ordering invariant: `recv_handle` is the raw pointer masked out of the
+/// receiver in `idispatch.tower`, and the header loads below dereference it.
+/// That is only safe because **nothing between the mask and this point is a
+/// safepoint**: the only allocating thing a case block can emit before the call
+/// is the rest-array bundling (`js_array_alloc` / `js_array_push_f64`), and a
+/// rest-bearing method can never reach here — `collectors/proven_this.rs`
+/// rejects any method with a rest or synthesized-`arguments` parameter, so no
+/// clone exists for one and `tower_pshape_route` returns `None`. The non-rest
+/// preamble emits no instructions at all (already-lowered SSA values plus
+/// `undefined` literals). If a future change makes the case preamble allocate,
+/// this dereference must move above it — the `GC_FLAG_FORWARDED` conjunct would
+/// degrade a moved receiver to the generic path rather than misread it, but
+/// relying on that instead of on the ordering would be luck, not a proof.
+fn emit_tower_pshape_call(
+    ctx: &mut FnCtx<'_>,
+    case_no: usize,
+    route: &TowerPshapeRoute,
+    recv_handle: &str,
+    fname: &str,
+    case_arg_slices: &[(crate::types::LlvmType, &str)],
+) -> String {
+    // The global is read ONCE per function (entry-hoisted); the case block only
+    // reloads it from the stack slot, which mem2reg folds away.
+    let keys_slot = ctx.func.entry_init_load_global(&route.keys_global, I64);
+    let expected_keys = ctx.block().load(I64, &keys_slot);
+
+    let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
+    let generic_idx = ctx.new_block(&format!("idispatch.case{}.generic", case_no));
+    let join_idx = ctx.new_block(&format!("idispatch.case{}.join", case_no));
+    let proven_label = ctx.block_label(proven_idx);
+    let generic_label = ctx.block_label(generic_idx);
+    let join_label = ctx.block_label(join_idx);
+
+    crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
+        ctx,
+        recv_handle,
+        &expected_keys,
+        &proven_label,
+        &generic_label,
+    );
+
+    ctx.current_block = proven_idx;
+    let v_proven = ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
+    let proven_end = ctx.block().label.clone();
+    ctx.block().br(&join_label);
+
+    ctx.current_block = generic_idx;
+    let v_generic = ctx.block().call(DOUBLE, fname, case_arg_slices);
+    let generic_end = ctx.block().label.clone();
+    ctx.block().br(&join_label);
+
+    ctx.current_block = join_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[
+            (v_proven.as_str(), proven_end.as_str()),
+            (v_generic.as_str(), generic_end.as_str()),
+        ],
+    )
+}
+
 /// Interface / dynamic dispatch fallback: when the static class is unknown OR
 /// resolves to an interface name not in the class registry, BUT the property
 /// name corresponds to a method defined on at least one class in the registry,
@@ -106,6 +228,14 @@ pub(crate) fn try_lower_instance_method_call(
         // `implementors`, so each case block can build its own per-arity args
         // without rescanning `ctx.methods`.
         let mut impl_meta: Vec<(bool, usize)> = Vec::new();
+        // #7142: aligned 1:1 with `implementors` — `Some(class)` exactly when
+        // the receiver class of this case DECLARES `property` itself (the walk
+        // stopped at its own entry). That is the condition a proven-`this`
+        // clone needs: the class the clone was compiled for is then the
+        // receiver's exact dynamic class, so `this` cannot be a subclass
+        // instance with a longer chain. Inherited dispatch gets `None` and
+        // keeps today's lowering.
+        let mut impl_owner: Vec<Option<String>> = Vec::new();
         let mut seen_pairs: std::collections::HashSet<(u32, String)> =
             std::collections::HashSet::new();
         for (start_cls, &start_cid) in ctx.class_ids.iter() {
@@ -118,6 +248,7 @@ pub(crate) fn try_lower_instance_method_call(
                         // method resolved, so its arity metadata is available now.
                         let has_rest = matches!(ctx.method_has_rest.get(&key), Some(&true));
                         let decl = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+                        impl_owner.push((c == *start_cls).then(|| start_cls.clone()));
                         implementors.push((start_cid, fname));
                         impl_meta.push((has_rest, decl));
                     }
@@ -343,10 +474,13 @@ pub(crate) fn try_lower_instance_method_call(
             }
 
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
-            for (((_, fname), &case_idx), &(impl_has_rest, impl_decl_count)) in implementors
-                .iter()
-                .zip(case_idxs.iter())
-                .zip(impl_meta.iter())
+            for (case_no, ((((_, fname), &case_idx), &(impl_has_rest, impl_decl_count)), owner)) in
+                implementors
+                    .iter()
+                    .zip(case_idxs.iter())
+                    .zip(impl_meta.iter())
+                    .zip(impl_owner.iter())
+                    .enumerate()
             {
                 ctx.current_block = case_idx;
                 // #1758: a `perry_static_*` implementor is a STATIC method on a
@@ -432,7 +566,17 @@ pub(crate) fn try_lower_instance_method_call(
                     }
                     let case_arg_slices: Vec<(crate::types::LlvmType, &str)> =
                         case_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                    ctx.block().call(DOUBLE, fname, &case_arg_slices)
+                    match tower_pshape_route(ctx, owner.as_deref(), property, fname) {
+                        Some(route) => emit_tower_pshape_call(
+                            ctx,
+                            case_no,
+                            &route,
+                            &recv_handle,
+                            fname,
+                            &case_arg_slices,
+                        ),
+                        None => ctx.block().call(DOUBLE, fname, &case_arg_slices),
+                    }
                 };
                 let after_label = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
@@ -870,6 +1014,25 @@ pub(crate) fn try_lower_instance_method_call(
                     .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
                     ctx.note_ptr_shape_consumed(object, "ptr_shape_method");
+                    // Representation-selection Phase 5a: the proven-`this`
+                    // clone, when one was emitted. Hoisted above the
+                    // typed-receiver branch because BOTH exits of this block
+                    // are guard-free under the same Phase 3b proof — the
+                    // typed-receiver arm's own generic fallback used to call
+                    // the guard-ridden public body while the plain exit 25
+                    // lines below routed to the clone, so a proven receiver
+                    // whose ARGUMENTS happened to be non-plain-double silently
+                    // lost the receiver proof too.
+                    //
+                    // A `pshape_methods` hit additionally proves `class_name`
+                    // DECLARES `property` — so the clone's `this` is exactly
+                    // the class it was compiled for and cannot be a subclass
+                    // instance.
+                    let pshape_target = ctx
+                        .pshape_methods
+                        .contains_key(&(class_name.clone(), property.to_string()))
+                        .then(|| crate::collectors::pshape_method_name(&fallback_fn));
+                    let generic_target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
                     // Prefer the typed-receiver clone (bare gep+load field
                     // access inside the body) when one exists: the receiver
                     // is proven, so only the ARGUMENT value classes need
@@ -920,7 +1083,7 @@ pub(crate) fn try_lower_instance_method_call(
                         let typed_end = ctx.block().label.clone();
                         ctx.block().br(&merge_label);
                         ctx.current_block = generic_idx;
-                        let v_generic = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                        let v_generic = ctx.block().call(DOUBLE, generic_target, &arg_slices);
                         let generic_end = ctx.block().label.clone();
                         ctx.block().br(&merge_label);
                         ctx.current_block = merge_idx;
@@ -934,19 +1097,12 @@ pub(crate) fn try_lower_instance_method_call(
                         return Ok(Some(merged));
                     }
                     // Representation-selection Phase 5a: route to the
-                    // proven-`this` clone when one exists. The receiver is
-                    // already proven here (no guard is emitted on this path at
-                    // all), and a `pshape_methods` hit additionally proves
-                    // `class_name` DECLARES `property` — so the clone's `this`
-                    // is exactly the class it was compiled for and cannot be a
-                    // subclass instance. Same ABI, so the call is unchanged
-                    // apart from the callee name.
-                    let pshape_target = ctx
-                        .pshape_methods
-                        .contains_key(&(class_name.clone(), property.to_string()))
-                        .then(|| crate::collectors::pshape_method_name(&fallback_fn));
-                    let target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
-                    let direct = ctx.block().call(DOUBLE, target, &arg_slices);
+                    // proven-`this` clone when one exists (`generic_target`,
+                    // resolved at the top of this block). The receiver is
+                    // already proven here — no guard is emitted on this path at
+                    // all. Same ABI, so the call is unchanged apart from the
+                    // callee name.
+                    let direct = ctx.block().call(DOUBLE, generic_target, &arg_slices);
                     return Ok(Some(direct));
                 }
                 if let Some(guarded) = emit_guarded_direct_method_call(

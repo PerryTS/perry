@@ -2066,24 +2066,35 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
-    // Per-invocation object staging dir (2026-07-02 audit fleet P0).
-    // Objects used to land at CWD-relative name-only paths, so two
-    // concurrent perry compiles sharing a working directory overwrote each
-    // other's `<module>.o` mid-link and each deleted the other's objects
-    // afterwards — deterministically wrong binaries whenever the object
-    // cache was bypassed (--no-cache / trace modes / store errors), and the
-    // fixed-name stub objects collided even with the cache ON. pid + a
-    // strictly-monotonic wall component (the linker.rs #509 discipline)
-    // keeps simultaneous invocations disjoint; the dir is removed with the
-    // intermediates below.
-    let object_output_dir = {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("perry-objs-{}-{}", std::process::id(), nanos));
-        std::fs::create_dir_all(&dir)?;
-        dir
+    // Where this compile's objects go — see `compile/object_staging.rs`.
+    //
+    // #7167: only a compile that is going to *link* gets a temp staging
+    // directory, and that directory is removed by `Drop` rather than by a
+    // cleanup call each exit has to remember. `--no-link` gets none at all:
+    // its objects are the product, so they are delivered to `-o` and stay
+    // there. The old code created the staging dir unconditionally and removed
+    // it on the two link exits only, so every `--no-link` compile leaked one
+    // — unbounded in compiles, because the name carries pid + nanos.
+    let object_staging: Option<object_staging::StagingDir> = if args.no_link {
+        None
+    } else {
+        let staging = object_staging::StagingDir::create()?;
+        if args.keep_intermediates {
+            // `--keep-intermediates` is the single opt-in for keeping the
+            // staged objects. Disarmed once, here, where the directory is
+            // created — not re-checked at each exit.
+            staging.keep();
+        }
+        Some(staging)
+    };
+    let no_link_destination =
+        object_staging::NoLinkDestination::resolve(args.output.as_deref(), total_codegen_modules);
+    let object_output_dir: PathBuf = match &object_staging {
+        Some(staging) => staging.path().to_path_buf(),
+        None => {
+            no_link_destination.prepare()?;
+            no_link_destination.dir().to_path_buf()
+        }
     };
     let compile_results: Vec<Result<NativeObjectArtifact, String>> = ctx
         .native_modules
@@ -4229,7 +4240,16 @@ pub fn run_with_parse_cache(
             let obj_name = native_object_file_stem(&hir_module.name);
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
-            let obj_path = object_output_dir.join(format!("{}.{}", obj_name, ext));
+            // #7167: on `--no-link` the emitted object is the product, so it
+            // is written where `-o` points (verbatim, for the single-module
+            // case) rather than into a temp directory nobody deletes. When
+            // linking, `object_output_dir` is the staging dir and the two
+            // agree.
+            let obj_path = if args.no_link {
+                no_link_destination.artifact_path(&obj_name, ext)
+            } else {
+                object_output_dir.join(format!("{}.{}", obj_name, ext))
+            };
 
             if let Some((key, cached_path, ffi_symbols)) = cache_key
                 .and_then(|k| object_cache.lookup_path_with_ffi(k).map(|(p, s)| (k, p, s)))
@@ -4244,11 +4264,35 @@ pub fn run_with_parse_cache(
                 // `_js_ws_connect_start`. Replaying the manifest makes a hit
                 // record exactly what the skipped codegen would have.
                 perry_codegen::ext_registry::replay_ffi_symbols(&ffi_symbols);
+                // #7167: `-o` must name the same file whether the object cache
+                // was warm or cold. A linking compile can hand the linker the
+                // cache path directly — the bytes are the bytes and nothing
+                // else looks at them — but `--no-link` promised the user a file
+                // at `-o`, so a hit has to materialise one there too. Copy
+                // rather than hand back the cache path: the cache entry is
+                // shared with every other build and must not become an output
+                // the user may overwrite or delete.
+                let hit_path = if args.no_link {
+                    fs::copy(&cached_path, &obj_path).map_err(|e| {
+                        format!(
+                            "failed to write cached object to {}: {}",
+                            obj_path.display(),
+                            e
+                        )
+                    })?;
+                    obj_path
+                } else {
+                    cached_path
+                };
                 return Ok(NativeObjectArtifact {
-                    path: cached_path,
+                    path: hit_path,
                     bytes: None,
                     fingerprint: format!("cache:{:016x}", key),
                     cleanup_after_link: false,
+                    // The *cache* was reused either way — that is what the
+                    // hit/miss stats and the `--keep-intermediates` exemption
+                    // are about. The label printed below keys on whether the
+                    // path we are reporting is the cache's or the user's.
                     reused_cache_path: true,
                     stored_cache_path: false,
                 });
@@ -4322,20 +4366,34 @@ pub fn run_with_parse_cache(
                 object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
                 object_cache.store_and_get_path(k, &object_code)
             }) {
-                return Ok(NativeObjectArtifact {
-                    path: cached_path,
-                    bytes: None,
-                    fingerprint: object_fingerprint,
-                    cleanup_after_link: false,
-                    reused_cache_path: false,
-                    stored_cache_path: true,
-                });
+                // #7167: handing back the cache path saves a copy for a
+                // compile that is going to *link* — the linker is the only
+                // reader and the bytes are the bytes. `--no-link` promised the
+                // user a file at `-o`, so it keeps the store (a later build
+                // still hits) but falls through to write the object it just
+                // produced to the destination. Otherwise `-o` would be honoured
+                // only with the cache disabled, which is the cache-warmth
+                // dependence this destination rule exists to avoid.
+                if !args.no_link {
+                    return Ok(NativeObjectArtifact {
+                        path: cached_path,
+                        bytes: None,
+                        fingerprint: object_fingerprint,
+                        cleanup_after_link: false,
+                        reused_cache_path: false,
+                        stored_cache_path: true,
+                    });
+                }
             }
             Ok(NativeObjectArtifact {
                 path: obj_path,
                 bytes: Some(object_code),
                 fingerprint: object_fingerprint,
-                cleanup_after_link: true,
+                // #7167: a staged object is an intermediate; a `--no-link`
+                // object is the product and must never be listed for cleanup.
+                // Nothing consults this before the `--no-link` return today —
+                // it is set correctly so that stays true if cleanup ever moves.
+                cleanup_after_link: !args.no_link,
                 reused_cache_path: false,
                 stored_cache_path: false,
             })
@@ -4414,7 +4472,13 @@ pub fn run_with_parse_cache(
     for artifact in artifacts {
         match format {
             OutputFormat::Text => {
-                let label = if artifact.reused_cache_path {
+                // #7167: on `--no-link` a cache hit is copied out to `-o`, so
+                // the path being reported is a file this compile wrote, not
+                // the cache entry. Say so — "Reused cached object" would name
+                // a path the caller cannot treat as its output, and the census
+                // harness's `_written_objects` (which scrapes exactly these
+                // lines) would see no objects at all from a warm cache.
+                let label = if artifact.reused_cache_path && !args.no_link {
                     "Reused cached object"
                 } else if artifact.stored_cache_path {
                     "Stored cached object"
@@ -4536,6 +4600,33 @@ pub fn run_with_parse_cache(
             eprintln!("  - {}{}{}{}", bold_on, m, marker, bold_off);
         }
         eprintln!();
+        // #7167 failure policy: say where the objects of the modules that DID
+        // compile are, and how to keep them. On `--no-link` they are already
+        // the user's files at `-o` and nothing removes them; when linking,
+        // the staging directory is removed on the way out (by `Drop`) unless
+        // `--keep-intermediates` was given, so name both the path and the
+        // flag rather than deleting in silence.
+        if will_abort {
+            match &object_staging {
+                Some(staging) if args.keep_intermediates => eprintln!(
+                    "Objects for the modules that compiled are kept in {} \
+                     (--keep-intermediates).\n",
+                    staging.path().display()
+                ),
+                Some(staging) => eprintln!(
+                    "Objects for the modules that compiled were staged in {} and are \
+                     removed on exit;\nre-run with --keep-intermediates to keep them. \
+                     Diagnosing a codegen failure normally\nwants the IR instead \
+                     (PERRY_LLVM_KEEP_IR=1).\n",
+                    staging.path().display()
+                ),
+                None => eprintln!(
+                    "Objects for the modules that compiled were written to {} and are \
+                     left in place.\n",
+                    object_output_dir.display()
+                ),
+            }
+        }
         if entry_failed {
             eprintln!("Aborting: the entry module's `main` symbol is required by the linker.");
             eprintln!("Fix the codegen errors above (search for `Error compiling module`)");
@@ -4643,6 +4734,24 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Issue #76 follow-up — auto-provision the wasmi host staticlib. A
+    // program that references `WebAssembly.*` sets `ctx.needs_wasm_runtime`
+    // (feature_detect.rs), which links `libperry_wasm_host.a`. That archive
+    // lives in the standalone `perry-wasm-host` crate and is built by NOTHING
+    // in the normal compile path — not the auto-optimize runtime/stdlib
+    // rebuild, not codegen — so a bare `perry compile` used to die with
+    // `libperry_wasm_host.a not found` until a human ran
+    // `cargo build --release -p perry-wasm-host`. Build it on demand here so
+    // both the symbol-stub scan below and the final link resolve it. No-op
+    // when it already exists (or when the program doesn't use wasm).
+    let use_wasm_host = ctx.needs_wasm_runtime || args.enable_wasm_runtime;
+    let wasm_host_lib_resolved = if use_wasm_host {
+        find_wasm_host_library(target.as_deref())
+            .or_else(|| build_wasm_host_library(target.as_deref(), format, verbose))
+    } else {
+        None
+    };
+
     // Auto-mode: pick the smallest matching (features, panic) profile
     // for this binary and rebuild perry-runtime + perry-stdlib in a
     // hash-keyed target dir. Both halves fall back to the prebuilt full
@@ -4684,12 +4793,7 @@ pub fn run_with_parse_cache(
         // being linked, scan its archive so the `perry_wasm_host_*` symbols
         // are recognised as defined and we don't synthesise empty stubs that
         // would shadow the real implementations.
-        let use_wasm_host = ctx.needs_wasm_runtime || args.enable_wasm_runtime;
-        let wasm_host_lib_path = if use_wasm_host {
-            find_wasm_host_library(target.as_deref())
-        } else {
-            None
-        };
+        let wasm_host_lib_path = wasm_host_lib_resolved.clone();
         let mut all_scan_paths: Vec<PathBuf> = obj_paths.clone();
         if let Some(ref p) = runtime_lib_path {
             all_scan_paths.push(p.clone());
@@ -5365,10 +5469,8 @@ pub fn run_with_parse_cache(
         if let Some(p) = &stdlib_lib_resolved {
             push_archive(&mut link_archives, "stdlib", p);
         }
-        if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
-            if let Some(p) = find_wasm_host_library(target.as_deref()) {
-                push_archive(&mut link_archives, "wasm-host", &p);
-            }
+        if let Some(p) = &wasm_host_lib_resolved {
+            push_archive(&mut link_archives, "wasm-host", p);
         }
         if ctx.needs_ui {
             if let Some(p) = find_ui_library(target.as_deref()) {
@@ -5407,9 +5509,13 @@ pub fn run_with_parse_cache(
             for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
-            // Best-effort: drop the per-invocation staging dir (only when
-            // empty — keep_intermediates or stray files leave it in place).
-            let _ = fs::remove_dir(&object_output_dir);
+            // The staging directory itself is removed by `StagingDir`'s
+            // `Drop` (#7167), so every exit — including the `?`s between here
+            // and there — cleans up through one site rather than three that
+            // each have to remember. This loop stays because
+            // `obj_cleanup_paths` also holds objects from *outside* the
+            // staging dir (the bitcode-link merge output, the embedded-JS
+            // object under `perry-embed-<pid>/`).
         }
 
         let codegen_cache_stats = if object_cache.is_enabled() {
@@ -5604,9 +5710,13 @@ pub fn run_with_parse_cache(
             for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
-            // Best-effort: drop the per-invocation staging dir (only when
-            // empty — keep_intermediates or stray files leave it in place).
-            let _ = fs::remove_dir(&object_output_dir);
+            // The staging directory itself is removed by `StagingDir`'s
+            // `Drop` (#7167), so every exit — including the `?`s between here
+            // and there — cleans up through one site rather than three that
+            // each have to remember. This loop stays because
+            // `obj_cleanup_paths` also holds objects from *outside* the
+            // staging dir (the bitcode-link merge output, the embedded-JS
+            // object under `perry-embed-<pid>/`).
         }
 
         let codegen_cache_stats = if object_cache.is_enabled() {
@@ -5692,8 +5802,8 @@ pub fn run_with_parse_cache(
     // a hard error when codegen detected `WebAssembly.*` usage, otherwise the
     // flag-only case silently degrades to None (the user will hit a link
     // error on first use, with the symbol name as the breadcrumb).
-    let wasm_host_lib = if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
-        match find_wasm_host_library(target.as_deref()) {
+    let wasm_host_lib = if use_wasm_host {
+        match wasm_host_lib_resolved {
             Some(lib) => {
                 if let OutputFormat::Text = format {
                     println!("Using wasmi WebAssembly host runtime");

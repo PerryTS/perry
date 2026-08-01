@@ -876,6 +876,12 @@ pub(crate) struct FnCtx<'a> {
     pub pshape_methods:
         &'a std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
 
+    /// #7142: the subset of [`Self::pshape_methods`] the class-id dispatch
+    /// tower may route to. A profitability filter only — see
+    /// `collectors::pshape_tower_route_profitable`. Soundness at that site comes
+    /// entirely from the emitted inline keys check, never from this set.
+    pub pshape_tower_routable: &'a std::collections::HashSet<(String, String)>,
+
     /// Locals referenced anywhere inside a nested closure body (including
     /// explicit capture lists). Excluded from canonical-i32 selection — the
     /// capture machinery stays on the boxed protocol. Empty when

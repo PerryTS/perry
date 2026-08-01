@@ -364,7 +364,17 @@ pub(crate) fn print_uncaught(value: f64) {
                 // for this header. When the stack is empty (defensive), fall
                 // back to the bare `<Name>: <message>` line.
                 if !stack_str.is_empty() {
-                    eprintln!("{}", stack_str);
+                    if let Some(code) =
+                        crate::node_submodules::error_code_for_message(unsafe { (*eh).message })
+                    {
+                        let frames = stack_str
+                            .split_once('\n')
+                            .map(|(_, frames)| format!("\n{frames}"))
+                            .unwrap_or_default();
+                        eprintln!("{name_display} [{code}]: {msg_str}{frames}");
+                    } else {
+                        eprintln!("{}", stack_str);
+                    }
                 } else if msg_str.is_empty() {
                     eprintln!("{}", name_display);
                 } else {

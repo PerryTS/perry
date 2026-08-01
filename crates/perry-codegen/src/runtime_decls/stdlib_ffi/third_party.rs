@@ -296,6 +296,18 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
         &[DOUBLE, PTR, I32],
     );
     module.declare_function("js_child_process_validate_args", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_child_process_validate_options",
+        DOUBLE,
+        &[DOUBLE, I32, I32],
+    );
+    module.declare_function("js_child_process_validate_fork_module", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_child_process_validate_spawn_args",
+        DOUBLE,
+        &[DOUBLE, I32, I32],
+    );
+    module.declare_function("js_child_process_new", DOUBLE, &[]);
 
     // ========== cheerio ==========
     module.declare_function("js_cheerio_load", I64, &[I64]);

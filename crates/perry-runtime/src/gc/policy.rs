@@ -429,6 +429,22 @@ pub(super) fn force_legacy_gc_pacing() -> LegacyGcPacingGuard {
     LegacyGcPacingGuard { previous }
 }
 
+/// Pin moving GC pacing (moving-loop polls ON) for the duration of the returned
+/// guard — the shipped default, pinned explicitly so a #7148 deferral test
+/// asserts against a *declared* pacing mode instead of inheriting whatever the
+/// process-wide `PERRY_GC_MOVING_LOOP_POLLS` OnceLock resolved to. A test that
+/// silently ran under legacy pacing would find the deferral branch dead and
+/// pass for the wrong reason.
+#[cfg(test)]
+pub(super) fn force_moving_gc_pacing() -> LegacyGcPacingGuard {
+    let previous = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| {
+        let previous = cell.get();
+        cell.set(Some(true));
+        previous
+    });
+    LegacyGcPacingGuard { previous }
+}
+
 pub(super) fn gc_trace_enabled() -> bool {
     #[cfg(test)]
     if GC_TRACE_TEST_FORCE.with(Cell::get) {
@@ -1288,6 +1304,43 @@ pub fn gc_check_trigger() {
     // keeps it safe: anything still referenced from the stack/registers at this
     // allocation point (e.g. the temporary currently being built) is retained;
     // only genuinely unreachable old blocks are returned.
+    //
+    // ★ #7148 disposition: **keep, justified, observable — and add a precise
+    // path that beats it to the punch.** The first attempt at this site was a
+    // deferral like the nursery arm's. It was wrong, and the reasoning is kept
+    // because the shape recurs.
+    //
+    // 1. **The headline RSS argument does not apply here.** A conservative scan
+    //    costs +364%..+5371% `heap_used_bytes` on the ratchet probes *because
+    //    it makes the copying minor ineligible* — `minor_cycles` → 0. This arm
+    //    runs a FULL mark-sweep, which is non-moving with or without the scan.
+    //    What the scan costs here is conservative *retention* for one cycle,
+    //    not the loss of evacuation. Much smaller, and unmeasured.
+    // 2. **Deferring it breaks a tested RSS guarantee.** #5476's regression test
+    //    (`check_trigger_drives_old_reclaim_to_completion_without_host_stepping`)
+    //    asserts that *a single* `gc_check_trigger` call — what every allocation
+    //    does — drives the reclaim to completion, because the workload that
+    //    motivated it is a compute-only loop that never reaches a host step. A
+    //    deferral makes that "within one 32 MB growth quantum" instead, on the
+    //    exact workload whose bug report was titled *RSS climbs unbounded*.
+    //    Trading conservative retention for bounded-but-real extra old-gen
+    //    residency is not obviously a win, and nothing here measured that it is.
+    //
+    // So this arm is unchanged, and `gc_safepoint_moving_minor` instead gained
+    // the SAME full mark-sweep with precise roots (#7148). Programs that reach a
+    // safepoint — every event-loop program — now get their old-gen reclaim
+    // precisely and *no later* than before; nothing is delayed for anyone. The
+    // fallback is attacked by adding a competing earlier precise path, not by
+    // postponing the collection. `ConservativeScanSite::OldReclaimAllocPoint`
+    // counts how often the alloc point still gets there first.
+    //
+    // Default-robustness (#7161 proposes flipping `PERRY_GC_MOVING_LOOP_POLLS`
+    // OFF): this arm does not consult that gate at all, so it behaves
+    // identically either way. The precise safepoint path is reached from the
+    // microtask pump under `gc_moving_safepoint_enabled` (a different knob,
+    // untouched by #7161) and from `js_gc_loop_safepoint` only while polls are
+    // on. Polls off ⇒ the precise path is reached less often ⇒ this arm fires
+    // more often ⇒ the census counter rises. Inert, not unsound.
     if !gc_budgeted_cycle_active()
         && matches!(
             gc_budgeted_due_trigger(),
@@ -1297,7 +1350,9 @@ pub fn gc_check_trigger() {
     {
         let _reentry = OldReclaimReentryGuard::enter();
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
-        let _scan = super::roots::ManualGcScanGuard::force_full_scan();
+        let _scan = super::roots::ManualGcScanGuard::force_full_scan(
+            super::ConservativeScanSite::OldReclaimAllocPoint,
+        );
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
             GcTriggerKind::OldGenBytes,
         ))
@@ -1400,8 +1455,28 @@ pub fn gc_check_trigger() {
             // arbitrary alloc point a value mid-construction may live only in
             // registers, which the conservative scan retains (and which makes
             // copied-minor ineligible, so the non-moving minor runs).
-            let _scan = (!super::gc_scavenge_enabled())
-                .then(super::roots::ManualGcScanGuard::force_full_scan);
+            //
+            // ★ #7148 disposition: **keep as the bounded valve, now counted.**
+            // The deferral above is the primary path and is sound by
+            // construction; reaching here means the slack expired without the
+            // program touching a single loop back-edge poll or microtask-pump
+            // boundary — a mega-expression, or a synchronous recursion, that
+            // allocated `gc_moving_defer_slack_dyn_bytes()` past the deferral
+            // point. There is no safepoint to defer to in that state, so the
+            // answer to "what if pressure spikes before a safepoint is
+            // reached" is: this arm runs, and it is the reason RSS stays
+            // bounded. Making it *imprecise* instead (collecting without the
+            // scan) is the one thing #7148 rules out — it would trade a cost
+            // problem for a soundness problem. Making it **countable** is what
+            // turns "unreachable in practice" into a measurement:
+            // `ConservativeScanSite::NurseryChurnSlackValve` is 0 on all eight
+            // ratchet probes and across the stress matrix, and the drain
+            // counter proves the deferral ran instead.
+            let _scan = (!super::gc_scavenge_enabled()).then(|| {
+                super::roots::ManualGcScanGuard::force_full_scan(
+                    super::ConservativeScanSite::NurseryChurnSlackValve,
+                )
+            });
             let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
             // Re-baseline the arming trigger after the direct minor, mirroring
             // `gc_finish_budgeted_cycle`. This arm is taken whenever
@@ -1602,11 +1677,30 @@ pub(crate) fn gc_safepoint_moving_minor() {
     // We are handling this safepoint (collect or find nothing due): clear the
     // deferral flag set by the alloc-point arm (Phase 2/3).
     GC_SAFEPOINT_PENDING.with(|p| p.set(false));
-    // Only nursery-pressure triggers take the moving minor here; OldReclaim
-    // stays on its existing full mark-sweep path.
     let kind = match gc_budgeted_due_trigger() {
         Some(BudgetedGcTrigger::ArenaBytes) => GcTriggerKind::ArenaBytes,
         Some(BudgetedGcTrigger::MallocCount) => GcTriggerKind::MallocCount,
+        // ★ #7148: old-gen reclaim used to be the alloc-point arm's business
+        // exclusively — it ran a direct full mark-sweep behind a forced
+        // conservative scan, because at an allocation point that scan is what
+        // makes it sound. Here it is not needed: this is the same precise-root
+        // safepoint the nursery minor uses, so run the identical full
+        // mark-sweep with `SkipDisabled` roots. The alloc-point arm keeps only
+        // the bounded slack valve.
+        Some(BudgetedGcTrigger::OldReclaim) => {
+            if GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get) {
+                return;
+            }
+            let _reentry = OldReclaimReentryGuard::enter();
+            GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+            // No `force_full_scan`: roots are precise at this safepoint.
+            gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
+                GcTriggerKind::OldGenBytes,
+            ))
+            .emit_after_current();
+            super::record_safepoint_drain(super::SafepointDrainKind::OldReclaim);
+            return;
+        }
         _ => {
             // No nursery-pressure trigger is due — nothing to collect here.
             return;
@@ -1624,6 +1718,11 @@ pub(crate) fn gc_safepoint_moving_minor() {
             gc_finish_arena_trigger_collection(pre_in_use, outcome);
         }
     }
+    // The live-subject counter for every deferral gate: a test that asserts
+    // "the conservative valve did not fire" is vacuous unless it can also show
+    // the precise collection that replaced it actually ran (CLAUDE.md, four
+    // ways a gate cannot fail — #4, the gate runs but its subject never did).
+    super::record_safepoint_drain(super::SafepointDrainKind::NurseryMinor);
 }
 
 /// Phase 2 of the moving-GC project: codegen emits a call to this at loop
@@ -2160,8 +2259,28 @@ pub extern "C" fn js_gc_collect() {
 /// Run an explicit (`gc()`) full collection. The `gc()` callsite may hold live
 /// module-init/top-level locals only on the native stack, so the collection
 /// forces the conservative native-stack scan (#4977); see `ManualGcScanGuard`.
+///
+/// ★ #7148 disposition: **keep, observable.** Unlike the four automatic sites
+/// this is not a collection the program pays for without asking. `gc()` is a
+/// user request with synchronous semantics — `gc(); assertFreed()` is the
+/// shape every test and every ratchet probe uses — so deferring it to the next
+/// safepoint would change the observable contract of the API, not just its
+/// cost. It is counted (`ConservativeScanSite::ManualCollect`) so its share of
+/// any census is attributable: all eight `gc_ratchet` probes end with an
+/// explicit full `gc()`, so this site fires at least once per probe *by
+/// construction*, and a census that did not separate it from the automatic
+/// sites would look alarming for no reason.
+///
+/// The known cost is #6942/#6946: forcing the scan makes this path non-moving,
+/// which is why `PERRY_GC_FORCE_EVACUATE` was inert for every `gc()`-driven
+/// test. Removing the scan here needs precise roots at the `gc()` callsite PC
+/// — the safepoint contract in `docs/statepoint-gc-experiment.md` on branch
+/// `exp/stackmap-viability` (not on `main`) — not a
+/// deferral.
 fn manual_gc_collect_now() {
-    let _scan = super::roots::ManualGcScanGuard::force_full_scan();
+    let _scan = super::roots::ManualGcScanGuard::force_full_scan(
+        super::ConservativeScanSite::ManualCollect,
+    );
     // NOTE: pending finalization jobs from earlier AUTOMATIC cycles are NOT
     // cleared here — each record enqueues exactly once (its pending flag is
     // reset at enqueue time), so dropping the vec would lose those callbacks
@@ -2191,12 +2310,18 @@ pub extern "C" fn js_gc_module_collect() -> f64 {
 /// freed byte count (0 when skipped: unsafe zone or deferred). Like `gc()`,
 /// the callsite may hold live locals only on the native stack, so force the
 /// conservative scan (#4977).
+///
+/// ★ #7148 disposition: **keep, observable** — same reasoning as
+/// `manual_gc_collect_now`. `minor()` returns the freed byte count, so its
+/// result is only meaningful if the collection ran before it returned;
+/// deferring would have to return 0 and silently mean something else.
 #[no_mangle]
 pub extern "C" fn js_gc_module_minor() -> f64 {
     if manual_gc_blocked_by_unsafe_zone() {
         return 0.0;
     }
-    let _scan = super::roots::ManualGcScanGuard::force_full_scan();
+    let _scan =
+        super::roots::ManualGcScanGuard::force_full_scan(super::ConservativeScanSite::ManualMinor);
     super::gc_collect_minor() as f64
 }
 

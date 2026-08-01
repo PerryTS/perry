@@ -65,6 +65,7 @@ interface ToolPin {
   repository?: string
   release?: string
   binaryName?: string
+  distBaseUrl?: string
   purl?: string
   integrity?: string
   platforms?: Record<string, PlatformPin>
@@ -513,6 +514,15 @@ export async function installTool(name: string, tools: Record<string, ToolPin>):
     )
     return
   }
+  if (pin.release === 'node-dist') {
+    // Official nodejs.org dist tarball (not a github release, not a single
+    // bin). Its download+verify+cache resolver lives in the compat runner,
+    // which needs a full node tree rather than a rack bin handle.
+    console.log(
+      `[external-tools] ${name} is a node-dist pin — installed by scripts/node_compat_matrix.mjs (its own resolver), not the tool rack`,
+    )
+    return
+  }
   throw new Error(`${name}: no installable shape (release=${pin.release ?? 'none'})`)
 }
 
@@ -645,6 +655,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   if (argv.includes('--install-all')) {
     for (const name of Object.keys(tools)) {
       if (name === 'sfw-enterprise' || name === 'sfw-free') {
+        continue
+      }
+      // node is a node-dist pin resolved by the compat runner, not the
+      // rack — installTool prints a hint and no-ops, so skip the noise.
+      if (tools[name]?.release === 'node-dist') {
         continue
       }
       await installTool(name, tools)

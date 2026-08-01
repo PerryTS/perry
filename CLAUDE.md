@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1265
+**Current Version:** 0.5.1272
 
 
 ## TypeScript Parity Status
@@ -26,6 +26,26 @@ Two workflows are deliberately exempt and say so inline: `node-core-subset.yml` 
 - **Compile-as-package** — `#348` (ink TUI end-to-end), `#488/#489` (Drizzle + MySQL), `#678` (linker emits native callsites for V8-fallback modules).
 - **Test/CI mechanics** — `#794` (per-category parity thresholds), `#796` (gap-suite output truncation + O(n²) `normalize_output`), `#812` (42-module behavioral matrix), `#806/#807/#808` (test harnesses for mixins / async context / ≥300-init scale).
 - **Skip-list audit** — `#797` covers `test-parity/known_failures.json` provenance (issue # + date per entry).
+
+### Node builtin compatibility matrix (`scripts/node_compat_matrix.mjs`)
+
+Breadth sweep over EVERY `require("module").builtinModules` entry, both import forms (`M` and `node:M`), against a **pinned, SRI-verified Node** (the "latest stable" oracle, pinned in `external-tools.json` `tools.node.version` — currently **26.5.1**, independent of the `.node-version` gap-suite oracle). It compares Perry's export-SHAPE fingerprint (sorted `name:typeof` over the module namespace + the default export's typeof) to the oracle's. This is the systematic version of the #812 "42-module behavioral matrix" — shape, not deep behavior (behavioral cases stay in the node-suite).
+
+```bash
+# FAST LOOP — reach for this first when iterating on ONE builtin:
+node scripts/node_compat_matrix.mjs --module fs                      # one module, both forms
+node scripts/node_compat_matrix.mjs --module fs,path,crypto          # a few
+node scripts/node_compat_matrix.mjs --module fs --method readFileSync,promises  # only these exports
+node scripts/node_compat_matrix.mjs --only fs.readFileSync,path.join # combined mod.export form
+# (the pinned Node download is skipped once cached under .cache/node-pin/)
+
+# FULL SWEEP + GATE:
+node scripts/node_compat_matrix.mjs                 # whole matrix + summary table
+node scripts/node_compat_matrix.mjs --check         # CI gate: exit 1 on regressions vs the baseline
+node scripts/node_compat_matrix.mjs --update-baseline   # rewrite test-parity/node-compat-matrix.baseline.json
+```
+
+A `--module` selector scopes `--check`/`--update-baseline` to just that slice (a single-module refresh never rewrites the whole baseline). A `--method`/`--only` subset is a print-only fast diagnostic (it narrows the fingerprint, so it is refused for `--check`/`--update-baseline`). **Bump the pinned Node** by editing `tools.node.version` in `external-tools.json` (add per-platform sha512 SRI), then `--update-baseline` and review the diff. Needs the release binary (`cargo build --release -p perry`). Full page: `docs/src/testing/node-compat-matrix.md`.
 
 **Known categorical gaps**: `console.dir`/`console.group*` formatting, lone surrogate handling (WTF-8). (Lookbehind regex is NOT a gap anymore: `perry-runtime/src/regex.rs` falls back from the `regex` crate to `fancy-regex` for lookbehind/backreferences, with capture-group translation and replacement expansion.)
 

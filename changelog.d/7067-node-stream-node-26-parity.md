@@ -1,0 +1,1 @@
+Completed Node.js 26.5 stream parity across classic streams, async iteration, iterator helpers, pipelines, composition, and Web Streams, including lifecycle, backpressure, cancellation, error propagation, and microtask ordering.

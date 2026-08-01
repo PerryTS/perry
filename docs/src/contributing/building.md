@@ -57,6 +57,30 @@ Perry has three build profiles, each tuned for a different job (#5422):
 After a `--timings` build, `scripts/cargo_timing_summary.py` prints the slowest
 units so build-time regressions are visible.
 
+### Compiler cache for ephemeral worktrees
+
+Short-lived worktrees and coding agents can opt into a compiler cache shared
+outside the repository. Install `sccache` in your user environment, then run
+Cargo through the wrapper:
+
+```bash
+./scripts/cargo_cached.sh check -p perry
+
+# Slim, optimized developer CLI
+./scripts/cargo_cached.sh build --profile perry-dev -p perry \
+  --no-default-features --features dev-cli
+```
+
+The wrapper disables Cargo incremental compilation because `sccache` cannot
+cache incremental artifacts. It stores compiler objects under
+`${XDG_CACHE_HOME:-$HOME/.cache}/perry/sccache` by default, not in the worktree;
+set `SCCACHE_DIR` or `SCCACHE_CACHE_SIZE` to override its `12G` cache policy.
+It does not install or configure `sccache` globally.
+
+In a long-lived worktree, use ordinary `cargo` commands instead so the local
+incremental cache remains available. Cache benefit depends on the compiler,
+flags, dependencies, and how much prior work the cache can reuse.
+
 ## Build Specific Crates
 
 ```bash

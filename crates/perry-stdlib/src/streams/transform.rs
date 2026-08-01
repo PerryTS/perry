@@ -25,7 +25,11 @@ pub unsafe extern "C" fn js_transform_stream_new(
     let transform_cb = closure_from_bits(transform_bits.to_bits());
     let flush_cb = closure_from_bits(flush_bits.to_bits());
     let writable = parse_strategy_value(writable_strategy);
-    let readable = parse_strategy_value(readable_strategy);
+    let readable = if readable_strategy.to_bits() == TAG_UNDEFINED {
+        (0.0, 0)
+    } else {
+        parse_strategy_value(readable_strategy)
+    };
     alloc_transform_stream_with_strategies(
         start_cb,
         transform_cb,
@@ -69,6 +73,7 @@ unsafe fn alloc_transform_stream_with_strategies(
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&readable_id) {
             s.started = true;
+            s.high_water_mark = if r_hwm.is_nan() { 0.0 } else { r_hwm.max(0.0) };
         }
     }
 
@@ -115,6 +120,7 @@ unsafe fn alloc_transform_stream_with_strategies(
             transform_cb,
             flush_cb,
             native,
+            backpressure: r_hwm <= 0.0,
         },
     );
     TRANSFORM_PAIRS.lock().unwrap().insert(writable_id, id);
@@ -258,7 +264,16 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
         .unwrap()
         .entry(writable_id)
         .or_insert(0) += 1;
-    perry_runtime::builtins::js_queue_microtask(job as i64);
+    if transform_initial_backpressure(readable_id) {
+        TRANSFORM_BACKPRESSURED_JOBS
+            .lock()
+            .unwrap()
+            .entry(readable_id)
+            .or_default()
+            .push(job as usize);
+    } else {
+        perry_runtime::builtins::js_queue_microtask(job as i64);
+    }
     promise
 }
 
@@ -351,11 +366,12 @@ unsafe fn settle_transform_write(readable_id: usize, promise: *mut Promise) {
         Park,
         Resolve,
     }
+    let initial_backpressure = transform_initial_backpressure(readable_id);
     let settle = {
         let g = super::READABLE_STREAMS.lock().unwrap();
         match g.get(&readable_id) {
             Some(s) if s.state == ReadableState::Errored => Settle::Errored(s.error_value),
-            Some(s) if !s.chunks.is_empty() => Settle::Park,
+            Some(s) if transform_has_backpressure(s, initial_backpressure) => Settle::Park,
             _ => Settle::Resolve,
         }
     };
@@ -382,6 +398,8 @@ lazy_static::lazy_static! {
     /// `transform_write` whose transformer hasn't finished delivering yet
     /// (async transformers count until their returned promise settles).
     static ref TRANSFORM_PENDING_WRITES: Mutex<HashMap<usize, usize>> =
+        Mutex::new(HashMap::new());
+    pub(super) static ref TRANSFORM_BACKPRESSURED_JOBS: Mutex<HashMap<usize, Vec<usize>>> =
         Mutex::new(HashMap::new());
     /// #6607: transform writable id -> close-request promise (as address)
     /// deferred until the pending write jobs above drain.
@@ -465,17 +483,27 @@ extern "C" fn transform_write_settle_rejected(closure: *const ClosureHeader, rea
 /// promises once its queue has drained (spec: the source pull algorithm sets
 /// backpressure = false). Called from the reader-read paths in `streams.rs`.
 pub(super) unsafe fn transform_release_writes(readable_id: usize) {
-    let (drained, errored) = {
+    set_transform_initial_backpressure(readable_id, false);
+    if let Some(jobs) = TRANSFORM_BACKPRESSURED_JOBS
+        .lock()
+        .unwrap()
+        .remove(&readable_id)
+    {
+        for job in jobs {
+            perry_runtime::builtins::js_queue_microtask(job as i64);
+        }
+    }
+    let (backpressured, errored) = {
         let g = super::READABLE_STREAMS.lock().unwrap();
         match g.get(&readable_id) {
             Some(s) => (
-                s.chunks.is_empty(),
+                transform_has_backpressure(s, false),
                 (s.state == ReadableState::Errored).then_some(s.error_value),
             ),
-            None => (true, None),
+            None => (false, None),
         }
     };
-    if !drained && errored.is_none() {
+    if backpressured && errored.is_none() {
         return;
     }
     let parked = TRANSFORM_WRITE_RELEASES
@@ -489,6 +517,139 @@ pub(super) unsafe fn transform_release_writes(readable_id: usize) {
                 None => js_promise_resolve(p as *mut Promise, f64::from_bits(TAG_UNDEFINED)),
             }
         }
+    }
+}
+
+pub(super) unsafe fn transform_abort_pending_writes(writable_id: usize, reason: f64) {
+    let readable_id = TRANSFORM_PAIRS
+        .lock()
+        .unwrap()
+        .get(&writable_id)
+        .and_then(|transform_id| {
+            TRANSFORM_STREAMS
+                .lock()
+                .unwrap()
+                .get(transform_id)
+                .map(|stream| stream.readable_handle)
+        });
+    let Some(readable_id) = readable_id else {
+        return;
+    };
+    if let Some(jobs) = TRANSFORM_BACKPRESSURED_JOBS
+        .lock()
+        .unwrap()
+        .remove(&readable_id)
+    {
+        for job in jobs {
+            let closure = job as *const ClosureHeader;
+            let promise =
+                perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as *mut Promise;
+            js_promise_reject(promise, reason);
+            transform_write_job_done(writable_id);
+        }
+    }
+}
+
+fn transform_has_backpressure(stream: &ReadableStreamData, initial: bool) -> bool {
+    initial || (!stream.chunks.is_empty() && stream.queue_total_size >= stream.high_water_mark)
+}
+
+fn transform_initial_backpressure(readable_id: usize) -> bool {
+    TRANSFORM_STREAMS
+        .lock()
+        .unwrap()
+        .values()
+        .find_map(|stream| (stream.readable_handle == readable_id).then_some(stream.backpressure))
+        .unwrap_or(false)
+}
+
+fn set_transform_initial_backpressure(readable_id: usize, value: bool) {
+    if let Some(stream) = TRANSFORM_STREAMS
+        .lock()
+        .unwrap()
+        .values_mut()
+        .find(|stream| stream.readable_handle == readable_id)
+    {
+        stream.backpressure = value;
+    }
+}
+
+#[cfg(test)]
+mod backpressure_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TRANSFORM_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn capture_transform(
+        _closure: *const ClosureHeader,
+        _chunk: f64,
+        _controller: f64,
+    ) -> f64 {
+        TRANSFORM_CALLS.fetch_add(1, Ordering::Relaxed);
+        f64::from_bits(TAG_UNDEFINED)
+    }
+
+    #[test]
+    fn default_transform_starts_backpressured_until_read_demand() {
+        let _serial = crate::streams::tests::serial_guard();
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let transform = unsafe {
+            js_transform_stream_new(undefined, undefined, undefined, undefined, undefined)
+        };
+        let readable = unsafe { js_transform_stream_readable(transform) } as usize;
+
+        assert!(transform_initial_backpressure(readable));
+        unsafe { transform_release_writes(readable) };
+        assert!(!transform_initial_backpressure(readable));
+    }
+
+    #[test]
+    fn initial_backpressure_defers_transform_until_read_demand() {
+        let _serial = crate::streams::tests::serial_guard();
+        TRANSFORM_CALLS.store(0, Ordering::Relaxed);
+        let transform = perry_runtime::closure::js_closure_alloc(capture_transform as *const u8, 0);
+        perry_runtime::closure::js_register_closure_arity(capture_transform as *const u8, 2);
+        let transform_value = f64::from_bits(JSValue::pointer(transform as *const u8).bits());
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let stream = unsafe {
+            js_transform_stream_new(undefined, transform_value, undefined, undefined, undefined)
+        };
+        let readable = unsafe { js_transform_stream_readable(stream) } as usize;
+        let writable = unsafe { js_transform_stream_writable(stream) } as usize;
+        let write = unsafe { transform_write(writable, 1.0) };
+
+        perry_runtime::promise::js_promise_run_microtasks();
+        assert_eq!(TRANSFORM_CALLS.load(Ordering::Relaxed), 0);
+        assert_eq!(perry_runtime::promise::js_promise_state(write), 0);
+
+        unsafe { transform_release_writes(readable) };
+        perry_runtime::promise::js_promise_run_microtasks();
+        assert_eq!(TRANSFORM_CALLS.load(Ordering::Relaxed), 1);
+        assert_eq!(perry_runtime::promise::js_promise_state(write), 1);
+    }
+
+    #[test]
+    fn abort_rejects_transform_waiting_for_read_demand() {
+        let _serial = crate::streams::tests::serial_guard();
+        TRANSFORM_CALLS.store(0, Ordering::Relaxed);
+        let transform = perry_runtime::closure::js_closure_alloc(capture_transform as *const u8, 0);
+        perry_runtime::closure::js_register_closure_arity(capture_transform as *const u8, 2);
+        let transform_value = f64::from_bits(JSValue::pointer(transform as *const u8).bits());
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let stream = unsafe {
+            js_transform_stream_new(undefined, transform_value, undefined, undefined, undefined)
+        };
+        let writable = unsafe { js_transform_stream_writable(stream) } as usize;
+        let write = unsafe { transform_write(writable, 1.0) };
+
+        unsafe {
+            super::writable::js_writable_stream_abort_inner(writable as f64, 7.0, true);
+        }
+        perry_runtime::promise::js_promise_run_microtasks();
+        assert_eq!(TRANSFORM_CALLS.load(Ordering::Relaxed), 0);
+        assert_eq!(perry_runtime::promise::js_promise_state(write), 2);
+        assert_eq!(perry_runtime::promise::js_promise_reason(write), 7.0);
     }
 }
 

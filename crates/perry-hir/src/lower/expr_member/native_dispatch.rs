@@ -125,6 +125,18 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
         // behind a compact native handle. Bare reads must invoke the FFI
         // getters; methods still travel through the call-expression path.
         "readline" => matches!(prop, "line" | "terminal"),
+        // lru-cache: `.size` is the one native DATA GETTER whose value comes
+        // from the FFI helper `js_lru_cache_size`, so a bare read must dispatch
+        // as a 0-arg `NativeMethodCall` through the `lru-cache` NativeModSig row
+        // (see `lower_call/native_table/node_misc.rs`). Without this arm the read
+        // fell to the inverted default (a plain `PropertyGet`) and the runtime's
+        // handle-property lookup — which has no `size` handler for the compact
+        // lru-cache handle — returned `undefined`. Every other member
+        // (`get`/`set`/`has`/`delete`/`clear`/`peek`) is a METHOD: a method CALL
+        // arrives via the call-expression path, and a bare method-VALUE read must
+        // stay a plain PropertyGet, never a 0-arg invoking dispatch. Mirrors the
+        // `blob` (`size`/`type`/…) and `__disposable__` (`disposed`) getter arms.
+        "lru-cache" => prop == "size",
         // #6364 — DisposableStack / AsyncDisposableStack: `disposed` is the
         // only native data getter (its value comes from the FFI helper
         // `js_disposable_stack_disposed`), so a bare read must dispatch as a
@@ -599,5 +611,20 @@ mod tests {
         assert!(is_native_dispatch_member("perry/ui", "State", "value"));
         assert!(!is_native_dispatch_member("perry/ui", "State", "custom"));
         assert!(!is_native_dispatch_member("perry/ui", "Canvas", "value"));
+    }
+
+    #[test]
+    fn lru_cache_dispatches_only_the_size_getter() {
+        // `cache.size` (bare property read) must dispatch as a 0-arg
+        // NativeMethodCall → `js_lru_cache_size`, not fall through to a plain
+        // PropertyGet (which read `undefined`). Regression for the handle-backed
+        // property-getter dispatch gap.
+        assert!(is_native_dispatch_member("lru-cache", "LRUCache", "size"));
+        // Methods stay method-VALUE reads (plain PropertyGet); their CALL form
+        // arrives via the call-expression path, so they must NOT dispatch here.
+        assert!(!is_native_dispatch_member("lru-cache", "LRUCache", "get"));
+        assert!(!is_native_dispatch_member("lru-cache", "LRUCache", "set"));
+        assert!(!is_native_dispatch_member("lru-cache", "LRUCache", "has"));
+        assert!(!is_native_dispatch_member("lru-cache", "LRUCache", "clear"));
     }
 }

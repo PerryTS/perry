@@ -26,8 +26,8 @@
       "total": 53
     },
     "cluster": {
-      "pass": 15,
-      "total": 41
+      "pass": 43,
+      "total": 43
     },
     "console": {
       "pass": 119,
@@ -108,12 +108,12 @@
       }
     },
     "inspector": {
-      "pass": 4,
+      "pass": 37,
       "total": 37
     },
     "inspector-promises": {
-      "pass": 3,
-      "total": 30
+      "pass": 31,
+      "total": 31
     },
     "module": {
       "pass": 29,

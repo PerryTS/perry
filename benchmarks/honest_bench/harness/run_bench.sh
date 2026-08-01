@@ -32,6 +32,8 @@ if [[ $# -lt 3 ]]; then
   exit 2
 fi
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
 WORKLOAD="$1"; shift
 LANGUAGE="$1"; shift
 BINARY="$1"; shift
@@ -85,19 +87,32 @@ PYTHON
 
   if [[ "$kind" == "measured" ]]; then
     python3 - \
-        "$WORKLOAD" "$LANGUAGE" "$BINARY" "$run" "$wall_ns" "$peak_kb" \
+        "$REPO_ROOT" "$WORKLOAD" "$LANGUAGE" "$BINARY" "$run" "$wall_ns" "$peak_kb" \
         "$exit_code" "$stdout_first" "$stdout_last" "$tmp_out" "$@" <<'PY'
 import json, os, shutil, subprocess, sys
-(_, workload, lang, binary, run, wall_ns, peak_kb,
+(_, repo_root, workload, lang, binary, run, wall_ns, peak_kb,
  exit_code, stdout_first, stdout_last, stdout_path, *args) = sys.argv
 
-resolved_binary = shutil.which(binary) or os.path.realpath(binary)
+
+def portable_path(value):
+    """Strip the operator's home directory: results.json is committed."""
+    resolved = os.path.realpath(value)
+    for base, prefix in (
+        (os.path.realpath(repo_root), ""),
+        (os.path.realpath(os.path.expanduser("~")), "~/"),
+    ):
+        if resolved == base or resolved.startswith(base + os.sep):
+            return prefix + os.path.relpath(resolved, base)
+    return resolved
+
+
+resolved_binary = portable_path(shutil.which(binary) or binary)
 
 row = {
     "workload": workload,
     "language": lang,
     "binary": resolved_binary,
-    "command": [resolved_binary, *args],
+    "command": [resolved_binary, *(portable_path(a) if os.path.isabs(a) else a for a in args)],
     "run": int(run),
     "wall_ms": int(wall_ns) / 1_000_000.0,
     "max_rss_kb": int(peak_kb),

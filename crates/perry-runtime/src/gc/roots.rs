@@ -2,6 +2,7 @@ use super::*;
 use std::any::Any;
 
 mod runtime_handles;
+mod scan_mode;
 mod scanner_shims;
 mod shadow_stack;
 mod temp_roots;
@@ -21,6 +22,18 @@ pub use scanner_shims::{
     shadow_stack_root_scanner, shape_cache_mutable_root_scanner, shape_cache_root_scanner,
     small_int_cache_mutable_root_scanner, small_int_cache_root_scanner, timer_mutable_root_scanner,
     timer_root_scanner, transition_cache_mutable_root_scanner, transition_cache_root_scanner,
+};
+// The conservative-scan mode lives in `roots/scan_mode.rs` (split out in #7148
+// when this file crossed the 2,000-line gate) but every consumer names it
+// `gc::roots::…` or reaches it through `mod.rs`'s `pub use roots::*`, so the
+// whole surface is re-exported here — same shape, and same `allow`, as the
+// `shadow_stack` re-exports below.
+#[allow(unused_imports)]
+pub(crate) use scan_mode::{
+    conservative_stack_scan_decision, conservative_stack_scan_decision_for,
+    conservative_stack_scan_mode, conservative_stack_scan_mode_from_value,
+    set_conservative_stack_scan_override, ConservativeStackScanDecision, ConservativeStackScanMode,
+    ManualGcScanGuard, CONSERVATIVE_STACK_SCAN_OVERRIDE,
 };
 pub(crate) use shadow_stack::shadow_stack_has_active_frame;
 pub(crate) use shadow_stack::SHADOW;
@@ -145,144 +158,6 @@ pub(super) fn exit_gc_root_lock() {
     if should_flush {
         flush_deferred_gc_request();
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConservativeStackScanMode {
-    Auto,
-    Disabled,
-    Full,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
-pub(super) enum ConservativeStackScanDecision {
-    Scan,
-    #[default]
-    SkipDisabled,
-}
-
-impl ConservativeStackScanDecision {
-    #[cfg(feature = "diagnostics")]
-    #[inline]
-    pub(super) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Scan => "scan",
-            Self::SkipDisabled => "skip_disabled",
-        }
-    }
-}
-
-pub(super) fn conservative_stack_scan_mode_from_value(
-    value: Option<&str>,
-) -> ConservativeStackScanMode {
-    let Some(value) = value else {
-        return ConservativeStackScanMode::Auto;
-    };
-    match value.trim().to_ascii_lowercase().as_str() {
-        "" | "auto" => ConservativeStackScanMode::Auto,
-        "0" | "off" | "false" => ConservativeStackScanMode::Disabled,
-        "1" | "on" | "true" | "full" | "debug" => ConservativeStackScanMode::Full,
-        _ => ConservativeStackScanMode::Auto,
-    }
-}
-
-thread_local! {
-    /// Per-thread override for the conservative-scan mode, taking precedence over
-    /// the `#[cfg(test)]` default but not an explicit env var. The GC unit tests
-    /// set this to `Auto` (skip) inside their controlled-root scopes so a forced
-    /// collection still reclaims the objects they hold only as native-stack
-    /// locals; see `ScopedRootScannerRegistryGuard`.
-    pub(super) static CONSERVATIVE_STACK_SCAN_OVERRIDE: std::cell::Cell<Option<ConservativeStackScanMode>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// Set (or clear) this thread's conservative-scan mode override, returning the
-/// previous value.
-#[allow(dead_code)] // test-only scaffolding: GC unit tests (gc/tests) pin the scan mode via this override
-pub(crate) fn set_conservative_stack_scan_override(
-    mode: Option<ConservativeStackScanMode>,
-) -> Option<ConservativeStackScanMode> {
-    CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.replace(mode))
-}
-
-/// Scoped guard forcing the conservative native-stack scan for an explicit
-/// `gc()` collection (#4977). In the default `Auto` mode a full collection
-/// skips the native scan, but at a `gc()` callsite live module-init/top-level
-/// locals may be held only on the native stack — neither the precise
-/// shadow-stack roots nor the module-var scanners cover them — so the
-/// collector reclaimed live object graphs and later field reads returned
-/// dangling-pointer garbage. An already-pinned per-thread override wins (the
-/// GC unit tests pin `Auto` so a forced collection still reclaims objects they
-/// hold only as native-stack locals), and an explicit
-/// `PERRY_CONSERVATIVE_STACK_SCAN` env value beats any override either way,
-/// so the bisection escape hatch keeps working.
-pub(super) struct ManualGcScanGuard {
-    engaged: bool,
-}
-
-impl ManualGcScanGuard {
-    pub(super) fn force_full_scan() -> Self {
-        let engaged = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| {
-            if c.get().is_some() {
-                return false;
-            }
-            c.set(Some(ConservativeStackScanMode::Full));
-            true
-        });
-        Self { engaged }
-    }
-}
-
-impl Drop for ManualGcScanGuard {
-    fn drop(&mut self) {
-        if self.engaged {
-            CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.set(None));
-        }
-    }
-}
-
-pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
-    // Explicit env var wins (so the dedicated mode tests and ops bisection keep
-    // working), then a per-thread override, then the build-time default.
-    if let Ok(value) = std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
-        return conservative_stack_scan_mode_from_value(Some(&value));
-    }
-    if let Some(mode) = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()) {
-        return mode;
-    }
-    // Unit tests root GC-managed pointers as raw locals on the *native* (Rust)
-    // stack, not the shadow stack, so without the conservative native scan any
-    // collection triggered mid-test (e.g. by an allocation in a helper) reclaims
-    // them and a later header deref faults. Default the test build to a full
-    // scan so those locals survive; production keeps live values on the shadow
-    // stack and skips the imprecise, costly native scan.
-    #[cfg(test)]
-    {
-        ConservativeStackScanMode::Full
-    }
-    #[cfg(not(test))]
-    {
-        ConservativeStackScanMode::Auto
-    }
-}
-
-#[inline]
-pub(super) fn conservative_stack_scan_decision_for(
-    mode: ConservativeStackScanMode,
-    _shadow_frame_active: bool,
-) -> ConservativeStackScanDecision {
-    match mode {
-        ConservativeStackScanMode::Disabled => ConservativeStackScanDecision::SkipDisabled,
-        ConservativeStackScanMode::Full => ConservativeStackScanDecision::Scan,
-        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::SkipDisabled,
-    }
-}
-
-pub(super) fn conservative_stack_scan_decision() -> ConservativeStackScanDecision {
-    conservative_stack_scan_decision_for(
-        conservative_stack_scan_mode(),
-        shadow_stack_has_active_frame(),
-    )
 }
 
 /// Register a root scanner function.

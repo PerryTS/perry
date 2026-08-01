@@ -1,5 +1,45 @@
 {
   "tools": {
+    "node": {
+      "description": "Node.js — the pinned oracle for the builtin-module compatibility matrix (scripts/node_compat_matrix.mjs).",
+      "version": "26.5.1",
+      "release": "node-dist",
+      "repository": "github:nodejs/node",
+      "distBaseUrl": "https://nodejs.org/dist",
+      "notes": [
+        "Latest CURRENT stable at pin time. Bump via the NODE_PIN.version constant in scripts/node_compat_matrix.mjs, then run --update-baseline and review the diff.",
+        "Assets are the official nodejs.org dist tarballs. Integrity is sha512 recomputed from the downloaded bytes (matching this file's sha512 SRI convention); nodejs.org also publishes sha256 in SHASUMS256.txt, cross-checked at pin time against every asset here.",
+        "Installed by scripts/node_compat_matrix.mjs via its own resolver (download + SRI-verify + cache under .cache/node-pin/), NOT the shared tool rack: nodejs.org is not a github release host, and the tarball is a full node tree rather than a single bin.",
+        "Official dist ships no musl build (musl lives on unofficial-builds.nodejs.org); alpine/musl runners fall back to a system node.",
+        "LTS alternate: v24.18.1 (Krypton). Pass --node-version <ver> to fetch a non-pinned line — it is verified against that version's SHASUMS256.txt (sha256) since no sha512 pin exists here for it."
+      ],
+      "platforms": {
+        "darwin-arm64": {
+          "asset": "node-v26.5.1-darwin-arm64.tar.gz",
+          "integrity": "sha512-P8PFV7IyfNm+w2PXZt20GGHf9PvQ2/UDH4toqqJwgAGMzsqAdfJQWeAO1TTpsBuz5JBetwagXhhlUl1XyvH93A=="
+        },
+        "darwin-x64": {
+          "asset": "node-v26.5.1-darwin-x64.tar.gz",
+          "integrity": "sha512-w15Ah75azmsKod8iVXqAZrxYFHl/zgw2eHgC62+o8L0e3CX7lJTCa+NBzmdXDo9Vz/RgkM1rHIzo8lsk7q3VjA=="
+        },
+        "linux-arm64": {
+          "asset": "node-v26.5.1-linux-arm64.tar.gz",
+          "integrity": "sha512-ZBxARZ/lB1q3WNr3ptUUFQX2kv84dOpVlb1f9oAA5g8F6ZmK3ZTIf871Ml1Xb6o1Yi+LWzF1ukrlDe0tfen3Nw=="
+        },
+        "linux-x64": {
+          "asset": "node-v26.5.1-linux-x64.tar.gz",
+          "integrity": "sha512-gP57AfiLlsia+9NJ0G99EACtsN5l0nBrTfDkupo8lzhOfjLX9aZ9WIeOxYy+nGisfpnfUxOLNzz3AqIBRsWB9A=="
+        },
+        "win-arm64": {
+          "asset": "node-v26.5.1-win-arm64.zip",
+          "integrity": "sha512-JJyyH4I6cHQq38iw1gWxcR7VVl+YBrRtGYVEgRH14OUJzSh1JT4RMddH/7Z9MMvgPDH04yFLnp9dHub5YQiWzw=="
+        },
+        "win-x64": {
+          "asset": "node-v26.5.1-win-x64.zip",
+          "integrity": "sha512-fkmRHaGoDDQeFPpnpasE7sGwF9xKy55Qg7E8wDrDsCymXKBh+I41nOu0Y/v1ectAHP+AOXv41ysVx/aTiWMPdg=="
+        }
+      }
+    },
     "pnpm": {
       "description": "pnpm — the fleet's package manager.",
       "version": "11.15.1",

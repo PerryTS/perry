@@ -1388,6 +1388,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         (String, String),
         crate::collectors::PtrShapeLocal,
     > = std::collections::HashMap::new();
+    // #7142: the profitability subset the class-id dispatch tower may route to.
+    let mut pshape_tower_routable: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     // Phase 3b typed-receiver widening: chain-global field indexes need the
     // full class table — and it must be the SAME table dynamic dispatch's
     // call-site gating consults (`class_table`, incl. class-expression
@@ -1410,6 +1413,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 receiver_class_table,
                 &module_dispatch_facts,
             ) {
+                // #7142: the tower routing site emits its own inline shape
+                // re-check, so it only takes the clone where the clone deletes
+                // strictly more guarded field sites than that check costs. The
+                // other two sites are guard-dominated and route unconditionally.
+                if crate::collectors::pshape_tower_route_profitable(
+                    class,
+                    method,
+                    receiver_class_table,
+                ) {
+                    pshape_tower_routable.insert((class.name.clone(), method.name.clone()));
+                }
                 pshape_methods.insert((class.name.clone(), method.name.clone()), fact);
             }
             match typed_abi::typed_f64_method_rejection_reason(method) {
@@ -1708,6 +1722,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
         pshape_methods,
+        pshape_tower_routable,
         typed_f64_closures: std::collections::HashSet::new(),
         typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),

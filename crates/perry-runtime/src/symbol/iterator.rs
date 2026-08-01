@@ -445,6 +445,17 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     if is_registered_class_ref {
         throw_value_not_iterable();
     }
+    let async_iter_wk = well_known_symbol("asyncIterator");
+    if !async_iter_wk.is_null() {
+        let sym_f64 =
+            f64::from_bits(crate::value::JSValue::pointer(async_iter_wk as *const u8).bits());
+        let async_iter_fn = unsafe { js_object_get_symbol_property(val_f64, sym_f64) };
+        if async_iter_fn.to_bits() != TAG_UNDEFINED
+            && async_iter_fn.to_bits() != crate::value::TAG_NULL
+        {
+            throw_value_not_iterable();
+        }
+    }
     val_f64
 }
 

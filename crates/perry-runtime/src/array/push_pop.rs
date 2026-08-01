@@ -91,6 +91,16 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);
 
         (*new_ptr).capacity = new_capacity;
+        // HOLE-initialize the newly added [old_capacity, new_capacity) slack
+        // so it never holds stale arena bits the whole-heap from-space scan
+        // misreads as live from-space pointers.
+        {
+            let new_elems =
+                (new_ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+            for i in old_capacity as usize..new_capacity as usize {
+                ptr::write(new_elems.add(i), crate::value::TAG_HOLE);
+            }
+        }
         let old_header =
             (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         let new_header =

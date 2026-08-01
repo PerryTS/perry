@@ -48,7 +48,7 @@
         "run",
         "<source.ts>"
       ],
-      "resolved_executable": "/Users/sergigonzalez/.bun/bin/bun"
+      "resolved_executable": "~/.bun/bin/bun"
     }
   },
   "policy": {

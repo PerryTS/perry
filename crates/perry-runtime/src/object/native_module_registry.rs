@@ -94,7 +94,13 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "events" => Some(NmBucket::Events),
         "fs" => Some(NmBucket::Fs),
         "http" | "http2" | "https" => Some(NmBucket::Http),
-        "inspector" | "inspector.Network" | "inspector/promises" => Some(NmBucket::Inspector),
+        "inspector"
+        | "inspector.Network"
+        | "inspector.NetworkResources"
+        | "inspector.DOMStorage"
+        | "inspector.Session"
+        | "inspector/promises"
+        | "inspector/promises.Session" => Some(NmBucket::Inspector),
         "module" => Some(NmBucket::Module),
         "net" => Some(NmBucket::Net),
         // #6563: node-pty + the API-identical @lydell fork, one bucket.
@@ -234,17 +240,27 @@ pub extern "C" fn js_nm_install_bun() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_child_process() {
+    nm_register_attach(
+        NmBucket::ChildProcess,
+        super::native_module::callable_exports::nm_attach_child_process,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::ChildProcess as usize].store(
         nm_dispatch_child_process as NmDispatchFn as *mut (),
         Ordering::Relaxed,
     );
+    nm_register_ctor(NmBucket::ChildProcess, nm_ctor_child_process);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_cluster() {
+    nm_register_attach(
+        NmBucket::Cluster,
+        super::native_module::callable_exports::nm_attach_cluster,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Cluster as usize].store(
         nm_dispatch_cluster as NmDispatchFn as *mut (),
         Ordering::Relaxed,
     );
+    nm_register_ctor(NmBucket::Cluster, nm_ctor_cluster);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_console() {
@@ -599,8 +615,8 @@ pub(crate) fn nm_run_install_all_hook() {
 // the method-dispatch registry: populated by `js_nm_install_<module>()` (only
 // the 8 ctor-owning buckets register a fn), looked up by `js_new_function_construct`.
 use super::class_registry::{
-    nm_ctor_fs, nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty,
-    nm_ctor_vm, nm_ctor_wasi,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
+    nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
 };
 
 type NmCtorFn = unsafe fn(&str, &str, *const f64, usize) -> Option<f64>;

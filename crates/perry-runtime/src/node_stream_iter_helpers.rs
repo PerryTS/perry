@@ -661,7 +661,7 @@ fn consume_stream(stream: f64, callback: f64, op: f64, initial: f64, opts: f64) 
         consume_op_default(op)
     };
 
-    let Some(iter) = crate::array::call_symbol_async_iterator_for_flat_map(stream) else {
+    let Some(iter) = crate::array::call_symbol_async_iterator(stream) else {
         // Not async-iterable (shouldn't happen for a readable): empty result.
         if op == CONSUME_OP_REDUCE && !has_initial {
             return rejected_promise(reduce_missing_initial_error());
@@ -876,11 +876,10 @@ pub(super) fn flatten_async_iterable_with_source(
     value: f64,
 ) -> Option<(*mut crate::array::ArrayHeader, Option<f64>)> {
     use crate::array::{
-        async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
-        has_iterator_next,
+        async_iterator_to_array_for_flat_map, call_symbol_async_iterator, has_iterator_next,
     };
     use crate::symbol::js_get_iterator;
-    if let Some(async_iter) = call_symbol_async_iterator_for_flat_map(value) {
+    if let Some(async_iter) = call_symbol_async_iterator(value) {
         return Some((
             async_iterator_to_array_for_flat_map(async_iter),
             Some(async_iter),
@@ -908,10 +907,274 @@ pub(super) fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::arr
     flatten_async_iterable_with_source(value).map(|(chunks, _)| chunks)
 }
 
+const TAKE_SOURCE_STREAM_KEY: &[u8] = b"__perryTakeSourceStream";
+const TAKE_RESULT_STREAM_KEY: &[u8] = b"__perryTakeResultStream";
+const TAKE_SOURCE_REMAINING_KEY: &[u8] = b"__perryTakeSourceRemaining";
+const TAKE_SOURCE_DONE_KEY: &[u8] = b"__perryTakeSourceDone";
+
+fn take_source_done_result() -> f64 {
+    let result = crate::object::js_object_alloc(0, 2);
+    js_object_set_field_by_name(result, hidden_key(b"value"), f64::from_bits(TAG_UNDEFINED));
+    js_object_set_field_by_name(result, hidden_key(b"done"), f64::from_bits(TAG_TRUE));
+    box_pointer(result as *const u8)
+}
+
+fn finish_take_source(iterator: f64, reason: Option<f64>, close_source: bool) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(iterator);
+    let reason = reason.map(|reason| scope.root_nanbox_f64(reason));
+    let iterator_value = iterator.get_nanbox_f64();
+    if has_truthy_hidden(iterator_value, hidden_key(TAKE_SOURCE_DONE_KEY)) {
+        return;
+    }
+    set_hidden_value(
+        iterator_value,
+        hidden_key(TAKE_SOURCE_DONE_KEY),
+        f64::from_bits(TAG_TRUE),
+    );
+    let Some(source) = get_hidden_value(iterator_value, hidden_key(TAKE_SOURCE_STREAM_KEY)) else {
+        return;
+    };
+    let source = scope.root_nanbox_f64(source);
+    if close_source {
+        async_iterator::call_source_iterator_return(source.get_nanbox_f64());
+    }
+    let terminal = reason
+        .as_ref()
+        .map(|reason| reason.get_nanbox_f64())
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+    destroy_stream(source.get_nanbox_f64(), terminal);
+    if let Some(result) = get_hidden_value(
+        iterator.get_nanbox_f64(),
+        hidden_key(TAKE_RESULT_STREAM_KEY),
+    ) {
+        let result = scope.root_nanbox_f64(result);
+        let terminal = reason
+            .as_ref()
+            .map(|reason| reason.get_nanbox_f64())
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+        destroy_stream(result.get_nanbox_f64(), terminal);
+    }
+}
+
+fn take_source_fulfilled(iterator: f64, result: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(iterator);
+    let result = scope.root_nanbox_f64(result);
+    match pipeline_iterator_result(result.get_nanbox_f64()) {
+        Some((false, _)) => {
+            let remaining = get_hidden_value(
+                iterator.get_nanbox_f64(),
+                hidden_key(TAKE_SOURCE_REMAINING_KEY),
+            )
+            .unwrap_or(0.0);
+            set_hidden_value(
+                iterator.get_nanbox_f64(),
+                hidden_key(TAKE_SOURCE_REMAINING_KEY),
+                (remaining - 1.0).max(0.0),
+            );
+        }
+        _ => finish_take_source(iterator.get_nanbox_f64(), None, false),
+    }
+    result.get_nanbox_f64()
+}
+
+pub(super) extern "C" fn ns_take_source_fulfilled(
+    closure: *const ClosureHeader,
+    result: f64,
+) -> f64 {
+    take_source_fulfilled(js_closure_get_capture_f64(closure, 0), result)
+}
+
+pub(super) extern "C" fn ns_take_source_rejected(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let reason = scope.root_nanbox_f64(reason);
+    finish_take_source(
+        js_closure_get_capture_f64(closure, 0),
+        Some(reason.get_nanbox_f64()),
+        true,
+    );
+    rejected_promise(reason.get_nanbox_f64())
+}
+
+pub(super) extern "C" fn ns_take_limit_fulfilled(
+    closure: *const ClosureHeader,
+    result: f64,
+) -> f64 {
+    let iterator = js_closure_get_capture_f64(closure, 0);
+    let close_source = matches!(pipeline_iterator_result(result), Some((false, _)));
+    finish_take_source(iterator, None, close_source);
+    take_source_done_result()
+}
+
+pub(super) extern "C" fn ns_take_limit_rejected(
+    closure: *const ClosureHeader,
+    _reason: f64,
+) -> f64 {
+    finish_take_source(js_closure_get_capture_f64(closure, 0), None, true);
+    take_source_done_result()
+}
+
+pub(super) extern "C" fn ns_take_source_next(closure: *const ClosureHeader) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(this_value(closure));
+    if has_truthy_hidden(iterator.get_nanbox_f64(), hidden_key(TAKE_SOURCE_DONE_KEY)) {
+        return take_source_done_result();
+    }
+    let remaining = get_hidden_value(
+        iterator.get_nanbox_f64(),
+        hidden_key(TAKE_SOURCE_REMAINING_KEY),
+    )
+    .unwrap_or(0.0);
+    let Some(source) = get_hidden_value(
+        iterator.get_nanbox_f64(),
+        hidden_key(TAKE_SOURCE_STREAM_KEY),
+    ) else {
+        finish_take_source(iterator.get_nanbox_f64(), None, false);
+        return take_source_done_result();
+    };
+    let source = scope.root_nanbox_f64(source);
+    let Some(source_iterator) = get_hidden_value(
+        source.get_nanbox_f64(),
+        hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+    ) else {
+        finish_take_source(iterator.get_nanbox_f64(), None, false);
+        return take_source_done_result();
+    };
+    let source_iterator = scope.root_nanbox_f64(source_iterator);
+    let next = match catch_pipeline_throw(|| unsafe {
+        crate::object::js_native_call_method(
+            source_iterator.get_nanbox_f64(),
+            b"next".as_ptr() as *const i8,
+            4,
+            std::ptr::null(),
+            0,
+        )
+    }) {
+        Ok(next) => next,
+        Err(reason) => {
+            let reason = scope.root_nanbox_f64(reason);
+            if remaining <= 0.0 {
+                finish_take_source(iterator.get_nanbox_f64(), None, true);
+                return take_source_done_result();
+            }
+            finish_take_source(
+                iterator.get_nanbox_f64(),
+                Some(reason.get_nanbox_f64()),
+                true,
+            );
+            return rejected_promise(reason.get_nanbox_f64());
+        }
+    };
+    let next = scope.root_nanbox_f64(next);
+    if remaining <= 0.0 {
+        if crate::promise::js_value_is_promise(next.get_nanbox_f64()) == 0 {
+            let close_source = matches!(
+                pipeline_iterator_result(next.get_nanbox_f64()),
+                Some((false, _))
+            );
+            finish_take_source(iterator.get_nanbox_f64(), None, close_source);
+            return take_source_done_result();
+        }
+        let fulfilled = js_closure_alloc(ns_take_limit_fulfilled as *const u8, 1);
+        let fulfilled = scope.root_raw_mut_ptr(fulfilled);
+        let rejected = js_closure_alloc(ns_take_limit_rejected as *const u8, 1);
+        let rejected = scope.root_raw_mut_ptr(rejected);
+        js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
+        js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
+        let promise = crate::value::js_nanbox_get_pointer(next.get_nanbox_f64())
+            as *mut crate::promise::Promise;
+        return box_pointer(crate::promise::js_promise_then(
+            promise,
+            fulfilled.get_raw_mut_ptr(),
+            rejected.get_raw_mut_ptr(),
+        ) as *const u8);
+    }
+    if crate::promise::js_value_is_promise(next.get_nanbox_f64()) == 0 {
+        return take_source_fulfilled(iterator.get_nanbox_f64(), next.get_nanbox_f64());
+    }
+    let fulfilled = js_closure_alloc(ns_take_source_fulfilled as *const u8, 1);
+    let fulfilled = scope.root_raw_mut_ptr(fulfilled);
+    let rejected = js_closure_alloc(ns_take_source_rejected as *const u8, 1);
+    let rejected = scope.root_raw_mut_ptr(rejected);
+    js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
+    js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
+    let promise =
+        crate::value::js_nanbox_get_pointer(next.get_nanbox_f64()) as *mut crate::promise::Promise;
+    box_pointer(crate::promise::js_promise_then(
+        promise,
+        fulfilled.get_raw_mut_ptr(),
+        rejected.get_raw_mut_ptr(),
+    ) as *const u8)
+}
+
+pub(super) extern "C" fn ns_take_source_return(closure: *const ClosureHeader) -> f64 {
+    finish_take_source(this_value(closure), None, true);
+    take_source_done_result()
+}
+
+fn take_source_iterator(source: f64, result: f64, count: u32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(source);
+    let result = scope.root_nanbox_f64(result);
+    let methods = [
+        ("next", cast0(ns_take_source_next)),
+        ("return", cast0(ns_take_source_return)),
+    ];
+    let iterator = box_pointer(build_object(&methods, 0x7FFF_FF70) as *const u8);
+    set_hidden_value(
+        iterator,
+        hidden_key(TAKE_SOURCE_STREAM_KEY),
+        source.get_nanbox_f64(),
+    );
+    set_hidden_value(
+        iterator,
+        hidden_key(TAKE_RESULT_STREAM_KEY),
+        result.get_nanbox_f64(),
+    );
+    set_hidden_value(
+        iterator,
+        hidden_key(TAKE_SOURCE_REMAINING_KEY),
+        count as f64,
+    );
+    iterator
+}
+
 pub(super) extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {
-    let this = this_value(closure);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this_value(closure));
+    if !readable_chunks_nonempty(this.get_nanbox_f64()) {
+        if get_hidden_value(
+            this.get_nanbox_f64(),
+            hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+        )
+        .is_some()
+        {
+            let result = readable_from_chunks(crate::array::js_array_alloc(0));
+            let result = scope.root_nanbox_f64(result);
+            propagate_stream_state(
+                this.get_nanbox_f64(),
+                f64::from_bits(TAG_UNDEFINED),
+                result.get_nanbox_f64(),
+            );
+            let iterator = take_source_iterator(
+                this.get_nanbox_f64(),
+                result.get_nanbox_f64(),
+                count_arg(count),
+            );
+            set_hidden_value(
+                result.get_nanbox_f64(),
+                hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+                iterator,
+            );
+            return result.get_nanbox_f64();
+        }
+    }
+    prepare_readable_for_iteration(this.get_nanbox_f64());
+    let arr = readable_chunks_array(this.get_nanbox_f64());
     let mut out = crate::array::js_array_alloc(0);
     if !arr.is_null() {
         let len = crate::array::js_array_length(arr);
@@ -921,7 +1184,7 @@ pub(super) extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64)
         }
     }
     let result = readable_from_chunks(out);
-    propagate_stream_state(this, f64::from_bits(TAG_UNDEFINED), result);
+    propagate_stream_state(this.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED), result);
     result
 }
 
@@ -939,4 +1202,160 @@ pub(super) extern "C" fn ns_iter_drop(closure: *const ClosureHeader, count: f64)
     let result = readable_from_chunks(out);
     propagate_stream_state(this, f64::from_bits(TAG_UNDEFINED), result);
     result
+}
+
+#[cfg(test)]
+mod take_tests {
+    use super::*;
+
+    extern "C" fn source_next(closure: *const ClosureHeader) -> f64 {
+        let source = this_value(closure);
+        let value = get_hidden_value(source, hidden_key(b"count")).unwrap_or(0.0) + 1.0;
+        set_hidden_value(source, hidden_key(b"count"), value);
+        if value > 2.0 && has_truthy_hidden(source, hidden_key(b"failAfterLimit")) {
+            if has_truthy_hidden(source, hidden_key(b"rejectAfterLimit")) {
+                return rejected_promise(9.0);
+            }
+            crate::exception::js_throw(9.0);
+        }
+        let done = get_hidden_value(source, hidden_key(b"doneAfter"))
+            .is_some_and(|done_after| value > done_after);
+        let result = crate::object::js_object_alloc(0, 2);
+        js_object_set_field_by_name(result, hidden_key(b"value"), value);
+        js_object_set_field_by_name(
+            result,
+            hidden_key(b"done"),
+            f64::from_bits(if done { TAG_TRUE } else { TAG_FALSE }),
+        );
+        box_pointer(result as *const u8)
+    }
+
+    extern "C" fn source_return(closure: *const ClosureHeader) -> f64 {
+        let source = this_value(closure);
+        set_hidden_value(source, hidden_key(b"returned"), f64::from_bits(TAG_TRUE));
+        f64::from_bits(TAG_UNDEFINED)
+    }
+
+    fn pull(iterator: f64) -> (bool, f64) {
+        let next = unsafe {
+            crate::object::js_native_call_method(
+                iterator,
+                b"next".as_ptr() as *const i8,
+                4,
+                std::ptr::null(),
+                0,
+            )
+        };
+        pipeline_iterator_result(settle_pipeline_value(next).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn take_closes_retained_source_after_limit() {
+        let methods = [
+            ("next", cast0(source_next)),
+            ("return", cast0(source_return)),
+        ];
+        let source = box_pointer(build_object(&methods, 0x7FFF_FF72) as *const u8);
+        let chunks = crate::array::js_array_alloc(0);
+        let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+        set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+        let take = js_closure_alloc(ns_iter_take as *const u8, 1);
+        js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
+
+        let result = ns_iter_take(take, 2.0);
+        let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
+
+        assert!(!has_truthy_hidden(source, hidden_key(b"returned")));
+        assert!(!stream_destroyed(stream));
+        assert_eq!(pull(iterator), (false, 1.0));
+        assert_eq!(pull(iterator), (false, 2.0));
+        assert!(pull(iterator).0);
+        assert!(has_truthy_hidden(source, hidden_key(b"returned")));
+        assert!(stream_destroyed(stream));
+        assert!(stream_destroyed(result));
+        assert_eq!(get_hidden_value(source, hidden_key(b"count")), Some(3.0));
+    }
+
+    #[test]
+    fn take_does_not_return_source_that_finished_naturally() {
+        let methods = [
+            ("next", cast0(source_next)),
+            ("return", cast0(source_return)),
+        ];
+        let source = box_pointer(build_object(&methods, 0x7FFF_FF73) as *const u8);
+        set_hidden_value(source, hidden_key(b"doneAfter"), 1.0);
+        let chunks = crate::array::js_array_alloc(0);
+        let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+        set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+        let take = js_closure_alloc(ns_iter_take as *const u8, 1);
+        js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
+
+        let result = ns_iter_take(take, 2.0);
+        let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
+
+        assert!(!stream_destroyed(stream));
+        assert_eq!(pull(iterator), (false, 1.0));
+        assert!(pull(iterator).0);
+        assert!(!has_truthy_hidden(source, hidden_key(b"returned")));
+        assert!(stream_destroyed(stream));
+        assert!(stream_destroyed(result));
+    }
+
+    #[test]
+    fn take_propagates_retained_source_state() {
+        let source = box_pointer(build_object(
+            &[
+                ("next", cast0(source_next)),
+                ("return", cast0(source_return)),
+            ],
+            0x7FFF_FF75,
+        ) as *const u8);
+        let stream =
+            js_node_stream_readable_from(box_pointer(crate::array::js_array_alloc(0) as *const u8));
+        set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+        set_hidden_value(stream, hidden_error_key(), 7.0);
+        set_hidden_value(stream, hidden_signal_key(), 8.0);
+        let take = js_closure_alloc(ns_iter_take as *const u8, 1);
+        js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
+
+        let result = ns_iter_take(take, 2.0);
+
+        assert_eq!(readable_hidden_error(result), Some(7.0));
+        assert_eq!(get_hidden_value(result, hidden_signal_key()), Some(8.0));
+    }
+
+    #[test]
+    fn take_suppresses_sync_and_async_lookahead_errors() {
+        for reject in [false, true] {
+            let methods = [
+                ("next", cast0(source_next)),
+                ("return", cast0(source_return)),
+            ];
+            let source = box_pointer(build_object(&methods, 0x7FFF_FF74) as *const u8);
+            set_hidden_value(
+                source,
+                hidden_key(b"failAfterLimit"),
+                f64::from_bits(TAG_TRUE),
+            );
+            if reject {
+                set_hidden_value(
+                    source,
+                    hidden_key(b"rejectAfterLimit"),
+                    f64::from_bits(TAG_TRUE),
+                );
+            }
+            let chunks = crate::array::js_array_alloc(0);
+            let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+            set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+            let result = readable_from_chunks(crate::array::js_array_alloc(0));
+            let iterator = take_source_iterator(stream, result, 2);
+
+            assert_eq!(pull(iterator), (false, 1.0));
+            assert_eq!(pull(iterator), (false, 2.0));
+            assert!(pull(iterator).0);
+            assert!(has_truthy_hidden(source, hidden_key(b"returned")));
+            assert!(stream_destroyed(stream));
+            assert!(stream_destroyed(result));
+        }
+    }
 }

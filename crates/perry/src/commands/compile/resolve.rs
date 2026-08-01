@@ -938,6 +938,11 @@ fn resolve_exports_with_conditions(
 /// perry_fn_…unicorn_magic…__toPath`). Matches the `resolve_subpath_import`
 /// condition order (chalk's `#supports-color` `{ node, default }`); the two
 /// resolvers must agree.
+// First-match convenience wrapper. Current call sites use
+// `resolve_exports_candidates` / `resolve_exports_with_conditions` directly, so
+// this has no non-test caller and would trip `-D dead-code`; kept as the
+// documented single-result entry point (mirrors `resolve_subpath_import`).
+#[allow(dead_code)]
 pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String> {
     resolve_exports_with_conditions(
         exports,

@@ -19,11 +19,43 @@
 //! but the entry defends itself with the same guards the safepoint uses;
 //! when collecting here is unsafe, the lowered trigger still guarantees a
 //! prompt collection at the next allocation-side check.
+//!
+//! ★ #7148 disposition: **defer.** This site used to force the conservative
+//! native-stack scan unconditionally, on the grounds that "a host may deliver
+//! the callback with unspilled locals on the native frames above us". True —
+//! but only when there *are* generated frames above us, and the paragraph
+//! above says the common case is the opposite: the handler fires at a run-loop
+//! boundary with the JS stack unwound. The rationale is now *tested* rather
+//! than assumed:
+//!
+//! * **No active shadow frame** — no generated frame is live on this thread,
+//!   so the precise root set is complete (shadow stack empty; globals, module
+//!   vars and side tables scanned; runtime helpers hold their temporaries in
+//!   `RuntimeHandleScope`). Collect right here with `SkipDisabled` roots:
+//!   precise, and the copying minor stays eligible. This is the case hosts
+//!   actually deliver, and it is also the case where deferring would be
+//!   *worst* — memory pressure arrives when a process is idle, and an idle
+//!   process reaches no loop back-edge and pumps no microtasks, so a deferral
+//!   would shed nothing at all before the jetsam.
+//! * **A generated frame is live above us** — do not scan. Arm the deferral
+//!   and return 1, the code this API already documents as "trigger lowered,
+//!   collection deferred". A live generated frame is precisely the condition
+//!   under which a safepoint *is* reachable: the loop back-edge poll or
+//!   microtask-pump boundary that frame will reach drains it precisely.
+//!
+//! **What if pressure spikes before that safepoint is reached?** The lowered
+//! arena trigger is left in place either way, so the alloc-point arm in
+//! `gc_check_trigger` stays armed and collects at the next allocation check —
+//! identical to the pre-existing `blocked` path, which has always returned 1
+//! and relied on exactly that. The deferral adds a faster precise drain in
+//! front of that fallback; it removes no backstop.
 
 use super::*;
 
 /// Return codes: 0 = ignored (level 0), 1 = trigger lowered but the
-/// collection was deferred (unsafe point), 2 = collected synchronously.
+/// collection was deferred (unsafe point, or a generated frame is live above
+/// us and a precise safepoint is reachable — #7148), 2 = collected
+/// synchronously.
 #[no_mangle]
 pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
     if level == 0 {
@@ -48,10 +80,28 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
     if blocked {
         return 1;
     }
-    // Force the conservative scan for the same reason the alloc-point arm
-    // does: a host may deliver the callback with unspilled locals on the
-    // native frames above us.
-    let _scan = roots::ManualGcScanGuard::force_full_scan();
+
+    // #7148: a generated frame is live above us, so this is not a precise
+    // point — but it is a point from which a precise one is reachable. Arm the
+    // deferral instead of scanning conservatively. `GC_SAFEPOINT_PENDING` is
+    // the flag `js_gc_loop_safepoint` polls; for a *critical* level the owed
+    // collection must be a full cycle, and `GC_OLD_RECLAIM_PENDING` is exactly
+    // the sticky "a full old-gen reclaim is owed" flag `gc_budgeted_due_trigger`
+    // reads, so the safepoint drain runs a full mark-sweep rather than a minor.
+    if roots::shadow_stack_has_active_frame() {
+        if level >= 2 {
+            GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
+        }
+        if !GC_SAFEPOINT_PENDING.with(std::cell::Cell::get) {
+            GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(total));
+            GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+        }
+        return 1;
+    }
+
+    // No generated frame is live on this thread: the precise root set is
+    // complete, so NO `force_full_scan`. `conservative_stack_scan_decision()`
+    // stays `SkipDisabled` and the copying minor remains eligible.
     if level >= 2 {
         let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
             GcTriggerKind::Emergency,
@@ -59,5 +109,6 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
     } else {
         let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
     }
+    record_safepoint_drain(SafepointDrainKind::HostPressure);
     2
 }

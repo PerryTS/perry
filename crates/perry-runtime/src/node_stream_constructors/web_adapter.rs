@@ -149,7 +149,7 @@ fn build_enumerable_object(fields: &[(&[u8], f64)]) -> f64 {
 }
 
 fn build_web_read_result(value: f64, done: bool) -> f64 {
-    build_enumerable_object(&[(b"value", value), (b"done", bool_value(done))])
+    build_enumerable_object(&[(b"done", bool_value(done)), (b"value", value)])
 }
 
 fn property_value(value: f64, name: &[u8]) -> f64 {

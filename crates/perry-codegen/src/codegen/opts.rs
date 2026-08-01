@@ -806,6 +806,13 @@ pub(crate) struct CrossModuleCtx {
     /// instance with a different chain.
     pub pshape_methods:
         std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
+    /// #7142: the subset of [`Self::pshape_methods`] whose clone the class-id
+    /// dispatch tower may route to. The other two routing sites are dominated by
+    /// a shape guard they pay regardless, so the clone is free for them; the
+    /// tower has to emit its own inline shape re-check, so it only routes where
+    /// the clone deletes strictly more work than that check costs
+    /// (`collectors/repsel_benefit.rs`).
+    pub pshape_tower_routable: std::collections::HashSet<(String, String)>,
     /// Inline closure bodies that have a generated internal typed-f64 clone.
     /// Only statically-known local closure calls may select these clones after
     /// closure identity/arity and numeric argument guards pass.

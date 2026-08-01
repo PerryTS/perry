@@ -41,9 +41,8 @@ aggregate stdout/exit data at SHA-256
 `994cab8da5deb3aa67bb505560eae5f6d7ee0754dfdd0aad92f4c95266688d49`. Deno
 produced 28 exact matches, one surface diff, and one deterministic process
 error. Bun produced one exact match, 11 diffs, 17 errors, and one bounded
-timeout. Three focused release-runner passes classified Perry identically at
-**3/30**, with 27 stable output/exit diffs and no compile failure, runtime
-timeout, or crash.
+timeout. The final maintainer release-runner audit classified Perry at
+**31/31**, with no output mismatch, compile failure, runtime timeout, or crash.
 
 Deno mirrors Node's subclass-plus-promisify design but omits `NetworkResources`.
 Its pending-disconnect case reproducibly aborts with a V8 evaluate-callback

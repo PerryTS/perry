@@ -2,7 +2,7 @@
 // clone values that JSON cannot preserve.
 import cluster from "node:cluster";
 
-cluster.setupPrimary({ serialization: "advanced" });
+if (cluster.isPrimary) cluster.setupPrimary({ serialization: "advanced" });
 if (cluster.isWorker) {
   process.once("message", (message: any) => {
     process.send!({

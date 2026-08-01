@@ -5,6 +5,10 @@ target/
 __pycache__/
 *.py[cod]
 
+# Pinned Node oracle for the builtin-module compat matrix
+# (scripts/node_compat_matrix.mjs downloads + SRI-verifies + caches here).
+.cache/node-pin/
+
 # Android Gradle: caches and build outputs are regenerable. Source under
 # android-build/ that we DO track: build.gradle.kts files, gradle wrapper,
 # AndroidManifest.xml, Kotlin sources under app/src/main/java, and resources

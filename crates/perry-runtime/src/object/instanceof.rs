@@ -301,12 +301,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
-        if module == "events"
-            && method == "EventEmitter"
-            && (is_event_emitter_instance_value(value)
-                || super::tls_constructor_prototype_is_instance_of(value, method.as_str()))
-        {
-            return f64::from_bits(crate::value::TAG_TRUE);
+        if module == "events" && method == "EventEmitter" {
+            return f64::from_bits(
+                if is_event_emitter_instance_value(value)
+                    || super::tls_constructor_prototype_is_instance_of(value, method.as_str())
+                    || ordinary_has_instance_prototype_walk(value, type_ref)
+                {
+                    crate::value::TAG_TRUE
+                } else {
+                    TAG_FALSE
+                },
+            );
         }
         if module == "events"
             && method == "EventEmitterAsyncResource"
@@ -823,6 +828,11 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
 }
 
 fn is_event_emitter_instance_value(value: f64) -> bool {
+    if is_native_module_namespace_value(value, "cluster.default")
+        || crate::cluster::is_worker_instance_value(value)
+    {
+        return true;
+    }
     if let Some(handle) = small_native_handle_id(value) {
         if let Some(probe) = crate::object::event_emitter_handle_probe() {
             return unsafe { probe(handle) };
@@ -835,7 +845,8 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
     {
         return true;
     }
-    false
+    let constructor = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    ordinary_has_instance_prototype_walk(value, constructor)
 }
 
 fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {

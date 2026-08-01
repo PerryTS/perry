@@ -578,3 +578,111 @@ fn unmodelled_forms_are_neutral() {
     let out = run(&stmts, &HashSet::new());
     assert!(!out.contains(&1), "typeof-read counter refused: {out:?}");
 }
+
+// ---------------------------------------------------------------------------
+// #7142: the dispatch-tower routing threshold.
+// ---------------------------------------------------------------------------
+
+fn this_get(field: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::This),
+        property: field.to_string(),
+        byte_offset: 0,
+    }
+}
+
+fn method(body: Vec<Stmt>) -> perry_hir::Function {
+    perry_hir::Function {
+        id: 1,
+        name: "m".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: HirType::Number,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }
+}
+
+fn declared(names: &[&str]) -> HashSet<String> {
+    names.iter().map(|s| (*s).to_string()).collect()
+}
+
+/// One declared-field site is the break-even, not a win: the route swaps the
+/// body's single inline shape check for one at the call site and adds a branch
+/// plus a second call site on top. Two is the first count that deletes work.
+#[test]
+fn tower_route_break_even_is_one_field_site() {
+    let fields = declared(&["a", "c"]);
+
+    let one = method(vec![Stmt::Return(Some(this_get("a")))]);
+    assert_eq!(proven_receiver_clone_field_sites(&one, &fields), 1);
+    assert!(!tower_route_profitable(&one, &fields));
+
+    let two = method(vec![Stmt::Return(Some(bin(
+        BinaryOp::Add,
+        this_get("a"),
+        this_get("c"),
+    )))]);
+    assert_eq!(proven_receiver_clone_field_sites(&two, &fields), 2);
+    assert!(tower_route_profitable(&two, &fields));
+}
+
+/// Only DECLARED chain fields get a fixed slot; anything else keeps its by-name
+/// lowering inside the clone too, so it is not work the route deletes and must
+/// not be counted toward the threshold.
+#[test]
+fn tower_route_counts_only_declared_fields() {
+    let fields = declared(&["a"]);
+    let m = method(vec![
+        Stmt::Expr(this_get("a")),
+        Stmt::Expr(this_get("expando")),
+        Stmt::Expr(this_get("alsoNotDeclared")),
+    ]);
+    assert_eq!(proven_receiver_clone_field_sites(&m, &fields), 1);
+    assert!(!tower_route_profitable(&m, &fields));
+}
+
+/// A field access on something that is not `this` is somebody else's receiver
+/// and is not affected by the clone at all.
+#[test]
+fn tower_route_ignores_non_this_receivers() {
+    let fields = declared(&["a"]);
+    let m = method(vec![
+        Stmt::Expr(this_get("a")),
+        Stmt::Expr(Expr::PropertyGet {
+            object: Box::new(get(9)),
+            property: "a".to_string(),
+            byte_offset: 0,
+        }),
+    ]);
+    assert_eq!(proven_receiver_clone_field_sites(&m, &fields), 1);
+}
+
+/// Writes count as well as reads — a `this.f = …` site pays the same inline
+/// check (plus the frozen/plain-value conjuncts) in the public body.
+#[test]
+fn tower_route_counts_writes() {
+    let fields = declared(&["a", "b"]);
+    let m = method(vec![
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "a".to_string(),
+            value: Box::new(Expr::Number(1.0)),
+        }),
+        Stmt::Expr(Expr::PropertyUpdate {
+            object: Box::new(Expr::This),
+            property: "b".to_string(),
+            op: BinaryOp::Add,
+            prefix: false,
+        }),
+    ]);
+    assert_eq!(proven_receiver_clone_field_sites(&m, &fields), 2);
+    assert!(tower_route_profitable(&m, &fields));
+}

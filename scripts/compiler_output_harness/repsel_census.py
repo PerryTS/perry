@@ -192,6 +192,13 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
     # Its value is the SITE coverage it provides (checked separately); the
     # count floor here just keeps it honest as a promotion too.
     "fixture_ptr_shape_sites": {"ptr-shape": 1, "ptr-shape-consumed": 1},
+    # #7034 §3 (array-element escape). The other two `ptr_shape` fixtures never
+    # touch an array, and the 18 real workloads promote zero element locals, so
+    # without this entry `collectors/ptr_shape_elements.rs` could stop issuing
+    # facts entirely and every counter in the census would be unchanged --
+    # CLAUDE.md failure mode 4, exactly. Three promotions: the pushed producer,
+    # the `rows[i]` binding, and the `for…of` binding.
+    "fixture_ptr_shape_elements": {"ptr-shape": 3, "ptr-shape-consumed": 3},
     "fixture_ptr_numarray": {"ptr-numarray": 1},
     "fixture_canonical_slots": {
         "canonical-i32": 1,

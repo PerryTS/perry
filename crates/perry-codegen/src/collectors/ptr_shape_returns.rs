@@ -204,6 +204,17 @@ fn producer_return_class(
         // inside this function body.
         let boxed = crate::boxed_vars::collect_boxed_vars(&f.body);
         let _quiet = report::SuppressScope::new();
+        // #7034 §3: the producer's own element-shape facts, so this body
+        // proof reaches the same verdict the real pass will. Passing an empty
+        // set instead would make the two disagree, and the aliasing check
+        // below needs the facts anyway.
+        let elements = super::ptr_shape_elements::collect_element_shape_facts(
+            &f.body,
+            &boxed,
+            &HashMap::new(),
+            classes,
+            facts,
+        );
         let promoted = super::ptr_shape::collect_shape_proven_ptr_locals(
             &f.body,
             &boxed,
@@ -211,11 +222,24 @@ fn producer_return_class(
             classes,
             facts,
             &HashSet::new(),
+            &elements,
         );
         for id in &needs_body_proof {
             match promoted.get(id) {
                 Some(fact) if fact.class_name == class_name => {}
                 _ => return None,
+            }
+            // #7034 §3: a promoted local is normally unaliased, which is
+            // exactly the freshness this fact needs. An ELEMENT-GROUP member
+            // is the one promoted local that is aliased on purpose — the
+            // array holds it too. That array is region-local and cannot
+            // outlive the frame here (returning it instead would make the
+            // returns disagree, and every other escape disqualifies it), but
+            // the caller-side proof should not rest on a two-step argument
+            // when refusing costs nothing: no return-shape fact for a value
+            // that is also in an array.
+            if elements.is_group_member(*id) {
+                return None;
             }
         }
     }

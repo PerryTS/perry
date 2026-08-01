@@ -60,6 +60,25 @@ pub(crate) unsafe fn nm_ctor_tty(
     None
 }
 
+pub(crate) unsafe fn nm_ctor_child_process(
+    _module: &str,
+    method: &str,
+    _args_ptr: *const f64,
+    _args_len: usize,
+) -> Option<f64> {
+    (method == "ChildProcess").then(crate::child_process::cp_build_unstarted_child_process)
+}
+
+pub(crate) unsafe fn nm_ctor_cluster(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    (method == "Worker")
+        .then(|| crate::cluster::js_cluster_worker_new(nm_ctor_arg(args_ptr, args_len, 0)))
+}
+
 pub(crate) unsafe fn nm_ctor_fs(
     _module: &str,
     method: &str,

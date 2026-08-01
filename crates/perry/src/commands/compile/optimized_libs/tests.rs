@@ -319,6 +319,38 @@ fn undici_needs_shared_tokio() {
     assert!(binding_needs_shared_tokio("undici"));
 }
 
+/// The emitted-FFI → link derivation resolves to real well-known bindings.
+/// The codegen prefix net routes `js_ioredis_*` / `js_undici_*` /
+/// `js_node_forge_*` to these binding keys; each must exist in the shipped
+/// `well_known_bindings.toml` and map to its `perry-ext-*` crate, or the
+/// driver's routing loop would silently drop the flip.
+#[test]
+fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
+    for (key, krate) in [
+        ("ioredis", "perry-ext-ioredis"),
+        ("undici", "perry-ext-undici"),
+        ("node-forge", "perry-ext-node-forge"),
+    ] {
+        let binding = super::super::well_known::lookup_well_known(key)
+            .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
+        assert_eq!(binding.krate, krate, "binding `{key}` routes to `{krate}`");
+    }
+}
+
+/// The auto-build selection split: ioredis/undici carry their own tokio and
+/// must ride the shared auto-optimize invocation, while node-forge is CPU-only
+/// (routes async through perry-stdlib's spawn_blocking shim) and is auto-built
+/// by the isolated leaf-build path in the driver's CPU-only branch.
+#[test]
+fn ext_binding_build_routing_split() {
+    assert!(binding_needs_shared_tokio("ioredis"));
+    assert!(binding_needs_shared_tokio("undici"));
+    assert!(
+        !binding_needs_shared_tokio("node-forge"),
+        "node-forge is CPU-only and must not ride the shared-tokio invocation"
+    );
+}
+
 #[test]
 fn unknown_modules_default_to_workspace_path() {
     // Defensive default: if a module isn't in the allowlist,
@@ -680,6 +712,84 @@ printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_ext_http.a"
     assert_eq!(
         got.expect("missing archive should be built from workspace source"),
         target_dir.join("release/libperry_ext_http.a")
+    );
+}
+
+/// Issue #76 follow-up: a bare `perry compile` of a `WebAssembly.*` program
+/// must auto-build `perry-wasm-host` instead of hard-failing with
+/// `libperry_wasm_host.a not found`. The build is a plain leaf
+/// `cargo build --release -p perry-wasm-host` into `target/release`; drive it
+/// with a fake cargo (so no real toolchain runs) and assert the resolved path.
+#[cfg(unix)]
+#[test]
+fn wasm_host_auto_build_produces_staticlib_from_workspace_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = env_lock();
+    let old_path = std::env::var_os("PATH");
+    let old_cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR");
+    let old_workspace_root = std::env::var_os("PERRY_WORKSPACE_ROOT");
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    // A crate dir + workspace marker so `find_perry_workspace_root` (via
+    // PERRY_WORKSPACE_ROOT) and the `crate_dir.is_dir()` guard both pass.
+    for dir in [
+        "crates/perry-wasm-host",
+        "crates/perry-runtime",
+        "crates/perry-ui-geisterhand",
+    ] {
+        std::fs::create_dir_all(workspace.path().join(dir)).expect("mkdir workspace marker");
+    }
+
+    let fake_bin = workspace.path().join("fake-bin");
+    std::fs::create_dir_all(&fake_bin).expect("mkdir fake bin");
+    let fake_cargo = fake_bin.join("cargo");
+    std::fs::write(
+        &fake_cargo,
+        r#"#!/bin/sh
+case "$*" in
+  *"-p perry-wasm-host"*) ;;
+  *) exit 43 ;;
+esac
+mkdir -p "$CARGO_TARGET_DIR/release"
+printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_wasm_host.a"
+"#,
+    )
+    .expect("write fake cargo");
+    let mut perms = std::fs::metadata(&fake_cargo)
+        .expect("fake cargo metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_cargo, perms).expect("chmod fake cargo");
+
+    let target_dir = workspace.path().join("out-target");
+    let test_path = match old_path.as_ref() {
+        Some(path) => {
+            let mut paths = vec![fake_bin.clone()];
+            paths.extend(std::env::split_paths(path));
+            std::env::join_paths(paths).expect("join PATH")
+        }
+        None => fake_bin.clone().into_os_string(),
+    };
+    std::env::set_var("PATH", test_path);
+    std::env::set_var("CARGO_TARGET_DIR", &target_dir);
+    std::env::set_var("PERRY_WORKSPACE_ROOT", workspace.path());
+
+    let got = super::super::library_search::build_wasm_host_library(None, OutputFormat::Json, 0);
+
+    set_env_var("PATH", old_path.as_deref().and_then(|v| v.to_str()));
+    set_env_var(
+        "CARGO_TARGET_DIR",
+        old_cargo_target_dir.as_deref().and_then(|v| v.to_str()),
+    );
+    set_env_var(
+        "PERRY_WORKSPACE_ROOT",
+        old_workspace_root.as_deref().and_then(|v| v.to_str()),
+    );
+
+    assert_eq!(
+        got.expect("missing wasm host lib should be built from workspace source"),
+        target_dir.join("release/libperry_wasm_host.a")
     );
 }
 

@@ -38,9 +38,11 @@ Plus two controls, because a diff-based gate that cannot tell "different" from
 "noisy" proves nothing:
 
 * **determinism** — the same compiler, same flags, twice, must produce the same
-  bytes. On aarch64 Linux it does not (the LLVM module name embeds pid +
-  nanotime), so this check refuses to run the emission half there rather than
-  reporting 26 phantom diffs;
+  bytes. This used to be false on aarch64 Linux (the temp `.ll` name carried pid
+  + nanotime and clang records a unit's source basename into the ELF object), so
+  the gate detected the host and skipped the emission half there. #7131/#7135
+  content-addressed that name; the skip is gone and a disagreement is now a
+  hard failure on every host — see [`repsel_determinism`];
 * **inert-variable** — `K=1` and an unrelated `PERRY_TOTALLY_UNRELATED=0` must
   both reproduce the default object bit-for-bit. If they do not, the diff
   signal is not attributable to the knob at all.
@@ -83,6 +85,7 @@ from .repsel_census import (
     compile_and_census,
     load_baseline,
 )
+from .repsel_determinism import digest_objects, nondeterminism_report
 
 
 #: `SpecParamRep::label()` spelling for a canonical-i32 parameter slot.
@@ -216,13 +219,6 @@ def _spec_abi_i32_slots(report: dict[str, Any]) -> int:
     return total
 
 
-def _digest(paths: list[str]) -> str:
-    h = hashlib.sha256()
-    for path in sorted(paths):
-        h.update(Path(path).read_bytes())
-    return h.hexdigest()
-
-
 def _compile_arm(
     perry: list[str],
     source: Path,
@@ -246,7 +242,7 @@ def _compile_arm(
             "spec-abi-i32-slot": _spec_abi_i32_slots(report),
             "consumed-receiver": int(census.get("consumed_receiver", 0)),
         },
-        digest=_digest(census["objects"]),
+        digest=digest_objects(census["objects"]),
         objects=list(census["objects"]),
     )
 
@@ -315,7 +311,7 @@ def check_isolation(args: argparse.Namespace) -> int:
         with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
             results: dict[tuple[str, str], Arm] = dict(pool.map(run, jobs))
 
-        return _verdict(workloads, knobs, results, args)
+        return _verdict(workloads, knobs, results)
     finally:
         if not args.keep_objects:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -327,53 +323,48 @@ def _verdict(
     workloads: list[dict[str, Any]],
     knobs: tuple[Knob, ...],
     results: dict[tuple[str, str], Arm],
-    args: argparse.Namespace,
 ) -> int:
     names = [w["name"] for w in workloads]
 
     # ── control 1: determinism ────────────────────────────────────────────
+    # Every object comparison below is void unless the compiler is a function
+    # of its inputs. Until #7131/#7135 it was not on ELF, and this control
+    # SKIPPED the emission half there — which meant the half of the gate that
+    # caught the `PERRY_CANONICAL_STR_LOCALS` defect could not run on Linux at
+    # all. The skip is gone: a disagreement here is a regression to fix, not a
+    # host to route around (CLAUDE.md — a mode that still exists is a decision
+    # that hasn't been made).
     nondeterministic = [
         n for n in names if results[(n, "default")].digest != results[(n, "default#2")].digest
     ]
-    emission_checkable = not nondeterministic
     if nondeterministic:
+        print(nondeterminism_report(nondeterministic, len(names)))
+        print()
         print(
-            "OBJECT EMISSION IS NONDETERMINISTIC on this host: "
-            f"{len(nondeterministic)}/{len(names)} workload(s) compiled twice with "
-            "identical flags produced different bytes "
-            f"({', '.join(nondeterministic[:4])}{'…' if len(nondeterministic) > 4 else ''}).\n"
-            "  Known cause on aarch64 Linux: the LLVM module name embeds pid +\n"
-            "  nanotime and lands in the object. The emission half of this gate is\n"
-            "  SKIPPED — it would report a diff for every arm. Run it on a host\n"
-            "  where the compiler is deterministic (macOS today).\n"
+            "Knob isolation FAILED at its determinism control: nothing below it can "
+            "be trusted, so no knob was judged."
         )
-        if args.require_emission:
-            print(
-                "--require-emission was passed, so a host that cannot compare objects "
-                "is a failure rather than a partial run."
-            )
-            return 1
+        return 1
 
     failures: list[str] = []
     notes: list[str] = []
 
     # ── control 2: an inert variable must not move the object ─────────────
-    if emission_checkable:
+    for n in names:
+        if results[(n, f"inert:{INERT_VAR}=0")].digest != results[(n, "default")].digest:
+            failures.append(
+                f"CONTROL: {n} compiled differently with {INERT_VAR}=0 set, an env var "
+                "the compiler does not read. The object diff below is not attributable "
+                "to any knob."
+            )
+    for knob in knobs:
         for n in names:
-            if results[(n, f"inert:{INERT_VAR}=0")].digest != results[(n, "default")].digest:
+            if results[(n, f"{knob.env}=1")].digest != results[(n, "default")].digest:
                 failures.append(
-                    f"CONTROL: {n} compiled differently with {INERT_VAR}=0 set, an env var "
-                    "the compiler does not read. The object diff below is not attributable "
-                    "to any knob."
+                    f"CONTROL: {n} compiled differently with {knob.env}=1, which is the "
+                    "default. The knob is keyed into codegen beyond its documented "
+                    "off-state."
                 )
-        for knob in knobs:
-            for n in names:
-                if results[(n, f"{knob.env}=1")].digest != results[(n, "default")].digest:
-                    failures.append(
-                        f"CONTROL: {n} compiled differently with {knob.env}=1, which is the "
-                        "default. The knob is keyed into codegen beyond its documented "
-                        "off-state."
-                    )
 
     # ── rule 1 / rule 2, per knob ─────────────────────────────────────────
     rows: list[str] = []
@@ -420,8 +411,6 @@ def _verdict(
                     )
 
             moved_counts += int(lost)
-            if not emission_checkable:
-                continue
             differs = off.digest != base.digest
             moved_objects += int(differs)
             promotes = (
@@ -451,7 +440,7 @@ def _verdict(
                 "anywhere in the corpus. Either the representation stopped firing or the "
                 "knob no longer reaches it; both make every A/B through it vacuous."
             )
-        if emission_checkable and moved_objects == 0:
+        if moved_objects == 0:
             failures.append(
                 f"DEAD KNOB: {knob.env}=0 left every object in the corpus byte-identical. "
                 "An arm that emits the same bytes as the default cannot be evidence about "
@@ -489,12 +478,6 @@ def _verdict(
         )
         return 1
 
-    if not emission_checkable:
-        print(
-            "Count isolation OK on every knob. EMISSION isolation was not checked "
-            "(nondeterministic host)."
-        )
-        return 0
     print("Knob isolation OK: every knob moves its own representation and nothing else.")
     return 0
 
@@ -512,7 +495,6 @@ def self_test(_args: argparse.Namespace) -> int:
     two branches that catch them are exercised on every run rather than only on
     a host with a compiler.
     """
-    ns = argparse.Namespace(require_emission=False)
     workloads = [{"name": "w", "source": "x.ts"}, {"name": "v", "source": "y.ts"}]
 
     def arm(counts: dict[str, int], digest: str, **signals: int) -> Arm:
@@ -549,7 +531,7 @@ def self_test(_args: argparse.Namespace) -> int:
         },
         i32,
     )
-    verdict = _capture(_verdict, workloads, (i32,), leak, ns)
+    verdict = _capture(_verdict, workloads, (i32,), leak)
     assert verdict.code == 1, verdict.out
     assert "COUNT LEAK" in verdict.out and "ptr-shape-consumed" in verdict.out, verdict.out
 
@@ -560,7 +542,7 @@ def self_test(_args: argparse.Namespace) -> int:
         {"w": arm({"canonical-str": 0}, "cc"), "v": arm({}, "zz")},
         strk,
     )
-    verdict = _capture(_verdict, workloads, (strk,), emission, ns)
+    verdict = _capture(_verdict, workloads, (strk,), emission)
     assert verdict.code == 1, verdict.out
     assert "EMISSION LEAK" in verdict.out, verdict.out
 
@@ -571,7 +553,7 @@ def self_test(_args: argparse.Namespace) -> int:
         {"w": arm({"canonical-str": 0}, "cc"), "v": arm({}, "bb")},
         strk,
     )
-    verdict = _capture(_verdict, workloads, (strk,), clean, ns)
+    verdict = _capture(_verdict, workloads, (strk,), clean)
     assert verdict.code == 0, verdict.out
 
     # A knob that moves nothing is dead, not clean.
@@ -580,7 +562,7 @@ def self_test(_args: argparse.Namespace) -> int:
         {"w": arm({"canonical-str": 1}, "aa"), "v": arm({}, "bb")},
         strk,
     )
-    verdict = _capture(_verdict, workloads, (strk,), dead, ns)
+    verdict = _capture(_verdict, workloads, (strk,), dead)
     assert verdict.code == 1 and "DEAD KNOB" in verdict.out, verdict.out
 
     # An inert variable that moves the object means the diff is not the knob's.
@@ -590,22 +572,27 @@ def self_test(_args: argparse.Namespace) -> int:
         strk,
     )
     contaminated[("v", f"inert:{INERT_VAR}=0")] = arm({}, "qq")
-    verdict = _capture(_verdict, workloads, (strk,), contaminated, ns)
+    verdict = _capture(_verdict, workloads, (strk,), contaminated)
     assert verdict.code == 1 and "CONTROL" in verdict.out, verdict.out
 
-    # A nondeterministic host must skip the emission half, not fail it — and
-    # must still run the count half.
+    # A nondeterministic compiler fails the gate outright (#7131). It used to
+    # skip the emission half, which is how the half that caught defect B above
+    # became unrunnable on Linux — the host where it mattered most. Note the
+    # arms here are otherwise CLEAN: the determinism control must reject them on
+    # its own, before any knob is judged.
     flaky = table(
         {"w": arm({"canonical-str": 1}, "aa"), "v": arm({}, "bb")},
-        {"w": arm({"canonical-str": 0}, "cc"), "v": arm({}, "zz")},
+        {"w": arm({"canonical-str": 0}, "cc"), "v": arm({}, "bb")},
         strk,
     )
     flaky[("w", "default#2")] = arm({"canonical-str": 1}, "AA")
-    verdict = _capture(_verdict, workloads, (strk,), flaky, ns)
-    assert verdict.code == 0 and "NONDETERMINISTIC" in verdict.out.upper(), verdict.out
-    strict = argparse.Namespace(require_emission=True)
-    verdict = _capture(_verdict, workloads, (strk,), flaky, strict)
+    verdict = _capture(_verdict, workloads, (strk,), flaky)
     assert verdict.code == 1, verdict.out
+    assert "NONDETERMINISTIC" in verdict.out.upper(), verdict.out
+    assert "#7131" in verdict.out, verdict.out
+    # …and it must stop there rather than reporting per-knob verdicts drawn
+    # from bytes it just declared untrustworthy.
+    assert "EMISSION LEAK" not in verdict.out and "DEAD KNOB" not in verdict.out, verdict.out
 
     # `PERRY_STATIC_STRING_LOWERING` owns no census key: it must move no count,
     # and rule 2 must NOT demand a byte-identical object of it.
@@ -616,14 +603,14 @@ def self_test(_args: argparse.Namespace) -> int:
         {"w": arm({"canonical-str": 1}, "cc"), "v": arm({}, "dd")},
         static,
     )
-    verdict = _capture(_verdict, workloads, (static,), ok, ns)
+    verdict = _capture(_verdict, workloads, (static,), ok)
     assert verdict.code == 0, verdict.out
     moved = table(
         {"w": arm({"canonical-str": 1}, "aa"), "v": arm({}, "bb")},
         {"w": arm({"canonical-str": 0}, "cc"), "v": arm({}, "dd")},
         static,
     )
-    verdict = _capture(_verdict, workloads, (static,), moved, ns)
+    verdict = _capture(_verdict, workloads, (static,), moved)
     assert verdict.code == 1 and "COUNT LEAK" in verdict.out, verdict.out
 
     # A documented proof dependency may lower the downstream key and only that.
@@ -634,7 +621,7 @@ def self_test(_args: argparse.Namespace) -> int:
         {"w": arm({"int-valued-ta": 0, "canonical-i32": 2}, "cc"), "v": arm({}, "bb")},
         intk,
     )
-    verdict = _capture(_verdict, workloads, (intk,), down_ok, ns)
+    verdict = _capture(_verdict, workloads, (intk,), down_ok)
     assert verdict.code == 0, verdict.out
     # …but never raise it. A knob that ADDS another representation's promotions
     # is a leak no withdrawn proof can explain.
@@ -643,7 +630,7 @@ def self_test(_args: argparse.Namespace) -> int:
         {"w": arm({"int-valued-ta": 0, "canonical-i32": 4}, "cc"), "v": arm({}, "bb")},
         intk,
     )
-    verdict = _capture(_verdict, workloads, (intk,), down_bad, ns)
+    verdict = _capture(_verdict, workloads, (intk,), down_bad)
     assert verdict.code == 1 and "RAISED" in verdict.out, verdict.out
     # An UNDOCUMENTED cross-representation move is still a leak: the Str knob
     # has no dependency on canonical-i32, so the identical shape must go red.
@@ -652,7 +639,7 @@ def self_test(_args: argparse.Namespace) -> int:
         {"w": arm({"canonical-str": 0, "canonical-i32": 2}, "cc"), "v": arm({}, "bb")},
         strk,
     )
-    verdict = _capture(_verdict, workloads, (strk,), undocumented, ns)
+    verdict = _capture(_verdict, workloads, (strk,), undocumented)
     assert verdict.code == 1 and "COUNT LEAK" in verdict.out, verdict.out
 
     print("repsel knob-isolation self-test OK")

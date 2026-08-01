@@ -74,19 +74,30 @@ of them is recorded at the site where the proof is dropped:
 reproducible without the report at all: compile the workload twice, once with
 `PERRY_PTR_SHAPE_LOCALS=0`, and compare the objects.
 
-`--no-link` does **not** honour `-o`: the object goes to a per-run temp
-directory and the path is printed. So capture the printed path in each arm and
-compare those — comparing the `-o` arguments compares two files that were never
-created.
+`--no-link` writes its objects to `-o` (#7167): verbatim for a single-module
+program, otherwise into `-o`'s directory under module-derived names. **Give each
+arm its own `-o`.** Two arms pointed at one path is not a comparison — the
+second compile overwrites the first and `cmp` then compares a file with itself,
+which is "identical" for every arm forever.
+
+Read the paths back off stdout rather than assuming `-o` named them, because a
+multi-module workload emits several and only one of them can be `-o`. An arm
+that reported no object is a harness error, not a silent pass — the same reason
+`_written_objects` in the census script raises.
 
 ```bash
-obj() {  # echo the object path this compile actually wrote
+objs() {  # echo every object path this compile actually wrote
   "$@" --no-link --no-cache 2>&1 | sed -n 's/^Wrote object file: //p'
 }
-a=$(obj perry compile <src> -o /tmp/ignored)
-b=$(PERRY_PTR_SHAPE_LOCALS=0 obj perry compile <src> -o /tmp/ignored)
+a=$(objs perry compile <src> -o "$PWD/ab/a.o")
+b=$(PERRY_PTR_SHAPE_LOCALS=0 objs perry compile <src> -o "$PWD/ab/b.o")
 cmp "$a" "$b" && echo "IDENTICAL — the promotion emitted nothing"
 ```
+
+Before #7167 the flag ignored `-o` entirely and left the objects in a
+`perry-objs-<pid>-<nanos>/` directory under `TMPDIR` that nothing ever deleted,
+which is why the older version of this recipe passed `-o /tmp/ignored` twice and
+still worked. It does not any more, and the version above is the one to copy.
 
 Byte-identical objects mean the promotions the report counted as wins changed
 nothing. `07_object_create` and `12_binary_trees` are byte-identical today.
@@ -236,11 +247,46 @@ Per knob, with that knob at `0` and every other at its default:
    some object.
 
 Rule 1 catches the first defect, rule 2 the second (it leaves every count
-untouched). Two controls guard the diff: the compiler must be deterministic
-(**it is not on aarch64 Linux** — the LLVM module name embeds pid + nanotime, so
-the emission half is skipped there rather than reporting 26 phantoms), and both
-`X=1` and an env var the compiler does not read must reproduce the default
-object bit-for-bit.
+untouched). Two controls guard the diff: the compiler must be deterministic, and
+both `X=1` and an env var the compiler does not read must reproduce the default
+object bit-for-bit. A determinism failure aborts the run — it is not a host
+property to route around (see below).
+
+## Emission determinism (#7131)
+
+Every object comparison on this page assumes the compiler is a function of its
+inputs. On ELF it was not: the temp `.ll` name carried pid + wall-clock nanos,
+and clang records a translation unit's **source basename** into the object as an
+`STT_FILE` symbol, so two identical compiles differed by exactly those digits —
+26/26 census workloads on a Raspberry Pi 5, 12 bytes apart on `suite_01_startup`:
+
+```
+run1  STT_FILE  perry_llvm_217502_1785528949373123236_0.ll
+run2  STT_FILE  perry_llvm_217533_1785528951945773193_0.ll
+```
+
+Mach-O does not record that name in the `.o` at all, which is why macOS looked
+clean while carrying the same defect — and why this cannot be reviewed on a Mac.
+#7135 content-addressed the `.ll` basename.
+
+Check it before trusting any object-level result on a host you have not measured
+on (the whole corpus twice is ~7 s):
+
+```bash
+python3 scripts/compiler_output_regression.py census-determinism \
+    --perry <path/to/perry> --repeat 2 --jobs 4
+```
+
+Repeats run **concurrently** on purpose. Identical IR now shares one
+content-addressed `.ll`, so racing it is part of the subject — and that is what
+caught #7135's other half, where the `.o` name lost its pid and two `perry`
+processes compiling the same file deleted each other's object.
+
+The knob-isolation gate runs the same control inline and **fails** on a
+disagreement. It used to skip its emission half instead, which meant the half
+that caught the `PERRY_CANONICAL_STR_LOCALS` defect could not run on Linux at
+all — the host where object-hash A/B is most useful, because it is the one with
+an unprivileged instruction-retired counter.
 
 One documented exception, downward only: `PERRY_INT_VALUED_LOCALS=0` lowers
 `canonical-i32` on `fixture_int_valued_ta` (3 → 2), because
@@ -250,6 +296,72 @@ canonical-i32 draws from. A withdrawn proof cannot be selected. A knob that
 
 `--jobs` compiles arms in parallel; the whole corpus × 6 knobs × 4 arms is about
 20 s on an M1.
+
+## Temp-directory hygiene (#7144)
+
+The other consequence of content-addressing that `.ll`: two workers holding
+identical IR now *share* the path, so a per-call unlink can race a sibling that
+computed the path but has not yet handed it to clang. #7135 responded by not
+deleting it — and then nothing did. The leftovers are bounded by **distinct IR
+ever compiled** on the machine, which is fine in CI (runner temp dirs are
+reclaimed) and not fine anywhere a compiler is being worked on, where the IR
+changes on every rebuild: 1627 files / 951.8 MB after one day on one dev box,
+~29 GB on another.
+
+#7144 removed the sharing rather than the deletion. Each `.ll` → `.o` compile
+gets a private directory under the temp root and removes it on success; the
+*basename* inside it is still a pure function of the IR, so the determinism
+property above is untouched — the directory is not recorded in the object, only
+the basename is.
+
+```bash
+python3 scripts/compiler_output_regression.py census-temp-hygiene \
+    --perry <path/to/perry> --repeat 2 --jobs 4
+```
+
+It compiles the corpus with `TMPDIR` pointed at an empty directory of its own
+and asserts the directory is still empty. Two things worth knowing before
+changing it:
+
+* **"No growth run-over-run" would have been green on the broken compiler.**
+  Compiling the same corpus twice produces the same content-addressed names, so
+  a repeat-and-compare check sees a flat count while the machine fills up. The
+  property that goes red is the absolute one: *nothing* left behind.
+* **The `TMPDIR` isolation is load-bearing**, not politeness. Counting entries
+  in the shared system temp dir measures every other process on the box.
+
+It fails on **anything** left behind, with no allowlist. It shipped with one —
+the clang driver's own names (`perry_llvm_*`, `perry_cgu_*`, `perry_bc_*`)
+failed and everything else was merely reported — because the compile driver was
+leaking a `perry-objs-<pid>-<nanos>/` staging directory on the `--no-link` path
+at the time (#7167), and a gate that goes red for another module's defect gets
+muted rather than fixed. #7167 closed that path and the carve-out went with it.
+
+The absence of an allowlist is the point. #7167 was *known*: this gate printed
+it on every run and could not turn one red. A gate that enumerates the leaks it
+is allowed to fail on cannot see the one nobody has written yet.
+
+No exemption for `PERRY_DEBUG_SYMBOLS`, and that is a change of belief rather
+than a change of policy. `-g` was documented as pulling the `.ll`'s **absolute**
+path plus `DW_AT_comp_dir` into DWARF, which would have made the file part of
+the shipped object and forced it to persist. Measured on a real Perry module
+(Apple clang 21, `-target x86_64-unknown-linux-gnu` and
+`aarch64-unknown-linux-gnu`): the `-g` object is **byte-identical** to the one
+without it and has **no `.debug_*` sections at all**. Perry's codegen emits no
+`DICompileUnit`/`DIFile`/`!dbg` metadata, and `clang -g` on a `.ll` lowers debug
+info that is already in the IR rather than synthesising a compile unit for the
+input file. So there is one layout, not two, and
+`debug_symbols_do_not_change_what_the_object_records` in
+`linker_temp_lifecycle_tests.rs` goes red the day that stops being true. (Not
+measured on COFF/Windows.)
+
+That test has a sibling worth knowing about:
+`the_ll_directory_is_not_recorded_in_the_object_but_the_basename_is` compiles
+one `.ll` under the same basename from two different directories, for both
+Linux ELF targets, and asserts the objects are identical — with a control that
+a *different* basename does change them. That is the property this whole
+directory rests on, and until #7144 it lived only in a comment and a hand
+measurement taken once on a Raspberry Pi.
 
 ## Editing the fixtures
 

@@ -1,0 +1,10 @@
+{
+  "_schema": {
+    "description": "Curated skip / known-partial list for scripts/node_compat_matrix.mjs. A builtin listed here is NOT probed for export shape and is recorded with status \"skip\" (plus this reason) rather than silently passing. Reserve this for modules that cannot be meaningfully fingerprinted by a bare `import * as m` — side-effectful on import, export shape depends on constructor args, or the import legitimately aborts the process. Behavioral coverage for these lives in the hand-authored node-suite (run_parity_tests.sh).",
+    "fields": {
+      "reason": "Why a bare-import shape fingerprint is not meaningful for this module.",
+      "added": "ISO date (YYYY-MM-DD) the skip was added."
+    }
+  },
+  "modules": {}
+}

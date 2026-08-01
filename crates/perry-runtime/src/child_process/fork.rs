@@ -20,22 +20,30 @@ use super::*;
 use std::process::Command;
 use std::time::Duration;
 
-/// `child_process.fork(modulePath[, args][, options])`. `module_ptr`/`args_ptr`
-/// are raw (unboxed) `StringHeader` / `ArrayHeader` pointers; `opts_ptr` is a
-/// raw heap pointer (or 0). Returns a NaN-boxed ChildProcess.
+/// `child_process.fork(modulePath[, args][, options])`. `module_val` stays
+/// raw string/array pointers; `opts_ptr` is a raw heap pointer (or 0). The
+/// codegen boundary string-coerces a URL module path before calling this.
 #[no_mangle]
 pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr: i64) -> f64 {
     cp_register_arities();
 
     reactor::cp_register_reactor_arities();
 
-    let module = unsafe { cp_read_string_header(module_ptr) };
-    let arg_strs = unsafe { cp_read_arg_strings(args_ptr) };
-    let opts_val = if opts_ptr > 0x10000 {
-        cp_box_ptr(opts_ptr as *const u8)
+    let module_raw = unsafe { cp_read_string_header(module_ptr) };
+    if module_raw.contains('\0') {
+        crate::fs::validate::throw_type_error_with_code(
+            "The argument must not contain null bytes",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+    let module = if module_raw.starts_with("file:") {
+        crate::url::node_compat::module_base_to_path(cp_box_string(&module_raw))
+            .unwrap_or(module_raw)
     } else {
-        cp_undefined()
+        module_raw
     };
+    let arg_strs = unsafe { cp_read_arg_strings(args_ptr) };
+    let opts_val = cp_options_from_raw_args(args_ptr, opts_ptr);
     let abort_signal = cp_read_abort_signal(opts_val);
 
     // Launch interpreter: options.execPath → $PERRY_FORK_EXECPATH → "node".
@@ -67,12 +75,26 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let stdout_obj = cp_build_readable();
     let stderr_obj = cp_build_readable();
     let stdin_obj = cp_build_writable();
-    let mut stdio_kinds = cp_read_stdio(opts_val, 3);
+    let stdio_field = cp_get_field(opts_val, b"stdio");
+    let ipc_fd = cp_array_ptr(stdio_field)
+        .and_then(|stdio| {
+            (0..crate::array::js_array_length(stdio)).find(|&fd| {
+                cp_value_to_string(crate::array::js_array_get_f64(stdio, fd)).as_deref()
+                    == Some("ipc")
+            })
+        })
+        .unwrap_or(3) as usize;
+    let stdio_count = cp_array_ptr(stdio_field)
+        .map(|stdio| crate::array::js_array_length(stdio) as usize)
+        .unwrap_or(4)
+        .max(4);
+    let mut stdio_kinds = cp_read_stdio(opts_val, stdio_count);
+    // The IPC socket is installed by fork_launch after live stdio setup.
+    stdio_kinds[ipc_fd] = CpStdio::Ignore;
     // Node fork semantics: `silent: false` (cluster.fork's default) inherits
     // stdin/stdout/stderr from the parent; `silent: true` pipes them. Only an
     // explicit `silent: false` overrides — an absent `silent` keeps Perry's
     // historical pipe default, and an explicit `stdio` option wins (#4914).
-    let stdio_field = cp_get_field(opts_val, b"stdio");
     if crate::value::JSValue::from_bits(stdio_field.to_bits()).is_undefined()
         && cp_get_field(opts_val, b"silent").to_bits() == crate::value::TAG_FALSE
     {
@@ -119,11 +141,29 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     cp_set_field(cp, b"stdout", cp_stdio_js_value(stdio_kinds[1], stdout_obj));
     cp_set_field(cp, b"stderr", cp_stdio_js_value(stdio_kinds[2], stderr_obj));
     cp_set_field(cp, b"stdin", cp_stdio_js_value(stdio_kinds[0], stdin_obj));
-    let mut stdio = crate::array::js_array_alloc(4);
+    let mut stdio = crate::array::js_array_alloc(stdio_count as u32);
     stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[0], stdin_obj));
     stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[1], stdout_obj));
     stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[2], stderr_obj));
-    stdio = crate::array::js_array_push_f64(stdio, TAG_NULL_F64); // fd 3 = ipc
+    let mut extra_streams = Vec::new();
+    for (fd, kind) in stdio_kinds.iter().copied().enumerate().skip(3) {
+        let stream = if fd != ipc_fd && kind == CpStdio::Pipe {
+            cp_build_readable()
+        } else {
+            TAG_NULL_F64
+        };
+        if fd != ipc_fd && kind == CpStdio::Pipe {
+            extra_streams.push((fd, stream));
+        }
+        stdio = crate::array::js_array_push_f64(
+            stdio,
+            if fd == ipc_fd {
+                TAG_NULL_F64
+            } else {
+                cp_stdio_js_value(kind, stream)
+            },
+        );
+    }
     cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
     cp_set_field(cp, b"exitCode", TAG_NULL_F64);
     cp_set_field(cp, b"signalCode", TAG_NULL_F64);
@@ -134,37 +174,65 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     cp_set_field(cp, b"spawnfile", cp_box_string(&exec_path));
 
     // Build the command: <execPath> [execArgv] <module> [args].
+    let native_self = std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+        .is_some_and(|path| path == exec_path && module == exec_path);
     let mut command = Command::new(&exec_path);
-    command.args(&exec_argv);
-    command.arg(&module);
-    command.args(&arg_strs);
+    let native_exec_argv = if native_self {
+        command.args(&arg_strs);
+        Some(serde_json::to_string(&exec_argv).unwrap_or_else(|_| "[]".to_string()))
+    } else {
+        command.args(&exec_argv);
+        command.arg(&module);
+        command.args(&arg_strs);
+        None
+    };
     cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
+    if let Some(exec_argv) = native_exec_argv {
+        command.env("PERRY_PROCESS_EXEC_ARGV", exec_argv);
+    }
     cp_apply_detached(&mut command, opts_val);
-    cp_apply_live_stdio(&mut command, &stdio_kinds);
-
-    let launched = fork_launch(
-        cp,
-        stdout_obj,
-        stderr_obj,
-        stdin_obj,
-        command,
-        advanced,
-        timeout,
-        kill_signal,
-        abort_signal,
-        opts_val,
-    );
-    if !launched {
-        // Spawn failure: emit a deferred `error`, leave `connected` false.
-        let msg = format!("fork failed: {exec_path}");
-        let mp = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_error_new_with_message(mp);
-        cp_set_field(
+    let launch = match cp_apply_live_stdio(&mut command, &stdio_kinds) {
+        Ok(extra_readers) => fork_launch(
             cp,
-            b"__cpError",
-            crate::value::js_nanbox_pointer(err as i64),
+            stdout_obj,
+            stderr_obj,
+            stdin_obj,
+            extra_readers
+                .into_iter()
+                .filter_map(|(fd, pipe)| {
+                    extra_streams
+                        .iter()
+                        .find(|(stream_fd, _)| *stream_fd == fd)
+                        .map(|(_, stream)| (fd, *stream, pipe))
+                })
+                .collect(),
+            command,
+            advanced,
+            timeout,
+            kill_signal,
+            abort_signal,
+            opts_val,
+            ipc_fd,
+        ),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = launch {
+        // Spawn failure: emit a deferred `error`, leave `connected` false.
+        let code = cp_io_error_code(&error);
+        let syscall = format!("spawn {exec_path}");
+        let err = cp_make_error(
+            &format!("{syscall} {code}"),
+            &[
+                ("errno", cp_errno_number(code)),
+                ("code", cp_box_string(code)),
+                ("syscall", cp_box_string(&syscall)),
+                ("path", cp_box_string(&exec_path)),
+            ],
         );
+        cp_set_field(cp, b"__cpError", err);
         let emit_closure =
             crate::closure::js_closure_alloc(reactor::cp_emit_spawn_error as *const u8, 1);
         crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
@@ -182,28 +250,30 @@ fn fork_launch(
     stdout_obj: f64,
     stderr_obj: f64,
     stdin_obj: f64,
+    extra_pipes: Vec<(usize, f64, std::fs::File)>,
     mut command: Command,
     advanced: bool,
     timeout: Option<Duration>,
     kill_signal: i32,
     abort_signal: Option<f64>,
     opts_val: f64,
-) -> bool {
+    ipc_fd: usize,
+) -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
 
     let (parent_sock, child_sock) = match UnixStream::pair() {
         Ok(p) => p,
-        Err(_) => return false,
+        Err(error) => return Err(error),
     };
 
-    // The child inherits `child_sock` across fork; dup it onto fd 3 (which
+    // The child inherits `child_sock` across fork; dup it onto the IPC fd (which
     // `dup2` leaves without CLOEXEC, so it survives exec) and advertise it via
     // NODE_CHANNEL_FD — the convention a Node child reads to enable
     // `process.send` / `process.on('message')`.
     let child_fd = child_sock.as_raw_fd();
-    command.env("NODE_CHANNEL_FD", "3");
+    command.env("NODE_CHANNEL_FD", ipc_fd.to_string());
     // #2130: tell a node child to use V8 structured-clone framing on the channel.
     command.env(
         "NODE_CHANNEL_SERIALIZATION_MODE",
@@ -211,7 +281,7 @@ fn fork_launch(
     );
     unsafe {
         command.pre_exec(move || {
-            if libc::dup2(child_fd, 3) < 0 {
+            if libc::dup2(child_fd, ipc_fd as i32) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -223,13 +293,20 @@ fn fork_launch(
             // The child now holds fd 3; the parent keeps `parent_sock`.
             drop(child_sock);
             cp_set_field(cp, b"connected", TAG_TRUE_F64);
-            let channel = crate::object::js_object_alloc(0, 0);
+            let channel = cp_build_object(
+                &[
+                    ("ref", cp_cast0(cp_method_this0)),
+                    ("unref", cp_cast0(cp_method_this0)),
+                ],
+                CP_SHAPE_ID + 0x40,
+            );
             cp_set_field(cp, b"channel", cp_box_ptr(channel as *const u8));
             let handle = reactor::cp_register_live_child(
                 cp,
                 stdout_obj,
                 stderr_obj,
                 stdin_obj,
+                extra_pipes,
                 child,
                 Some(parent_sock),
                 advanced,
@@ -237,9 +314,9 @@ fn fork_launch(
                 kill_signal,
             );
             reactor::cp_install_abort_signal(handle, abort_signal, opts_val);
-            true
+            Ok(())
         }
-        Err(_) => false,
+        Err(error) => Err(error),
     }
 }
 
@@ -249,13 +326,15 @@ fn fork_launch(
     stdout_obj: f64,
     stderr_obj: f64,
     stdin_obj: f64,
+    extra_pipes: Vec<(usize, f64, std::fs::File)>,
     mut command: Command,
     advanced: bool,
     timeout: Option<Duration>,
     kill_signal: i32,
     abort_signal: Option<f64>,
     opts_val: f64,
-) -> bool {
+    _ipc_fd: usize,
+) -> std::io::Result<()> {
     let _ = advanced;
     match command.spawn() {
         Ok(child) => {
@@ -264,6 +343,7 @@ fn fork_launch(
                 stdout_obj,
                 stderr_obj,
                 stdin_obj,
+                extra_pipes,
                 child,
                 None,
                 false,
@@ -271,8 +351,8 @@ fn fork_launch(
                 kill_signal,
             );
             reactor::cp_install_abort_signal(handle, abort_signal, opts_val);
-            true
+            Ok(())
         }
-        Err(_) => false,
+        Err(error) => Err(error),
     }
 }

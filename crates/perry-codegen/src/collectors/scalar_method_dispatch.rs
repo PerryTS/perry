@@ -38,6 +38,8 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Class, Expr, Module, Stmt};
 
+use super::cjs_scaffolding::CjsScaffolding;
+
 /// Everything in a module that can change what `C.prototype.<m>` resolves to.
 #[derive(Debug, Clone)]
 pub struct ModuleDispatchFacts {
@@ -188,13 +190,18 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         return_shape_functions: HashMap::new(),
     };
 
-    note_stmts(&hir.init, &mut facts);
+    // #7139: resolve the CommonJS wrap's `exports` / `require` scaffolding
+    // bindings first — the barrier classifier below consults them to skip the
+    // two `defineProperty` sites every `cjs_wrap`-compiled module contains.
+    let cjs = super::cjs_scaffolding::collect(hir);
+
+    note_stmts(&hir.init, &mut facts, &cjs);
     for function in &hir.functions {
-        note_stmts(&function.body, &mut facts);
+        note_stmts(&function.body, &mut facts, &cjs);
     }
     for class in &hir.classes {
         if let Some(ctor) = &class.constructor {
-            note_stmts(&ctor.body, &mut facts);
+            note_stmts(&ctor.body, &mut facts, &cjs);
         }
         for method in class
             .methods
@@ -204,18 +211,18 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
             .chain(class.setters.iter().map(|(_, f)| f))
             .chain(class.computed_members.iter().map(|m| &m.function))
         {
-            note_stmts(&method.body, &mut facts);
+            note_stmts(&method.body, &mut facts, &cjs);
         }
         for field in class.fields.iter().chain(class.static_fields.iter()) {
             if let Some(init) = &field.init {
-                note_expr_tree(init, &mut facts);
+                note_expr_tree(init, &mut facts, &cjs);
             }
             if let Some(key) = &field.key_expr {
-                note_expr_tree(key, &mut facts);
+                note_expr_tree(key, &mut facts, &cjs);
             }
         }
         for member in &class.computed_members {
-            note_expr_tree(&member.key_expr, &mut facts);
+            note_expr_tree(&member.key_expr, &mut facts, &cjs);
         }
     }
 
@@ -231,34 +238,33 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     facts
 }
 
-fn note_stmts(stmts: &[Stmt], facts: &mut ModuleDispatchFacts) {
-    for_each_expr_in_stmts(stmts, &mut |expr| {
-        note_prototype_effect(expr, facts);
-        if super::ptr_shape::expr_is_shape_barrier(expr) {
-            facts.shape_barrier_sites = true;
-        }
-        if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(expr) {
-            facts.numarray_prototype_index_barriers = true;
-        }
-        if super::proven_this::expr_is_freeze_barrier(expr) {
-            facts.freeze_barrier_sites = true;
-        }
-    });
+fn note_stmts(stmts: &[Stmt], facts: &mut ModuleDispatchFacts, cjs: &CjsScaffolding) {
+    for_each_expr_in_stmts(stmts, &mut |expr| note_expr(expr, facts, cjs));
 }
 
-fn note_expr_tree(expr: &Expr, facts: &mut ModuleDispatchFacts) {
-    for_each_expr(expr, &mut |node| {
-        note_prototype_effect(node, facts);
-        if super::ptr_shape::expr_is_shape_barrier(node) {
-            facts.shape_barrier_sites = true;
-        }
-        if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(node) {
-            facts.numarray_prototype_index_barriers = true;
-        }
-        if super::proven_this::expr_is_freeze_barrier(node) {
-            facts.freeze_barrier_sites = true;
-        }
-    });
+fn note_expr_tree(expr: &Expr, facts: &mut ModuleDispatchFacts, cjs: &CjsScaffolding) {
+    for_each_expr(expr, &mut |node| note_expr(node, facts, cjs));
+}
+
+/// Classify one already-visited expression node.
+fn note_expr(expr: &Expr, facts: &mut ModuleDispatchFacts, cjs: &CjsScaffolding) {
+    note_prototype_effect(expr, facts);
+    // #7139: the CommonJS wrap's own `defineProperty(require, 'name', …)`
+    // preamble and the transpiled-CJS `defineProperty(exports, "__esModule",
+    // …)` marker target module scaffolding that can never be a `Ptr<Shape>`
+    // local, so they do not arm the rule-5 module-wide kill. Every other
+    // barrier family and every other target still does. See
+    // `collectors/cjs_scaffolding.rs` for the predicate and its soundness
+    // argument.
+    if super::ptr_shape::expr_is_shape_barrier(expr) && !cjs.exempts_shape_barrier(expr) {
+        facts.shape_barrier_sites = true;
+    }
+    if super::ptr_numarray::expr_is_numarray_prototype_index_barrier(expr) {
+        facts.numarray_prototype_index_barriers = true;
+    }
+    if super::proven_this::expr_is_freeze_barrier(expr) {
+        facts.freeze_barrier_sites = true;
+    }
 }
 
 /// Record what a single expression node does to some class's prototype.
@@ -428,7 +434,7 @@ pub fn mark_unstable_scalar_method_receivers(
 // not descend into closure bodies (they are `Vec<Stmt>`), so both are wired up
 // here.
 
-fn for_each_expr(expr: &Expr, f: &mut dyn FnMut(&Expr)) {
+pub(super) fn for_each_expr(expr: &Expr, f: &mut dyn FnMut(&Expr)) {
     f(expr);
     perry_hir::walker::walk_expr_children(expr, &mut |child| for_each_expr(child, f));
     if let Expr::Closure { body, .. } = expr {

@@ -245,17 +245,16 @@ pub extern "C" fn js_node_stream_pipeline(args: *const crate::array::ArrayHeader
 
     let callback = *args.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED));
     if !is_callable_value(callback) {
-        throw_pipeline_callback_required();
+        throw_pipeline_callback_required(callback);
     }
     args.pop();
 
-    let mut options = PipelineOptions {
+    let options = PipelineOptions {
         end_final: true,
         signal: None,
     };
     if args.last().copied().is_some_and(is_pipeline_options_arg) {
-        let option_arg = args.pop().unwrap_or(f64::from_bits(TAG_UNDEFINED));
-        options = pipeline_options_from_arg(option_arg);
+        throw_pipeline_invalid_body(*args.last().unwrap());
     }
 
     if args.len() == 1 && is_array_like_value(args[0]) {

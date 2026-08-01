@@ -174,15 +174,51 @@ pub(crate) fn build_optimized_libs(
             // exists on disk (partial build / release tarball
             // missing the wrapper).
             if !needs_shared_tokio {
-                let Some(lib_path) = super::super::well_known::bundled_staticlib_path_for_target(
+                // CPU-only wrapper: prefer the workspace-built copy on disk.
+                // When it's missing (fresh checkout, or a `compilePackages`
+                // binding that a human never prebuilt — the measured
+                // perry-ext-node-forge gap), auto-build it from workspace
+                // source instead of silently falling back to the perry-stdlib
+                // copy. A bare `perry compile` of a program whose codegen
+                // emitted `js_node_forge_*` must not require a manual
+                // `cargo build -p perry-ext-node-forge` first. `build_missing_
+                // prebuilt_ext_lib` is the same plain-build mechanism the
+                // no-auto path already uses (a leaf `cargo build --release -p
+                // <crate>` into `target/release`) — CPU-only wrappers don't
+                // need the shared-tokio invocation, so this stays isolated
+                // from the specialized runtime/stdlib rebuild.
+                let lib_path = super::super::well_known::bundled_staticlib_path_for_target(
                     workspace_root,
                     binding,
                     rust_target_triple(target),
-                ) else {
+                )
+                .or_else(|| {
+                    let filename = super::super::well_known::ext_staticlib_filename(
+                        &binding.lib,
+                        rust_target_triple(target),
+                    );
+                    if matches!(format, OutputFormat::Text) && verbose > 0 {
+                        eprintln!(
+                            "  well-known: `lib{}.a` not on disk for `{}` — auto-building \
+                             `{}` from workspace source.",
+                            binding.lib, module, binding.krate
+                        );
+                    }
+                    super::no_auto::build_missing_prebuilt_ext_lib(
+                        workspace_root,
+                        binding,
+                        &filename,
+                        target,
+                        format,
+                        verbose,
+                    )
+                });
+                let Some(lib_path) = lib_path else {
                     if matches!(format, OutputFormat::Text) && verbose > 0 {
                         eprintln!(
                             "  well-known: skipping `{}` — bundled `lib{}.a` not found \
-                             in target/release; falling back to perry-stdlib copy.",
+                             in target/release and the auto-build produced nothing; \
+                             falling back to perry-stdlib copy.",
                             module, binding.lib
                         );
                     }

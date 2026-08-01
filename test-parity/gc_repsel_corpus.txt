@@ -48,6 +48,15 @@ test_gap_repsel_ptr_shape_barriers
 # is exactly the claim this phase's GC contract makes.
 test_gap_repsel_return_shape
 
+# --- Phase 3b / #7034 §3: array-element shape facts -------------------------
+# `rows.push(row)` no longer disqualifies `row`, and `const r = rows[i]` under
+# an `i < rows.length` loop is rule-1 provenance. Every element local is an
+# ordinary shadow-bound NaN-boxed slot re-derived per access, so `churn`
+# deliberately allocates 200 objects BETWEEN two field reads of the same
+# element local: the evacuating arms are the ones that can catch a raw pointer
+# cached across that safepoint.
+test_gap_repsel_ptr_shape_elements
+
 # --- Phase 4a / 4a.3: Ptr<NumArray> numeric arrays (#6915, #6916) -----------
 test_gap_repsel_p4a_holes_axis
 test_gap_repsel_p4a_inline_tiers
@@ -65,6 +74,17 @@ test_gap_repsel_p4b_field_store_elision
 # script exits 3 on an unregistered `test_gap_repsel_*` file, so `gc-stress`
 # was failing on main for every PR until this line landed.
 test_gap_repsel_proven_this_frozen
+
+# --- Phase 5a routing: class-id dispatch tower -> proven `this` (#7142) ------
+# The tower case proves `class_id`, which `delete` preserves while compacting
+# the packed slots, so the route carries an INLINE keys-token check. Registered
+# because the routed path has its own GC contract: the receiver is re-derived
+# from the NaN-boxed argument at the call site and the clone shadow-binds its
+# own receiver slot (#6925/#6990 -- `GC_TYPE_OBJECT` is movable, the `TaPtr`
+# no-bind shortcut does not transfer). `churn()` allocates past the matrix's
+# `--pressure 8` heap limit with `rows` live across it, so the evacuating arms
+# have a receiver to move rather than reporting the file inert.
+test_gap_repsel_pshape_tower_delete
 
 # --- Typed-array constructor source rooting (#6981) --------------------------
 # Not a representation file, so the UNREGISTERED gate does not auto-detect it:

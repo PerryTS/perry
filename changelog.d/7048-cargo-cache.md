@@ -1,0 +1,1 @@
+Added an opt-in cached Cargo wrapper for ephemeral worktrees. It keeps compiler objects outside the repository, disables incompatible incremental compilation only for wrapped commands, and leaves ordinary long-lived development builds unchanged.

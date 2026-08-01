@@ -126,7 +126,7 @@ pub use self::subclass::{
 // protocol instead of being appended as a single chunk.
 pub(crate) use self::iterator::{
     async_from_sync_wrap_iterator, async_iterator_to_array_for_flat_map,
-    call_symbol_async_iterator_for_flat_map, entries_array_for_small_handle_id, has_iterator_next,
+    call_symbol_async_iterator, entries_array_for_small_handle_id, has_iterator_next,
     sync_iterator_to_array_if_not_async,
 };
 pub use self::jsvalue_api::{

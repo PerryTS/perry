@@ -150,11 +150,27 @@ trap 'rm -f "$RUNTIME_METADATA"' EXIT
 python3 - "$RUNTIME_METADATA" "$COMPILETS" "$HAS_NODE" "$HAS_BUN" \
   "$("$COMPILETS" --version 2>/dev/null || echo local-build)" \
   "$(node --version 2>/dev/null || true)" "$(bun --version 2>/dev/null || true)" \
-  "${NODE_CMD[*]}" <<'PY'
+  "${NODE_CMD[*]}" "$ROOT" <<'PY'
 import json
+import os
 import sys
 
-path, perry, has_node, has_bun, perry_version, node_version, bun_version, node_command = sys.argv[1:]
+path, perry, has_node, has_bun, perry_version, node_version, bun_version, node_command, root = sys.argv[1:]
+
+
+def portable_path(value):
+    """Strip the operator's home directory: this metadata reaches public artifacts."""
+    resolved = os.path.realpath(value)
+    for base, prefix in (
+        (os.path.realpath(root), ""),
+        (os.path.realpath(os.path.expanduser("~")), "~/"),
+    ):
+        if resolved == base or resolved.startswith(base + os.sep):
+            return prefix + os.path.relpath(resolved, base)
+    return resolved
+
+
+perry = portable_path(perry)
 metadata = {
     "perry": {
         "available": True,
