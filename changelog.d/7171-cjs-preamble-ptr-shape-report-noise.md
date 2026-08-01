@@ -137,3 +137,9 @@ compile phase: a sibling agent was running the identical 21-arm matrix
 concurrently and host free disk had fallen below the campaign floor. For a
 change that emits identical code the IR comparison above is the stronger
 statement, but the matrix columns are unmeasured and are recorded as such.
+
+Both arms of the table are pinned at `df7214b0d`, differing only by this patch.
+A re-measurement on the rebased HEAD keeps the scaffolding result exactly (rule-2
+bare reference 4, zero `__cjs_module` rows) but moves the other buckets, because
+an unrelated `main` change made `rollup/dist/shared/index.js` compile where it
+had failed in both original arms. Different baseline, not a different result.
