@@ -1498,6 +1498,13 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
         // tombstone (an entry whose key the GC collected) so a new key can
         // reuse the freed slot instead of growing the array unboundedly. This
         // scan performs no allocation, so `entries_ptr` stays valid throughout.
+        //
+        // #7154: the one exception is the barriered `js_object_set_field` on the
+        // match arm below — treat it as a collection point. It is the LAST thing
+        // that arm does: the arm returns immediately, deriving its result from
+        // `map_handle`, so neither `entries_ptr` nor `entry` is read after it.
+        // ***If you ever make that arm fall through to another iteration,
+        // re-derive `entries_ptr` from `map_handle` first.***
         let mut first_tomb: i64 = -1;
         for i in 0..len {
             let entry = weak_entry_at(entries_ptr, i);

@@ -53,24 +53,41 @@ unsafe fn enumerated_child_slots(user_ptr: usize) -> Vec<usize> {
 /// pointer into a traced payload slot.
 #[test]
 fn test_bound_this_capture_is_traced_after_method_bind_7154() {
-    let _guard = CopyingNurseryTestGuard::new(1);
+    // Slot 0 closure, slot 1 receiver, slot 2 key. `js_object_set_method_by_name`
+    // allocates (it interns the key, may clone the keys array and may grow the
+    // object), so it is a collection point: nothing may be carried across it in a
+    // raw Rust local. Rust stack locals are not roots and do not pin, so every
+    // address is parked in a shadow slot and re-read afterwards — otherwise a
+    // minor landing inside the call would fail this test for a reason unrelated
+    // to the fix. Same discipline as the WeakMap test below.
+    let _guard = CopyingNurseryTestGuard::new(3);
 
-    let closure = crate::closure::js_closure_alloc(
-        test_bound_method_body as *const u8,
-        crate::closure::CAPTURES_THIS_FLAG | 1,
+    js_shadow_slot_set(
+        0,
+        ptr_bits(crate::closure::js_closure_alloc(
+            test_bound_method_body as *const u8,
+            crate::closure::CAPTURES_THIS_FLAG | 1,
+        ) as usize),
     );
-    let receiver = crate::object::js_object_alloc(0, 1);
-    let key = crate::string::js_string_from_bytes(b"m".as_ptr(), 1);
+    js_shadow_slot_set(1, ptr_bits(crate::object::js_object_alloc(0, 1) as usize));
+    js_shadow_slot_set(
+        2,
+        string_bits(crate::string::js_string_from_bytes(b"m".as_ptr(), 1) as usize),
+    );
 
     unsafe {
+        // Every argument is read from its slot at the call, so the last
+        // allocation before the call cannot leave a sibling argument stale.
         crate::symbol::js_object_set_method_by_name(
-            f64::from_bits(ptr_bits(receiver as usize)),
-            f64::from_bits(string_bits(key as usize)),
-            f64::from_bits(ptr_bits(closure as usize)),
+            f64::from_bits(ptr_bits((js_shadow_slot_get(1) & POINTER_MASK) as usize)),
+            f64::from_bits(string_bits((js_shadow_slot_get(2) & POINTER_MASK) as usize)),
+            f64::from_bits(ptr_bits((js_shadow_slot_get(0) & POINTER_MASK) as usize)),
         );
     }
 
     // The `this` slot now holds the receiver. The collector must say so.
+    // Re-derive the closure — the call above may have moved it.
+    let closure = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
     let capture_slot = unsafe { crate::closure::closure_capture_slots_mut(closure) as usize };
     let enumerated = unsafe { enumerated_child_slots(closure as usize) };
     assert!(
@@ -81,10 +98,12 @@ fn test_bound_this_capture_is_traced_after_method_bind_7154() {
          the whole capture payload is skipped)"
     );
 
-    // End to end: the closure is the ONLY root. The receiver has to survive a
-    // copying minor through the capture edge, and the slot has to be rewritten
-    // to the receiver's new address.
-    js_shadow_slot_set(0, ptr_bits(closure as usize));
+    // End to end: the closure (slot 0) becomes the ONLY root — drop the direct
+    // roots on the receiver and the key so the receiver is reachable exclusively
+    // through the capture edge under test. It has to survive a copying minor
+    // through that edge, and the slot has to be rewritten to its new address.
+    js_shadow_slot_set(1, crate::value::TAG_UNDEFINED);
+    js_shadow_slot_set(2, crate::value::TAG_UNDEFINED);
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert!(
         trace.copying_nursery.copied_objects > 0,
