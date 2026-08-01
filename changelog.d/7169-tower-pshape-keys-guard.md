@@ -59,6 +59,18 @@ totals are deliberately unchanged, because the public body survives as the miss
 arm and as the registered vtable symbol, which is why the A/B is reported at the
 call site rather than as a module count.
 
+Timed on a quiet Raspberry Pi 5 with `perf stat`, two compilers from the same
+tree (arm `before` has the tower route forced off, nothing else), ASLR disabled,
+pinned to one core, interleaved, 12 reps each. The workload is bimodal at ~1%
+independently of the arm (3/12 runs per arm in the low mode; zero GC collections
+in both, so it is not a GC-schedule effect), so the delta is reported per mode:
+**−0.156%** in the low mode and **−0.168%** in the high mode, overall median
+−0.17%. That is ≈6.0M instructions over 40,000 `rescore` calls, ≈150
+instructions per call; the whole-program figure is small because `rescore` is a
+small share of `batch.ts`, which is dominated by allocation, `sort` and
+`reduce`. The fixture is there because its *receiver shape* is the hard case,
+not because its method is the hot spot.
+
 `test-files/test_gap_repsel_pshape_tower_delete.ts` is the soundness test, built
 red-first: construct → `delete` a field through a cross-module alias → call the
 method. Against a class-id-only route it prints `after: 103,NaN,309,412` where
