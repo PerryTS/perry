@@ -1,9 +1,9 @@
 `--opt-report`'s `Ptr<Shape>` section stops charging Perry's own CommonJS
-wrapper to the user's code. Over 195 real `__esModule` dependency modules from `scriptc/node_modules`,
-**31 % of all `Ptr<Shape>` candidates (379 of 1231) were two statements the
-`cjs_wrap` template emits itself** — and they were the evidence behind two
-scheduling decisions that turned out to be about scaffolding rather than about
-dependency code.
+wrapper to the user's code. Over 195 real `__esModule` dependency modules from
+`scriptc/node_modules`, **31 % of all `Ptr<Shape>` candidates (379 of 1231)
+were two statements the `cjs_wrap` template emits itself** — and they were the
+evidence behind two scheduling decisions that turned out to be about
+scaffolding rather than about dependency code.
 
 | denial bucket | base | after |
 |---|---:|---:|
