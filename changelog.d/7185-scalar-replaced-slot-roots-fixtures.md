@@ -1,0 +1,3 @@
+### Fixed
+
+- **tests: `scalar_replaced_slot_roots` was red on `main` for a stale string, not a real regression**. Two helpers located the shadow frame push by grepping `call i64 @js_shadow_frame_push(i32 `, which #7088 replaced with `call ptr @js_shadow_frame_enter(i32 ` (same slot-count operand; the pop handle is now derived from `frame_top`). Both panicked at the lookup before reaching the assertions they exist for, so `scalar_replaced_object_field_holding_a_heap_value_is_bound` and `bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop` failed while the #6968 rooting contract they guard was intact. Fixtures updated to the post-#7088 emission; every real assertion is unchanged and now actually executes (11/11 pass).

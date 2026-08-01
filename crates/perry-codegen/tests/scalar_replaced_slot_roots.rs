@@ -188,8 +188,14 @@ fn enclosing_function<'a>(ir: &'a str, needle: &str) -> &'a str {
 }
 
 /// The slot count baked into this module-init function's frame push.
+///
+/// #7088 replaced the handle-returning `js_shadow_frame_push` with
+/// `js_shadow_frame_enter`, which returns the `ShadowStackState` pointer the
+/// inline slot stores address (the pop handle is derived from `frame_top`).
+/// The slot-count operand is unchanged, so only the callee name and its
+/// return type move.
 fn frame_slot_count(ir: &str) -> u32 {
-    let needle = "call i64 @js_shadow_frame_push(i32 ";
+    let needle = "call ptr @js_shadow_frame_enter(i32 ";
     let start = ir
         .find(needle)
         .map(|i| i + needle.len())
@@ -587,8 +593,9 @@ fn bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop() {
     );
 
     let body = enclosing_function(&ir, "call void @js_shadow_slot_bind(");
+    // #7088: the push is `js_shadow_frame_enter` (returns the state pointer).
     let push = body
-        .find("call i64 @js_shadow_frame_push(")
+        .find("call ptr @js_shadow_frame_enter(")
         .unwrap_or_else(|| panic!("no frame push in the binding function:\n{body}"));
     let bind = body
         .find("call void @js_shadow_slot_bind(")
