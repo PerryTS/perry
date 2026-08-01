@@ -145,10 +145,11 @@ fn host_pressure_collects_precisely_when_no_generated_frame_is_live() {
 
     assert_eq!(result, 2, "collected synchronously");
     assert_eq!(
-        scan_fallback_count(ConservativeScanSite::HostPressure),
+        automatic_scan_fallback_total(),
         0,
         "with no generated frame live the precise root set is complete, so \
-         the host-pressure collection must not force the scan"
+         the host-pressure collection must not force the scan (the site has no \
+         conservative arm left at all — this catches its reintroduction)"
     );
     assert_eq!(
         safepoint_drain_count(SafepointDrainKind::HostPressure),
@@ -182,7 +183,7 @@ fn host_pressure_defers_when_a_generated_frame_is_live() {
         "documented return code for 'trigger lowered, collection deferred'"
     );
     assert_eq!(
-        scan_fallback_count(ConservativeScanSite::HostPressure),
+        automatic_scan_fallback_total(),
         0,
         "a live generated frame means a safepoint is reachable — defer to it \
          instead of scanning conservatively"

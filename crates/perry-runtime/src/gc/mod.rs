@@ -340,7 +340,8 @@ fn gc_collect_emergency_full() -> GcCollectOutcome {
 /// It is instead made *measurable* (`ConservativeScanSite::EmergencyReclaim`
 /// + a `PERRY_GC_DIAG` line), so "emergency reclaim never fires in practice"
 /// stops being an assumption. The long-term plan for this site is the
-/// statepoint work (`docs/statepoint-gc-experiment.md`): with native stack
+/// statepoint work (`docs/statepoint-gc-experiment.md` on branch
+/// `exp/stackmap-viability`, not on `main`): with native stack
 /// maps a precise root set exists at *any* mapped PC, so an OOM-time
 /// collection would not need the scan at all. That is the only mechanism that
 /// removes this site, and it is not a deferral.
@@ -355,8 +356,7 @@ pub(crate) fn gc_try_emergency_reclaim() -> bool {
         return false;
     }
     IN_EMERGENCY.with(|c| c.set(true));
-    let _scan =
-        roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::EmergencyReclaim);
+    let _scan = roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::EmergencyReclaim);
     let _ = gc_collect_emergency_full();
     IN_EMERGENCY.with(|c| c.set(false));
     true

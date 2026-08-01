@@ -64,26 +64,30 @@ pub(crate) enum ConservativeScanSite {
     /// `gc_try_emergency_reclaim` — a heap allocation already failed and the
     /// caller is about to panic. Automatic; cannot defer (see `mod.rs`).
     EmergencyReclaim,
-    /// `js_gc_memory_pressure` with a generated frame live above us.
-    /// Host-driven.
-    HostPressure,
     /// `manual_gc_collect_now` — explicit `gc()`. Explicit.
     ManualCollect,
     /// `js_gc_module_minor` — explicit `perry/gc` `minor()`. Explicit.
     ManualMinor,
+    // ★ There is deliberately no `HostPressure` variant. `js_gc_memory_pressure`
+    // used to force the scan unconditionally; after #7148 it either collects
+    // with precise roots (empty shadow stack) or defers to a safepoint (a
+    // generated frame is live), so it has no conservative arm left to count.
+    // The site is not "unreached", it is **deleted** — which is the strongest
+    // form of what #7148 asks for, and why an unconstructed variant kept here
+    // "for completeness" would be the wrong kind of tidy: an enum arm nothing
+    // can produce is a claim no test can check.
 }
 
 impl ConservativeScanSite {
-    pub(crate) const COUNT: usize = 6;
+    pub(crate) const COUNT: usize = 5;
 
     const fn index(self) -> usize {
         match self {
             Self::OldReclaimSlackValve => 0,
             Self::NurseryChurnSlackValve => 1,
             Self::EmergencyReclaim => 2,
-            Self::HostPressure => 3,
-            Self::ManualCollect => 4,
-            Self::ManualMinor => 5,
+            Self::ManualCollect => 3,
+            Self::ManualMinor => 4,
         }
     }
 
@@ -92,30 +96,28 @@ impl ConservativeScanSite {
             Self::OldReclaimSlackValve => "old_reclaim_slack_valve",
             Self::NurseryChurnSlackValve => "nursery_churn_slack_valve",
             Self::EmergencyReclaim => "emergency_reclaim",
-            Self::HostPressure => "host_pressure",
             Self::ManualCollect => "manual_collect",
             Self::ManualMinor => "manual_minor",
         }
     }
 
     /// Whether this site is reached without any user code calling `gc()`.
-    /// The four automatic sites are the ones #7148 is about: they are the
+    /// The automatic sites are the ones #7148 is about: they are the
     /// collections a program pays for without asking for them.
     pub(crate) const fn is_automatic(self) -> bool {
         match self {
-            Self::OldReclaimSlackValve
-            | Self::NurseryChurnSlackValve
-            | Self::EmergencyReclaim
-            | Self::HostPressure => true,
+            Self::OldReclaimSlackValve | Self::NurseryChurnSlackValve | Self::EmergencyReclaim => {
+                true
+            }
             Self::ManualCollect | Self::ManualMinor => false,
         }
     }
 
+    #[cfg(test)]
     pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::OldReclaimSlackValve,
         Self::NurseryChurnSlackValve,
         Self::EmergencyReclaim,
-        Self::HostPressure,
         Self::ManualCollect,
         Self::ManualMinor,
     ];
@@ -205,6 +207,7 @@ pub(crate) fn record_safepoint_drain(kind: SafepointDrainKind) {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn scan_fallback_count(site: ConservativeScanSite) -> u64 {
     SCAN_FALLBACKS.with(|c| c.get()[site.index()])
 }
@@ -212,6 +215,7 @@ pub(crate) fn scan_fallback_count(site: ConservativeScanSite) -> u64 {
 /// Total conservative-scan fallbacks across the four **automatic** sites. This
 /// is the number #7148 wants driven to zero: explicit `gc()` is a user request
 /// and is not part of the claim.
+#[cfg(test)]
 pub(crate) fn automatic_scan_fallback_total() -> u64 {
     SCAN_FALLBACKS.with(|c| {
         let counts = c.get();
@@ -223,6 +227,7 @@ pub(crate) fn automatic_scan_fallback_total() -> u64 {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn safepoint_drain_count(kind: SafepointDrainKind) -> u64 {
     SAFEPOINT_DRAINS.with(|c| c.get()[kind.index()])
 }

@@ -2365,7 +2365,8 @@ pub extern "C" fn js_gc_collect() {
 /// The known cost is #6942/#6946: forcing the scan makes this path non-moving,
 /// which is why `PERRY_GC_FORCE_EVACUATE` was inert for every `gc()`-driven
 /// test. Removing the scan here needs precise roots at the `gc()` callsite PC
-/// — the safepoint contract in `docs/statepoint-gc-experiment.md` — not a
+/// — the safepoint contract in `docs/statepoint-gc-experiment.md` on branch
+/// `exp/stackmap-viability` (not on `main`) — not a
 /// deferral.
 fn manual_gc_collect_now() {
     let _scan = super::roots::ManualGcScanGuard::force_full_scan(
