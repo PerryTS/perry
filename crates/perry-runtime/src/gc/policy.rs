@@ -1722,8 +1722,16 @@ pub(crate) fn gc_safepoint_moving_minor() {
             return;
         }
         _ => {
-            // No nursery-pressure trigger is due — nothing to collect here.
-            return;
+            // No nursery-pressure trigger is due — nothing to collect here...
+            // unless zeal is on (#7154 tooling), in which case the point of the
+            // mode is to collect anyway so an unrooted value moves on its first
+            // exposure. `gc_force_evacuate_enabled()` is true under zeal, so
+            // this minor MOVES survivors rather than sweeping in place.
+            if !super::gc_zeal_enabled() {
+                return;
+            }
+            super::note_zeal_forced_collection();
+            GcTriggerKind::ArenaBytes
         }
     };
     let pre_in_use = crate::arena::arena_in_use_bytes();
@@ -1756,7 +1764,15 @@ pub(crate) fn gc_safepoint_moving_minor() {
 /// one thread-local read).
 #[no_mangle]
 pub extern "C" fn js_gc_loop_safepoint() {
-    if !gc_moving_loop_polls_enabled() || !GC_SAFEPOINT_PENDING.with(Cell::get) {
+    if !gc_moving_loop_polls_enabled() {
+        return;
+    }
+    // Zeal (#7154 tooling) collects at EVERY poll, not only when the alloc-point
+    // arm already deferred one. Zeal cannot conjure a poll codegen never emitted,
+    // so the `gc_moving_loop_polls_enabled()` gate above still applies — see
+    // `gc/zeal.rs` for why that means "compile AND run with
+    // `PERRY_GC_MOVING_LOOP_POLLS=1`".
+    if !GC_SAFEPOINT_PENDING.with(Cell::get) && !super::gc_zeal_enabled() {
         return;
     }
     gc_safepoint_moving_minor();

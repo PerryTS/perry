@@ -82,7 +82,12 @@ mod verify;
 /// the rewrite pass own root enumeration. Debug-only
 /// (`PERRY_GC_FROMSPACE_SCAN=1`).
 mod fromspace_scan;
+/// #7154 tooling: force an evacuating minor at every safepoint so an unrooted
+/// value dies/moves on its FIRST exposure. Debug-only (`PERRY_GC_ZEAL=1`).
+mod zeal;
 pub use verify::*;
+pub use zeal::zeal_forced_collections;
+pub(crate) use zeal::{gc_zeal_enabled, note_zeal_forced_collection};
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 #[cfg(feature = "diagnostics")]
@@ -244,11 +249,17 @@ pub fn gen_gc_evacuate_enabled() -> bool {
 }
 
 fn gc_force_evacuate_enabled() -> bool {
+    // `PERRY_GC_ZEAL=1` implies forced evacuation (#7154 tooling): a zealous
+    // minor that leaves survivors in place would move nothing, and "an unrooted
+    // value moves on its first exposure" is the entire contract of zeal mode.
+    // Still subject to `gen_gc_evacuate_enabled()` — an explicit
+    // `PERRY_GEN_GC_EVACUATE=0` wins, so the two knobs cannot silently disagree.
     gen_gc_evacuate_enabled()
-        && matches!(
-            std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
+        && (gc_zeal_enabled()
+            || matches!(
+                std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
+                Ok("1") | Ok("on") | Ok("true")
+            ))
 }
 
 fn gc_verify_evacuation_enabled() -> bool {

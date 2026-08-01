@@ -19,6 +19,7 @@ crates/perry-runtime/src/object/native_module.rs | "O_SYMLINK" => Some(0x200000)
 #
 # Grandfathered GcHeader-cast files:
 crates/perry-runtime/src/arena/allocators.rs | * | arena allocator/walker internals: header addresses come from block iteration or fresh allocation, never from NaN-box payloads
+crates/perry-runtime/src/arena/quarantine.rs | let header = data.add(pos) as *const crate::gc::GcHeader; | #7154 from-space quarantine census: `data + pos` comes from linear block iteration over a detached arena block (the same discipline as arena/walk.rs), never from a NaN-box payload, so no handle band can reach it; the walk stops at the first header whose size does not cover the remaining bytes
 crates/perry-runtime/src/arena/tests.rs | * | arena allocator/walker internals: header addresses come from block iteration or fresh allocation, never from NaN-box payloads
 crates/perry-runtime/src/arena/walk.rs | * | arena allocator/walker internals: header addresses come from block iteration or fresh allocation, never from NaN-box payloads
 crates/perry-runtime/src/array/alloc.rs | * | pre-existing GcHeader probe predating addr_class; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up

@@ -967,6 +967,20 @@ jobs:
         if: github.event_name != 'pull_request'
         run: ./scripts/gc_repsel_matrix.sh --no-build --arms all --json gc-repsel-matrix.json
 
+      # GATING, and deliberately so. CLAUDE.md's GC knob kill-policy requires
+      # every GC knob to have an arm that exercises it; the #7154 instruments
+      # (PERRY_GC_PROTECT_FROMSPACE, PERRY_GC_ZEAL) would otherwise be dark
+      # knobs on the subsystem with this repo's worst history of configuration
+      # rot. This asserts BOTH defaults — inert with the knobs unset, live with
+      # them set — and refuses to pass unless the zeal arm forced strictly more
+      # collections than the pressure-only arm, so it cannot go green having
+      # run zero copying minors (the #6942 / #7024 / #7025 failure mode).
+      # The detection property itself is a required-gate unit test:
+      # gc/tests/fromspace_protect.rs::quarantine_catches_a_planted_stale_from_space_deref.
+      # ~20s: the fixture is sized for ~1200 back-edge polls, not #7154's 240k.
+      - name: GC rooting-bug instruments (inert-when-off, live-when-on)
+        run: ./scripts/gc_instrument_smoke.sh target/release/perry
+
       - name: Run GC write-barrier stress tests
         # Informational: these are ~200s nondeterministic corruption-window
         # hunts (#5029). Kept out of the gate so a flake never blocks a PR.

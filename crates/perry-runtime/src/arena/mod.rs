@@ -12,6 +12,9 @@ mod allocators;
 mod block;
 mod inline;
 mod page_meta;
+/// #7154 tooling: from-space quarantine + poison + `mprotect` so a stale
+/// pointer faults at the instruction that used it. Default-off.
+mod quarantine;
 mod reset;
 mod stats;
 mod walk;
@@ -80,6 +83,15 @@ pub(crate) use reset::{
     SurvivorArenaReclaimDeadBlocksState,
 };
 pub use reset::{arena_reset_all_blocks_to_zero, arena_reset_empty_blocks};
+
+// quarantine.rs (#7154 from-space protection; default-off)
+pub(crate) use quarantine::{copying_quarantine_from_spaces_and_flip, protect_fromspace_enabled};
+#[cfg(test)]
+pub(crate) use quarantine::{
+    parse_protection_mode, parse_quarantine_depth, quarantine_depth, FromSpaceProtection,
+    ProtectionModeGuard, QUARANTINE_POISON_OBJ_TYPE, QUARANTINE_POISON_WORD,
+};
+pub use quarantine::{quarantine_stats, QuarantineStats};
 
 // stats.rs
 pub(crate) use stats::{active_survivor_space, inactive_survivor_space};
