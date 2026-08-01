@@ -292,7 +292,7 @@ codegen-units = 16
 codegen-units = 16
 
 [workspace.package]
-version = "0.5.1277"
+version = "0.5.1278"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"

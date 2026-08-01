@@ -131,6 +131,20 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // `dotenv.parse(src)` → the JSON string `js_dotenv_parse` builds, piped
+    // through `js_json_parse` by NR_OBJ_FROM_JSON_STR so TypeScript sees a
+    // real object (`{ FOO: "bar" }`), not the encoded string. Without this
+    // row the symbol fell through the #463 gate to a deferred runtime throw
+    // even though the native implementation was already linked in.
+    NativeModSig {
+        module: "dotenv",
+        has_receiver: false,
+        method: "parse",
+        class_filter: None,
+        runtime: "js_dotenv_parse",
+        args: &[NA_STR],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
     // ========== nanoid ==========
     // js_nanoid_sized(NaN) → size=0 → falls back to js_nanoid() (21-char default),
     // so nanoid() and nanoid(N) both route through the same entry safely.
@@ -395,3 +409,38 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `dotenv.parse` must dispatch to the native implementation and return a
+    /// real object.
+    ///
+    /// `js_dotenv_parse` was declared to codegen and linked into every binary,
+    /// but had no dispatch row, so the #463 gate compiled each call site to a
+    /// deferred throw-on-reach error. `readConfigFile()`-shaped callers wrap
+    /// the call in `try { … } catch {}`, so the throw was swallowed and the
+    /// `.env` config silently never loaded.
+    ///
+    /// The return kind matters as much as the row: `js_dotenv_parse` hands back
+    /// a JSON *string*, so only `NR_OBJ_FROM_JSON_STR` (which pipes it through
+    /// `js_json_parse`) makes `dotenv.parse(src).FOO` read a property instead
+    /// of indexing a string.
+    #[test]
+    fn dotenv_parse_dispatches_to_native_impl_as_an_object() {
+        let row = UTILS_CRYPTO_ROWS
+            .iter()
+            .find(|r| r.module == "dotenv" && r.method == "parse")
+            .expect("dotenv.parse needs a dispatch row");
+        assert_eq!(row.runtime, "js_dotenv_parse");
+        assert!(!row.has_receiver);
+        assert_eq!(row.class_filter, None);
+        assert!(matches!(row.args, [NativeArgKind::StrPtr]));
+        assert!(
+            matches!(row.ret, NativeRetKind::ObjFromJsonStr),
+            "dotenv.parse must be JSON-decoded into an object, got {:?}",
+            row.ret
+        );
+    }
+}

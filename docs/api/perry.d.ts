@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2000 entries across 122 modules
+// Coverage: 2001 entries across 122 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1428,6 +1428,8 @@ declare module "domain" {
 declare module "dotenv" {
   /** stdlib */
   export function config(...args: any[]): any;
+  /** stdlib */
+  export function parse(src: string): any;
 }
 
 declare module "ethers" {

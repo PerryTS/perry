@@ -548,6 +548,48 @@ mod tests {
         assert_eq!(bare.is_some(), prefixed.is_some());
     }
 
+    /// `dotenv.parse` regression guard.
+    ///
+    /// `js_dotenv_parse` has always been implemented and declared to codegen,
+    /// but the manifest only ever registered `dotenv.config`. That gap made
+    /// the #463 unimplemented-API gate fire for every `dotenv.parse(...)`
+    /// call site, which under the default (defer) policy compiles to a
+    /// throw-on-reach runtime error rather than a build failure. Callers that
+    /// load config inside `try { … } catch {}` — the common shape — swallowed
+    /// the throw and silently ran with no configuration at all.
+    #[test]
+    fn dotenv_parse_is_registered() {
+        let entry = module_has_symbol("dotenv", "parse")
+            .expect("dotenv.parse must be in the manifest — see js_dotenv_parse");
+        assert!(
+            matches!(
+                entry.kind,
+                ApiKind::Method {
+                    has_receiver: false,
+                    class_filter: None
+                }
+            ),
+            "dotenv.parse must be a static module method, got {:?}",
+            entry.kind
+        );
+        assert_eq!(
+            entry.params.len(),
+            1,
+            "dotenv.parse takes exactly the source text"
+        );
+        assert!(
+            matches!(
+                entry.params[0],
+                ParamSpec::Named {
+                    ty: TypeSpec::String,
+                    ..
+                }
+            ),
+            "dotenv.parse's argument is the .env source string, got {:?}",
+            entry.params[0]
+        );
+    }
+
     #[test]
     fn buffer_inspect_max_bytes_is_manifest_property() {
         let entry = module_has_symbol("node:buffer", "INSPECT_MAX_BYTES")

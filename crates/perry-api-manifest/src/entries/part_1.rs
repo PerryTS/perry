@@ -1241,6 +1241,27 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("nodemailer", "sendMail", true, None),
     method("nodemailer", "verify", true, None),
     method_sig("dotenv", "config", false, None, &[], TypeSpec::Any),
+    // `dotenv.parse(src)` — the native impl (`js_dotenv_parse`) has shipped
+    // since the module was added, but the manifest never registered the
+    // symbol, so the #463 gate compiled every call site to a deferred
+    // throw-on-reach error. Callers that wrap config loading in
+    // `try { … } catch {}` swallowed that throw and silently got no config
+    // at all, which is why this is registered as a data-loss fix, not a
+    // missing-feature one. The extern returns a JSON string; the dispatch
+    // row's `NR_OBJ_FROM_JSON_STR` pipes it through `js_json_parse` so the
+    // user-visible value is a real object.
+    method_sig(
+        "dotenv",
+        "parse",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "src",
+            ty: TypeSpec::String,
+            optional: false,
+        }],
+        TypeSpec::Any,
+    ),
     method_sig(
         "nanoid",
         "nanoid",
