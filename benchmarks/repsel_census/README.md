@@ -74,19 +74,30 @@ of them is recorded at the site where the proof is dropped:
 reproducible without the report at all: compile the workload twice, once with
 `PERRY_PTR_SHAPE_LOCALS=0`, and compare the objects.
 
-`--no-link` does **not** honour `-o`: the object goes to a per-run temp
-directory and the path is printed. So capture the printed path in each arm and
-compare those — comparing the `-o` arguments compares two files that were never
-created.
+`--no-link` writes its objects to `-o` (#7167): verbatim for a single-module
+program, otherwise into `-o`'s directory under module-derived names. **Give each
+arm its own `-o`.** Two arms pointed at one path is not a comparison — the
+second compile overwrites the first and `cmp` then compares a file with itself,
+which is "identical" for every arm forever.
+
+Read the paths back off stdout rather than assuming `-o` named them, because a
+multi-module workload emits several and only one of them can be `-o`. An arm
+that reported no object is a harness error, not a silent pass — the same reason
+`_written_objects` in the census script raises.
 
 ```bash
-obj() {  # echo the object path this compile actually wrote
+objs() {  # echo every object path this compile actually wrote
   "$@" --no-link --no-cache 2>&1 | sed -n 's/^Wrote object file: //p'
 }
-a=$(obj perry compile <src> -o /tmp/ignored)
-b=$(PERRY_PTR_SHAPE_LOCALS=0 obj perry compile <src> -o /tmp/ignored)
+a=$(objs perry compile <src> -o "$PWD/ab/a.o")
+b=$(PERRY_PTR_SHAPE_LOCALS=0 objs perry compile <src> -o "$PWD/ab/b.o")
 cmp "$a" "$b" && echo "IDENTICAL — the promotion emitted nothing"
 ```
+
+Before #7167 the flag ignored `-o` entirely and left the objects in a
+`perry-objs-<pid>-<nanos>/` directory under `TMPDIR` that nothing ever deleted,
+which is why the older version of this recipe passed `-o /tmp/ignored` twice and
+still worked. It does not any more, and the version above is the one to copy.
 
 Byte-identical objects mean the promotions the report counted as wins changed
 nothing. `07_object_create` and `12_binary_trees` are byte-identical today.
@@ -319,10 +330,16 @@ changing it:
 * **The `TMPDIR` isolation is load-bearing**, not politeness. Counting entries
   in the shared system temp dir measures every other process on the box.
 
-It fails on the clang driver's own temp names (`perry_llvm_*`, `perry_cgu_*`,
-`perry_bc_*`) and merely *reports* anything else — today that is the compile
-driver's `perry-objs-<pid>-<nanos>/` staging directory, which `--no-link` never
-cleans up (#7167). Widen `OWNED_PREFIXES` to "everything" once that is closed.
+It fails on **anything** left behind, with no allowlist. It shipped with one —
+the clang driver's own names (`perry_llvm_*`, `perry_cgu_*`, `perry_bc_*`)
+failed and everything else was merely reported — because the compile driver was
+leaking a `perry-objs-<pid>-<nanos>/` staging directory on the `--no-link` path
+at the time (#7167), and a gate that goes red for another module's defect gets
+muted rather than fixed. #7167 closed that path and the carve-out went with it.
+
+The absence of an allowlist is the point. #7167 was *known*: this gate printed
+it on every run and could not turn one red. A gate that enumerates the leaks it
+is allowed to fail on cannot see the one nobody has written yet.
 
 No exemption for `PERRY_DEBUG_SYMBOLS`, and that is a change of belief rather
 than a change of policy. `-g` was documented as pulling the `.ll`'s **absolute**

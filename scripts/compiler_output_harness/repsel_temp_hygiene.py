@@ -1,5 +1,16 @@
-"""Temp-directory hygiene check (#7144).
+"""Temp-directory hygiene check (#7144, #7167).
 
+Compile the census corpus with `TMPDIR` pointed at an empty directory of our
+own, then look in that directory. **It must be empty** — no allowlist, no
+"known" leaks, nothing.
+
+It did not start that way. #7144 shipped this gate failing only on
+`perry-codegen`'s clang-driver names and merely *reporting* everything else,
+because a second leak was live at the time (#7167) and a gate that goes red for
+another module's defect gets muted rather than fixed. #7167 closed that path
+and the carve-out went with it. The two leaks it has caught:
+
+**#7144 — the clang driver's `.ll`.**
 `compile_ll_to_object` writes the module's LLVM IR to a temp `.ll`, hands the
 path to `clang -c`, and reads back the object. #7131 made that name a pure
 function of the IR — it had to, because clang records a translation unit's
@@ -21,11 +32,22 @@ directory that belongs to one call, so unlinking it is unobservable to anyone
 else, and the *basename* clang records is untouched — `census-determinism` is
 the check that the second half still holds.
 
-What this module checks is the first half, end to end, on the real compiler:
-compile the census corpus with `TMPDIR` pointed at an empty directory of our
-own, then look in that directory. It must be empty.
+**#7167 — the compile driver's staged objects.**
+`run_pipeline.rs` staged every emitted `.o` in a `perry-objs-<pid>-<nanos>/`
+directory and removed it on the paths that *link*. `--no-link` returns before
+those, so it removed nothing: one fresh directory plus its objects per compile,
+unbounded in **compiles** rather than in distinct IR, and the objects are far
+larger than the `.ll`s. 3086 such directories had accumulated on one dev box.
+Every harness in this package compiles with `--no-link`, so running the census
+was itself the heaviest source of the leak.
 
-Two design notes, because both alternatives were tried and are wrong:
+The fix was not a third `remove_dir`. On `--no-link` the objects are the
+*product*, so they are delivered to `-o` and no staging directory is created at
+all; when linking, the directory is removed by a `Drop` guard so every exit
+cleans up through one site. See `crates/perry/src/commands/compile/
+object_staging.rs`.
+
+Design notes, because the alternatives were tried and are wrong:
 
 * **"No growth run-over-run" is not the property.** Compiling the same corpus
   twice leaves the same content-addressed names, so a repeat-and-compare check
@@ -36,6 +58,10 @@ Two design notes, because both alternatives were tried and are wrong:
   Counting entries in the shared system temp directory measures every other
   process on the box — on a machine running several compiles at once, that is
   noise large enough to swamp the signal in either direction.
+* **No allowlist.** Naming the leaks this gate is allowed to fail on means the
+  next leak — under a name nobody has written yet — passes silently. #7167 is
+  the worked example: it was known, printed on every run, and could not turn a
+  run red.
 
 `PERRY_DEBUG_SYMBOLS` is *not* exempt, though it was going to be. `-g` was
 documented as putting the `.ll`'s absolute path into DWARF; measured on a real
@@ -72,35 +98,6 @@ DEFAULT_REPEAT = 2
 #: not.
 MAX_REPORTED = 12
 
-#: Every temp name `crates/perry-codegen/src/linker.rs` creates — the `.ll`/`.o`
-#: pair and its scratch directory (`perry_llvm_*`), the multi-codegen-unit
-#: staging objects (`perry_cgu_*`, #5391), and the bitcode-link intermediates
-#: (`perry_bc_*`). This gate's subject is that module's file lifecycle, so it
-#: fails on these and only these.
-#:
-#: Anything else found is REPORTED, loudly, and does not fail: as of #7144 the
-#: compile driver leaks a `perry-objs-<pid>-<nanos>/` staging directory on the
-#: `--no-link` path (#7167 — `run_pipeline.rs` removes it on both *link* exits and
-#: there is no third one), which is a real defect but a different module's, and a gate
-#: that goes red for someone else's bug gets muted rather than fixed. Widen this
-#: to "nothing at all" once the driver's path is closed.
-OWNED_PREFIXES = ("perry_llvm", "perry_cgu", "perry_bc")
-
-
-def classify(leftovers: list[str]) -> tuple[list[str], list[str]]:
-    """Split leftovers into "this gate's subject" and "somebody else's".
-
-    Classified on the FIRST path component: everything under a leaked scratch
-    directory is leaked by whoever leaked the directory.
-    """
-    owned: list[str] = []
-    other: list[str] = []
-    for rel in leftovers:
-        top = rel.split("/", 1)[0]
-        (owned if top.startswith(OWNED_PREFIXES) else other).append(rel)
-    return owned, other
-
-
 def leftovers_under(root: Path) -> list[str]:
     """Every path under `root`, relative to it, deepest entries first.
 
@@ -134,65 +131,53 @@ def verdict(
             "no compiles ran, so an empty temp directory proves nothing; "
             "this run checked nothing"
         )
-    owned, other = classify(leftovers)
 
-    if other:
-        shown = other[:MAX_REPORTED]
+    if not leftovers:
         printer(
-            f"Not this gate's subject — {len(other)} entr"
-            f"{'y' if len(other) == 1 else 'ies'} left by a module other than "
-            "perry-codegen's clang driver:"
-        )
-        for name in shown:
-            printer(f"    {name}")
-        if len(other) > len(shown):
-            printer(f"    … and {len(other) - len(shown)} more")
-        printer(
-            "  `perry-objs-<pid>-<nanos>/` is the compile driver's object "
-            "staging dir;\n"
-            "  `run_pipeline.rs` removes it on both *link* exits and `--no-link` "
-            "returns\n"
-            "  before either (#7167). Reported, not failed: a gate that goes "
-            "red for another\n"
-            "  module's defect gets muted rather than fixed.\n"
-        )
-
-    if not owned:
-        printer(
-            f"Temp directory is clean: {compiles} compile(s) left 0 clang-driver "
-            "files behind. The #7144 leak is not present."
+            f"Temp directory is clean: {compiles} compile(s) left 0 entries "
+            "behind. Neither the #7144 nor the #7167 leak is present."
         )
         return 0
 
-    shown = owned[:MAX_REPORTED]
+    shown = leftovers[:MAX_REPORTED]
     printer(
-        f"TEMP FILES LEAKED: {compiles} compile(s) left {len(owned)} "
-        f"entr{'y' if len(owned) == 1 else 'ies'} in a temp directory that "
+        f"TEMP FILES LEAKED: {compiles} compile(s) left {len(leftovers)} "
+        f"entr{'y' if len(leftovers) == 1 else 'ies'} in a temp directory that "
         "started empty.\n"
     )
     for name in shown:
         printer(f"    {name}")
-    if len(owned) > len(shown):
-        printer(f"    … and {len(owned) - len(shown)} more")
+    if len(leftovers) > len(shown):
+        printer(f"    … and {len(leftovers) - len(shown)} more")
     printer(
         "\n"
-        "  This is #7144. The `.ll` handed to `clang -c` is content-addressed\n"
-        "  (#7131 — clang records its basename into the ELF object), so the\n"
-        "  leftovers are bounded by DISTINCT IR EVER COMPILED, not by compiles:\n"
-        "  a repeat-and-compare check stays green while a developer machine\n"
-        "  fills up. Measured before the fix: 1627 files / 951.8 MB after a day\n"
-        "  of compiler work; 29 GB on a longer-lived box.\n"
+        "  Nothing may survive a compile in the temp directory. Two known\n"
+        "  leaks produced this failure before; the name above says which, and\n"
+        "  a THIRD name means a new one.\n"
         "\n"
-        "  The fix is not a more careful unlink — that races a sibling worker\n"
-        "  holding the same IR, which is why #7135 stopped deleting at all. It\n"
-        "  is to stop sharing: `crates/perry-codegen/src/linker.rs` gives each\n"
-        "  compile a private scratch directory and removes it on success, while\n"
-        "  the basename inside it stays a pure function of the IR so\n"
-        "  `census-determinism` keeps passing.\n"
+        "  `perry_llvm_*` / `perry_cgu_*` / `perry_bc_*` — #7144, the clang\n"
+        "  driver. The `.ll` handed to `clang -c` is content-addressed (#7131:\n"
+        "  clang records its basename into the ELF object), so the leftovers\n"
+        "  are bounded by DISTINCT IR EVER COMPILED, not by compiles — a\n"
+        "  repeat-and-compare check stays green while a developer machine fills\n"
+        "  up. 1627 files / 951.8 MB after a day; 29 GB on a longer-lived box.\n"
+        "  The fix was not a more careful unlink (that races a sibling worker\n"
+        "  holding the same IR, which is why #7135 stopped deleting at all) but\n"
+        "  to stop sharing: `crates/perry-codegen/src/linker.rs` gives each\n"
+        "  compile a private scratch directory. `PERRY_DEBUG_SYMBOLS` is not an\n"
+        "  exemption — measured, `-g` emits no DWARF from a Perry `.ll` at all.\n"
         "\n"
-        "  `PERRY_DEBUG_SYMBOLS` is not an exemption: measured, `-g` emits no\n"
-        "  DWARF from a Perry `.ll` at all, so nothing records where the file\n"
-        "  was and nothing needs to outlive the compile."
+        "  `perry-objs-*` — #7167, the compile driver. `run_pipeline.rs` staged\n"
+        "  objects in a per-invocation temp directory and removed it on the link\n"
+        "  exits only, so every `--no-link` compile leaked one, unbounded in\n"
+        "  COMPILES. The fix was to stop creating it: on `--no-link` the objects\n"
+        "  are the product and go to `-o`, and when linking the directory is\n"
+        "  removed by `Drop` so no exit has to remember.\n"
+        "\n"
+        "  Anything else is a new leak. This gate has no allowlist on purpose:\n"
+        "  #7167 was known, printed on every run, and could not turn the run\n"
+        "  red for a full release. A gate that names its exceptions cannot see\n"
+        "  the leak nobody has written yet."
     )
     return 1
 
@@ -257,6 +242,8 @@ def self_test(_args: argparse.Namespace) -> int:
     quiet: Callable[[str], None] = lambda _line: None
 
     assert verdict([], compiles=52, printer=quiet) == 0
+
+    # #7144's family — the clang driver's own names.
     assert verdict(["perry_llvm_2791e842224ea99c.ll"], compiles=52, printer=quiet) == 1
     # An empty scratch directory left behind is the same defect, smaller.
     assert verdict(["perry_llvm_scratch_1a2b_0"], compiles=1, printer=quiet) == 1
@@ -265,19 +252,25 @@ def self_test(_args: argparse.Namespace) -> int:
     for owned in ("perry_cgu_1_2_0.o", "perry_bc_1_2_linked.bc"):
         assert verdict([owned], compiles=1, printer=quiet) == 1, owned
 
-    # Another module's leftovers are reported, not failed — see OWNED_PREFIXES.
-    assert verdict(["perry-objs-9-1/m.o"], compiles=1, printer=quiet) == 0
+    # #7167's family. These used to return 0 — reported, not failed — while the
+    # compile driver's `--no-link` path was still leaking them. The flip from 0
+    # to 1 IS the widening, so it is asserted directly rather than implied by
+    # the absence of an allowlist.
+    assert verdict(["perry-objs-9-1"], compiles=1, printer=quiet) == 1
+    assert verdict(["perry-objs-9-1/m.o"], compiles=1, printer=quiet) == 1
     lines: list[str] = []
-    assert verdict(["perry-objs-9-1/m.o"], compiles=1, printer=lines.append) == 0
+    verdict(["perry-objs-9-1/m.o"], compiles=1, printer=lines.append)
     joined = "\n".join(lines)
-    assert "perry-objs" in joined and "run_pipeline.rs" in joined, joined
-    # A mixture still fails, and the failure is about the owned half.
-    assert verdict(["perry-objs-9-1/m.o", "perry_llvm_a.ll"], compiles=1, printer=quiet) == 1
+    assert "#7167" in joined and "run_pipeline.rs" in joined, joined
 
-    assert classify(["perry_llvm_a.ll", "perry-objs-9-1/m.o"]) == (
-        ["perry_llvm_a.ll"],
-        ["perry-objs-9-1/m.o"],
-    )
+    # A name from neither family must fail too. This is the case an allowlist
+    # cannot cover, and the reason there is no allowlist: the next leak has a
+    # name nobody has written yet.
+    assert verdict(["perry-embed-4242/bundle.o"], compiles=1, printer=quiet) == 1
+    assert verdict(["something-nobody-has-written-yet"], compiles=1, printer=quiet) == 1
+    lines = []
+    verdict(["brand-new-leak-name"], compiles=1, printer=lines.append)
+    assert "new leak" in "\n".join(lines)
 
     # A run that compiled nothing finds an empty directory for the wrong
     # reason. It must not be able to report success.
@@ -291,7 +284,14 @@ def self_test(_args: argparse.Namespace) -> int:
     lines = []
     verdict(["perry_llvm_a.ll", "perry_llvm_b.ll"], compiles=2, printer=lines.append)
     report = "\n".join(lines)
-    for expected in ("#7144", "#7131", "PERRY_DEBUG_SYMBOLS", "linker.rs"):
+    for expected in (
+        "#7144",
+        "#7131",
+        "PERRY_DEBUG_SYMBOLS",
+        "linker.rs",
+        "#7167",
+        "run_pipeline.rs",
+    ):
         assert expected in report, f"failure report must mention {expected}: {report}"
 
     # The truncation must announce itself rather than quietly dropping paths.
