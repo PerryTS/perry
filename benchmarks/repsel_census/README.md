@@ -286,6 +286,47 @@ canonical-i32 draws from. A withdrawn proof cannot be selected. A knob that
 `--jobs` compiles arms in parallel; the whole corpus × 6 knobs × 4 arms is about
 20 s on an M1.
 
+## Temp-directory hygiene (#7144)
+
+The other consequence of content-addressing that `.ll`: two workers holding
+identical IR now *share* the path, so a per-call unlink can race a sibling that
+computed the path but has not yet handed it to clang. #7135 responded by not
+deleting it — and then nothing did. The leftovers are bounded by **distinct IR
+ever compiled** on the machine, which is fine in CI (runner temp dirs are
+reclaimed) and not fine anywhere a compiler is being worked on, where the IR
+changes on every rebuild: 1627 files / 951.8 MB after one day on one dev box,
+~29 GB on another.
+
+#7144 removed the sharing rather than the deletion. Each `.ll` → `.o` compile
+gets a private directory under the temp root and removes it on success; the
+*basename* inside it is still a pure function of the IR, so the determinism
+property above is untouched — the directory is not recorded in the object, only
+the basename is.
+
+```bash
+python3 scripts/compiler_output_regression.py census-temp-hygiene \
+    --perry <path/to/perry> --repeat 2 --jobs 4
+```
+
+It compiles the corpus with `TMPDIR` pointed at an empty directory of its own
+and asserts the directory is still empty. Two things worth knowing before
+changing it:
+
+* **"No growth run-over-run" would have been green on the broken compiler.**
+  Compiling the same corpus twice produces the same content-addressed names, so
+  a repeat-and-compare check sees a flat count while the machine fills up. The
+  property that goes red is the absolute one: *nothing* left behind.
+* **The `TMPDIR` isolation is load-bearing**, not politeness. Counting entries
+  in the shared system temp dir measures every other process on the box.
+
+Exempt on purpose: under `PERRY_DEBUG_SYMBOLS` clang gets `-g` and puts the
+`.ll`'s **absolute** path into DWARF, so those builds keep their `.ll` at a
+stable, content-addressed path in the temp root — deleting it would ship debug
+info pointing at a file that no longer exists. That layout is bounded by
+distinct IR compiled with `-g`, and `debug_symbols_layout_and_g_flag_agree` pins
+the two halves of the decision together so a future edit cannot delete a file
+DWARF still names.
+
 ## Editing the fixtures
 
 Don't tidy them. Every one is written against a specific collector's rules and
