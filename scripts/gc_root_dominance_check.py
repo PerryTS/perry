@@ -87,6 +87,7 @@ real corpus.
 import argparse
 import contextlib
 import io
+import json
 import os
 import re
 import sys
@@ -581,6 +582,30 @@ class Violation:
     def moving(self):
         return bool(self.movers)
 
+    @property
+    def fingerprint(self):
+        """Identity of this violation for allowlist matching.
+
+        Deliberately built from names, never from SSA registers, slot indices
+        or line numbers: `%12`, `slot 3` and "line 480" all move when an
+        unrelated lowering above them changes by one instruction, and a
+        fingerprint that churns is a fingerprint someone will replace with a
+        numeric threshold. What stays put across a recompile is *which
+        function*, *what it allocated*, and *what could collect before the
+        root store landed* -- which is also exactly the triple a human needs
+        to judge whether an entry is still the bug they signed off on.
+
+        Coarser than one-per-instruction on purpose: two violations in the
+        same function with the same alloc/collector pair collapse to one
+        fingerprint, and the allowlist entry's `count` is what pins the
+        multiplicity. A third one appearing later therefore still fails.
+        """
+        return "{}::{}::{}->{}".format(
+            self.module, self.func, self.alloc.callee or "?",
+            sorted({c.callee for c in self.collectors})[0]
+            if self.collectors else "?",
+        )
+
 
 def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
                anchor_mode="alloc"):
@@ -708,6 +733,337 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
             violations.append(v)
             break        # one report per bind: the widest window
     return violations
+
+
+# -------------------------------------------------------------- allowlist ---
+#
+# Why a file of named entries and not `--max-violations N`:
+#
+# A numeric threshold cannot tell a new violation from an old one. Fix one bug,
+# introduce a different one, and the count is unchanged and the gate is green --
+# which is the failure mode this whole exercise exists to prevent. Worse, the
+# number ratchets the wrong way under pressure: the cheapest way to make a red
+# build green is to raise it by one, and nothing in the diff says what was
+# conceded.
+#
+# So: one entry per known-remaining violation, each naming the issue that tracks
+# it and carrying a written justification, and three properties that keep the
+# file from decaying into a blanket suppression:
+#
+#   * an entry that matches NOTHING is an error. When the bug is fixed the entry
+#     must be deleted in the same PR, so the allowlist cannot accumulate
+#     tombstones that quietly widen its coverage later.
+#   * an entry suppresses at most `count` violations. A second violation of the
+#     same shape in the same function is new, and fails.
+#   * a violation with no entry fails, regardless of how many entries exist.
+
+ALLOWLIST_MIN_JUSTIFICATION = 40
+
+
+class AllowlistError(Exception):
+    """The allowlist itself is malformed, stale, or under-documented."""
+
+
+class AllowEntry:
+    __slots__ = ("fingerprint", "count", "issue", "justification", "matched")
+
+    def __init__(self, fingerprint, count, issue, justification):
+        self.fingerprint = fingerprint
+        self.count = count
+        self.issue = issue
+        self.justification = justification
+        self.matched = 0
+
+
+def load_allowlist(path):
+    """Parse and VALIDATE the allowlist. Every failure here is exit 2.
+
+    Validation is strict because an allowlist is the one part of a gate whose
+    whole purpose is to make it not fail; a typo'd field that silently parses
+    to "suppress everything" would be indistinguishable from a working gate.
+    """
+    try:
+        with open(path, "r") as fh:
+            doc = json.load(fh)
+    except FileNotFoundError:
+        raise AllowlistError(f"{path}: no such file")
+    except json.JSONDecodeError as exc:
+        raise AllowlistError(f"{path}: not valid JSON: {exc}")
+
+    if not isinstance(doc, dict) or "entries" not in doc:
+        raise AllowlistError(
+            f"{path}: expected a JSON object with an \"entries\" array")
+    raw = doc["entries"]
+    if not isinstance(raw, list):
+        raise AllowlistError(f"{path}: \"entries\" must be an array")
+
+    entries = {}
+    for i, e in enumerate(raw):
+        where = f"{path}: entries[{i}]"
+        if not isinstance(e, dict):
+            raise AllowlistError(f"{where}: must be an object")
+        for field in ("fingerprint", "issue", "justification"):
+            if not isinstance(e.get(field), str) or not e[field].strip():
+                raise AllowlistError(
+                    f"{where}: \"{field}\" is required and must be a "
+                    "non-empty string")
+        count = e.get("count", 1)
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise AllowlistError(
+                f"{where}: \"count\" must be a positive integer (got {count!r})")
+        # A justification of "known issue" is not a justification. The length
+        # floor is crude, but it is the difference between a reviewer having to
+        # read a sentence and having to go excavate the history themselves.
+        if len(e["justification"].strip()) < ALLOWLIST_MIN_JUSTIFICATION:
+            raise AllowlistError(
+                f"{where}: \"justification\" must be at least "
+                f"{ALLOWLIST_MIN_JUSTIFICATION} characters explaining WHY this "
+                "violation is known-safe or known-tracked. Suppressing a "
+                "GC-rooting violation without saying why is how the next one "
+                "gets waved through.")
+        fp = e["fingerprint"].strip()
+        if fp in entries:
+            raise AllowlistError(
+                f"{where}: duplicate fingerprint {fp!r}; merge the two entries "
+                "and set \"count\" instead, so the suppressed multiplicity is "
+                "stated in one place")
+        entries[fp] = AllowEntry(fp, count, e["issue"].strip(),
+                                 e["justification"].strip())
+    return entries
+
+
+def apply_allowlist(violations, entries):
+    """Split `violations` into (suppressed, remaining) and mark entries used.
+
+    Over-quota violations land in `remaining`: an entry is a licence for a
+    stated number of hits, not for a shape.
+    """
+    seen = defaultdict(int)
+    suppressed, remaining = [], []
+    for v in violations:
+        fp = v.fingerprint
+        entry = entries.get(fp)
+        if entry is None:
+            remaining.append(v)
+            continue
+        seen[fp] += 1
+        if seen[fp] <= entry.count:
+            entry.matched += 1
+            suppressed.append(v)
+        else:
+            remaining.append(v)
+    return suppressed, remaining
+
+
+def stale_entries(entries):
+    """Entries that matched nothing. Always an error -- see the header note."""
+    return [e for e in entries.values() if e.matched == 0]
+
+
+# --------------------------------------------------- seeded-violation proof ---
+#
+# `--self-test` proves the checker fires on HAND-WRITTEN IR. Necessary, not
+# sufficient: the fixtures are frozen text, so they keep passing even if perry's
+# emitted IR drifts to a shape the parser can no longer read -- at which point
+# the checker reports a serene `violations: 0` over a corpus it is not actually
+# analysing. That is hazard 4 (CLAUDE.md) wearing the self-test's clothes, and
+# it is the failure mode this repo has hit most often.
+#
+# So the gate also seeds violations into the REAL corpus and requires every one
+# to be caught. For each sampled site we take a value that IS correctly rooted
+# today and splice a collection point into the gap between the allocation and
+# its root store -- mechanically manufacturing #7192's exact shape out of code
+# that is currently right:
+#
+#     %v = call ptr @js_object_alloc(...)      <-- real
+#     call double @js_call_function(...)       <-- spliced in
+#     store ptr %v, ptr %slot                  <-- real
+#     call void @js_shadow_slot_bind(...)      <-- real
+#
+# Only the collection point is synthetic. The function, its CFG, the allocation,
+# the value's provenance chain through `or`/`bitcast`, the alloca, the store and
+# the bind are all perry's own output, so the exercise covers the parser, the
+# CFG builder, the provenance walk and the dominance computation against IR as
+# it is actually emitted. Splicing rather than reordering also means a site
+# always exists wherever a rooted allocation exists, instead of depending on the
+# scheduler happening to leave a collecting call in a convenient place.
+#
+# If perry's IR stops having rooted allocations in the shape this matches, the
+# gate goes red for "I could not seed a violation" rather than green for "I
+# found none".
+
+_ANY_BIND_RE = re.compile(
+    r"^\s*call void @js_shadow_slot_bind\(i32 (\d+), ptr %([\w.$]+)\)")
+_ANY_STORE_RE = re.compile(
+    r"^\s*store\s+[\w\[\]x* ]+?\s+%([\w.$]+),\s*ptr %([\w.$]+)")
+_ANY_ASSIGN_RE = re.compile(r"^\s*%([\w.$]+)\s*=\s*(.*)$")
+_ANY_CALL_RHS_RE = re.compile(r"^call\s+[^@]*@([\w.$]+)\(")
+
+# The spliced collection point. `js_call_function` is in POLL_CAPABLE_RUNTIME,
+# so the planted violation is classified MOVING and survives `--moving-only` --
+# i.e. the proof is about the configuration the gate actually ships with, not a
+# laxer one. The mutant only has to be parseable by this checker, never
+# compiled, so no declaration is needed.
+_SEED_CALL = "  %gcseed.probe = call double @js_call_function(double 0.000000e+00)"
+
+
+def _block_defs(lines, lo, hi):
+    """reg -> right-hand side, for definitions in lines[lo:hi]."""
+    defs = {}
+    for j in range(lo, hi):
+        m = _ANY_ASSIGN_RE.match(lines[j])
+        if m:
+            defs[m.group(1)] = m.group(2)
+    return defs
+
+
+def _reaches_alloc(defs, reg, limit=32):
+    """Does `reg` trace back to an allocation through transparent ops only?
+
+    Mirrors `provenance()` deliberately: the seeded site has to be one the
+    checker's own anchoring would accept, otherwise a non-report is correct
+    behaviour being counted as a miss.
+    """
+    seen = set()
+    q = deque([reg])
+    while q and len(seen) < limit:
+        r = q.popleft()
+        if r in seen:
+            continue
+        seen.add(r)
+        rhs = defs.get(r)
+        if rhs is None:
+            continue
+        cm = _ANY_CALL_RHS_RE.match(rhs)
+        if cm:
+            if ALLOC_RE.match(cm.group(1)):
+                return True
+            continue
+        if any(op in rhs for op in TRANSPARENT_OPS):
+            q.extend(re.findall(r"%([\w.$]+)", rhs))
+    return False
+
+
+def _seed_sites(lines):
+    """Yield line indices at which to splice a collection point.
+
+    A site is a `store`/`js_shadow_slot_bind` pair whose stored value traces
+    back to an allocation earlier in the same basic block, where:
+
+      * the slot is bound exactly once in the enclosing function and never
+        `js_shadow_slot_set`, so it cannot already be active at the store --
+        an already-active slot publishes through `bound_ptr` and the checker
+        correctly reports nothing;
+      * nothing in the gap roots the value another way, which would likewise
+        make a non-report correct.
+
+    Both exclusions matter: without them the "misses" this test reports would
+    be the checker behaving properly, and the first person to see a red run
+    would learn to distrust it.
+    """
+    fn_lo, fn_hi = 0, 0
+    block_start = 0
+    fn_text = ""
+    for i, line in enumerate(lines):
+        if line.startswith("define "):
+            fn_lo = i
+            fn_hi = next((k for k in range(i + 1, len(lines))
+                          if lines[k].startswith("}")), len(lines))
+            fn_text = "\n".join(lines[fn_lo:fn_hi])
+            block_start = i + 1
+            continue
+        if LABEL_RE.match(line) or line.startswith("}"):
+            block_start = i + 1
+            continue
+        if i < fn_lo or i >= fn_hi:
+            continue
+        bm = _ANY_BIND_RE.match(line)
+        if not bm:
+            continue
+        slot, alloca = bm.group(1), bm.group(2)
+        if i == 0:
+            continue
+        sm = _ANY_STORE_RE.match(lines[i - 1])
+        if not sm or sm.group(2) != alloca:
+            continue
+        # the slot must not already be live at the store
+        if fn_text.count(f"js_shadow_slot_bind(i32 {slot}, ") != 1:
+            continue
+        if f"js_shadow_slot_set(i32 {slot}," in fn_text:
+            continue
+        defs = _block_defs(lines, block_start, i - 1)
+        if not _reaches_alloc(defs, sm.group(1)):
+            continue
+        # a rooting call already in the block would protect the mutant
+        if any(rc in lines[j] for j in range(block_start, i - 1)
+               for rc in ROOTING_CALLS):
+            continue
+        yield i - 1
+
+
+def _mutate(lines, at):
+    """Splice a collection point immediately above line `at`."""
+    return lines[:at] + [_SEED_CALL] + lines[at:]
+
+
+def seeded_violation_test(paths, moving_only, anchor, want_sites, verbose=False):
+    """Return 0 if every seeded violation was caught, non-zero otherwise."""
+    caught = missed = sites = 0
+    misses = []
+    with tempfile.TemporaryDirectory() as td:
+        mutant = os.path.join(td, "mutant.ll")
+        for p in sorted(paths):
+            if sites >= want_sites:
+                break
+            with open(p, "r", errors="replace") as fh:
+                lines = fh.read().splitlines()
+            try:
+                base, _ = _scan([p], moving_only, anchor)
+            except MalformedIR:
+                continue
+            for at in _seed_sites(lines):
+                if sites >= want_sites:
+                    break
+                with open(mutant, "w") as fh:
+                    fh.write("\n".join(_mutate(lines, at)) + "\n")
+                try:
+                    after, _ = _scan([mutant], moving_only, anchor)
+                except MalformedIR:
+                    continue
+                sites += 1
+                if len(after) > len(base):
+                    caught += 1
+                    if verbose:
+                        print(f"  seeded {os.path.basename(p)}:{at + 1} -> caught")
+                else:
+                    missed += 1
+                    misses.append(f"{p}:{at + 1}")
+
+    print(f"=== seeded violations: {sites} planted, {caught} caught, "
+          f"{missed} MISSED")
+    if sites == 0:
+        print("error: could not seed a single violation into the corpus. The "
+              "mutator looks for a store/bind pair whose value traces back to "
+              "an allocation in the same block; finding none means perry's "
+              "emitted IR no longer has the shape this checker anchors on, so "
+              "a clean verdict from it would be meaningless.", file=sys.stderr)
+        return 2
+    if sites < want_sites:
+        print(f"error: only {sites} seed site(s) found, wanted {want_sites}. "
+              "Too narrow a sample to claim the checker still fires.",
+              file=sys.stderr)
+        return 2
+    if missed:
+        print("error: the checker did NOT report these seeded violations:",
+              file=sys.stderr)
+        for m in misses[:20]:
+            print(f"  {m}", file=sys.stderr)
+        print("A planted collection point between an allocation and its root "
+              "store went unreported. The checker is not reading this IR the "
+              "way it thinks it is; a clean verdict from it means nothing "
+              "until this is explained.", file=sys.stderr)
+        return 1
+    return 0
 
 
 # ------------------------------------------------------------- self-test ---
@@ -1268,7 +1624,7 @@ def _scan(paths, moving_only, anchor):
         if BIND_RE.search(ins.text)
     )
     found = [
-        (mod, v)
+        v
         for mod, fs in parsed
         for f in fs
         for v in check_func(mod, f, moving_only, poll_reaching, anchor)
@@ -1318,7 +1674,7 @@ def self_test():
             print(f"self-test FAIL: planted fixture -> {binds} binds, expected 2",
                   file=sys.stderr)
             ok = False
-        if ok and not all(v.moving for _m, v in found):
+        if ok and not all(v.moving for v in found):
             print("self-test FAIL: both planted violations reach a moving minor "
                   "(js_call_function / js_gc_loop_safepoint) and must be "
                   "classified MOVING", file=sys.stderr)
@@ -1408,6 +1764,122 @@ def self_test():
                   f"bind for every alloca, so the unrooted check must report 0, "
                   f"got {len(found)}", file=sys.stderr)
             ok = False
+        # ---- the allowlist must not be able to absorb a new violation ------
+        #
+        # These arms exist because the allowlist is the only component whose
+        # job is to stop the gate failing. Every one of them is a way it could
+        # quietly become a blanket suppression.
+        planted_hits, _ = _scan([planted], False, "alloc")
+        fps = sorted({v.fingerprint for v in planted_hits})
+        if len(fps) != 2:
+            print(f"self-test FAIL: planted fixture -> {len(fps)} distinct "
+                  "fingerprints, expected 2 (the two functions differ, so the "
+                  "fingerprint must distinguish them)", file=sys.stderr)
+            ok = False
+
+        def _write_allowlist(entries):
+            p = os.path.join(td, "allow.json")
+            with open(p, "w") as fh:
+                json.dump({"entries": entries}, fh)
+            return p
+
+        good_reason = ("tracked in the issue above; the receiver is rooted by "
+                       "the caller one frame up, verified by hand")
+
+        if len(fps) == 2:
+            # 1. Full coverage suppresses.
+            al = load_allowlist(_write_allowlist([
+                {"fingerprint": fp, "issue": "#0000",
+                 "justification": good_reason} for fp in fps]))
+            _sup, rem = apply_allowlist(planted_hits, al)
+            if rem or stale_entries(al):
+                print("self-test FAIL: an allowlist naming every planted "
+                      "fingerprint should suppress all of them and go stale on "
+                      "none", file=sys.stderr)
+                ok = False
+
+            # 2. Partial coverage still fails -- the uncovered one is "new".
+            al = load_allowlist(_write_allowlist([
+                {"fingerprint": fps[0], "issue": "#0000",
+                 "justification": good_reason}]))
+            _sup, rem = apply_allowlist(planted_hits, al)
+            if len(rem) != 1:
+                print(f"self-test FAIL: one entry covering one of two "
+                      f"violations left {len(rem)} unallowed, expected 1. An "
+                      "allowlist that suppresses a violation it does not name "
+                      "is a blanket suppression.", file=sys.stderr)
+                ok = False
+
+            # 3. `count` is a quota, not a licence for the shape. Feed the same
+            #    violation twice against a count of 1 and the second must
+            #    survive -- this is the "new violation while the total is
+            #    unchanged" case that a numeric threshold cannot see.
+            al = load_allowlist(_write_allowlist([
+                {"fingerprint": fps[0], "issue": "#0000", "count": 1,
+                 "justification": good_reason}]))
+            same = [v for v in planted_hits if v.fingerprint == fps[0]]
+            _sup, rem = apply_allowlist(same + same, al)
+            if len(rem) != 1:
+                print(f"self-test FAIL: count=1 against two hits of the same "
+                      f"fingerprint left {len(rem)} unallowed, expected 1",
+                      file=sys.stderr)
+                ok = False
+
+            # 4. An entry that matches nothing is an error, so a fixed bug's
+            #    tombstone cannot linger and widen coverage later.
+            al = load_allowlist(_write_allowlist([
+                {"fingerprint": "nosuch::nosuch::js_object_alloc->js_x",
+                 "issue": "#0000", "justification": good_reason}]))
+            apply_allowlist(planted_hits, al)
+            if not stale_entries(al):
+                print("self-test FAIL: an allowlist entry matching nothing must "
+                      "be reported stale", file=sys.stderr)
+                ok = False
+
+        # 5. Under-documented and malformed entries are refused outright.
+        for bad, why in (
+            ([{"fingerprint": "a::b::c->d", "issue": "#1",
+               "justification": "known"}], "a too-short justification"),
+            ([{"fingerprint": "a::b::c->d", "justification": good_reason}],
+             "a missing issue"),
+            ([{"fingerprint": "a::b::c->d", "issue": "#1", "count": 0,
+               "justification": good_reason}], "count=0"),
+            ([{"fingerprint": "a::b::c->d", "issue": "#1",
+               "justification": good_reason},
+              {"fingerprint": "a::b::c->d", "issue": "#2",
+               "justification": good_reason}], "a duplicate fingerprint"),
+        ):
+            try:
+                load_allowlist(_write_allowlist(bad))
+            except AllowlistError:
+                pass
+            else:
+                print(f"self-test FAIL: {why} must be rejected", file=sys.stderr)
+                ok = False
+
+        # ---- the corpus mutator must be able to manufacture a violation ----
+        # (proves seeded_violation_test's machinery works even before it is
+        #  pointed at real IR, so a CI run that finds no sites is a real signal
+        #  about the IR rather than a broken mutator.)
+        with open(clean, "r") as fh:
+            clean_lines = fh.read().splitlines()
+        sites = list(_seed_sites(clean_lines))
+        if not sites:
+            print("self-test FAIL: the mutator found no seed site in the clean "
+                  "fixture, which is a rooted alloc followed by a collecting "
+                  "call — the exact shape it exists to find", file=sys.stderr)
+            ok = False
+        else:
+            mutant = os.path.join(td, "mutant.ll")
+            with open(mutant, "w") as fh:
+                fh.write("\n".join(_mutate(clean_lines, sites[0])) + "\n")
+            got, _ = _scan([mutant], False, "alloc")
+            if not got:
+                print("self-test FAIL: sinking the root store below the "
+                      "collecting call in the CLEAN fixture must produce a "
+                      "violation; the mutator or the checker is broken",
+                      file=sys.stderr)
+                ok = False
 
     print("self-test OK" if ok else "self-test FAILED")
     return 0 if ok else 1
@@ -1451,6 +1923,21 @@ def main():
                          "holds a heap value across a collecting call and is "
                          "loaded below it, with no js_shadow_slot_bind anywhere. "
                          "Disjoint from the bind-anchored check by construction.")
+    ap.add_argument("--min-funcs", type=int, default=1, metavar="N",
+                    help="fail unless at least N functions were checked (default 1). "
+                         "Files and binds can both look healthy while the corpus "
+                         "is one module deep; this asserts breadth.")
+    ap.add_argument("--allowlist", metavar="PATH",
+                    help="JSON file of known-remaining violations, one entry each "
+                         "with an issue and a written justification. An entry that "
+                         "matches nothing is an error, and an entry suppresses at "
+                         "most its `count` hits -- so a NEW violation fails even "
+                         "when the total is below some previous number.")
+    ap.add_argument("--seeded-violations", type=int, default=0, metavar="N",
+                    help="after checking, plant N synthetic violations into the "
+                         "real corpus IR and require every one to be reported. "
+                         "Proves the checker can still fail against the IR perry "
+                         "actually emits, not just against frozen fixtures.")
     ns = ap.parse_args()
 
     # A knob that is silently ignored is a disarmed knob: `--max-stale 0`
@@ -1464,6 +1951,14 @@ def main():
 
     if ns.self_test:
         return self_test()
+
+    allowlist = {}
+    if ns.allowlist:
+        try:
+            allowlist = load_allowlist(ns.allowlist)
+        except AllowlistError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
 
     moving_only = ns.moving_only
     anchor = "any" if ns.any_def else "alloc"
@@ -1552,42 +2047,98 @@ def main():
             return 2
         return 1 if total else 0
 
-    total = 0
-    moving_total = 0
-    per_kind = defaultdict(int)
-    per_kind_moving = defaultdict(int)
-    out = []
+    n_funcs = sum(len(fs) for _m, fs in parsed)
+
+    found = []
     for mod, fs in parsed:
         for f in fs:
-            for v in check_func(mod, f, moving_only, poll_reaching, anchor):
-                total += 1
-                per_kind[v.alloc.callee] += 1
-                if v.moving:
-                    moving_total += 1
-                    per_kind_moving[v.alloc.callee] += 1
-                cs = sorted({c.callee for c in v.collectors})
-                out.append(
-                    f"{mod}::{v.func}\n"
-                    f"  alloc  : {v.alloc.text.strip()}\n"
-                    f"  store  : {v.store.text.strip()}\n"
-                    f"  bind   : slot {v.slot}  {v.bind.text.strip()}\n"
-                    f"  between: {', '.join(cs[:8])}"
-                    f"{'  (+%d more)' % (len(cs) - 8) if len(cs) > 8 else ''}\n"
-                    f"  MOVING : {('YES via ' + ', '.join(v.movers[:3])) if v.moving else 'no'}\n"
-                )
+            found.extend(check_func(mod, f, moving_only, poll_reaching, anchor))
+
+    suppressed, remaining = apply_allowlist(found, allowlist)
+
+    def render(v):
+        cs = sorted({c.callee for c in v.collectors})
+        return (
+            f"{v.module}::{v.func}\n"
+            f"  alloc  : {v.alloc.text.strip()}\n"
+            f"  store  : {v.store.text.strip()}\n"
+            f"  bind   : slot {v.slot}  {v.bind.text.strip()}\n"
+            f"  between: {', '.join(cs[:8])}"
+            f"{'  (+%d more)' % (len(cs) - 8) if len(cs) > 8 else ''}\n"
+            f"  MOVING : {('YES via ' + ', '.join(v.movers[:3])) if v.moving else 'no'}\n"
+            f"  fingerprint: {v.fingerprint}\n"
+        )
+
+    total = len(found)
+    moving_total = sum(1 for v in found if v.moving)
+    per_kind = defaultdict(int)
+    per_kind_moving = defaultdict(int)
+    for v in found:
+        per_kind[v.alloc.callee] += 1
+        if v.moving:
+            per_kind_moving[v.alloc.callee] += 1
+
     if verbose:
-        print("\n".join(out))
-    print(f"=== files: {len(paths)}   root stores: {n_binds}   violations: {total}"
-          f"   (moving-minor reachable: {moving_total})")
+        print("\n".join(render(v) for v in found))
+
+    # The breadth line CI reads. Printing functions and modules -- not just a
+    # violation count -- is what makes a silently-empty or silently-shrunken run
+    # visible in the log instead of indistinguishable from a clean one.
+    print(f"=== checked {n_funcs} functions / {len(parsed)} modules "
+          f"({len(paths)} .ll files, {n_binds} root stores)")
+    print(f"=== violations: {total}   (moving-minor reachable: {moving_total})")
+    if allowlist:
+        print(f"=== allowlisted: {len(suppressed)} hit(s) across "
+              f"{len(allowlist)} entr(y/ies);  unallowed: {len(remaining)}")
     for k, n in sorted(per_kind.items(), key=lambda kv: -kv[1]):
         print(f"  {n:6d}  ({per_kind_moving.get(k, 0):5d} moving)  {k}")
+
+    # --- subject-liveness assertions, before any verdict is announced -------
     if n_binds < ns.min_binds:
         print(f"error: {n_binds} root store(s) in the corpus, need at least "
               f"{ns.min_binds}. The subject of this check never ran — a clean "
               "verdict here means the IR was not the IR you think it is "
               "(compile with PERRY_INLINE_SHADOW_SLOT=0).", file=sys.stderr)
         return 2
-    return 1 if total else 0
+    if n_funcs < ns.min_funcs:
+        print(f"error: checked {n_funcs} function(s), need at least "
+              f"{ns.min_funcs}. The corpus compiled but is too thin to have "
+              "exercised the lowerings this invariant runs through.",
+              file=sys.stderr)
+        return 2
+
+    # --- allowlist hygiene --------------------------------------------------
+    stale = stale_entries(allowlist)
+    if stale:
+        print("error: allowlist entries matched nothing:", file=sys.stderr)
+        for e in stale:
+            print(f"  {e.fingerprint}  ({e.issue})", file=sys.stderr)
+        print("Either the violation was fixed — delete the entry in the same "
+              "PR, that is the ratchet — or the corpus shrank and no longer "
+              "contains the module it names, which means this run checked less "
+              "than it claims to.", file=sys.stderr)
+        return 2
+
+    if remaining:
+        if not verbose:
+            print("\n".join(render(v) for v in remaining))
+        print(f"error: {len(remaining)} GC root-dominance violation(s) not "
+              "covered by the allowlist.", file=sys.stderr)
+        print("A GC-managed value is live across a collection point without "
+              "being reachable from a root. See docs/src/internals/"
+              "gc-rooting-invariant.md. If this is genuinely known and tracked, "
+              "add an entry with an issue and a justification — never a count "
+              "bump.", file=sys.stderr)
+        return 1
+
+    # --- can this gate still fail? ------------------------------------------
+    if ns.seeded_violations:
+        rc = seeded_violation_test(paths, moving_only, anchor,
+                                   ns.seeded_violations, verbose)
+        if rc:
+            return rc
+
+    return 0
 
 
 if __name__ == "__main__":

@@ -19,16 +19,37 @@ name: GC Root Dominance
 #
 #   1. no `continue-on-error`, no `|| true`, no pipe between the checker and
 #      the shell's exit status;
-#   2. NOT yet in branch protection's required contexts — deliberately, because
-#      a new gate has never been green and promoting it immediately blocks every
-#      open PR. Promote after one clean week on `main`;
+#   2. NOT yet in branch protection's required contexts. This was deliberate at
+#      first — a new gate has never been green, so promoting it immediately
+#      blocks every open PR — but the second step was never taken, and in the
+#      meantime the job WAS red on `main` and blocked nothing: the five
+#      ClassExprFresh hits now tracked in #7211 have been reported on every run
+#      since #7198 and went unread. That is hazard 2 doing exactly what the
+#      corollary in CLAUDE.md warns about.
+#
+#      **ACTION REQUIRED, and it is not something this workflow can do to
+#      itself**: with the allowlist below the job is green on `main`, so a
+#      repo admin must add `gc-root-dominance` to branch protection's required
+#      contexts. Until that happens this file is documentation, not a gate.
+#      See docs/src/internals/gc-rooting-invariant.md, "Promoting this gate".
 #   3. `concurrency` cancels pull-request runs only, never `main` runs;
-#   4. the subject is ASSERTED live, not assumed. `--self-test` proves the
-#      checker still reports a planted violation and still clears the control,
-#      and `--min-files` / `--min-binds` refuse a clean verdict over a corpus
-#      that contained no modules or no root stores. An empty `.perry-trace/llvm`
-#      is a routine outcome of a failed compile, so "0 violations" over 0 files
-#      must be an error rather than a pass.
+#   4. the subject is ASSERTED live, not assumed, at three levels.
+#      `--self-test` proves the checker still reports a planted violation in
+#      hand-written IR and still clears the control. `--seeded-violations`
+#      goes further and plants collection points into the REAL corpus,
+#      requiring every one to be reported -- that is what catches the case
+#      where perry's emitted IR drifts to a shape the parser can no longer
+#      read, which frozen fixtures cannot detect. And `--min-files` /
+#      `--min-binds` / `--min-funcs` refuse a clean verdict over a corpus with
+#      too few modules, root stores or functions to have exercised anything.
+#      An empty `.perry-trace/llvm` is a routine outcome of a failed compile,
+#      so "0 violations" over 0 files must be an error rather than a pass.
+#
+# Known-remaining violations live in scripts/gc_root_dominance_allowlist.json,
+# one named entry each with an issue and a written justification -- NOT a
+# numeric threshold, which cannot tell a new violation from an old one. An
+# entry that matches nothing fails the build, so a fixed bug's entry must be
+# deleted rather than left to widen coverage later.
 
 on:
   pull_request:
@@ -93,60 +114,35 @@ jobs:
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
 
+      # The source list and the env knobs live in the script, not here, so that
+      # reproducing a CI failure is one command rather than a re-read of this
+      # YAML. A retyped invocation that drops PERRY_GC_MOVING_LOOP_POLLS
+      # produces IR in which the bug is not expressible at all, and the local
+      # run then "cannot reproduce" a real finding.
       - name: Emit the IR corpus
-        env:
-          # PERRY_GC_MOVING_LOOP_POLLS=1 is what puts `js_gc_loop_safepoint` in
-          # the IR, which is what the MOVING classification keys on. It is off
-          # by default (#7161 stopgap), so without it this gate would run over
-          # IR that cannot express the bug — hazard 4 again.
-          PERRY_GC_MOVING_LOOP_POLLS: "1"
-          # Makes every root store the @js_shadow_slot_bind call form. The #7088
-          # inline diamond is equivalent but harder to anchor on.
-          PERRY_INLINE_SHADOW_SLOT: "0"
-          PERRY_NO_AUTO_OPTIMIZE: "1"
-        run: |
-          set -euo pipefail
-          mkdir -p ir-corpus
-          # A spread of shapes that exercise the lowerings this invariant runs
-          # through: construction, object/array literals and spreads, class
-          # expressions with statics, property and element stores, closures.
-          # Kept to test-files/ so the corpus is versioned with the repo rather
-          # than depending on a private workload.
-          shopt -s nullglob
-          sources=(
-            test-files/test_gap_gc_*.ts
-            test-files/test_gap_class*.ts
-            test-files/test_gap_object*.ts
-            test-files/test_gap_static*.ts
-            test-files/test_gap_prop*.ts
-          )
-          if [ "${#sources[@]}" -eq 0 ]; then
-            echo "::error::no corpus sources matched; the glob is stale"
-            exit 1
-          fi
-          for src in "${sources[@]}"; do
-            name="$(basename "$src" .ts)"
-            rm -rf .perry-trace/llvm
-            # A source that fails to compile must not silently shrink the
-            # corpus: --min-files below is the backstop, but say so here too.
-            if ! ./target/release/perry compile "$src" -o "/tmp/$name" --trace llvm >/dev/null 2>&1; then
-              echo "::warning::$src did not compile; skipping"
-              continue
-            fi
-            for ll in .perry-trace/llvm/*.ll; do
-              cp "$ll" "ir-corpus/${name}__$(basename "$ll")"
-            done
-          done
-          echo "corpus: $(find ir-corpus -name '*.ll' | wc -l) .ll files"
+        run: ./scripts/gc_root_dominance_corpus.sh ir-corpus
 
       - name: Check root-store dominance
         run: |
           set -euo pipefail
-          # No pipe: the checker's own exit status is the job's. --min-binds
-          # asserts the corpus actually contained root stores, so a green
-          # verdict cannot come from IR that never had a subject.
+          # No pipe: the checker's own exit status is the job's.
+          #
+          # The floors are asserted, not hoped for. On the corpus as of this
+          # commit the run reports ~1993 functions / 117 modules / 2501 root
+          # stores, so these sit below that with room for churn and well above
+          # "something compiled". Raise them when the corpus grows; never lower
+          # one to make a run pass -- a shrinking corpus is the finding.
+          #
+          # --seeded-violations plants 40 collection points into this very IR
+          # and requires all 40 to be reported. That is the arm that fails if
+          # the checker has stopped understanding perry's output, which is the
+          # only way a green verdict here could be a lie.
           python3 scripts/gc_root_dominance_check.py ir-corpus \
-            --moving-only --min-files 5 --min-binds 50 -v
+            --moving-only \
+            --min-files 90 --min-binds 1500 --min-funcs 1200 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
 
       - name: Upload the IR corpus on failure
         if: failure()
