@@ -1030,6 +1030,22 @@ mod r0_bucket_tests {
         assert_eq!(json["summary"]["masked_by_dedup"], 7);
     }
 
+    /// The rule-to-tier invariant is asserted, not resolved silently — and the
+    /// assertion is exercised, so it is not a guard nobody has watched fire.
+    ///
+    /// `debug_assert` is compiled out in release, which is the right trade for
+    /// a report-only invariant: the cost of being wrong is one mislabelled
+    /// bucket, not a miscompile. This test runs in the debug profile where the
+    /// assertion is live.
+    #[test]
+    #[should_panic(expected = "carries two tiers")]
+    #[cfg(debug_assertions)]
+    fn one_rule_carrying_two_tiers_is_a_hard_error() {
+        let a = alloc_site("return", RULE1, Tier::CompilerLimitation, 0);
+        let b = alloc_site("return", RULE1, Tier::Fixable, 1);
+        let _ = render_json_with(&[a, b], 0);
+    }
+
     /// An entry that is not an allocation site contributes to `by_rule` and to
     /// nothing else — the alloc table must not grow rows for ordinary locals.
     #[test]
