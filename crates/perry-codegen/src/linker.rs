@@ -46,8 +46,76 @@ static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();
 /// may stay in every *output* name, where it costs nothing and still closes
 /// #509. The one caveat is `PERRY_DEBUG_SYMBOLS`, which adds `-g` and pulls the
 /// absolute `.ll` path plus `DW_AT_comp_dir` into DWARF — objects built with it
-/// are reproducible only for a fixed `TMPDIR` and working directory.
+/// are reproducible only for a fixed `TMPDIR` and working directory. That
+/// caveat is also why the two layouts in `LlLayout` exist.
 static TEMP_NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Which temp-file layout one `.ll` uses — and, inseparably, whether the file
+/// survives the compile (#7144).
+///
+/// The rule, stated once: **the `.ll` lives at a path whose stability matches
+/// what the emitted object records about it.**
+///
+/// * `Scratch` (default): the object records the translation unit's *basename*
+///   and nothing else — the table above, measured, not assumed. So the basename
+///   must be content-addressed and the *directory* is free. Give every call its
+///   own directory and remove it when the compile succeeds. Nothing is shared,
+///   so the unlink cannot race a sibling worker that computed the same content
+///   hash. That race is why #7135 stopped deleting the `.ll` at all, and why
+///   #7144 then measured one leftover per *distinct IR ever compiled* — 1627
+///   files / 951.8 MB on one dev box after a day, 29 GB on another.
+/// * `DebugShared` (`PERRY_DEBUG_SYMBOLS`): clang also gets `-g`, which puts
+///   the `.ll`'s **absolute** path plus `DW_AT_comp_dir` into DWARF. The file is
+///   then referenced by the shipped object, so it must (a) keep a stable
+///   absolute path — flat in the temp root, content-addressed, exactly the
+///   pre-#7144 layout — and (b) outlive the compile, or a debugger stepping
+///   into generated code has nothing to resolve. These are retained on purpose.
+///   They are bounded by the distinct IR compiled *with `-g`*, and a debug build
+///   asking for debug info is the one case where keeping the source is the
+///   point rather than a leak.
+///
+/// The layout and clang's `-g` flag must never disagree: deleting a `.ll` that
+/// DWARF names by absolute path silently breaks source-level debugging. Both
+/// are therefore derived from one `TempFilePolicy` value at a single call site,
+/// and `debug_symbols_layout_and_g_flag_agree` pins that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LlLayout {
+    /// Per-call directory, removed on success.
+    Scratch,
+    /// Flat, content-addressed, retained — the object points at it.
+    DebugShared,
+}
+
+/// The two environment inputs that decide what happens to the temp files.
+///
+/// Read once, in `compile_ll_to_object`, and threaded down rather than probed
+/// where they are used: the lifecycle is then testable without a test mutating
+/// process-wide environment underneath every other test in the binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TempFilePolicy {
+    /// `PERRY_LLVM_KEEP_IR` — retain every intermediate and write the compile
+    /// plan alongside it.
+    keep: bool,
+    /// `PERRY_DEBUG_SYMBOLS` — clang gets `-g`; see `LlLayout::DebugShared`.
+    debug_symbols: bool,
+}
+
+impl TempFilePolicy {
+    fn from_env() -> Self {
+        Self {
+            keep: env::var_os("PERRY_LLVM_KEEP_IR").is_some(),
+            debug_symbols: env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
+        }
+    }
+
+    fn layout(self) -> LlLayout {
+        if self.debug_symbols {
+            LlLayout::DebugShared
+        } else {
+            LlLayout::Scratch
+        }
+    }
+}
 
 /// FNV-1a 64-bit over `ll_text`. Stable across platforms and rustc versions
 /// (unlike `DefaultHasher`), used only to content-address temp IR filenames so
@@ -81,6 +149,11 @@ fn ll_content_hash(ll_text: &str) -> u64 {
 ///   same-source compiles failed with "Failed to read clang output … No such
 ///   file or directory". This is #509 again, one scope out.
 ///
+/// Under `LlLayout::Scratch` the two names additionally sit inside a directory
+/// that belongs to this call alone (#7144). The directory name is *not*
+/// content-addressed — it must not be, or two callers would share it again —
+/// and it does not have to be: only the basename reaches the object.
+///
 /// `pid` and `counter` are parameters rather than read in here so the property
 /// above is testable without spawning processes.
 fn llvm_temp_paths_for(
@@ -88,21 +161,53 @@ fn llvm_temp_paths_for(
     ll_text: &str,
     pid: u32,
     counter: u64,
-) -> (PathBuf, PathBuf) {
+    layout: LlLayout,
+) -> LlvmTempPaths {
     let hash = ll_content_hash(ll_text);
-    let ll_path = tmp_dir.join(format!("perry_llvm_{hash:016x}.ll"));
-    let obj_path = tmp_dir.join(format!("perry_llvm_{hash:016x}_{pid:x}_{counter:x}.o"));
-    (ll_path, obj_path)
+    let ll_name = format!("perry_llvm_{hash:016x}.ll");
+    // The `.o` keeps its uniquifiers even inside a private directory. They cost
+    // nothing, and the day someone flattens the layout again the object must
+    // not silently go back to colliding across processes (#7140).
+    let obj_name = format!("perry_llvm_{hash:016x}_{pid:x}_{counter:x}.o");
+    match layout {
+        LlLayout::Scratch => {
+            let scratch = tmp_dir.join(format!("perry_llvm_scratch_{pid:x}_{counter:x}"));
+            LlvmTempPaths {
+                ll_path: scratch.join(&ll_name),
+                obj_path: scratch.join(&obj_name),
+                scratch_dir: Some(scratch),
+            }
+        }
+        LlLayout::DebugShared => LlvmTempPaths {
+            ll_path: tmp_dir.join(&ll_name),
+            obj_path: tmp_dir.join(&obj_name),
+            scratch_dir: None,
+        },
+    }
+}
+
+/// Temp paths for one `compile_ll_to_object` call.
+#[derive(Debug, Clone)]
+struct LlvmTempPaths {
+    /// Directory owned exclusively by this call, removed once the object bytes
+    /// have been read. `None` under `LlLayout::DebugShared`, where the `.ll` is
+    /// shared between callers and deliberately retained.
+    scratch_dir: Option<PathBuf>,
+    ll_path: PathBuf,
+    obj_path: PathBuf,
 }
 
 /// `llvm_temp_paths_for` with this process's pid and the next counter value.
-/// Returns `(ll_path, obj_path, pid, counter)` — the last two also name the
+/// Returns the paths plus `(pid, counter)` — the last two also name the
 /// atomic-write staging file.
-fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str) -> (PathBuf, PathBuf, u32, u64) {
+fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str, layout: LlLayout) -> (LlvmTempPaths, u32, u64) {
     let pid = std::process::id();
     let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let (ll_path, obj_path) = llvm_temp_paths_for(tmp_dir, ll_text, pid, counter);
-    (ll_path, obj_path, pid, counter)
+    (
+        llvm_temp_paths_for(tmp_dir, ll_text, pid, counter, layout),
+        pid,
+        counter,
+    )
 }
 
 /// Staging name for the atomic `.ll` write. Must be unique per process for the
@@ -300,6 +405,7 @@ fn build_clang_compile_plan(
     target_triple: Option<&str>,
     ll_byte_size: usize,
     ll_fn_count: usize,
+    debug_symbols: bool,
 ) -> ClangCompilePlan {
     let effective_target = target_triple
         .map(|s| s.to_string())
@@ -335,7 +441,11 @@ fn build_clang_compile_plan(
     };
 
     let mut clang_args = vec!["-c".to_string(), opt_flag.to_string()];
-    if std::env::var("PERRY_DEBUG_SYMBOLS").is_ok() {
+    // `-g` and `LlLayout::DebugShared` are two consequences of ONE decision
+    // (`TempFilePolicy::debug_symbols`) and are passed the same value from the
+    // same call site. If they ever disagree, we delete a `.ll` that DWARF names
+    // by absolute path and source-level debugging breaks silently (#7144).
+    if debug_symbols {
         clang_args.push("-g".to_string());
     }
     clang_args.push("-fno-math-errno".to_string());
@@ -389,6 +499,40 @@ fn build_clang_compile_plan(
 /// resulting `.o`, and clean up both on success. On failure the temp files
 /// are left behind for debugging — the caller can `grep /tmp/perry_llvm_*`.
 pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Result<Vec<u8>> {
+    compile_ll_to_object_in(
+        &env::temp_dir(),
+        ll_text,
+        target_triple,
+        TempFilePolicy::from_env(),
+    )
+}
+
+/// `compile_ll_to_object` with the temp root and the file-lifetime policy as
+/// arguments instead of process state.
+///
+/// Both are parameters so the temp-file *lifecycle* — the subject of #7144 — is
+/// testable: a test can hand this an empty directory of its own and assert what
+/// is left in it, without racing every other test in the binary over `TMPDIR`
+/// or `PERRY_LLVM_KEEP_IR`.
+///
+/// Cleanup policy, in one place:
+///
+/// * **success**: the object is read into memory and removed; under
+///   `LlLayout::Scratch` the whole per-call directory goes with it, so a
+///   compile leaves nothing behind (#7144).
+/// * **failure** (clang non-zero, or the object cannot be read): everything is
+///   left on disk. The error message names the `.ll`, and a failed compile is
+///   exactly when someone wants to look at the IR that produced it.
+/// * **`PERRY_LLVM_KEEP_IR`**: everything is kept and its location printed,
+///   plus the compile plan as JSON.
+/// * **`PERRY_DEBUG_SYMBOLS`**: the `.ll` is kept even on success — the object's
+///   DWARF references it by absolute path. See `LlLayout`.
+fn compile_ll_to_object_in(
+    tmp_dir: &Path,
+    ll_text: &str,
+    target_triple: Option<&str>,
+    policy: TempFilePolicy,
+) -> Result<Vec<u8>> {
     // Validate the toolchain before creating the potentially large `.ll`
     // scratch file. Unsupported clang releases should fail without leaving
     // an artifact that was never passed to the compiler.
@@ -414,10 +558,21 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     })?;
     ensure_supported_clang(&clang)?;
 
-    let tmp_dir = env::temp_dir();
     // #7131: content-address the `.ll` basename (clang embeds it into the
     // object on ELF). #509: keep the `.o` unique via the per-call counter.
-    let (ll_path, obj_path, write_pid, write_nonce) = llvm_temp_paths(&tmp_dir, ll_text);
+    // #7144: put both under a directory this call owns, so the `.ll` can be
+    // deleted again without racing a sibling that hashed the same IR.
+    let layout = policy.layout();
+    let (paths, write_pid, write_nonce) = llvm_temp_paths(tmp_dir, ll_text, layout);
+    let LlvmTempPaths {
+        scratch_dir,
+        ll_path,
+        obj_path,
+    } = paths;
+    if let Some(dir) = &scratch_dir {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("Failed to create temp dir at {}", dir.display()))?;
+    }
     write_ll_atomically(&ll_path, ll_text, write_pid, write_nonce)?;
 
     let plan = build_clang_compile_plan(
@@ -427,6 +582,7 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
         target_triple,
         ll_text.len(),
         count_ll_functions(ll_text),
+        policy.debug_symbols,
     );
 
     // Pre-flight probe: capture clang's default Target: line once per process,
@@ -499,15 +655,21 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     let bytes = fs::read(&obj_path)
         .with_context(|| format!("Failed to read clang output at {}", obj_path.display()))?;
 
-    // Clean up on success. The content-addressed `.ll` is **shared** across
-    // concurrent `compile_ll_to_object` calls with identical IR (#7131), so we
-    // must NOT delete it here — a sibling worker may still have clang open on
-    // that path (CodeRabbit). Only the unique `.o` is removed. The `.ll` is
-    // left in the process temp dir (same content is reused on cache misses;
-    // OS temp cleanup / `PERRY_LLVM_KEEP_IR` handle the rest). When KEEP_IR is
-    // set we also retain the object and write compile metadata.
-    let keep = env::var_os("PERRY_LLVM_KEEP_IR").is_some();
-    if keep {
+    // Clean up on success.
+    //
+    // #7135 could not delete the `.ll`: it had just made the name a pure
+    // function of the IR, so two workers holding identical IR *shared* that
+    // path and either could unlink it in the window between the other computing
+    // the path and clang opening it. The consequence (#7144) was that nothing
+    // ever deleted them — one file per distinct IR ever compiled, measured at
+    // 29 GB on a dev box.
+    //
+    // The fix is not a more careful delete, it is removing the sharing: the
+    // `.ll` now sits in a directory that belongs to this call, so unlinking it
+    // is unobservable to anyone else and there is no window to lose. The name
+    // clang records — the basename — is untouched, so emission stays
+    // deterministic (#7131).
+    if policy.keep {
         let _ = fs::write(&plan.stderr_remarks_path, &output.stderr);
         let metadata_path = PathBuf::from(format!("{}.compile-plan.json", plan.obj_path.display()));
         write_compile_plan_metadata(&plan, &metadata_path)?;
@@ -519,6 +681,19 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
         );
     } else {
         let _ = fs::remove_file(&plan.obj_path);
+        match &scratch_dir {
+            // Ours alone: `remove_dir_all` rather than unlinking the two names
+            // we know about, so anything clang chose to drop beside them goes
+            // too and the directory cannot survive as an empty husk.
+            Some(dir) => {
+                let _ = fs::remove_dir_all(dir);
+            }
+            // `LlLayout::DebugShared`: the object's DWARF names this `.ll` by
+            // absolute path. Deleting it would leave a debug build that cannot
+            // show the source it was built from — the one case where retaining
+            // the IR is the feature.
+            None => {}
+        }
     }
 
     Ok(bytes)
@@ -1367,6 +1542,7 @@ mod tests {
             None,
             0,
             0,
+            false,
         );
         assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
         // Small module → optimized at -O3 (#4880).
@@ -1394,6 +1570,7 @@ mod tests {
             None,
             huge,
             many_funcs,
+            false,
         );
         assert!(plan.clang_args.contains(&"-Os".to_string()));
         assert!(!plan.clang_args.contains(&"-O3".to_string()));
@@ -1413,6 +1590,7 @@ mod tests {
             None,
             huge,
             2, // ~3 MB/fn — far above the density cap
+            false,
         );
         assert!(plan.clang_args.contains(&"-O0".to_string()));
         assert!(!plan.clang_args.contains(&"-O3".to_string()));
@@ -1428,6 +1606,7 @@ mod tests {
             Some("x86_64-unknown-linux-gnu"),
             0,
             0,
+            false,
         );
         assert_eq!(plan.effective_target, "x86_64-unknown-linux-gnu");
         assert_eq!(plan.native_tuning_arg, None);
@@ -1520,6 +1699,7 @@ mod tests {
             Some("x86_64-unknown-linux-gnu"),
             0,
             0,
+            false,
         );
         write_compile_plan_metadata(&plan, &temp).unwrap();
         let text = fs::read_to_string(&temp).unwrap();
@@ -1570,8 +1750,10 @@ mod tests {
         // basename still differs via the counter.
         let tmp = env::temp_dir();
         let ir = "define void @f() {\n  ret void\n}\n";
-        let (ll_a, obj_a, _, _) = llvm_temp_paths(&tmp, ir);
-        let (ll_b, obj_b, _, _) = llvm_temp_paths(&tmp, ir);
+        let (a, _, _) = llvm_temp_paths(&tmp, ir, LlLayout::Scratch);
+        let (b, _, _) = llvm_temp_paths(&tmp, ir, LlLayout::Scratch);
+        let (ll_a, obj_a) = (&a.ll_path, &a.obj_path);
+        let (ll_b, obj_b) = (&b.ll_path, &b.obj_path);
         assert_eq!(
             ll_a.file_name(),
             ll_b.file_name(),
@@ -1583,8 +1765,12 @@ mod tests {
             ".o basenames must stay unique across calls (#509)"
         );
         // Different IR → different .ll basename.
-        let (ll_c, _, _, _) = llvm_temp_paths(&tmp, "define void @g() {\n  ret void\n}\n");
-        assert_ne!(ll_a.file_name(), ll_c.file_name());
+        let (c, _, _) = llvm_temp_paths(
+            &tmp,
+            "define void @g() {\n  ret void\n}\n",
+            LlLayout::Scratch,
+        );
+        assert_ne!(ll_a.file_name(), c.ll_path.file_name());
         // No pid / wall-clock digits of variable width — only hex hash.
         let name = ll_a.file_name().unwrap().to_string_lossy();
         assert!(
@@ -1616,8 +1802,10 @@ mod tests {
         let ir = "define void @f() {\n  ret void\n}\n";
 
         // Same IR, same counter, DIFFERENT process.
-        let (ll_p1, obj_p1) = llvm_temp_paths_for(&tmp, ir, 1111, 0);
-        let (ll_p2, obj_p2) = llvm_temp_paths_for(&tmp, ir, 2222, 0);
+        let p1 = llvm_temp_paths_for(&tmp, ir, 1111, 0, LlLayout::Scratch);
+        let p2 = llvm_temp_paths_for(&tmp, ir, 2222, 0, LlLayout::Scratch);
+        let (ll_p1, obj_p1) = (&p1.ll_path, &p1.obj_path);
+        let (ll_p2, obj_p2) = (&p2.ll_path, &p2.obj_path);
         assert_eq!(
             ll_p1.file_name(),
             ll_p2.file_name(),
@@ -1633,29 +1821,26 @@ mod tests {
 
         // Same process, different call: the counter still has to separate
         // in-process rayon workers.
-        let (_, obj_c0) = llvm_temp_paths_for(&tmp, ir, 1111, 0);
-        let (_, obj_c1) = llvm_temp_paths_for(&tmp, ir, 1111, 1);
-        assert_ne!(obj_c0.file_name(), obj_c1.file_name());
+        let c0 = llvm_temp_paths_for(&tmp, ir, 1111, 0, LlLayout::Scratch);
+        let c1 = llvm_temp_paths_for(&tmp, ir, 1111, 1, LlLayout::Scratch);
+        assert_ne!(c0.obj_path.file_name(), c1.obj_path.file_name());
 
         // The atomic-write staging name needs the same separation: both
         // processes reach it with the same hash and the same counter, and
         // `File::create` truncates.
         assert_ne!(
-            ll_staging_path(&ll_p1, 1111, 0).file_name(),
-            ll_staging_path(&ll_p1, 2222, 0).file_name(),
+            ll_staging_path(ll_p1, 1111, 0).file_name(),
+            ll_staging_path(ll_p1, 2222, 0).file_name(),
             "staging .tmp name must be per-process"
         );
         assert_ne!(
-            ll_staging_path(&ll_p1, 1111, 0).file_name(),
-            ll_staging_path(&ll_p1, 1111, 1).file_name(),
+            ll_staging_path(ll_p1, 1111, 0).file_name(),
+            ll_staging_path(ll_p1, 1111, 1).file_name(),
             "staging .tmp name must be per-call"
         );
 
         // …and the staging file must never be mistaken for the real `.ll`.
-        assert_ne!(
-            ll_staging_path(&ll_p1, 1111, 0).file_name(),
-            ll_p1.file_name()
-        );
+        assert_ne!(ll_staging_path(ll_p1, 1111, 0).file_name(), ll_p1.file_name());
     }
 
     #[test]
@@ -1665,3 +1850,10 @@ mod tests {
         assert_eq!(ll_content_hash("a"), 0xaf63_dc4c_8601_ec8c);
     }
 }
+
+/// Temp-file *lifecycle* — who owns the `.ll`, and when it is removed (#7144).
+/// A sibling file only because of the 2,000-line cap; `use super::*` gives it
+/// the same view of this module as the block above.
+#[cfg(test)]
+#[path = "linker_temp_lifecycle_tests.rs"]
+mod linker_temp_lifecycle_tests;
