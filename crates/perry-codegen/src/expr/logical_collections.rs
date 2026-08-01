@@ -983,7 +983,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Refs #590.
         Expr::ObjectAssign { target, sources } => {
             let target_box = lower_expr(ctx, target)?;
-            let mut acc = ctx.block().call(
+            let acc = ctx.block().call(
                 DOUBLE,
                 "js_object_assign_validate_target",
                 &[(DOUBLE, &target_box)],
@@ -998,14 +998,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if sources.is_empty() {
                 return Ok(acc);
             }
+            // #7200: `acc` is a live object handle across every remaining
+            // source's lowering AND across every `js_object_assign_one` call —
+            // that helper reads every own key of the source, so an accessor
+            // there runs arbitrary user code inside the helper. `Expr::Object`
+            // has rooted its accumulator since #6951; this arm never copied it.
+            //
+            // Unconditional whenever there is a source: the user-code re-entry
+            // is inside the callee, so no property of the *source expression*
+            // can rule it out. (#7198 declined the "a helper's own allocation
+            // initiates a moving collection" argument on evidence; this is the
+            // route it accepted instead.)
+            let acc_slot = super::temp_root::temp_root_push_double(ctx, &acc);
             for src in sources {
                 let src_box = lower_expr(ctx, src)?;
-                acc = ctx.block().call(
+                let acc_now = super::temp_root::temp_root_get_double(ctx, &acc_slot);
+                let next = ctx.block().call(
                     DOUBLE,
                     "js_object_assign_one",
-                    &[(DOUBLE, &acc), (DOUBLE, &src_box)],
+                    &[(DOUBLE, &acc_now), (DOUBLE, &src_box)],
                 );
+                // The helper now returns the post-collection target address, so
+                // publish that back into the root rather than keeping the
+                // pre-call one: `Object.assign(t, a, b)` threads it into `b`'s
+                // link, and the caller receives it.
+                super::temp_root::temp_root_set_double(ctx, &acc_slot, &next);
             }
+            let acc = super::temp_root::temp_root_get_double(ctx, &acc_slot);
+            super::temp_root::temp_root_truncate(ctx, &acc_slot);
             Ok(acc)
         }
 

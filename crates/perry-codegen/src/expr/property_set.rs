@@ -53,7 +53,7 @@ fn lower_runtime_property_set_by_name(
     // #7154: root the receiver across the value's evaluation, which allocates.
     let recv_guard = super::temp_root::guard_store_operand(ctx, object, &recv_box, value);
     let val_double = lower_expr(ctx, value)?;
-    let recv_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &recv_box);
+    let recv_box = super::temp_root::reread_store_operand(ctx, &recv_guard, object, &recv_box)?;
     let key_idx = ctx.strings.intern(property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let blk = ctx.block();
@@ -1010,7 +1010,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "property_set.dynamic_value_bits",
                 "dynamic_property_set_helper_edge",
             )?;
-            let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
+            let obj_box =
+                super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
             // Intern the field name in the StringPool (same one the
             // matching getter uses, so they share the global string).
             let key_idx = ctx.strings.intern(property);

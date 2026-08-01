@@ -62,6 +62,11 @@ pub(crate) struct FromSpaceRef {
     /// True when the target carries `GC_FLAG_FORWARDED` — i.e. it MOVED and
     /// this reference was simply not rewritten.
     pub(super) target_forwarded: bool,
+    /// The TARGET's `obj_type`, read off its (still intact, pre-flip) header.
+    /// The single most useful field when triaging a `value is not a function`:
+    /// `4` is a closure, `2` an object. Reported as `0xFF` when the target is
+    /// too low in memory to carry a header.
+    pub(super) target_obj_type: u8,
     /// True when the word was NaN-boxed, false when it was a bare address.
     pub(super) nanboxed: bool,
     /// Remembered-set coverage of THIS SLOT's page, the decisive split:
@@ -105,14 +110,38 @@ pub(crate) struct FromSpaceScanReport {
 
 const MAX_SAMPLES: usize = 32;
 
+fn truthy(raw: Option<&str>) -> bool {
+    matches!(raw, Some("1") | Some("on") | Some("true"))
+}
+
+/// Resolve both scan knobs together.
+///
+/// **ABORT IMPLIES SCAN** (#7154 tooling). `PERRY_GC_FROMSPACE_SCAN_ABORT=1` on
+/// its own used to be completely inert: `run_fromspace_scan` returned at the
+/// `fromspace_scan_enabled()` gate, the scan never ran, there was nothing to
+/// abort, and the run reported success. A knob that reads as "abort on the
+/// first offender" and silently does nothing is exactly the class of defect the
+/// GC knob kill-policy exists for — and exactly what an investigator reaching
+/// for the abort switch mid-hunt would be misled by.
+///
+/// Pure so it is testable without mutating the process environment (the live
+/// readers cache in a `OnceLock`).
+pub(super) fn resolve_scan_knobs(scan: Option<&str>, abort: Option<&str>) -> (bool, bool) {
+    let abort = truthy(abort);
+    (truthy(scan) || abort, abort)
+}
+
 pub(super) fn fromspace_scan_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_FROMSPACE_SCAN").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+        resolve_scan_knobs(
+            std::env::var("PERRY_GC_FROMSPACE_SCAN").ok().as_deref(),
+            std::env::var("PERRY_GC_FROMSPACE_SCAN_ABORT")
+                .ok()
+                .as_deref(),
         )
+        .0
     })
 }
 
@@ -120,10 +149,13 @@ fn fromspace_scan_abort() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_FROMSPACE_SCAN_ABORT").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+        resolve_scan_knobs(
+            std::env::var("PERRY_GC_FROMSPACE_SCAN").ok().as_deref(),
+            std::env::var("PERRY_GC_FROMSPACE_SCAN_ABORT")
+                .ok()
+                .as_deref(),
         )
+        .1
     })
 }
 
@@ -187,11 +219,11 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
         }
         // The target is in from-space. Did it move (missing rewrite) or was it
         // never evacuated (dangling)?
-        let target_forwarded = if target >= GC_HEADER_SIZE {
+        let (target_forwarded, target_obj_type) = if target >= GC_HEADER_SIZE {
             let th = (target - GC_HEADER_SIZE) as *const GcHeader;
-            (*th).gc_flags & GC_FLAG_FORWARDED != 0
+            ((*th).gc_flags & GC_FLAG_FORWARDED != 0, (*th).obj_type)
         } else {
-            false
+            (false, 0xFF)
         };
         if target_forwarded {
             report.missing_rewrites += 1;
@@ -226,6 +258,7 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
                 target,
                 target_space,
                 target_forwarded,
+                target_obj_type,
                 nanboxed: matches!(word, super::root_words::RootWord::Nanboxed { .. }),
                 slot_dirty_now: super::barrier::dirty_now_for_addr(words.add(i) as usize),
                 slot_ever_dirty: super::barrier::ever_dirty_for_addr(words.add(i) as usize),
@@ -282,13 +315,14 @@ pub(crate) fn scan_heap_for_fromspace_refs() -> FromSpaceScanReport {
 
 fn describe(r: &FromSpaceRef) -> String {
     format!(
-        "  owner={:#x} type={} space={:?} +{} {} -> {:#x} ({:?}) {} [slot dirty_now={} ever_dirty={} owner_flags={:#x} marked={}]",
+        "  owner={:#x} type={} space={:?} +{} {} -> {:#x} (type={} {:?}) {} [slot dirty_now={} ever_dirty={} owner_flags={:#x} marked={}]",
         r.owner_header,
         r.owner_obj_type,
         r.owner_space,
         r.slot_offset,
         if r.nanboxed { "nanbox" } else { "bare" },
         r.target,
+        r.target_obj_type,
         r.target_space,
         if r.target_forwarded {
             "MISSING-REWRITE (target moved)"
@@ -304,6 +338,16 @@ fn describe(r: &FromSpaceRef) -> String {
 
 fn report_and_abort(report: &FromSpaceScanReport) -> ! {
     emit_report(report, "abort");
+    // The scan runs inside the collector, so this backtrace names the
+    // COLLECTION, not the mutator store that created the stale slot — which is
+    // exactly the limitation `PERRY_GC_PROTECT_FROMSPACE` exists to remove
+    // (there the fault happens at the stale *use*, with the holder live). Still
+    // printed: it pins which collector phase and trigger observed the offender,
+    // and it is free on a path that is about to abort.
+    eprintln!(
+        "[gc-fromspace-scan abort] collector backtrace:\n{}",
+        std::backtrace::Backtrace::force_capture()
+    );
     panic!(
         "gc from-space scan: {} missing rewrite(s), {} dangling reference(s) survived the rewrite pass",
         report.missing_rewrites, report.dangling

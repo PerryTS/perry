@@ -39,6 +39,21 @@ use crate::types::{DOUBLE, I32, I64, I8, PTR};
 /// `ctx.classes`, so a name this returns `false` for never reaches the push and
 /// would leave the scope marker as pure overhead.
 fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    // #7207: an IMPORTED constructor runs user code while leaving no trace in
+    // the local class table — `ctx.classes[class_name].constructor` is `None`
+    // for it. A class that also declares no fields and no heritage therefore
+    // answered `false` here while `lower_new_impl_inner` went on to dispatch
+    // `ctx.imported_class_ctors[class_name]` (its `has_imported_ctor` arm, and
+    // the `Stmt::Return` writer at the tail of this file). That left BOTH
+    // consumers of this predicate unprotected across a real constructor body:
+    // #7192's `instance_root`, and the `this`-slot bind added for #7202.
+    //
+    // Keeping it ONE predicate rather than two is the point — the consumers
+    // have to agree by construction, which is what stops the divergence
+    // #7114's pair of predicates produced.
+    if ctx.imported_class_ctors.contains_key(class_name) {
+        return true;
+    }
     ctx.classes.get(class_name).is_some_and(|class| {
         class.constructor.is_some()
             || !class.fields.is_empty()
@@ -1107,7 +1122,49 @@ fn lower_new_impl_inner(
     // closures that capture `this`), so hoist to the entry block for
     // dominance safety.
     let this_slot = ctx.func.alloca_entry(DOUBLE);
-    ctx.block().store(DOUBLE, &obj_box, &this_slot);
+    // #7202: this alloca holds the INSTANCE for the whole inlined constructor
+    // body, and every `this` read below is a `load` from it. It is a plain
+    // `alloca_entry` — not a shadow slot, not a temp root — so an evacuating
+    // minor at a field initializer's back-edge poll neither marks nor rewrites
+    // it, and every `this.x = …` after that collection stores into abandoned
+    // from-space memory.
+    //
+    // #7192 rooted the instance for the *caller* (`instance_root` above,
+    // re-read by `reload_instance` at the tail) precisely because this window
+    // collects — so the object survives and MOVES. That made the caller's copy
+    // correct and left this one behind: the same address, taken one line later,
+    // that nothing rewrites. The #7154 comment on `ctor_result_slot` states the
+    // invariant and applies it only to that sibling.
+    //
+    // Reachability is the default, not an opt-in: `force_ctor_call` requires
+    // `class.constructor.is_some()`, so `class C { payload = mk() }` and
+    // `class C extends B {}` take this path with `PERRY_INLINE_CTOR` unset —
+    // and `construction_runs_user_code` (which gates `instance_root`) is true
+    // for exactly those, i.e. the code already asserts this window collects.
+    //
+    // Binding it — rather than routing `Expr::This` through a temp root —
+    // leaves all ~30 `ctx.this_stack.last()` readers untouched: they load from
+    // the alloca, and `js_shadow_slot_bind` makes evacuation rewrite the alloca
+    // in place. The `undefined` seed is required by `root_entry_alloca`'s
+    // contract: the bind is hoisted to entry setup, so the slot is live to the
+    // collector before this store executes.
+    //
+    // Gated on `instance_root.is_some()`, i.e. on the very same
+    // `construction_runs_user_code` predicate that decided the instance needed
+    // a temp root at all. When it is false no user code runs between this store
+    // and the pop, so nothing in the window can collect and the slot cannot go
+    // stale — and a class with no constructor, no fields and no heritage keeps
+    // its previous IR exactly, frame size included. One predicate, one place:
+    // forking a second one here is how #7114's two predicates diverged.
+    if instance_root.is_some() {
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        ctx.func
+            .entry_allocas_push_store(DOUBLE, &undef, &this_slot);
+        ctx.block().store(DOUBLE, &obj_box, &this_slot);
+        crate::expr::root_entry_alloca(ctx, &this_slot);
+    } else {
+        ctx.block().store(DOUBLE, &obj_box, &this_slot);
+    }
     ctx.this_stack.push(this_slot);
     ctx.class_stack.push(class_name.to_string());
 

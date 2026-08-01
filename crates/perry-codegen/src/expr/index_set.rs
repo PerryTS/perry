@@ -1437,7 +1437,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "index_set.literal_string_value_bits",
                     "literal_string_index_set_helper_edge",
                 )?;
-                let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
+                let obj_box =
+                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
@@ -1501,8 +1502,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "index_set.string_value_bits",
                     "string_index_set_helper_edge",
                 )?;
-                let key_box = super::temp_root::reread_store_operand(ctx, &key_guard, &key_box);
-                let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
+                let key_box =
+                    super::temp_root::reread_store_operand(ctx, &key_guard, index, &key_box)?;
+                let obj_box =
+                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
                 super::property_set::emit_nullish_write_guard(
                     ctx,
@@ -1538,6 +1541,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &val_double),
                     ],
                 );
+                // Inner-to-outer: `temp_root_truncate` drops every slot at and
+                // above its index, so releasing the receiver first would drop
+                // the key's as a side effect. Correct today, wrong the moment
+                // the push order changes — and #7207's `proxy_reflect` sibling
+                // spells both out for exactly that reason.
+                super::temp_root::release_store_operand(ctx, key_guard);
                 super::temp_root::release_store_operand(ctx, recv_guard);
                 return Ok(val_double);
             }

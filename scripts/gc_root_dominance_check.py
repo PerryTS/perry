@@ -1005,6 +1005,244 @@ def run_stale(parsed, poll_reaching, verbose, moving_only, fatal_only,
 
 
 
+# ------------------------------------------------- unrooted-alloca check ---
+#
+# The third way the invariant breaks (#7202), and the one the bind-anchored
+# check above is structurally blind to.
+#
+# #7184 was a root store whose slot index fell outside the pushed frame.
+# #7192 was a root store emitted after a collection point. Both produce a
+# `js_shadow_slot_bind` for the checker to anchor on. This one produces NONE:
+# the value lives in a plain `alloca_entry` for its whole lifetime, so the
+# collector neither marks nor rewrites it, and a scan that starts from binds
+# reports the function clean while every load below the collection point names
+# from-space.
+#
+# The shape, from `lower_call/new.rs`'s inline-constructor `this` slot:
+#
+#     %slot = alloca double                    ; never in a js_shadow_slot_bind
+#     store double %inst, ptr %slot
+#     %x  = call double @user_fn()             ; collects; the instance MOVES
+#     %t  = load double, ptr %slot             ; from-space
+#
+# It reports an alloca when ALL of:
+#   1. it is never an operand of `js_shadow_slot_bind` anywhere in the function
+#      (a bind makes the collector rewrite it, which is the fix);
+#   2. some store into it carries a value whose provenance is a heap-value
+#      SOURCE — an allocation, or a load of a collector-rewritten location;
+#   3. a collecting call sits on some CFG path between that store and a LOAD of
+#      the alloca.
+#
+# One-sided in the same direction as the bind-anchored check: `NONCOLLECTING`
+# is the only place a call is declared safe, so a missing entry costs a false
+# positive and never a missed bug. It is reported separately from the
+# bind-anchored count because its two populations are disjoint by construction.
+
+# Loads whose source is a location the collector REWRITES. A register holding
+# one of these is stale below a collection point even though the value survives
+# — property (2) without property (3), the module-header distinction.
+REWRITTEN_LOAD_RE = re.compile(
+    r"load\s+\S+,\s*ptr\s+@(?:"
+    r"\w*_\.str\.\d+\.handle"          # string-literal handle globals
+    r"|perry_global_\w+"               # module-level variables
+    r"|perry_class_keys_\w+"           # class keys arrays (old-gen, C4b movable)
+    r")"
+)
+
+# Calls that MATERIALIZE a heap value (a superset of ALLOC_RE: anything that
+# hands back an object the collector can move).
+HEAP_SOURCE_CALLS = frozenset({
+    "js_gc_temp_root_get", "js_shadow_slot_get", "js_closure_get_capture_bits",
+    "js_box_get_bits", "js_implicit_this_get", "js_new_target_get",
+    "js_static_this_resolve", "js_get_exception",
+})
+
+ALLOCA_RE = re.compile(r"^\s*%([\w.$]+)\s*=\s*alloca\s+(.+)$")
+LOAD_FROM_RE = re.compile(r"=\s*load\s+[^,]+,\s*ptr\s+%([\w.$]+)")
+# Types that can hold a NaN-boxed JS value or a raw heap address. An `i32`/`i1`
+# slot is a counter or a flag and cannot name the heap.
+GC_CAPABLE_ALLOCA_TYPES = ("double", "i64", "[")
+
+
+class UnrootedAlloca:
+    def __init__(self, module, func, alloca, store, load, collectors,
+                 poll_reaching=frozenset()):
+        self.module = module
+        self.func = func
+        self.alloca = alloca
+        self.store = store
+        self.load = load
+        self.collectors = collectors
+        self.poll_reaching = poll_reaching
+
+    @property
+    def movers(self):
+        return sorted({c.callee for c in self.collectors
+                       if c.callee == MOVING_POLL or c.callee in self.poll_reaching
+                       or c.callee in POLL_CAPABLE_RUNTIME})
+
+    @property
+    def moving(self):
+        return bool(self.movers)
+
+
+def _is_heap_source(ins):
+    """Does `ins` materialize a value the collector can move?"""
+    if ins.callee is not None:
+        return bool(ALLOC_RE.match(ins.callee)) or ins.callee in HEAP_SOURCE_CALLS
+    return bool(REWRITTEN_LOAD_RE.search(ins.text))
+
+
+def check_func_unrooted_allocas(module, f, want_moving_only=False,
+                                poll_reaching=frozenset()):
+    if not f.blocks:
+        return []
+
+    bound = set()
+    allocas = {}          # reg -> Insn
+    def_of = {}
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            m = BIND_RE.search(ins.text)
+            if m:
+                bound.add(m.group(2))
+            am = ALLOCA_RE.match(ins.text)
+            if am and any(am.group(2).strip().startswith(t)
+                          for t in GC_CAPABLE_ALLOCA_TYPES):
+                allocas[am.group(1)] = ins
+            if ins.result:
+                def_of[ins.result] = ins
+    if not allocas:
+        return []
+
+    # Alloca-typed registers that leak their ADDRESS to a call cannot be
+    # reasoned about locally — the callee may root them. Exclude them rather
+    # than report a guess.
+    escaped = set()
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if ins.callee is None:
+                continue
+            for r in operand_regs(ins.text):
+                if r in allocas:
+                    escaped.add(r)
+
+    idom = dominators(f)
+    stores = defaultdict(list)   # alloca -> [Insn]
+    loads = defaultdict(list)    # alloca -> [Insn]
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            sm = STORE_RE.match(ins.text)
+            if sm and sm.group(3) in allocas:
+                stores[sm.group(3)].append(ins)
+            lm = LOAD_FROM_RE.search(ins.text)
+            if lm and lm.group(1) in allocas:
+                loads[lm.group(1)].append(ins)
+
+    def window_hits(A, B):
+        hits = []
+        if A.block == B.block:
+            return [c for c in f.insns[A.block]
+                    if is_collecting(c.callee) and A.idx < c.idx < B.idx]
+        hits += [c for c in f.insns[A.block]
+                 if is_collecting(c.callee) and c.idx > A.idx]
+        hits += [c for c in f.insns[B.block]
+                 if is_collecting(c.callee) and c.idx < B.idx]
+        for m_blk in between_blocks(f, A.block, B.block):
+            hits += [c for c in f.insns[m_blk] if is_collecting(c.callee)]
+        return hits
+
+    out = []
+    for reg, alloca_ins in sorted(allocas.items()):
+        if reg in bound or reg in escaped:
+            continue
+        if not stores[reg] or not loads[reg]:
+            continue
+        reported = False
+        for st in stores[reg]:
+            sm = STORE_RE.match(st.text)
+            val = sm.group(2).strip()
+            if not val.startswith("%"):
+                continue        # a constant seed (`undefined`) names no heap
+            origins = provenance(def_of, val[1:])
+            if not any(_is_heap_source(o) for o in origins):
+                continue
+            for ld in loads[reg]:
+                if not dominates(idom, st.block, ld.block):
+                    continue
+                if st.block == ld.block and st.idx >= ld.idx:
+                    continue
+                hits = window_hits(st, ld)
+                if not hits:
+                    continue
+                v = UnrootedAlloca(module, f.name, alloca_ins, st, ld, hits,
+                                   poll_reaching)
+                if want_moving_only and not v.moving:
+                    continue
+                out.append(v)
+                reported = True
+                break
+            if reported:
+                break
+    return out
+
+
+# The #7202 shape, and its fix. `@unrooted` is `lower_call/new.rs`'s
+# inline-constructor `this` slot before this change: allocated, stored, held
+# across a user call, loaded after. `@rooted` is byte-identical with the bind
+# added — which is the whole fix, because the collector then rewrites the
+# alloca in place and the load below the call is correct.
+_SELFTEST_UNROOTED = """\
+define double @perry_fn_selftest__unrooted(double %a) {
+entry.0:
+  %slot = alloca double
+  %inst = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 0)
+  %box = bitcast i64 %inst to double
+  store double %box, ptr %slot
+  %ret = call double @perry_fn_user__init(double %a)
+  %this = load double, ptr %slot
+  ret double %this
+}
+"""
+
+_SELFTEST_ROOTED = """\
+define double @perry_fn_selftest__rooted(double %a) {
+entry.0:
+  %slot = alloca double
+  %inst = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 0)
+  %box = bitcast i64 %inst to double
+  store double %box, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  %ret = call double @perry_fn_user__init(double %a)
+  %this = load double, ptr %slot
+  ret double %this
+}
+"""
+
+
+def _scan_unrooted(paths):
+    """(violations, n_gc_capable_allocas) over `paths`."""
+    parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
+    poll_reaching, _known = compute_poll_reaching(
+        [f for _m, fs in parsed for f in fs])
+    n = 0
+    for _m, fs in parsed:
+        for f in fs:
+            for b in f.blocks:
+                for ins in f.insns[b]:
+                    am = ALLOCA_RE.match(ins.text)
+                    if am and any(am.group(2).strip().startswith(t)
+                                  for t in GC_CAPABLE_ALLOCA_TYPES):
+                        n += 1
+    found = [
+        (mod, v)
+        for mod, fs in parsed
+        for f in fs
+        for v in check_func_unrooted_allocas(mod, f, False, poll_reaching)
+    ]
+    return found, n
+
+
 def _scan(paths, moving_only, anchor):
     """(violations, n_binds) over `paths`."""
     parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
@@ -1121,6 +1359,45 @@ def self_test():
                   file=sys.stderr)
             ok = False
 
+        # --- the #7202 mode, both directions -------------------------------
+        unrooted = os.path.join(td, "unrooted.ll")
+        rooted = os.path.join(td, "rooted.ll")
+        for p, text in ((unrooted, _SELFTEST_UNROOTED), (rooted, _SELFTEST_ROOTED)):
+            with open(p, "w") as fh:
+                fh.write(text)
+
+        found, n_allocas = _scan_unrooted([unrooted])
+        if len(found) != 1:
+            print(f"self-test FAIL: unrooted-alloca fixture -> {len(found)} "
+                  "violations, expected 1", file=sys.stderr)
+            ok = False
+        if n_allocas != 1:
+            print(f"self-test FAIL: unrooted-alloca fixture -> {n_allocas} "
+                  "gc-capable allocas, expected 1", file=sys.stderr)
+            ok = False
+
+        found, n_allocas = _scan_unrooted([rooted])
+        if found:
+            print(f"self-test FAIL: rooted control -> {len(found)} violations, "
+                  "expected 0. The ONLY difference from the planted fixture is "
+                  "the js_shadow_slot_bind, so a non-zero count here means the "
+                  "check does not actually model the fix.", file=sys.stderr)
+            ok = False
+        if n_allocas != 1:
+            print(f"self-test FAIL: rooted control -> {n_allocas} gc-capable "
+                  "allocas, expected 1", file=sys.stderr)
+            ok = False
+
+        # And it must not fire on the bind-anchored fixtures, nor the reverse:
+        # the two populations are disjoint by construction and a checker that
+        # double-counts would make both numbers meaningless.
+        found, _ = _scan_unrooted([planted])
+        if found:
+            print(f"self-test FAIL: the bind-anchored planted fixture has a "
+                  f"bind for every alloca, so the unrooted check must report 0, "
+                  f"got {len(found)}", file=sys.stderr)
+            ok = False
+
     print("self-test OK" if ok else "self-test FAILED")
     return 0 if ok else 1
 
@@ -1158,6 +1435,11 @@ def main():
     ap.add_argument("--min-binds", type=int, default=1, metavar="N",
                     help="fail unless at least N root stores were seen (default 1). "
                          "A clean verdict over zero root stores proves nothing.")
+    ap.add_argument("--unrooted-allocas", action="store_true",
+                    help="check the #7202 shape instead: a plain alloca that "
+                         "holds a heap value across a collecting call and is "
+                         "loaded below it, with no js_shadow_slot_bind anywhere. "
+                         "Disjoint from the bind-anchored check by construction.")
     ns = ap.parse_args()
 
     # A knob that is silently ignored is a disarmed knob: `--max-stale 0`
@@ -1213,6 +1495,51 @@ def main():
         for ins in f.insns[b]
         if BIND_RE.search(ins.text)
     )
+
+    if ns.unrooted_allocas:
+        total = 0
+        moving_total = 0
+        per_fn = defaultdict(int)
+        out = []
+        n_allocas = 0
+        for mod, fs in parsed:
+            for f in fs:
+                for b in f.blocks:
+                    for ins in f.insns[b]:
+                        am = ALLOCA_RE.match(ins.text)
+                        if am and any(am.group(2).strip().startswith(t)
+                                      for t in GC_CAPABLE_ALLOCA_TYPES):
+                            n_allocas += 1
+                for v in check_func_unrooted_allocas(mod, f, moving_only,
+                                                     poll_reaching):
+                    total += 1
+                    per_fn[v.func] += 1
+                    if v.moving:
+                        moving_total += 1
+                    cs = sorted({c.callee for c in v.collectors})
+                    out.append(
+                        f"{mod}::{v.func}\n"
+                        f"  alloca : {v.alloca.text.strip()}\n"
+                        f"  store  : {v.store.text.strip()}\n"
+                        f"  load   : {v.load.text.strip()}\n"
+                        f"  between: {', '.join(cs[:8])}"
+                        f"{'  (+%d more)' % (len(cs) - 8) if len(cs) > 8 else ''}\n"
+                        f"  MOVING : {('YES via ' + ', '.join(v.movers[:3])) if v.moving else 'no'}\n"
+                    )
+        if verbose:
+            print("\n".join(out))
+        print(f"=== files: {len(paths)}   gc-capable allocas: {n_allocas}   "
+              f"unrooted-alloca violations: {total}"
+              f"   (moving-minor reachable: {moving_total})")
+        for k, n in sorted(per_fn.items(), key=lambda kv: -kv[1])[:20]:
+            print(f"  {n:6d}  {k}")
+        # Liveness floor: the subject here is the alloca population, not the
+        # bind population, so `--min-binds` would certify the wrong thing.
+        if n_allocas < ns.min_binds:
+            print(f"error: {n_allocas} gc-capable alloca(s) in the corpus, need "
+                  f"at least {ns.min_binds}. Nothing was checked.", file=sys.stderr)
+            return 2
+        return 1 if total else 0
 
     total = 0
     moving_total = 0

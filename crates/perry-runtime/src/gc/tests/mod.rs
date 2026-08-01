@@ -11,6 +11,7 @@ mod dead_owner_side_tables;
 mod debt_pacer;
 mod error_side_tables;
 mod evacuation;
+mod fromspace_protect;
 mod fromspace_scan;
 mod helper_stores;
 mod host_safepoints;
