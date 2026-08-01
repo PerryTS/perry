@@ -142,11 +142,11 @@ fn invalid_handle_is_no_op() {
 fn string_key_round_trip_by_content() {
     let h = js_lru_cache_new(f64::from_bits(TAG_UNDEFINED));
     // Store under one string allocation…
-    js_lru_cache_set(h, string_value("socket-firewall"), 4242.0);
+    js_lru_cache_set(h, string_value("cache-key"), 4242.0);
     // …read back through a *different* allocation of the same text. The old
     // pointer-bits keying missed here; content keying hits.
-    assert_eq!(js_lru_cache_get(h, string_value("socket-firewall")), 4242.0);
-    assert!(is_true(js_lru_cache_has(h, string_value("socket-firewall"))));
+    assert_eq!(js_lru_cache_get(h, string_value("cache-key")), 4242.0);
+    assert!(is_true(js_lru_cache_has(h, string_value("cache-key"))));
     assert!(!is_true(js_lru_cache_has(h, string_value("other"))));
     assert_eq!(js_lru_cache_size(h), 1.0);
     perry_ffi::drop_handle(h);

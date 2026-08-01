@@ -3,7 +3,7 @@
 - **`lru-cache` native binding (`perry-ext-lru-cache`) is now faithful to the
   npm `lru-cache` API for real-world usage.** The previous wrapper only handled
   numeric (`f64`) keys and values with no TTL, so a cache keyed on strings with
-  object/string values (e.g. Socket Firewall's `new LRUCache({ max, ttl,
+  object/string values (e.g. a typical caller's `new LRUCache({ max, ttl,
   updateAgeOnGet })`) silently misbehaved. Two defects are fixed:
 
   - **Keys and values are treated as real JS values, not raw `f64` bit

@@ -29,7 +29,7 @@
 //!
 //! `new LRUCache({ max, ttl, updateAgeOnGet })` is parsed from the
 //! NaN-boxed options object (mirrors npm's option surface for the parts
-//! Socket Firewall and typical callers use):
+//! typical callers use):
 //!
 //! - `max` — capacity; entries past it evict LRU-first (default 100 when
 //!   absent, so an unconfigured cache still has a bound).
