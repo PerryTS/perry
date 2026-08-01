@@ -1419,13 +1419,20 @@ pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
 pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     let id = handle_id(handle);
     let cloned = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        guard.get(&id).map(|resp| {
+        let mut guard = FETCH_RESPONSES.lock().unwrap();
+        guard.get_mut(&id).map(|resp| {
             if resp.body_present && resp.body_used {
                 unsafe {
                     throw_fetch_type_error("Response.clone: Body has already been consumed.")
                 };
             }
+            let cloned_stream_id = resp.body_stream_id.map(|stream_id| {
+                let (original, cloned) =
+                    unsafe { crate::streams::tee_readable_stream_ids(stream_id) };
+                resp.body_stream_id = Some(original);
+                resp.cached_body_stream_id = Some(original);
+                cloned
+            });
             FetchResponse {
                 status: resp.status,
                 status_text: resp.status_text.clone(),
@@ -1437,8 +1444,8 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 url: resp.url.clone(),
                 redirected: resp.redirected,
                 cached_headers_id: None,
-                cached_body_stream_id: None,
-                body_stream_id: None,
+                cached_body_stream_id: cloned_stream_id,
+                body_stream_id: cloned_stream_id,
             }
         })
     };

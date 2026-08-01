@@ -1,13 +1,8 @@
 //! Module discovery + transitive import walk.
-//!
-//! Tier 2.1 follow-up (v0.5.341) — extracts `collect_modules` (~380
-//! LOC) from `compile.rs`. Walks the import graph from the entry
-//! file, lowers every TypeScript module to HIR, classifies each as
-//! native-compiled vs JS-runtime-loaded, and accumulates the result
-//! in `CompilationContext.native_modules` / `js_modules`. Runs
-//! per-module HIR passes (inline_functions, transform_generators)
-//! before adding the module to the context. Source hashes feed the
-//! V2.2 codegen cache key derivation.
+//! Walks the import graph, lowers TypeScript to HIR, classifies native-compiled
+//! versus JS-runtime-loaded modules, and accumulates them in the compilation context.
+//! Per-module HIR passes run before insertion, and source hashes feed
+//! the V2.2 codegen cache key.
 
 use anyhow::{anyhow, Result};
 use perry_hir::ModuleKind;
@@ -18,7 +13,6 @@ use perry_transform::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
@@ -40,6 +34,7 @@ mod feature_detect;
 mod import_helpers;
 mod native_addon;
 mod parse_error;
+mod script_string;
 mod static_require_transform;
 #[cfg(test)]
 mod tests;
@@ -91,73 +86,6 @@ pub(super) fn is_nextjs_runtime_module(path: &std::path::Path) -> bool {
     comps
         .windows(2)
         .any(|w| w[0] == std::ffi::OsStr::new(".next") && w[1] == std::ffi::OsStr::new("server"))
-}
-
-fn script_string_import_target(specifier: &str) -> Option<&str> {
-    let (path, query) = specifier.split_once('?')?;
-    if query.split('&').any(|part| part == "script-string") {
-        Some(path)
-    } else {
-        None
-    }
-}
-
-fn compact_script_string_source(source: &str) -> String {
-    let lines: Vec<_> = source
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    let mut out = String::new();
-    for (idx, line) in lines.iter().enumerate() {
-        out.push_str(line);
-        let last = idx + 1 == lines.len();
-        if !last && !line.ends_with('{') && !line.ends_with(',') {
-            out.push(';');
-        }
-    }
-    out
-}
-
-fn synthesize_script_string_module(
-    ctx: &CompilationContext,
-    importer_path: &std::path::Path,
-    specifier: &str,
-) -> Result<Option<PathBuf>> {
-    let Some(target_specifier) = script_string_import_target(specifier) else {
-        return Ok(None);
-    };
-    let resolved = if target_specifier.starts_with('/') {
-        super::resolve::resolve_absolute_import_paths(target_specifier)
-            .map(|path| path.canonical_path)
-    } else {
-        super::resolve::resolve_relative_import_path(target_specifier, importer_path)
-    };
-    let Some(source_path) = resolved else {
-        return Ok(None);
-    };
-    let raw = fs::read_to_string(&source_path)
-        .map_err(|e| anyhow!("Failed to read {}: {}", source_path.display(), e))?;
-    let script = compact_script_string_source(&raw);
-    let literal = serde_json::to_string(&script).map_err(|e| {
-        anyhow!(
-            "Failed to encode script-string asset {} as a string literal: {}",
-            source_path.display(),
-            e
-        )
-    })?;
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    source_path.hash(&mut hasher);
-    specifier.hash(&mut hasher);
-    script.hash(&mut hasher);
-    let filename = format!("script-string-{:016x}.ts", hasher.finish());
-    let dir = ctx.cache_dir.join("synthetic-modules");
-    fs::create_dir_all(&dir).map_err(|e| anyhow!("Failed to create {}: {}", dir.display(), e))?;
-    let synthetic_path = dir.join(filename);
-    fs::write(&synthetic_path, format!("export default {};\n", literal))
-        .map_err(|e| anyhow!("Failed to write {}: {}", synthetic_path.display(), e))?;
-    Ok(Some(synthetic_path))
 }
 
 /// Collect all modules to compile (transitive closure of imports)
@@ -1371,19 +1299,7 @@ fn collect_module_one(
             continue;
         }
 
-        if let Some(synthetic_path) =
-            synthesize_script_string_module(ctx, entry_path, &import.source)?
-        {
-            let resolved_path = synthetic_path.canonicalize().map_err(|e| {
-                anyhow!(
-                    "Failed to canonicalize synthetic module {}: {}",
-                    synthetic_path.display(),
-                    e
-                )
-            })?;
-            import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
-            import.module_kind = ModuleKind::NativeCompiled;
-            pending.push(synthetic_path);
+        if script_string::resolve(ctx, &canonical, import, &mut pending)? {
             continue;
         }
 

@@ -1,4 +1,4 @@
-use perry_types::Type;
+use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use super::extract_ts_type;

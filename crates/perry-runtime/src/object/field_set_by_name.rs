@@ -870,30 +870,6 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
     }
-    // #5756: Web Streams handles are represented as finite f64 ids in the
-    // stream-id band (not NaN-boxed pointers). Reads already route those ids
-    // through `handle_property_dispatch`; writes need the matching setter path
-    // so userland/React can attach expando fields like `stream.allReady`.
-    {
-        let f = f64::from_bits(obj as u64);
-        if !key.is_null() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
-            let id = f as usize;
-            if let Some(probe) = crate::object::stream_handle_probe() {
-                unsafe {
-                    if probe(id) {
-                        if let Some(dispatch) = handle_property_set_dispatch() {
-                            let name_ptr =
-                                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                            let name_len = (*key).byte_len as usize;
-                            dispatch(id as i64, name_ptr, name_len, value);
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
     // Strip NaN-boxing tags if present (defensive: handle POINTER_TAG, UNDEFINED, NULL, etc.)
     let obj = {
         let bits = obj as u64;

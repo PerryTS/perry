@@ -673,6 +673,7 @@ pub fn lower_module_full(
 
     // Pre-register module-level variable declarations so function bodies
     // declared before the variable can still reference them via lookup_local
+    let mut builtin_aliases_in_module_vars = HashSet::new();
     for item in &ast_module.body {
         let var_decl = match item {
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(v))) => Some(v),
@@ -686,7 +687,6 @@ pub fn lower_module_full(
             _ => None,
         };
         if let Some(var_decl) = var_decl {
-            let mut builtin_aliases_in_decl = HashSet::new();
             for decl in &var_decl.decls {
                 // #4461: `var X = class { ... }` is lowered as a class
                 // expression bound to the name `X` (see stmt.rs) — the class
@@ -706,11 +706,11 @@ pub fn lower_module_full(
                         || decl.init.as_deref().and_then(require_literal_specifier)
                             == Some("node:util")
                     {
-                        builtin_aliases_in_decl.insert(name.clone());
+                        builtin_aliases_in_module_vars.insert(name.clone());
                     }
                     if ctx.lookup_local(&name).is_none() {
                         let ty = infer_hoisted_text_codec_var_type(decl, ident, |name| {
-                            builtin_aliases_in_decl.contains(name)
+                            builtin_aliases_in_module_vars.contains(name)
                                 || matches!(
                                     ctx.lookup_builtin_module_alias(name),
                                     Some("util" | "node:util")

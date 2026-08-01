@@ -185,26 +185,9 @@ pub(crate) fn lower_jsx_fragment(
             }),
             property: "Fragment".to_string(),
         };
-        return Ok(Expr::Call {
-            callee: Box::new(Expr::PropertyGet {
-                object: Box::new(if let Some(id) = ctx.lookup_local(&react_local) {
-                    Expr::LocalGet(id)
-                } else {
-                    Expr::ExternFuncRef {
-                        name: ctx
-                            .lookup_imported_func(&react_local)
-                            .unwrap_or(&react_local)
-                            .to_string(),
-                        param_types: Vec::new(),
-                        return_type: Type::Any,
-                    }
-                }),
-                property: "createElement".to_string(),
-            }),
-            args: vec![fragment_type, props_expr],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        });
+        if let Some(call) = react_create_element_call(ctx, fragment_type, &props_expr) {
+            return Ok(call);
+        }
     }
 
     Ok(Expr::Call {
@@ -213,12 +196,17 @@ pub(crate) fn lower_jsx_fragment(
             param_types: Vec::new(),
             return_type: Type::Any,
         }),
+        // Fragment marker: inline "__Fragment" string. perry-react's jsx() checks
+        // `type === "__Fragment"` to detect fragment elements.
         args: vec![Expr::String("__Fragment".to_string()), props_expr],
         type_args: Vec::new(),
         byte_offset: 0,
     })
 }
 
+/// Lower a JSX element name to an HIR expression.
+/// Lowercase tag names (HTML intrinsics) become string literals.
+/// Uppercase tag names (components) are looked up as identifiers.
 pub(crate) fn lower_jsx_element_name(
     ctx: &mut LoweringContext,
     name: &ast::JSXElementName,

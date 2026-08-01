@@ -514,8 +514,6 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         "RegExp" => 0xFFFF0021,
         "ArrayBuffer" => 0xFFFF0025,
         "DataView" => 0xFFFF002B,
-        "WeakMap" => 0xFFFF002C,
-        "WeakSet" => 0xFFFF002D,
         "Array" => 0xFFFF0024,
         "Object" => 0xFFFF0050,
         "Function" => CLASS_ID_FUNCTION,
