@@ -209,3 +209,26 @@ test_gap_gc_inline_ctor_this_rooting
 # `requires=move` arms.
 test_gap_gc_catch_param_rooting
 test_gap_gc_closure_this_capture_rooting
+
+# --- Stale REGISTERS: a receiver and a computed base (#7206) -----------------
+# A different failure from every entry above. The sites above are root stores
+# that are late, mis-indexed or missing; these two values are never rooted at
+# all. Spec order evaluates the object first and the sibling operand second, so
+# `recv.m(f())` and `o[f()]` leave the base in a bare SSA register while `f()`
+# runs. It SURVIVES the minor -- the capture cell or module global it was read
+# from is a root -- and therefore MOVES, the collector rewrites that location,
+# and the register keeps naming from-space. A bare register is not a root, so
+# no runtime GC probe can see it.
+#
+# Measured on `origin/main` (91170973c), compiled AND run with
+# `PERRY_GC_MOVING_LOOP_POLLS=1`, oracle node 26.5.1 (`bad 0` for both):
+#   method_receiver_rooting    `TypeError: value is not a function`, and
+#                              exit=139 (SIGSEGV) under PERRY_GC_ZEAL=1 +
+#                              PERRY_GC_PROTECT_FROMSPACE=1
+#   index_get_receiver_rooting `TypeError: Cannot read properties of undefined
+#                              (reading 'v')`
+# Both are `bad 0` with #7206 applied, and `bad 0` on the shipped default on
+# BOTH sides -- the default cannot express the bug, which is why these belong on
+# the `requires=move` arms and prove nothing on `default`.
+test_gap_gc_method_receiver_rooting
+test_gap_gc_index_get_receiver_rooting
