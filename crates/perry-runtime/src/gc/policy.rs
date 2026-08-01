@@ -359,18 +359,29 @@ pub(crate) fn gc_incremental_enabled() -> bool {
 /// Make the moving minor PRIMARY inside loops: defer the alloc-point nursery
 /// collection to a codegen loop back-edge poll (`js_gc_loop_safepoint`) instead
 /// of collecting non-moving mid-expression, so reallocation-heavy loops evacuate
-/// (bounded RSS) instead of leaking. **DEFAULT ON** as of the moving-nursery flip
-/// — the poll is now emitted only for ALLOCATING loop bodies (`body_may_allocate`
-/// in codegen), so numeric/vectorizable loops stay call-free. Kill switch is an
-/// explicit `PERRY_GC_MOVING_LOOP_POLLS=0`/`off`/`false` (bisection / max-throughput
-/// batch). MUST match codegen `moving_safepoint_polls_enabled` (same env) so the
-/// deferral and the polls that drain it stay coherent — a runtime default-on with
-/// a codegen default-off (or vice versa) would defer collections that never drain.
+/// (bounded RSS) instead of leaking.
+///
+/// **DEFAULT OFF (stopgap for #7154).** This was flipped default-ON in #7019, but
+/// the evacuating minor it makes primary has a use-after-free: a young closure
+/// referenced from a dynamically-added object field (`field[1]`, holders built in
+/// `proxy::create_or_update_receiver_property`) is reclaimed while still live, so
+/// the field dangles and a later call dies with `TypeError: value is not a
+/// function`. This reproduces in the DEFAULT config (no env) — the shipped binary
+/// corrupts the heap. `PERRY_GC_MOVING_LOOP_POLLS=0` is confirmed to eliminate it,
+/// so until #7154 is root-caused we default OFF (restoring the previously-correct
+/// non-moving minor) and keep the moving-loop path behind an explicit
+/// `PERRY_GC_MOVING_LOOP_POLLS=1`/`on`/`true` opt-in. Reverting the default costs
+/// #7019's minor-GC RSS/throughput win but not correctness.
+///
+/// MUST match codegen `moving_safepoint_polls_enabled` (same env) so the deferral
+/// and the polls that drain it stay coherent — a runtime default that disagrees
+/// with the codegen default would defer collections that never drain (or drain
+/// collections that were never deferred).
 pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
     // Test-only mode override (see `force_legacy_gc_pacing`). Consulted BEFORE
-    // the process-wide OnceLock so a single test can pin legacy (non-moving,
-    // budgeted/direct, 128 MiB-ceiling) pacing for its duration even though the
-    // process default is moving-on. Compiled out entirely in release builds.
+    // the process-wide OnceLock so a single test can pin a specific pacing mode
+    // for its duration even though the process default is off. Compiled out
+    // entirely in release builds.
     #[cfg(test)]
     if let Some(forced) = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(Cell::get) {
         return forced;
@@ -378,11 +389,20 @@ pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
 
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
+        moving_loop_polls_enabled_from_env(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").ok().as_deref(),
         )
     })
+}
+
+/// Pure env→enable decision for the moving-loop minor, factored out so the
+/// default is unit-testable without touching process env / the cached `OnceLock`.
+/// **Default OFF (#7154 stopgap):** an unset var (or any value other than an
+/// explicit opt-in) selects the non-evacuating minor; only `1`/`on`/`true`
+/// enables the moving-loop path. Codegen's `moving_safepoint_polls_enabled`
+/// mirrors this exactly (same env, same predicate).
+pub(crate) fn moving_loop_polls_enabled_from_env(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("on") | Some("true"))
 }
 
 #[cfg(test)]

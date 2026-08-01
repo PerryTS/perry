@@ -429,6 +429,29 @@ fn test_effective_arena_trigger_respects_armed_values() {
     GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
 }
 
+// #7154 stopgap: the moving-loop (evacuating) minor must be OFF by default.
+// #7019 flipped it default-on, but the evacuating minor has a use-after-free
+// that corrupts the heap in the default config, so the default must select the
+// non-evacuating minor; the moving path stays reachable only via an explicit
+// PERRY_GC_MOVING_LOOP_POLLS=1/on/true opt-in.
+#[test]
+fn test_moving_loop_minor_off_by_default_7154() {
+    use super::super::policy::moving_loop_polls_enabled_from_env as enabled;
+    // Default (unset) is non-evacuating.
+    assert!(!enabled(None), "moving-loop minor must be OFF by default (#7154)");
+    // Kill-switch values remain off.
+    assert!(!enabled(Some("0")));
+    assert!(!enabled(Some("off")));
+    assert!(!enabled(Some("false")));
+    // Unknown / garbage values fall back to the safe default (off).
+    assert!(!enabled(Some("")));
+    assert!(!enabled(Some("2")));
+    // Explicit opt-in enables the moving path.
+    assert!(enabled(Some("1")));
+    assert!(enabled(Some("on")));
+    assert!(enabled(Some("true")));
+}
+
 // #6184: the OS memory-pressure entry must run a real collection when the
 // thread is at a safe point, and must lower+arm the arena trigger.
 #[test]
