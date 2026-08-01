@@ -427,10 +427,8 @@ pub extern "C" fn js_node_stream_readable_from(iterable: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64) -> f64 {
-    if matches!(iterable.to_bits(), TAG_NULL | TAG_UNDEFINED)
-        || is_non_iterable_primitive_for_readable_from(iterable)
-    {
-        throw_readable_from_invalid_iterable();
+    if is_invalid_readable_from_input(iterable) {
+        throw_readable_from_invalid_iterable(iterable);
     }
     let readable = js_node_stream_readable_new(readable_from_options(opts));
     let raw = raw_ptr_from_value(readable);
@@ -461,20 +459,4 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
         }
     }
     readable
-}
-
-fn initialize_readable_from_buffered_length(readable: f64, chunks: f64) {
-    let mut values = Vec::new();
-    push_chunk_values(chunks, &mut values, 0);
-    let length = if readable_object_mode(readable) {
-        values.len() as f64
-    } else {
-        let mut bytes = Vec::new();
-        for value in values {
-            append_chunk_bytes(value, &mut bytes, 0);
-        }
-        bytes.len() as f64
-    };
-    set_hidden_value(readable, hidden_buffered_key(), length);
-    set_hidden_value(readable, hidden_key(b"readableLength"), length);
 }

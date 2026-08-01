@@ -30,7 +30,62 @@ static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();
 /// in the `.ll` name made two identical compiles produce different objects on
 /// Linux (#7131). The `.ll` is content-addressed instead; uniqueness of
 /// concurrent same-content writes is handled by an atomic rename.
+///
+/// Which names actually reach the object, measured rather than assumed
+/// (aarch64 Debian clang 19.1.7, ELF, no `-g`) — so nobody has to re-derive
+/// this when reviewing a temp-path change:
+///
+/// | name                            | recorded in the `.o`?          |
+/// |---------------------------------|--------------------------------|
+/// | `.ll` **basename**              | YES — `STT_FILE` in `.symtab`  |
+/// | `.ll` **directory**, process CWD| no (needs DWARF, i.e. `-g`)    |
+/// | `-o` output path                | no                             |
+/// | `ld -r` input / output paths    | no (`compile_units_to_object`) |
+///
+/// That is the whole reason only the `.ll` basename had to change: the counter
+/// may stay in every *output* name, where it costs nothing and still closes
+/// #509. And because the *directory* is recorded nowhere, #7144 could put every
+/// compile's `.ll` in a directory of its own and delete it again.
+///
+/// **`PERRY_DEBUG_SYMBOLS` is not an exception**, contrary to what the comment
+/// here used to say. `-g` was assumed to pull the `.ll`'s absolute path plus
+/// `DW_AT_comp_dir` into DWARF, which would have made the file part of the
+/// shipped object and forced it to persist at a stable path. Measured on a real
+/// Perry module (Apple clang 21, `-target x86_64-unknown-linux-gnu` and
+/// `aarch64-unknown-linux-gnu`): the `-g` object is **byte-identical** to the
+/// one without it and carries **no `.debug_*` sections at all**. Perry's codegen
+/// emits no `DICompileUnit`/`DIFile`/`!dbg` metadata, and `clang -g` on a `.ll`
+/// lowers debug info that is in the IR rather than synthesising a compile unit
+/// for the input file. So `-g` records nothing about where the `.ll` lived, and
+/// the temp-file lifetime does not depend on it — see
+/// `debug_symbols_do_not_change_what_the_object_records`. (Not measured on
+/// COFF/Windows.)
 static TEMP_NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The environment inputs that decide what happens to the temp files.
+///
+/// Read once, in `compile_ll_to_object`, and threaded down rather than probed
+/// where they are used: the lifecycle is then testable without a test mutating
+/// process-wide environment underneath every other test in the binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TempFilePolicy {
+    /// `PERRY_LLVM_KEEP_IR` — retain every intermediate and write the compile
+    /// plan alongside it. The only input that changes the files' lifetime.
+    keep: bool,
+    /// `PERRY_DEBUG_SYMBOLS` — clang gets `-g`. Carried here only so the flag
+    /// is a parameter rather than an env probe buried in plan construction; it
+    /// deliberately does **not** affect cleanup (see `TEMP_NONCE_COUNTER`).
+    debug_symbols: bool,
+}
+
+impl TempFilePolicy {
+    fn from_env() -> Self {
+        Self {
+            keep: env::var_os("PERRY_LLVM_KEEP_IR").is_some(),
+            debug_symbols: env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
+        }
+    }
+}
 
 /// FNV-1a 64-bit over `ll_text`. Stable across platforms and rustc versions
 /// (unlike `DefaultHasher`), used only to content-address temp IR filenames so
@@ -45,27 +100,83 @@ fn ll_content_hash(ll_text: &str) -> u64 {
     h
 }
 
-/// Content-addressed `.ll` path + unique `.o` path under `tmp_dir`.
+/// Content-addressed `.ll` path + per-process-unique `.o` path under `tmp_dir`.
 ///
-/// The `.ll` basename is a function of the IR bytes alone so two compiles of
-/// the same module record the same source name in the object (Linux ELF
-/// determinism, #7131). The `.o` basename still carries a per-call counter so
-/// concurrent workers never race the clang output file (#509).
-/// Returns `(ll_path, obj_path, counter)` — `counter` is also used for the
-/// atomic-write staging filename.
-fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str) -> (PathBuf, PathBuf, u64) {
+/// The two names are asymmetric **on purpose**, and each half has already been
+/// got wrong once:
+///
+/// * The `.ll` basename is a function of the IR bytes ALONE. clang records a
+///   translation unit's source basename into the object, so anything else in
+///   this name (pid, clock) lands in the shipped bytes — that was #7131.
+/// * The `.o` basename must be unique per *process as well as* per call. The
+///   output path is not recorded anywhere, so uniquifiers are free here, and
+///   they are mandatory: `compile_ll_to_object` deletes the object once it has
+///   read it, so two concurrent `perry` processes compiling identical IR that
+///   agree on the name will delete it out from under each other. The counter
+///   alone does not achieve this — it is per-process state, and every process
+///   starts it at 0, so two processes with the same IR both pick
+///   `..._0.o`. Measured before this was fixed: **8 of 12** concurrent
+///   same-source compiles failed with "Failed to read clang output … No such
+///   file or directory". This is #509 again, one scope out.
+///
+/// Both names additionally sit inside a `scratch_dir` that belongs to this call
+/// alone (#7144). The directory name is *not* content-addressed — it must not
+/// be, or two callers would share it again and the unlink would be racing a
+/// sibling, which is the corner #7135 painted itself into. And it does not have
+/// to be: only the basename reaches the object.
+///
+/// `pid` and `counter` are parameters rather than read in here so the property
+/// above is testable without spawning processes.
+fn llvm_temp_paths_for(tmp_dir: &Path, ll_text: &str, pid: u32, counter: u64) -> LlvmTempPaths {
     let hash = ll_content_hash(ll_text);
+    let ll_name = format!("perry_llvm_{hash:016x}.ll");
+    // The `.o` keeps its uniquifiers even inside a private directory. They cost
+    // nothing, and the day someone flattens the layout again the object must
+    // not silently go back to colliding across processes (#7140).
+    let obj_name = format!("perry_llvm_{hash:016x}_{pid:x}_{counter:x}.o");
+    let scratch = tmp_dir.join(format!("perry_llvm_scratch_{pid:x}_{counter:x}"));
+    LlvmTempPaths {
+        ll_path: scratch.join(&ll_name),
+        obj_path: scratch.join(&obj_name),
+        scratch_dir: scratch,
+    }
+}
+
+/// Temp paths for one `compile_ll_to_object` call.
+#[derive(Debug, Clone)]
+struct LlvmTempPaths {
+    /// Directory owned exclusively by this call, removed once the object bytes
+    /// have been read.
+    scratch_dir: PathBuf,
+    ll_path: PathBuf,
+    obj_path: PathBuf,
+}
+
+/// `llvm_temp_paths_for` with this process's pid and the next counter value.
+/// Returns the paths plus `(pid, counter)` — the last two also name the
+/// atomic-write staging file.
+fn llvm_temp_paths(tmp_dir: &Path, ll_text: &str) -> (LlvmTempPaths, u32, u64) {
+    let pid = std::process::id();
     let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let ll_path = tmp_dir.join(format!("perry_llvm_{hash:016x}.ll"));
-    let obj_path = tmp_dir.join(format!("perry_llvm_{hash:016x}_{counter:x}.o"));
-    (ll_path, obj_path, counter)
+    (
+        llvm_temp_paths_for(tmp_dir, ll_text, pid, counter),
+        pid,
+        counter,
+    )
+}
+
+/// Staging name for the atomic `.ll` write. Must be unique per process for the
+/// same reason the `.o` is: two processes holding identical IR reach this with
+/// the same content hash and the same counter value.
+fn ll_staging_path(ll_path: &Path, pid: u32, counter: u64) -> PathBuf {
+    ll_path.with_extension(format!("ll.tmp.{pid:x}.{counter:x}"))
 }
 
 /// Write `ll_text` to a content-addressed path. Concurrent workers with the
 /// same IR may race; we write via a unique `.tmp` then `rename` into place so
 /// readers never see a partial file. A lost race (dest already exists) is fine
 /// — the winner already wrote the same content.
-fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()> {
+fn write_ll_atomically(ll_path: &Path, ll_text: &str, pid: u32, counter: u64) -> Result<()> {
     // Fast path: already present (common under parallel multi-module compile
     // when two units share nothing but we re-hit the same hash only on true
     // content match — overwrite is still safe because the content is identical).
@@ -79,7 +190,7 @@ fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()
             }
         }
     }
-    let tmp = ll_path.with_extension(format!("ll.tmp.{counter}"));
+    let tmp = ll_staging_path(ll_path, pid, counter);
     {
         let mut f = fs::File::create(&tmp)
             .with_context(|| format!("Failed to create temp .ll file at {}", tmp.display()))?;
@@ -96,9 +207,8 @@ fn write_ll_atomically(ll_path: &Path, ll_text: &str, counter: u64) -> Result<()
                     return Ok(());
                 }
             }
-            fs::write(ll_path, ll_text.as_bytes()).with_context(|| {
-                format!("Failed to write temp .ll file at {}", ll_path.display())
-            })
+            fs::write(ll_path, ll_text.as_bytes())
+                .with_context(|| format!("Failed to write temp .ll file at {}", ll_path.display()))
         }
     }
 }
@@ -250,6 +360,7 @@ fn build_clang_compile_plan(
     target_triple: Option<&str>,
     ll_byte_size: usize,
     ll_fn_count: usize,
+    debug_symbols: bool,
 ) -> ClangCompilePlan {
     let effective_target = target_triple
         .map(|s| s.to_string())
@@ -285,7 +396,11 @@ fn build_clang_compile_plan(
     };
 
     let mut clang_args = vec!["-c".to_string(), opt_flag.to_string()];
-    if std::env::var("PERRY_DEBUG_SYMBOLS").is_ok() {
+    // A parameter rather than an env probe so a test can pin what `-g` does
+    // and does not reach — measured in #7144: on a Perry `.ll` it produces a
+    // byte-identical object with no `.debug_*` sections, because Perry's
+    // codegen emits no DI metadata for clang to lower. See `TEMP_NONCE_COUNTER`.
+    if debug_symbols {
         clang_args.push("-g".to_string());
     }
     clang_args.push("-fno-math-errno".to_string());
@@ -339,6 +454,40 @@ fn build_clang_compile_plan(
 /// resulting `.o`, and clean up both on success. On failure the temp files
 /// are left behind for debugging — the caller can `grep /tmp/perry_llvm_*`.
 pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Result<Vec<u8>> {
+    compile_ll_to_object_in(
+        &env::temp_dir(),
+        ll_text,
+        target_triple,
+        TempFilePolicy::from_env(),
+    )
+}
+
+/// `compile_ll_to_object` with the temp root and the file-lifetime policy as
+/// arguments instead of process state.
+///
+/// Both are parameters so the temp-file *lifecycle* — the subject of #7144 — is
+/// testable: a test can hand this an empty directory of its own and assert what
+/// is left in it, without racing every other test in the binary over `TMPDIR`
+/// or `PERRY_LLVM_KEEP_IR`.
+///
+/// Cleanup policy, in one place:
+///
+/// * **success**: the object is read into memory, and the per-call directory
+///   goes with it — a compile leaves nothing behind (#7144).
+/// * **failure** (clang non-zero, or the object cannot be read): everything is
+///   left on disk. The error message names the `.ll`, and a failed compile is
+///   exactly when someone wants to look at the IR that produced it.
+/// * **`PERRY_LLVM_KEEP_IR`**: everything is kept and its location printed,
+///   plus the compile plan as JSON.
+/// * **`PERRY_DEBUG_SYMBOLS`**: no effect on any of the above. It was believed
+///   to put the `.ll`'s absolute path into DWARF; measured, it does not put
+///   anything there at all. See `TEMP_NONCE_COUNTER`.
+fn compile_ll_to_object_in(
+    tmp_dir: &Path,
+    ll_text: &str,
+    target_triple: Option<&str>,
+    policy: TempFilePolicy,
+) -> Result<Vec<u8>> {
     // Validate the toolchain before creating the potentially large `.ll`
     // scratch file. Unsupported clang releases should fail without leaving
     // an artifact that was never passed to the compiler.
@@ -364,11 +513,19 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     })?;
     ensure_supported_clang(&clang)?;
 
-    let tmp_dir = env::temp_dir();
     // #7131: content-address the `.ll` basename (clang embeds it into the
     // object on ELF). #509: keep the `.o` unique via the per-call counter.
-    let (ll_path, obj_path, write_nonce) = llvm_temp_paths(&tmp_dir, ll_text);
-    write_ll_atomically(&ll_path, ll_text, write_nonce)?;
+    // #7144: put both under a directory this call owns, so the `.ll` can be
+    // deleted again without racing a sibling that hashed the same IR.
+    let (paths, write_pid, write_nonce) = llvm_temp_paths(tmp_dir, ll_text);
+    let LlvmTempPaths {
+        scratch_dir,
+        ll_path,
+        obj_path,
+    } = paths;
+    fs::create_dir_all(&scratch_dir)
+        .with_context(|| format!("Failed to create temp dir at {}", scratch_dir.display()))?;
+    write_ll_atomically(&ll_path, ll_text, write_pid, write_nonce)?;
 
     let plan = build_clang_compile_plan(
         clang.clone(),
@@ -377,6 +534,7 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
         target_triple,
         ll_text.len(),
         count_ll_functions(ll_text),
+        policy.debug_symbols,
     );
 
     // Pre-flight probe: capture clang's default Target: line once per process,
@@ -449,15 +607,21 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     let bytes = fs::read(&obj_path)
         .with_context(|| format!("Failed to read clang output at {}", obj_path.display()))?;
 
-    // Clean up on success. The content-addressed `.ll` is **shared** across
-    // concurrent `compile_ll_to_object` calls with identical IR (#7131), so we
-    // must NOT delete it here — a sibling worker may still have clang open on
-    // that path (CodeRabbit). Only the unique `.o` is removed. The `.ll` is
-    // left in the process temp dir (same content is reused on cache misses;
-    // OS temp cleanup / `PERRY_LLVM_KEEP_IR` handle the rest). When KEEP_IR is
-    // set we also retain the object and write compile metadata.
-    let keep = env::var_os("PERRY_LLVM_KEEP_IR").is_some();
-    if keep {
+    // Clean up on success.
+    //
+    // #7135 could not delete the `.ll`: it had just made the name a pure
+    // function of the IR, so two workers holding identical IR *shared* that
+    // path and either could unlink it in the window between the other computing
+    // the path and clang opening it. The consequence (#7144) was that nothing
+    // ever deleted them — one file per distinct IR ever compiled, measured at
+    // 29 GB on a dev box.
+    //
+    // The fix is not a more careful delete, it is removing the sharing: the
+    // `.ll` now sits in a directory that belongs to this call, so unlinking it
+    // is unobservable to anyone else and there is no window to lose. The name
+    // clang records — the basename — is untouched, so emission stays
+    // deterministic (#7131).
+    if policy.keep {
         let _ = fs::write(&plan.stderr_remarks_path, &output.stderr);
         let metadata_path = PathBuf::from(format!("{}.compile-plan.json", plan.obj_path.display()));
         write_compile_plan_metadata(&plan, &metadata_path)?;
@@ -468,7 +632,13 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
             metadata_path.display()
         );
     } else {
-        let _ = fs::remove_file(&plan.obj_path);
+        // Ours alone: `remove_dir_all` rather than unlinking the two names we
+        // know about, so anything clang chose to drop beside them goes too and
+        // the directory cannot survive as an empty husk.
+        //
+        // Unconditional, including under `PERRY_DEBUG_SYMBOLS`: `-g` records
+        // nothing about this path, measured — see `TEMP_NONCE_COUNTER`.
+        let _ = fs::remove_dir_all(&scratch_dir);
     }
 
     Ok(bytes)
@@ -1317,6 +1487,7 @@ mod tests {
             None,
             0,
             0,
+            false,
         );
         assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
         // Small module → optimized at -O3 (#4880).
@@ -1344,6 +1515,7 @@ mod tests {
             None,
             huge,
             many_funcs,
+            false,
         );
         assert!(plan.clang_args.contains(&"-Os".to_string()));
         assert!(!plan.clang_args.contains(&"-O3".to_string()));
@@ -1363,6 +1535,7 @@ mod tests {
             None,
             huge,
             2, // ~3 MB/fn — far above the density cap
+            false,
         );
         assert!(plan.clang_args.contains(&"-O0".to_string()));
         assert!(!plan.clang_args.contains(&"-O3".to_string()));
@@ -1378,6 +1551,7 @@ mod tests {
             Some("x86_64-unknown-linux-gnu"),
             0,
             0,
+            false,
         );
         assert_eq!(plan.effective_target, "x86_64-unknown-linux-gnu");
         assert_eq!(plan.native_tuning_arg, None);
@@ -1470,6 +1644,7 @@ mod tests {
             Some("x86_64-unknown-linux-gnu"),
             0,
             0,
+            false,
         );
         write_compile_plan_metadata(&plan, &temp).unwrap();
         let text = fs::read_to_string(&temp).unwrap();
@@ -1520,8 +1695,10 @@ mod tests {
         // basename still differs via the counter.
         let tmp = env::temp_dir();
         let ir = "define void @f() {\n  ret void\n}\n";
-        let (ll_a, obj_a, _) = llvm_temp_paths(&tmp, ir);
-        let (ll_b, obj_b, _) = llvm_temp_paths(&tmp, ir);
+        let (a, _, _) = llvm_temp_paths(&tmp, ir);
+        let (b, _, _) = llvm_temp_paths(&tmp, ir);
+        let (ll_a, obj_a) = (&a.ll_path, &a.obj_path);
+        let (ll_b, obj_b) = (&b.ll_path, &b.obj_path);
         assert_eq!(
             ll_a.file_name(),
             ll_b.file_name(),
@@ -1533,8 +1710,8 @@ mod tests {
             ".o basenames must stay unique across calls (#509)"
         );
         // Different IR → different .ll basename.
-        let (ll_c, _, _) = llvm_temp_paths(&tmp, "define void @g() {\n  ret void\n}\n");
-        assert_ne!(ll_a.file_name(), ll_c.file_name());
+        let (c, _, _) = llvm_temp_paths(&tmp, "define void @g() {\n  ret void\n}\n");
+        assert_ne!(ll_a.file_name(), c.ll_path.file_name());
         // No pid / wall-clock digits of variable width — only hex hash.
         let name = ll_a.file_name().unwrap().to_string_lossy();
         assert!(
@@ -1552,9 +1729,75 @@ mod tests {
     }
 
     #[test]
+    fn object_temp_name_is_unique_across_processes_but_ll_is_not() {
+        // The regression this test exists for: #7135 content-addressed BOTH
+        // temp names, so the `.o` lost the pid it used to carry. Two `perry`
+        // processes compiling identical IR then agreed on the object path —
+        // and `compile_ll_to_object` deletes the object after reading it, so
+        // they deleted each other's. Measured on macOS before the fix: 8 of 12
+        // concurrent same-source compiles failed with
+        //   Failed to read clang output at …/perry_llvm_<hash>_0.o
+        // Both processes start TEMP_NONCE_COUNTER at 0, so the counter cannot
+        // separate them; only the pid can.
+        let tmp = env::temp_dir();
+        let ir = "define void @f() {\n  ret void\n}\n";
+
+        // Same IR, same counter, DIFFERENT process.
+        let p1 = llvm_temp_paths_for(&tmp, ir, 1111, 0);
+        let p2 = llvm_temp_paths_for(&tmp, ir, 2222, 0);
+        let (ll_p1, obj_p1) = (&p1.ll_path, &p1.obj_path);
+        let (ll_p2, obj_p2) = (&p2.ll_path, &p2.obj_path);
+        assert_eq!(
+            ll_p1.file_name(),
+            ll_p2.file_name(),
+            "the .ll is what clang records into the object; it must stay a pure \
+             function of the IR across processes (#7131)"
+        );
+        assert_ne!(
+            obj_p1.file_name(),
+            obj_p2.file_name(),
+            "two processes with identical IR must NOT share an object path — \
+             they delete it out from under each other (#509 across processes)"
+        );
+
+        // Same process, different call: the counter still has to separate
+        // in-process rayon workers.
+        let c0 = llvm_temp_paths_for(&tmp, ir, 1111, 0);
+        let c1 = llvm_temp_paths_for(&tmp, ir, 1111, 1);
+        assert_ne!(c0.obj_path.file_name(), c1.obj_path.file_name());
+
+        // The atomic-write staging name needs the same separation: both
+        // processes reach it with the same hash and the same counter, and
+        // `File::create` truncates.
+        assert_ne!(
+            ll_staging_path(ll_p1, 1111, 0).file_name(),
+            ll_staging_path(ll_p1, 2222, 0).file_name(),
+            "staging .tmp name must be per-process"
+        );
+        assert_ne!(
+            ll_staging_path(ll_p1, 1111, 0).file_name(),
+            ll_staging_path(ll_p1, 1111, 1).file_name(),
+            "staging .tmp name must be per-call"
+        );
+
+        // …and the staging file must never be mistaken for the real `.ll`.
+        assert_ne!(
+            ll_staging_path(ll_p1, 1111, 0).file_name(),
+            ll_p1.file_name()
+        );
+    }
+
+    #[test]
     fn ll_content_hash_is_stable_for_fixed_input() {
         // Pin the FNV-1a value so a future hash swap is intentional.
         assert_eq!(ll_content_hash(""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(ll_content_hash("a"), 0xaf63_dc4c_8601_ec8c);
     }
 }
+
+/// Temp-file *lifecycle* — who owns the `.ll`, and when it is removed (#7144).
+/// A sibling file only because of the 2,000-line cap; `use super::*` gives it
+/// the same view of this module as the block above.
+#[cfg(test)]
+#[path = "linker_temp_lifecycle_tests.rs"]
+mod linker_temp_lifecycle_tests;

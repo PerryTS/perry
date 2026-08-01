@@ -430,6 +430,13 @@ enum PendingNetEvent {
 // callback pointer with it.
 extern "C" {
     fn js_net_callback_ptr(value: f64) -> i64;
+    fn js_get_string_pointer_unified(value: f64) -> i64;
+    fn perry_cluster_worker_listening(
+        addr_ptr: *const u8,
+        addr_len: u32,
+        port: i32,
+        address_type: i32,
+    );
 }
 
 fn push_event(ev: PendingNetEvent) {
@@ -700,7 +707,8 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
     // is left alone.)
     js_net_validate_listen_port(port);
     let port_u16 = port as u16;
-    let host = "0.0.0.0".to_string();
+    let host = string_from_header_i64(js_get_string_pointer_unified(arg2))
+        .unwrap_or_else(|| "0.0.0.0".to_string());
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -778,6 +786,13 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                     s.bound_host = local.ip().to_string();
                 }
             }
+            let address = local.ip().to_string();
+            perry_cluster_worker_listening(
+                address.as_ptr(),
+                address.len() as u32,
+                local.port() as i32,
+                if local.is_ipv6() { 6 } else { 4 },
+            );
         }
         // bind succeeded — fire `'listening'`.
         push_event(PendingNetEvent::ServerListening(server_id));

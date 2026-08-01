@@ -31,6 +31,15 @@ fn fallback_mac_address() -> String {
     "00:00:00:00:00:00".to_string()
 }
 
+// Callers are `collect_link_macs` (macOS/BSD), `collect_windows_adapters`
+// (Windows), and the unit tests. On Linux/Android the MAC is read as a
+// preformatted string from `/sys`, so this helper has no caller there and
+// would trip `-D dead-code`; gate it to the union of its real callers.
+#[cfg(any(
+    windows,
+    all(unix, not(any(target_os = "linux", target_os = "android"))),
+    test
+))]
 fn format_mac_address(bytes: &[u8]) -> String {
     if bytes.len() != 6 {
         return fallback_mac_address();

@@ -711,7 +711,11 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             match (lt, rt) {
                 (Some(a), Some(b)) if a == b => Some(a),
                 (Some(a), Some(b)) => Some(HirType::Union(vec![a, b])),
-                (Some(t), None) | (None, Some(t)) => Some(t),
+                // One unknown branch makes the whole conditional unknown.
+                // Optional chaining lowers to `receiver == null ? undefined :
+                // receiver.property`; treating that as `Void` when the property
+                // type is dynamic made `Array.isArray(obj?.value)` constant-fold
+                // to false without inspecting the runtime value.
                 _ => None,
             }
         }

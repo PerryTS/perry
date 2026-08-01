@@ -228,6 +228,30 @@ pub(crate) fn method_proven_this(
     })
 }
 
+/// #7142 profitability: should a class-id dispatch-tower case route to
+/// `method`'s `{public}__pshape` clone?
+///
+/// Only meaningful once [`method_proven_this`] has admitted a clone — this adds
+/// the "should we?" half that the admission test (a pure "may we?" conjunction)
+/// deliberately does not carry. Refusing is always sound: the tower case keeps
+/// calling the public body.
+///
+/// The two other routing sites do NOT consult this. They are dominated by a
+/// shape guard that is paid whether or not the clone is taken, so for them the
+/// clone is free; only the tower pays for its own proof.
+pub(crate) fn tower_route_profitable(
+    class: &Class,
+    method: &Function,
+    classes: &HashMap<String, &Class>,
+) -> bool {
+    let chain = chain_classes(classes, &class.name);
+    if chain.is_empty() {
+        return false;
+    }
+    let fields = chain_field_names(&chain);
+    super::repsel_benefit::tower_route_profitable(method, &fields)
+}
+
 /// Does the method body READ `this.<declared chain field>` anywhere?
 fn method_reads_chain_field(method: &Function, fields: &HashSet<String>) -> bool {
     let mut found = false;
@@ -337,8 +361,9 @@ mod tests {
         // Naming + emission + the two proven call sites. `string_pool.rs`
         // (which emits `js_register_class_method`) is deliberately ABSENT:
         // the vtable must only ever hold the public symbol.
-        let allowed: [&str; 6] = [
+        let allowed: [&str; 7] = [
             "collectors/proven_this.rs",                   // this test
+            "collectors/proven_this_routing_tests.rs",     // routing IR ratchet
             "codegen/typed_abi.rs",                        // name helper
             "codegen/method.rs",                           // clone emission
             "codegen/artifacts.rs",                        // emission driver

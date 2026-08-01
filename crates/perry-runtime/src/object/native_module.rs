@@ -624,6 +624,7 @@ pub(crate) fn canonical_native_callable_property<'a>(
         ("path" | "path.posix" | "path.win32", "_makeLong") => "toNamespacedPath",
         ("querystring", "decode") => "parse",
         ("querystring", "encode") => "stringify",
+        ("cluster", "setupMaster") => "setupPrimary",
         _ => property_name,
     }
 }

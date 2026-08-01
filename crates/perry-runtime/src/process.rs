@@ -10,6 +10,7 @@ use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 mod credentials;
 mod env_misc;
@@ -340,6 +341,17 @@ pub(crate) fn module_array_value(items: &[&str]) -> f64 {
         crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
     }
     f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn process_exec_argv_value() -> f64 {
+    static EXEC_ARGV: OnceLock<Vec<String>> = OnceLock::new();
+    let values = EXEC_ARGV.get_or_init(|| {
+        let raw = std::env::var("PERRY_PROCESS_EXEC_ARGV").unwrap_or_else(|_| "[]".to_string());
+        std::env::remove_var("PERRY_PROCESS_EXEC_ARGV");
+        serde_json::from_str(&raw).unwrap_or_default()
+    });
+    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
+    module_array_value(&refs)
 }
 
 pub(crate) fn module_set_value(items: &[&str]) -> f64 {
@@ -690,7 +702,8 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "argv0" | "execPath" => module_string_value(&process_argv0_string()),
         "config" => report::process_config_value(),
         "debugPort" => 9229.0,
-        "execArgv" | "moduleLoadList" => module_array_value(&[]),
+        "execArgv" => process_exec_argv_value(),
+        "moduleLoadList" => module_array_value(&[]),
         "features" => report::process_features_value(),
         "finalization" => finalization::process_finalization_value(),
         "permission" => permission::process_permission_value()?,

@@ -46,6 +46,45 @@ pub(crate) fn internal_promise() -> *mut Promise {
     p
 }
 
+unsafe fn try_call_stream_action(callback: i64, reason: f64) -> Result<f64, u64> {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped == 0 {
+        let result = js_closure_call1(callback as *const ClosureHeader, reason);
+        perry_runtime::exception::js_try_end();
+        Ok(result)
+    } else {
+        let error = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        Err(error.to_bits())
+    }
+}
+
+unsafe fn stream_action_promise(result: f64) -> Option<*mut Promise> {
+    let adopted = perry_runtime::promise::js_assimilate_thenable(result);
+    if perry_runtime::promise::js_value_is_promise(adopted) == 0 {
+        return None;
+    }
+    let promise = js_nanbox_get_pointer(adopted) as *mut Promise;
+    (!promise.is_null()).then_some(promise)
+}
+
+unsafe fn settle_stream_action_promise(promise: *mut Promise, actions: &[*mut Promise]) {
+    match actions {
+        [] => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
+        [action] => perry_runtime::promise::js_promise_resolve_with_promise(promise, *action),
+        _ => {
+            let values = js_array_alloc(actions.len() as u32);
+            for action in actions {
+                js_array_push(values, JSValue::pointer(*action as *const u8));
+            }
+            let all = perry_runtime::promise::js_promise_all(values);
+            perry_runtime::promise::js_promise_resolve_with_promise(promise, all);
+        }
+    }
+}
+
 mod byob;
 mod expando;
 mod idalloc;
@@ -214,6 +253,7 @@ struct TransformStreamData {
     transform_cb: i64,
     flush_cb: i64,
     native: Option<NativeTransformKind>,
+    backpressure: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -387,6 +427,15 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             *slot = p as usize;
         }
     }
+    if let Ok(mut map) = transform::TRANSFORM_BACKPRESSURED_JOBS.lock() {
+        for jobs in map.values_mut() {
+            for slot in jobs.iter_mut() {
+                let mut job = *slot as *mut ClosureHeader;
+                visitor.visit_raw_mut_ptr_slot(&mut job);
+                *slot = job as usize;
+            }
+        }
+    }
     if let Ok(mut map) = READERS.lock() {
         for r in map.values_mut() {
             visitor.visit_raw_mut_ptr_slot(&mut r.closed_promise);
@@ -436,13 +485,13 @@ unsafe fn stream_object_closure(object: f64, name: &[u8]) -> i64 {
 unsafe fn build_iter_result(value_bits: u64, done: bool) -> u64 {
     let obj = js_object_alloc(0, 2);
     let keys = js_array_alloc(2);
-    let k_value = js_string_from_bytes(b"value".as_ptr(), 5);
     let k_done = js_string_from_bytes(b"done".as_ptr(), 4);
-    js_array_push(keys, JSValue::string_ptr(k_value));
+    let k_value = js_string_from_bytes(b"value".as_ptr(), 5);
     js_array_push(keys, JSValue::string_ptr(k_done));
-    js_object_set_field(obj, 0, JSValue::from_bits(value_bits));
+    js_array_push(keys, JSValue::string_ptr(k_value));
     let done_bits = if done { TAG_TRUE } else { TAG_FALSE };
-    js_object_set_field(obj, 1, JSValue::from_bits(done_bits));
+    js_object_set_field(obj, 0, JSValue::from_bits(done_bits));
+    js_object_set_field(obj, 1, JSValue::from_bits(value_bits));
     js_object_set_keys(obj, keys);
     JSValue::object_ptr(obj as *mut u8).bits()
 }
@@ -708,17 +757,80 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
             let pull_outcome = perry_runtime::exception::js_call_catching(|| {
                 if pull_returns_byte_chunk {
                     pull_deferred_byte_chunk(stream_id, cb);
+                    f64::from_bits(TAG_UNDEFINED)
                 } else {
-                    js_closure_call1(cb as *const ClosureHeader, stream_id as f64);
+                    js_closure_call1(cb as *const ClosureHeader, stream_id as f64)
                 }
-                f64::from_bits(TAG_UNDEFINED)
             });
-            if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
-                s.pulling = false;
+            match pull_outcome {
+                Ok(result) => {
+                    if perry_runtime::promise::js_value_is_promise(result) != 0 {
+                        let promise =
+                            perry_runtime::value::js_nanbox_get_pointer(result) as *mut Promise;
+                        if !promise.is_null() {
+                            let fulfilled = readable_pull_settled_closure(
+                                readable_pull_fulfilled as *const u8,
+                                stream_id,
+                            );
+                            let rejected = readable_pull_settled_closure(
+                                readable_pull_rejected as *const u8,
+                                stream_id,
+                            );
+                            let _ = perry_runtime::promise::js_promise_then(
+                                promise, fulfilled, rejected,
+                            );
+                            return f64::from_bits(TAG_UNDEFINED);
+                        }
+                    }
+                    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+                        s.pulling = false;
+                    }
+                }
+                Err(exc) => {
+                    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+                        s.pulling = false;
+                    }
+                    error_readable_stream(stream_id, exc.to_bits());
+                }
             }
-            if let Err(exc) = pull_outcome {
-                error_readable_stream(stream_id, exc.to_bits());
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn readable_pull_settled_closure(func: *const u8, stream_id: usize) -> *mut ClosureHeader {
+    perry_runtime::closure::js_register_closure_arity(func, 1);
+    let closure = perry_runtime::closure::js_closure_alloc(func, 1);
+    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, stream_id as i64);
+    closure
+}
+
+extern "C" fn readable_pull_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+    unsafe {
+        let stream_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+            s.pulling = false;
+        }
+        maybe_pull(stream_id);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn readable_pull_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    unsafe {
+        let stream_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let should_error = {
+            let mut streams = READABLE_STREAMS.lock().unwrap();
+            match streams.get_mut(&stream_id) {
+                Some(stream) => {
+                    stream.pulling = false;
+                    stream.state == ReadableState::Readable
+                }
+                None => false,
             }
+        };
+        if should_error {
+            error_readable_stream(stream_id, reason.to_bits());
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -1142,14 +1254,29 @@ unsafe fn js_readable_stream_cancel_inner(
         reject_type_error(promise, "ReadableStream is locked");
         return promise;
     }
+    let mut actions = [std::ptr::null_mut(); 2];
+    let mut action_count = 0;
     if let Some(writable_id) = transform_writable_for_readable(id) {
-        let _ = js_writable_stream_abort_inner(writable_id as f64, reason, true);
+        actions[action_count] = js_writable_stream_abort_inner(writable_id as f64, reason, true);
+        action_count += 1;
     }
     if cb != 0 {
-        js_closure_call1(cb as *const ClosureHeader, reason);
+        match try_call_stream_action(cb, reason) {
+            Ok(result) => {
+                if let Some(action) = stream_action_promise(result) {
+                    actions[action_count] = action;
+                    action_count += 1;
+                }
+            }
+            Err(error) => {
+                close_pending(id);
+                js_promise_reject(promise, f64::from_bits(error));
+                return promise;
+            }
+        }
     }
     close_pending(id);
-    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    settle_stream_action_promise(promise, &actions[..action_count]);
     promise
 }
 
@@ -1512,6 +1639,14 @@ unsafe fn throw_invalid_readable_strategy_size(stream_id: usize, size: f64) -> !
     perry_runtime::exception::js_throw(f64::from_bits(err))
 }
 
+fn readable_controller_enqueue_error(stream_id: usize) -> Option<&'static str> {
+    let streams = READABLE_STREAMS.lock().unwrap();
+    match streams.get(&stream_id) {
+        Some(stream) if stream.state == ReadableState::Readable => None,
+        _ => Some("Invalid state: Controller is already closed"),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ReadableStreamDefaultController FFI (controller is the stream handle)
 // ─────────────────────────────────────────────────────────────────────
@@ -1533,6 +1668,9 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
         }
     }
     let id = stream_handle as usize;
+    if let Some(message) = readable_controller_enqueue_error(id) {
+        throw_type_error_with_code(message, "ERR_INVALID_STATE");
+    }
     let chunk_bits = chunk.to_bits();
     let is_byte_stream = {
         let g = READABLE_STREAMS.lock().unwrap();
@@ -1992,20 +2130,77 @@ pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *m
 // tee / pipeTo / pipeThrough
 // ─────────────────────────────────────────────────────────────────────
 
-/// `readable.pipeThrough({readable, writable})` — pipeTo into the
-/// transform's writable side, return its readable side. Caller already
-/// destructured the TransformStream into its readable / writable
-/// handles.
+fn pipe_through_validation_error(
+    readable_id: usize,
+    writable_id: usize,
+    output_id: usize,
+) -> Option<&'static str> {
+    let readable = READABLE_STREAMS.lock().unwrap();
+    match readable.get(&readable_id) {
+        Some(stream) if stream.reader_handle.is_some() => return Some("ReadableStream is locked"),
+        Some(_) => {}
+        None => return Some("Invalid ReadableStream"),
+    }
+    if !readable.contains_key(&output_id) {
+        return Some("Invalid transform readable");
+    }
+    drop(readable);
+    match WRITABLE_STREAMS.lock().unwrap().get(&writable_id) {
+        Some(stream) if stream.writer_handle.is_some() => Some("WritableStream is locked"),
+        Some(_) => None,
+        None => Some("Invalid transform writable"),
+    }
+}
+
+unsafe fn pipe_through_options_error(options: f64) -> Option<&'static str> {
+    let signal = perry_runtime::value::js_get_property(options, b"signal".as_ptr() as i64, 6);
+    pipe_through_signal_error(signal)
+}
+
+fn pipe_through_signal_error(signal: f64) -> Option<&'static str> {
+    (signal.to_bits() != TAG_UNDEFINED
+        && perry_runtime::url::js_abort_signal_resolve_ptr(signal).is_null())
+    .then_some("The options.signal property must be an AbortSignal")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_pipe_through_validate(
+    readable_handle: f64,
+    transform_writable_handle: f64,
+    transform_readable_handle: f64,
+    options: f64,
+) -> f64 {
+    if let Some(message) = pipe_through_validation_error(
+        readable_handle as usize,
+        transform_writable_handle as usize,
+        transform_readable_handle as usize,
+    ) {
+        throw_type_error(message);
+    }
+    if let Some(message) = pipe_through_options_error(options) {
+        throw_type_error(message);
+    }
+    transform_readable_handle
+}
+
+/// Legacy three-argument ABI shared with the external streams library.
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_pipe_through(
     readable_handle: f64,
     transform_writable_handle: f64,
     transform_readable_handle: f64,
 ) -> f64 {
-    let _ = js_readable_stream_pipe_to(
+    let output = js_readable_stream_pipe_through_validate(
+        readable_handle,
+        transform_writable_handle,
+        transform_readable_handle,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    let pipe = js_readable_stream_pipe_to(
         readable_handle,
         transform_writable_handle,
         f64::from_bits(TAG_UNDEFINED),
     );
-    transform_readable_handle
+    js_promise_mark_internally_handled(pipe);
+    output
 }

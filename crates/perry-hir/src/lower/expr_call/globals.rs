@@ -941,6 +941,15 @@ pub(super) fn try_global_builtins(
         // Check if this is a direct call on an aliased named import
         // e.g., uuid() where import { v4 as uuid } from 'uuid'
         if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
+            if module_name == "inspector/promises" && method_name == "Session" {
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: module_name.to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "SessionCall".to_string(),
+                    args,
+                }));
+            }
             if module_name == "os" || module_name == "node:os" {
                 match method_name {
                     "availableParallelism" => return Ok(Ok(Expr::OsAvailableParallelism)),

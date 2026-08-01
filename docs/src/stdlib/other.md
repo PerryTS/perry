@@ -192,8 +192,14 @@ if (parentPort) {
 ## lru-cache
 
 The wired constructor takes the npm v7+ options-object shape
-(`new LRUCache({ max: 100 })`) — the older positional form
-`new LRUCache(100)` falls through to a `max=100` default.
+(`new LRUCache({ max: 100 })`) and validates it the way npm does, throwing
+the same errors rather than clamping: `max` must be a positive integer no
+larger than the JS array-length limit, `ttl` must be a positive integer,
+and at least one of `max` or `ttl` is required — so `new LRUCache()` and
+the older positional form `new LRUCache(100)` both throw a `TypeError`,
+exactly as they do on npm. `ttl`, `updateAgeOnGet` and `peek` are honored;
+`maxSize`/`sizeCalculation`, `dispose`, `fetch`, `allowStale` and the
+iterator surface are not yet implemented.
 
 ```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:lru-cache}}

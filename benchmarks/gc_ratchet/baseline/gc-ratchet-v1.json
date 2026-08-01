@@ -36,18 +36,18 @@
     },
     "binaries": {
       "perry": {
-        "path": "/Users/perry/projects/perry/wt-ratchet-target/release/perry",
+        "path": "wt-ratchet-target/release/perry",
         "size": 36187312,
         "sha256": "f3de4f3edf8429f6646510143755f87f8cbab9d8356b98308fd095eb8e68d205"
       },
-      "runtime_dir": "/Users/perry/projects/perry/wt-ratchet-target/release",
+      "runtime_dir": "wt-ratchet-target/release",
       "libperry_runtime.a": {
-        "path": "/Users/perry/projects/perry/wt-ratchet-target/release/libperry_runtime.a",
+        "path": "wt-ratchet-target/release/libperry_runtime.a",
         "size": 30240784,
         "sha256": "4f31a6fe96ba835d18be5157515025b700be350107d4b24db330277cc5cbc067"
       },
       "libperry_stdlib.a": {
-        "path": "/Users/perry/projects/perry/wt-ratchet-target/release/libperry_stdlib.a",
+        "path": "wt-ratchet-target/release/libperry_stdlib.a",
         "size": 85427768,
         "sha256": "237b63291f7c0c7573c14e758f37c08306d84a2a058af40447f8e5c2d95aba97"
       }
@@ -1833,7 +1833,7 @@
           "<compiled-binary>"
         ],
         "compile_command": [
-          "/Users/perry/projects/perry/wt-ratchet-target/release/perry",
+          "wt-ratchet-target/release/perry",
           "<source.ts>",
           "-o",
           "<compiled-binary>"

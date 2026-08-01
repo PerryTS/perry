@@ -80,21 +80,21 @@ main:
 H1_MIN_IR = """
 define i32 @main() {
 entry:
-  br label %for.body.2
-for.body.2:
+  br label %for.body.14
+for.body.14:
   %i = load i32, ptr %slot
   store i32 %i, ptr %slot
   %ok = icmp slt i32 %i, %n
   %p0 = getelementptr i8, ptr %src, i32 %i
   %b = load i8, ptr %p0
   store i8 %b, ptr %p0
-  br label %for.body.6
-for.body.6:
+  br label %for.body.18
+for.body.18:
   %p1 = getelementptr i8, ptr %src, i32 %i
   %b1 = load i8, ptr %p1
   store i8 %b1, ptr %p1
-  br label %for.body.10
-for.body.10:
+  br label %for.body.22
+for.body.22:
   %p2 = getelementptr i8, ptr %src, i32 %i
   %b2 = load i8, ptr %p2
   store i8 %b2, ptr %p2
@@ -1556,7 +1556,11 @@ idxset.bounded_numeric_merge.5:
         self.assertEqual(summary["gc_collections_traced"], 2)
         self.assertEqual(summary["allocations_traced"], 4)
         self.assertEqual(summary["write_barriers_traced"], 3)
-        self.assertEqual(summary["write_barriers_static"], 4)
+        # write_barriers_static counts only heap barriers (js_write_barrier +
+        # js_write_barrier_slot); the inline shadow-stack root-shading barriers
+        # (#7088) are tracked separately so they do not inflate the budget.
+        self.assertEqual(summary["write_barriers_static"], 2)
+        self.assertEqual(summary["root_shading_barriers_static"], 2)
         self.assertEqual(summary["boxed_number_allocations_static"], 1)
         self.assertEqual(summary["buffer_slow_path_accesses_static"], 2)
         self.assertEqual(summary["array_slow_path_accesses_static"], 2)

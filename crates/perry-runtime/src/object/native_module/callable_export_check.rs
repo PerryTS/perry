@@ -124,10 +124,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                 "readline/promises",
                 "createInterface" | "Interface" | "Readline",
             )
-            | (
-                "inspector",
-                "open" | "close" | "url" | "waitForDebugger" | "Session",
-            )
+            | ("inspector", "open" | "close" | "url" | "waitForDebugger" | "Session")
             | (
                 "inspector.Network",
                 "requestWillBeSent"
@@ -139,6 +136,15 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                     | "webSocketCreated"
                     | "webSocketClosed"
                     | "webSocketHandshakeResponseReceived",
+            )
+            | ("inspector.NetworkResources", "put")
+            | (
+                "inspector.DOMStorage",
+                "domStorageItemAdded"
+                    | "domStorageItemRemoved"
+                    | "domStorageItemUpdated"
+                    | "domStorageItemsCleared"
+                    | "registerStorage",
             )
             | ("inspector/promises", "Session")
             | (
@@ -1476,6 +1482,16 @@ static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         &["Session", "close", "open", "url", "waitForDebugger"],
     ),
     (
+        "inspector.DOMStorage",
+        &[
+            "domStorageItemAdded",
+            "domStorageItemRemoved",
+            "domStorageItemUpdated",
+            "domStorageItemsCleared",
+            "registerStorage",
+        ],
+    ),
+    (
         "inspector.Network",
         &[
             "dataReceived",
@@ -1489,6 +1505,7 @@ static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "webSocketHandshakeResponseReceived",
         ],
     ),
+    ("inspector.NetworkResources", &["put"]),
     (
         "inspector.Session",
         &[

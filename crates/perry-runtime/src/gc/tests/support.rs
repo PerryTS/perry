@@ -202,30 +202,14 @@ pub(super) fn root_scanner_registry_counts() -> (usize, usize, usize, usize) {
     (rust_roots, mutable_roots, ffi_roots, ffi_mutable_roots)
 }
 
-/// Opt this thread out of the test build's full-conservative-scan default for
-/// the guard's lifetime, restoring the prior override on drop. GC tests that
-/// verify collection of objects they hold only as native-stack locals — and
-/// don't go through `ScopedRootScannerRegistryGuard` — use this so the native
-/// scan is *skipped* (production `Auto` behavior) and those locals are reclaimed.
-pub(super) struct ConservativeScanAutoGuard {
-    prev: Option<crate::gc::ConservativeStackScanMode>,
-}
-
-impl ConservativeScanAutoGuard {
-    pub(super) fn new() -> Self {
-        Self {
-            prev: crate::gc::set_conservative_stack_scan_override(Some(
-                crate::gc::ConservativeStackScanMode::Auto,
-            )),
-        }
-    }
-}
-
-impl Drop for ConservativeScanAutoGuard {
-    fn drop(&mut self) {
-        crate::gc::set_conservative_stack_scan_override(self.prev);
-    }
-}
+// `ConservativeScanAutoGuard` used to live here. It opted a thread out of the
+// test build's `Full` conservative-scan default, back to production's `Auto`.
+// The test build now defaults to `Auto` for every thread
+// (`gc::roots::conservative_stack_scan_mode`), so the guard set the value it
+// was already going to get — it could no longer fail, and per CLAUDE.md's
+// kill-policy a mode that cannot be exercised is deleted rather than left for a
+// future bisect to trust. Tests needing the scan *provably* off should pin
+// `ConservativeScanDisabledGuard`, which asserts the stronger property.
 
 /// Put the runtime-handle mutable-root scanner back into this thread's
 /// registry.

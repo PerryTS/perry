@@ -873,6 +873,23 @@ pub(super) fn drain_readable_from_events(stream: f64) {
     {
         return;
     }
+    if !readable_chunks_nonempty(stream) {
+        if let Some(source_iterator) =
+            get_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
+        {
+            match collect_pipeline_iterator_chunks(source_iterator) {
+                Ok(Some(chunks)) => {
+                    set_hidden_value(stream, hidden_chunks_key(), chunks);
+                    initialize_readable_from_buffered_length(stream, chunks);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    destroy_stream(stream, err);
+                    return;
+                }
+            }
+        }
+    }
     if let Some(chunks) = readable_hidden_chunks(stream) {
         let mut values = Vec::new();
         push_chunk_values(chunks, &mut values, 0);
@@ -993,7 +1010,8 @@ pub(super) fn writable_hidden_final(value: f64) -> Option<f64> {
 }
 
 pub(super) fn is_transform_stream(stream: f64) -> bool {
-    transform_hidden_callback(stream).is_some()
+    is_classic_stream_instance_of(stream, "Transform")
+        || transform_hidden_callback(stream).is_some()
         || transform_hidden_flush(stream).is_some()
         || has_truthy_hidden(stream, hidden_transform_passthrough_key())
 }
@@ -1378,6 +1396,13 @@ pub(super) fn is_non_iterable_primitive_for_readable_from(value: f64) -> bool {
     (jsval.is_number() || jsval.is_int32() || jsval.is_bool()) && !jsval.is_any_string()
 }
 
+pub(super) fn is_invalid_readable_from_input(value: f64) -> bool {
+    matches!(value.to_bits(), TAG_NULL | TAG_UNDEFINED)
+        || is_non_iterable_primitive_for_readable_from(value)
+        || is_callable_value(value)
+        || crate::promise::js_value_is_promise(value) != 0
+}
+
 pub(super) fn uint8array_byte_chunks(raw: usize) -> f64 {
     let arr = crate::array::js_array_alloc(0);
     if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
@@ -1471,6 +1496,12 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
         let arr = crate::array::js_array_push_f64(arr, iterable);
         return normalized_readable_chunks(box_pointer(arr as *const u8));
     }
+    if let Some(source_iterator) = crate::array::call_symbol_async_iterator(iterable) {
+        return NormalizedReadableInput {
+            chunks: box_pointer(crate::array::js_array_alloc(0) as *const u8),
+            source_iterator: Some(source_iterator),
+        };
+    }
     if let Some((chunks, source_iterator)) = flatten_async_iterable_with_source(iterable) {
         return NormalizedReadableInput {
             chunks: box_pointer(chunks as *const u8),
@@ -1486,6 +1517,22 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
 
     let arr = crate::array::js_array_alloc(1);
     normalized_readable_chunks(box_pointer(arr as *const u8))
+}
+
+pub(super) fn initialize_readable_from_buffered_length(readable: f64, chunks: f64) {
+    let mut values = Vec::new();
+    push_chunk_values(chunks, &mut values, 0);
+    let length = if readable_object_mode(readable) {
+        values.len() as f64
+    } else {
+        let mut bytes = Vec::new();
+        for value in values {
+            append_chunk_bytes(value, &mut bytes, 0);
+        }
+        bytes.len() as f64
+    };
+    set_hidden_value(readable, hidden_buffered_key(), length);
+    set_hidden_value(readable, hidden_key(b"readableLength"), length);
 }
 
 fn flatten_sync_iterable_value(

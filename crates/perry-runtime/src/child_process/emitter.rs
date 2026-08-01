@@ -68,7 +68,9 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     // and that iterator registers its `data`/`end`/`error` listeners in node:stream's
     // registry rather than the one above. Forward there too, so a `for await` over a
     // child's output sees the chunks the reactor delivers.
-    crate::node_stream::emit_to_stream_listeners(target, event.as_bytes(), args);
+    if !JSValue::from_bits(cp_get_field(target, b"readable").to_bits()).is_undefined() {
+        crate::node_stream::emit_to_stream_listeners(target, event.as_bytes(), args);
+    }
 
     fired
 }
@@ -102,7 +104,26 @@ pub(crate) extern "C" fn cp_method_this0(closure: *const ClosureHeader) -> f64 {
 pub(crate) extern "C" fn cp_method_this1(closure: *const ClosureHeader, _a: f64) -> f64 {
     cp_this(closure)
 }
+
+/// Low-level `new ChildProcess().spawn(options)` validation boundary. Node's
+/// constructor is public even though normal callers use `spawn()`; keep the
+/// constructed idle object inert after its setup checks.
+pub(crate) extern "C" fn cp_method_child_spawn(closure: *const ClosureHeader, options: f64) -> f64 {
+    crate::child_process::validate::cp_validate_child_process_spawn(options);
+    cp_this(closure)
+}
+/// `child.stdout.setEncoding(encoding)` switches emitted chunks from Buffers
+/// to decoded strings. The reactor reads this field when it delivers data.
+pub(crate) extern "C" fn cp_method_set_encoding(
+    closure: *const ClosureHeader,
+    encoding: f64,
+) -> f64 {
+    let this = cp_this(closure);
+    cp_set_field(this, b"__cpEncoding", encoding);
+    this
+}
 pub(crate) extern "C" fn cp_method_kill(closure: *const ClosureHeader, signal: f64) -> f64 {
+    cp_validate_signal(signal);
     let this = cp_this(closure);
     cp_set_field(this, b"killed", TAG_TRUE_F64);
     // #1934: signal the live child if one is still running. `__cpHandle` is the
@@ -113,7 +134,7 @@ pub(crate) extern "C" fn cp_method_kill(closure: *const ClosureHeader, signal: f
             return TAG_TRUE_F64;
         }
     }
-    TAG_TRUE_F64
+    TAG_FALSE_F64
 }
 /// `child[Symbol.dispose]()` — Node aliases this to `kill()` and returns
 /// `undefined`, so `using child = spawn(...)` terminates the subprocess on
@@ -290,13 +311,29 @@ pub(crate) extern "C" fn cp_method_send(
     a3: f64,
     a4: f64,
 ) -> f64 {
+    let message_value = JSValue::from_bits(message.to_bits());
+    if message_value.is_undefined() {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"message\" argument must be specified",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    if unsafe { crate::symbol::js_is_symbol(message) != 0 }
+        || (message_value.is_pointer() && !crate::fs::extract_closure_ptr(message).is_null())
+    {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"message\" argument must be one of type string, object, number, or boolean",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
     let this = cp_this(closure);
 
     // The callback is the last argument when it is a function. dispatch pads
     // missing slots with `undefined`, so scan slots 4→2 for a closure.
-    let callback = [a4, a3, a2]
-        .into_iter()
-        .find(|v| !crate::fs::extract_closure_ptr(*v).is_null());
+    let callback = [a4, a3, a2].into_iter().find(|v| {
+        JSValue::from_bits(v.to_bits()).is_pointer()
+            && !crate::fs::extract_closure_ptr(*v).is_null()
+    });
 
     // A closed IPC channel (after `disconnect()`, or never connected) returns
     // `false` and reports `ERR_IPC_CHANNEL_CLOSED` to the callback.
@@ -373,7 +410,16 @@ pub(crate) extern "C" fn cp_method_disconnect(closure: *const ClosureHeader) -> 
     }
     cp_set_field(this, b"connected", TAG_FALSE_F64);
     cp_set_field(this, b"channel", TAG_NULL_F64);
-    cp_emit(this, "disconnect", &[]);
+    js_register_closure_arity(cp_disconnect_emit_thunk as *const u8, 0);
+    let deferred = js_closure_alloc(cp_disconnect_emit_thunk as *const u8, 1);
+    js_closure_set_capture_ptr(deferred, 0, this.to_bits() as i64);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+    cp_undefined()
+}
+
+extern "C" fn cp_disconnect_emit_thunk(closure: *const ClosureHeader) -> f64 {
+    let child = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    cp_emit(child, "disconnect", &[]);
     cp_undefined()
 }
 
@@ -396,6 +442,7 @@ pub(crate) extern "C" fn cp_method_stdin_end(closure: *const ClosureHeader, chun
         }
         reactor::cp_live_stdin_close(handle);
     }
+    cp_set_field(this, b"writable", TAG_FALSE_F64);
     this
 }
 

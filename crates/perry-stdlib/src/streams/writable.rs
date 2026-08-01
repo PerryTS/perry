@@ -208,19 +208,34 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
         reject_type_error(promise, "Invalid state: WritableStream is locked");
         return promise;
     }
-    if cb != 0 {
-        js_closure_call1(cb as *const ClosureHeader, reason);
-    }
+    let action = if cb != 0 {
+        match try_call_stream_action(cb, reason) {
+            Ok(result) => stream_action_promise(result),
+            Err(error) => {
+                js_promise_reject(promise, f64::from_bits(error));
+                None
+            }
+        }
+    } else {
+        None
+    };
     if !closed_p.is_null() {
         js_promise_reject(closed_p, reason);
     }
     if !close_request.is_null() {
         js_promise_reject(close_request, reason);
     }
+    transform::transform_abort_pending_writes(id, reason);
     // #5437: writable stream aborted (terminal Errored) — drop expandos.
     super::expando::stream_expando_clear(id);
     super::idalloc::retire_writable_terminal(id);
-    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    if perry_runtime::promise::js_promise_state(promise) == 0 {
+        if let Some(action) = action {
+            settle_stream_action_promise(promise, &[action]);
+        } else {
+            js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+        }
+    }
     promise
 }
 
@@ -256,6 +271,24 @@ fn writable_capture_usize(closure: *const ClosureHeader, idx: u32) -> usize {
 
 fn writable_capture_promise(closure: *const ClosureHeader, idx: u32) -> *mut Promise {
     perry_runtime::closure::js_closure_get_capture_ptr(closure, idx) as *mut Promise
+}
+
+extern "C" fn writable_write_start_microtask(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let stream_id = writable_capture_usize(closure, 0);
+        let writer_id = writable_capture_usize(closure, 1);
+        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2);
+        let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as u64;
+        let write_promise = writable_capture_promise(closure, 4);
+        run_writable_write(
+            stream_id,
+            writer_id,
+            cb,
+            f64::from_bits(chunk_bits),
+            write_promise,
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 extern "C" fn writable_write_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
@@ -570,15 +603,23 @@ pub(super) unsafe fn writable_stream_write(
         install_writable_backpressure_ready(stream_id, writer_id);
     }
     if let Some((cb, chunk, write_promise)) = start_write {
-        // Spec/Node tick parity: with no write in flight, `writer.write(chunk)`
-        // invokes the sink's `write()` SYNCHRONOUSLY in the same job
-        // (WritableStreamDefaultControllerProcessWrite) — deferring it through
-        // a microtask cost one tick per write, which let a tee sibling's
-        // reader outrun a pipeTo pump (teepipe.js; Next.js cold-start head
-        // reorder). All registry locks are released above; `run_writable_write`
-        // re-enters the FFI safely (it is the same body the queued microtask
-        // ran).
-        run_writable_write(stream_id, writer_id, cb, chunk, write_promise);
+        let job_fn = writable_write_start_microtask as *const u8;
+        perry_runtime::closure::js_register_closure_arity(job_fn, 0);
+        let job = perry_runtime::closure::js_closure_alloc(job_fn, 5);
+        perry_runtime::closure::js_closure_set_capture_ptr(
+            job,
+            0,
+            (stream_id as f64).to_bits() as i64,
+        );
+        perry_runtime::closure::js_closure_set_capture_ptr(
+            job,
+            1,
+            (writer_id as f64).to_bits() as i64,
+        );
+        perry_runtime::closure::js_closure_set_capture_ptr(job, 2, cb);
+        perry_runtime::closure::js_closure_set_capture_ptr(job, 3, chunk.to_bits() as i64);
+        perry_runtime::closure::js_closure_set_capture_ptr(job, 4, write_promise as i64);
+        perry_runtime::builtins::js_queue_microtask(job as i64);
     }
     promise
 }

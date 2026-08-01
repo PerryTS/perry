@@ -103,6 +103,7 @@ fn run(stmts: &[Stmt], classes: &HashMap<String, &Class>) -> HashMap<u32, PtrSha
         classes,
         &clean_dispatch(),
         &HashSet::new(),
+        &crate::collectors::ptr_shape_elements::ElementShapeFacts::default(),
     )
 }
 
@@ -266,6 +267,7 @@ fn module_barrier_still_enumerates_the_candidates_it_killed() {
         &classes,
         &dispatch,
         &HashSet::new(),
+        &crate::collectors::ptr_shape_elements::ElementShapeFacts::default(),
     );
     let entries = session.entries();
 

@@ -32,12 +32,13 @@ use std::sync::{Condvar, Mutex};
 #[cfg(unix)]
 use std::time::Duration;
 
-// Binary fd-frame on the IPC byte stream: a leading NUL (never present in the
-// newline-delimited JSON the channel otherwise carries) followed by the 4-byte
-// big-endian routing key id. The accompanying fd rides in the `SCM_RIGHTS`
-// ancillary data of the same `sendmsg`.
+// Binary fd-frame on the IPC byte stream: a reserved 0xFE tag followed by the
+// 4-byte big-endian routing key id. JSON never starts with this byte, and an
+// advanced IPC length prefix cannot start with it for a representable payload
+// in this process. The accompanying fd rides in the `SCM_RIGHTS` ancillary
+// data of the same `sendmsg`.
 #[cfg(unix)]
-const FD_FRAME_TAG: u8 = 0x00;
+const FD_FRAME_TAG: u8 = 0xFE;
 #[cfg(unix)]
 const FD_FRAME_LEN: usize = 5; // tag + u32 key id
 
@@ -188,14 +189,16 @@ pub fn worker_recv_fd(key_id: u32) -> RawFd {
 
 /// Worker IPC read loop for cluster workers. Replaces the plain
 /// `BufReader::lines()` reader (which cannot receive `SCM_RIGHTS`) with a
-/// `recvmsg` loop that splits the byte stream into JSON frames *and* routes
-/// ancillary connection fds. `queryServerReply` frames are consumed here;
-/// every other JSON line is handed to `on_message` exactly as before so normal
+/// `recvmsg` loop that splits the byte stream into JSON or advanced frames and
+/// routes ancillary connection fds. `queryServerReply` frames are consumed
+/// here; every other frame is handed to the matching callback so normal
 /// `process.on('message')` delivery is unaffected.
 #[cfg(unix)]
 pub fn worker_recv_loop(
     stream: std::os::unix::net::UnixStream,
+    advanced: bool,
     mut on_message: impl FnMut(String),
+    mut on_advanced: impl FnMut(Vec<u8>),
     on_closed: impl FnOnce(),
 ) {
     let fd = stream.as_raw_fd();
@@ -246,7 +249,11 @@ pub fn worker_recv_loop(
         }
 
         acc.extend_from_slice(&data[..n as usize]);
-        drain_frames(&mut acc, &mut fd_queue, &mut on_message);
+        if advanced {
+            drain_advanced_frames(&mut acc, &mut fd_queue, &mut on_advanced);
+        } else {
+            drain_json_frames(&mut acc, &mut fd_queue, &mut on_message);
+        }
     }
 
     // Channel closed: flag it + drain any already-routed-but-unpulled fds under
@@ -276,7 +283,7 @@ pub fn worker_recv_loop(
 /// queued fd to its injection queue; newline-delimited JSON lines are either
 /// consumed (queryServerReply) or forwarded to `on_message`.
 #[cfg(unix)]
-fn drain_frames(
+fn drain_json_frames(
     acc: &mut Vec<u8>,
     fd_queue: &mut VecDeque<RawFd>,
     on_message: &mut impl FnMut(String),
@@ -319,6 +326,198 @@ fn drain_frames(
     }
     if pos > 0 {
         acc.drain(..pos);
+    }
+}
+
+/// Split an advanced channel into `[u32 BE length][V8 payload]` frames while
+/// still recognizing the reserved fd-passing frame. Query-server replies are
+/// decoded without constructing JS heap values on this reader thread because
+/// the JS main thread is synchronously waiting for that reply inside `listen()`.
+#[cfg(unix)]
+fn drain_advanced_frames(
+    acc: &mut Vec<u8>,
+    fd_queue: &mut VecDeque<RawFd>,
+    on_message: &mut impl FnMut(Vec<u8>),
+) {
+    let mut pos = 0usize;
+    loop {
+        if pos >= acc.len() {
+            break;
+        }
+        if acc[pos] == FD_FRAME_TAG {
+            if acc.len() - pos < FD_FRAME_LEN {
+                break;
+            }
+            let key_id =
+                u32::from_be_bytes([acc[pos + 1], acc[pos + 2], acc[pos + 3], acc[pos + 4]]);
+            if let Some(cfd) = fd_queue.pop_front() {
+                let mut inbox = worker_state().fd_inbox.lock().unwrap();
+                inbox.queues.entry(key_id).or_default().push_back(cfd);
+                drop(inbox);
+                worker_state().fd_cv.notify_all();
+            }
+            pos += FD_FRAME_LEN;
+            continue;
+        }
+        if acc.len() - pos < 4 {
+            break;
+        }
+        let len = u32::from_be_bytes([acc[pos], acc[pos + 1], acc[pos + 2], acc[pos + 3]]) as usize;
+        if acc.len() - pos - 4 < len {
+            break;
+        }
+        let start = pos + 4;
+        let payload = &acc[start..start + len];
+        if !try_consume_advanced_query_reply(payload) {
+            on_message(payload.to_vec());
+        }
+        pos = start + len;
+    }
+    if pos > 0 {
+        acc.drain(..pos);
+    }
+}
+
+/// Extract the three fields in Perry's flat advanced `queryServerReply`
+/// object without constructing JS heap values on the IPC reader thread.
+#[cfg(unix)]
+fn try_consume_advanced_query_reply(payload: &[u8]) -> bool {
+    let mut reader = FlatV8Reader::new(payload);
+    let Some(fields) = reader.read_object() else {
+        return false;
+    };
+    if fields.act.as_deref() != Some("queryServerReply") {
+        return false;
+    }
+    let Some(req_key) = fields.req_key else {
+        return false;
+    };
+    let port = fields.port.unwrap_or(-1);
+    let mut queries = worker_state().queries.lock().unwrap();
+    if let Some(slot) = queries.get_mut(&req_key) {
+        *slot = Some(port);
+        drop(queries);
+        worker_state().query_cv.notify_all();
+    }
+    true
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct QueryReplyFields {
+    act: Option<String>,
+    req_key: Option<String>,
+    port: Option<i32>,
+}
+
+/// Tiny, allocation-safe V8 reader for a flat object whose keys/values are
+/// strings or numbers. This intentionally is not a second structured-clone
+/// implementation; it only recognizes the cluster control message above.
+#[cfg(unix)]
+struct FlatV8Reader<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+#[cfg(unix)]
+impl<'a> FlatV8Reader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
+
+    fn byte(&mut self) -> Option<u8> {
+        let value = *self.bytes.get(self.pos)?;
+        self.pos += 1;
+        Some(value)
+    }
+
+    fn varint(&mut self) -> Option<u64> {
+        let mut value = 0u64;
+        let mut shift = 0;
+        loop {
+            let byte = self.byte()?;
+            value |= ((byte & 0x7f) as u64) << shift;
+            if byte & 0x80 == 0 {
+                return Some(value);
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+    }
+
+    fn raw(&mut self, len: usize) -> Option<&'a [u8]> {
+        let end = self.pos.checked_add(len)?;
+        let bytes = self.bytes.get(self.pos..end)?;
+        self.pos = end;
+        Some(bytes)
+    }
+
+    fn string(&mut self) -> Option<String> {
+        match self.byte()? {
+            b'S' | b'"' => {
+                let len = self.varint()? as usize;
+                Some(String::from_utf8_lossy(self.raw(len)?).into_owned())
+            }
+            b'c' => {
+                let len = self.varint()? as usize;
+                let bytes = self.raw(len)?;
+                if bytes.len() % 2 != 0 {
+                    return None;
+                }
+                let units = bytes
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .collect::<Vec<_>>();
+                String::from_utf16(&units).ok()
+            }
+            _ => None,
+        }
+    }
+
+    fn number(&mut self) -> Option<i32> {
+        match self.byte()? {
+            b'I' => {
+                let value = self.varint()?;
+                Some(((value >> 1) as i64 ^ -((value & 1) as i64)) as i32)
+            }
+            b'U' => Some(self.varint()? as i32),
+            b'N' => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(self.raw(8)?);
+                Some(f64::from_le_bytes(bytes) as i32)
+            }
+            _ => None,
+        }
+    }
+
+    fn read_object(&mut self) -> Option<QueryReplyFields> {
+        if self.byte()? != 0xff {
+            return None;
+        }
+        self.varint()?;
+        if self.byte()? != b'o' {
+            return None;
+        }
+        let mut fields = QueryReplyFields::default();
+        loop {
+            if self.bytes.get(self.pos) == Some(&b'{') {
+                self.pos += 1;
+                let _ = self.varint()?;
+                return Some(fields);
+            }
+            let key = self.string()?;
+            match key.as_str() {
+                "cmd" => {
+                    let _ = self.string()?;
+                }
+                "act" => fields.act = Some(self.string()?),
+                "reqKey" => fields.req_key = Some(self.string()?),
+                "port" => fields.port = Some(self.number()?),
+                _ => return None,
+            }
+        }
     }
 }
 

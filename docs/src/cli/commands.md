@@ -20,7 +20,7 @@ perry main.ts -o app
 | `--target <TARGET>` | Platform target (see [Compiler Flags](flags.md)) |
 | `--output-type <TYPE>` | `executable` (default) or `dylib` (plugin) |
 | `--print-hir` | Print HIR intermediate representation |
-| `--no-link` | Produce object file only, skip linking |
+| `--no-link` | Produce object file(s) only, skip linking; written to `-o` (see [Compiler Flags](flags.md)) |
 | `--keep-intermediates` | Keep `.o` and `.asm` files |
 | `--enable-js-runtime` | Enable V8 JavaScript runtime fallback |
 | `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected on `WebAssembly.*` use) |

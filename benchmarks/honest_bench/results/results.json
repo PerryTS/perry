@@ -3,7 +3,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 1,
       "wall_ms": 393.145542,
       "max_rss_kb": 49696,
@@ -16,7 +16,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 2,
       "wall_ms": 399.731458,
       "max_rss_kb": 49696,
@@ -29,7 +29,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 3,
       "wall_ms": 400.096792,
       "max_rss_kb": 49696,
@@ -42,7 +42,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 4,
       "wall_ms": 390.64325,
       "max_rss_kb": 49696,
@@ -55,7 +55,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 5,
       "wall_ms": 399.162125,
       "max_rss_kb": 49696,
@@ -68,7 +68,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 6,
       "wall_ms": 398.947875,
       "max_rss_kb": 49696,
@@ -81,7 +81,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 7,
       "wall_ms": 392.447417,
       "max_rss_kb": 49696,
@@ -94,7 +94,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 8,
       "wall_ms": 394.653375,
       "max_rss_kb": 49696,
@@ -107,7 +107,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 9,
       "wall_ms": 393.478792,
       "max_rss_kb": 49696,
@@ -120,7 +120,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 10,
       "wall_ms": 391.702916,
       "max_rss_kb": 49696,
@@ -133,7 +133,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 11,
       "wall_ms": 391.024042,
       "max_rss_kb": 49696,
@@ -146,7 +146,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 12,
       "wall_ms": 389.562375,
       "max_rss_kb": 49696,
@@ -159,7 +159,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 13,
       "wall_ms": 389.620667,
       "max_rss_kb": 49696,
@@ -172,7 +172,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 14,
       "wall_ms": 389.962917,
       "max_rss_kb": 49696,
@@ -185,7 +185,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 15,
       "wall_ms": 394.127417,
       "max_rss_kb": 49680,
@@ -198,7 +198,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 16,
       "wall_ms": 396.695875,
       "max_rss_kb": 49696,
@@ -211,7 +211,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 17,
       "wall_ms": 390.569458,
       "max_rss_kb": 49696,
@@ -224,7 +224,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 18,
       "wall_ms": 389.399166,
       "max_rss_kb": 49696,
@@ -237,7 +237,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 19,
       "wall_ms": 389.244166,
       "max_rss_kb": 49696,
@@ -250,7 +250,7 @@
     {
       "workload": "image_convolution",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/rust/target/release/image_conv",
       "run": 20,
       "wall_ms": 390.338,
       "max_rss_kb": 49696,
@@ -263,7 +263,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 1,
       "wall_ms": 243.609125,
       "max_rss_kb": 49648,
@@ -276,7 +276,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 2,
       "wall_ms": 245.780417,
       "max_rss_kb": 49632,
@@ -289,7 +289,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 3,
       "wall_ms": 249.363,
       "max_rss_kb": 49648,
@@ -302,7 +302,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 4,
       "wall_ms": 244.298041,
       "max_rss_kb": 49648,
@@ -315,7 +315,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 5,
       "wall_ms": 268.891042,
       "max_rss_kb": 49648,
@@ -328,7 +328,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 6,
       "wall_ms": 241.854417,
       "max_rss_kb": 49632,
@@ -341,7 +341,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 7,
       "wall_ms": 240.314875,
       "max_rss_kb": 49648,
@@ -354,7 +354,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 8,
       "wall_ms": 241.26875,
       "max_rss_kb": 49648,
@@ -367,7 +367,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 9,
       "wall_ms": 247.123666,
       "max_rss_kb": 49648,
@@ -380,7 +380,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 10,
       "wall_ms": 241.813292,
       "max_rss_kb": 49648,
@@ -393,7 +393,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 11,
       "wall_ms": 244.244292,
       "max_rss_kb": 49648,
@@ -406,7 +406,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 12,
       "wall_ms": 241.267375,
       "max_rss_kb": 49632,
@@ -419,7 +419,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 13,
       "wall_ms": 245.117666,
       "max_rss_kb": 49632,
@@ -432,7 +432,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 14,
       "wall_ms": 247.102291,
       "max_rss_kb": 49632,
@@ -445,7 +445,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 15,
       "wall_ms": 244.966333,
       "max_rss_kb": 49648,
@@ -458,7 +458,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 16,
       "wall_ms": 246.73175,
       "max_rss_kb": 49648,
@@ -471,7 +471,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 17,
       "wall_ms": 248.459209,
       "max_rss_kb": 49632,
@@ -484,7 +484,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 18,
       "wall_ms": 250.455833,
       "max_rss_kb": 49632,
@@ -497,7 +497,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 19,
       "wall_ms": 249.686875,
       "max_rss_kb": 49648,
@@ -510,7 +510,7 @@
     {
       "workload": "image_convolution",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/zig/zig-out/bin/image_conv",
       "run": 20,
       "wall_ms": 251.848959,
       "max_rss_kb": 49648,
@@ -523,7 +523,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 1,
       "wall_ms": 353.905792,
       "max_rss_kb": 51120,
@@ -536,7 +536,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 2,
       "wall_ms": 352.935666,
       "max_rss_kb": 51120,
@@ -549,7 +549,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 3,
       "wall_ms": 354.9005,
       "max_rss_kb": 51152,
@@ -562,7 +562,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 4,
       "wall_ms": 357.990375,
       "max_rss_kb": 51152,
@@ -575,7 +575,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 5,
       "wall_ms": 357.113875,
       "max_rss_kb": 51120,
@@ -588,7 +588,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 6,
       "wall_ms": 358.15725,
       "max_rss_kb": 51120,
@@ -601,7 +601,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 7,
       "wall_ms": 353.61225,
       "max_rss_kb": 51168,
@@ -614,7 +614,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 8,
       "wall_ms": 352.534125,
       "max_rss_kb": 51120,
@@ -627,7 +627,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 9,
       "wall_ms": 357.191709,
       "max_rss_kb": 51152,
@@ -640,7 +640,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 10,
       "wall_ms": 353.946,
       "max_rss_kb": 51152,
@@ -653,7 +653,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 11,
       "wall_ms": 350.160959,
       "max_rss_kb": 51120,
@@ -666,7 +666,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 12,
       "wall_ms": 354.893334,
       "max_rss_kb": 51136,
@@ -679,7 +679,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 13,
       "wall_ms": 353.3355,
       "max_rss_kb": 51120,
@@ -692,7 +692,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 14,
       "wall_ms": 355.724917,
       "max_rss_kb": 51120,
@@ -705,7 +705,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 15,
       "wall_ms": 355.270875,
       "max_rss_kb": 51120,
@@ -718,7 +718,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 16,
       "wall_ms": 350.367584,
       "max_rss_kb": 51120,
@@ -731,7 +731,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 17,
       "wall_ms": 354.485458,
       "max_rss_kb": 51168,
@@ -744,7 +744,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 18,
       "wall_ms": 352.368583,
       "max_rss_kb": 51120,
@@ -757,7 +757,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 19,
       "wall_ms": 354.07075,
       "max_rss_kb": 51152,
@@ -770,7 +770,7 @@
     {
       "workload": "image_convolution",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
+      "binary": "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv",
       "run": 20,
       "wall_ms": 350.738875,
       "max_rss_kb": 51120,
@@ -1303,7 +1303,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 1,
       "wall_ms": 34.952917,
       "max_rss_kb": 1184,
@@ -1316,7 +1316,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 2,
       "wall_ms": 34.2765,
       "max_rss_kb": 1184,
@@ -1329,7 +1329,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 3,
       "wall_ms": 36.259458,
       "max_rss_kb": 1168,
@@ -1342,7 +1342,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 4,
       "wall_ms": 34.075375,
       "max_rss_kb": 1184,
@@ -1355,7 +1355,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 5,
       "wall_ms": 33.190083,
       "max_rss_kb": 1184,
@@ -1368,7 +1368,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 6,
       "wall_ms": 35.027416,
       "max_rss_kb": 1184,
@@ -1381,7 +1381,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 7,
       "wall_ms": 35.046708,
       "max_rss_kb": 1184,
@@ -1394,7 +1394,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 8,
       "wall_ms": 32.711709,
       "max_rss_kb": 1184,
@@ -1407,7 +1407,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 9,
       "wall_ms": 33.6715,
       "max_rss_kb": 1168,
@@ -1420,7 +1420,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 10,
       "wall_ms": 33.941083,
       "max_rss_kb": 1168,
@@ -1433,7 +1433,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 11,
       "wall_ms": 32.825083,
       "max_rss_kb": 1184,
@@ -1446,7 +1446,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 12,
       "wall_ms": 33.327042,
       "max_rss_kb": 1184,
@@ -1459,7 +1459,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 13,
       "wall_ms": 33.789958,
       "max_rss_kb": 1168,
@@ -1472,7 +1472,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 14,
       "wall_ms": 34.544792,
       "max_rss_kb": 1168,
@@ -1485,7 +1485,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 15,
       "wall_ms": 36.450709,
       "max_rss_kb": 1184,
@@ -1498,7 +1498,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 16,
       "wall_ms": 34.217875,
       "max_rss_kb": 1168,
@@ -1511,7 +1511,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 17,
       "wall_ms": 33.518084,
       "max_rss_kb": 1184,
@@ -1524,7 +1524,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 18,
       "wall_ms": 34.189833,
       "max_rss_kb": 1184,
@@ -1537,7 +1537,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 19,
       "wall_ms": 35.79525,
       "max_rss_kb": 1184,
@@ -1550,7 +1550,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 20,
       "wall_ms": 33.690208,
       "max_rss_kb": 1184,
@@ -1563,7 +1563,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 1,
       "wall_ms": 32.702084,
       "max_rss_kb": 1520,
@@ -1576,7 +1576,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 2,
       "wall_ms": 32.95725,
       "max_rss_kb": 1536,
@@ -1589,7 +1589,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 3,
       "wall_ms": 35.187042,
       "max_rss_kb": 1536,
@@ -1602,7 +1602,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 4,
       "wall_ms": 34.697709,
       "max_rss_kb": 1536,
@@ -1615,7 +1615,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 5,
       "wall_ms": 32.767709,
       "max_rss_kb": 1520,
@@ -1628,7 +1628,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 6,
       "wall_ms": 34.482292,
       "max_rss_kb": 1520,
@@ -1641,7 +1641,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 7,
       "wall_ms": 33.74825,
       "max_rss_kb": 1536,
@@ -1654,7 +1654,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 8,
       "wall_ms": 32.675959,
       "max_rss_kb": 1536,
@@ -1667,7 +1667,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 9,
       "wall_ms": 32.843584,
       "max_rss_kb": 1536,
@@ -1680,7 +1680,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 10,
       "wall_ms": 34.443583,
       "max_rss_kb": 1520,
@@ -1693,7 +1693,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 11,
       "wall_ms": 34.460292,
       "max_rss_kb": 1520,
@@ -1706,7 +1706,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 12,
       "wall_ms": 37.253334,
       "max_rss_kb": 1520,
@@ -1719,7 +1719,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 13,
       "wall_ms": 34.396792,
       "max_rss_kb": 1520,
@@ -1732,7 +1732,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 14,
       "wall_ms": 35.454459,
       "max_rss_kb": 1536,
@@ -1745,7 +1745,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 15,
       "wall_ms": 34.475125,
       "max_rss_kb": 1536,
@@ -1758,7 +1758,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 16,
       "wall_ms": 34.593709,
       "max_rss_kb": 1536,
@@ -1771,7 +1771,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 17,
       "wall_ms": 33.509041,
       "max_rss_kb": 1520,
@@ -1784,7 +1784,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 18,
       "wall_ms": 34.916417,
       "max_rss_kb": 1520,
@@ -1797,7 +1797,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 19,
       "wall_ms": 34.8765,
       "max_rss_kb": 1520,
@@ -1810,7 +1810,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 20,
       "wall_ms": 34.490917,
       "max_rss_kb": 1520,
@@ -1823,7 +1823,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 1,
       "wall_ms": 38.32375,
       "max_rss_kb": 3632,
@@ -1836,7 +1836,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 2,
       "wall_ms": 39.518875,
       "max_rss_kb": 3632,
@@ -1849,7 +1849,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 3,
       "wall_ms": 40.58725,
       "max_rss_kb": 3632,
@@ -1862,7 +1862,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 4,
       "wall_ms": 38.416333,
       "max_rss_kb": 3632,
@@ -1875,7 +1875,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 5,
       "wall_ms": 37.675625,
       "max_rss_kb": 3664,
@@ -1888,7 +1888,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 6,
       "wall_ms": 38.730541,
       "max_rss_kb": 3648,
@@ -1901,7 +1901,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 7,
       "wall_ms": 38.265375,
       "max_rss_kb": 3648,
@@ -1914,7 +1914,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 8,
       "wall_ms": 38.861875,
       "max_rss_kb": 3648,
@@ -1927,7 +1927,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 9,
       "wall_ms": 39.309917,
       "max_rss_kb": 3632,
@@ -1940,7 +1940,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 10,
       "wall_ms": 39.232834,
       "max_rss_kb": 3632,
@@ -1953,7 +1953,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 11,
       "wall_ms": 39.7595,
       "max_rss_kb": 3632,
@@ -1966,7 +1966,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 12,
       "wall_ms": 43.094833,
       "max_rss_kb": 3648,
@@ -1979,7 +1979,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 13,
       "wall_ms": 39.386041,
       "max_rss_kb": 3648,
@@ -1992,7 +1992,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 14,
       "wall_ms": 39.651083,
       "max_rss_kb": 3632,
@@ -2005,7 +2005,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 15,
       "wall_ms": 39.739958,
       "max_rss_kb": 3632,
@@ -2018,7 +2018,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 16,
       "wall_ms": 38.731791,
       "max_rss_kb": 3648,
@@ -2031,7 +2031,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 17,
       "wall_ms": 38.625459,
       "max_rss_kb": 3632,
@@ -2044,7 +2044,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 18,
       "wall_ms": 37.813625,
       "max_rss_kb": 3632,
@@ -2057,7 +2057,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 19,
       "wall_ms": 41.030292,
       "max_rss_kb": 3632,
@@ -2070,7 +2070,7 @@
     {
       "workload": "json_pipeline_small",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 20,
       "wall_ms": 39.108709,
       "max_rss_kb": 3632,
@@ -2603,7 +2603,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 1,
       "wall_ms": 601.8995,
       "max_rss_kb": 442352,
@@ -2616,7 +2616,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 2,
       "wall_ms": 602.069167,
       "max_rss_kb": 438720,
@@ -2629,7 +2629,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 3,
       "wall_ms": 605.726,
       "max_rss_kb": 440912,
@@ -2642,7 +2642,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 4,
       "wall_ms": 609.582209,
       "max_rss_kb": 438336,
@@ -2655,7 +2655,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 5,
       "wall_ms": 660.508334,
       "max_rss_kb": 442656,
@@ -2668,7 +2668,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 6,
       "wall_ms": 607.789875,
       "max_rss_kb": 440896,
@@ -2681,7 +2681,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 7,
       "wall_ms": 608.638291,
       "max_rss_kb": 442672,
@@ -2694,7 +2694,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 8,
       "wall_ms": 610.796208,
       "max_rss_kb": 442336,
@@ -2707,7 +2707,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 9,
       "wall_ms": 599.539584,
       "max_rss_kb": 442672,
@@ -2720,7 +2720,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 10,
       "wall_ms": 607.225125,
       "max_rss_kb": 440880,
@@ -2733,7 +2733,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 11,
       "wall_ms": 602.323208,
       "max_rss_kb": 442672,
@@ -2746,7 +2746,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 12,
       "wall_ms": 611.593584,
       "max_rss_kb": 440896,
@@ -2759,7 +2759,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 13,
       "wall_ms": 612.353416,
       "max_rss_kb": 438704,
@@ -2772,7 +2772,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 14,
       "wall_ms": 607.287,
       "max_rss_kb": 442672,
@@ -2785,7 +2785,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 15,
       "wall_ms": 621.74625,
       "max_rss_kb": 442400,
@@ -2798,7 +2798,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 16,
       "wall_ms": 621.437833,
       "max_rss_kb": 438704,
@@ -2811,7 +2811,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 17,
       "wall_ms": 607.873708,
       "max_rss_kb": 442352,
@@ -2824,7 +2824,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 18,
       "wall_ms": 608.823792,
       "max_rss_kb": 440928,
@@ -2837,7 +2837,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 19,
       "wall_ms": 612.654292,
       "max_rss_kb": 438432,
@@ -2850,7 +2850,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "rust",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/rust/target/release/json_pipeline",
       "run": 20,
       "wall_ms": 603.127417,
       "max_rss_kb": 436960,
@@ -2863,7 +2863,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 1,
       "wall_ms": 921.030208,
       "max_rss_kb": 590608,
@@ -2876,7 +2876,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 2,
       "wall_ms": 860.017666,
       "max_rss_kb": 590608,
@@ -2889,7 +2889,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 3,
       "wall_ms": 863.431666,
       "max_rss_kb": 590624,
@@ -2902,7 +2902,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 4,
       "wall_ms": 870.846875,
       "max_rss_kb": 590608,
@@ -2915,7 +2915,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 5,
       "wall_ms": 875.882416,
       "max_rss_kb": 590624,
@@ -2928,7 +2928,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 6,
       "wall_ms": 868.164917,
       "max_rss_kb": 590624,
@@ -2941,7 +2941,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 7,
       "wall_ms": 870.474375,
       "max_rss_kb": 590608,
@@ -2954,7 +2954,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 8,
       "wall_ms": 932.23875,
       "max_rss_kb": 590608,
@@ -2967,7 +2967,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 9,
       "wall_ms": 864.806708,
       "max_rss_kb": 590624,
@@ -2980,7 +2980,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 10,
       "wall_ms": 862.333083,
       "max_rss_kb": 590608,
@@ -2993,7 +2993,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 11,
       "wall_ms": 865.232209,
       "max_rss_kb": 590608,
@@ -3006,7 +3006,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 12,
       "wall_ms": 872.025042,
       "max_rss_kb": 590608,
@@ -3019,7 +3019,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 13,
       "wall_ms": 868.595417,
       "max_rss_kb": 590608,
@@ -3032,7 +3032,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 14,
       "wall_ms": 863.729042,
       "max_rss_kb": 590592,
@@ -3045,7 +3045,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 15,
       "wall_ms": 865.995625,
       "max_rss_kb": 590624,
@@ -3058,7 +3058,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 16,
       "wall_ms": 868.087834,
       "max_rss_kb": 590624,
@@ -3071,7 +3071,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 17,
       "wall_ms": 865.841083,
       "max_rss_kb": 590624,
@@ -3084,7 +3084,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 18,
       "wall_ms": 866.776833,
       "max_rss_kb": 590592,
@@ -3097,7 +3097,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 19,
       "wall_ms": 866.140667,
       "max_rss_kb": 590624,
@@ -3110,7 +3110,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "zig",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/zig/zig-out/bin/json_pipeline",
       "run": 20,
       "wall_ms": 895.654292,
       "max_rss_kb": 590624,
@@ -3123,7 +3123,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 1,
       "wall_ms": 1091.640917,
       "max_rss_kb": 748513,
@@ -3136,7 +3136,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 2,
       "wall_ms": 1100.503541,
       "max_rss_kb": 748513,
@@ -3149,7 +3149,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 3,
       "wall_ms": 1105.45,
       "max_rss_kb": 748513,
@@ -3162,7 +3162,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 4,
       "wall_ms": 1126.517917,
       "max_rss_kb": 748529,
@@ -3175,7 +3175,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 5,
       "wall_ms": 1100.768417,
       "max_rss_kb": 748529,
@@ -3188,7 +3188,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 6,
       "wall_ms": 1097.905375,
       "max_rss_kb": 748529,
@@ -3201,7 +3201,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 7,
       "wall_ms": 1090.236125,
       "max_rss_kb": 748513,
@@ -3214,7 +3214,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 8,
       "wall_ms": 1098.249208,
       "max_rss_kb": 748513,
@@ -3227,7 +3227,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 9,
       "wall_ms": 1098.499125,
       "max_rss_kb": 748529,
@@ -3240,7 +3240,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 10,
       "wall_ms": 1096.985834,
       "max_rss_kb": 748513,
@@ -3253,7 +3253,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 11,
       "wall_ms": 1098.672792,
       "max_rss_kb": 748513,
@@ -3266,7 +3266,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 12,
       "wall_ms": 1093.523459,
       "max_rss_kb": 748513,
@@ -3279,7 +3279,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 13,
       "wall_ms": 1107.960791,
       "max_rss_kb": 748513,
@@ -3292,7 +3292,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 14,
       "wall_ms": 1093.430417,
       "max_rss_kb": 748513,
@@ -3305,7 +3305,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 15,
       "wall_ms": 1091.401333,
       "max_rss_kb": 748513,
@@ -3318,7 +3318,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 16,
       "wall_ms": 1095.222167,
       "max_rss_kb": 748513,
@@ -3331,7 +3331,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 17,
       "wall_ms": 1105.782333,
       "max_rss_kb": 748529,
@@ -3344,7 +3344,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 18,
       "wall_ms": 1096.645334,
       "max_rss_kb": 748513,
@@ -3357,7 +3357,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 19,
       "wall_ms": 1100.851083,
       "max_rss_kb": 748513,
@@ -3370,7 +3370,7 @@
     {
       "workload": "json_pipeline_full",
       "language": "perry",
-      "binary": "/Users/amlug/projects/perry/perry/.claude/worktrees/refresh-benchmarks/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+      "binary": "benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
       "run": 20,
       "wall_ms": 1121.404833,
       "max_rss_kb": 748545,

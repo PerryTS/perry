@@ -528,13 +528,43 @@ pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
         // wraps for a handle near `usize::MAX` and lets exactly the corrupted
         // handles this guard exists for slip through into an unchecked read.
         if base >= s.len {
-            debug_assert!(false, "shadow-stack pop past end (corrupted frame handle)");
+            report_corrupt_frame_pop(frame_handle);
             return;
         }
         s.frame_top = (*s.ptr.add(base)).value as usize;
         // `ShadowEntry: Copy`, so shrinking has no drop glue to run.
         s.set_slots_len(base);
     });
+}
+
+/// Report an out-of-range `js_shadow_frame_pop` handle without unwinding.
+///
+/// #7145: this guard used to be `debug_assert!(false, …)`. That is unsound
+/// *inside an `extern "C"` fn*: in a debug build the assert fires, the panic
+/// cannot unwind across the `extern "C"` boundary, and the process aborts.
+/// `gc::tests::shadow_stack_ops::out_of_range_frame_pop_is_ignored` calls this
+/// path deliberately, so `cargo test -p perry-runtime --lib` in the dev profile
+/// SIGABRTed the entire test binary — a whole profile of the runtime suite was
+/// un-runnable, and CI could not see it because CI runs `--release`, where
+/// `debug_assert!` compiles out.
+///
+/// Skipping the malformed pop is the documented behaviour in both profiles now;
+/// the diagnostic is one line on stderr, emitted once per process so it cannot
+/// perturb a stdout parity comparison (the
+/// `report_growth_stub_skipped_below_heap_min` pattern).
+#[cold]
+fn report_corrupt_frame_pop(frame_handle: u64) {
+    use std::sync::atomic::AtomicBool;
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    if REPORTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "[perry-gc] shadow-stack pop past end: frame handle {frame_handle:#x} is out of \
+range; the pop was SKIPPED (memory-safe, over-approximates the root set). This \
+usually means a caller threaded a NaN-boxed value into js_shadow_frame_pop \
+instead of the index js_shadow_frame_push returned. Reported once per process."
+    );
 }
 
 /// Update slot `idx` in the current frame with `value`.

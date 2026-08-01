@@ -49,6 +49,9 @@ const OBJECT_TYPE_REGULAR: &str = "1";
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
 const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
 const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
+/// `OBJ_FLAG_FROZEN | OBJ_FLAG_HAS_DESCRIPTORS` — both live in the same
+/// `GcHeader::_reserved` i16, so one mask tests both.
+const OBJ_FLAG_FROZEN_OR_DESCRIPTORS: &str = "2049";
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
 /// Emit the `i1` "plain finite number" predicate on a value's raw bits: true
@@ -194,6 +197,103 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         // No terminator: the caller branches after verifying the fast clone.
         (obj_ptr, acc)
     }
+}
+
+/// #7142: the inline shape re-check that licenses routing a class-id dispatch
+/// tower case to a proven-receiver method clone.
+///
+/// ## What the caller has already established
+///
+/// The caller emits this INTO a dispatch-tower case block, i.e. a block reached
+/// only when `js_object_get_class_id(obj_handle)` returned a specific non-zero
+/// user class id. That call already rejects the handle band, the built-in
+/// Set/Map/RegExp registries, out-of-heap-range addresses, and any allocation
+/// whose `GcHeader.obj_type` is not `GC_TYPE_OBJECT`
+/// (`object/field_get_set/field_ops.rs`). So every predicate
+/// [`emit_class_field_inline_precheck`] evaluates *before* its dereference is
+/// already discharged, and the loads below need no gate/deref split — they all
+/// fit in the caller's single basic block.
+///
+/// ## What is left, and why each one
+///
+/// * **`keys_array` identity** — the load-bearing one. `delete inst.f` compacts
+///   the packed inline slots while PRESERVING `class_id`, so a class-id match
+///   alone does not prove the layout: on `class C { a; b; c }`, `delete inst.b`
+///   moves `c` from slot 2 to slot 1. The compaction installs a freshly CLONED
+///   keys array (`object/delete_rest.rs` — `js_array_alloc` +
+///   `set_object_keys_array`, cloned precisely because the old array is shared
+///   between every instance of the shape), so a pointer compare against the
+///   class's `@perry_class_keys_*` global catches it. The check is deliberately
+///   DYNAMIC: the `delete` shape barrier that stands the analysis down is
+///   module-scoped while receivers alias across modules (#7143), so no static
+///   proof is available at this site.
+/// * **The sticky `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch** — flipped
+///   the moment a descriptor / accessor lands on a class prototype or on
+///   `Object.prototype`, or typed-feedback tracing turns on. This is the very
+///   latch the per-access inline guard *inside the body being replaced* reads,
+///   so a routed call is never weaker than the lowering it displaces.
+/// * **Per-object `OBJ_FLAG_HAS_DESCRIPTORS`** — instance-level descriptor
+///   installs deliberately do NOT flip the process-global latch (#5654), so
+///   they are vetted per receiver, exactly as the per-access check does.
+/// * **`OBJ_FLAG_FROZEN`** — a proven-receiver clone may contain field WRITES,
+///   and a guard-free raw store into a frozen receiver would silently succeed
+///   where the spec requires a strict-mode `TypeError`. The clone's own
+///   admission rules this out only through a MODULE-scoped freeze-barrier kill,
+///   so the receiver is vetted here as well.
+/// * **Not-forwarded** and **`object_type == OBJECT_TYPE_REGULAR`** — the two
+///   header predicates `js_object_get_class_id` does not itself check.
+///
+/// Cost: one volatile `i8` load of the latch, three loads off the receiver (two
+/// of them from the `GcHeader` word the tower's class-id read already pulled
+/// in), nine ALU ops and one conditional branch. `expected_keys` is expected to
+/// come from an entry-hoisted slot (`LlFunction::entry_init_load_global`), so
+/// the global itself is read once per function, not per call.
+///
+/// Emits into the CURRENT block and terminates it; the caller supplies both
+/// successor labels and sets `ctx.current_block` afterwards.
+pub(crate) fn emit_proven_shape_recheck(
+    ctx: &mut FnCtx,
+    obj_handle: &str,
+    expected_keys: &str,
+    proven_label: &str,
+    generic_label: &str,
+) {
+    let blk = ctx.block();
+
+    // Policy latch first — volatile for the same reason the per-access check
+    // loads it volatile: the runtime flips it sticky 0 -> 1 mid-execution and
+    // LLVM must not hoist a stale 0 across the flip.
+    let flag = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
+    let flag_ok = blk.icmp_eq(I8, &flag, "0");
+
+    let obj_ptr = blk.inttoptr(I64, obj_handle);
+
+    // GcHeader (precedes the object by 8 bytes): gc_flags @-7 (i8),
+    // _reserved @-6 (i16).
+    let gflags_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-7")]);
+    let gflags = blk.load(I8, &gflags_ptr);
+    let fwd = blk.and(I8, &gflags, GC_FLAG_FORWARDED_I8);
+    let not_fwd = blk.icmp_eq(I8, &fwd, "0");
+
+    let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+    let reserved = blk.load(I16, &res_ptr);
+    let latched = blk.and(I16, &reserved, OBJ_FLAG_FROZEN_OR_DESCRIPTORS);
+    let unlatched = blk.icmp_eq(I16, &latched, "0");
+
+    // ObjectHeader: object_type @0 (i32), keys_array @16 (i64). `class_id` @4
+    // was already matched by the tower's `js_object_get_class_id` compare.
+    let object_type = blk.load(I32, &obj_ptr);
+    let ot_ok = blk.icmp_eq(I32, &object_type, OBJECT_TYPE_REGULAR);
+
+    let ka_ptr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
+    let keys_array = blk.load(I64, &ka_ptr);
+    let ka_ok = blk.icmp_eq(I64, &keys_array, expected_keys);
+
+    let mut acc = blk.and(I1, &flag_ok, &not_fwd);
+    acc = blk.and(I1, &acc, &unlatched);
+    acc = blk.and(I1, &acc, &ot_ok);
+    acc = blk.and(I1, &acc, &ka_ok);
+    blk.cond_br(&acc, proven_label, generic_label);
 }
 
 /// Emit the inline class-field shape pre-check.

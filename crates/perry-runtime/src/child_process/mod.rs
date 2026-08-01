@@ -12,7 +12,11 @@ mod v8_serde;
 mod sync_run;
 // #3079: setup-time command/file/args validation (`ERR_INVALID_ARG_TYPE`).
 mod validate;
-pub use validate::{js_child_process_validate_args, js_child_process_validate_command};
+pub use validate::{
+    js_child_process_validate_args, js_child_process_validate_command,
+    js_child_process_validate_fork_module, js_child_process_validate_options,
+    js_child_process_validate_spawn_args,
+};
 
 // #3137: reuse the codec for the public `node:v8` serialize/deserialize API.
 // #3680: class-based `v8.Serializer` / `v8.Deserializer` builders.
@@ -69,28 +73,30 @@ pub use registry::{
 // value_util.rs — NaN-box value helpers.
 pub(crate) use value_util::{
     cp_args_from_value, cp_array_ptr, cp_box_ptr, cp_box_string, cp_box_string_bytes,
-    cp_coerce_string, cp_get_field, cp_make_buffer, cp_object_ptr, cp_read_arg_strings,
-    cp_read_string_header, cp_set_field, cp_this, cp_undefined, cp_value_to_bytes,
-    cp_value_to_string,
+    cp_coerce_string, cp_get_field, cp_make_buffer, cp_object_ptr, cp_options_from_raw_args,
+    cp_read_arg_strings, cp_read_string_header, cp_set_field, cp_this, cp_undefined,
+    cp_value_to_bytes, cp_value_to_string,
 };
 
 // signals.rs — signal name/number mapping + kill/timeout reads.
 pub(crate) use signals::{
-    cp_read_kill_signal, cp_read_timeout, cp_signal_from_value, cp_signal_name, CP_SIGTERM,
+    cp_read_kill_signal, cp_read_timeout, cp_signal_from_value, cp_signal_is_valid, cp_signal_name,
+    cp_validate_signal, CP_SIGTERM,
 };
 
 // emitter.rs — EventEmitter listener registry, method bodies, IPC send/disconnect.
 pub(crate) use emitter::{
-    cp_emit, cp_method_disconnect, cp_method_dispose, cp_method_emit, cp_method_kill, cp_method_on,
-    cp_method_pipe, cp_method_read, cp_method_remove_all_listeners, cp_method_remove_listener,
-    cp_method_send, cp_method_stdin_end, cp_method_this0, cp_method_this1, cp_method_write2,
-    cp_send_callback_thunk, js_fork_child,
+    cp_emit, cp_method_child_spawn, cp_method_disconnect, cp_method_dispose, cp_method_emit,
+    cp_method_kill, cp_method_on, cp_method_pipe, cp_method_read, cp_method_remove_all_listeners,
+    cp_method_remove_listener, cp_method_send, cp_method_set_encoding, cp_method_stdin_end,
+    cp_method_this0, cp_method_this1, cp_method_write2, cp_send_callback_thunk, js_fork_child,
 };
 
 // builder.rs — heap object construction + shape ids.
 pub(crate) use builder::{
-    cp_build_object, cp_build_readable, cp_build_writable, cp_cast0, cp_cast1, cp_cast2, cp_cast4,
-    cp_install_dispose, cp_register_arities, CpFn, CP_SHAPE_ID,
+    cp_build_object, cp_build_readable, cp_build_unstarted_child_process, cp_build_writable,
+    cp_cast0, cp_cast1, cp_cast2, cp_cast4, cp_install_dispose, cp_register_arities, CpFn,
+    CP_SHAPE_ID,
 };
 
 // options.rs — command option application (cwd/env/uid/gid/argv0/detached/stdio).
@@ -99,7 +105,8 @@ pub(crate) use options::cp_resolve_program_path;
 pub(crate) use options::{
     cp_abort_signal_is_aborted, cp_apply_argv0, cp_apply_detached, cp_apply_live_stdio,
     cp_apply_options, cp_build_command, cp_command_for_program, cp_read_abort_signal,
-    cp_read_stdio, cp_spawnargs_argv0, cp_stdio_from_fd, cp_stdio_js_value, CpStdio,
+    cp_read_stdio, cp_spawnargs_argv0, cp_stdio_from_fd, cp_stdio_js_value, cp_stdio_stream_fd,
+    CpStdio,
 };
 
 // output.rs — output encoding, error shape, exit decoding.

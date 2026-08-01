@@ -192,7 +192,7 @@ fn cp_stdio_number_fd(value: f64) -> Option<i32> {
     }
 }
 
-fn cp_stdio_stream_fd(value: f64, fd_index: usize) -> Option<i32> {
+pub(crate) fn cp_stdio_stream_fd(value: f64, fd_index: usize) -> Option<i32> {
     let expected_stream = match fd_index {
         0 => crate::fs::is_fs_stream_instance_value(value, "ReadStream"),
         1 | 2 => crate::fs::is_fs_stream_instance_value(value, "WriteStream"),
@@ -256,7 +256,11 @@ pub(crate) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     }
 }
 
-pub(crate) fn cp_apply_live_stdio(command: &mut Command, stdio: &[CpStdio]) {
+/// Apply stdio 0-2 and honor explicit descriptors beyond fd 2.
+pub(crate) fn cp_apply_live_stdio(
+    command: &mut Command,
+    stdio: &[CpStdio],
+) -> std::io::Result<Vec<(usize, std::fs::File)>> {
     let to_stdio = |kind: CpStdio| match kind {
         CpStdio::Pipe => Stdio::piped(),
         CpStdio::Ignore => Stdio::null(),
@@ -266,6 +270,78 @@ pub(crate) fn cp_apply_live_stdio(command: &mut Command, stdio: &[CpStdio]) {
     command.stdin(to_stdio(stdio.first().copied().unwrap_or(CpStdio::Pipe)));
     command.stdout(to_stdio(stdio.get(1).copied().unwrap_or(CpStdio::Pipe)));
     command.stderr(to_stdio(stdio.get(2).copied().unwrap_or(CpStdio::Pipe)));
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::process::CommandExt;
+
+        let mut readers = Vec::new();
+        for (fd, kind) in stdio.iter().copied().enumerate().skip(3) {
+            match kind {
+                CpStdio::Pipe => {
+                    let mut pipe = [0; 2];
+                    if unsafe { libc::pipe(pipe.as_mut_ptr()) } != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    let read = unsafe { std::fs::File::from_raw_fd(pipe[0]) };
+                    let write = unsafe { std::fs::File::from_raw_fd(pipe[1]) };
+                    if unsafe { libc::fcntl(read.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    let write_fd = write.as_raw_fd();
+                    if unsafe { libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    unsafe {
+                        command.pre_exec(move || {
+                            if libc::dup2(write.as_raw_fd(), fd as i32) < 0
+                                || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
+                            {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                            Ok(())
+                        });
+                    }
+                    readers.push((fd, read));
+                }
+                CpStdio::Ignore => {
+                    let null = std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open("/dev/null")?;
+                    unsafe {
+                        command.pre_exec(move || {
+                            if libc::dup2(null.as_raw_fd(), fd as i32) < 0
+                                || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
+                            {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                            Ok(())
+                        });
+                    }
+                }
+                CpStdio::Fd(source) => unsafe {
+                    command.pre_exec(move || {
+                        if libc::dup2(source, fd as i32) < 0
+                            || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                },
+                CpStdio::Inherit => {}
+            }
+        }
+        return Ok(readers);
+    }
+
+    #[cfg(not(unix))]
+    {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(unix)]

@@ -1,7 +1,11 @@
 import { ReadableStream, WritableStream } from "node:stream/web";
-// rs.cancel() during an active pipeTo — the pipeTo promise rejects (locked stream).
+// rs.cancel() during an active pipeTo rejects because the readable is locked.
 const rs = new ReadableStream({
-  pull(c) { setTimeout(() => c.enqueue("x"), 50); },
+  async pull(c) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    c.enqueue("x");
+    c.close();
+  },
 });
 const ws = new WritableStream({ write() {} });
 const p = rs.pipeTo(ws);
@@ -13,5 +17,4 @@ try {
   cancelErr = e && e.name;
 }
 console.log("cancel-on-locked rejected:", cancelErr);
-// pipeTo will likely still be pending
-p.catch(() => {});
+await p;

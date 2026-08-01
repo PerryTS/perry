@@ -37,6 +37,8 @@ pub(crate) fn cp_register_arities() {
     js_register_closure_arity(cp_method_emit as *const u8, 2);
     js_register_closure_arity(cp_method_this0 as *const u8, 0);
     js_register_closure_arity(cp_method_this1 as *const u8, 1);
+    js_register_closure_arity(cp_method_child_spawn as *const u8, 1);
+    js_register_closure_arity(cp_method_set_encoding as *const u8, 1);
     js_register_closure_arity(cp_method_remove_listener as *const u8, 2);
     js_register_closure_arity(cp_method_remove_all_listeners as *const u8, 1);
     js_register_closure_arity(cp_method_kill as *const u8, 1);
@@ -121,7 +123,7 @@ pub(crate) fn cp_build_readable() -> f64 {
         ("pause", cp_cast0(cp_method_this0)),
         ("resume", cp_cast0(cp_method_this0)),
         ("destroy", cp_cast0(cp_method_this0)),
-        ("setEncoding", cp_cast1(cp_method_this1)),
+        ("setEncoding", cp_cast1(cp_method_set_encoding)),
         ("read", cp_cast1(cp_method_read)),
         ("pipe", cp_cast1(cp_method_pipe)),
     ];
@@ -163,7 +165,59 @@ pub(crate) fn cp_build_writable() -> f64 {
     ];
     let obj = cp_build_object(&methods, CP_WRITABLE_SHAPE_ID + methods.len() as u32);
     let val = cp_box_ptr(obj as *const u8);
+    cp_set_field(val, b"readable", TAG_FALSE_F64);
     cp_set_field(val, b"writable", TAG_TRUE_F64);
     cp_set_field(val, b"destroyed", TAG_FALSE_F64);
     val
+}
+
+/// Build the inert public `new ChildProcess()` instance. Normal `spawn()` and
+/// `fork()` construct their live variants in the reactor; this low-level Node
+/// API only needs the initial observable shape plus its validating `.spawn`.
+pub(crate) fn cp_build_unstarted_child_process() -> f64 {
+    cp_register_arities();
+    let methods: [(&str, CpFn); 11] = [
+        ("on", cp_cast2(cp_method_on)),
+        ("once", cp_cast2(cp_method_on)),
+        ("addListener", cp_cast2(cp_method_on)),
+        ("removeListener", cp_cast2(cp_method_remove_listener)),
+        ("off", cp_cast2(cp_method_remove_listener)),
+        ("emit", cp_cast2(cp_method_emit)),
+        (
+            "removeAllListeners",
+            cp_cast1(cp_method_remove_all_listeners),
+        ),
+        ("kill", cp_cast1(cp_method_kill)),
+        ("ref", cp_cast0(cp_method_this0)),
+        ("unref", cp_cast0(cp_method_this0)),
+        ("spawn", cp_cast1(cp_method_child_spawn)),
+    ];
+    let obj = cp_build_object(&methods, CP_SHAPE_ID + 0x60 + methods.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let child = scope.root_nanbox_f64(cp_box_ptr(obj as *const u8));
+    cp_set_field(child.get_nanbox_f64(), b"connected", TAG_FALSE_F64);
+    cp_set_field(child.get_nanbox_f64(), b"killed", TAG_FALSE_F64);
+    cp_set_field(child.get_nanbox_f64(), b"exitCode", TAG_NULL_F64);
+    cp_set_field(child.get_nanbox_f64(), b"signalCode", TAG_NULL_F64);
+    cp_set_field(child.get_nanbox_f64(), b"spawnfile", TAG_NULL_F64);
+
+    let constructor =
+        crate::object::bound_native_callable_export_value("child_process", "ChildProcess");
+    let constructor =
+        unsafe { crate::object::callable_exports::ensure_child_process_prototype(constructor) };
+    let raw = (constructor.to_bits() & crate::value::POINTER_MASK) as usize;
+    let prototype = crate::closure::closure_get_dynamic_prop(raw, "prototype");
+    if let Some(obj) = cp_object_ptr(child.get_nanbox_f64()) {
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj as usize,
+            prototype.to_bits(),
+        );
+    }
+    child.get_nanbox_f64()
+}
+
+/// Public constructor hook for the codegen `new ChildProcess()` fast path.
+#[no_mangle]
+pub extern "C" fn js_child_process_new() -> f64 {
+    cp_build_unstarted_child_process()
 }

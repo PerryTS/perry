@@ -239,6 +239,14 @@ fn evict_ids(batch: &[usize]) {
             g.remove(id);
         }
     }
+    {
+        let mut g = super::transform::TRANSFORM_BACKPRESSURED_JOBS
+            .lock()
+            .unwrap();
+        for id in batch {
+            g.remove(id);
+        }
+    }
     byob::evict_ids(batch);
     tee::evict_ids(batch);
     for &id in batch {

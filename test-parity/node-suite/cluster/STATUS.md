@@ -25,31 +25,32 @@ substitute expected-output sources.
 
 ## Measured coverage
 
-- 41 granular TypeScript fixtures (40 added over the original one).
-- Node v26.5.0: 41/41 complete successfully in three consecutive direct rounds.
-- Deno 2.9.2 local comparison: 41/41 complete successfully.
-- Bun 1.2.18 local comparison: 40/41 complete successfully; its older local
-  release fails the `ChildProcess.channel` ref/unref probe. Current Bun source,
-  rather than this older binary, was used for selection evidence.
-- Perry differential result: stable 15/41 (36.6%), with 25 behavioral
-  differences and one runtime timeout.
+- 43 granular TypeScript fixtures (42 added over the original one).
+- Node v26.5.x: all 43 complete successfully.
+- Deno 2.9.2 local comparison: 41/41 complete successfully before the two
+  maintainer-audit additions.
+- Bun 1.2.18 local comparison: 40/41 complete successfully before the two
+  maintainer-audit additions; its older local release fails the
+  `ChildProcess.channel` ref/unref probe. Current Bun source, rather than this
+  older binary, was used for selection evidence.
+- Perry differential result: 43/43 (100%) on the final maintainer-audit run,
+  with no output differences, compile failures, crashes, or skips.
 
-## Stable diagnostic boundaries
+## Repaired diagnostic boundaries
 
-The granular cases intentionally report, rather than repair, mismatches in areas
-such as Worker construction/prototypes, setup aliases/events, empty disconnect
-timing, fork/event ordering, worker/cluster message forwarding, worker state and
-exit payloads, option validation, and TCP listening.
+The formerly measured Worker construction/prototype, setup alias/event, empty
+disconnect timing, fork/event ordering, worker/cluster message forwarding,
+worker state/exit payload, option validation, TCP listening, and advanced IPC
+differences now match Node across this suite.
 
 ## Stopping exclusions
 
 The remaining upstream cases were reviewed and stopped in these categories:
 
-- **Blocked by the single-worker TCP result:** round-robin versus shared
-  scheduling, multi-worker connection distribution, server restart, backlog,
-  pipe handles, socket transfer, and shared-handle races. Adding scheduler
-  assertions before basic listening/request-response parity would obscure the
-  primary gap.
+- **Broader scheduler stress:** multi-worker connection distribution, server
+  restart, backlog, pipe handles, socket transfer, and shared-handle races. The
+  deterministic suite now covers single-worker SCHED_RR request/response in both
+  JSON and advanced serialization modes.
 - **UDP foundation / duplicate semantics:** dgram sharing, reuse, fd binding,
   IPv6-only and unshared-UDP disconnect cases. These belong after TCP cluster
   lifecycle is reliable and otherwise repeat the granular `node:dgram` suite.
@@ -71,14 +72,12 @@ access, arbitrary readiness sleep, or scheduler-dependent worker ordering.
 
 ## Final verification
 
-- `deno fmt --check test-parity/node-suite/cluster` — 43 files checked.
-- Three direct Node v26.5.0 rounds — 41/41 exited successfully each round.
-- Two consecutive warmed focused differential rounds — 15/41 each, 25 behavioral
-  differences and one Perry runtime timeout; no Node failures or compile/link
-  failures.
-- A per-fixture diagnostic run reproduced the same 15 pass, 25 difference, one
-  runtime-timeout partition and identified the timeout as invalid
-  serialization/inspect-port validation.
+- Three direct Node v26.5.0 rounds — 41/41 exited successfully each round; Node
+  v26.5.1 also completes both maintainer-audit additions.
+- Focused maintainer checks: listener validation/bookkeeping, child-side Worker
+  shape/send delegation, and advanced-mode TCP handoff all pass.
+- Final normal-mode differential run: 43/43 (100%), with no Node failures,
+  output differences, compile/link failures, crashes, or skips.
 
 Only the measured cluster module floor was changed in
 `node_suite_baseline.json`; its historical full-suite aggregate remains the last

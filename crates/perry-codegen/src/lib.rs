@@ -40,6 +40,7 @@ pub use codegen::{
     compile_module, resolve_target_triple, AppMetadata, CompileOptions, FpContractMode,
     ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
+pub use collectors::CjsPreambleCensus;
 
 /// The shadow-stack field offsets generated code bakes into its inline root
 /// stores (#7088).
@@ -105,4 +106,36 @@ pub fn iter_native_method_signatures() -> impl Iterator<Item = NativeMethodRef> 
             ret_kind,
         },
     )
+}
+
+/// #7139 template-change canary: does `hir` carry a `Ptr<Shape>` §5.2 module
+/// barrier (`collectors::ModuleDispatchFacts::shape_barrier_sites`)?
+///
+/// Public **solely** so the `perry` crate's `cjs_wrap` tests can assert that
+/// the CommonJS preamble they emit is still recognised as module scaffolding
+/// by `collectors::cjs_scaffolding` — the recogniser is here, the template is
+/// there, and only `perry` can see both. That coupling is otherwise silent:
+/// a template edit would not break anything, it would just quietly re-arm the
+/// barrier for 100 % of CommonJS modules and evaporate the #7139 win with no
+/// symptom. Same shape as [`iter_native_method_signatures`], which exists for
+/// `perry-api-manifest`'s consistency test.
+///
+/// Not part of any codegen contract; nothing in the compile pipeline calls it.
+pub fn module_has_ptr_shape_barrier(hir: &perry_hir::Module) -> bool {
+    collectors::collect_module_dispatch_facts(hir).has_shape_barrier_sites()
+}
+
+/// #7152 template-change canary: what the `Ptr<Shape>` report suppresses in
+/// `hir` as Perry's own `cjs_wrap` scaffolding.
+///
+/// Public for exactly the reason [`module_has_ptr_shape_barrier`] is, and with
+/// the same failure mode: rename `__cjs_module`, drop the
+/// `var module = __cjs_module` alias, or change the `{ exports: {} }` literal,
+/// and `collectors::cjs_scaffolding`'s recogniser stops firing. Nothing breaks
+/// — the report just goes back to attributing Perry's scaffolding to the
+/// user's code, in every CommonJS module, with no symptom.
+///
+/// Not part of any codegen contract; nothing in the compile pipeline calls it.
+pub fn cjs_preamble_census(hir: &perry_hir::Module) -> CjsPreambleCensus {
+    collectors::cjs_preamble_census(hir)
 }

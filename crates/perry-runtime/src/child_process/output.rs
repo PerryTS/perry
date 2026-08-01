@@ -157,11 +157,14 @@ fn cp_make_error_with_class(
     };
     set("name", cp_box_string(name));
     set("message", cp_box_string(message));
+    let constructor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    set("constructor", constructor);
     // `name`/`message` are non-enumerable on a Node Error (only the diagnostic
     // props are enumerable), so keep them out of `Object.keys(err)`.
     let attrs = crate::object::PropertyAttrs::new(true, false, true);
     crate::object::set_property_attrs(obj as usize, "name".to_string(), attrs);
     crate::object::set_property_attrs(obj as usize, "message".to_string(), attrs);
+    crate::object::set_property_attrs(obj as usize, "constructor".to_string(), attrs);
     for (k, v) in extra {
         set(k, *v);
     }
@@ -387,17 +390,18 @@ pub(crate) fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f
     };
     // Field order matches Node's insertion order (status, signal, output, pid,
     // stdout, stderr) so `Object.keys(err)` is byte-identical.
-    let err = cp_make_error(
-        &message,
-        &[
-            ("status", status),
-            ("signal", signal),
-            ("output", output),
-            ("pid", pid),
-            ("stdout", stdout),
-            ("stderr", stderr),
-        ],
-    );
+    let mut fields = vec![
+        ("status", status),
+        ("signal", signal),
+        ("output", output),
+        ("pid", pid),
+        ("stdout", stdout),
+        ("stderr", stderr),
+    ];
+    if let Some((code, _)) = &run.spawn_error {
+        fields.push(("code", cp_box_string(code)));
+    }
+    let err = cp_make_error(&message, &fields);
     crate::exception::js_throw(err)
 }
 

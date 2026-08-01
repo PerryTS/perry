@@ -204,15 +204,28 @@ pub(crate) unsafe fn dispatch_stream_method(
                 let transform = js_stream_unwrap_handle(arg0);
                 let writable = js_transform_stream_writable(transform);
                 let readable = js_transform_stream_readable(transform);
-                return Some(js_readable_stream_pipe_through(handle, writable, readable));
+                let output =
+                    js_readable_stream_pipe_through_validate(handle, writable, readable, arg1);
+                let pipe = js_readable_stream_pipe_to(handle, writable, arg1);
+                js_promise_mark_internally_handled(pipe);
+                return Some(output);
             }
             // #1644: a readable handle is also its own controller. The
             // start/transform/flush callbacks receive it as `controller`, so
             // `controller.enqueue/close/error/terminate` dispatch here when the
-            // controller param is generically typed. `terminate()` ends the
-            // readable side (TransformStreamDefaultController.terminate).
+            // controller param is generically typed.
             "enqueue" => return Some(js_readable_stream_controller_enqueue(handle, arg0)),
-            "close" | "terminate" => return Some(js_readable_stream_controller_close(handle)),
+            "close" => return Some(js_readable_stream_controller_close(handle)),
+            "terminate" => {
+                let result = js_readable_stream_controller_close(handle);
+                if let Some(writable_id) = transform_writable_for_readable(id) {
+                    let reason = f64::from_bits(make_type_error_with_message(
+                        "Invalid state: TransformStream has been terminated",
+                    ));
+                    let _ = js_writable_stream_abort_inner(writable_id as f64, reason, true);
+                }
+                return Some(result);
+            }
             "error" => return Some(js_readable_stream_controller_error(handle, arg0)),
             _ => return None,
         }
@@ -257,6 +270,11 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
         }
         (2, "locked") => return js_writable_stream_locked(handle),
         (3, "closed") => return box_promise(js_reader_closed(handle)),
+        (4, "closed") => return box_promise(js_writer_closed(handle)),
+        (4, "ready") => return box_promise(js_writer_ready(handle)),
+        (4, "desiredSize") => return js_writer_desired_size(handle),
+        (5, "readable") => return js_transform_stream_readable(handle),
+        (5, "writable") => return js_transform_stream_writable(handle),
         _ => {}
     }
     // #5437: expando properties stored via `stream.prop = v` (React's

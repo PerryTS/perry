@@ -23,6 +23,15 @@ try {
     typeof params.timestamp,
     Array.isArray(params.stackTrace.callFrames),
   );
+  const types: string[] = [];
+  for (const method of ["log", "info", "debug", "warn", "error"] as const) {
+    const next = new Promise<any>((resolve) =>
+      session.once("Runtime.consoleAPICalled", resolve)
+    );
+    inspector.console[method]("marker", 42, true);
+    types.push((await next).params.type);
+  }
+  console.log("types:", types.join(","));
 } finally {
   session.disconnect();
 }

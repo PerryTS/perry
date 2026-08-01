@@ -260,6 +260,77 @@ fn test_layout_mask_small_mixed_array_scans_exact_pointer_slot() {
 }
 
 #[test]
+fn test_pointer_store_restores_side_mask_from_stale_pointer_free() {
+    // Regression: an array can end up in POINTER_FREE layout state while
+    // still carrying a populated element pointer-mask (e.g. after a
+    // numeric-layout rebuild observed a short/empty prefix while the mask
+    // lingered). `heap_payload_slot_selection` short-circuits POINTER_FREE and
+    // skips the WHOLE payload without consulting the mask, so the evacuating
+    // minor would drop live pointer elements. `layout_note_slot` must restore
+    // SIDE_MASK whenever it records a pointer into an existing mask.
+    clear_marks();
+    clear_mark_seeds();
+
+    let child0 = crate::string::js_string_from_bytes(b"c0".as_ptr(), 2) as *mut u8;
+    let child1 = crate::string::js_string_from_bytes(b"c1".as_ptr(), 2) as *mut u8;
+    let child0_h = unsafe { header_from_user_ptr(child0) };
+    let child1_h = unsafe { header_from_user_ptr(child1) };
+
+    let arr = crate::array::js_array_alloc_with_length(2);
+    // Store a pointer at index 0 -> SIDE_MASK + mask{0}.
+    crate::array::js_array_set_f64(
+        arr,
+        0,
+        f64::from_bits(STRING_TAG | (child0 as u64 & POINTER_MASK)),
+    );
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 2), Some(1));
+
+    // Reproduce the stale-state hazard: force POINTER_FREE while the mask{0}
+    // entry is still present (`set_layout_state` only touches the state bits).
+    let arr_header = unsafe { header_from_user_ptr(arr as *mut u8) };
+    unsafe {
+        set_layout_state(arr_header, GC_LAYOUT_POINTER_FREE);
+    }
+
+    // Store a pointer at index 1 through the normal array store path.
+    crate::array::js_array_set_f64(
+        arr,
+        1,
+        f64::from_bits(STRING_TAG | (child1 as u64 & POINTER_MASK)),
+    );
+
+    // The fix: recording a pointer must have restored SIDE_MASK, so the mask is
+    // consulted and BOTH pointer slots are visible to the tracer.
+    unsafe {
+        assert_eq!(
+            (*arr_header)._reserved & GC_LAYOUT_STATE_MASK,
+            GC_LAYOUT_SIDE_MASK,
+            "recording a pointer into an existing mask must restore SIDE_MASK"
+        );
+    }
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 2), Some(2));
+
+    let valid_ptrs = build_valid_pointer_set();
+    let mut worklist = Vec::new();
+    unsafe {
+        trace_array(arr as *mut u8, &valid_ptrs, &mut worklist);
+        assert_ne!(
+            (*child0_h).gc_flags & GC_FLAG_MARKED,
+            0,
+            "index 0 pointer must be traced"
+        );
+        assert_ne!(
+            (*child1_h).gc_flags & GC_FLAG_MARKED,
+            0,
+            "index 1 pointer (stored under stale POINTER_FREE) must be traced"
+        );
+    }
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_layout_mask_heap_conversion_keeps_sparse_words_zeroed() {
     clear_marks();
     clear_mark_seeds();

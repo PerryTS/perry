@@ -32,6 +32,11 @@ perry doctor                              # Check environment
 perry update                              # Self-update
 ```
 
+## Testing / node parity
+
+- `./run_parity_tests.sh` — hand-authored node-suite (behavioral parity vs `node --experimental-strip-types`).
+- `node scripts/node_compat_matrix.mjs --module fs` — fast per-module export-shape check against a pinned Node oracle (26.5.1); drop `--module` for the full builtin sweep, add `--check` for the CI gate (systematic form of tracker #812).
+
 ## Documentation
 
 Full documentation: see the `docs/` directory (mdBook format), or build with `mdbook serve docs`.

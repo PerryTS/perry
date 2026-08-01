@@ -122,6 +122,33 @@ error — the "probe ran no collection" rule deliberately lives in
 that the largest possible regression is not misdiagnosed as "your probe is too
 small".
 
+### `PERRY_CONSERVATIVE_STACK_SCAN=full` is this gate's sensitivity arm — keep it
+
+CLAUDE.md's kill-policy says an unexercised mode gets deleted, and `=full` was a
+clean candidate: it failed **134 of 1574** `perry-runtime` tests, a shipped
+escape hatch nobody had verified (#7148). It was **kept** rather than deleted
+for the reason this section documents — it is the only end-to-end proof that
+`gc-ratchet` can fail. Deleting the mode would delete a gate's proof, which is
+the same failure the kill-policy exists to prevent, one level up.
+
+It is verified instead. The 134 failures were not soundness failures: a
+collector test's central assertion is *"this object should have been
+collected"*, and an ambient conservative scan retains whatever the native stack
+looks like a pointer to, so `=full` broke exactly the assertions the suite
+exists to make. Since #7147 the test build has one declared scan mode and the
+isolation guards are its authority, so as of #7148 a pinned per-thread override
+beats an env request for `Full` **in the test build only** — the env var may
+make the scan less aggressive than a test declared, never more. Production
+binaries pin no override, so the arm above is unchanged and still forces the
+scan.
+
+The `heap_used_bytes` column above is also the quantitative case behind #7148:
+every `force_full_scan()` that fires at runtime is a collection that runs no
+copying minor, so the four *automatic* fallback sites were each worth this much
+RSS whenever they were reached. They are now counted
+(`[gc-scan-fallback] site=… automatic=…` under `PERRY_GC_DIAG`), so a probe run
+shows directly whether any of them fired.
+
 ## Cross-host evidence (why the shared-CI profile gates what it gates)
 
 The baseline is captured on an 8-core M1 with 8 GB at load ~1.2. The first

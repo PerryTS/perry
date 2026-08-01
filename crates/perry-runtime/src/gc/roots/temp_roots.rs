@@ -60,6 +60,27 @@ thread_local! {
         std::cell::UnsafeCell::new(Vec::with_capacity(TEMP_ROOT_RESERVE));
 }
 
+/// Report a temp-root stack overflow without unwinding.
+///
+/// Same defect class as #7145's `js_shadow_frame_pop`: a `debug_assert!(false)`
+/// inside an `extern "C"` fn aborts the process in a debug build instead of
+/// unwinding. Unreachable in practice (it needs `u32::MAX` live temp roots), so
+/// no test drives it — which is exactly why it should not be left as a latent
+/// abort. One line on stderr, once per process.
+#[cold]
+fn report_temp_root_overflow(depth: usize) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    if REPORTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "[perry-gc] temp-root stack overflow at depth {depth}: refusing to grow \
+(codegen dropped a js_gc_temp_root_truncate). The returned index still addresses \
+a live slot. Reported once per process."
+    );
+}
+
 /// Push `value` and return the index generated code must pass to
 /// `js_gc_temp_root_get` / `js_gc_temp_root_set` / `js_gc_temp_root_truncate`.
 #[no_mangle]
@@ -71,7 +92,7 @@ pub extern "C" fn js_gc_temp_root_push(value: u64) -> u32 {
         // keeps a runaway from turning into unbounded retention. The returned
         // index still addresses a live slot, so get/set stay well-defined.
         if idx >= u32::MAX as usize {
-            debug_assert!(false, "temp-root stack overflow (unbalanced truncate)");
+            report_temp_root_overflow(idx);
             return (idx - 1) as u32;
         }
         s.push(value);

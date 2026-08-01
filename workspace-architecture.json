@@ -1,9 +1,13 @@
 {
   "schema_version": 1,
   "expected_default_members": [
-    "perry"
+    "perry",
+    "perry-container-compose"
   ],
-  "allowed_binding_runtime_dependencies": [],
+  "allowed_binding_runtime_dependencies": [
+    "perry-ext-node-forge",
+    "perry-ext-undici"
+  ],
   "ci": {
     "linux_host_excluded_members": [
       "perry-ui-android",
@@ -21,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 76,
+    "workspace_members": 78,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -32,6 +36,7 @@
       "perry-codegen-swiftui",
       "perry-codegen-wasm",
       "perry-codegen-wear-tiles",
+      "perry-container-compose",
       "perry-diagnostics",
       "perry-dispatch",
       "perry-hir",
@@ -61,7 +66,7 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 29,
+      "externalize": 31,
       "keep": 42,
       "merge": 1,
       "remove": 1,
@@ -194,6 +199,10 @@
       "decision": "externalize"
     },
     "perry-ext-fetch": {
+      "category": "binding",
+      "decision": "externalize"
+    },
+    "perry-ext-node-forge": {
       "category": "binding",
       "decision": "externalize"
     },

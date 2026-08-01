@@ -6,9 +6,12 @@
 //! sites) that let those `continue` sites record `(value, reason)` instead of
 //! dropping the information on the floor.
 //!
-//! **Everything here runs only when [`crate::opt_report::enabled`] is true.**
-//! The collector's returned facts are untouched either way: recording happens
-//! *next to* the `continue`, never instead of it.
+//! **Everything here runs only when [`crate::opt_report::enabled`] is true**,
+//! with one deliberate exception: [`candidate_seeds`] is the collector's own
+//! rule-1 seeding, shared so that the report and the proof can never disagree
+//! about what a candidate is. The collector's returned facts are untouched
+//! either way: recording happens *next to* the `continue`, never instead of
+//! it.
 //!
 //! ## On the actionability tiers
 //!
@@ -29,6 +32,7 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Class, Expr, Stmt};
 
+use super::cjs_scaffolding::CjsPreamble;
 use crate::opt_report::{self, Analysis, Denial, Position, Tier};
 
 /// A named denial: the rule as the collector numbers it, a human expansion,
@@ -163,10 +167,25 @@ pub(super) const ESC_RETURN: ShapeDenial = ShapeDenial {
 
 pub(super) const ESC_ELEMENT: ShapeDenial = ShapeDenial {
     rule: RULE2,
-    reason: "stored into an array or object (element/property of a container). \
-             Container slots do not carry a shape fact yet.",
+    reason: "stored into a container whose own uses the proof cannot bound. \
+             `A.push(x)` is contained when `A` is an element-shape-proven \
+             local array (#7034 §3: single empty-literal `Let`, only `push` \
+             writes of one class, only `.length` and in-bounds `A[i]` reads, \
+             `return A` aside); object properties and every other container \
+             slot still carry no shape fact.",
     tier: Tier::CompilerLimitation,
     issue: Some("#7034 §3/§5 P4-P5 (elements and fields)"),
+};
+
+pub(super) const ESC_ELEMENT_GROUP: ShapeDenial = ShapeDenial {
+    rule: RULE2,
+    reason: "it shares an element-shape-proven array with a value that failed \
+             containment. One member adding a property reshapes the objects \
+             every other member reads guard-free, so an element group is \
+             all-or-nothing — fix the sibling's escape and this value is \
+             promoted with it.",
+    tier: Tier::Fixable,
+    issue: None,
 };
 
 pub(super) const ESC_THROWN: ShapeDenial = ShapeDenial {
@@ -456,14 +475,30 @@ pub(super) struct NewSite {
 /// are never bound to a local. **Does not descend into closure bodies** —
 /// those are lowered as their own regions and reported under their own
 /// function name.
-pub(super) fn unbound_new_sites(stmts: &[Stmt]) -> Vec<NewSite> {
+///
+/// `preamble` (#7152) suppresses the object literals Perry's own `cjs_wrap`
+/// preamble allocates. On the dependency corpus that is the whole
+/// "constructor argument" bucket — `{ exports: {} }`, once per CommonJS
+/// module — plus the descriptor / `require.cache` / `require.extensions`
+/// literals behind it. Recognition is per region and fails to `Default`, in
+/// which case nothing is suppressed.
+pub(super) fn unbound_new_sites(stmts: &[Stmt], preamble: &CjsPreamble) -> Vec<NewSite> {
     let mut out = Vec::new();
-    scan_stmts(stmts, 0, "statement", &mut out);
+    scan_stmts(stmts, 0, "statement", preamble, &mut out);
     out
 }
 
-fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
+fn scan_stmts(
+    stmts: &[Stmt],
+    depth: u32,
+    ctx: &'static str,
+    preamble: &CjsPreamble,
+    out: &mut Vec<NewSite>,
+) {
     for s in stmts {
+        if preamble.stmt_allocates_only_scaffolding(s) {
+            continue;
+        }
         match s {
             // The Let init IS the provenance site rule 1 accepts; skip it and
             // scan only its arguments.
@@ -490,14 +525,14 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                 else_branch,
             } => {
                 scan_expr(condition, depth, "condition", out);
-                scan_stmts(then_branch, depth, ctx, out);
+                scan_stmts(then_branch, depth, ctx, preamble, out);
                 if let Some(eb) = else_branch {
-                    scan_stmts(eb, depth, ctx, out);
+                    scan_stmts(eb, depth, ctx, preamble, out);
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 scan_expr(condition, depth + 1, "condition", out);
-                scan_stmts(body, depth + 1, ctx, out);
+                scan_stmts(body, depth + 1, ctx, preamble, out);
             }
             Stmt::For {
                 init,
@@ -506,7 +541,13 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                 body,
             } => {
                 if let Some(init) = init {
-                    scan_stmts(std::slice::from_ref(init.as_ref()), depth + 1, ctx, out);
+                    scan_stmts(
+                        std::slice::from_ref(init.as_ref()),
+                        depth + 1,
+                        ctx,
+                        preamble,
+                        out,
+                    );
                 }
                 if let Some(c) = condition {
                     scan_expr(c, depth + 1, "condition", out);
@@ -514,19 +555,19 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                 if let Some(u) = update {
                     scan_expr(u, depth + 1, "loop update", out);
                 }
-                scan_stmts(body, depth + 1, ctx, out);
+                scan_stmts(body, depth + 1, ctx, preamble, out);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                scan_stmts(body, depth, ctx, out);
+                scan_stmts(body, depth, ctx, preamble, out);
                 if let Some(c) = catch {
-                    scan_stmts(&c.body, depth, ctx, out);
+                    scan_stmts(&c.body, depth, ctx, preamble, out);
                 }
                 if let Some(f) = finally {
-                    scan_stmts(f, depth, ctx, out);
+                    scan_stmts(f, depth, ctx, preamble, out);
                 }
             }
             Stmt::Switch {
@@ -538,12 +579,16 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                     if let Some(t) = &c.test {
                         scan_expr(t, depth, "case test", out);
                     }
-                    scan_stmts(&c.body, depth, ctx, out);
+                    scan_stmts(&c.body, depth, ctx, preamble, out);
                 }
             }
-            Stmt::Labeled { body, .. } => {
-                scan_stmts(std::slice::from_ref(body.as_ref()), depth, ctx, out)
-            }
+            Stmt::Labeled { body, .. } => scan_stmts(
+                std::slice::from_ref(body.as_ref()),
+                depth,
+                ctx,
+                preamble,
+                out,
+            ),
             _ => {}
         }
     }
@@ -636,16 +681,26 @@ pub(super) fn admission_cause(
     None
 }
 
-/// Enumerate the `Stmt::Let`-bound allocation candidates in a region without
-/// running the proof — used on the early-bail paths (gate off, module
-/// barrier) so the report can still name what *would* have been considered.
+/// The rule-1 candidate seeds of a region.
+///
+/// Used by the collector itself and, on the early-bail paths (gate off, module
+/// barrier), by the report so it can still name what *would* have been
+/// considered. One function, so a value cannot be a candidate for one and not
+/// the other.
 pub(super) fn candidate_seeds(
     stmts: &[Stmt],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
+    preamble: &CjsPreamble,
 ) -> HashMap<u32, String> {
     let mut out = HashMap::new();
     super::find_new_candidates(stmts, boxed_vars, module_globals, &mut out);
+    // #7152: mirror the collector's own filter. Without it a module whose
+    // rule-5 barrier is armed reports `__cjs_module` under rule 5 while an
+    // unarmed one reports it under rule 2, and the same scaffolding value
+    // moves between buckets depending on what the package source happens to
+    // do.
+    out.retain(|id, _| !preamble.is_module_record(*id));
     out
 }
 

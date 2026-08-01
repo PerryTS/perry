@@ -99,7 +99,7 @@ accept either the `$perryfs/<path>` virtual path or the embed-relative key.
 | `--print-hir` | Print HIR (intermediate representation) to stdout |
 | `--trace <STAGES>` | Dump IR at one or more pipeline stages. Comma-separated: `hir` (post-transform HIR), `llvm` (per-module `.ll` into `.perry-trace/llvm/`), or `all` |
 | `--focus <NAME>` | Restrict `--trace hir` to functions/methods/classes whose name contains `NAME`, suppressing import/export/init noise. Implies `--trace hir` if no stage is given |
-| `--no-link` | Produce `.o` object file only, skip linking |
+| `--no-link` | Produce `.o` object file(s) only, skip linking. The objects are written to `-o` — verbatim for a single-module program, otherwise into `-o`'s directory under module-derived names, since one `-o` cannot name several files. With no `-o` they land in the current directory. Each path is printed as `Wrote object file: <path>` |
 | `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
 | `--opt-report[=json]` | Report which values Perry could **not** statically type, why, and whether you can fix it. Text by default; `--opt-report=json` emits a stable schema for tooling. Also settable via `PERRY_OPT_REPORT=1` |

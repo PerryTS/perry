@@ -17,3 +17,12 @@ lru = "0.18"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+# Direct handle for two things the tests need from the runtime:
+# `tests/gc_survival.rs` forces a minor collection
+# (`perry_runtime::gc::gc_collect_minor`) and drives the write-barrier /
+# shadow-frame guard, mirroring perry-ext-events' scanner test; the unit
+# tests use `exception::js_call_catching` to assert on the constructor's
+# npm-matching option errors without the throw exiting the process.
+# `default` + `stdlib` keep this copy feature-identical to the shipped
+# runtime (see perry-ext-events/Cargo.toml for the #6303 rationale).
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }

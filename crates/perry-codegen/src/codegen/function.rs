@@ -835,6 +835,7 @@ pub(super) fn compile_function(
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
+        pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,

@@ -215,6 +215,24 @@ pub(crate) fn cp_args_from_value(value: f64) -> Vec<String> {
     }
 }
 
+/// Normalize `spawn*`/`fork`'s optional `(args, options)` slots after codegen
+/// has unboxed them: when the third argument is absent, a plain object in the
+/// second slot is the options object, not an argv list.
+pub(crate) fn cp_options_from_raw_args(args_ptr: i64, opts_ptr: i64) -> f64 {
+    if opts_ptr > 0x10000 {
+        return cp_box_ptr(opts_ptr as *const u8);
+    }
+    if args_ptr <= 0x10000 {
+        return cp_undefined();
+    }
+    let args = cp_box_ptr(args_ptr as *const u8);
+    if cp_array_ptr(args).is_none() && cp_object_ptr(args).is_some() {
+        args
+    } else {
+        cp_undefined()
+    }
+}
+
 /// Coerce any JS value to an owned Rust string — string fast-path, else
 /// `js_jsvalue_to_string`. Used for `env` values, which Node stringifies.
 pub(crate) fn cp_coerce_string(value: f64) -> String {

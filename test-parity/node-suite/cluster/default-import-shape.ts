@@ -43,6 +43,10 @@ for (
     "emit",
     "eventNames",
     "listenerCount",
+    "listeners",
+    "rawListeners",
+    "getMaxListeners",
+    "setMaxListeners",
   ]
 ) {
   console.log(

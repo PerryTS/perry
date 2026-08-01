@@ -178,6 +178,23 @@ def host_description() -> dict[str, Any]:
     return info
 
 
+def portable_path(path: Path | str) -> str:
+    """Render a path without the operator's home directory in it.
+
+    Repo-relative inside the checkout, ``~``-relative under ``$HOME``, otherwise
+    unchanged. The artifact this feeds is committed to a public repository, so an
+    absolute build path here publishes whoever pinned the baseline.
+    """
+    resolved = os.path.realpath(str(path))
+    for base, prefix in (
+        (os.path.realpath(REPO_ROOT), ""),
+        (os.path.realpath(os.path.expanduser("~")), "~/"),
+    ):
+        if resolved == base or resolved.startswith(base + os.sep):
+            return prefix + os.path.relpath(resolved, base)
+    return resolved
+
+
 def binary_fingerprints(perry: Path) -> dict[str, Any]:
     """Content hashes of the binary and archives actually under test.
 
@@ -198,11 +215,15 @@ def binary_fingerprints(perry: Path) -> dict[str, Any]:
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 hasher.update(chunk)
-        return {"path": str(path), "size": path.stat().st_size, "sha256": hasher.hexdigest()}
+        return {
+            "path": portable_path(path),
+            "size": path.stat().st_size,
+            "sha256": hasher.hexdigest(),
+        }
 
     runtime_dir = os.environ.get("PERRY_RUNTIME_DIR")
     search = Path(runtime_dir) if runtime_dir else perry.parent
-    out: dict[str, Any] = {"perry": digest(perry), "runtime_dir": str(search)}
+    out: dict[str, Any] = {"perry": digest(perry), "runtime_dir": portable_path(search)}
     for lib in ("libperry_runtime.a", "libperry_stdlib.a"):
         out[lib] = digest(search / lib)
     return out

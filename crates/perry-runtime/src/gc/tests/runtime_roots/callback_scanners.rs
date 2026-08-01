@@ -1205,7 +1205,12 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     );
     assert_eq!(
         crate::node_submodules::test_node_submodule_roots(),
-        (fixture.old_addr(), fixture.old_addr(), fixture.old_addr())
+        (
+            fixture.old_addr(),
+            fixture.old_addr(),
+            fixture.old_addr(),
+            fixture.old_bits,
+        )
     );
     assert_eq!(
         crate::os::test_process_event_listener_root_snapshot(),

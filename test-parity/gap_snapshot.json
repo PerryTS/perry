@@ -128,13 +128,6 @@
       "added": "2026-07-04",
       "category": "module-inventory",
       "reason": "node:v8 second cluster (#3680+); standing per #5917."
-    },
-    "test_gap_zlib_3285_params": {
-      "status": "parity_fail",
-      "issue": "3285",
-      "added": "2026-07-04",
-      "category": "bug-open",
-      "reason": "zlib params (#3285); standing per #5917."
     }
   }
 }

@@ -653,7 +653,10 @@ pub(crate) fn test_process_event_listener_root_snapshot() -> usize {
 }
 
 pub fn emit_process_uncaught_exception(error: f64) {
-    emit_process_event("uncaughtException", &[error]);
+    if !emit_process_event("uncaughtException", &[error]) {
+        crate::exception::print_uncaught(error);
+        crate::process::exit_after_current_thread_collection_teardown(1);
+    }
 }
 
 /// process.nextTick(callback, ...args) — schedule callback as a tick,

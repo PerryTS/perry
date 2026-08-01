@@ -147,6 +147,7 @@
 # Testing
 
 - [Geisterhand (UI Fuzzer)](testing/geisterhand.md)
+- [Node Compatibility Matrix](testing/node-compat-matrix.md)
 
 # CLI Reference
 
