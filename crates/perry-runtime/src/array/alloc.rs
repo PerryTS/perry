@@ -47,6 +47,13 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
         // Initialize header
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
+        // EXPERIMENT (#sfw-registry slack): HOLE-initialize the whole capacity so
+        // the unused [length, capacity) slack never holds stale arena bits that
+        // the whole-heap from-space scan misreads as live from-space pointers.
+        let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        for i in 0..actual_capacity as usize {
+            std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
+        }
         set_array_numeric_layout(ptr, NumericArrayLayout::RawF64);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
