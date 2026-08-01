@@ -506,9 +506,14 @@ fn a_closure_region_never_reports_a_served_return() {
     );
 }
 
-/// Only the RETURN position is served. `return f({a: 1})` puts the literal in
-/// a call-argument position of a function that is not a producer at all, and
-/// even inside a real producer a nested argument is not one of the returns.
+/// Only the RETURN position is served, across both nesting shapes a `return`
+/// can put an allocation in: a constructor argument of the returned `new`, and
+/// an argument of a returned *call*.
+///
+/// Both are in the body. The doc used to cite `return f(...)` while the body
+/// built only `return new C(new C())` — a different code path, since the
+/// `Expr::New` arm overrides the context and the `Expr::Call` arm is what
+/// handles the other.
 #[test]
 fn only_the_return_position_is_marked_served() {
     let c = class_with_fields("C", &["x"]);
@@ -537,6 +542,30 @@ fn only_the_return_position_is_marked_served() {
         .collect();
     assert_eq!(served.len(), 1, "exactly the return position is served");
     assert_eq!(served[0].alloc_context.as_deref(), Some("return"));
+
+    // `return f(new C())` — the allocation is a CALL ARGUMENT. Nothing here is
+    // a return position, so nothing is served even in a producer region.
+    //
+    // Reuses the SAME `session`: `Session::start` takes a process-global,
+    // non-reentrant lock, so opening a second one while the first is alive
+    // deadlocks. `entries()` has already drained the sink, so the second phase
+    // starts clean.
+    let called = vec![Stmt::Return(Some(Expr::Call {
+        callee: Box::new(Expr::FuncRef(9)),
+        args: vec![new_c()],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }))];
+
+    let _guard = crate::opt_report::enter_function_region("mk", true);
+    let _ = run(&called, &classes);
+    drop(_guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].alloc_context.as_deref(), Some("call argument"));
+    assert_ne!(rows[0].tier, Some(crate::opt_report::Tier::Served));
 }
 
 /// Defect 1 (PR #7171 §3). Every anonymous literal renders as
@@ -597,4 +626,150 @@ fn a_region_lowered_twice_still_collapses_and_says_how_much() {
         2,
         "and the report says how many rows it folded away"
     );
+}
+
+// ── #7176 review, Major 1: `return` is a POSITION, not "anywhere under a
+//    returned expression" ─────────────────────────────────────────────────
+//
+// `RETURN` is set once, at `Stmt::Return(Some(e))`, and `scan_expr` propagates
+// `ctx` unchanged through its fallback arm — only `New`, `Call` arguments and
+// `Array` override it. So every allocation nested inside a returned expression
+// inherited the `return` label and, in a region flagged as a return-shape
+// producer, `Tier::Served` with it.
+//
+// The return-shape fact covers the function's RETURN VALUE. It says nothing
+// about an operand of a conditional, a `&&`, an `await` or a member base that
+// happens to sit inside the returned expression. Two consequences, both live:
+//
+//   * the `return` bucket over-counts — and 323 of it was published as R1's
+//     ceiling on #7170;
+//   * servedness is decided by a string that means the wrong thing. Today no
+//     production region can hit that (`producer_return_class` admits only a
+//     bare `Expr::New` or `Expr::LocalGet` return, so a ternary/await/binary
+//     return yields no fact at all) — but that is a distant invariant in
+//     another file, and R2 widening the producer side would silently turn this
+//     into a wrong `Served` row. These tests force the producer flag on so the
+//     classifier is tested on its own terms rather than on that invariant.
+
+fn ternary(a: Expr, b: Expr) -> Expr {
+    Expr::Conditional {
+        condition: Box::new(Expr::Bool(true)),
+        then_expr: Box::new(a),
+        else_expr: Box::new(b),
+    }
+}
+
+/// Run with the region flagged as a return-shape producer, which is the only
+/// state in which the served classification can fire at all.
+fn run_as_producer(
+    stmts: &[Stmt],
+    classes: &HashMap<String, &Class>,
+) -> Vec<crate::opt_report::Entry> {
+    let session = Session::start();
+    let guard = crate::opt_report::enter_function_region("mk", true);
+    let _ = run(stmts, classes);
+    drop(guard);
+    session.entries()
+}
+
+fn c_classes() -> Class {
+    class_with_fields("C", &["x"])
+}
+
+/// `return cond ? new C() : new C()` — two operands of a conditional, neither
+/// of which is the function's return value.
+#[test]
+fn a_conditional_arm_under_a_return_is_not_a_return_position() {
+    let c = c_classes();
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(ternary(new_c(), new_c())))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 2);
+    for e in &rows {
+        assert_ne!(
+            e.alloc_context.as_deref(),
+            Some("return"),
+            "a conditional arm is not the returned value"
+        );
+        assert_ne!(
+            e.tier,
+            Some(crate::opt_report::Tier::Served),
+            "the return-shape fact does not cover a conditional arm"
+        );
+    }
+}
+
+/// `return flag && new C()` — a binary operand.
+#[test]
+fn a_logical_operand_under_a_return_is_not_a_return_position() {
+    let c = c_classes();
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(Expr::Logical {
+        op: perry_hir::LogicalOp::And,
+        left: Box::new(Expr::Bool(true)),
+        right: Box::new(new_c()),
+    }))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_ne!(rows[0].alloc_context.as_deref(), Some("return"));
+    assert_ne!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+}
+
+/// `return await new C()` — the awaited operand is not the returned value
+/// either; the promise's resolution is.
+#[test]
+fn an_awaited_operand_under_a_return_is_not_a_return_position() {
+    let c = c_classes();
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(Expr::Await(Box::new(new_c()))))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_ne!(rows[0].alloc_context.as_deref(), Some("return"));
+    assert_ne!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+}
+
+/// `return new C().x` — the allocation is a member-access BASE. What is
+/// returned is a field of it, which is not even an object.
+#[test]
+fn a_member_base_under_a_return_is_not_a_return_position() {
+    let c = c_classes();
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(Expr::PropertyGet {
+        object: Box::new(new_c()),
+        property: "x".to_string(),
+        byte_offset: 0,
+    }))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_ne!(rows[0].alloc_context.as_deref(), Some("return"));
+    assert_ne!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+}
+
+/// The anti-vacuity half: a BARE `return new C()` — the one shape the
+/// return-shape fact actually covers — must still be `return` and still be
+/// served. Without this, "never mark anything served" passes all four above.
+#[test]
+fn a_bare_return_is_still_a_return_position_and_still_served() {
+    let c = c_classes();
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(new_c()))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].alloc_context.as_deref(), Some("return"));
+    assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
 }

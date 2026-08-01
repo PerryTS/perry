@@ -418,7 +418,7 @@ pub(super) fn deny_alloc_site(site: &NewSite) {
     if !opt_report::enabled() || suppressed() {
         return;
     }
-    let served = site.context == RETURN && opt_report::region_is_return_shape_producer();
+    let served = site.is_return_position && opt_report::region_is_return_shape_producer();
     let d = if served {
         UNBOUND_ALLOC_SERVED_RETURN
     } else {
@@ -518,11 +518,26 @@ fn walk_lets(stmts: &[Stmt], depth: u32, f: &mut impl FnMut(u32, &str, u32)) {
 // ── Allocation-position vocabulary ─────────────────────────────────────────
 //
 // Named constants rather than inline literals, because #7170 §5.1 is a bug
-// about exactly one of these strings meaning two different things. `RETURN` is
-// additionally compared against in `deny_alloc_site`, and a typo there would
-// silently disable the served-return classification.
+// about exactly one of these strings meaning two different things.
+//
+// None of these strings is load-bearing: servedness is decided by
+// [`NewSite::is_return_position`], set at the one site that knows it. A label
+// here can be renamed without silently disabling a classification.
 
+/// The allocation IS the function's return value: `return new C(...)`.
 const RETURN: &str = "return";
+/// The allocation sits *inside* a returned expression but is not the returned
+/// value — a conditional arm, a `&&` operand, an awaited operand, a member
+/// access base.
+///
+/// Split out in review of #7176. `RETURN` was set once, at
+/// `Stmt::Return(Some(e))`, and `scan_expr` propagates its context unchanged
+/// through the fallback arm, so `return cond ? new C() : new D()` filed both
+/// arms as return positions. That over-counted the `return` bucket — 323 of
+/// which was published on #7170 as R1's ceiling — and would have handed
+/// `Tier::Served` to operands the return-shape fact does not cover the moment
+/// the producer side widened.
+const RETURNED_OPERAND: &str = "returned expression operand";
 /// A genuine `new C(arg)` argument — the developer wrote a constructor call.
 const CTOR_ARG: &str = "constructor argument";
 /// A property value of an anonymous-shape object literal.
@@ -560,6 +575,15 @@ pub(super) struct NewSite {
     /// Index of this site in the region's walk. A de-duplication discriminant;
     /// see [`crate::opt_report::Entry::alloc_ordinal`].
     pub ordinal: u32,
+    /// This allocation **is** the expression of a `Stmt::Return` — the value the
+    /// function hands back — rather than something nested inside it.
+    ///
+    /// The only input to the served-return classification, and set in exactly
+    /// one place ([`scan_return`]) together with the `context` label, so a
+    /// sabotage cannot kill one without the other. Deriving servedness from the
+    /// label string instead would make a cosmetic rename of a report bucket
+    /// silently disable it.
+    pub is_return_position: bool,
     /// Byte offset of the `new` expression in its module's source. `Expr::New`
     /// is the one HIR node that already carries a source position (#5253,
     /// captured for constructor TypeErrors), so allocation sites — which have
@@ -617,7 +641,7 @@ fn scan_stmts(
             }
             Stmt::Expr(e) => scan_expr(e, depth, ctx, out),
             Stmt::Throw(e) => scan_expr(e, depth, "throw", out),
-            Stmt::Return(Some(e)) => scan_expr(e, depth, RETURN, out),
+            Stmt::Return(Some(e)) => scan_return(e, depth, out),
             Stmt::Return(None) => {}
             Stmt::If {
                 condition,
@@ -694,6 +718,52 @@ fn scan_stmts(
     }
 }
 
+/// Scan the expression of a `Stmt::Return`.
+///
+/// **The direct expression of a `return` is the function's return value;
+/// anything nested inside it is an operand.** `return cond ? new C() : new D()`
+/// returns the *conditional*, not either allocation, and #7107's return-shape
+/// fact says nothing about them.
+///
+/// This is the only place `RETURN` and [`NewSite::is_return_position`] are set,
+/// and they are set together, so no sabotage can leave the label and the
+/// classification disagreeing.
+fn scan_return(e: &Expr, depth: u32, out: &mut Vec<NewSite>) {
+    match e {
+        Expr::New {
+            class_name,
+            args,
+            byte_offset,
+            ..
+        } => {
+            push_new_site(out, class_name, RETURN, depth, *byte_offset, true);
+            let arg_ctx = arg_context(class_name);
+            for a in args {
+                scan_expr(a, depth, arg_ctx, out);
+            }
+        }
+        _ => scan_expr(e, depth, RETURNED_OPERAND, out),
+    }
+}
+
+fn push_new_site(
+    out: &mut Vec<NewSite>,
+    class_name: &str,
+    context: &'static str,
+    depth: u32,
+    byte_offset: u32,
+    is_return_position: bool,
+) {
+    out.push(NewSite {
+        display: display_class(class_name),
+        context,
+        loop_depth: depth,
+        ordinal: out.len() as u32,
+        byte_offset,
+        is_return_position,
+    });
+}
+
 fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
     match e {
         // A closure body is its own lowering region; it reports separately.
@@ -704,13 +774,9 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
             byte_offset,
             ..
         } => {
-            out.push(NewSite {
-                display: display_class(class_name),
-                context: ctx,
-                loop_depth: depth,
-                ordinal: out.len() as u32,
-                byte_offset: *byte_offset,
-            });
+            // Never a return position: `scan_return` handles the one expression
+            // that is, and it does not route through here.
+            push_new_site(out, class_name, ctx, depth, *byte_offset, false);
             let arg_ctx = arg_context(class_name);
             for a in args {
                 scan_expr(a, depth, arg_ctx, out);

@@ -73,7 +73,18 @@ fn hotness(e: &Entry) -> String {
 }
 
 /// Human-readable report.
+///
+/// Reads the process-global de-duplication counter. **Tests must use
+/// [`render_text_with`]**: the renderers take a snapshot (`entries`) while that
+/// counter is live, so a test asserting on the "duplicate row(s) collapsed"
+/// line without holding a `test_support::Session` would observe whatever a
+/// concurrently-running collector test last stored.
 pub fn render_text(entries: &[Entry]) -> String {
+    render_text_with(entries, super::masked_by_dedup())
+}
+
+/// [`render_text`] with the de-duplication count supplied explicitly.
+pub fn render_text_with(entries: &[Entry], masked: usize) -> String {
     let mut out = String::new();
     let tallies = tally(entries);
 
@@ -134,7 +145,6 @@ pub fn render_text(entries: &[Entry]) -> String {
         "  {:<16} {total_selected} values unboxed, {total_denied} left Boxed",
         "TOTAL",
     );
-    let masked = super::masked_by_dedup();
     if masked > 0 {
         let _ = writeln!(
             out,
@@ -400,6 +410,15 @@ fn rule_buckets(entries: &[Entry]) -> Vec<JsonRuleBucket<'_>> {
         let slot = out
             .entry((e.analysis.as_str(), rule))
             .or_insert((e.tier, 0));
+        // Rule-to-tier is 1:1 because both come from one `ShapeDenial`
+        // constant — but nothing HERE enforces that, and silently keeping the
+        // first tier seen would let a scheduler-facing bucket mean two things
+        // at once, which is the defect this PR exists to remove. Assert the
+        // invariant rather than resolving it.
+        debug_assert_eq!(
+            slot.0, e.tier,
+            "rule {rule} carries two tiers; the bucket would report only one"
+        );
         slot.1 += 1;
     }
     out.into_iter()
@@ -442,6 +461,12 @@ struct JsonReport<'a> {
 /// builds and catch a representation regression (a `selected` count silently
 /// going to zero — exactly what #7034 found by hand).
 pub fn render_json(entries: &[Entry]) -> String {
+    render_json_with(entries, super::masked_by_dedup())
+}
+
+/// [`render_json`] with the de-duplication count supplied explicitly. See
+/// [`render_text_with`] for why tests use this form.
+pub fn render_json_with(entries: &[Entry], masked: usize) -> String {
     let tallies = tally(entries);
     let report = JsonReport {
         schema_version: SCHEMA_VERSION,
@@ -450,7 +475,7 @@ pub fn render_json(entries: &[Entry]) -> String {
             denied: tallies.values().map(|t| t.denied).sum(),
             consumed: tallies.values().map(|t| t.consumed).sum(),
             unconsumed: tallies.values().map(|t| t.unconsumed).sum(),
-            masked_by_dedup: super::masked_by_dedup(),
+            masked_by_dedup: masked,
             // Enumerate `Analysis::ALL`, not the analyses that happen to have
             // entries: an analysis that recorded nothing must appear with an
             // explicit `0`. A consumer cannot tell an absent key from a zero
@@ -888,7 +913,7 @@ mod r0_bucket_tests {
             ),
             alloc_site("return", SERVED, Tier::Served, 3),
         ];
-        let json: serde_json::Value = serde_json::from_str(&render_json(&entries)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&render_json_with(&entries, 0)).unwrap();
         let buckets = json["summary"]["by_alloc_context"].as_array().unwrap();
         let find = |ctx: &str| {
             buckets
@@ -914,7 +939,7 @@ mod r0_bucket_tests {
             alloc_site("return", SERVED, Tier::Served, 1),
             alloc_site("return", SERVED, Tier::Served, 2),
         ];
-        let json: serde_json::Value = serde_json::from_str(&render_json(&entries)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&render_json_with(&entries, 0)).unwrap();
         let rules = json["summary"]["by_rule"].as_array().unwrap();
         let row = |rule: &str| {
             rules
@@ -933,7 +958,7 @@ mod r0_bucket_tests {
     /// exists because already-shipped mechanisms were being counted there.
     #[test]
     fn a_served_site_renders_under_its_own_heading_not_the_roadmap_one() {
-        let text = render_text(&[alloc_site("return", SERVED, Tier::Served, 0)]);
+        let text = render_text_with(&[alloc_site("return", SERVED, Tier::Served, 0)], 0);
         assert!(
             text.contains("Already served by another mechanism"),
             "got:\n{text}"
@@ -950,7 +975,7 @@ mod r0_bucket_tests {
     #[test]
     fn every_tier_has_a_heading_and_is_rendered() {
         for (i, tier) in Tier::ALL.into_iter().enumerate() {
-            let text = render_text(&[alloc_site("return", RULE1, tier, i as u32)]);
+            let text = render_text_with(&[alloc_site("return", RULE1, tier, i as u32)], 0);
             assert!(
                 text.contains(tier.heading()),
                 "{:?} is not rendered; got:\n{text}",
@@ -963,15 +988,18 @@ mod r0_bucket_tests {
     /// fix, and it must state the position rather than leaving it to prose.
     #[test]
     fn text_reports_the_allocation_positions_as_a_table() {
-        let text = render_text(&[
-            alloc_site("constructor argument", RULE1, Tier::CompilerLimitation, 0),
-            alloc_site(
-                "object literal property value",
-                RULE1,
-                Tier::CompilerLimitation,
-                1,
-            ),
-        ]);
+        let text = render_text_with(
+            &[
+                alloc_site("constructor argument", RULE1, Tier::CompilerLimitation, 0),
+                alloc_site(
+                    "object literal property value",
+                    RULE1,
+                    Tier::CompilerLimitation,
+                    1,
+                ),
+            ],
+            0,
+        );
         assert!(
             text.contains("Unbound allocation sites by position (2)"),
             "got:\n{text}"
@@ -982,6 +1010,26 @@ mod r0_bucket_tests {
         );
     }
 
+    /// The de-duplication count is reported only when it is nonzero, and it is
+    /// supplied explicitly here rather than read from the process-global that
+    /// `render_text` consults — otherwise this ABSENCE assertion would observe
+    /// whatever a concurrently-running collector test last stored.
+    #[test]
+    fn the_masked_row_count_is_printed_only_when_nonzero() {
+        let rows = [alloc_site("return", RULE1, Tier::CompilerLimitation, 0)];
+        assert!(
+            !render_text_with(&rows, 0).contains("collapsed by de-duplication"),
+            "a zero must not print a line"
+        );
+        let text = render_text_with(&rows, 7);
+        assert!(
+            text.contains("7 duplicate row(s) collapsed by de-duplication"),
+            "got:\n{text}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&render_json_with(&rows, 7)).unwrap();
+        assert_eq!(json["summary"]["masked_by_dedup"], 7);
+    }
+
     /// An entry that is not an allocation site contributes to `by_rule` and to
     /// nothing else — the alloc table must not grow rows for ordinary locals.
     #[test]
@@ -990,7 +1038,7 @@ mod r0_bucket_tests {
         local.position = Position::Local;
         local.alloc_context = None;
         local.alloc_ordinal = None;
-        let json: serde_json::Value = serde_json::from_str(&render_json(&[local])).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&render_json_with(&[local], 0)).unwrap();
         assert!(json["summary"]["by_alloc_context"]
             .as_array()
             .unwrap()

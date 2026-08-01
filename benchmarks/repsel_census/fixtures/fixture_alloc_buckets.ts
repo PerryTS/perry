@@ -78,7 +78,20 @@ const boxed = new Boxed(new Point(1, 2));
 // with the line above.
 const nested = { inner: { a: 1, b: 2 }, k: 3 };
 
+// Bucket 4 — a returned expression OPERAND. What this function returns is the
+// conditional, not either allocation, so #7107's return-shape fact covers
+// neither and `pickPoint` gets no fact at all (`producer_return_class` admits
+// only a bare `Expr::New` or a proven local as a return). Before the #7176
+// review both arms inherited the `return` label from `Stmt::Return` and were
+// counted as return positions — which is what over-stated the `return` bucket
+// published on #7170 as R1's ceiling.
+export function pickPoint(flag: boolean): Point {
+  return flag ? new Point(5, 6) : new Point(7, 8);
+}
+
 const p = makePoint(3);
+const q = pickPoint(true);
 console.log(
-  "alloc_buckets:" + (boxed.v.x + nested.inner.a + nested.k + p.x + p.y),
+  "alloc_buckets:" +
+    (boxed.v.x + nested.inner.a + nested.k + p.x + p.y + q.x + q.y),
 );
