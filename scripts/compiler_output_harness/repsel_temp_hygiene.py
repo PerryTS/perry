@@ -69,6 +69,34 @@ DEFAULT_REPEAT = 2
 #: not.
 MAX_REPORTED = 12
 
+#: Every temp name `crates/perry-codegen/src/linker.rs` creates — the `.ll`/`.o`
+#: pair and its scratch directory (`perry_llvm_*`), the multi-codegen-unit
+#: staging objects (`perry_cgu_*`, #5391), and the bitcode-link intermediates
+#: (`perry_bc_*`). This gate's subject is that module's file lifecycle, so it
+#: fails on these and only these.
+#:
+#: Anything else found is REPORTED, loudly, and does not fail: as of #7144 the
+#: compile driver leaks a `perry-objs-<pid>-<nanos>/` staging directory on the
+#: `--no-link` path (`run_pipeline.rs` removes it on both *link* exits and there
+#: is no third one), which is a real defect but a different module's, and a gate
+#: that goes red for someone else's bug gets muted rather than fixed. Widen this
+#: to "nothing at all" once the driver's path is closed.
+OWNED_PREFIXES = ("perry_llvm", "perry_cgu", "perry_bc")
+
+
+def classify(leftovers: list[str]) -> tuple[list[str], list[str]]:
+    """Split leftovers into "this gate's subject" and "somebody else's".
+
+    Classified on the FIRST path component: everything under a leaked scratch
+    directory is leaked by whoever leaked the directory.
+    """
+    owned: list[str] = []
+    other: list[str] = []
+    for rel in leftovers:
+        top = rel.split("/", 1)[0]
+        (owned if top.startswith(OWNED_PREFIXES) else other).append(rel)
+    return owned, other
+
 
 def leftovers_under(root: Path) -> list[str]:
     """Every path under `root`, relative to it, deepest entries first.
@@ -103,23 +131,46 @@ def verdict(
             "no compiles ran, so an empty temp directory proves nothing; "
             "this run checked nothing"
         )
-    if not leftovers:
+    owned, other = classify(leftovers)
+
+    if other:
+        shown = other[:MAX_REPORTED]
         printer(
-            f"Temp directory is clean: {compiles} compile(s) left 0 files behind. "
-            "The #7144 leak is not present."
+            f"Not this gate's subject — {len(other)} entr"
+            f"{'y' if len(other) == 1 else 'ies'} left by a module other than "
+            "perry-codegen's clang driver:"
+        )
+        for name in shown:
+            printer(f"    {name}")
+        if len(other) > len(shown):
+            printer(f"    … and {len(other) - len(shown)} more")
+        printer(
+            "  `perry-objs-<pid>-<nanos>/` is the compile driver's object "
+            "staging dir;\n"
+            "  `run_pipeline.rs` removes it on both *link* exits and `--no-link` "
+            "returns\n"
+            "  before either. Reported, not failed: a gate that goes red for "
+            "another\n"
+            "  module's defect gets muted rather than fixed.\n"
+        )
+
+    if not owned:
+        printer(
+            f"Temp directory is clean: {compiles} compile(s) left 0 clang-driver "
+            "files behind. The #7144 leak is not present."
         )
         return 0
 
-    shown = leftovers[:MAX_REPORTED]
+    shown = owned[:MAX_REPORTED]
     printer(
-        f"TEMP FILES LEAKED: {compiles} compile(s) left {len(leftovers)} "
-        f"entr{'y' if len(leftovers) == 1 else 'ies'} in a temp directory that "
+        f"TEMP FILES LEAKED: {compiles} compile(s) left {len(owned)} "
+        f"entr{'y' if len(owned) == 1 else 'ies'} in a temp directory that "
         "started empty.\n"
     )
     for name in shown:
         printer(f"    {name}")
-    if len(leftovers) > len(shown):
-        printer(f"    … and {len(leftovers) - len(shown)} more")
+    if len(owned) > len(shown):
+        printer(f"    … and {len(owned) - len(shown)} more")
     printer(
         "\n"
         "  This is #7144. The `.ll` handed to `clang -c` is content-addressed\n"
@@ -206,6 +257,24 @@ def self_test(_args: argparse.Namespace) -> int:
     assert verdict(["perry_llvm_2791e842224ea99c.ll"], compiles=52, printer=quiet) == 1
     # An empty scratch directory left behind is the same defect, smaller.
     assert verdict(["perry_llvm_scratch_1a2b_0"], compiles=1, printer=quiet) == 1
+    # …and a file inside one is attributed to whoever leaked the directory.
+    assert verdict(["perry_llvm_scratch_1a2b_0/x.ll"], compiles=1, printer=quiet) == 1
+    for owned in ("perry_cgu_1_2_0.o", "perry_bc_1_2_linked.bc"):
+        assert verdict([owned], compiles=1, printer=quiet) == 1, owned
+
+    # Another module's leftovers are reported, not failed — see OWNED_PREFIXES.
+    assert verdict(["perry-objs-9-1/m.o"], compiles=1, printer=quiet) == 0
+    lines: list[str] = []
+    assert verdict(["perry-objs-9-1/m.o"], compiles=1, printer=lines.append) == 0
+    joined = "\n".join(lines)
+    assert "perry-objs" in joined and "run_pipeline.rs" in joined, joined
+    # A mixture still fails, and the failure is about the owned half.
+    assert verdict(["perry-objs-9-1/m.o", "perry_llvm_a.ll"], compiles=1, printer=quiet) == 1
+
+    assert classify(["perry_llvm_a.ll", "perry-objs-9-1/m.o"]) == (
+        ["perry_llvm_a.ll"],
+        ["perry-objs-9-1/m.o"],
+    )
 
     # A run that compiled nothing finds an empty directory for the wrong
     # reason. It must not be able to report success.
@@ -216,15 +285,19 @@ def self_test(_args: argparse.Namespace) -> int:
     else:  # pragma: no cover - the raise below is the failure report
         raise AssertionError("verdict() called a zero-compile run clean")
 
-    lines: list[str] = []
-    verdict(["a.ll", "b.ll"], compiles=2, printer=lines.append)
+    lines = []
+    verdict(["perry_llvm_a.ll", "perry_llvm_b.ll"], compiles=2, printer=lines.append)
     report = "\n".join(lines)
     for expected in ("#7144", "#7131", "PERRY_DEBUG_SYMBOLS", "linker.rs"):
         assert expected in report, f"failure report must mention {expected}: {report}"
 
     # The truncation must announce itself rather than quietly dropping paths.
     lines = []
-    verdict([f"f{i}.ll" for i in range(MAX_REPORTED + 5)], compiles=1, printer=lines.append)
+    verdict(
+        [f"perry_llvm_{i}.ll" for i in range(MAX_REPORTED + 5)],
+        compiles=1,
+        printer=lines.append,
+    )
     assert "and 5 more" in "\n".join(lines)
 
     print("repsel temp-hygiene self-test OK")
