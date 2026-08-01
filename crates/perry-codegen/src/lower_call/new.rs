@@ -39,6 +39,21 @@ use crate::types::{DOUBLE, I32, I64, I8, PTR};
 /// `ctx.classes`, so a name this returns `false` for never reaches the push and
 /// would leave the scope marker as pure overhead.
 fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    // #7207: an IMPORTED constructor runs user code while leaving no trace in
+    // the local class table — `ctx.classes[class_name].constructor` is `None`
+    // for it. A class that also declares no fields and no heritage therefore
+    // answered `false` here while `lower_new_impl_inner` went on to dispatch
+    // `ctx.imported_class_ctors[class_name]` (its `has_imported_ctor` arm, and
+    // the `Stmt::Return` writer at the tail of this file). That left BOTH
+    // consumers of this predicate unprotected across a real constructor body:
+    // #7192's `instance_root`, and the `this`-slot bind added for #7202.
+    //
+    // Keeping it ONE predicate rather than two is the point — the consumers
+    // have to agree by construction, which is what stops the divergence
+    // #7114's pair of predicates produced.
+    if ctx.imported_class_ctors.contains_key(class_name) {
+        return true;
+    }
     ctx.classes.get(class_name).is_some_and(|class| {
         class.constructor.is_some()
             || !class.fields.is_empty()
