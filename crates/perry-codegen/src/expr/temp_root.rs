@@ -86,6 +86,16 @@ pub(crate) fn temp_root_set_i64(ctx: &mut FnCtx<'_>, idx: &str, value_i64: &str)
         .call_void("js_gc_temp_root_set", &[(I32, idx), (I64, value_i64)]);
 }
 
+/// Overwrite slot `idx` with a new NaN-boxed `double`.
+///
+/// The `Object.assign` accumulator (#7200) is the same shape as the `concat`
+/// one: `js_object_assign_one` returns the target's *post-collection* address,
+/// so each link must republish rather than keep the address it passed in.
+pub(crate) fn temp_root_set_double(ctx: &mut FnCtx<'_>, idx: &str, value: &str) {
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    temp_root_set_i64(ctx, idx, &bits);
+}
+
 /// Drop slot `idx` and everything pushed above it.
 pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
     ctx.block()
@@ -585,6 +595,10 @@ pub(crate) fn temp_root_release(ctx: &mut FnCtx<'_>, guard: Option<String>) {
 /// release of the outer one drops the inner.
 pub(crate) struct StoreOperandGuard {
     slot: Option<String>,
+    /// The operand took [`OperandProtection::Reload`]: no runtime slot, but the
+    /// re-read below the collection point must re-emit the lowering rather than
+    /// reuse the register. See [`reread_store_operand`].
+    reload: bool,
 }
 
 /// Root `lowered` (the already-lowered `operand`) if evaluating `value` can
@@ -597,31 +611,68 @@ pub(crate) fn guard_store_operand(
     value: &Expr,
 ) -> StoreOperandGuard {
     let collects = expr_may_trigger_gc(ctx, value);
-    let slot = match operand_protection(ctx, operand, collects) {
+    guard_store_operand_across(ctx, operand, lowered, collects)
+}
+
+/// [`guard_store_operand`] with the window stated explicitly.
+///
+/// The hazard is not visible from a single sibling expression: a receiver
+/// lowered before both the key and the value is live across *both*, so its
+/// `collects` is the disjunction. Deriving it from the value alone — which is
+/// what every caller did before #7201 — leaves `o[f()] = 1` unguarded, because
+/// the literal `1` cannot collect while `f()` obviously can. This mirrors
+/// [`RootedOperands::push`], whose doc already states that "for `m.set(k, v)`
+/// the receiver's window covers both `key`'s lowering and `value`'s".
+pub(crate) fn guard_store_operand_across(
+    ctx: &mut FnCtx<'_>,
+    operand: &Expr,
+    lowered: &str,
+    collects: bool,
+) -> StoreOperandGuard {
+    let protection = operand_protection(ctx, operand, collects);
+    let slot = match protection {
         OperandProtection::Root => Some(temp_root_push_double(ctx, lowered)),
-        // `Reload` means the operand is a string literal: a registered,
-        // immutable global root, so re-deriving it below the collection point
-        // is exact — and the call sites here re-lower nothing, they simply keep
-        // the register, which for a literal is a load from that same global.
-        // `Reuse` means a proven non-pointer, which relocation cannot touch.
+        // `Reload` emits no runtime call, but it is NOT "keep the register":
+        // [`reread_store_operand`] re-lowers the operand below the collection
+        // point. `Reuse` means a proven non-pointer, which relocation cannot
+        // touch, so its register is genuinely reusable.
         OperandProtection::Reload | OperandProtection::Reuse => None,
     };
-    StoreOperandGuard { slot }
+    StoreOperandGuard {
+        slot,
+        reload: protection == OperandProtection::Reload,
+    }
 }
 
 /// Re-read the operand below the value's evaluation. Returns `lowered`
-/// unchanged when nothing was rooted.
+/// unchanged only when the operand is a proven non-pointer.
+///
+/// # Why `Reload` must re-lower, not reuse (#7201)
+///
+/// Until this was fixed, the `Reload` arm returned the caller's register
+/// unchanged, on the reasoning that "for a literal [the register] is a load
+/// from that same global". It is a load from that global *taken before the
+/// collection point*. A string literal's `__perry_init_strings_*` handle is a
+/// registered root that evacuation **rewrites** — that is the whole content of
+/// #7114 — so the pre-collection register names from-space and the global does
+/// not. Emitting the load again is the entire fix and costs no runtime call.
+///
+/// This now matches [`RootedOperands::reread`], which has always re-lowered its
+/// `Reload` operands. The two helper families answering the same question
+/// differently is exactly the drift that produced #7114.
 pub(crate) fn reread_store_operand(
     ctx: &mut FnCtx<'_>,
     guard: &StoreOperandGuard,
-    recv: &str,
-) -> String {
+    operand: &Expr,
+    lowered: &str,
+) -> anyhow::Result<String> {
     match &guard.slot {
         Some(idx) => {
             let idx = idx.clone();
-            temp_root_get_double(ctx, &idx)
+            Ok(temp_root_get_double(ctx, &idx))
         }
-        None => recv.to_string(),
+        None if guard.reload => super::lower_expr(ctx, operand),
+        None => Ok(lowered.to_string()),
     }
 }
 

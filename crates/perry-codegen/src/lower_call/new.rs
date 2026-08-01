@@ -1107,7 +1107,37 @@ fn lower_new_impl_inner(
     // closures that capture `this`), so hoist to the entry block for
     // dominance safety.
     let this_slot = ctx.func.alloca_entry(DOUBLE);
+    // #7202: this alloca holds the INSTANCE for the whole inlined constructor
+    // body, and every `this` read below is a `load` from it. It is a plain
+    // `alloca_entry` — not a shadow slot, not a temp root — so an evacuating
+    // minor at a field initializer's back-edge poll neither marks nor rewrites
+    // it, and every `this.x = …` after that collection stores into abandoned
+    // from-space memory.
+    //
+    // #7192 rooted the instance for the *caller* (`instance_root` above,
+    // re-read by `reload_instance` at the tail) precisely because this window
+    // collects — so the object survives and MOVES. That made the caller's copy
+    // correct and left this one behind: the same address, taken one line later,
+    // that nothing rewrites. The #7154 comment on `ctor_result_slot` states the
+    // invariant and applies it only to that sibling.
+    //
+    // Reachability is the default, not an opt-in: `force_ctor_call` requires
+    // `class.constructor.is_some()`, so `class C { payload = mk() }` and
+    // `class C extends B {}` take this path with `PERRY_INLINE_CTOR` unset —
+    // and `construction_runs_user_code` (which gates `instance_root`) is true
+    // for exactly those, i.e. the code already asserts this window collects.
+    //
+    // Binding it — rather than routing `Expr::This` through a temp root —
+    // leaves all ~30 `ctx.this_stack.last()` readers untouched: they load from
+    // the alloca, and `js_shadow_slot_bind` makes evacuation rewrite the alloca
+    // in place. The `undefined` seed is required by `root_entry_alloca`'s
+    // contract: the bind is hoisted to entry setup, so the slot is live to the
+    // collector before this store executes.
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    ctx.func
+        .entry_allocas_push_store(DOUBLE, &undef, &this_slot);
     ctx.block().store(DOUBLE, &obj_box, &this_slot);
+    crate::expr::root_entry_alloca(ctx, &this_slot);
     ctx.this_stack.push(this_slot);
     ctx.class_stack.push(class_name.to_string());
 

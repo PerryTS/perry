@@ -544,7 +544,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // exposure the receiver has, one operand over. Root it.
                 let key_guard = super::temp_root::guard_store_operand(ctx, key, &k, init);
                 let v = lower_expr(ctx, init)?;
-                let k = super::temp_root::reread_store_operand(ctx, &key_guard, &k);
+                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
                 // #7154: both lowerings above can collect; re-derive the
                 // receiver from the root rather than reusing the register.
                 let obj = super::temp_root::rooted_handle_get(ctx, &rooted);

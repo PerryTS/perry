@@ -1262,34 +1262,71 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let strict_i32 = if *strict { "1" } else { "0" };
             // #6812 (w12) inline path: evaluation order k → v → t. The
             // target is a pure local read, so hoisting key/value evaluation
-            // above its REGISTER materialization is unobservable — and it
-            // makes the path GC-clean with NO compile-time value gate: a GC
-            // during key/value evaluation happens before the target pointer
-            // exists; a moved key merely misses by stale bits (identity
-            // compare — false negatives only); the store re-checks the
-            // VALUE's tag at runtime and routes reference-creating values
-            // (pointer/string/bigint) to the outlined path.
+            // above its REGISTER materialization is unobservable, and that
+            // ordering is what keeps the TARGET safe — the pointer is
+            // materialized below everything that can collect.
+            //
+            // #7201: the KEY is not covered by that argument, and the comment
+            // that used to sit here claimed it was — "a moved key merely misses
+            // by stale bits (identity compare — false negatives only)". That is
+            // true of the three way-compares and false of everything below
+            // them: the miss falls through to `put.dynic.slow`, which hands the
+            // SAME register to `js_put_value_set_dyn_ic`, which DEREFERENCES it
+            // as a `StringHeader*`. `this.viaBlock = churn()` inside a
+            // `static { … }` block is the shipped shape (#7201): the key
+            // literal's `__perry_init_strings_*` handle is a registered root
+            // that evacuation REWRITES, so the register loaded above `churn()`
+            // names from-space and the slow path reads a relocated string
+            // header — SIGSEGV, or a property under a garbage name.
+            //
+            // An identity-compare-only use is not the only use. Re-derive the
+            // key below the value, exactly as every other store operand does.
             let dyn_inline = same_put_value_receiver_expr(target, receiver)
                 && matches!(target.as_ref(), Expr::LocalGet(_) | Expr::This);
             if dyn_inline {
                 let k = lower_expr(ctx, key)?;
+                let key_guard = super::temp_root::guard_store_operand(ctx, key, &k, value);
                 let v = lower_expr(ctx, value)?;
+                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
                 let t = lower_expr(ctx, target)?;
-                return lower_put_value_dyn_ic_inline(ctx, &t, &k, &v, strict_i32);
+                let result = lower_put_value_dyn_ic_inline(ctx, &t, &k, &v, strict_i32)?;
+                // After the store: the outlined helper allocates while reading
+                // the key (interning, keys-array growth, shape transition).
+                super::temp_root::release_store_operand(ctx, key_guard);
+                return Ok(result);
             }
+            // #7201, outlined arms: `t` is lowered FIRST here, so it is live
+            // across both `k`'s and `v`'s lowering, and `k` across `v`'s. Both
+            // are consumed by helpers that dereference them.
             let t = lower_expr(ctx, target)?;
+            // The receiver's window covers BOTH the key's lowering and the
+            // value's, so its `collects` is the disjunction — `o[f()] = 1` has
+            // an inert value and a collecting key.
+            let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, key)
+                || super::temp_root::expr_may_trigger_gc(ctx, value)
+                || super::temp_root::expr_may_trigger_gc(ctx, receiver);
+            let recv_guard =
+                super::temp_root::guard_store_operand_across(ctx, target, &t, recv_collects);
             let k = lower_expr(ctx, key)?;
+            // Pushed AFTER the receiver's so the two `temp_root_truncate` cuts
+            // nest: a release of the outer one drops the inner.
+            let key_collects = super::temp_root::expr_may_trigger_gc(ctx, value)
+                || super::temp_root::expr_may_trigger_gc(ctx, receiver);
+            let key_guard =
+                super::temp_root::guard_store_operand_across(ctx, key, &k, key_collects);
             let v = lower_expr(ctx, value)?;
             // #6812 (w12): same-receiver dynamic-key stores that failed the
             // inline gate (computed target expressions) still take the
             // outlined 3-way IC helper.
-            if same_put_value_receiver_expr(target, receiver) {
+            let result = if same_put_value_receiver_expr(target, receiver) {
+                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
+                let t = super::temp_root::reread_store_operand(ctx, &recv_guard, target, &t)?;
                 let site_id = ctx.ic_site_counter;
                 ctx.ic_site_counter += 1;
                 let cache_name = format!("perry_ic_{}", site_id);
                 ctx.ic_globals.push(cache_name.clone());
                 let cache_ref = format!("@{}", cache_name);
-                return Ok(ctx.block().call(
+                ctx.block().call(
                     DOUBLE,
                     "js_put_value_set_dyn_ic",
                     &[
@@ -1299,20 +1336,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &v),
                         (I32, strict_i32),
                     ],
-                ));
-            }
-            let r = lower_expr(ctx, receiver)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_put_value_set",
-                &[
-                    (DOUBLE, &t),
-                    (DOUBLE, &k),
-                    (DOUBLE, &v),
-                    (DOUBLE, &r),
-                    (I32, strict_i32),
-                ],
-            ))
+                )
+            } else {
+                // The explicit-receiver form lowers a FOURTH operand, so the
+                // re-reads have to sit below it, not above.
+                let r = lower_expr(ctx, receiver)?;
+                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
+                let t = super::temp_root::reread_store_operand(ctx, &recv_guard, target, &t)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_put_value_set",
+                    &[
+                        (DOUBLE, &t),
+                        (DOUBLE, &k),
+                        (DOUBLE, &v),
+                        (DOUBLE, &r),
+                        (I32, strict_i32),
+                    ],
+                )
+            };
+            // Released after the store: every one of these helpers allocates
+            // while reading the operands.
+            super::temp_root::release_store_operand(ctx, key_guard);
+            super::temp_root::release_store_operand(ctx, recv_guard);
+            Ok(result)
         }
         Expr::ReflectHas { target, key } => {
             downgrade_unknown_call_expr(ctx, target);
