@@ -29,7 +29,8 @@
         "ptr_shape_set": 1,
         "ptr_shape_method": 1
       },
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_ptr_shape_sites",
@@ -61,7 +62,8 @@
         "ptr_shape_update": 1,
         "ptr_shape_method": 1
       },
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_ptr_shape_elements",
@@ -92,7 +94,8 @@
         "class_field_get.shape_proven_load": 1,
         "ptr_shape_set": 2
       },
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_alloc_buckets",
@@ -110,7 +113,7 @@
         "spec-abi-taptr-slot": 0
       },
       "candidates": {
-        "ptr-shape": 6,
+        "ptr-shape": 10,
         "ptr-numarray": 0,
         "canonical-slot": 0,
         "int-valued-ta": 0,
@@ -124,6 +127,13 @@
         "return": 1,
         "constructor argument": 1,
         "object literal property value": 1
+      },
+      "alloc_buckets": {
+        "ptr-shape | return | rule 1 (provenance) \u2014 already served by return-shape": 1,
+        "ptr-shape | constructor argument | rule 1 (provenance)": 1,
+        "ptr-shape | initializer | rule 1 (provenance)": 2,
+        "ptr-shape | object literal property value | rule 1 (provenance)": 1,
+        "ptr-shape | returned expression operand | rule 1 (provenance)": 2
       }
     },
     {
@@ -150,7 +160,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_canonical_slots",
@@ -176,7 +187,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_int_valued_ta",
@@ -202,7 +214,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_spec_abi_taptr",
@@ -228,7 +241,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_loop_bounded_i32",
@@ -254,7 +268,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "fixture_module_init_canonical",
@@ -280,7 +295,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "batch",
@@ -314,6 +330,9 @@
       },
       "alloc_contexts": {
         "return": 1
+      },
+      "alloc_buckets": {
+        "ptr-shape | return | rule 1 (provenance)": 1
       }
     },
     {
@@ -340,7 +359,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_02_loop_overhead",
@@ -366,7 +386,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_03_array_write",
@@ -392,7 +413,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_04_array_read",
@@ -418,7 +440,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_05_fibonacci",
@@ -444,7 +467,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_06_math_intensive",
@@ -470,7 +494,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_07_object_create",
@@ -498,7 +523,8 @@
         "scalar_replaced": 1
       },
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_08_string_concat",
@@ -524,7 +550,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_09_method_calls",
@@ -556,7 +583,8 @@
         "ptr_shape_get_number": 1,
         "ptr_shape_set": 1
       },
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_10_nested_loops",
@@ -582,7 +610,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_11_prime_sieve",
@@ -608,7 +637,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_12_binary_trees",
@@ -636,7 +666,8 @@
         "scalar_replaced": 1
       },
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_13_factorial",
@@ -662,7 +693,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_14_closure",
@@ -688,7 +720,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_15_mandelbrot",
@@ -714,7 +747,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_16_matrix_multiply",
@@ -740,7 +774,8 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     },
     {
       "name": "suite_17_loop_data_dependent",
@@ -766,8 +801,9 @@
       },
       "unconsumed_mechanisms": {},
       "consumption_sites": {},
-      "alloc_contexts": {}
+      "alloc_contexts": {},
+      "alloc_buckets": {}
     }
   ],
-  "generated_at": "2026-08-01T08:24:43.033789Z"
+  "generated_at": "2026-08-01T09:48:17.115667Z"
 }
