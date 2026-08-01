@@ -699,6 +699,14 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     //     from the ioredis class entries. ---
     class("redis", "Redis"),
     method("redis", "createClient", false, None),
+    // --- iovalkey — the Valkey fork of ioredis (valkey-io/iovalkey),
+    //     served by the same perry-ext-ioredis surface. Dispatch
+    //     normalizes `iovalkey` → `ioredis` (see native_module_dispatch.rs),
+    //     so there are no iovalkey rows in NATIVE_MODULE_TABLE; these
+    //     entries exist so the module clears the #513 strict-mode gate
+    //     (module_has_any_entries) and mirror the `redis` alias above. ---
+    class("iovalkey", "Redis"),
+    method("iovalkey", "createClient", false, None),
     // --- date-fns — alias for dayjs (well-known routes both to
     //     perry-ext-dayjs). Surface methods are the date-fns
     //     functional API exposed by the wrapper. ---

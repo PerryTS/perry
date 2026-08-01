@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1989 entries across 120 modules
+// Coverage: 2000 entries across 122 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1934,6 +1934,13 @@ declare module "ioredis" {
   export function createClient(p0: any): any;
 }
 
+declare module "iovalkey" {
+  /** stdlib */
+  export class Redis { [key: string]: any; }
+  /** stdlib */
+  export function createClient(...args: any[]): any;
+}
+
 declare module "iroh" {
   /** stdlib */
   export function bind(...args: any[]): any;
@@ -2184,6 +2191,25 @@ declare module "node-fetch" {
   export class Response { [key: string]: any; }
   /** stdlib */
   export default function (...args: any[]): any;
+}
+
+declare module "node-forge" {
+  /** stdlib */
+  export function certificateFromPem(...args: any[]): any;
+  /** stdlib */
+  export function certificateToPem(...args: any[]): any;
+  /** stdlib */
+  export function create(...args: any[]): any;
+  /** stdlib */
+  export function createCertificate(...args: any[]): any;
+  /** stdlib */
+  export function generateKeyPair(...args: any[]): any;
+  /** stdlib */
+  export function privateKeyFromPem(...args: any[]): any;
+  /** stdlib */
+  export function privateKeyToPem(...args: any[]): any;
+  /** stdlib */
+  export function publicKeyToPem(...args: any[]): any;
 }
 
 declare module "node-pty" {
@@ -3856,6 +3882,8 @@ declare module "tls" {
   export function checkServerIdentity(hostname: any, cert: any): any;
   /** stdlib */
   export function connect(p0: any, p1: any, p2: any, p3: any): any;
+  /** stdlib */
+  export function convertALPNProtocols(protocols: any, out: any): any;
   /** stdlib */
   export function createSecureContext(options: any): any;
   /** stdlib */

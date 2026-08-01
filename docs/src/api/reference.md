@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2899 entries across 122 modules.
+Total: 2917 entries across 124 modules.
 
 ## Modules
 
@@ -50,6 +50,7 @@ Total: 2899 entries across 122 modules.
 - [`inspector`](#inspector)
 - [`inspector/promises`](#inspectorpromises)
 - [`ioredis`](#ioredis)
+- [`iovalkey`](#iovalkey)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
@@ -63,6 +64,7 @@ Total: 2899 entries across 122 modules.
 - [`net`](#net)
 - [`node-cron`](#node-cron)
 - [`node-fetch`](#node-fetch)
+- [`node-forge`](#node-forge)
 - [`node-pty`](#node-pty)
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
@@ -947,6 +949,7 @@ Total: 2899 entries across 122 modules.
 - `remoteAddress` — instance *(class: `Socket`)*
 - `removeListener` — instance *(class: `Socket`)*
 - `send` — instance *(class: `Socket`)*
+- `sendto` — instance *(class: `Socket`)*
 - `setBroadcast` — instance *(class: `Socket`)*
 - `setMulticastInterface` — instance *(class: `Socket`)*
 - `setMulticastLoopback` — instance *(class: `Socket`)*
@@ -1820,6 +1823,16 @@ Total: 2899 entries across 122 modules.
 - `quit` — instance
 - `set` — instance
 
+## `iovalkey`
+
+### Classes
+
+- `Redis`
+
+### Methods
+
+- `createClient` — module
+
 ## `iroh`
 
 ### Methods
@@ -2173,6 +2186,23 @@ Total: 2899 entries across 122 modules.
 ### Methods
 
 - `default` — module
+
+## `node-forge`
+
+### Methods
+
+- `certificateFromPem` — module
+- `certificateToPem` — module
+- `create` — module
+- `createCertificate` — module
+- `generateKeyPair` — module
+- `privateKeyFromPem` — module
+- `privateKeyToPem` — module
+- `publicKeyToPem` — module
+- `setExtensions` — instance *(class: `Certificate`)*
+- `setIssuer` — instance *(class: `Certificate`)*
+- `setSubject` — instance *(class: `Certificate`)*
+- `sign` — instance *(class: `Certificate`)*
 
 ## `node-pty`
 
@@ -3128,6 +3158,7 @@ Total: 2899 entries across 122 modules.
 - `createSession` — instance
 - `createTagStore` — instance *(class: `DatabaseSync`)*
 - `db` — instance *(class: `SQLTagStore`)*
+- `deserialize` — instance
 - `enableDefensive` — instance *(class: `DatabaseSync`)*
 - `enableLoadExtension` — instance
 - `exec` — instance
@@ -3147,6 +3178,7 @@ Total: 2899 entries across 122 modules.
 - `prepare` — instance
 - `run` — instance *(class: `SQLTagStore`)*
 - `run` — instance
+- `serialize` — instance
 - `setAllowBareNamedParameters` — instance
 - `setAllowUnknownNamedParameters` — instance
 - `setAuthorizer` — instance *(class: `DatabaseSync`)*
@@ -3461,6 +3493,7 @@ Total: 2899 entries across 122 modules.
 - `checkServerIdentity` — module
 - `close` — instance *(class: `Server`)*
 - `connect` — module
+- `convertALPNProtocols` — module
 - `createSecureContext` — module
 - `createServer` — module
 - `eventNames` — instance *(class: `Server`)*

@@ -247,6 +247,12 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("sqlite", "@@__perry_wk_dispose", true, None),
     method("sqlite", "exec", true, None),
     method("sqlite", "prepare", true, None),
+    // DatabaseSync.serialize()/deserialize() — dispatched by
+    // js_node_sqlite_database_sync_{serialize,deserialize}. Receiver
+    // methods on the base DatabaseSync instance (no class_filter), so
+    // they mirror the `open`/`close`/`exec`/`prepare` rows above.
+    method("sqlite", "serialize", true, None),
+    method("sqlite", "deserialize", true, None),
     method("sqlite", "function", true, Some("DatabaseSync")),
     method("sqlite", "aggregate", true, Some("DatabaseSync")),
     method("sqlite", "enableDefensive", true, Some("DatabaseSync")),
@@ -534,6 +540,9 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     class("dgram", "Socket"),
     method("dgram", "Socket", false, None),
     method("dgram", "send", true, Some("Socket")),
+    // Socket.sendto() — dispatched by js_dgram_socket_sendto (sibling of
+    // `send`); same Socket-filtered receiver shape.
+    method("dgram", "sendto", true, Some("Socket")),
     method("dgram", "bind", true, Some("Socket")),
     method("dgram", "close", true, Some("Socket")),
     method("dgram", "address", true, Some("Socket")),

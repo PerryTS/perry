@@ -287,19 +287,36 @@ fn every_well_known_binding_has_manifest_entry() {
     let mut missing: Vec<String> = Vec::new();
     for line in toml.lines() {
         let line = line.trim();
-        // `[bindings.<name>]` or `[bindings."<name>">]` (quoted form
-        // used for names with `/` or `.`).
+        // `[bindings.<name>]` or `[bindings."<name>"]` (quoted form used
+        // for names with `/` or `.`).
         let Some(rest) = line.strip_prefix("[bindings.") else {
             continue;
         };
         let Some(name_with_bracket) = rest.strip_suffix(']') else {
             continue;
         };
-        // Strip optional surrounding double quotes.
-        let name = name_with_bracket
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .unwrap_or(name_with_bracket);
+        // Skip nested sub-tables like `[bindings.<name>.upstream]` — those
+        // carry per-binding provenance metadata (version/sha256/repo), not
+        // a routed module name. Only the bare top-level `[bindings.<name>]`
+        // header names a module the unimplemented-API gate must cover.
+        let name = if let Some(after_open_quote) = name_with_bracket.strip_prefix('"') {
+            // Quoted key such as `"decimal.js"`. A top-level binding header
+            // ends immediately after the closing quote; anything trailing
+            // (`"decimal.js".upstream`) is a sub-table.
+            let Some((inner, trailing)) = after_open_quote.split_once('"') else {
+                continue; // malformed / not a plain `[bindings."..."]` header
+            };
+            if !trailing.is_empty() {
+                continue; // sub-table of a quoted binding key
+            }
+            inner
+        } else {
+            // Bare key. A dotted path (`dotenv.upstream`) is a sub-table.
+            if name_with_bracket.contains('.') {
+                continue;
+            }
+            name_with_bracket
+        };
         if SIDE_EFFECT_ONLY.contains(&name) {
             continue;
         }
