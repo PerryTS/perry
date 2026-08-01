@@ -799,45 +799,7 @@ pub(crate) struct Denial<'a> {
 /// `detail` costs anything: the arguments are evaluated before this function
 /// can early-return.
 pub(crate) fn deny(d: Denial<'_>) {
-    if !enabled() {
-        return;
-    }
-    let (module, function, region, per_element) = SCOPE.with(|s| match s.borrow().as_ref() {
-        Some(sc) => (
-            sc.module.clone(),
-            sc.function.clone(),
-            sc.region,
-            sc.invoked_per_element.clone(),
-        ),
-        None => (
-            String::from("<unknown>"),
-            String::from("<unknown>"),
-            RegionKind::Function,
-            None,
-        ),
-    });
-    push(Entry {
-        module,
-        function,
-        region,
-        position: d.position,
-        name: d.name.to_string(),
-        local_id: d.local_id,
-        analysis: d.analysis,
-        outcome: Outcome::Denied,
-        rep: String::from("Boxed"),
-        rule: Some(d.rule.to_string()),
-        reason: Some(d.reason.to_string()),
-        tier: Some(d.tier),
-        issue: d.issue.map(str::to_string),
-        loop_depth: d.loop_depth,
-        invoked_per_element: per_element,
-        detail: d.detail,
-        byte_offset: d.byte_offset,
-        site: None,
-        alloc_context: None,
-        alloc_ordinal: None,
-    });
+    deny_in_scope(d, None, None);
 }
 
 /// [`deny`] for a [`Position::AllocSite`] row, carrying the two fields that
@@ -851,6 +813,16 @@ pub(crate) fn deny_alloc(d: Denial<'_>, alloc_context: &str, alloc_ordinal: u32)
     if !enabled() {
         return;
     }
+    deny_in_scope(d, Some(alloc_context.to_string()), Some(alloc_ordinal));
+}
+
+/// The one body behind [`deny`] and [`deny_alloc`]: build a `Denied` entry from
+/// the ambient scope. Kept single so the two entry points cannot drift in what
+/// they attribute.
+fn deny_in_scope(d: Denial<'_>, alloc_context: Option<String>, alloc_ordinal: Option<u32>) {
+    if !enabled() {
+        return;
+    }
     let (module, function, region, per_element) = SCOPE.with(|s| match s.borrow().as_ref() {
         Some(sc) => (
             sc.module.clone(),
@@ -884,8 +856,8 @@ pub(crate) fn deny_alloc(d: Denial<'_>, alloc_context: &str, alloc_ordinal: u32)
         detail: d.detail,
         byte_offset: d.byte_offset,
         site: None,
-        alloc_context: Some(alloc_context.to_string()),
-        alloc_ordinal: Some(alloc_ordinal),
+        alloc_context,
+        alloc_ordinal,
     });
 }
 
