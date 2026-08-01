@@ -151,9 +151,38 @@ date = "2026-07-30"
 crate = "perry-ext-lru-cache"
 lib = "perry_ext_lru_cache"
 tracking = "#466"
-# PARTIAL (explicit): the wrapper's store is numeric-value-oriented and
-# does not faithfully reproduce lru-cache's full generic/option surface.
-# Kept off the auto-prefer faithful path until the port is completed.
+# PARTIAL (explicit) — but NOT for the reason this comment used to give.
+#
+# The old wording ("the wrapper's store is numeric-value-oriented") went
+# stale when #7136 landed: the store holds real JS keys and values, string
+# keys hash and compare by CONTENT, cached heap values are registered GC
+# roots (marked and rewritten across copying evacuation), and `ttl` /
+# `updateAgeOnGet` follow npm's clock semantics. A 20-assertion probe of
+# real-world usage — string keys, object values, object identity, mutation
+# through the cached reference, overwrite, size, delete, clear, miss,
+# has, eviction at max, get-promotes / peek-does-not, numeric values, ttl,
+# and object survival across forced heap churn — prints IDENTICAL output
+# under npm `lru-cache@11.5.2` on Node 26.5.0 and under this binding.
+#
+# It stays `partial` because `full` is a stronger claim than "faithful for
+# what it implements": per docs/src/native-libraries/zero-config-and-
+# faithfulness.md it means an exhaustively audited drop-in for the pinned
+# package's ENTIRE public API, and it licenses auto-preferring this wrapper
+# over a user's installed `node_modules/lru-cache`. This wrapper exports 8
+# entry points and does not cover `maxSize`/`sizeCalculation`,
+# `dispose`/`disposeAfter`, `fetch`/`forceFetch`, `allowStale`, per-call
+# `set`/`get` option objects, or the iterator / `forEach` / `entries` /
+# `keys` / `values` surface (the ABI only carries `(key, value)`).
+#
+# Two of those gaps fail SILENTLY rather than loudly, which is precisely
+# what the marker exists to prevent: measured against the same probe,
+# `cache.forEach(...)` visits nothing (npm visits every entry) and a
+# `dispose` callback is never invoked (npm invokes it on eviction). Both
+# print a wrong answer instead of throwing, so a `full` marker here would
+# let Perry silently substitute this wrapper for a correct installed copy.
+# Promote to `full` only once those surfaces exist and are conformance-
+# tested; until then `PERRY_REQUIRE_FAITHFUL_BINDINGS=1` refusing this
+# binding is the correct outcome, not a false positive.
 compat = "partial"
 
 [bindings.lru-cache.upstream]
