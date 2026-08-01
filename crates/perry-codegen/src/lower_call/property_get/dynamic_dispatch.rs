@@ -78,6 +78,20 @@ fn tower_pshape_route(
 /// whole analysis down is module-scoped while a receiver can be deleted from
 /// through an alias in another module (#7143), so a static proof would be
 /// exactly the wrong instrument here.
+///
+/// GC ordering invariant: `recv_handle` is the raw pointer masked out of the
+/// receiver in `idispatch.tower`, and the header loads below dereference it.
+/// That is only safe because **nothing between the mask and this point is a
+/// safepoint**: the only allocating thing a case block can emit before the call
+/// is the rest-array bundling (`js_array_alloc` / `js_array_push_f64`), and a
+/// rest-bearing method can never reach here — `collectors/proven_this.rs`
+/// rejects any method with a rest or synthesized-`arguments` parameter, so no
+/// clone exists for one and `tower_pshape_route` returns `None`. The non-rest
+/// preamble emits no instructions at all (already-lowered SSA values plus
+/// `undefined` literals). If a future change makes the case preamble allocate,
+/// this dereference must move above it — the `GC_FLAG_FORWARDED` conjunct would
+/// degrade a moved receiver to the generic path rather than misread it, but
+/// relying on that instead of on the ordering would be luck, not a proof.
 fn emit_tower_pshape_call(
     ctx: &mut FnCtx<'_>,
     case_no: usize,
