@@ -204,6 +204,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // Resolve through any scope-local class rename so `new X` binds to
             // the lexically-correct (possibly disambiguated) class.
             let mut class_name = ctx.resolve_class_name(ident.sym.as_str());
+            // Global constructor aliases such as Zod's `const F = Function`
+            // retain the Function constructor identity. Treat only aliases
+            // explicitly tracked from globalThis.Function as intrinsic; an
+            // arbitrary local named F remains an ordinary user value.
+            let function_alias = ctx.resolve_class_alias(&class_name).as_deref() == Some("Function");
+            if function_alias {
+                class_name = "Function".to_string();
+            }
             // Snapshot the callee identifier's local/param binding at the TOP
             // of the ident arm, before any argument lowering or native-module
             // probing below runs. Two distinct hazards make a later lookup
@@ -269,6 +277,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // sibling `class X` declared later in the same function body
             // (pre-registered by the Phase-1.5 scan but not yet lowered).
             let shadowed_by_user_binding = !force_global_intrinsic
+                && !function_alias
                 && (ctx.lookup_class(&class_name).is_some()
                     || callee_local_at_entry.is_some()
                     || ctx.lookup_func(&class_name).is_some()
@@ -602,17 +611,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         new_expr.span,
                     )? {
                         crate::eval_classifier::EvalDecision::Proceed => {}
-                        // #6559: a runtime-constructed body now EVALUATES —
-                        // fall through to `Expr::New { "Function" }`, which
-                        // codegen routes to `js_function_ctor_from_strings`
-                        // (the perry-runtime dyn-eval interpreter). The site
-                        // stays recorded for the end-of-compile notice, and
-                        // strict-eval mode already refused inside
-                        // `check_site` before this arm can be reached. The
-                        // interpreter throws its own precise error (parse
-                        // SyntaxError / named unsupported-construct
-                        // TypeError) if the generated source is beyond it —
-                        // still catchable, still located, never a crash.
                         crate::eval_classifier::EvalDecision::DeferToRuntimeError(_message) => {}
                     }
                 }

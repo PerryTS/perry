@@ -109,6 +109,20 @@ impl EvalBucket {
 /// build-time-knowable — later phases evaluate them at build time.
 pub const KNOWN_CODEGEN_PACKAGES: &[&str] = &["fast-json-stringify", "ajv", "find-my-way"];
 
+/// #6559 companion: KnownLibraryCodegen sites (ajv, fast-json-stringify,
+/// find-my-way) also need the dyn-eval interpreter at runtime until their
+/// build-time evaluation phases (#1680/#1681/#1682) ship. Track them in a
+/// deferred-style sink so the auto-optimizer can include `dyn-eval`.
+static KNOWN_CODEGEN_SITE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether this compile contains at least one KnownLibraryCodegen site.
+/// The auto-optimizer consults this alongside [`has_deferred_dynamic_code_sites`]
+/// to decide whether to include the `dyn-eval` interpreter.
+pub fn has_known_codegen_sites() -> bool {
+    KNOWN_CODEGEN_SITE_COUNT.load(std::sync::atomic::Ordering::Relaxed) > 0
+}
+
+
 /// A classified `eval`/`Function` call site plus its provenance. Pure data
 /// — the lowering site decides whether to refuse based on [`Self::bucket`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -611,6 +625,13 @@ pub fn check_site(
 ) -> anyhow::Result<EvalDecision> {
     let classification = classify(surface, body_arg, source_file_path, span.lo.0);
     report(&classification);
+    // #6559 companion: track KnownLibraryCodegen sites so the auto-optimizer
+    // includes the dyn-eval interpreter even when no deferred (bucket-3) sites
+    // exist. Without this, ajv/fast-json-stringify/find-my-way binaries link
+    // without the interpreter and throw at the first new Function() call.
+    if classification.bucket == EvalBucket::KnownLibraryCodegen {
+        KNOWN_CODEGEN_SITE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     if !classification.is_refused() {
         return Ok(EvalDecision::Proceed);
     }

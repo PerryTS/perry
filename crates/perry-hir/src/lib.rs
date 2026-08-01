@@ -48,8 +48,9 @@ pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;
 pub use eval_classifier::{
     check_unimplemented_api, classify as classify_eval_surface, has_deferred_dynamic_code_sites,
-    location_string, record_deferred_aot_site, set_eval_strict_mode, set_unimplemented_strict_mode,
-    take_deferred_eval_sites, DeferredEvalSite, EvalBucket, EvalClassification, EvalDecision,
+    has_known_codegen_sites, location_string, record_deferred_aot_site, set_eval_strict_mode,
+    set_unimplemented_strict_mode, take_deferred_eval_sites, DeferredEvalSite, EvalBucket,
+    EvalClassification, EvalDecision,
     EvalSurface, UnimplementedDecision, UNIMPLEMENTED_API_KIND,
 };
 pub use ir::*;

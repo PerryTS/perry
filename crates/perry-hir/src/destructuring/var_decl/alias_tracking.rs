@@ -218,7 +218,8 @@ pub(crate) fn track_decl_aliases(
             } if is_global_this_value(ctx, object.as_ref())
                 && matches!(
                     property.as_str(),
-                    "URL"
+                    "Function"
+                        | "URL"
                         | "URLSearchParams"
                         | "TextEncoder"
                         | "TextDecoder"

@@ -104,7 +104,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|knowngen={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -136,6 +136,7 @@ pub(crate) fn auto_optimized_cache_key(
         // #6559: dyn-eval presence changes the built archive, so it must
         // key the freshness stamp like every other runtime feature toggle.
         perry_hir::has_deferred_dynamic_code_sites(),
+        perry_hir::has_known_codegen_sites(),
         format!(
             "{}{}{}",
             size_opt_level().unwrap_or("off"),
@@ -256,7 +257,9 @@ pub(crate) fn auto_optimized_cross_features(
     // interpreter. The generated code of the schema-codegen ecosystem (ajv)
     // also leans on regex literals (`key.replace(/~/g, …)`), so the regex
     // engine rides along even when the program's own source never uses one.
-    if perry_hir::has_deferred_dynamic_code_sites() {
+    let has_dyn_eval = perry_hir::has_deferred_dynamic_code_sites();
+    let has_known = perry_hir::has_known_codegen_sites();
+    if has_dyn_eval || has_known {
         cross_features.push("perry-runtime/dyn-eval".to_string());
         if !ctx.uses_regex {
             cross_features.push("perry-runtime/regex-engine".to_string());
