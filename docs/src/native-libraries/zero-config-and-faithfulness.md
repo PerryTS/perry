@@ -8,10 +8,11 @@ to a maintainer rather than flipped unilaterally.
 
 ## Background: the friction we set out to remove
 
-Socket Firewall compiled its CLIs with two hand-maintained workarounds:
+A downstream command-line application compiled its CLIs with two
+hand-maintained workarounds:
 
 1. it kept a `perry.compilePackages` list of every AOT-compiled dependency, and
-2. its `scripts/build-perry.ts` physically moved
+2. its build script physically moved
    `node_modules/{undici,node-forge,iovalkey,dotenv}` aside for the duration
    of each `perry compile`, because a bare `node_modules/<name>` copy used to
    shadow perry's bundled binding and trip the V8-free "JavaScript runtime"
@@ -44,9 +45,9 @@ Resolution precedence for a bare `import 'X'` is documented at the top of
 `main` **all four already resolve to their bundled bindings even when a
 `node_modules/<name>` copy is present** — verified empirically (`Found N
 module(s): N native, 0 JavaScript`, no error, no `node_modules` move). The
-"binding gets shadowed" problem the firewall offload worked around is already
-gone. Firewall's offload dance and its omission of these packages from
-`compilePackages` are now **stale** (see the firewall cleanup section).
+"binding gets shadowed" problem that offload worked around is already gone.
+That offload dance, and omitting these packages from `compilePackages`, are
+now **stale** (see the cleanup section below).
 
 That reframes the original ask. The literal "convert today's hard error into a
 working binding build" is already the behavior for anything in `NATIVE_MODULES`
@@ -90,7 +91,7 @@ byte-identical):
    hard error — perry refuses to auto-prefer a `partial` binding over an
    installed copy. This is the provable "an unfaithful binding does *not*
    silently win" behavior; it is **off by default** so nothing currently
-   relying on a partial binding (firewall included) breaks.
+   relying on a partial binding breaks.
 
 ## Landed: auto-compile is the default
 
@@ -122,12 +123,12 @@ user's real `node_modules` copy silently. The conservative alternative is to
 make `PERRY_REQUIRE_FAITHFUL_BINDINGS` behavior the **default** — a partial
 binding would error unless the user opts into either the binding or
 `compilePackages`. That is *safer* (no silent subset substitution) but **would
-break Socket Firewall today**, because firewall depends on the `undici` and
-`node-forge` bindings being auto-preferred and those wrappers are, by design,
-subsets. So the two cannot both be true at once:
+break downstream consumers today**, because a dependent application can rely on
+the `undici` and `node-forge` bindings being auto-preferred, and those wrappers
+are, by design, subsets. So the two cannot both be true at once:
 
-> "the four firewall packages just work with zero config" **and** "a partial
-> binding refuses to auto-prefer"
+> "the four natively-shimmed packages just work with zero config" **and** "a
+> partial binding refuses to auto-prefer"
 
 are mutually exclusive while `undici`/`node-forge` remain `partial`. The honest
 paths forward are: (a) keep auto-prefer-with-note as the default (current
@@ -147,27 +148,25 @@ allowlist. The V8-free gate is retained only as an opt-in constraint
 (`compilePackages: []` / an explicit array) and for genuinely unsupported
 situations, not for "unlisted".
 
-Possible future layer (not built): perry could integrate `socket-sdk-js` to
-**warn** about known-malicious packages during compile — a telemetry/warning
-layer, never a build-blocking gate.
+Possible future layer (not built): perry could integrate a package-advisory
+data source to **warn** about known-malicious packages during compile — a
+telemetry/warning layer, never a build-blocking gate.
 
-## Firewall cleanup this unblocks
+## Workarounds this removes for dependent projects
 
-Once firewall builds against a perry with these changes, its perry config
+Once a project builds against a perry with these changes, its perry config
 collapses to **nothing**:
 
-- delete the `node_modules` offload/restore dance in `scripts/build-perry.ts`
-  (the `bindingServed` array, `offload()`, `restore()`) — the four packages
-  resolve to bindings on their own (they are in `NATIVE_MODULES`), so no
-  relocation is needed; call `perry compile` directly;
+- delete any `node_modules` offload/restore dance from the project's build
+  script — the natively-shimmed packages resolve to bindings on their own (they
+  are in `NATIVE_MODULES`), so no relocation is needed; call `perry compile`
+  directly;
 - delete the entire `perry` block from `package.json` — both
-  `perry.compilePackages` (`git-up`, `git-url-parse`, `is-ssh`, `lodash`,
-  `lru-cache`, `node-machine-id`, `parse-path`, `parse-url`, `protocols`,
-  `zod`) and the mirrored `perry.allow.compilePackages`. Under auto-compile
-  those reachable deps compile with no list;
+  `perry.compilePackages` and the mirrored `perry.allow.compilePackages`. Under
+  auto-compile the reachable deps compile with no list;
 - expect the informational per-package note for `undici` / `node-forge` /
   `iovalkey` (all `partial` bindings). It is not an error. Note that
   `lru-cache` is marked `partial` on this base (its faithful port, #7136, is
   not yet in `main`); once #7136 lands its covered option surface can move to
-  `full`. If firewall would rather compile the real `lru-cache` JS than use the
-  binding, list just `lru-cache` in `compilePackages`.
+  `full`. A project that would rather compile the real `lru-cache` JS than use
+  the binding can list just `lru-cache` in `compilePackages`.
