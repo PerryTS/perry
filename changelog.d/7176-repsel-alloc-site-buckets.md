@@ -1,9 +1,10 @@
 **`--opt-report`: the `Ptr<Shape>` allocation-site buckets now mean what they
-are read as (#7170 R0).** Report-only — emitted LLVM IR is identical in both
-arms over 30 dependency modules, each with a same-compiler control run, with
-both arms run *under* `--opt-report` (the only mode in which any of this code
-executes). Three defects, each of which made a scheduler-facing number say
-something other than what it looked like:
+are read as (#7170 R0).** Report-only — emitted LLVM IR is identical across the
+**29 dependency modules that emit IR** out of 30 sampled (the 30th fails to
+compile identically in both arms), each with a same-compiler control run, both
+arms run *under* `--opt-report` — the only mode in which any of this code
+executes — and both built from one pinned commit. Four defects, each of which
+made a scheduler-facing number say something other than what it looked like:
 
 - **De-duplication was masking rows, by a factor of 2.2.** Every anonymous
   object literal renders as `object literal { ... }` and carries
@@ -27,6 +28,14 @@ something other than what it looked like:
   `return new C(...)` as a producer, but `deny_alloc_site` fires before any
   seeding. Those sites now carry their own rule string and a new `Tier::Served`
   so they leave the rule-1 bucket rather than inflating it.
+- **`return` was a *label propagated down a subtree*, not a position.** It was
+  set once at `Stmt::Return` and inherited by everything nested inside the
+  returned expression, so `return cond ? {a} : {b}`, `return flag && {a}`,
+  `return await {a}` and `return {a}.x` all counted as return positions.
+  `scan_return` is now the only producer of a return position, servedness reads
+  `NewSite::is_return_position` rather than comparing a label (so renaming a
+  bucket cannot silently disable it), and nested allocations get their own
+  bucket, `returned expression operand`.
 
 The buckets are computed by the compiler (`summary.by_rule`,
 `summary.by_alloc_context`) instead of being reconstructed downstream, which is
@@ -41,16 +50,18 @@ are in a `function` region at all; 1711 (92.9 %) are in closures, which cannot
 carry a return-shape fact. The instrument's real distortion was the dedup, and
 it ran the other way: the wall is larger than reported, not smaller.
 
-Census: `alloc_contexts` per workload (context, never gated), plus
-`ALLOC_BUCKET_FLOORS` and `ALLOC_RULE_FLOORS` held in code and
-`fixture_alloc_buckets.ts` written to land one allocation in each bucket. The
-rule floor is the only layer that can catch the served-return wiring dying —
-it lives in `codegen/function.rs`, and every compiler unit test sets the report
-scope by hand. No existing census floor moved and no existing workload's
-candidate count moved: the distortion is invisible on hand-written benchmarks
-and doubles the row count on real dependency JS, which is why it survived.
+Census: `alloc_buckets` per workload keyed by the full `(analysis, allocation
+position, denial rule)` tuple — the same identity the renderer uses, so the two
+cannot describe different things — recorded as context and floored in code via
+`ALLOC_BUCKET_FLOORS`, with `fixture_alloc_buckets.ts` written to land one
+allocation in each bucket. The served row is the only layer that can catch the
+wiring dying: it lives in `codegen/function.rs`, and every compiler unit test
+sets the report scope by hand. No existing census floor moved and no existing
+workload's candidate count moved: the distortion is invisible on hand-written
+benchmarks and doubles the row count on real dependency JS, which is why it
+survived.
 
-Still open, measured but deliberately not fixed here: `statement` is now the
+Still open, measured but deliberately not fixed here: `statement` is the
 largest bucket (455 of 1842, 24.7 %) and is a **catch-all** — the report walk's
 default context, holding property stores, reassignments, conditional branches
 and default parameters indistinguishably.
