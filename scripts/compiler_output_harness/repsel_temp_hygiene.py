@@ -37,9 +37,12 @@ Two design notes, because both alternatives were tried and are wrong:
   process on the box — on a machine running several compiles at once, that is
   noise large enough to swamp the signal in either direction.
 
-The `PERRY_DEBUG_SYMBOLS` layout is deliberately exempt: under `-g` the object's
-DWARF names the `.ll` by absolute path, so the file has to outlive the compile.
-This check runs without it, which is how every other gate compiles too.
+`PERRY_DEBUG_SYMBOLS` is *not* exempt, though it was going to be. `-g` was
+documented as putting the `.ll`'s absolute path into DWARF; measured on a real
+Perry module it emits no DWARF at all (Perry's codegen produces no DI metadata,
+and `clang -g` on a `.ll` lowers what the IR already has rather than
+synthesising a compile unit). One layout, no exemption — see
+`debug_symbols_do_not_change_what_the_object_records`.
 """
 
 from __future__ import annotations
@@ -187,9 +190,9 @@ def verdict(
         "  the basename inside it stays a pure function of the IR so\n"
         "  `census-determinism` keeps passing.\n"
         "\n"
-        "  Exempt by design: `PERRY_DEBUG_SYMBOLS` builds keep their `.ll` —\n"
-        "  the object's DWARF names it by absolute path. If this fired under\n"
-        "  `-g`, that is the expected behaviour and not this gate's business."
+        "  `PERRY_DEBUG_SYMBOLS` is not an exemption: measured, `-g` emits no\n"
+        "  DWARF from a Perry `.ll` at all, so nothing records where the file\n"
+        "  was and nothing needs to outlive the compile."
     )
     return 1
 

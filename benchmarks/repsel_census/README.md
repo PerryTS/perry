@@ -319,13 +319,27 @@ changing it:
 * **The `TMPDIR` isolation is load-bearing**, not politeness. Counting entries
   in the shared system temp dir measures every other process on the box.
 
-Exempt on purpose: under `PERRY_DEBUG_SYMBOLS` clang gets `-g` and puts the
-`.ll`'s **absolute** path into DWARF, so those builds keep their `.ll` at a
-stable, content-addressed path in the temp root — deleting it would ship debug
-info pointing at a file that no longer exists. That layout is bounded by
-distinct IR compiled with `-g`, and `debug_symbols_layout_and_g_flag_agree` pins
-the two halves of the decision together so a future edit cannot delete a file
-DWARF still names.
+No exemption for `PERRY_DEBUG_SYMBOLS`, and that is a change of belief rather
+than a change of policy. `-g` was documented as pulling the `.ll`'s **absolute**
+path plus `DW_AT_comp_dir` into DWARF, which would have made the file part of
+the shipped object and forced it to persist. Measured on a real Perry module
+(Apple clang 21, `-target x86_64-unknown-linux-gnu` and
+`aarch64-unknown-linux-gnu`): the `-g` object is **byte-identical** to the one
+without it and has **no `.debug_*` sections at all**. Perry's codegen emits no
+`DICompileUnit`/`DIFile`/`!dbg` metadata, and `clang -g` on a `.ll` lowers debug
+info that is already in the IR rather than synthesising a compile unit for the
+input file. So there is one layout, not two, and
+`debug_symbols_do_not_change_what_the_object_records` in
+`linker_temp_lifecycle_tests.rs` goes red the day that stops being true. (Not
+measured on COFF/Windows.)
+
+That test has a sibling worth knowing about:
+`the_ll_directory_is_not_recorded_in_the_object_but_the_basename_is` compiles
+one `.ll` under the same basename from two different directories, for both
+Linux ELF targets, and asserts the objects are identical — with a control that
+a *different* basename does change them. That is the property this whole
+directory rests on, and until #7144 it lived only in a comment and a hand
+measurement taken once on a Raspberry Pi.
 
 ## Editing the fixtures
 
