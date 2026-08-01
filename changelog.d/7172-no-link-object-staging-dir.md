@@ -34,6 +34,20 @@ Two structural changes rather than a third `remove_dir`:
   actually wrote, so `-o` does not mean two different things depending on
   whether the object cache was warm. Bitcode-link mode emits `.ll`, never
   takes `-o` verbatim.
+
+  Both object-cache paths had to be closed for that last property to be true.
+  A cold *store* and a warm *hit* each handed back the cache entry's path
+  (`Stored cached object:` / `Reused cached object:`) instead of the object the
+  user asked for, so `-o` went unwritten with the cache on. Harmless when
+  linking — the linker is the only reader — but not for `--no-link`. A hit now
+  copies the cached object out to the destination (copy, not hand back the
+  path: the cache entry is shared with every other build and must not become an
+  output the user may overwrite); a store keeps storing, so later builds still
+  hit, but falls through to write the object it just produced. Both report
+  `Wrote object file`, which also means the census harness's
+  `_written_objects` — which scrapes exactly those lines — sees a warm-cache
+  compile at all instead of finding no objects. Verified: cold and warm both
+  write `-o`, byte-identical.
 * **When linking, the staging directory is removed by `Drop`** (new
   `crates/perry/src/commands/compile/object_staging.rs`), so both link exits,
   the static-archive exit and every `?` in between clean up through one site.
