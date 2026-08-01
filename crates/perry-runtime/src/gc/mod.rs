@@ -50,6 +50,11 @@ mod malloc;
 pub use malloc::*;
 mod roots;
 pub use roots::*;
+/// #7148: the census of conservative-scan fallbacks and the precise-safepoint
+/// drains that replace them. Declared next to `roots` because
+/// `ManualGcScanGuard` is what records into it.
+mod scan_fallback;
+pub(crate) use scan_fallback::*;
 // The one decoder shared by the mark, rewrite and incremental-barrier paths
 // for words that may hold a heap reference (#6910). Declared before its
 // consumers for readability only — Rust module order is irrelevant.
@@ -322,6 +327,23 @@ fn gc_collect_emergency_full() -> GcCollectOutcome {
 /// alloc-point direct arm forces it: this runs at an arbitrary allocation
 /// site where locals of the current call chain may not be spilled to
 /// shadow slots.
+///
+/// ★ #7148 disposition: **keep, justified, observable.** This is the one site
+/// that provably cannot defer to a precise safepoint. Deferral trades a
+/// collection now for a collection at the next safepoint, and this path is
+/// entered only after a heap allocation has *already failed*: the caller's
+/// next act is to panic, so there is no "next safepoint" to defer to — the
+/// program does not survive to reach one. The pressure-spike question the
+/// other sites must answer is therefore vacuous here; the spike has already
+/// happened and this is the response to it.
+///
+/// It is instead made *measurable* (`ConservativeScanSite::EmergencyReclaim`
+/// + a `PERRY_GC_DIAG` line), so "emergency reclaim never fires in practice"
+/// stops being an assumption. The long-term plan for this site is the
+/// statepoint work (`docs/statepoint-gc-experiment.md`): with native stack
+/// maps a precise root set exists at *any* mapped PC, so an OOM-time
+/// collection would not need the scan at all. That is the only mechanism that
+/// removes this site, and it is not a deferral.
 pub(crate) fn gc_try_emergency_reclaim() -> bool {
     thread_local! {
         static IN_EMERGENCY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -333,7 +355,8 @@ pub(crate) fn gc_try_emergency_reclaim() -> bool {
         return false;
     }
     IN_EMERGENCY.with(|c| c.set(true));
-    let _scan = roots::ManualGcScanGuard::force_full_scan();
+    let _scan =
+        roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::EmergencyReclaim);
     let _ = gc_collect_emergency_full();
     IN_EMERGENCY.with(|c| c.set(false));
     true

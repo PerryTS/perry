@@ -216,12 +216,22 @@ pub(crate) fn set_conservative_stack_scan_override(
 /// hold only as native-stack locals), and an explicit
 /// `PERRY_CONSERVATIVE_STACK_SCAN` env value beats any override either way,
 /// so the bisection escape hatch keeps working.
+///
+/// ★ #7148: engaging this guard is *expensive*, not merely imprecise — the
+/// conservative scan makes the copying minor ineligible
+/// (`CopiedMinorFallbackReason::ConservativeStack`), so the cycle it covers
+/// runs no copying minor at all (`benchmarks/gc_ratchet/README.md`:
+/// `heap_used_bytes` +364%..+5371%, `minor_cycles` → 0 on all eight probes).
+/// Every callsite therefore declares which of the six sites it is and is
+/// counted in `super::scan_fallback`, so "this never fires in practice" is a
+/// measurement instead of an assumption.
 pub(super) struct ManualGcScanGuard {
     engaged: bool,
 }
 
 impl ManualGcScanGuard {
-    pub(super) fn force_full_scan() -> Self {
+    pub(super) fn force_full_scan(site: super::ConservativeScanSite) -> Self {
+        super::record_scan_fallback(site);
         let engaged = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| {
             if c.get().is_some() {
                 return false;
@@ -244,10 +254,43 @@ impl Drop for ManualGcScanGuard {
 pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
     // Explicit env var wins (so the dedicated mode tests and ops bisection keep
     // working), then a per-thread override, then the build-time default.
-    if let Ok(value) = std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
-        return conservative_stack_scan_mode_from_value(Some(&value));
+    let env_mode = std::env::var("PERRY_CONSERVATIVE_STACK_SCAN")
+        .ok()
+        .map(|value| conservative_stack_scan_mode_from_value(Some(&value)));
+    let pinned = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get());
+
+    // ★ #7148: in the TEST build a pinned override beats an env request for
+    // `Full`. The env var may make the scan *less* aggressive than the mode a
+    // test declared, never more.
+    //
+    // Why: `PERRY_CONSERVATIVE_STACK_SCAN=full` failed **134 of 1574**
+    // perry-runtime tests — a shipped escape hatch in a state nobody had
+    // verified. The failures were not soundness failures. A collector test's
+    // central assertion is *"this object should have been collected"*, and a
+    // conservative scan retains whatever the native stack happens to look like
+    // a pointer to, so an ambient `=full` broke exactly the assertions the
+    // suite exists to make. Since #7147 the test build has ONE declared scan
+    // mode (`Auto`) and the isolation guards are its authority; letting an
+    // ambient env var silently re-impose `Full` on a guarded scope reintroduces
+    // the test-build-is-a-different-GC-configuration problem #7147 removed.
+    //
+    // Kept rather than deleted (CLAUDE.md's kill-policy default) because
+    // `=full` is load-bearing *outside* the test build: it is the ratchet's
+    // validated sensitivity arm — the run that produced the 60 regression rows
+    // proving `gc-ratchet` can actually fail (`benchmarks/gc_ratchet/README.md`).
+    // Deleting the mode would delete a gate's only end-to-end proof. This makes
+    // it verified instead: the suite is green under `=full`.
+    #[cfg(test)]
+    if matches!(env_mode, Some(ConservativeStackScanMode::Full)) {
+        if let Some(pinned) = pinned {
+            return pinned;
+        }
     }
-    if let Some(mode) = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()) {
+
+    if let Some(mode) = env_mode {
+        return mode;
+    }
+    if let Some(mode) = pinned {
         return mode;
     }
     // ONE default for every build, tests included.
