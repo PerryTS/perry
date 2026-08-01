@@ -11,6 +11,9 @@ from .repsel_determinism import DEFAULT_REPEAT, check_determinism
 from .repsel_determinism import self_test as determinism_self_test
 from .repsel_knob_isolation import check_isolation
 from .repsel_knob_isolation import self_test as isolation_self_test
+from .repsel_temp_hygiene import DEFAULT_REPEAT as DEFAULT_HYGIENE_REPEAT
+from .repsel_temp_hygiene import check_temp_hygiene
+from .repsel_temp_hygiene import self_test as temp_hygiene_self_test
 from .spec import WORKLOADS
 
 
@@ -178,6 +181,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="check the determinism verdict logic without compiling",
     )
     det_self_p.set_defaults(func=determinism_self_test)
+
+    # Temp-directory hygiene (#7144). The other half of the #7131 story: the
+    # `.ll` name became a function of the IR, which meant workers shared it,
+    # which meant nothing deleted it — one file per distinct IR ever compiled,
+    # forever, on every developer machine.
+    hyg_p = sub.add_parser(
+        "census-temp-hygiene",
+        help="assert compiling leaves no files behind in the temp directory",
+    )
+    hyg_p.add_argument("--perry")
+    hyg_p.add_argument("--baseline")
+    hyg_p.add_argument("--workload", action="append", help="restrict to named workload(s)")
+    hyg_p.add_argument(
+        "--repeat",
+        type=int,
+        default=DEFAULT_HYGIENE_REPEAT,
+        help="compiles per workload; >1 puts identical IR in flight concurrently",
+    )
+    hyg_p.add_argument("--compile-timeout", type=int, default=300)
+    hyg_p.add_argument("--jobs", type=int, default=4, help="parallel compiles")
+    hyg_p.set_defaults(func=check_temp_hygiene)
+
+    hyg_self_p = sub.add_parser(
+        "census-temp-hygiene-self-test",
+        help="check the temp-hygiene verdict logic without compiling",
+    )
+    hyg_self_p.set_defaults(func=temp_hygiene_self_test)
 
     return parser
 
