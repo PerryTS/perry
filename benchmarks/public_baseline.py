@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import statistics
@@ -92,6 +93,36 @@ def _git(*args: str) -> str:
 _CARGO_VERSION_RE = re.compile(rb'(?m)^version = "[^"]*"')
 
 
+def portable_path(value: Any) -> str:
+    """Render a path without the operator's home directory in it.
+
+    Repo-relative inside the checkout, ``~``-relative under ``$HOME``, otherwise
+    unchanged. This artifact is committed to a public repository, so a resolved
+    executable path recorded verbatim publishes whoever ran the benchmark.
+    """
+    text = str(value or "")
+    if not text:
+        return text
+    resolved = os.path.realpath(text)
+    for base, prefix in (
+        (os.path.realpath(ROOT), ""),
+        (os.path.realpath(os.path.expanduser("~")), "~/"),
+    ):
+        if resolved == base or resolved.startswith(base + os.sep):
+            return prefix + os.path.relpath(resolved, base)
+    return resolved
+
+
+def _is_resolved_path(value: Any) -> bool:
+    """True when a recorded command names a concrete file rather than a bare word.
+
+    The point of the check is to reject an unresolved ``bun``, not to require an
+    absolute path — :func:`portable_path` deliberately emits repo-relative paths.
+    """
+    text = str(value or "")
+    return bool(text) and (os.path.isabs(text) or os.sep in text)
+
+
 def _fingerprint_bytes(name: str) -> bytes:
     data = (ROOT / name).read_bytes()
     if name == "Cargo.toml":
@@ -157,9 +188,9 @@ def _validate_component(component: Mapping[str, Any], suite: str) -> None:
         if not commands.get(runtime):
             raise ArtifactError(f"{suite}: missing resolved {runtime} command")
         metadata = runtime_metadata.get(runtime, {})
-        if not metadata.get("version") or not Path(
-            str(metadata.get("resolved_executable", ""))
-        ).is_absolute():
+        if not metadata.get("version") or not _is_resolved_path(
+            metadata.get("resolved_executable")
+        ):
             raise ArtifactError(f"{suite}: incomplete {runtime} runtime metadata")
     actual_benchmarks = set(component.get("benchmarks", {}))
     expected_benchmarks = EXPECTED_COMPONENT_BENCHMARKS[suite]
@@ -224,9 +255,11 @@ def normalize_honest(results: Mapping[str, Any], metadata: Mapping[str, Any]) ->
             if len(commands) != 1 or not next(iter(commands), ()):
                 raise ArtifactError(f"honest_bench/{workload}: {runtime} command is incomplete")
             measured_command = list(commands.pop())
-            if not Path(measured_command[0]).is_absolute():
+            if not _is_resolved_path(measured_command[0]):
                 raise ArtifactError(f"honest_bench/{workload}: {runtime} command is not resolved")
-            runtime_results[runtime]["measured_command"] = measured_command
+            runtime_results[runtime]["measured_command"] = [
+                portable_path(part) if os.path.isabs(part) else part for part in measured_command
+            ]
         benchmarks[workload] = {
             "correctness": {"status": "pass", "reference": "bun"},
             "runtimes": runtime_results,
@@ -300,13 +333,19 @@ def assemble(
         if runtime == "perry":
             executable = metadata.get("compile_command", [str(ROOT / "target/release/perry")])[0]
         resolved = shutil.which(executable) or str((ROOT / executable).resolve())
-        metadata["resolved_executable"] = resolved
+        metadata["resolved_executable"] = portable_path(resolved)
 
     for component_name, component in components.items():
         if component_name == "suite":
             continue
         for runtime in RUNTIMES:
             component_runtime = component["runtime_metadata"][runtime]
+            # Sanitize here rather than in each component harness: this is the
+            # single funnel every component passes through on its way to the
+            # committed artifact.
+            component_runtime["resolved_executable"] = portable_path(
+                component_runtime.get("resolved_executable")
+            )
             if component_runtime["version"] != runtimes[runtime]["version"]:
                 raise ArtifactError(
                     f"{component_name}: {runtime} version does not match suite metadata"

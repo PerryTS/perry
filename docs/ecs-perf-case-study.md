@@ -37,11 +37,11 @@ incremental on top of that.
 ## Constraints (load-bearing)
 
 - **No changes to ECS code.** All 6 workloads compile from the vanilla
-  TypeScript `@codehz/ecs` — the test fixture lives at
-  `/Users/amlug/projects/perry/ecs-perf-test`. If perry can't make the
-  vanilla code fast, the perf bar isn't met. A handful of attempts to
-  rewrite hot ECS paths got reverted; perf has to come from the
-  compiler and runtime.
+  TypeScript `@codehz/ecs` — the test fixture is an `ecs-perf-test`
+  scratch checkout kept outside this repository, not an in-tree
+  directory. If perry can't make the vanilla code fast, the perf bar
+  isn't met. A handful of attempts to rewrite hot ECS paths got
+  reverted; perf has to come from the compiler and runtime.
 - **Default GC settings.** No `PERRY_GEN_GC=0` or `PERRY_DEBUG_SYMBOLS=1`
   in the bar's measurement runs.
 - **No regression on the 5 currently-passing workloads.** A change
