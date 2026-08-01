@@ -202,10 +202,9 @@ pub(crate) fn build_missing_prebuilt_ext_lib(
     }
     if is_android_target(target) {
         if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
-            for (k, v) in super::super::library_search::android_cross_env(
-                std::path::Path::new(&ndk),
-                target,
-            ) {
+            for (k, v) in
+                super::super::library_search::android_cross_env(std::path::Path::new(&ndk), target)
+            {
                 cargo_cmd.env(k, v);
             }
         }

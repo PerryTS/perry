@@ -14,3 +14,6 @@ module being outside `compilePackages`.
   invocation), and `perry-wasm-host` is auto-built whenever the program uses
   `WebAssembly.*`, so `libperry_wasm_host.a not found` can no longer happen on a
   normal compile.
+- Maintainer audit: propagate custom `CARGO_TARGET_DIR` wasm-host artifacts
+  through symbol scanning, link manifests, and the final link, and reject
+  incomplete HarmonyOS SDKs before configuring their cross-build environment.

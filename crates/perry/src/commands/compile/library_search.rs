@@ -1359,22 +1359,28 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
 /// Studio's default install locations per platform. Returns `None` if nothing
 /// resembling an OHOS SDK is present; the caller is expected to surface a
 /// remediation message naming the env var.
+fn is_usable_harmonyos_native_sdk(path: &Path) -> bool {
+    let bin = path.join("llvm").join("bin");
+    let has_clang = bin.join("clang").is_file() || bin.join("clang.exe").is_file();
+    has_clang && path.join("sysroot").is_dir()
+}
+
 pub(super) fn find_harmonyos_sdk() -> Option<PathBuf> {
     fn normalize(p: PathBuf) -> Option<PathBuf> {
         // Accept either `<sdk>` or `<sdk>/native` — we want the `native` dir
         // so callers can unconditionally join `llvm/bin/clang` and `sysroot`.
-        if p.join("llvm").join("bin").exists() && p.join("sysroot").exists() {
+        if is_usable_harmonyos_native_sdk(&p) {
             return Some(p);
         }
         let native = p.join("native");
-        if native.join("llvm").join("bin").exists() && native.join("sysroot").exists() {
+        if is_usable_harmonyos_native_sdk(&native) {
             return Some(native);
         }
         // DevEco's layout nests the API-level dir: <root>/openharmony/<api>/native
         if let Ok(entries) = std::fs::read_dir(p.join("openharmony")) {
             for entry in entries.flatten() {
                 let candidate = entry.path().join("native");
-                if candidate.join("llvm").join("bin").exists() {
+                if is_usable_harmonyos_native_sdk(&candidate) {
                     return Some(candidate);
                 }
             }
@@ -1525,6 +1531,25 @@ mod android_cross_env_tests {
     }
 }
 
+#[cfg(test)]
+mod harmonyos_sdk_tests {
+    use super::is_usable_harmonyos_native_sdk;
+
+    #[test]
+    fn native_sdk_requires_both_clang_and_sysroot() {
+        let sdk = tempfile::tempdir().expect("tempdir");
+        let bin = sdk.path().join("llvm/bin");
+        std::fs::create_dir_all(&bin).expect("create llvm bin");
+        assert!(!is_usable_harmonyos_native_sdk(sdk.path()));
+
+        std::fs::write(bin.join("clang"), b"").expect("create clang");
+        assert!(!is_usable_harmonyos_native_sdk(sdk.path()));
+
+        std::fs::create_dir(sdk.path().join("sysroot")).expect("create sysroot");
+        assert!(is_usable_harmonyos_native_sdk(sdk.path()));
+    }
+}
+
 /// Cross-compile env vars to pass to `cargo build` so `cc-rs` picks up the
 /// OHOS SDK's clang + musl sysroot for any C source in dependency build.rs
 /// scripts (notably `libmimalloc-sys`, which needs `pthread.h`).
@@ -1539,8 +1564,17 @@ pub(super) fn harmonyos_cross_env(
         Some("harmonyos-simulator") => ("x86_64-unknown-linux-ohos", "x86_64-linux-ohos"),
         _ => ("aarch64-unknown-linux-ohos", "aarch64-linux-ohos"),
     };
-    let clang = sdk_native.join("llvm").join("bin").join("clang");
-    let clangpp = sdk_native.join("llvm").join("bin").join("clang++");
+    let bin = sdk_native.join("llvm").join("bin");
+    let clang = if bin.join("clang").is_file() {
+        bin.join("clang")
+    } else {
+        bin.join("clang.exe")
+    };
+    let clangpp = if bin.join("clang++").is_file() {
+        bin.join("clang++")
+    } else {
+        bin.join("clang++.exe")
+    };
     let sysroot = sdk_native.join("sysroot");
     let cflags = format!(
         "--target={} --sysroot={} -D__MUSL__",
