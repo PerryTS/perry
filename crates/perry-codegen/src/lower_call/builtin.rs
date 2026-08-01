@@ -526,14 +526,20 @@ pub(super) fn lower_builtin_new(
         // (`js_lru_cache_new(options: f64)`), so we just lower the options
         // argument and hand it through — no static field extraction, which
         // means dynamic/variable options objects work too. A missing options
-        // argument passes `undefined`; the runtime falls back to max=100
-        // (matching npm `lru-cache`'s bounded-cache default).
+        // argument passes `undefined`, which the runtime rejects with the
+        // same `TypeError` npm's constructor destructuring raises.
         "LRUCache" => {
             let opts_val = if let Some(opts_arg) = args.first() {
                 lower_expr(ctx, opts_arg)?
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            // npm's constructor ignores everything past the options object,
+            // but the arguments are still evaluated — lower the tail for its
+            // side effects so `new LRUCache(opts, f())` still calls `f`.
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
             let blk = ctx.block();
             let handle = blk.call(I64, "js_lru_cache_new", &[(DOUBLE, &opts_val)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
