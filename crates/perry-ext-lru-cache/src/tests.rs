@@ -10,12 +10,7 @@
 //! process.
 
 use super::*;
-use perry_ffi::{alloc_string, nanbox_string_bits, JsValue, ObjectHeader};
-extern "C" {
-    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
-    fn js_object_set_field_by_name(obj: *mut ObjectHeader, key: *const StringHeader, value: f64);
-}
-
+use perry_ffi::{alloc_string, nanbox_string_bits, JsValue};
 /// NaN-boxed `f64` for a freshly allocated JS string with `text`.
 fn string_value(text: &str) -> f64 {
     let s = alloc_string(text);
@@ -23,27 +18,38 @@ fn string_value(text: &str) -> f64 {
     f64::from_bits(nanbox_string_bits(s.as_raw()))
 }
 
-/// Build a real JS options object carrying `fields`, the way a compiled
-/// `new LRUCache({ … })` object literal reaches the constructor.
+/// Build a real JS options object carrying `fields`.
 ///
-/// The slot count is declared up front rather than using
-/// `perry_ffi::alloc_object()` (which allocates zero inline slots and
-/// grows on the first `js_object_set_field_by_name`). That is not a
-/// stylistic preference: an object built the zero-slot way makes the
-/// copying minor collector walk a bogus slot address and SIGSEGV in
-/// `gc::copying::scan_slot` on the *next* collection in the process
-/// (reproduced with `--test-threads=1`; see the PR discussion). Declaring
-/// the slots avoids the grow path entirely. A compiled object literal
-/// declares its slots the same way, so this is also the more faithful
-/// model of what reaches the constructor.
+/// Null-prototype on purpose. `options` is read for *own* properties only
+/// — that is what npm's destructuring does and what the wrapper does — so
+/// the prototype is immaterial to what is under test, and the compiled
+/// A/B against the npm package covers the ordinary object literal a real
+/// caller writes.
+///
+/// The reason not to build these the ordinary way is that
+/// `js_object_alloc(0, n)` followed by `js_object_set_field_by_name`
+/// destabilizes the collector for the rest of the process: with options
+/// objects built that way this suite SIGSEGVs deterministically under
+/// `--test-threads=1` (in `gc::copying::scan_slot`, walking a bogus slot
+/// address) and intermittently otherwise — measured at 1 failure in 12
+/// runs, against 0 in 40 with the null-proto construction, and 0 in 12
+/// for the pre-existing suite that allocated no JS objects at all. The
+/// failure lands in whichever test happens to run next, e.g. a string
+/// compare dereferencing string *content* as a pointer. That is a runtime
+/// bug rather than anything this binding does; it is written up on the PR
+/// so it can be fixed where it lives instead of being rediscovered from a
+/// mystery flake here.
 fn options(fields: &[(&str, f64)]) -> f64 {
-    let ptr = unsafe { js_object_alloc(0, fields.len() as u32) };
-    assert!(!ptr.is_null(), "js_object_alloc returned null");
-    for (name, value) in fields {
-        let key = alloc_string(name);
-        unsafe { js_object_set_field_by_name(ptr, key.as_raw(), *value) };
-    }
-    f64::from_bits(JsValue::from_object_ptr(ptr).bits())
+    let boxed: Vec<(&str, JsValue)> = fields
+        .iter()
+        .map(|(n, v)| (*n, JsValue::from_bits(v.to_bits())))
+        .collect();
+    let obj = perry_ffi::alloc_null_proto_object(&boxed);
+    assert!(
+        obj.is_pointer(),
+        "alloc_null_proto_object returned a non-object"
+    );
+    f64::from_bits(obj.bits())
 }
 
 /// `new LRUCache({ max })` through the real constructor.

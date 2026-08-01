@@ -18,12 +18,15 @@
 //!   binary, this string gets pinned and the minor reports
 //!   `copied_objects=0` (measured; alone it reports `copied_objects=1`),
 //!   so the relocation assertion fails through no fault of the binding.
-//! - Worse, driving `gc_collect_minor()` from a unit-test binary that has
-//!   also allocated JS *objects* (which the constructor tests must do, to
-//!   pass a real options object) makes the copying collector walk a bogus
-//!   slot address and SIGSEGV in `gc::copying::scan_slot`. That
-//!   reproduces deterministically under `--test-threads=1` and is a
-//!   runtime-level fragility, not something this binding controls.
+//! - Worse, a unit-test binary that has built an ordinary-prototype JS
+//!   object with `js_object_alloc` + `js_object_set_field_by_name` — the
+//!   obvious way to pass a real options object — makes the copying
+//!   collector walk a bogus slot address and SIGSEGV in
+//!   `gc::copying::scan_slot`, deterministically under
+//!   `--test-threads=1`. Null-prototype objects do not trip it, which is
+//!   what both test files now build, but the hazard is a runtime bug
+//!   rather than something this binding controls, so this file keeps its
+//!   distance from other tests regardless.
 //!
 //! A dedicated integration binary gets a pristine process: an empty
 //! nursery, a shallow stack, and no JS objects. The relocation then
@@ -37,27 +40,30 @@
 
 use perry_ext_lru_cache::{js_lru_cache_get, js_lru_cache_new, js_lru_cache_set};
 use perry_ffi::{
-    alloc_string, nanbox_string_bits, read_bytes, Handle, JsString, JsValue, ObjectHeader,
-    StringHeader,
+    alloc_string, nanbox_string_bits, read_bytes, Handle, JsString, JsValue, StringHeader,
 };
 
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 extern "C" {
-    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
-    fn js_object_set_field_by_name(obj: *mut ObjectHeader, key: *const StringHeader, value: f64);
     fn js_get_string_pointer_unified(value: f64) -> i64;
 }
 
-/// `{ max: <max> }` as a real JS object, the way a compiled object
-/// literal reaches the constructor.
+/// `{ max: <max> }` as a real JS object.
+///
+/// Null-prototype for the same reason as the unit tests' helper: building
+/// it with `js_object_alloc` + `js_object_set_field_by_name` destabilizes
+/// the collector for the rest of the process, and this file exists
+/// precisely to run a collection. Only own properties are read, so the
+/// prototype does not matter to what is under test.
 fn options_with_max(max: f64) -> f64 {
-    let ptr = unsafe { js_object_alloc(0, 1) };
-    assert!(!ptr.is_null(), "js_object_alloc returned null");
-    let key = alloc_string("max");
-    unsafe { js_object_set_field_by_name(ptr, key.as_raw(), max) };
-    f64::from_bits(JsValue::from_object_ptr(ptr).bits())
+    let obj = perry_ffi::alloc_null_proto_object(&[("max", JsValue::from_bits(max.to_bits()))]);
+    assert!(
+        obj.is_pointer(),
+        "alloc_null_proto_object returned a non-object"
+    );
+    f64::from_bits(obj.bits())
 }
 
 fn string_value(text: &str) -> f64 {

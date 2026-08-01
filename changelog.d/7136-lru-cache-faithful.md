@@ -82,6 +82,17 @@
     stay live indefinitely on npm. This binding reads `performance.now()`
     on every access, so a blocking loop does observe expiry.
 
+  Constructor options are read through the runtime's boxed-receiver getter
+  (`js_object_get_field_by_name_boxed`) rather than being unboxed here to a
+  `*const ObjectHeader`. `options` is an untrusted runtime value — an
+  array, a function and a native handle id are all pointer-tagged — and the
+  unboxed getter dereferences its argument on faith. This also deletes a
+  hand-rolled `>= 0x1000` band literal, the kind of open-coded address test
+  the addr-class ratchet exists to prevent. Behavior is unchanged and now
+  pinned by a test: strings, empty and populated arrays, and handle-band
+  ids all yield npm's "At least one of max, maxSize, or ttl is required",
+  which is what npm gives for any heap value lacking a `max` own property.
+
   The GC-survival test moved to its own test binary
   (`crates/perry-ext-lru-cache/tests/gc_survival.rs`) and now asserts that
   the collector *relocated* the cached value, not merely that it is still
@@ -91,6 +102,19 @@
   conservatively pins any nursery object a stack word points at, so after
   even one other test in the same binary the minor reports
   `copied_objects=0` instead of `1`. Verified in both directions —
-  `PERRY_GEN_GC=0` (non-moving mark-sweep) trips the new assertion.
+  `PERRY_GEN_GC=0` (non-moving mark-sweep) trips the new assertion. The
+  address is carried across the collection XOR-folded, from an
+  `#[inline(never)]` helper, so the test cannot conservatively pin the very
+  string whose relocation it asserts.
+
+  Both test files build their options objects null-prototype. Building them
+  the ordinary way (`js_object_alloc` + `js_object_set_field_by_name`)
+  destabilizes the collector for the rest of the process: SIGSEGV in
+  `gc::copying::scan_slot` under `--test-threads=1`, and 1 failure in 12
+  runs otherwise, landing in whichever unrelated test runs next. Null-proto
+  objects measured 0 in 40. Only own properties are read, so the prototype
+  is immaterial to what is under test, and the compiled A/B covers the
+  ordinary literal a real caller writes. The underlying fault is a runtime
+  bug, reported separately rather than worked around silently.
 
   Tracking: #466 (Phase 5 native bindings). PR #7136.
