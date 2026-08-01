@@ -37,7 +37,8 @@
 
 use perry_ext_lru_cache::{js_lru_cache_get, js_lru_cache_new, js_lru_cache_set};
 use perry_ffi::{
-    alloc_string, nanbox_string_bits, read_bytes, JsString, JsValue, ObjectHeader, StringHeader,
+    alloc_string, nanbox_string_bits, read_bytes, Handle, JsString, JsValue, ObjectHeader,
+    StringHeader,
 };
 
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -63,6 +64,35 @@ fn string_value(text: &str) -> f64 {
     let s = alloc_string(text);
     assert!(!s.is_null(), "alloc_string returned null");
     f64::from_bits(nanbox_string_bits(s.as_raw()))
+}
+
+/// Folded into the address so no stack word held across the collection
+/// looks like a heap pointer.
+const ADDRESS_TOKEN_XOR: u64 = 0xA5A5_A5A5_A5A5_A5A5;
+
+/// Allocate the value, hand it to the cache, and return **only** an
+/// obfuscated token for the address it started at.
+///
+/// `#[inline(never)]` is load-bearing, and so is the fact that neither the
+/// raw address nor the NaN-boxed string ever becomes a local of the
+/// caller. The collector conservatively pins any nursery object that some
+/// live stack word points at — that is precisely the effect this test had
+/// to be moved into its own binary to escape. A caller-frame local holding
+/// the bare address would pin the very string whose relocation is being
+/// asserted, and the assertion would then fail while proving nothing about
+/// the cache-root rewrite. Keeping the pointer-shaped values inside a
+/// frame that is popped before `gc_collect_minor()` runs, and carrying
+/// only `address ^ ADDRESS_TOKEN_XOR` across it, removes that hazard.
+#[inline(never)]
+fn insert_value_and_take_address_token(handle: Handle) -> u64 {
+    let value = string_value("value-object-1234567890");
+    let address = value.to_bits() & POINTER_MASK;
+    assert!(
+        perry_runtime::arena::pointer_in_nursery(address as usize),
+        "the value must start in the nursery or a minor cannot move it"
+    );
+    js_lru_cache_set(handle, 1.0, value);
+    address ^ ADDRESS_TOKEN_XOR
 }
 
 fn read_string_value(value: f64) -> Option<String> {
@@ -95,14 +125,10 @@ fn cached_value_survives_and_is_rewritten_by_a_copying_minor() {
     let h = js_lru_cache_new(options_with_max(10.0));
     // A >5-byte string forces the heap `StringHeader` repr (not inline
     // SSO), so it is a real collectable allocation. Its ONLY root is the
-    // cache — nothing on the stack or in a global refers to it.
-    let value = string_value("value-object-1234567890");
-    let before = value.to_bits() & POINTER_MASK;
-    js_lru_cache_set(h, 1.0, value);
-    assert!(
-        perry_runtime::arena::pointer_in_nursery(before as usize),
-        "the value must start in the nursery or a minor cannot move it"
-    );
+    // cache — nothing on the stack or in a global refers to it, which is
+    // why the address is carried across the collection as an obfuscated
+    // token rather than a live pointer-shaped word.
+    let before_token = insert_value_and_take_address_token(h);
 
     // Reclaims unrooted nursery allocations and evacuates rooted survivors.
     let _ = perry_runtime::gc::gc_collect_minor();
@@ -120,6 +146,9 @@ fn cached_value_survives_and_is_rewritten_by_a_copying_minor() {
     // went untested. `PERRY_GEN_GC=0` routes `gc_collect_minor` to
     // non-moving mark-sweep and will trip this deliberately.
     let after = got.to_bits() & POINTER_MASK;
+    // Safe to materialize now: the collection is over, so a pointer-shaped
+    // stack word can no longer pin anything.
+    let before = before_token ^ ADDRESS_TOKEN_XOR;
     assert_ne!(
         before, after,
         "minor GC did not relocate the cached value (0x{before:x}), so this run \
