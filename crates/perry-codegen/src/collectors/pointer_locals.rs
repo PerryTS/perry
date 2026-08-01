@@ -897,10 +897,37 @@ pub fn collect_pointer_typed_locals(
 
     let mut out = std::collections::HashMap::new();
     let mut next_slot: u32 = 0;
+    /// Assign `id` a shadow-frame slot, exactly once.
+    ///
+    /// #7154 root cause: a local id can appear in MORE THAN ONE `Stmt::Let` —
+    /// duplicate `var` declarations share a single HIR binding, and lowering
+    /// keeps a `Let` at each declaration site (lodash's `runInContext` has
+    /// 170+ of them). The old `out.insert(id, slot); slot += 1;` replaced the
+    /// map entry but still burned a slot index, so `out.len()` (what every
+    /// caller passes to `enable_shadow_frame` /
+    /// `enable_post_init_shadow_frame`) undercounted the indices actually
+    /// handed out. Every local whose index landed at or beyond the frame
+    /// length failed `js_shadow_slot_bind` / the #7088 inline store's bounds
+    /// check SILENTLY — the local was live but invisible to the precise-root
+    /// moving minor, so an evacuation at a loop back-edge poll relocated the
+    /// object and left the compiled local slot pointing into from-space
+    /// ("TypeError: value is not a function" once it was called).
+    ///
+    /// Assigning through `entry` keeps one slot per id, restoring the
+    /// invariant the frame sizing depends on: `out.len() == next_slot ==
+    /// max_index + 1`. Re-binding the same slot from each duplicate
+    /// declaration site is correct — the id names one alloca, and the bind
+    /// snapshots that alloca's current value either way.
+    fn assign_slot(out: &mut std::collections::HashMap<u32, u32>, next_slot: &mut u32, id: u32) {
+        out.entry(id).or_insert_with(|| {
+            let s = *next_slot;
+            *next_slot += 1;
+            s
+        });
+    }
     for p in params {
         if is_ptr_typed(&p.ty) && !non_pointer_locals.contains(&p.id) {
-            out.insert(p.id, next_slot);
-            next_slot += 1;
+            assign_slot(&mut out, &mut next_slot, p.id);
         }
     }
     fn walk(
@@ -917,8 +944,7 @@ pub fn collect_pointer_typed_locals(
                         && !non_pointer_locals.contains(id)
                         && !flat_row_alias_ids.contains(id) =>
                 {
-                    out.insert(*id, *next_slot);
-                    *next_slot += 1;
+                    assign_slot(out, next_slot, *id);
                 }
                 Stmt::If {
                     then_branch,
@@ -962,8 +988,7 @@ pub fn collect_pointer_typed_locals(
                             // Catch parameter is implicitly bound;
                             // treat as Any (pointer-possible).
                             if !non_pointer_locals.contains(id) {
-                                out.insert(*id, *next_slot);
-                                *next_slot += 1;
+                                assign_slot(out, next_slot, *id);
                             }
                         }
                         walk(
@@ -1006,6 +1031,16 @@ pub fn collect_pointer_typed_locals(
         &mut next_slot,
         &non_pointer_locals,
         &flat_row_alias_ids,
+    );
+    // The frame-sizing invariant every caller relies on: they pass
+    // `map.len()` to `enable_shadow_frame`, so the count MUST equal the
+    // number of indices handed out. If this ever breaks again, slots at or
+    // beyond the frame length are silently dropped by the runtime's bounds
+    // check and their locals become invisible to the moving GC (#7154).
+    debug_assert_eq!(
+        out.len() as u32,
+        next_slot,
+        "shadow-frame slot map cardinality must equal the slot counter"
     );
     out
 }

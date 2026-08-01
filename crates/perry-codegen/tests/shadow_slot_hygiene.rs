@@ -542,6 +542,55 @@ fn closure_captured_write_shadow_module() -> Module {
     }
 }
 
+/// #7154: duplicate `var` declarations — one HIR local id, one `Stmt::Let`
+/// per declaration site (the shape lowering emits for JS `var` redeclaration;
+/// lodash's `runInContext` carries 170+ of them).
+fn duplicate_var_decl_shadow_module() -> Module {
+    let mut module = shadow_hygiene_module();
+    module.name = "dup_var_shadow.ts".to_string();
+    module.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Let {
+                id: 1,
+                name: "dup".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            // Same id, second declaration site.
+            Stmt::Let {
+                id: 1,
+                name: "dup".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "later".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(Vec::new())),
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    module
+}
+
 fn function_slice<'a>(ir: &'a str, name: &str) -> &'a str {
     let define_marker = format!("@{}(", name);
     let define_start = ir
@@ -605,6 +654,54 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
     assert!(
         !ir.contains("call void @js_shadow_slot_set(i32 2"),
         "known numeric Any local must not shift later pointer roots into a third slot"
+    );
+}
+
+/// #7154 regression: every emitted shadow-slot index must be inside the
+/// pushed frame. Duplicate `var` declarations used to burn a slot index per
+/// `Stmt::Let` while the frame was sized by map *cardinality*, so trailing
+/// locals landed at indices `>= slot_count` — the runtime bounds check then
+/// dropped their root stores SILENTLY and the moving minor never rewrote
+/// them (the "value is not a function" mutator reinjection).
+///
+/// The inline #7088 store keeps a `js_shadow_slot_bind` call on its
+/// null-state fallback arm at the same index, so scanning the bind calls
+/// covers the inline sites too.
+#[test]
+fn duplicate_var_declarations_keep_every_slot_inside_the_frame() {
+    let ir = String::from_utf8(
+        compile_module(&duplicate_var_decl_shadow_module(), empty_opts()).unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let fn_ir = function_slice(&ir, "perry_fn_dup_var_shadow_ts__probe");
+
+    let frame_slots: u32 = fn_ir
+        .split("call ptr @js_shadow_frame_enter(i32 ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|n| n.parse().ok())
+        .expect("probe must push a shadow frame");
+    assert_eq!(
+        frame_slots, 2,
+        "one slot for the duplicate-decl local, one for the trailing local"
+    );
+
+    for chunk in fn_ir.split("@js_shadow_slot_bind(i32 ").skip(1) {
+        let idx: u32 = chunk
+            .split(',')
+            .next()
+            .and_then(|n| n.trim().parse().ok())
+            .expect("bind index must be an integer literal");
+        assert!(
+            idx < frame_slots,
+            "shadow slot index {idx} out of bounds for a {frame_slots}-slot \
+             frame — the runtime bounds check drops this root silently and \
+             the local is invisible to the moving GC; fn IR:\n{fn_ir}"
+        );
+    }
+    assert!(
+        fn_ir.contains("@js_shadow_slot_bind(i32 1, ptr %"),
+        "trailing pointer local must be rooted at the deduped index; fn IR:\n{fn_ir}"
     );
 }
 
