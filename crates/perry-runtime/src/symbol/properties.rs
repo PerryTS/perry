@@ -637,6 +637,18 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
 /// non-closure value (e.g. a Proxy of a function) has no capture array to patch,
 /// so it is simply stored as-is; the call site then dispatches it through the
 /// proxy `[[Call]]` path.
+///
+/// #7154: the store MUST go through `js_closure_set_capture_f64`, not a raw
+/// `*slot = bits`. A closure is allocated `GC_LAYOUT_POINTER_FREE` and only
+/// leaves that state when a capture store *records* the pointer
+/// (`layout_note_slot`). `heap_payload_slot_selection` short-circuits on
+/// `POINTER_FREE` and skips the ENTIRE capture payload without consulting any
+/// mask, so a raw store left the receiver untraced: the evacuating young-gen
+/// minor neither kept it alive nor rewrote the slot when it moved, and the
+/// method later read a pointer into reclaimed nursery memory ("value is not a
+/// function", or a SIGSEGV in the collector on the next cycle). The raw store
+/// also skipped the write barrier, so an old-gen closure -> young receiver edge
+/// never entered the remembered set.
 unsafe fn bind_reserved_this_slot(closure_f64: f64, obj_f64: f64) {
     let c_bits = closure_f64.to_bits();
     if c_bits & 0xFFFF_0000_0000_0000 != POINTER_TAG {
@@ -649,10 +661,7 @@ unsafe fn bind_reserved_this_slot(closure_f64: f64, obj_f64: f64) {
     let c_ptr = c_addr as *mut crate::closure::ClosureHeader;
     let real_count = crate::closure::real_capture_count((*c_ptr).capture_count);
     if real_count >= 1 {
-        let captures_ptr = (c_ptr as *mut u8)
-            .add(std::mem::size_of::<crate::closure::ClosureHeader>())
-            as *mut f64;
-        *captures_ptr.add((real_count - 1) as usize) = obj_f64;
+        crate::closure::js_closure_set_capture_f64(c_ptr, real_count - 1, obj_f64);
     }
 }
 

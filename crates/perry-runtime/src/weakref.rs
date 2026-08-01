@@ -1512,10 +1512,18 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
                 continue;
             }
             if stored_key == key_handle.get_nanbox_f64().to_bits() {
-                write_object_field_bits_raw(
+                // #7154: overwriting an EXISTING mapping publishes a new value
+                // into a long-lived, already-reachable entry object — it must
+                // take the barriered store, exactly like `weak_entry_new`'s
+                // insert. The raw write recorded neither the layout bit (so the
+                // evacuating minor skipped the payload and dropped the value)
+                // nor the remembered-set page (so an old entry -> young value
+                // edge was invisible to a minor). Field 1 is +40 from the user
+                // pointer, the offset the #7154 diagnostic scan reports.
+                js_object_set_field(
                     entry,
-                    WEAK_ENTRY_VALUE_FIELD,
-                    value_handle.get_nanbox_f64().to_bits(),
+                    WEAK_ENTRY_VALUE_FIELD as u32,
+                    JSValue::from_bits(value_handle.get_nanbox_f64().to_bits()),
                 );
                 return map_handle.get_nanbox_f64();
             }
