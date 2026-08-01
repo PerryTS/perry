@@ -333,6 +333,14 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         "returns immediately after open(); there is no debugger to wait for (#4916)",
     ),
     property("inspector", "console"),
+    // `inspector.console.*` — the Chrome-DevTools console forwarders (#7090).
+    // Dispatch carries `class_filter: Some("console")`, so these hang off the
+    // `console` property above rather than being named exports of the module.
+    method("inspector", "log", false, Some("console")),
+    method("inspector", "info", false, Some("console")),
+    method("inspector", "debug", false, Some("console")),
+    method("inspector", "warn", false, Some("console")),
+    method("inspector", "error", false, Some("console")),
     property("inspector", "Network"),
     class("inspector", "Session"),
     method("inspector", "Session", false, None),
@@ -361,6 +369,11 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     property("inspector/promises", "default"),
     class("inspector/promises", "Session"),
     method("inspector/promises", "Session", false, None),
+    // Synthetic dispatch row for `Session(...)` invoked without `new`
+    // (js_node_inspector_session_call_without_new, #7090). It is not a public
+    // named export, so it stays `internal_method` — the .d.ts must keep
+    // advertising `Session`, not `SessionCall`.
+    internal_method("inspector/promises", "SessionCall", false, None),
     method("inspector/promises", "connect", true, Some("Session")),
     method(
         "inspector/promises",
@@ -1000,6 +1013,8 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("lru-cache", "delete", true, None),
     method("lru-cache", "clear", true, None),
     method("lru-cache", "size", true, None),
+    // `peek(key)` — read without refreshing recency (#7136).
+    method("lru-cache", "peek", true, None),
     method("commander", "name", true, None),
     method("commander", "description", true, None),
     method("commander", "version", true, None),

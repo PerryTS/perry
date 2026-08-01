@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2917 entries across 124 modules.
+Total: 2923 entries across 124 modules.
 
 ## Modules
 
@@ -1769,13 +1769,18 @@ Total: 2917 entries across 124 modules.
 - `close` — module
 - `connect` — instance *(class: `Session`)*
 - `connectToMainThread` — instance *(class: `Session`)*
+- `debug` — module *(class: `console`)*
 - `disconnect` — instance *(class: `Session`)*
+- `error` — module *(class: `console`)*
+- `info` — module *(class: `console`)*
+- `log` — module *(class: `console`)*
 - `on` — instance *(class: `Session`)*
 - `once` — instance *(class: `Session`)*
 - `open` — module ⚠ **stub** — accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916)
 - `post` — instance *(class: `Session`)* ⚠ **stub** — only Runtime.enable and a canned Runtime.evaluate subset respond; every other protocol method throws Inspector error -32601 (#4916)
 - `url` — module ⚠ **stub** — always undefined: Perry never exposes a real inspector endpoint (#4916)
 - `waitForDebugger` — module ⚠ **stub** — returns immediately after open(); there is no debugger to wait for (#4916)
+- `warn` — module *(class: `console`)*
 
 ### Properties
 
@@ -1900,6 +1905,7 @@ Total: 2917 entries across 124 modules.
 - `delete` — instance
 - `get` — instance
 - `has` — instance
+- `peek` — instance
 - `set` — instance
 - `size` — instance
 
