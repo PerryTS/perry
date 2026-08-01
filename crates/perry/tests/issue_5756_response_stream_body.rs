@@ -102,6 +102,49 @@ console.log('done=' + first.done + ',len=' + (first.value ? first.value.byteLeng
 }
 
 #[test]
+fn response_clone_tees_pull_driven_stream_body() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const enc = new TextEncoder()
+let pulls = 0
+const response = new Response(new ReadableStream({
+  pull(controller) {
+    pulls++
+    controller.enqueue(enc.encode('hello'))
+    controller.close()
+  }
+}))
+const clone = response.clone()
+const originalRead = await response.body.getReader().read()
+const cloneRead = await clone.body.getReader().read()
+console.log(originalRead.value.byteLength + ',' + cloneRead.value.byteLength + ',' + pulls)
+"#,
+    );
+    assert_eq!(stdout, "5,5,1\n");
+}
+
+#[test]
+fn request_rejects_get_stream_body_without_pulling_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+let pulls = 0
+const body = new ReadableStream({ pull() { pulls++ } })
+try {
+  new Request('https://example.test/', { method: 'GET', body, duplex: 'half' })
+  console.log('did-not-throw')
+} catch (error) {
+  console.log((error instanceof TypeError) + ',' + pulls)
+}
+"#,
+    );
+    assert_eq!(stdout, "true,0\n");
+}
+
+#[test]
 fn response_prototype_exposes_fetch_accessors_for_wrappers() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
@@ -163,16 +206,22 @@ fn script_string_query_imports_compile_to_default_string_asset() {
         "import boot from './boot?script-string'\nexport function readBoot() { return boot }\n",
     )
     .expect("write pkg index");
-    std::fs::write(pkg.join("src/boot.ts"), "self.$_TSR = { buffer: [] }\n")
-        .expect("write script source");
+    std::fs::write(
+        pkg.join("src/boot.ts"),
+        "// preserve formatting\nself.$_TSR = {\n  buffer: []\n}\n",
+    )
+    .expect("write script source");
     std::fs::write(
         dir.path().join("main.js"),
-        "import { readBoot } from 'pkg'\nconst boot = readBoot()\nconsole.log(typeof boot)\nconsole.log(boot.includes('self.$_TSR ='))\nconsole.log(boot === true)\n",
+        "import { readBoot } from 'pkg'\nconst boot = readBoot()\nconsole.log(typeof boot)\nconsole.log(boot.includes('self.$_TSR ='))\nconsole.log(JSON.stringify(boot))\n",
     )
     .expect("write main");
 
     let stdout = compile_and_run_entry(dir.path(), "main.js");
-    assert_eq!(stdout, "string\ntrue\nfalse\n");
+    assert_eq!(
+        stdout,
+        "string\ntrue\n\"// preserve formatting\\nself.$_TSR = {\\n  buffer: []\\n}\\n\"\n"
+    );
 }
 
 #[test]
