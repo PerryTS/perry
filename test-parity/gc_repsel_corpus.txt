@@ -170,3 +170,23 @@ test_gap_gc_pointer_publish
 # "collect" arms actually bite. Keep it registered and keep it collecting.
 test_gap_repsel_gc_stress
 
+
+# --- The three residual root-store holes (#7200, #7201, #7202) --------------
+# Not representation files, so registered explicitly per the header rule.
+#
+# ***ALL THREE ARE LIVE ONLY ON THE `requires=move` ARMS, AND THAT IS THE
+# POINT.*** Each is clean under the shipped default, because #7161 flipped the
+# evacuating minor off pending #7154 — so their `default` / `verify_evac` /
+# `cons_scan_off*` cells are UNVER, correctly. `loop_polls` is where they bite
+# end to end today; when #7161 is reverted the rest flip to PASS on their own.
+#
+# Measured on `origin/main` (3a983ca6a), compiled AND run with
+# `PERRY_GC_MOVING_LOOP_POLLS=1`:
+#   spread_accessor_rooting     exit=139 (SIGSEGV) 3/3
+#   static_block_this_rooting   `bad 4` 3/3 (deterministic)
+#   inline_ctor_this_rooting    green — see its own header; it is a STATIC
+#                               gate, pinned by the codegen test and by
+#                               `gc_root_dominance_check.py --unrooted-allocas`
+test_gap_gc_spread_accessor_rooting
+test_gap_gc_static_block_this_rooting
+test_gap_gc_inline_ctor_this_rooting

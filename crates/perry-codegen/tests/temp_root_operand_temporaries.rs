@@ -935,3 +935,300 @@ fn the_inline_ctor_result_slot_never_carries_an_instance_address() {
         );
     }
 }
+
+/// #7202: the inline-constructor `this` slot must be a **rewritten** root.
+///
+/// `lower_call/new.rs` allocates `this_slot` with `alloca_entry` and every
+/// `this` read inside the inlined body is a `load` from it. A plain
+/// `alloca_entry` is neither a shadow slot nor a temp root, so an evacuating
+/// minor at a field initializer's back-edge poll neither marks nor rewrites it,
+/// and every `this.x = …` after that collection stores into abandoned
+/// from-space memory.
+///
+/// #7192 rooted the instance for the CALLER (`instance_root`, re-read by
+/// `reload_instance`) precisely because this window collects — so the object
+/// survives and MOVES. That made the caller's copy correct and left this one
+/// behind: the same address, taken one line later, that nothing rewrites.
+///
+/// Binding the alloca is the fix rather than routing `Expr::This` through a
+/// temp root, because ~30 readers already `load` from it and
+/// `js_shadow_slot_bind` records `slot_ptrs[idx] = alloca`, so evacuation
+/// rewrites it in place.
+///
+/// Sabotage check: drop the `root_entry_alloca` call in `lower_new_impl_inner`
+/// and no bind names the `this` slot.
+#[test]
+fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
+    let ir = String::from_utf8(
+        compile_module(
+            &module_with_new_running_ctor("new_inst_this_slot.ts"),
+            entry_opts(),
+        )
+        .unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let f = init_ir(&ir);
+
+    // `this` is read by the field-initializer store; find the slot it loads
+    // from by taking the alloca that a `js_shadow_slot_bind` names AND that is
+    // stored with a nanboxed instance. Simpler and stronger: assert that every
+    // `double` alloca which receives a register store and is later loaded is
+    // covered by a bind.
+    let bound: std::collections::HashSet<String> = f
+        .lines()
+        .filter_map(|l| l.split_once("js_shadow_slot_bind(i32 "))
+        .filter_map(|(_, rest)| rest.split_once("ptr ").map(|(_, p)| p))
+        .map(|p| p.trim().trim_end_matches(')').to_string())
+        .collect();
+    assert!(
+        !bound.is_empty(),
+        "expected at least one js_shadow_slot_bind in:\n{f}"
+    );
+
+    // The instance's nanbox register: walk each `store double %X, ptr %S`
+    // backwards through the bit-level nanbox ops to see whether `%X` was
+    // produced by an object allocation. That is the `this` slot.
+    let def_of: std::collections::HashMap<&str, &str> = f
+        .lines()
+        .filter_map(|l| l.trim_start().split_once(" = "))
+        .map(|(r, rhs)| (r.trim(), rhs))
+        .collect();
+    fn reaches_alloc(
+        reg: &str,
+        def_of: &std::collections::HashMap<&str, &str>,
+        depth: usize,
+    ) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Some(rhs) = def_of.get(reg) else {
+            return false;
+        };
+        if rhs.contains("@js_object_alloc") {
+            return true;
+        }
+        // Only follow bit-level identity producers, exactly as the dominance
+        // checker's `provenance` does; anything else is a different value.
+        if !(rhs.starts_with("or i64")
+            || rhs.starts_with("bitcast")
+            || rhs.starts_with("inttoptr")
+            || rhs.starts_with("ptrtoint"))
+        {
+            return false;
+        }
+        rhs.split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '.' || c == '_'))
+            .filter(|w| w.starts_with('%'))
+            .any(|w| reaches_alloc(w, def_of, depth - 1))
+    }
+
+    let this_slot = f
+        .lines()
+        .filter(|l| l.trim_start().starts_with("store double %"))
+        .find_map(|l| {
+            let (val, rest) = l
+                .trim_start()
+                .strip_prefix("store double ")?
+                .split_once(", ")?;
+            let slot = rest.strip_prefix("ptr ")?.trim();
+            reaches_alloc(val.trim(), &def_of, 8).then(|| slot.to_string())
+        })
+        .unwrap_or_else(|| panic!("no store of a freshly allocated instance into a slot in:\n{f}"));
+
+    assert!(
+        bound.contains(&this_slot),
+        "the inline-ctor `this` slot {this_slot} is a plain entry alloca that \
+         the collector neither marks nor rewrites, yet it holds the instance \
+         across the whole constructor body — it must be bound as a shadow slot \
+         (#7202). Bound slots: {bound:?}\n{f}"
+    );
+
+    // The bind contract also requires an `undefined` seed: the bind is hoisted
+    // to entry setup, so the collector dereferences the alloca before the
+    // instance store executes.
+    assert!(
+        f.lines().any(|l| {
+            l.trim_start()
+                .starts_with("store double 0x7FFC000000000001")
+                && l.trim_end().ends_with(&format!("ptr {this_slot}"))
+        }),
+        "the `this` slot must be seeded with `undefined` in entry_allocas \
+         before the hoisted bind makes it live to the collector (#7202/#6968) \
+         — no such store for {this_slot}:\n{f}"
+    );
+}
+
+/// #7200: `Object.assign(t, …sources)` threads its accumulator through a bare
+/// SSA register across every source's lowering AND across every
+/// `js_object_assign_one` call.
+///
+/// The helper reads every own key of the source, so an accessor there runs
+/// arbitrary user code *inside* the helper — the route #7198 accepted, having
+/// declined "a helper's own allocation initiates a moving collection" on
+/// evidence. `Expr::Object` has rooted its accumulator since #6951; this arm
+/// never copied it.
+///
+/// Sabotage check: drop the `temp_root_push_double`/`temp_root_set_double` pair
+/// in the `Expr::ObjectAssign` arm and the accumulator operand stops being a
+/// `js_gc_temp_root_get` result.
+#[test]
+fn the_object_assign_accumulator_is_rooted_across_each_source() {
+    let module = module_with_init(
+        "object_assign_acc.ts",
+        vec![Stmt::Expr(Expr::ObjectAssign {
+            target: Box::new(Expr::Object(Vec::new())),
+            // Two sources so the accumulator is provably live across a second
+            // lowering as well as across the first helper call.
+            sources: vec![Expr::Object(Vec::new()), Expr::Object(Vec::new())],
+        })],
+    );
+    let ir = String::from_utf8(compile_module(&module, entry_opts()).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    let f = init_ir(&ir);
+
+    let def_of: std::collections::HashMap<&str, &str> = f
+        .lines()
+        .filter_map(|l| l.trim_start().split_once(" = "))
+        .map(|(r, rhs)| (r.trim(), rhs))
+        .collect();
+
+    let calls: Vec<&str> = f
+        .lines()
+        .filter(|l| l.contains("@js_object_assign_one("))
+        .collect();
+    assert_eq!(
+        calls.len(),
+        2,
+        "expected one js_object_assign_one per source in:\n{f}"
+    );
+
+    for call in &calls {
+        // `call double @js_object_assign_one(double %acc, double %src)` — the
+        // first operand must be re-derived from the temp root, not carried in
+        // a register across the previous link.
+        let acc = call
+            .split_once("@js_object_assign_one(")
+            .expect("argument list")
+            .1
+            .split(", ")
+            .next()
+            .and_then(|a| a.trim().strip_prefix("double "))
+            .unwrap_or_else(|| panic!("no accumulator operand in `{call}`"))
+            .to_string();
+        // Follow the bitcast back to the `js_gc_temp_root_get` that produced it.
+        let mut reg = acc.clone();
+        let mut rooted = false;
+        for _ in 0..4 {
+            let Some(rhs) = def_of.get(reg.as_str()) else {
+                break;
+            };
+            if rhs.contains("@js_gc_temp_root_get") {
+                rooted = true;
+                break;
+            }
+            let Some(next) = rhs
+                .split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '.' || c == '_'))
+                .find(|w| w.starts_with('%'))
+            else {
+                break;
+            };
+            reg = next.to_string();
+        }
+        assert!(
+            rooted,
+            "the Object.assign accumulator passed to `{call}` must be re-read \
+             from its temp root below the previous source's lowering, not \
+             carried in a register (#7200):\n{f}"
+        );
+    }
+
+    // And the result of each link must be republished, because the helper now
+    // returns the target's POST-collection address.
+    assert!(
+        f.contains("@js_gc_temp_root_set"),
+        "each js_object_assign_one result must be written back into the \
+         accumulator's root — the helper returns the moved target (#7200):\n{f}"
+    );
+}
+
+/// #7201: a `PutValueSet` KEY must be re-derived below the value's evaluation.
+///
+/// The dynamic-key write IC lowers `k → v → t`. That ordering is what keeps the
+/// TARGET safe — the pointer is materialized below everything that can collect
+/// — and the comment that used to sit there extended the claim to the key, on
+/// the grounds that "a moved key merely misses by stale bits (identity compare
+/// — false negatives only)". That is true of the three way-compares and false
+/// of everything below them: the miss falls through to `put.dynic.slow`, which
+/// hands the same register to `js_put_value_set_dyn_ic`, which DEREFERENCES it
+/// as a `StringHeader*`.
+///
+/// A string-literal key is a load of a `__perry_init_strings_*` handle global —
+/// a registered root that evacuation REWRITES — so the register loaded above
+/// the value names from-space. `this.viaBlock = churn()` inside a
+/// `static { … }` block is the shipped shape.
+///
+/// Sabotage check: remove the `guard_store_operand`/`reread_store_operand` pair
+/// from the `dyn_inline` arm of `Expr::PutValueSet` and the handle load stops
+/// being re-emitted below the call.
+#[test]
+fn a_put_value_set_key_is_re_derived_below_the_value() {
+    let module = module_with_init(
+        "put_value_set_key.ts",
+        vec![
+            Stmt::Let {
+                id: 0,
+                name: "o".to_string(),
+                ty: perry_hir::types::Type::Any,
+                init: Some(Expr::Object(Vec::new())),
+                mutable: true,
+            },
+            Stmt::Expr(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(0)),
+                key: Box::new(Expr::String("viaBlock".to_string())),
+                // A call: the collection point. `Expr::Object` allocates, and
+                // an allocation is a collection point in this model.
+                value: Box::new(Expr::Object(Vec::new())),
+                receiver: Box::new(Expr::LocalGet(0)),
+                strict: true,
+            }),
+        ],
+    );
+    let ir = String::from_utf8(compile_module(&module, entry_opts()).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    let f = init_ir(&ir);
+
+    let lines: Vec<&str> = f.lines().collect();
+    let handle_load_idxs: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.contains("= load double, ptr @") && l.contains(".handle"))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !handle_load_idxs.is_empty(),
+        "expected a string-literal handle load for the key in:\n{f}"
+    );
+    // The key literal's handle must be loaded AFTER the value's allocation.
+    // Before the fix there was exactly one such load and it sat above it.
+    let alloc_idx = lines
+        .iter()
+        .position(|l| l.contains("= call i64 @js_object_alloc(i32 0, i32 0)"))
+        .and_then(|first| {
+            // the value's allocation is the SECOND `js_object_alloc` (the first
+            // is the receiver `o`)
+            lines
+                .iter()
+                .enumerate()
+                .skip(first + 1)
+                .find(|(_, l)| l.contains("= call i64 @js_object_alloc(i32 0, i32 0)"))
+                .map(|(i, _)| i)
+        })
+        .unwrap_or_else(|| panic!("no value allocation in:\n{f}"));
+    assert!(
+        handle_load_idxs.iter().any(|i| *i > alloc_idx),
+        "the key literal's handle global must be re-loaded BELOW the value's \
+         allocation — a register loaded above it names from-space after an \
+         evacuating minor, and the dyn-IC slow path dereferences it as a \
+         StringHeader* (#7201/#7114). Handle loads at {handle_load_idxs:?}, \
+         value allocation at {alloc_idx}:\n{f}"
+    );
+}
