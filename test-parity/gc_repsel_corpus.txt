@@ -142,10 +142,25 @@ test_gap_repsel_module_init_canonical
 # `*slot = bits`, skipping `layout_note_slot` (so the holder stayed
 # `POINTER_FREE` and `heap_payload_slot_selection` skipped its WHOLE payload)
 # and the write barrier (so an old->young edge never reached the remembered
-# set). LIVE BY CONSTRUCTION: measured 33 copying minors at default settings,
-# and every subject is read AFTER the churn that drives them, so a non-moving
-# collection cannot satisfy it. Verified to FAIL on the pre-fix stores
-# (`spread-method: 310 base:0 base:39` becomes a crash) and pass after.
+# set). Every subject is read AFTER the churn that drives collection, so a
+# non-moving collection cannot satisfy it. Verified to FAIL on the pre-fix
+# stores (SIGBUS, exit 138) and pass after.
+#
+# ***THIS FILE IS LIVE ONLY ON THE MOVING ARMS, AND THAT IS THE POINT.***
+# Measured 33 copying minors under `PERRY_GC_MOVING_LOOP_POLLS=1` /
+# `evac_minor` / `force_evac`, and ZERO under the shipped default -- because
+# #7161 flipped the evacuating minor off by default pending #7154. So its
+# `default` / `verify_evac` / `cons_scan_off*` cells are UNVER, correctly: the
+# bug it guards cannot manifest without a moving collector, and a PASS there
+# would be the false confidence this harness exists to remove.
+#
+# The consequence to keep in view: `loop_polls` (and the other `requires=move`
+# arms) are now the ONLY place this file bites end to end. If #7161 is ever
+# reverted the cells flip to PASS on their own; if instead the moving-loop knob
+# is deleted, this file goes dark and must be re-tuned or retired with it. The
+# collector-side coverage does NOT depend on that knob: the three Rust tests in
+# `gc/tests/copying/pointer_publish_7154.rs` call `gc_collect_minor` directly,
+# which takes the copying path regardless, and each asserts `copied_objects > 0`.
 test_gap_gc_pointer_publish
 
 # --- The GC-live member ------------------------------------------------------
