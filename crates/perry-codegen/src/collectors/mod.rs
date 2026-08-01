@@ -6,6 +6,7 @@
 //! hub — public-API shape (`crate::collectors::*`) is preserved.
 
 mod cjs_scaffolding;
+pub use cjs_scaffolding::{census as cjs_preamble_census, CjsPreambleCensus};
 mod clamp_detect;
 mod class_accessors;
 mod closures;
