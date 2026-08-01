@@ -163,6 +163,21 @@ on.
 — read out of a root and held in a register across a collection point. That is
 the mode that found cases 3 and 4.
 
+`--unrooted-allocas` (#7207) covers the remaining shape, and is the one the
+bind-anchored check is structurally blind to: the value lives in a plain
+`alloca_entry` for its whole lifetime, so there is no `js_shadow_slot_bind` to
+anchor on and a scan that starts from binds calls the function clean. It found
+`lower_call/new.rs`'s inline-ctor `this_slot` independently of any runtime
+probe. **The gate does not run this mode yet** — its remaining hits are the
+caches, staging arrays and inlined-callee params tracked as #7210, and they are
+deliberately not in the allowlist, which covers the bind-anchored shape only.
+Run it by hand when you touch an `alloca_entry` site:
+
+```bash
+python3 scripts/gc_root_dominance_check.py .perry-trace/llvm \
+  --unrooted-allocas --moving-only -v
+```
+
 ### 2. The runtime instruments — second, and mind the depth
 
 From #7196:
