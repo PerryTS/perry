@@ -357,6 +357,14 @@ impl CjsPreamble {
 /// single pass over the region's top-level statements looking for R1/R2. Only
 /// `cjs_wrap` output binds `__cjs_module` to that literal, so on ordinary
 /// TypeScript this returns `Default` after one `Vec` scan.
+///
+/// Deliberately NOT gated on [`crate::opt_report::enabled`], even though the
+/// only observable effect is on the report. Gating it would make the candidate
+/// set differ between a reporting build and an ordinary one — the facts would
+/// still be identical (that is R4's argument), but "the report describes a
+/// different compile than the one you ran" is the exact confusion this whole
+/// report exists to remove. The cost of not gating it is one string compare per
+/// top-level statement per region.
 pub(super) fn preamble_in_region(stmts: &[Stmt]) -> CjsPreamble {
     // R1 + R2 (`record_binding`), on top-level bindings of R1's name.
     let records: Vec<u32> = stmts
