@@ -1349,22 +1349,43 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // resource class's enumerable statics like `.extend`/`.method`; without this
     // the call hung at `import 'stripe'`.)
     if crate::closure::is_closure_ptr(src_raw) {
-        for (name, value) in crate::closure::closure_dynamic_props_snapshot(src_raw) {
+        // #7200: `js_string_from_bytes` and the write funnel both allocate, and
+        // the snapshot's VALUES are heap references held in a plain `Vec` for
+        // the whole loop. `src_raw` keys the closure side tables, so it has to
+        // survive too. No accessor runs here (the snapshot is raw), so this is
+        // the allocation-only form of the same window rather than user-code
+        // re-entry — it is fixed for symmetry, and because a snapshot Vec of
+        // unrooted heap words is a liveness hole as well as a staleness one.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        let src_h = scope.root_raw_const_ptr(src_raw as *const u8);
+        let snapshot = crate::closure::closure_dynamic_props_snapshot(src_raw);
+        let value_handles: Vec<_> = snapshot
+            .iter()
+            .map(|(_name, value)| scope.root_nanbox_f64(*value))
+            .collect();
+        for ((name, _), value_h) in snapshot.iter().zip(value_handles.iter()) {
+            let src_raw = src_h.get_raw_const_ptr::<u8>() as usize;
             if matches!(name.as_str(), "length" | "name" | "prototype") {
                 continue;
             }
-            if crate::closure::closure_is_key_deleted(src_raw, &name) {
+            if crate::closure::closure_is_key_deleted(src_raw, name) {
                 continue;
             }
-            if let Some(attrs) = get_property_attrs(src_raw, &name) {
+            if let Some(attrs) = get_property_attrs(src_raw, name) {
                 if !attrs.enumerable() {
                     continue;
                 }
             }
             let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            object_assign_set_string_key(target, target_is_array, key_ptr, value);
+            object_assign_set_string_key(
+                tgt_h.get_raw_mut_ptr::<ObjectHeader>(),
+                target_is_array,
+                key_ptr,
+                value_h.get_nanbox_f64(),
+            );
         }
-        return target_f64;
+        return crate::value::js_nanbox_pointer(tgt_h.get_raw_mut_ptr::<ObjectHeader>() as i64);
     }
 
     let src = src_raw as *const ObjectHeader;
