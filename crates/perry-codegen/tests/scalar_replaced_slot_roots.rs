@@ -200,7 +200,7 @@ fn frame_slot_count(ir: &str) -> u32 {
         .find(needle)
         .map(|i| i + needle.len())
         .unwrap_or_else(|| {
-            panic!("expected a shadow frame push in:\n{ir}");
+            panic!("expected a shadow frame enter in:\n{ir}");
         });
     let rest = &ir[start..];
     let end = rest.find(')').expect("malformed frame push");
@@ -547,7 +547,7 @@ fn every_store_into_a_hoisted_scalar_slot_shades_its_value() {
 }
 
 /// The bind must sit in the ENTRY block, ahead of the loop that stores through
-/// the slot — and after `js_shadow_frame_push`.
+/// the slot — and after `js_shadow_frame_enter`.
 ///
 /// This is the property the whole change exists for: a store inside a loop must
 /// not re-bind per iteration. It is also where the one real ordering hazard
@@ -596,7 +596,7 @@ fn bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop() {
     // #7088: the push is `js_shadow_frame_enter` (returns the state pointer).
     let push = body
         .find("call ptr @js_shadow_frame_enter(")
-        .unwrap_or_else(|| panic!("no frame push in the binding function:\n{body}"));
+        .unwrap_or_else(|| panic!("no frame enter in the binding function:\n{body}"));
     let bind = body
         .find("call void @js_shadow_slot_bind(")
         .expect("bind was located by enclosing_function");
