@@ -494,10 +494,7 @@ pub(crate) fn collect_unprofitable_canonical_i32_locals(
 /// * a site inside a loop is counted once, though it is paid per iteration;
 /// * `this.other()` calls that the clone also lowers guard-free (the
 ///   `ThisFlowAnalysis` walk vets them transitively) are not followed.
-pub(crate) fn proven_receiver_clone_field_sites(
-    method: &Function,
-    chain_fields: &HashSet<String>,
-) -> u32 {
+fn proven_receiver_clone_field_sites(method: &Function, chain_fields: &HashSet<String>) -> u32 {
     let mut sites = 0u32;
     super::scalar_method_dispatch::for_each_expr_in_stmts(&method.body, &mut |e| {
         let named = match e {
