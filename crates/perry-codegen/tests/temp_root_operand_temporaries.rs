@@ -1232,3 +1232,38 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
          value allocation at {alloc_idx}:\n{f}"
     );
 }
+
+/// The negative half of #7202: a class that runs NO user code during
+/// construction must emit no `this`-slot root at all.
+///
+/// The bind is gated on the same `construction_runs_user_code` predicate that
+/// decides the instance needs a temp root — one predicate, one place. A class
+/// with no constructor, no fields and no heritage has nothing in the window
+/// that can collect, so the slot cannot go stale and the frame must not grow
+/// for it.
+///
+/// Sabotage check: drop the `instance_root.is_some()` guard around the bind in
+/// `lower_new_impl_inner` and this fails.
+#[test]
+fn a_collection_free_construction_emits_no_this_slot_root() {
+    // `module_with_new` is the bare `Pair` class: no fields, no ctor, no
+    // heritage — the exact shape `construction_runs_user_code` answers `false`
+    // for.
+    let ir = ir_for_new("new_inst_inert.ts", Vec::new());
+    let f = init_ir(&ir);
+    assert!(
+        f.contains("@js_object_alloc"),
+        "the fixture must actually construct something:\n{f}"
+    );
+    assert!(
+        !f.contains("@js_gc_temp_root_push"),
+        "an inert construction runs no user code, so it must emit no instance \
+         temp root (#7192) — the `this`-slot bind is gated on the same \
+         predicate:\n{f}"
+    );
+    assert!(
+        !f.contains("@js_shadow_slot_bind"),
+        "an inert construction must not grow the shadow frame for a `this` \
+         slot that cannot go stale (#7202):\n{f}"
+    );
+}

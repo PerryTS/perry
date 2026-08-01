@@ -1133,11 +1133,23 @@ fn lower_new_impl_inner(
     // in place. The `undefined` seed is required by `root_entry_alloca`'s
     // contract: the bind is hoisted to entry setup, so the slot is live to the
     // collector before this store executes.
-    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    ctx.func
-        .entry_allocas_push_store(DOUBLE, &undef, &this_slot);
-    ctx.block().store(DOUBLE, &obj_box, &this_slot);
-    crate::expr::root_entry_alloca(ctx, &this_slot);
+    //
+    // Gated on `instance_root.is_some()`, i.e. on the very same
+    // `construction_runs_user_code` predicate that decided the instance needed
+    // a temp root at all. When it is false no user code runs between this store
+    // and the pop, so nothing in the window can collect and the slot cannot go
+    // stale — and a class with no constructor, no fields and no heritage keeps
+    // its previous IR exactly, frame size included. One predicate, one place:
+    // forking a second one here is how #7114's two predicates diverged.
+    if instance_root.is_some() {
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        ctx.func
+            .entry_allocas_push_store(DOUBLE, &undef, &this_slot);
+        ctx.block().store(DOUBLE, &obj_box, &this_slot);
+        crate::expr::root_entry_alloca(ctx, &this_slot);
+    } else {
+        ctx.block().store(DOUBLE, &obj_box, &this_slot);
+    }
     ctx.this_stack.push(this_slot);
     ctx.class_stack.push(class_name.to_string());
 
