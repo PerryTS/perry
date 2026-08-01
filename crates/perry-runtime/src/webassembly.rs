@@ -303,31 +303,41 @@ fn make_module_object(module: *mut c_void) -> f64 {
     if module.is_null() {
         return nanbox_undefined();
     }
-    let obj = crate::object::js_object_alloc(0, 2);
-    object_set_string(obj, b"__wasmKind", b"module");
-    object_set(obj, b"__wasmModulePtr", module as usize as f64);
-    // Record this host pointer as a genuine module instance so the
-    // `instanceof WebAssembly.Module` brand check can distinguish it from a
-    // user object that merely copies the `__wasmKind`/`__wasmModulePtr` fields.
-    crate::object::register_wasm_module_ptr(module as usize);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+
+    // String/key creation can collect and evacuate the fresh wrapper. Root
+    // each value first, then reload the object before entering the generic
+    // setter (which roots its arguments internally).
+    let kind_key = scope.root_string_ptr(named_key(b"__wasmKind"));
+    let kind_value = scope.root_nanbox_f64(string_value(b"module"));
+    crate::object::js_object_set_field_by_name(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        kind_key.get_raw_const_ptr::<crate::string::StringHeader>(),
+        kind_value.get_nanbox_f64(),
+    );
+
+    let ptr_key = scope.root_string_ptr(named_key(b"__wasmModulePtr"));
+    crate::object::js_object_set_field_by_name(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        ptr_key.get_raw_const_ptr::<crate::string::StringHeader>(),
+        module as usize as f64,
+    );
+
+    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+    // Wrapper identity, not either public property, is the unforgeable brand
+    // and the only route back to the trusted host handle.
+    crate::object::register_wasm_module_wrapper(obj as usize, module as usize);
     object_value(obj)
 }
 
 fn extract_module_handle(module_jsval: f64) -> Option<*mut c_void> {
-    let ptr = unbox_pointer(module_jsval);
-    if ptr.is_null() {
+    let value = JSValue::from_bits(module_jsval.to_bits());
+    if !value.is_pointer() {
         return None;
     }
-    let raw = crate::object::js_object_get_field_by_name_f64(
-        ptr as *const crate::object::ObjectHeader,
-        named_key(b"__wasmModulePtr"),
-    );
-    let n = JSValue::from_bits(raw.to_bits()).to_number();
-    if n.is_finite() && n > 0.0 {
-        Some(n as usize as *mut c_void)
-    } else {
-        None
-    }
+    let wrapper = value.as_pointer::<crate::object::ObjectHeader>() as usize;
+    crate::object::registered_module_handle(wrapper).map(|handle| handle as *mut c_void)
 }
 
 fn extern_kind_name(kind: u8) -> &'static [u8] {

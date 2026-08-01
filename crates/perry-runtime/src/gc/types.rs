@@ -657,6 +657,7 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
             // this ordinary object so getPrototypeOf/inherited reads still
             // resolve after evacuation.
             crate::object::prototype_chain::object_static_prototype_owner_moved(old_user, new_user);
+            crate::object::module_wrapper_owner_moved(old_user, new_user);
         }
         GcMoveHookKind::ClosureDynamicProps => {
             crate::closure::closure_dynamic_props_owner_moved(old_user, new_user);
@@ -682,6 +683,7 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
     match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
         GcMoveHookKind::ObjectOverflowFields => {
             crate::object::clear_overflow_for_ptr(user_ptr);
+            crate::object::clear_module_wrapper_for_dead_ptr(user_ptr);
             // The old per-object KEYS_INDEX prune is gone (#6759 C1): key
             // indexes are shape records keyed on keys_array identity now,
             // memory-pruned by `shapes::prune_dead_shape_keys` in the

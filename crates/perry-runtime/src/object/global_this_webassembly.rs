@@ -139,50 +139,78 @@ fn wasm_unsupported_rejection(api: &str) -> f64 {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Live module-pointer brand registry
+// Live WebAssembly.Module wrapper registry
 // ────────────────────────────────────────────────────────────────────────
 
 /// A module wrapper is a plain heap object stamped with the enumerable
 /// `__wasmKind`/`__wasmModulePtr` properties (see
 /// `crate::webassembly::make_module_object`), so a user object literal can
-/// trivially copy those two fields — a string tag is not a brand.
-/// `mod instanceof WebAssembly.Module` must not be fooled by
-/// `{ __wasmKind: "module", __wasmModulePtr: 123 }`. The unforgeable signal is
-/// that `__wasmModulePtr` names a module host allocation THIS runtime produced:
-/// record every such pointer here at creation and require membership in the
-/// `instanceof` brand check. (Mirrors the `is_registered_buffer`/`_map`/`_set`
-/// side registries the other builtin `instanceof` probes rely on.) Kept in
-/// this always-compiled module rather than the `wasm-host`-gated
-/// `crate::webassembly` so the brand check compiles with the engine off — with
-/// no engine no module is ever registered, so the check correctly never
-/// matches.
-fn live_module_ptrs() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
-    static REG: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+/// trivially copy those two fields — including a genuine host pointer. Record
+/// the GC-managed wrapper identity instead and keep its trusted host handle in
+/// this side table. The move/death hooks keep the entry aligned with object
+/// evacuation and prevent an address-reuse false brand. This module is always
+/// compiled so `instanceof` works without `wasm-host`; with the engine off the
+/// registry stays empty and the probe correctly never matches.
+fn module_wrappers() -> &'static std::sync::Mutex<std::collections::HashMap<usize, usize>> {
+    static REG: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, usize>>> =
         std::sync::OnceLock::new();
-    REG.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+    REG.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-/// Record a module host pointer as a genuine `WebAssembly.Module` instance.
-/// Reachable only from the `wasm-host` construct path and the unit tests —
-/// with the engine off no real module exists to register.
+/// Fast-path latch for the GC hooks. Most programs never construct a wasm
+/// module, so their ordinary-object move/death path pays only one atomic load
+/// and never initializes or locks the registry.
+fn module_wrapper_registry_used() -> &'static std::sync::atomic::AtomicBool {
+    static USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    &USED
+}
+
+/// Bind a genuine wrapper object identity to its private host module handle.
+/// Public `__wasm*` properties are compatibility data, never the brand.
 #[cfg(any(test, feature = "wasm-host"))]
-pub(crate) fn register_module_ptr(ptr: usize) {
-    if ptr != 0 {
-        if let Ok(mut set) = live_module_ptrs().lock() {
-            set.insert(ptr);
+pub(crate) fn register_module_wrapper(wrapper: usize, host_handle: usize) {
+    if wrapper != 0 && host_handle != 0 {
+        if let Ok(mut wrappers) = module_wrappers().lock() {
+            wrappers.insert(wrapper, host_handle);
+            module_wrapper_registry_used().store(true, std::sync::atomic::Ordering::Release);
         }
     }
 }
 
-/// Whether `ptr` is a live module host pointer produced by this runtime — the
-/// `instanceof WebAssembly.Module` brand. Fails closed (poisoned lock / null →
-/// `false`), so a miss falls through to the ordinary prototype walk.
-fn is_registered_module_ptr(ptr: usize) -> bool {
-    ptr != 0
-        && live_module_ptrs()
-            .lock()
-            .map(|set| set.contains(&ptr))
-            .unwrap_or(false)
+/// Return the trusted host handle for a registered wrapper identity. A
+/// poisoned lock or unknown address fails closed.
+pub(crate) fn registered_module_handle(wrapper: usize) -> Option<usize> {
+    if wrapper == 0 || !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
+        return None;
+    }
+    module_wrappers()
+        .lock()
+        .ok()
+        .and_then(|wrappers| wrappers.get(&wrapper).copied())
+}
+
+/// Migrate a wrapper's identity after ordinary-object evacuation.
+pub(crate) fn module_wrapper_owner_moved(old_wrapper: usize, new_wrapper: usize) {
+    if old_wrapper == new_wrapper
+        || !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire)
+    {
+        return;
+    }
+    if let Ok(mut wrappers) = module_wrappers().lock() {
+        if let Some(host_handle) = wrappers.remove(&old_wrapper) {
+            wrappers.insert(new_wrapper, host_handle);
+        }
+    }
+}
+
+/// Clear the identity before a dead wrapper's address can be reused.
+pub(crate) fn clear_module_wrapper_for_dead_ptr(wrapper: usize) {
+    if !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    if let Ok(mut wrappers) = module_wrappers().lock() {
+        wrappers.remove(&wrapper);
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -296,45 +324,17 @@ fn webassembly_value_ctor_expected_kind(type_ref: f64) -> Option<&'static [u8]> 
 }
 
 /// Whether `value` is a genuine WebAssembly module wrapper this runtime
-/// produced whose `__wasmKind` brand tag equals `expected`. The wasm-host
-/// module wrapper (`crate::webassembly::make_module_object`) stamps
-/// `__wasmKind = "module"` and `__wasmModulePtr = <host module pointer>`.
-///
-/// Both properties are enumerable and user-writable, so the string tag alone
-/// is forgeable — `{ __wasmKind: "module", __wasmModulePtr: 123 }` would
-/// otherwise pass. The unforgeable brand is that `__wasmModulePtr` names a
-/// module host allocation recorded by `register_module_ptr` at construction
-/// (checked here via `is_registered_module_ptr`); a user object that merely
-/// copies the two fields carries a pointer this runtime never handed out, so
-/// it is rejected and falls through to the prototype walk (→ `false`),
-/// matching Node.
+/// produced. The enumerable, writable compatibility properties are ignored:
+/// even copying a real host pointer from a genuine module cannot brand another
+/// object. The GC-aware wrapper-address side table is the internal slot.
 fn value_wasm_kind_matches(value: f64, expected: &[u8]) -> bool {
-    let Some(obj) = value_object_ptr(value) else {
-        return false;
-    };
-    let kind = js_object_get_field_by_name_f64(obj, named_key(b"__wasmKind"));
-    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(kind, &mut scratch) else {
-        return false;
-    };
-    if ptr.is_null() {
-        return false;
-    }
-    if unsafe { std::slice::from_raw_parts(ptr, len as usize) } != expected {
-        return false;
-    }
-    // Unforgeable brand: `__wasmModulePtr` must be a live module host pointer
-    // this runtime produced. (`module` is the only value ctor with real
-    // instances in this baseline, so the registry is module-only.)
     if expected != b"module" {
         return false;
     }
-    let module_ptr = js_object_get_field_by_name_f64(obj, named_key(b"__wasmModulePtr"));
-    let n = crate::value::JSValue::from_bits(module_ptr.to_bits()).to_number();
-    if !(n.is_finite() && n > 0.0) {
+    let Some(obj) = value_object_ptr(value) else {
         return false;
-    }
-    is_registered_module_ptr(n as usize)
+    };
+    registered_module_handle(obj as usize).is_some()
 }
 
 /// `mod instanceof WebAssembly.Module` for the wasm-host module wrapper.
@@ -343,7 +343,7 @@ fn value_wasm_kind_matches(value: f64, expected: &[u8]) -> bool {
 /// error constructors have (see `webassembly_error_ctor_instanceof`) — so
 /// the ordinary prototype walk in `js_instanceof_dynamic` cannot brand it.
 /// Identify the RHS by its constructor thunk `func_ptr` and brand-check the
-/// instance by its `__wasmKind` tag. Returns `Some(true)` on a positive
+/// instance by its internal wrapper registration. Returns `Some(true)` on a positive
 /// match; `None` otherwise, so a non-matching value still falls through to
 /// the prototype walk — which is how `WebAssembly.Memory` instances (linked
 /// to `Memory.prototype` by the dynamic construct path) already resolve, and
@@ -1366,29 +1366,39 @@ mod tests {
     }
 
     /// Build a module-wrapper-shaped object stamped with the two enumerable
-    /// brand properties, exactly as `make_module_object` does. When
-    /// `register` is true the sentinel `__wasmModulePtr` is recorded in the
-    /// live-module registry, so the object is a GENUINE module; otherwise it
-    /// is a FORGERY (the fields are present but the pointer was never handed
-    /// out by this runtime).
+    /// compatibility properties, exactly as `make_module_object` does. Only
+    /// the internal wrapper-address registration establishes the brand.
     fn module_wrapper(module_ptr: usize, register: bool) -> f64 {
-        let obj = js_object_alloc(0, 2);
-        js_object_set_field_by_name(obj, named_key(b"__wasmKind"), string_value("module"));
-        js_object_set_field_by_name(obj, named_key(b"__wasmModulePtr"), module_ptr as f64);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
+        let kind_key = scope.root_string_ptr(named_key(b"__wasmKind"));
+        let kind_value = scope.root_nanbox_f64(string_value("module"));
+        js_object_set_field_by_name(
+            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+            kind_key.get_raw_const_ptr::<crate::StringHeader>(),
+            kind_value.get_nanbox_f64(),
+        );
+        let ptr_key = scope.root_string_ptr(named_key(b"__wasmModulePtr"));
+        js_object_set_field_by_name(
+            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+            ptr_key.get_raw_const_ptr::<crate::StringHeader>(),
+            module_ptr as f64,
+        );
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         if register {
-            register_module_ptr(module_ptr);
+            register_module_wrapper(obj as usize, module_ptr);
         }
         crate::value::js_nanbox_pointer(obj as i64)
     }
 
     #[test]
-    fn value_ctor_instanceof_brands_module_by_registered_ptr() {
+    fn value_ctor_instanceof_brands_only_registered_wrapper_identity() {
         let ns = create_webassembly_namespace();
         let module_ctor = ns_field(ns, b"Module");
         let memory_ctor = ns_field(ns, b"Memory");
 
-        // A genuine wrapper: both brand fields present AND its `__wasmModulePtr`
-        // recorded as a live module (mirrors `make_module_object`).
+        // A genuine wrapper: its object identity is registered with the host
+        // handle (mirrors `make_module_object`).
         let genuine = module_wrapper(0x5EED_0000, true);
         assert_eq!(
             webassembly_value_ctor_instanceof(genuine, module_ctor),
@@ -1418,14 +1428,20 @@ mod tests {
             "a plain object with only __wasmKind must not be instanceof Module"
         );
 
-        // Forgery #2: both fields copied, but the pointer was never handed out
-        // by this runtime (not registered) — still rejected.
-        let forged_unregistered = module_wrapper(0xDEAD_0000, false);
+        // Forgery #2: both fields copied INCLUDING a genuine registered host
+        // pointer. Host-pointer membership alone would accept this object;
+        // wrapper identity must reject it.
+        let forged_unregistered = module_wrapper(0x5EED_0000, false);
         assert_eq!(
             webassembly_value_ctor_instanceof(forged_unregistered, module_ctor),
             None,
-            "an unregistered __wasmModulePtr must not be instanceof Module"
+            "copying a genuine __wasmModulePtr must not brand another wrapper"
         );
+
+        let genuine_ptr = value_object_ptr(genuine).expect("genuine module wrapper") as usize;
+        let forged_ptr = value_object_ptr(forged_unregistered).expect("forged wrapper") as usize;
+        assert_eq!(registered_module_handle(genuine_ptr), Some(0x5EED_0000));
+        assert_eq!(registered_module_handle(forged_ptr), None);
 
         // A foreign object is not branded.
         let plain = js_object_alloc(0, 0);
@@ -1442,6 +1458,21 @@ mod tests {
             None
         );
         assert_eq!(webassembly_value_ctor_instanceof(genuine, 2.0), None);
+    }
+
+    #[test]
+    fn module_wrapper_registry_tracks_gc_move_and_death() {
+        let old_wrapper = 0xA11C_E000;
+        let new_wrapper = 0xA11C_F000;
+        let host_handle = 0xCAFE_0000;
+
+        register_module_wrapper(old_wrapper, host_handle);
+        module_wrapper_owner_moved(old_wrapper, new_wrapper);
+        assert_eq!(registered_module_handle(old_wrapper), None);
+        assert_eq!(registered_module_handle(new_wrapper), Some(host_handle));
+
+        clear_module_wrapper_for_dead_ptr(new_wrapper);
+        assert_eq!(registered_module_handle(new_wrapper), None);
     }
 
     #[test]

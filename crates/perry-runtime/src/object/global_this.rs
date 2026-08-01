@@ -20,13 +20,16 @@ use super::*;
 #[path = "global_this_webassembly.rs"]
 mod global_this_webassembly;
 pub(crate) use global_this_webassembly::{
+    clear_module_wrapper_for_dead_ptr, module_wrapper_owner_moved,
     webassembly_error_ctor_instanceof, webassembly_value_ctor_instanceof,
 };
 // Only the `wasm-host` engine constructs real modules (via
-// `webassembly::make_module_object`), so the registration hook is reachable
-// only under that feature; with the engine off no module is ever registered.
+// `webassembly::make_module_object`), so registration and trusted-handle
+// extraction are reachable only under that feature.
 #[cfg(feature = "wasm-host")]
-pub(crate) use global_this_webassembly::register_module_ptr as register_wasm_module_ptr;
+pub(crate) use global_this_webassembly::{
+    register_module_wrapper as register_wasm_module_wrapper, registered_module_handle,
+};
 
 // Topical sub-modules split out of the original monolithic `global_this.rs`
 // (pure code move; see the per-module re-exports below for the resolving paths).

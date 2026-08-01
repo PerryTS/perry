@@ -59,10 +59,13 @@ show("module instanceof Module", addModule instanceof WebAssembly.Module);
 show("compiled instanceof Module", compiled instanceof WebAssembly.Module);
 show("module not instanceof Memory", addModule instanceof WebAssembly.Memory);
 
-// A plain object that merely copies the internal brand fields is NOT a
-// module — the brand is a live host pointer this runtime handed out, not a
-// user-writable string/number property.
-const forged = { __wasmKind: "module", __wasmModulePtr: 1 } as unknown;
+// A plain object that copies BOTH public compatibility fields from a genuine
+// module is still not branded. Knowing a real host pointer must not let a
+// forged wrapper reach Module metadata host calls.
+const forged = {
+  __wasmKind: (addModule as any).__wasmKind,
+  __wasmModulePtr: (addModule as any).__wasmModulePtr,
+} as unknown;
 show("forged not instanceof Module", forged instanceof WebAssembly.Module);
 
 // `WebAssembly.Memory` instances are recognized too (they link
