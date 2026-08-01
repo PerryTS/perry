@@ -332,3 +332,269 @@ fn nothing_is_recorded_when_the_report_is_off() {
         "the sink must stay empty when the report is off"
     );
 }
+
+// ── #7170 R0: what the alloc-site buckets MEAN ─────────────────────────────
+//
+// Three defects, measured on 197 dependency modules, each of which made a
+// scheduler-facing number say something other than what it looked like. The
+// tests below are grouped by defect and each one is written so that reverting
+// its arm in the compiler takes it — and only it — red.
+
+fn anon_shape(args: Vec<Expr>) -> Expr {
+    Expr::New {
+        class_name: "__AnonShape_1f2e".to_string(),
+        args,
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    }
+}
+
+fn alloc_rows(entries: &[crate::opt_report::Entry]) -> Vec<&crate::opt_report::Entry> {
+    entries
+        .iter()
+        .filter(|e| e.position == Position::AllocSite)
+        .collect()
+}
+
+/// Defect 2 (#7170 §5.1). A closed-shape object literal lowers to
+/// `new __AnonShape_N(v0, …)` whose constructor arguments ARE its property
+/// values, so `{a: {b: 1}}` filed its inner literal under
+/// `constructor argument` — the label for a genuine `new C(arg)`. On the
+/// dependency corpus the two are 24.5% and 2.0% of sites: one bucket was 92%
+/// the other thing.
+#[test]
+fn a_nested_object_literal_is_not_filed_as_a_constructor_argument() {
+    let classes = HashMap::new();
+    let stmts = vec![Stmt::Let {
+        id: 1,
+        name: "outer".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(anon_shape(vec![anon_shape(Vec::new())])),
+    }];
+
+    let session = Session::start();
+    let _ = run(&stmts, &classes);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1, "the inner literal is the only unbound site");
+    assert_eq!(
+        rows[0].alloc_context.as_deref(),
+        Some("object literal property value"),
+        "a property value of an anonymous shape is not a constructor argument"
+    );
+}
+
+/// The other direction: a genuine `new C(arg)` argument must KEEP the
+/// `constructor argument` bucket. Without this the split is satisfiable by a
+/// rule that simply renames everything.
+#[test]
+fn a_real_constructor_argument_keeps_its_own_bucket() {
+    let c = class_with_fields("C", &["x"]);
+    let boxc = class_with_fields("Box", &["v"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    classes.insert("Box".to_string(), &boxc);
+    let stmts = vec![Stmt::Let {
+        id: 1,
+        name: "b".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::New {
+            class_name: "Box".to_string(),
+            args: vec![new_c()],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+    }];
+
+    let session = Session::start();
+    let _ = run(&stmts, &classes);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].alloc_context.as_deref(),
+        Some("constructor argument"),
+        "`new Box(new C())` really is a constructor argument"
+    );
+}
+
+/// Defect 3 (#7170 §5.2). `deny_alloc_site` fires unconditionally at the top
+/// of the collector, before any seeding, so a `return new C(...)` in a
+/// function that ALREADY carries a return-shape fact (#7107) was counted as a
+/// rule-1 miss. It is not one: the class reaches every
+/// `const r = producer(...)` call site.
+#[test]
+fn a_return_in_a_return_shape_producer_is_reported_as_served() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(new_c()))];
+
+    let session = Session::start();
+    let _guard = crate::opt_report::enter_function_region("mk", true);
+    let _ = run(&stmts, &classes);
+    drop(_guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].rule.as_deref(),
+        Some("rule 1 (provenance) — already served by return-shape"),
+        "a served return must leave the rule-1 bucket, not merely annotate it"
+    );
+    assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+}
+
+/// The same site in a function WITHOUT a return-shape fact stays an ordinary
+/// rule-1 denial. This is the anti-vacuity half: a classifier that answers
+/// "served" unconditionally passes the test above and fails this one.
+#[test]
+fn a_return_in_a_plain_function_is_still_a_rule_1_denial() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(new_c()))];
+
+    let session = Session::start();
+    let _guard = crate::opt_report::enter_function_region("mk", false);
+    let _ = run(&stmts, &classes);
+    drop(_guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].rule.as_deref(), Some("rule 1 (provenance)"));
+    assert_eq!(
+        rows[0].tier,
+        Some(crate::opt_report::Tier::CompilerLimitation)
+    );
+}
+
+/// #7170 §6, as a test rather than a comment: **91.6% of dependency-JS
+/// allocation sites are in closure regions, and none of them is served.**
+/// `collect_return_shape_functions` issues facts only for `hir.functions`
+/// entries and the caller-side seed only fires on a bare `Expr::FuncRef`
+/// callee, which a closure call never is. A classifier that keyed servedness
+/// on the syntax of the returns alone — rather than on the fact — would mark
+/// this whole population served and delete the wall it is supposed to measure.
+#[test]
+fn a_closure_region_never_reports_a_served_return() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(new_c()))];
+
+    let session = Session::start();
+    let _guard = crate::opt_report::enter_closure("mk", 7);
+    let _ = run(&stmts, &classes);
+    drop(_guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].rule.as_deref(),
+        Some("rule 1 (provenance)"),
+        "a closure body cannot carry a return-shape fact"
+    );
+}
+
+/// Only the RETURN position is served. `return f({a: 1})` puts the literal in
+/// a call-argument position of a function that is not a producer at all, and
+/// even inside a real producer a nested argument is not one of the returns.
+#[test]
+fn only_the_return_position_is_marked_served() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    // `return new C(new C())` — outer is the return, inner is an argument.
+    let stmts = vec![Stmt::Return(Some(Expr::New {
+        class_name: "C".to_string(),
+        args: vec![new_c()],
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    }))];
+
+    let session = Session::start();
+    let _guard = crate::opt_report::enter_function_region("mk", true);
+    let _ = run(&stmts, &classes);
+    drop(_guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 2, "outer return plus inner argument");
+    let served: Vec<_> = rows
+        .iter()
+        .filter(|e| e.tier == Some(crate::opt_report::Tier::Served))
+        .collect();
+    assert_eq!(served.len(), 1, "exactly the return position is served");
+    assert_eq!(served[0].alloc_context.as_deref(), Some("return"));
+}
+
+/// Defect 1 (PR #7171 §3). Every anonymous literal renders as
+/// `object literal { ... }` and carries `byte_offset: 0`, so
+/// `(module, function, name, position, analysis, outcome, rule)` was the same
+/// tuple for every unbound literal in a function and all but one vanished.
+/// PR #7171 measured the consequence directly: suppressing 379 scaffolding
+/// rows REVEALED 62 real user rows the dedup had been hiding.
+#[test]
+fn two_unbound_literals_in_one_function_are_two_rows() {
+    let classes = HashMap::new();
+    let stmts = vec![
+        Stmt::Expr(anon_shape(Vec::new())),
+        Stmt::Expr(anon_shape(Vec::new())),
+    ];
+
+    let session = Session::start();
+    let _ = run(&stmts, &classes);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(
+        rows.len(),
+        2,
+        "two syntactic allocations are two rows, not one: {rows:#?}"
+    );
+    let mut ordinals: Vec<_> = rows.iter().filter_map(|e| e.alloc_ordinal).collect();
+    ordinals.sort_unstable();
+    assert_eq!(ordinals, vec![0, 1]);
+}
+
+/// ...and the de-duplication that motivated the key still works: a function
+/// lowered twice (a boxed entry plus a typed clone) walks the same body and
+/// produces the same ordinals, so its rows still collapse — and the count of
+/// what collapsed is reported rather than left implicit.
+#[test]
+fn a_region_lowered_twice_still_collapses_and_says_how_much() {
+    let classes = HashMap::new();
+    let stmts = vec![
+        Stmt::Expr(anon_shape(Vec::new())),
+        Stmt::Expr(anon_shape(Vec::new())),
+    ];
+
+    let session = Session::start();
+    let _guard = crate::opt_report::enter_function_region("twice", false);
+    let _ = run(&stmts, &classes);
+    let _ = run(&stmts, &classes);
+    drop(_guard);
+    let entries = session.entries();
+
+    assert_eq!(
+        alloc_rows(&entries).len(),
+        2,
+        "the second lowering collapses"
+    );
+    assert_eq!(
+        crate::opt_report::masked_by_dedup(),
+        2,
+        "and the report says how many rows it folded away"
+    );
+}

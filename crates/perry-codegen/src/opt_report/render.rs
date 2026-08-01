@@ -134,7 +134,36 @@ pub fn render_text(entries: &[Entry]) -> String {
         "  {:<16} {total_selected} values unboxed, {total_denied} left Boxed",
         "TOTAL",
     );
+    let masked = super::masked_by_dedup();
+    if masked > 0 {
+        let _ = writeln!(
+            out,
+            "  {:<16} {masked} duplicate row(s) collapsed by de-duplication",
+            "",
+        );
+    }
     out.push('\n');
+
+    // ── Unbound allocation sites, by position ──────────────────────────────
+    // #7170 R0. These rows are the majority of the `Ptr<Shape>` denial
+    // population on real code, and their positions are what a scheduler reads
+    // to decide which escape to open next. Printed as an explicit table so
+    // that reading is not a `jq` reduction over `entries[]` whose bucket
+    // definitions live nowhere.
+    let alloc = alloc_buckets(entries);
+    if !alloc.is_empty() {
+        let total: usize = alloc.iter().map(|b| b.denied).sum();
+        let _ = writeln!(out, "Unbound allocation sites by position ({total})");
+        out.push_str("-------------------------------------\n");
+        for b in &alloc {
+            let _ = writeln!(
+                out,
+                "  {:<34} {:>5}   {} / {}",
+                b.context, b.denied, b.analysis, b.rule,
+            );
+        }
+        out.push('\n');
+    }
 
     // ── Headline: call out any representation that promoted nothing ────────
     // This is the #7034 §0 finding, stated without having to read IR.
@@ -218,11 +247,7 @@ pub fn render_text(entries: &[Entry]) -> String {
         );
     }
 
-    for tier in [
-        Tier::Fixable,
-        Tier::CompilerLimitation,
-        Tier::InherentlyPolymorphic,
-    ] {
+    for tier in Tier::ALL {
         let rows: Vec<&&Entry> = denials
             .iter()
             .filter(|e| e.tier == Some(tier))
@@ -255,6 +280,9 @@ pub fn render_text(entries: &[Entry]) -> String {
             }
             if let Some(detail) = &e.detail {
                 let _ = writeln!(out, "      {detail}");
+            }
+            if let Some(ordinal) = e.alloc_ordinal {
+                let _ = writeln!(out, "      allocation site #{ordinal} in this region");
             }
             if let Some(offset) = e.byte_offset {
                 let _ = writeln!(out, "      source byte offset {offset}");
@@ -320,13 +348,87 @@ struct JsonAnalysis<'a> {
     records_consumption: bool,
 }
 
+/// One `(analysis, rule)` denial bucket.
+///
+/// #7170 R0: the bucket counts are computed **here**, by the compiler that
+/// owns the rule vocabulary, rather than reconstructed downstream with `jq`
+/// over `entries[]`. Every scheduling decision in the #7152/#7170 chain was
+/// taken off a hand-rolled reduction of those rows, and two of the three
+/// defects R0 fixes were invisible in that reduction by construction: it could
+/// not see that one label meant two mechanisms, nor that a bucket contained
+/// already-served sites.
+#[derive(Debug, serde::Serialize)]
+struct JsonRuleBucket<'a> {
+    analysis: &'a str,
+    rule: &'a str,
+    tier: Option<Tier>,
+    denied: usize,
+}
+
+/// One `(allocation position, rule)` bucket, over `alloc-site` denials.
+///
+/// Separate from [`JsonRuleBucket`] because the position is the discriminant
+/// that #7170 §5.1 found merged: `constructor argument` and `object literal
+/// property value` share a rule and are different opportunities.
+#[derive(Debug, serde::Serialize)]
+struct JsonAllocBucket<'a> {
+    analysis: &'a str,
+    context: &'a str,
+    rule: &'a str,
+    denied: usize,
+}
+
 #[derive(Debug, serde::Serialize)]
 struct JsonSummary<'a> {
     selected: usize,
     denied: usize,
     consumed: usize,
     unconsumed: usize,
+    /// Entries the drain collapsed. See
+    /// [`crate::opt_report::masked_by_dedup`] — a nonzero value here is the
+    /// count of rows a consumer is NOT seeing.
+    masked_by_dedup: usize,
     by_analysis: Vec<JsonAnalysis<'a>>,
+    by_rule: Vec<JsonRuleBucket<'a>>,
+    by_alloc_context: Vec<JsonAllocBucket<'a>>,
+}
+
+fn rule_buckets(entries: &[Entry]) -> Vec<JsonRuleBucket<'_>> {
+    let mut out: BTreeMap<(&str, &str), (Option<Tier>, usize)> = BTreeMap::new();
+    for e in entries.iter().filter(|e| e.outcome == Outcome::Denied) {
+        let rule = e.rule.as_deref().unwrap_or("<unnamed>");
+        let slot = out
+            .entry((e.analysis.as_str(), rule))
+            .or_insert((e.tier, 0));
+        slot.1 += 1;
+    }
+    out.into_iter()
+        .map(|((analysis, rule), (tier, denied))| JsonRuleBucket {
+            analysis,
+            rule,
+            tier,
+            denied,
+        })
+        .collect()
+}
+
+fn alloc_buckets(entries: &[Entry]) -> Vec<JsonAllocBucket<'_>> {
+    let mut out: BTreeMap<(&str, &str, &str), usize> = BTreeMap::new();
+    for e in entries.iter().filter(|e| e.outcome == Outcome::Denied) {
+        let Some(context) = e.alloc_context.as_deref() else {
+            continue;
+        };
+        let rule = e.rule.as_deref().unwrap_or("<unnamed>");
+        *out.entry((e.analysis.as_str(), context, rule)).or_insert(0) += 1;
+    }
+    out.into_iter()
+        .map(|((analysis, context, rule), denied)| JsonAllocBucket {
+            analysis,
+            context,
+            rule,
+            denied,
+        })
+        .collect()
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -348,6 +450,7 @@ pub fn render_json(entries: &[Entry]) -> String {
             denied: tallies.values().map(|t| t.denied).sum(),
             consumed: tallies.values().map(|t| t.consumed).sum(),
             unconsumed: tallies.values().map(|t| t.unconsumed).sum(),
+            masked_by_dedup: super::masked_by_dedup(),
             // Enumerate `Analysis::ALL`, not the analyses that happen to have
             // entries: an analysis that recorded nothing must appear with an
             // explicit `0`. A consumer cannot tell an absent key from a zero
@@ -369,6 +472,8 @@ pub fn render_json(entries: &[Entry]) -> String {
                     }
                 })
                 .collect(),
+            by_rule: rule_buckets(entries),
+            by_alloc_context: alloc_buckets(entries),
         },
         entries,
     };
@@ -400,6 +505,8 @@ mod tests {
             detail: None,
             byte_offset: None,
             site: None,
+            alloc_context: None,
+            alloc_ordinal: None,
         }
     }
 
@@ -423,6 +530,8 @@ mod tests {
             detail: None,
             byte_offset: None,
             site: None,
+            alloc_context: None,
+            alloc_ordinal: None,
         }
     }
 
@@ -720,5 +829,172 @@ mod tests {
             text.contains("per-element callback of Array.prototype.map"),
             "got:\n{text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod r0_bucket_tests {
+    use super::*;
+    use crate::opt_report::{Position, RegionKind};
+
+    fn alloc_site(context: &str, rule: &str, tier: Tier, ordinal: u32) -> Entry {
+        Entry {
+            module: "dep.js".into(),
+            function: "mk".into(),
+            region: RegionKind::Function,
+            position: Position::AllocSite,
+            name: "object literal { ... }".into(),
+            local_id: None,
+            analysis: Analysis::PtrShape,
+            outcome: Outcome::Denied,
+            rep: "Boxed".into(),
+            rule: Some(rule.into()),
+            reason: Some("unbound".into()),
+            tier: Some(tier),
+            issue: None,
+            loop_depth: 0,
+            invoked_per_element: None,
+            detail: Some(format!("allocation position: {context}")),
+            byte_offset: None,
+            site: None,
+            alloc_context: Some(context.into()),
+            alloc_ordinal: Some(ordinal),
+        }
+    }
+
+    const RULE1: &str = "rule 1 (provenance)";
+    const SERVED: &str = "rule 1 (provenance) — already served by return-shape";
+
+    /// #7170 R0's primary deliverable, at the schema level: the bucket counts a
+    /// scheduler reads are computed by the compiler that owns the rule
+    /// vocabulary, not reconstructed with `jq` over `entries[]`. Two of the
+    /// three defects R0 fixes were invisible to such a reduction by
+    /// construction — it could not see that one label meant two mechanisms.
+    #[test]
+    fn json_reports_the_alloc_buckets_separately() {
+        let entries = vec![
+            alloc_site("constructor argument", RULE1, Tier::CompilerLimitation, 0),
+            alloc_site(
+                "object literal property value",
+                RULE1,
+                Tier::CompilerLimitation,
+                1,
+            ),
+            alloc_site(
+                "object literal property value",
+                RULE1,
+                Tier::CompilerLimitation,
+                2,
+            ),
+            alloc_site("return", SERVED, Tier::Served, 3),
+        ];
+        let json: serde_json::Value = serde_json::from_str(&render_json(&entries)).unwrap();
+        let buckets = json["summary"]["by_alloc_context"].as_array().unwrap();
+        let find = |ctx: &str| {
+            buckets
+                .iter()
+                .find(|b| b["context"] == ctx)
+                .unwrap_or_else(|| panic!("missing {ctx} bucket in {buckets:#?}"))
+                .clone()
+        };
+        assert_eq!(find("constructor argument")["denied"], 1);
+        assert_eq!(find("object literal property value")["denied"], 2);
+        assert_eq!(find("return")["denied"], 1);
+        assert_eq!(find("return")["rule"], SERVED);
+    }
+
+    /// The wall number itself: `by_rule` must separate the served population
+    /// from the rule-1 one, because "506 of 963" was a count of the merged
+    /// bucket and every scheduling decision in the #7152/#7170 chain was taken
+    /// off it.
+    #[test]
+    fn json_by_rule_separates_served_sites_from_the_rule_1_wall() {
+        let entries = vec![
+            alloc_site("return", RULE1, Tier::CompilerLimitation, 0),
+            alloc_site("return", SERVED, Tier::Served, 1),
+            alloc_site("return", SERVED, Tier::Served, 2),
+        ];
+        let json: serde_json::Value = serde_json::from_str(&render_json(&entries)).unwrap();
+        let rules = json["summary"]["by_rule"].as_array().unwrap();
+        let row = |rule: &str| {
+            rules
+                .iter()
+                .find(|r| r["rule"] == rule)
+                .unwrap_or_else(|| panic!("missing rule {rule} in {rules:#?}"))
+                .clone()
+        };
+        assert_eq!(row(RULE1)["denied"], 1, "the wall is 1, not 3");
+        assert_eq!(row(SERVED)["denied"], 2);
+        assert_eq!(row(SERVED)["tier"], "served-elsewhere");
+    }
+
+    /// A served row must not be filed under the roadmap tier. That heading is
+    /// what a scheduler reads as "Perry's outstanding work", and #7170 R0
+    /// exists because already-shipped mechanisms were being counted there.
+    #[test]
+    fn a_served_site_renders_under_its_own_heading_not_the_roadmap_one() {
+        let text = render_text(&[alloc_site("return", SERVED, Tier::Served, 0)]);
+        assert!(
+            text.contains("Already served by another mechanism"),
+            "got:\n{text}"
+        );
+        assert!(
+            !text.contains("Perry limitation (not your code)"),
+            "a served row must not appear in the roadmap tier; got:\n{text}"
+        );
+    }
+
+    /// Every tier must be renderable. The loop enumerates `Tier::ALL`, so a
+    /// future tier cannot be added and silently left unprinted — which is how
+    /// a row disappears from the human report while still being in the JSON.
+    #[test]
+    fn every_tier_has_a_heading_and_is_rendered() {
+        for (i, tier) in Tier::ALL.into_iter().enumerate() {
+            let text = render_text(&[alloc_site("return", RULE1, tier, i as u32)]);
+            assert!(
+                text.contains(tier.heading()),
+                "{:?} is not rendered; got:\n{text}",
+                tier
+            );
+        }
+    }
+
+    /// The allocation-position table is the human-readable half of the same
+    /// fix, and it must state the position rather than leaving it to prose.
+    #[test]
+    fn text_reports_the_allocation_positions_as_a_table() {
+        let text = render_text(&[
+            alloc_site("constructor argument", RULE1, Tier::CompilerLimitation, 0),
+            alloc_site(
+                "object literal property value",
+                RULE1,
+                Tier::CompilerLimitation,
+                1,
+            ),
+        ]);
+        assert!(
+            text.contains("Unbound allocation sites by position (2)"),
+            "got:\n{text}"
+        );
+        assert!(
+            text.contains("object literal property value"),
+            "got:\n{text}"
+        );
+    }
+
+    /// An entry that is not an allocation site contributes to `by_rule` and to
+    /// nothing else — the alloc table must not grow rows for ordinary locals.
+    #[test]
+    fn a_local_denial_does_not_appear_in_the_alloc_table() {
+        let mut local = alloc_site("return", RULE1, Tier::Fixable, 0);
+        local.position = Position::Local;
+        local.alloc_context = None;
+        local.alloc_ordinal = None;
+        let json: serde_json::Value = serde_json::from_str(&render_json(&[local])).unwrap();
+        assert!(json["summary"]["by_alloc_context"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(json["summary"]["by_rule"].as_array().unwrap().len(), 1);
     }
 }

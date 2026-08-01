@@ -100,6 +100,9 @@ pub(crate) mod test_support {
                 .unwrap_or_else(|e| e.into_inner());
             FORCED.store(true, Ordering::Relaxed);
             let _ = super::take_entries();
+            // The drain above may itself have collapsed leftovers; zero the
+            // counter so a hand-built render test never reads a neighbour's.
+            super::MASKED_BY_DEDUP.store(0, Ordering::Relaxed);
             Session { _guard: guard }
         }
 
@@ -112,6 +115,7 @@ pub(crate) mod test_support {
                 .unwrap_or_else(|e| e.into_inner());
             FORCED.store(false, Ordering::Relaxed);
             let _ = super::take_entries();
+            super::MASKED_BY_DEDUP.store(0, Ordering::Relaxed);
             Session { _guard: guard }
         }
 
@@ -299,14 +303,43 @@ pub enum Tier {
     /// Perry's limitation, not the program's. This tier doubles as a roadmap
     /// generator: `issue` names the tracking issue where one exists.
     CompilerLimitation,
+    /// The value is denied *at this position* but a different, already-shipped
+    /// mechanism carries its shape onward, so it is **not** a missed
+    /// opportunity and must not be counted as one (#7170 R0).
+    ///
+    /// This tier exists because the other three all answer "who should fix
+    /// it?", and for these rows the answer is "nobody — it is already fixed
+    /// elsewhere". Filing them under `CompilerLimitation` (which is where a
+    /// rule-1 alloc-site denial lands by default) put them in the roadmap
+    /// bucket a scheduler reads, and #7152/#7170 were both scheduled off a
+    /// number inflated by exactly that.
+    ///
+    /// The explicit rename keeps the serialized spelling identical to
+    /// [`Tier::as_str`], for the reason `Analysis::PtrNumArray` documents:
+    /// serde's kebab-case derive would spell this `served` while every
+    /// heading and text row says `served-elsewhere`, so one tier would appear
+    /// under two names in a single document and a consumer keying on either
+    /// would see half the rows.
+    #[serde(rename = "served-elsewhere")]
+    Served,
 }
 
 impl Tier {
+    /// Every tier, in report order. The text renderer enumerates *this* rather
+    /// than a hand-written list, so a new tier cannot be silently unrendered.
+    pub const ALL: [Tier; 4] = [
+        Tier::Fixable,
+        Tier::CompilerLimitation,
+        Tier::Served,
+        Tier::InherentlyPolymorphic,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Tier::Fixable => "fixable",
             Tier::InherentlyPolymorphic => "inherently-polymorphic",
             Tier::CompilerLimitation => "compiler-limitation",
+            Tier::Served => "served-elsewhere",
         }
     }
 
@@ -315,6 +348,7 @@ impl Tier {
             Tier::Fixable => "Fixable in your source",
             Tier::InherentlyPolymorphic => "Inherently polymorphic (correctly boxed — no action)",
             Tier::CompilerLimitation => "Perry limitation (not your code)",
+            Tier::Served => "Already served by another mechanism (not a missed opportunity)",
         }
     }
 }
@@ -396,6 +430,31 @@ pub struct Entry {
     /// it is a site nobody has ever watched work. Two of the six were in
     /// exactly that state when this field was added.
     pub site: Option<String>,
+    /// For a [`Position::AllocSite`] entry: the syntactic position the
+    /// allocation sits in (`return`, `constructor argument`, `object literal
+    /// property value`, …).
+    ///
+    /// A first-class field rather than prose inside `detail`, for the same
+    /// reason `site` is one: this is the bucket a scheduler counts. #7170 §5.1
+    /// found the `constructor argument` label conflating genuine `new C(arg)`
+    /// arguments (2.0% of sites) with the property values of anonymous-shape
+    /// object literals (24.5%) — two different opportunities needing two
+    /// different fixes, merged into one number by the label alone.
+    pub alloc_context: Option<String>,
+    /// For a [`Position::AllocSite`] entry: the site's index in its region's
+    /// deterministic report walk.
+    ///
+    /// **A de-duplication discriminant, not a source location.** Anonymous
+    /// object literals all render as `object literal { ... }` and all carry
+    /// `byte_offset: 0` (`perry-hir/src/lower/expr_object.rs` never populates
+    /// one for them), so before this field every unbound literal in a function
+    /// collapsed onto a single row in [`Entry::dedup_key`] — PR #7171 measured
+    /// suppressing 379 scaffolding rows *revealing* 62 previously-masked real
+    /// ones, and suppressing a single record moving its row between buckets
+    /// while changing the total by zero. The walk is a plain `Vec` traversal
+    /// with no map iteration, so a function lowered twice (a boxed entry plus
+    /// a typed clone) produces the same ordinals and still de-duplicates.
+    pub alloc_ordinal: Option<u32>,
 }
 
 impl Entry {
@@ -438,6 +497,17 @@ impl Entry {
     /// It is kept because a dedup key should carry the full discriminant: the
     /// cost is one tuple element, and the failure mode if a future rule name
     /// collides is silent data loss in the report that feeds the census.
+    /// - **`alloc_ordinal`** separates the several unbound allocation sites of
+    ///   one function from each other. It is `None` for every other position,
+    ///   so no other tally moves. See [`Entry::alloc_ordinal`] for why the
+    ///   pre-existing key could not tell them apart, and
+    ///   [`masked_by_dedup`] for what is still being collapsed.
+    ///
+    ///   `alloc_context` is deliberately **not** in this key. It is a function
+    ///   of the site, so the ordinal already implies it, and a second
+    ///   enforcement point that no sabotage can kill is how #7171 ended up
+    ///   with four green holes in its first pass. One discriminant, one test.
+    #[allow(clippy::type_complexity)]
     fn dedup_key(
         &self,
     ) -> (
@@ -449,6 +519,7 @@ impl Entry {
         Outcome,
         Option<String>,
         Option<String>,
+        Option<u32>,
     ) {
         (
             self.module.clone(),
@@ -468,6 +539,7 @@ impl Entry {
             // and selection tallies (and therefore the baseline's `candidates`
             // column) are unchanged.
             self.site.clone(),
+            self.alloc_ordinal,
         )
     }
 }
@@ -480,6 +552,20 @@ struct Scope {
     function: String,
     region: RegionKind,
     invoked_per_element: Option<String>,
+    /// #7170 R0: this region is a function that carries a **return-shape fact**
+    /// (`collectors/ptr_shape_returns.rs`, #7107), so its `return new C(...)`
+    /// sites already feed an existing mechanism.
+    ///
+    /// Set by exactly one caller — [`enter_function_region`], from
+    /// `codegen/function.rs`, which is the only place that holds both the
+    /// `FuncId` and `ModuleDispatchFacts`. Every other region (method, closure,
+    /// module-init) leaves it `false`, and that is CORRECT rather than
+    /// conservative: `collect_return_shape_functions` issues facts only for
+    /// `hir.functions` entries, and the caller-side seed
+    /// (`find_return_shape_candidates`) only fires on a bare `Expr::FuncRef`
+    /// callee — which a closure call never is. #7170 §6 is precisely the
+    /// measurement that closures are *not* served.
+    return_shape_producer: bool,
 }
 
 thread_local! {
@@ -523,6 +609,48 @@ pub(crate) fn enter_region(function: &str, region: RegionKind) -> ScopeGuard {
     enter(&module, function, region)
 }
 
+/// [`enter_region`] for a top-level function body, additionally recording
+/// whether this function carries a **return-shape fact** (#7107).
+///
+/// Report-only: the flag is read by nothing but
+/// [`region_is_return_shape_producer`], which only the `Ptr<Shape>` alloc-site
+/// recorder consults. Like every other entry point here it is inert — and
+/// allocation-free — when the report is off.
+pub(crate) fn enter_function_region(function: &str, return_shape_producer: bool) -> ScopeGuard {
+    if !enabled() {
+        return ScopeGuard {
+            previous: None,
+            active: false,
+        };
+    }
+    let scope = Scope {
+        module: current_module(),
+        function: function.to_string(),
+        region: RegionKind::Function,
+        invoked_per_element: None,
+        return_shape_producer,
+    };
+    let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
+    ScopeGuard {
+        previous,
+        active: true,
+    }
+}
+
+/// Whether the region currently being lowered carries a return-shape fact.
+///
+/// `false` with no scope at all, which is the safe direction: an unattributed
+/// site is reported as an ordinary rule-1 denial rather than silently written
+/// off as served.
+pub(crate) fn region_is_return_shape_producer() -> bool {
+    SCOPE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|sc| sc.return_shape_producer)
+            .unwrap_or(false)
+    })
+}
+
 fn current_module() -> String {
     SCOPE.with(|s| {
         s.borrow()
@@ -564,6 +692,7 @@ pub(crate) fn enter(module: &str, function: &str, region: RegionKind) -> ScopeGu
         function: function.to_string(),
         region,
         invoked_per_element: None,
+        return_shape_producer: false,
     };
     let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
     ScopeGuard {
@@ -587,6 +716,10 @@ pub(crate) fn enter_closure(function: &str, func_id: u32) -> ScopeGuard {
         function: function.to_string(),
         region: RegionKind::Closure,
         invoked_per_element: per_element_role(Some(func_id)),
+        // #7170 §6: a closure is never a return-shape producer — the caller-side
+        // seed requires a bare `Expr::FuncRef` callee. This `false` is the
+        // measurement, not a default.
+        return_shape_producer: false,
     };
     let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
     ScopeGuard {
@@ -702,6 +835,57 @@ pub(crate) fn deny(d: Denial<'_>) {
         detail: d.detail,
         byte_offset: d.byte_offset,
         site: None,
+        alloc_context: None,
+        alloc_ordinal: None,
+    });
+}
+
+/// [`deny`] for a [`Position::AllocSite`] row, carrying the two fields that
+/// make an unbound allocation identifiable: the syntactic position it sits in
+/// and its ordinal in the region's report walk.
+///
+/// A separate entry point rather than two more fields on [`Denial`], because
+/// every other denial site would then have to spell `None` twice for a pair of
+/// fields only this one can populate.
+pub(crate) fn deny_alloc(d: Denial<'_>, alloc_context: &str, alloc_ordinal: u32) {
+    if !enabled() {
+        return;
+    }
+    let (module, function, region, per_element) = SCOPE.with(|s| match s.borrow().as_ref() {
+        Some(sc) => (
+            sc.module.clone(),
+            sc.function.clone(),
+            sc.region,
+            sc.invoked_per_element.clone(),
+        ),
+        None => (
+            String::from("<unknown>"),
+            String::from("<unknown>"),
+            RegionKind::Function,
+            None,
+        ),
+    });
+    push(Entry {
+        module,
+        function,
+        region,
+        position: d.position,
+        name: d.name.to_string(),
+        local_id: d.local_id,
+        analysis: d.analysis,
+        outcome: Outcome::Denied,
+        rep: String::from("Boxed"),
+        rule: Some(d.rule.to_string()),
+        reason: Some(d.reason.to_string()),
+        tier: Some(d.tier),
+        issue: d.issue.map(str::to_string),
+        loop_depth: d.loop_depth,
+        invoked_per_element: per_element,
+        detail: d.detail,
+        byte_offset: d.byte_offset,
+        site: None,
+        alloc_context: Some(alloc_context.to_string()),
+        alloc_ordinal: Some(alloc_ordinal),
     });
 }
 
@@ -732,6 +916,8 @@ pub(crate) fn deny_named(function: &str, region: RegionKind, d: Denial<'_>) {
         detail: d.detail,
         byte_offset: d.byte_offset,
         site: None,
+        alloc_context: None,
+        alloc_ordinal: None,
     });
 }
 
@@ -790,6 +976,8 @@ pub(crate) fn select(
         detail,
         byte_offset: None,
         site: None,
+        alloc_context: None,
+        alloc_ordinal: None,
     });
 }
 
@@ -826,6 +1014,8 @@ pub(crate) fn select_explicit(
         detail: None,
         byte_offset: None,
         site: None,
+        alloc_context: None,
+        alloc_ordinal: None,
     });
 }
 
@@ -895,6 +1085,8 @@ pub(crate) fn consume(
         detail: Some(format!("consumed at {site}")),
         byte_offset: None,
         site: Some(site.to_string()),
+        alloc_context: None,
+        alloc_ordinal: None,
     });
 }
 
@@ -943,7 +1135,27 @@ pub(crate) fn unconsumed(u: Unconsumed<'_>) {
         detail: u.detail,
         byte_offset: None,
         site: None,
+        alloc_context: None,
+        alloc_ordinal: None,
     });
+}
+
+/// How many entries the most recent [`take_entries`] collapsed.
+///
+/// #7170 R0: de-duplication is not free information hygiene — it is a lossy
+/// step between "what the compiler recorded" and "what a scheduler counts",
+/// and PR #7171 measured it changing which bucket a row lands in while leaving
+/// the total at zero. The count is therefore reported rather than left
+/// implicit, so a reader can see how much of the population is still being
+/// folded away instead of having to assume it is none.
+///
+/// Set (not accumulated) by each drain; `0` before the first one.
+static MASKED_BY_DEDUP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Entries collapsed by the most recent [`take_entries`]. See
+/// [`MASKED_BY_DEDUP`].
+pub fn masked_by_dedup() -> usize {
+    MASKED_BY_DEDUP.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Drain every recorded entry, de-duplicated and ranked. Called once by the
@@ -953,8 +1165,10 @@ pub fn take_entries() -> Vec<Entry> {
         Ok(mut v) => std::mem::take(&mut *v),
         Err(_) => Vec::new(),
     };
+    let before = entries.len();
     let mut seen = std::collections::HashSet::new();
     entries.retain(|e| seen.insert(e.dedup_key()));
+    MASKED_BY_DEDUP.store(before - entries.len(), std::sync::atomic::Ordering::Relaxed);
     entries.sort_by(|a, b| a.rank().cmp(&b.rank()));
     entries
 }
@@ -983,6 +1197,8 @@ mod tests {
             detail: None,
             byte_offset: None,
             site: None,
+            alloc_context: None,
+            alloc_ordinal: None,
         }
     }
 
@@ -1018,6 +1234,38 @@ mod tests {
                 "serde and as_str disagree for {analysis:?}"
             );
         }
+    }
+
+    /// One tier, one spelling — the same trap `serialized_analysis_matches_as_str`
+    /// guards for analyses. A tier whose serde name differs from its `as_str`
+    /// name appears twice in one document and a consumer keying on either sees
+    /// half the rows.
+    #[test]
+    fn serialized_tier_matches_as_str() {
+        for tier in Tier::ALL {
+            let serialized = serde_json::to_string(&tier).unwrap();
+            assert_eq!(
+                serialized.trim_matches('"'),
+                tier.as_str(),
+                "serde and as_str disagree for {tier:?}"
+            );
+        }
+    }
+
+    /// `Tier::ALL` must actually enumerate the enum. The text renderer loops
+    /// over it, so a tier missing here is a tier that is in the JSON and not in
+    /// the human report.
+    #[test]
+    fn tier_all_lists_every_variant() {
+        for tier in [
+            Tier::Fixable,
+            Tier::InherentlyPolymorphic,
+            Tier::CompilerLimitation,
+            Tier::Served,
+        ] {
+            assert!(Tier::ALL.contains(&tier), "{tier:?} missing from Tier::ALL");
+        }
+        assert_eq!(Tier::ALL.len(), 4);
     }
 
     #[test]

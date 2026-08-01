@@ -278,6 +278,61 @@ REFUSAL_FLOORS: dict[str, dict[str, int]] = {
 }
 
 
+#: Minimum number of unbound allocations each **position bucket** must be seen
+#: in, per workload. **Held in code, never in the baseline**, for the same
+#: reason as [`LIVENESS_FLOORS`], and gated separately.
+#:
+#: #7170 R0 split one alloc-site label into three that mean different things:
+#:
+#:   * `constructor argument`          — a genuine `new C(arg)` argument (2.0%)
+#:   * `object literal property value` — a property value of an anonymous-shape
+#:                                       literal, i.e. `{a: {b: 1}}` (24.5%)
+#:   * `return`                        — with the rule naming whether the
+#:                                       enclosing function's return-shape fact
+#:                                       already serves it
+#:
+#: Every one of those classifications can fail silently to **zero**, and a zero
+#: bucket is indistinguishable from "the classifier is dead" — CLAUDE.md failure
+#: mode 4, in the instrument that R0 exists to repair. `fixture_alloc_buckets`
+#: is written to put at least one allocation in each, so a classification arm
+#: that stops firing takes this check red instead of quietly re-merging the
+#: buckets it separated.
+#:
+#: The `return` bucket carries a RULE floor as well ([`ALLOC_RULE_FLOORS`]),
+#: because the position alone cannot distinguish a served return from an
+#: unserved one — that distinction lives in the rule string, and it is the one
+#: the corrected wall number is derived from.
+ALLOC_BUCKET_FLOORS: dict[str, dict[str, int]] = {
+    "fixture_alloc_buckets": {
+        "constructor argument": 1,
+        "object literal property value": 1,
+        "return": 1,
+    },
+}
+
+#: Minimum number of times a named DENIAL RULE must be reported, per workload —
+#: the half of the #7170 R0 classification that the position cannot express.
+#: **Held in code, never in the baseline.**
+#:
+#: `return` is one position and two opportunities. A `return new C(...)` in a
+#: function that carries a return-shape fact (#7107) is already served: the
+#: class reaches every `const r = producer(...)` call site, and counting it as a
+#: rule-1 miss is what inflated #7170's 506/963 headline. A `return` in a
+#: function WITHOUT the fact — every closure in CommonJS, which is 91.6% of the
+#: dependency-corpus population — is a real miss. Only the rule string tells
+#: them apart, so only a rule floor can assert the distinction is still live.
+#:
+#: This floor is what makes the served classification falsifiable end to end:
+#: hard-coding `false` in `codegen/function.rs`, or dropping the fact conjunct
+#: in `deny_alloc_site`, takes it red while every unit test still passes,
+#: because the unit tests set the report scope by hand.
+ALLOC_RULE_FLOORS: dict[str, dict[str, int]] = {
+    "fixture_alloc_buckets": {
+        "rule 1 (provenance) — already served by return-shape": 1,
+    },
+}
+
+
 #: Workloads allowed to produce **zero candidates** — no analysis considered any
 #: value in them. Held in code for the same reason as [`LIVENESS_FLOORS`]: it is
 #: an assertion about the compiler, and `--update` must not be able to widen it.
@@ -408,6 +463,11 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
     consumed_receiver = 0
     unconsumed_mechanisms: dict[str, int] = {}
     denial_rules: dict[str, int] = {}
+    #: #7170 R0. Unbound-allocation denials keyed by the syntactic position the
+    #: allocation sits in, which is the bucket a scheduler reads. Kept separate
+    #: from `denial_rules` because two of the three buckets R0 separated share a
+    #: rule name and differ only here.
+    alloc_contexts: dict[str, int] = {}
     # Keyed by analysis as well as by rule. `unconsumed_mechanisms` alone is
     # rule-keyed, and with a second instrumented analysis a gap in analysis A
     # would be excused by a mechanism recorded for analysis B.
@@ -460,6 +520,9 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
             denial_rules[str(entry.get("rule") or "<unnamed>")] = (
                 denial_rules.get(str(entry.get("rule") or "<unnamed>"), 0) + 1
             )
+            context = entry.get("alloc_context")
+            if context is not None:
+                alloc_contexts[str(context)] = alloc_contexts.get(str(context), 0) + 1
     if unknown_sites:
         raise HarnessError(
             f"--opt-report recorded consumption at unregistered site(s) "
@@ -494,6 +557,7 @@ def census_from_report(report: dict[str, Any]) -> dict[str, Any]:
         "candidates": candidates,
         "unconsumed_mechanisms": unconsumed_mechanisms,
         "denial_rules": denial_rules,
+        "alloc_contexts": alloc_contexts,
         "unconsumed_by_analysis": unconsumed_by_analysis,
         "consumed_receiver": consumed_receiver,
         "consumption_sites": consumption_sites,
@@ -753,6 +817,61 @@ def check_refusal_floors(observed: dict[str, dict[str, Any]]) -> list[str]:
                     "stopped firing (collectors/repsel_benefit.rs) or the workload "
                     "changed shape; an unprofitable promotion is invisible to every "
                     "floor in this census, which is why this check exists."
+                )
+    return failures
+
+
+def check_alloc_bucket_floors(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """Every alloc-site position bucket must still be observed somewhere.
+
+    Independent of the baseline file on purpose — see [`ALLOC_BUCKET_FLOORS`].
+
+    This is the third layer of #7104's pattern for the #7170 R0 classifications:
+    unit tests prove the classifier picks the right bucket, this proves the
+    classifier is still *wired into a real compile*, and the sabotage matrix
+    proves each arm can go red. Layer 2 is the one the unit tests cannot give:
+    `codegen/function.rs` could pass `false` for every function and every unit
+    test would still pass, because they set the scope by hand.
+    """
+    failures: list[str] = []
+    for name, minimums in ALLOC_BUCKET_FLOORS.items():
+        if name not in observed:
+            failures.append(
+                f"alloc-bucket workload {name!r} did not run; the census cannot "
+                "claim to observe a bucket it never measured"
+            )
+            continue
+        buckets = observed[name].get("alloc_contexts", {})
+        for context, minimum in minimums.items():
+            seen = int(buckets.get(context, 0))
+            if seen < minimum:
+                failures.append(
+                    f"{name}: allocation position {context!r} was reported "
+                    f"{seen} time(s), and must be reported at least {minimum}. "
+                    "Either the classification in "
+                    "collectors/ptr_shape_report.rs stopped distinguishing it "
+                    "(re-merging buckets #7170 §5.1 separated) or the fixture "
+                    f"changed shape. Observed buckets: {sorted(buckets)}"
+                )
+    for name, minimums in ALLOC_RULE_FLOORS.items():
+        if name not in observed:
+            failures.append(
+                f"alloc-rule workload {name!r} did not run; the census cannot "
+                "claim to observe a rule it never measured"
+            )
+            continue
+        rules = observed[name].get("denial_rules", {})
+        for rule, minimum in minimums.items():
+            seen = int(rules.get(rule, 0))
+            if seen < minimum:
+                failures.append(
+                    f"{name}: denial rule {rule!r} was reported {seen} time(s), "
+                    f"and must be reported at least {minimum}. The served-return "
+                    "classification is no longer reaching a real compile — "
+                    "either codegen/function.rs stopped passing the "
+                    "return-shape fact into the report scope, or "
+                    "deny_alloc_site stopped consulting it. "
+                    f"Observed rules: {sorted(rules)}"
                 )
     return failures
 
@@ -1086,6 +1205,7 @@ def census(args: argparse.Namespace) -> int:
         improvements += imp
     liveness = check_liveness_fixtures(observed) if not partial else []
     refusals = check_refusal_floors(observed) if not partial else []
+    alloc_buckets = check_alloc_bucket_floors(observed) if not partial else []
     dead = check_instrument_liveness(observed) if not partial else []
     unreached = check_analysis_reach(observed) if not partial else []
     # Always checked, even for a --workload subset: it is an internal
@@ -1111,6 +1231,7 @@ def census(args: argparse.Namespace) -> int:
         ("REGRESSION", regressions),
         ("DEAD INSTRUMENT", liveness + dead),
         ("REFUSAL NO LONGER FIRING", refusals),
+        ("ALLOC-SITE BUCKET NO LONGER DISTINGUISHED", alloc_buckets),
         ("UNREACHED BY EVERY ANALYSIS", unreached),
         ("CONSUMPTION COUNTER IS INCOHERENT", invariant),
         ("WASTED PROMOTION WITH NO NAMED MECHANISM", unexplained),
@@ -1169,6 +1290,13 @@ def _update(
         # Context, never gated: which mechanism ate each wasted promotion.
         workload["unconsumed_mechanisms"] = observed[name].get("unconsumed_mechanisms", {})
         workload["consumption_sites"] = observed[name].get("consumption_sites", {})
+        # #7170 R0, also context and also never gated: where this workload's
+        # unbound allocations sit. Recorded per workload so the rule-1 wall can
+        # be re-derived from a checked-in artifact instead of from a `jq` line
+        # in an issue comment — which is how the 506/963 headline outlived the
+        # measurement it came from. The gated assertion is
+        # ALLOC_BUCKET_FLOORS / ALLOC_RULE_FLOORS, held in code.
+        workload["alloc_contexts"] = observed[name].get("alloc_contexts", {})
     baseline["generated_at"] = utc_now()
     path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {path.relative_to(REPO_ROOT)} ({len(workloads)} workload(s)).")
@@ -1232,6 +1360,73 @@ def self_test(_args: argparse.Namespace) -> int:
 
     dead = check_instrument_liveness({"w": {"counts": counts}})
     assert any("ptr-shape" in d for d in dead), dead
+
+    # #7170 R0: the alloc-site bucket extraction and its floors. Asserted in
+    # the FAILING direction first, for the reason stated at the top of this
+    # function — and once per defect, because the three classifications can
+    # each die on their own.
+    bucket_report = {
+        "schema_version": 2,
+        "summary": {
+            "selected": 0,
+            "denied": 3,
+            "by_analysis": [
+                {
+                    "analysis": a,
+                    "target_rep": a,
+                    "rule_source": "x",
+                    "selected": 0,
+                    "denied": 3 if a == "ptr-shape" else 0,
+                    "consumed": 0,
+                    "unconsumed": 0,
+                }
+                for a in EXPECTED_ANALYSES
+            ],
+        },
+        "entries": [
+            {
+                "analysis": "ptr-shape",
+                "outcome": "denied",
+                "rep": "Boxed",
+                "position": "alloc-site",
+                "rule": rule_name,
+                "alloc_context": context,
+            }
+            for context, rule_name in (
+                ("constructor argument", "rule 1 (provenance)"),
+                ("object literal property value", "rule 1 (provenance)"),
+                ("return", "rule 1 (provenance) — already served by return-shape"),
+            )
+        ],
+    }
+    buckets = census_from_report(bucket_report)
+    assert buckets["alloc_contexts"] == {
+        "constructor argument": 1,
+        "object literal property value": 1,
+        "return": 1,
+    }, buckets["alloc_contexts"]
+
+    fixture = next(iter(ALLOC_BUCKET_FLOORS))
+    good = {fixture: {"counts": buckets["counts"], **buckets}}
+    assert not check_alloc_bucket_floors(good), check_alloc_bucket_floors(good)
+
+    # Re-merging the two literal buckets — the #7170 §5.1 defect — is red.
+    merged = json.loads(json.dumps(good))
+    merged[fixture]["alloc_contexts"] = {"constructor argument": 2, "return": 1}
+    failures = check_alloc_bucket_floors(merged)
+    assert any("object literal property value" in f for f in failures), failures
+
+    # Losing the served-return classification — the #7170 §5.2 defect, and the
+    # only one a unit test in the compiler cannot catch, because it lives in
+    # codegen/function.rs rather than in the classifier — is red.
+    unserved = json.loads(json.dumps(good))
+    unserved[fixture]["denial_rules"] = {"rule 1 (provenance)": 3}
+    failures = check_alloc_bucket_floors(unserved)
+    assert any("already served by return-shape" in f for f in failures), failures
+
+    # And a workload that did not run at all cannot pass by being absent.
+    failures = check_alloc_bucket_floors({})
+    assert failures, "a missing alloc-bucket fixture must be a failure"
 
     # #7128: the refusal check must go red when the rule stops firing, and
     # green only when it fires at least as often as it was measured to.

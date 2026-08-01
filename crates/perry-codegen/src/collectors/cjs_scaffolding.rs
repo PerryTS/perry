@@ -1325,8 +1325,15 @@ mod tests {
         let base =
             super::super::ptr_shape_report::unbound_new_sites(&region, &CjsPreamble::default());
         let contexts: Vec<&str> = base.iter().map(|s| s.context).collect();
+        // #7170 §5.1 / R0 renamed this bucket, and the rename is measured on
+        // exactly this statement: `const __cjs_module = { exports: {} }` is an
+        // anonymous-shape allocation whose constructor arguments ARE its
+        // property values, so the inner `{}` is a *component of a literal*, not
+        // an argument of a `new C(...)`. It was 188 of the 194 rows the old
+        // `constructor argument` label carried (PR #7171 §1) — which is why
+        // that label could not be read as "constructor arguments".
         assert!(
-            contexts.contains(&"constructor argument"),
+            contexts.contains(&"object literal property value"),
             "the `{{ exports: {{}} }}` inner literal is no longer reported \
              unsuppressed; this test's premise is gone: {contexts:?}"
         );

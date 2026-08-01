@@ -46,6 +46,11 @@ pub(super) struct ShapeDenial {
 }
 
 const RULE1: &str = "rule 1 (provenance)";
+/// #7170 R0. A **separate rule string**, not a flavour of [`RULE1`]: the rule
+/// name is what every scheduler-facing tally buckets on (#7152 and #7170 both
+/// counted `rule 1` rows straight off the report), so a site that an existing
+/// mechanism already serves has to leave that bucket, not merely annotate it.
+const RULE1_SERVED: &str = "rule 1 (provenance) — already served by return-shape";
 const RULE2: &str = "rule 2 (containment)";
 const RULE3: &str = "rule 3 (this-flow containment)";
 const RULE4: &str = "rule 4 (dispatch stability)";
@@ -62,6 +67,32 @@ pub(super) const UNBOUND_ALLOC: ShapeDenial = ShapeDenial {
              `.map(x => ({...}))` / `return { ... }` idiom.",
     tier: Tier::CompilerLimitation,
     issue: Some("#7034 §4 (return-shape facts)"),
+};
+
+/// #7170 §5.2, R0: the same syntactic site as [`UNBOUND_ALLOC`], in the return
+/// position of a function that **already carries a return-shape fact**.
+///
+/// `report::deny_alloc_site` runs at the top of
+/// `collect_shape_proven_ptr_locals`, before any seeding — it cannot see that
+/// `collectors/ptr_shape_returns.rs` admits a bare `return new C(...)` with no
+/// local at all as a producer, so the class does reach every
+/// `const r = producer(…)` caller. Left under [`UNBOUND_ALLOC`] these rows
+/// counted as rule-1 misses, and #7170 measured the resulting 506/963 headline
+/// inflated by exactly them.
+///
+/// **What this asserts, precisely:** the fact was *issued* for the enclosing
+/// function. Whether any caller consumed it is a different question with a
+/// different counter (`Outcome::Consumed`), and this row makes no claim about
+/// it.
+pub(super) const UNBOUND_ALLOC_SERVED_RETURN: ShapeDenial = ShapeDenial {
+    rule: RULE1_SERVED,
+    reason: "returned from a function that carries a return-shape fact, so its \
+             class already reaches every `const r = producer(...)` call site \
+             (#7107). The allocation itself is still unbound — rule 1 cannot \
+             anchor to it — but this is NOT an unserved position, and counting \
+             it as one over-states the rule-1 wall.",
+    tier: Tier::Served,
+    issue: Some("#7107 (return-shape facts, shipped)"),
 };
 
 pub(super) const LET_INIT_NOT_NEW: ShapeDenial = ShapeDenial {
@@ -365,23 +396,44 @@ pub(super) fn deny_local(
 }
 
 /// Record an allocation site that never became a candidate (rule 1).
+///
+/// #7170 R0 changed two things here and nothing else:
+///
+/// 1. The denial is [`UNBOUND_ALLOC_SERVED_RETURN`] when the site is in return
+///    position of a function that already carries a return-shape fact, so the
+///    served population leaves the rule-1 bucket instead of inflating it.
+/// 2. The syntactic position and the site's walk ordinal are recorded as
+///    first-class fields, which is what lets `Entry::dedup_key` tell two
+///    allocations in one function apart. Every object literal renders as
+///    `object literal { ... }` and carries `byte_offset: 0`, so before this
+///    they collapsed onto one row.
 pub(super) fn deny_alloc_site(site: &NewSite) {
     if !opt_report::enabled() || suppressed() {
         return;
     }
-    opt_report::deny(Denial {
-        position: Position::AllocSite,
-        name: &site.display,
-        local_id: None,
-        analysis: Analysis::PtrShape,
-        rule: UNBOUND_ALLOC.rule,
-        reason: UNBOUND_ALLOC.reason,
-        tier: UNBOUND_ALLOC.tier,
-        issue: UNBOUND_ALLOC.issue,
-        loop_depth: site.loop_depth,
-        detail: Some(format!("allocation position: {}", site.context)),
-        byte_offset: (site.byte_offset != 0).then_some(site.byte_offset),
-    });
+    let served = site.context == RETURN && opt_report::region_is_return_shape_producer();
+    let d = if served {
+        UNBOUND_ALLOC_SERVED_RETURN
+    } else {
+        UNBOUND_ALLOC
+    };
+    opt_report::deny_alloc(
+        Denial {
+            position: Position::AllocSite,
+            name: &site.display,
+            local_id: None,
+            analysis: Analysis::PtrShape,
+            rule: d.rule,
+            reason: d.reason,
+            tier: d.tier,
+            issue: d.issue,
+            loop_depth: site.loop_depth,
+            detail: Some(format!("allocation position: {}", site.context)),
+            byte_offset: (site.byte_offset != 0).then_some(site.byte_offset),
+        },
+        site.context,
+        site.ordinal,
+    );
 }
 
 // ── Auxiliary walks (only run under the report flag) ───────────────────────
@@ -456,6 +508,41 @@ fn walk_lets(stmts: &[Stmt], depth: u32, f: &mut impl FnMut(u32, &str, u32)) {
     }
 }
 
+// ── Allocation-position vocabulary ─────────────────────────────────────────
+//
+// Named constants rather than inline literals, because #7170 §5.1 is a bug
+// about exactly one of these strings meaning two different things. `RETURN` is
+// additionally compared against in `deny_alloc_site`, and a typo there would
+// silently disable the served-return classification.
+
+const RETURN: &str = "return";
+/// A genuine `new C(arg)` argument — the developer wrote a constructor call.
+const CTOR_ARG: &str = "constructor argument";
+/// A property value of an anonymous-shape object literal.
+///
+/// #7170 §5.1: a closed-shape literal lowers to
+/// `new __AnonShape_N(v0, v1, …)` whose constructor arguments *are* its
+/// property values (`perry-hir/src/lower/expr_object.rs`), so `{a: {b: 1}}`
+/// filed its inner literal under [`CTOR_ARG`]. Measured on 197 dependency
+/// modules the two are 2.0% and 24.5% of sites respectively — one bucket was
+/// 92% the other thing. They are not the same opportunity: a nested literal is
+/// a field value of a parent allocation that is itself unbound, so proving its
+/// shape licenses nothing on its own.
+const ANON_SHAPE_COMPONENT: &str = "object literal property value";
+
+/// The allocation-position label for the arguments of `class_name`.
+fn arg_context(class_name: &str) -> &'static str {
+    if is_anon_shape(class_name) {
+        ANON_SHAPE_COMPONENT
+    } else {
+        CTOR_ARG
+    }
+}
+
+fn is_anon_shape(class_name: &str) -> bool {
+    class_name.starts_with("__AnonShape")
+}
+
 /// An object allocation that is not the initializer of a `Stmt::Let`.
 pub(super) struct NewSite {
     /// `new Row(...)` / `{ key, value }` — what the developer wrote.
@@ -463,6 +550,9 @@ pub(super) struct NewSite {
     /// Where it sits: `return`, `call argument`, `array element`, …
     pub context: &'static str,
     pub loop_depth: u32,
+    /// Index of this site in the region's walk. A de-duplication discriminant;
+    /// see [`crate::opt_report::Entry::alloc_ordinal`].
+    pub ordinal: u32,
     /// Byte offset of the `new` expression in its module's source. `Expr::New`
     /// is the one HIR node that already carries a source position (#5253,
     /// captured for constructor TypeErrors), so allocation sites — which have
@@ -503,11 +593,14 @@ fn scan_stmts(
             // The Let init IS the provenance site rule 1 accepts; skip it and
             // scan only its arguments.
             Stmt::Let {
-                init: Some(Expr::New { args, .. }),
+                init: Some(Expr::New {
+                    class_name, args, ..
+                }),
                 ..
             } => {
+                let ctx = arg_context(class_name);
                 for a in args {
-                    scan_expr(a, depth, "constructor argument", out);
+                    scan_expr(a, depth, ctx, out);
                 }
             }
             Stmt::Let { init, .. } => {
@@ -517,7 +610,7 @@ fn scan_stmts(
             }
             Stmt::Expr(e) => scan_expr(e, depth, ctx, out),
             Stmt::Throw(e) => scan_expr(e, depth, "throw", out),
-            Stmt::Return(Some(e)) => scan_expr(e, depth, "return", out),
+            Stmt::Return(Some(e)) => scan_expr(e, depth, RETURN, out),
             Stmt::Return(None) => {}
             Stmt::If {
                 condition,
@@ -608,10 +701,12 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
                 display: display_class(class_name),
                 context: ctx,
                 loop_depth: depth,
+                ordinal: out.len() as u32,
                 byte_offset: *byte_offset,
             });
+            let arg_ctx = arg_context(class_name);
             for a in args {
-                scan_expr(a, depth, "constructor argument", out);
+                scan_expr(a, depth, arg_ctx, out);
             }
         }
         Expr::Call { callee, args, .. } => {
@@ -633,7 +728,7 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
 /// "__AnonShape_…" }`; render them as the object literals the developer
 /// actually wrote rather than leaking the synthetic class name.
 fn display_class(class_name: &str) -> String {
-    if class_name.starts_with("__AnonShape") {
+    if is_anon_shape(class_name) {
         String::from("object literal { ... }")
     } else {
         format!("new {class_name}(...)")
