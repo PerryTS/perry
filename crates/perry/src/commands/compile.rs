@@ -36,6 +36,7 @@ mod link;
 mod lock_scan;
 mod lowering_report;
 mod object_cache;
+mod object_staging;
 mod optimized_libs;
 mod output_path;
 mod parse_cache;
