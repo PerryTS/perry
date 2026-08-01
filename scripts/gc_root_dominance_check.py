@@ -60,16 +60,50 @@ an intra-iteration path — a naive line-order scan produced 8 false positives
 where this reports none.
 
 Exit code is 1 when any violation is reported, so it can gate.
+
+Gating
+------
+A dominance gate that cannot fail is worse than none, so three things are
+enforced rather than assumed (CLAUDE.md, "four ways a gate can be unable to
+fail"):
+
+* **empty input is an error, not a pass.** No paths, a path that holds no
+  `.ll`, or a typo'd flag exits 2 with a message instead of printing
+  `violations: 0`.
+* **the subject must be live.** `--min-files` / `--min-binds` assert that the
+  corpus actually contained modules and actually contained root stores. A green
+  verdict over zero binds proves nothing and is refused.
+* **malformed IR is an error, not a silent skip.** A function body whose first
+  line is not a label used to parse to zero blocks and be dropped without a
+  word — a planted violation vanished and the run exited 0. Both that and a
+  label-shaped line the parser cannot read now raise.
+
+`--self-test` compiles two in-file fixtures — one with a planted violation of
+exactly this class, one identical but with the root store hoisted above the
+collection point — and asserts the checker reports the first and clears the
+second. It is the "assert the gate can fail" arm, and CI runs it next to the
+real corpus.
 """
+import argparse
 import os
 import re
 import sys
+import tempfile
 from collections import defaultdict, deque
 
 # ---------------------------------------------------------------- IR parsing
 
 DEFINE_RE = re.compile(r"^define\s+.*?@([\w.$]+)\(")
-LABEL_RE = re.compile(r"^([\w.$][\w.$]*):\s*$")
+# A trailing `; preds = %a, %b` comment is LLVM's own printed form (`llvm-dis`,
+# `opt -S`, `clang -S -emit-llvm`). Perry's writer never emits it, but pointing
+# this tool at LLVM-canonical IR is the obvious thing to try, and rejecting the
+# label there used to append it to the PREVIOUS block — collapsing the whole
+# function into one and producing exactly the line-order false positives the
+# docstring above says real dominance avoids.
+LABEL_RE = re.compile(r"^([\w.$][\w.$]*):\s*(?:;.*)?$")
+# Anything that ends in `:` and is not an instruction is label-SHAPED. If the
+# strict form above declines it, that is a parser gap and must be loud.
+LABEL_SHAPED_RE = re.compile(r"^[^\s=]+:\s*(?:;.*)?$")
 ASSIGN_RE = re.compile(r"^\s*%([\w.$]+)\s*=\s*(.*)$")
 CALL_RE = re.compile(r"\bcall\s+[^@]*@([\w.$]+)\(")
 BIND_RE = re.compile(r"call void @js_shadow_slot_bind\(i32 (\d+), ptr %([\w.$]+)\)")
@@ -102,12 +136,20 @@ class Func:
         self.preds = defaultdict(set)
 
 
+class MalformedIR(Exception):
+    """The parser cannot model this IR, so any verdict over it would be a lie.
+
+    Raised rather than skipped: a function the parser drops reports zero
+    violations, which is indistinguishable from a clean one.
+    """
+
+
 def parse_file(path):
     funcs = []
     cur = None
     curblk = None
     with open(path, "r", errors="replace") as fh:
-        for raw in fh:
+        for lineno, raw in enumerate(fh, 1):
             line = raw.rstrip("\n")
             m = DEFINE_RE.match(line)
             if m:
@@ -118,6 +160,12 @@ def parse_file(path):
             if cur is None:
                 continue
             if line.startswith("}"):
+                if not cur.blocks:
+                    raise MalformedIR(
+                        f"{path}:{lineno}: @{cur.name} has no basic-block label. "
+                        "The parser has no way to build a CFG for it, and a "
+                        "silent skip would report it clean."
+                    )
                 cur = None
                 curblk = None
                 continue
@@ -128,10 +176,24 @@ def parse_file(path):
                     cur.blocks.append(curblk)
                     cur.insns[curblk] = []
                 continue
-            if curblk is None:
-                continue
             if not line.strip():
                 continue
+            if LABEL_SHAPED_RE.match(line.strip()):
+                raise MalformedIR(
+                    f"{path}:{lineno}: label-shaped line the parser cannot read: "
+                    f"{line.strip()!r}. Appending it to the previous block would "
+                    "merge two blocks and fabricate an intra-block path."
+                )
+            if curblk is None:
+                # An instruction before the first label is LLVM's implicit
+                # entry block (`%0`). Perry's writer never emits one, but if it
+                # ever does, or if this is run over `llvm-dis` output, dropping
+                # the instructions would hide every violation in the entry
+                # block — which is where allocations live.
+                raise MalformedIR(
+                    f"{path}:{lineno}: instruction before the first label in "
+                    f"@{cur.name}: {line.strip()!r} (implicit entry block)."
+                )
             cur.insns[curblk].append(Insn(line, curblk, len(cur.insns[curblk])))
     for f in funcs:
         build_cfg(f)
@@ -635,26 +697,208 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
     return violations
 
 
+# ------------------------------------------------------------- self-test ---
+#
+# The gate's own "can it fail?" arm. `PLANTED` is the #7186 shape: the instance
+# is materialized, a call that allocates runs, and only THEN is the slot bound.
+# `CLEAN` is byte-identical with the store/bind pair hoisted above the call.
+
+_SELFTEST_PLANTED = """\
+define double @perry_fn_selftest__late(double %a) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %obj = call ptr @js_object_alloc(i32 4)
+  %ret = call double @js_call_function(double %a)
+  store ptr %obj, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret double %ret
+}
+
+define double @perry_fn_selftest__branchy(double %a, i1 %c) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %arr = call ptr @js_array_alloc(i32 8)
+  br i1 %c, label %if.then.1, label %if.merge.2
+
+if.then.1:
+  %poll = call double @js_gc_loop_safepoint(double %a)
+  br label %if.merge.2
+
+if.merge.2:
+  store ptr %arr, ptr %slot
+  call void @js_shadow_slot_bind(i32 1, ptr %slot)
+  ret double %a
+}
+"""
+
+_SELFTEST_CLEAN = """\
+define double @perry_fn_selftest__early(double %a) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %obj = call ptr @js_object_alloc(i32 4)
+  store ptr %obj, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  %ret = call double @js_call_function(double %a)
+  ret double %ret
+}
+"""
+
+_SELFTEST_MALFORMED = """\
+define double @perry_fn_selftest__nolabel(double %a) {
+  %slot = alloca i64
+  %obj = call ptr @js_object_alloc(i32 4)
+  %ret = call double @js_call_function(double %a)
+  store ptr %obj, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret double %ret
+}
+"""
+
+
+def _scan(paths, moving_only, anchor):
+    """(violations, n_binds) over `paths`."""
+    parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
+    poll_reaching, _known = compute_poll_reaching(
+        [f for _m, fs in parsed for f in fs])
+    binds = sum(
+        1
+        for _m, fs in parsed
+        for f in fs
+        for b in f.blocks
+        for ins in f.insns[b]
+        if BIND_RE.search(ins.text)
+    )
+    found = [
+        (mod, v)
+        for mod, fs in parsed
+        for f in fs
+        for v in check_func(mod, f, moving_only, poll_reaching, anchor)
+    ]
+    return found, binds
+
+
+def self_test():
+    """Assert the checker reports the planted violation and clears the control.
+
+    Returns 0 on success. A gate that never demonstrates a failure is a gate
+    that has not been shown to work.
+    """
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        planted = os.path.join(td, "planted.ll")
+        clean = os.path.join(td, "clean.ll")
+        broken = os.path.join(td, "broken.ll")
+        for p, text in (
+            (planted, _SELFTEST_PLANTED),
+            (clean, _SELFTEST_CLEAN),
+            (broken, _SELFTEST_MALFORMED),
+        ):
+            with open(p, "w") as fh:
+                fh.write(text)
+
+        found, binds = _scan([planted], False, "alloc")
+        if len(found) != 2:
+            print(f"self-test FAIL: planted fixture -> {len(found)} violations, "
+                  "expected 2 (same-block and cross-block forms)", file=sys.stderr)
+            ok = False
+        if binds != 2:
+            print(f"self-test FAIL: planted fixture -> {binds} binds, expected 2",
+                  file=sys.stderr)
+            ok = False
+        if ok and not all(v.moving for _m, v in found):
+            print("self-test FAIL: both planted violations reach a moving minor "
+                  "(js_call_function / js_gc_loop_safepoint) and must be "
+                  "classified MOVING", file=sys.stderr)
+            ok = False
+
+        found, binds = _scan([clean], False, "alloc")
+        if found:
+            print(f"self-test FAIL: control fixture -> {len(found)} violations, "
+                  "expected 0", file=sys.stderr)
+            ok = False
+        if binds != 1:
+            print(f"self-test FAIL: control fixture -> {binds} binds, expected 1",
+                  file=sys.stderr)
+            ok = False
+
+        try:
+            _scan([broken], False, "alloc")
+        except MalformedIR:
+            pass
+        else:
+            print("self-test FAIL: a function with no basic-block label must "
+                  "raise MalformedIR, not parse to zero blocks and report clean",
+                  file=sys.stderr)
+            ok = False
+
+    print("self-test OK" if ok else "self-test FAILED")
+    return 0 if ok else 1
+
+
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
-    moving_only = "--moving-only" in sys.argv
-    anchor = "any" if "--any-def" in sys.argv else "alloc"
-    verbose = "-v" in sys.argv
+    ap = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("paths", nargs="*", help=".ll files or directories to scan")
+    ap.add_argument("--moving-only", action="store_true",
+                    help="keep only violations whose window reaches a moving minor")
+    ap.add_argument("--any-def", action="store_true",
+                    help="anchor on any call result, not just allocation intrinsics")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--self-test", action="store_true",
+                    help="run the built-in planted/clean fixtures and exit")
+    ap.add_argument("--min-files", type=int, default=1, metavar="N",
+                    help="fail unless at least N .ll files were scanned (default 1)")
+    ap.add_argument("--min-binds", type=int, default=1, metavar="N",
+                    help="fail unless at least N root stores were seen (default 1). "
+                         "A clean verdict over zero root stores proves nothing.")
+    ns = ap.parse_args()
+
+    if ns.self_test:
+        return self_test()
+
+    moving_only = ns.moving_only
+    anchor = "any" if ns.any_def else "alloc"
+    verbose = ns.verbose
     paths = []
-    for a in args:
+    for a in ns.paths:
         if os.path.isdir(a):
             for root, _dirs, files in os.walk(a):
                 for fn in files:
                     if fn.endswith(".ll"):
                         paths.append(os.path.join(root, fn))
-        else:
+        elif os.path.isfile(a):
             paths.append(a)
+        else:
+            print(f"error: no such file or directory: {a}", file=sys.stderr)
+            return 2
+
+    # An empty corpus is a misconfigured run, never a pass. `--trace llvm`
+    # silently produces nothing for a failed compile, and `PERRY_SAVE_LL` is not
+    # written for modules that codegen splits into units, so "the directory is
+    # empty" is a routine outcome rather than an exotic one.
+    if len(paths) < ns.min_files:
+        print(f"error: scanned {len(paths)} .ll file(s), need at least "
+              f"{ns.min_files}. Nothing was checked.", file=sys.stderr)
+        return 2
 
     parsed = []
     for p in sorted(paths):
         parsed.append((os.path.basename(p), parse_file(p)))
     poll_reaching, _known = compute_poll_reaching(
         [f for _m, fs in parsed for f in fs])
+    n_binds = sum(
+        1
+        for _m, fs in parsed
+        for f in fs
+        for b in f.blocks
+        for ins in f.insns[b]
+        if BIND_RE.search(ins.text)
+    )
 
     total = 0
     moving_total = 0
@@ -681,12 +925,22 @@ def main():
                 )
     if verbose:
         print("\n".join(out))
-    print(f"=== files: {len(paths)}   violations: {total}"
+    print(f"=== files: {len(paths)}   root stores: {n_binds}   violations: {total}"
           f"   (moving-minor reachable: {moving_total})")
     for k, n in sorted(per_kind.items(), key=lambda kv: -kv[1]):
         print(f"  {n:6d}  ({per_kind_moving.get(k, 0):5d} moving)  {k}")
+    if n_binds < ns.min_binds:
+        print(f"error: {n_binds} root store(s) in the corpus, need at least "
+              f"{ns.min_binds}. The subject of this check never ran — a clean "
+              "verdict here means the IR was not the IR you think it is "
+              "(compile with PERRY_INLINE_SHADOW_SLOT=0).", file=sys.stderr)
+        return 2
     return 1 if total else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except MalformedIR as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)

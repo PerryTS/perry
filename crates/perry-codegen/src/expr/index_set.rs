@@ -1430,14 +1430,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // minor inside it relocates the receiver out from under
                 // `obj_box`. Root it across the evaluation and re-read below.
                 let recv_guard =
-                    super::temp_root::guard_store_receiver(ctx, object, &obj_box, value);
+                    super::temp_root::guard_store_operand(ctx, object, &obj_box, value);
                 let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
                     ctx,
                     value,
                     "index_set.literal_string_value_bits",
                     "literal_string_index_set_helper_edge",
                 )?;
-                let obj_box = super::temp_root::reread_store_receiver(ctx, &recv_guard, &obj_box);
+                let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
@@ -1476,22 +1476,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &val_double),
                     ],
                 );
-                super::temp_root::release_store_receiver(ctx, recv_guard);
+                super::temp_root::release_store_operand(ctx, recv_guard);
                 return Ok(val_double);
             }
             if is_string_expr(ctx, index) {
                 let obj_box = lower_expr(ctx, object)?;
                 // #7154: see the literal-key arm above.
                 let recv_guard =
-                    super::temp_root::guard_store_receiver(ctx, object, &obj_box, value);
+                    super::temp_root::guard_store_operand(ctx, object, &obj_box, value);
                 let key_box = lower_expr(ctx, index)?;
+                // #7154: the KEY sits in the same window as the receiver. A
+                // non-literal string key is an ordinary heap string with no
+                // registered root of its own, so an evacuating minor inside the
+                // value's evaluation relocates it and leaves `key_box` naming
+                // from-space — `unbox_str_handle` below would hand the setter a
+                // pre-move `StringHeader*` and the field would land under a
+                // garbage key. Pushed AFTER `recv_guard` so the two cuts nest:
+                // `temp_root_truncate` drops everything above its index, so the
+                // key must be released first.
+                let key_guard = super::temp_root::guard_store_operand(ctx, index, &key_box, value);
                 let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
                     ctx,
                     value,
                     "index_set.string_value_bits",
                     "string_index_set_helper_edge",
                 )?;
-                let obj_box = super::temp_root::reread_store_receiver(ctx, &recv_guard, &obj_box);
+                let key_box = super::temp_root::reread_store_operand(ctx, &key_guard, &key_box);
+                let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
                 super::property_set::emit_nullish_write_guard(
                     ctx,
@@ -1527,7 +1538,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &val_double),
                     ],
                 );
-                super::temp_root::release_store_receiver(ctx, recv_guard);
+                super::temp_root::release_store_operand(ctx, recv_guard);
                 return Ok(val_double);
             }
             // Fallback with runtime STRING_TAG check, matching IndexGet.

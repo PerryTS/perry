@@ -2653,9 +2653,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // #5391 codegen units: large modules split their object compilation into N
     // independently-compiled units so clang's peak RSS stays ~whole/N instead of
     // OOMing on one giant TU. Gated to large modules (default 1 unit = unchanged
-    // behavior). `emit_ir_only` and `PERRY_SAVE_LL` want the whole-module text,
-    // so they take the single-text path; the split path avoids materializing the
-    // full ~1GB IR string at all (which would defeat the memory win).
+    // behavior). `emit_ir_only` wants the whole-module text, so it takes the
+    // single-text path; the split path avoids materializing the full ~1GB IR
+    // string at all (which would defeat the memory win).
     let n_units = if opts.emit_ir_only {
         1
     } else {
@@ -2668,6 +2668,21 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             hir.name,
             units.len()
         );
+        // #7154: dump the units. The comment above used to claim `PERRY_SAVE_LL`
+        // took the single-text path — it never did; this `return` fires before
+        // the `PERRY_SAVE_LL` write below. So `--trace llvm` silently emitted
+        // NOTHING for any module past `MIN_CALLABLES_TO_SPLIT`, i.e. exactly the
+        // largest modules, which is where a static IR audit
+        // (`scripts/gc_root_dominance_check.py`) most needs to look — a corpus
+        // that quietly omits its biggest members makes a clean verdict
+        // meaningless. One file per unit, not one concatenation: the units are
+        // already materialized here, so this adds no peak.
+        if let Ok(save_dir) = std::env::var("PERRY_SAVE_LL") {
+            for (i, unit) in units.iter().enumerate() {
+                let filename = format!("{}/{}.unit{}.ll", save_dir, module_prefix, i);
+                let _ = std::fs::write(&filename, unit);
+            }
+        }
         return crate::linker::compile_units_to_object(&units, opts.target.as_deref());
     }
 

@@ -1,0 +1,157 @@
+name: GC Root Dominance
+
+# Static gate for the invariant a GC-managed value's root store must DOMINATE
+# every subsequent site that can trigger a collection (#7154).
+#
+# Two bugs of this class shipped before there was an instrument for it. #7184:
+# the root store was emitted but its shadow-slot index fell outside the pushed
+# frame, so `js_shadow_slot_bind` bounds-checked it into a silent no-op. #7192:
+# the store was emitted in-frame but AFTER a call that allocates. Both present
+# identically — a *rooted* slot holding a dangling pointer, surfacing cycles
+# later as "TypeError: value is not a function" — and neither is visible to any
+# runtime GC probe, because at the moment of the collection there is nothing
+# for the collector to find. A static pass over the emitted IR is the only
+# instrument that sees them before they crash, which is why this is a gate and
+# not a benchmark.
+#
+# THIS JOB IS DESIGNED TO BE ABLE TO FAIL, and is checked against all four ways
+# a gate can be unable to (CLAUDE.md):
+#
+#   1. no `continue-on-error`, no `|| true`, no pipe between the checker and
+#      the shell's exit status;
+#   2. NOT yet in branch protection's required contexts — deliberately, because
+#      a new gate has never been green and promoting it immediately blocks every
+#      open PR. Promote after one clean week on `main`;
+#   3. `concurrency` cancels pull-request runs only, never `main` runs;
+#   4. the subject is ASSERTED live, not assumed. `--self-test` proves the
+#      checker still reports a planted violation and still clears the control,
+#      and `--min-files` / `--min-binds` refuse a clean verdict over a corpus
+#      that contained no modules or no root stores. An empty `.perry-trace/llvm`
+#      is a routine outcome of a failed compile, so "0 violations" over 0 files
+#      must be an error rather than a pass.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per-event groups, cancelling PR runs only. A shared group with an
+  # unconditional cancel-in-progress starves `main`: on a deep runner queue
+  # every merge cancels the previous main run before it reaches a runner, and a
+  # gate that is always cancelled never fails. Same reasoning as gc-ratchet.yml.
+  group: gc-root-dominance-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  gc-root-dominance:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Fast structural failure first: prove the checker can still fail before
+      # spending a compiler build on it. This is the arm that would have caught
+      # `PERRY_GC_FORCE_EVACUATE` being inert for every test that "exercised"
+      # it (#6942/#6946).
+      - name: Checker self-test (can this gate still fail?)
+        run: python3 scripts/gc_root_dominance_check.py --self-test
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gcdom-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build perry and the runtime archives
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only; the .a files come from
+          # the -static wrapper crates. The package set is fixed so cargo
+          # feature unification matches every other job that builds the
+          # compiler.
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      - name: Emit the IR corpus
+        env:
+          # PERRY_GC_MOVING_LOOP_POLLS=1 is what puts `js_gc_loop_safepoint` in
+          # the IR, which is what the MOVING classification keys on. It is off
+          # by default (#7161 stopgap), so without it this gate would run over
+          # IR that cannot express the bug — hazard 4 again.
+          PERRY_GC_MOVING_LOOP_POLLS: "1"
+          # Makes every root store the @js_shadow_slot_bind call form. The #7088
+          # inline diamond is equivalent but harder to anchor on.
+          PERRY_INLINE_SHADOW_SLOT: "0"
+          PERRY_NO_AUTO_OPTIMIZE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p ir-corpus
+          # A spread of shapes that exercise the lowerings this invariant runs
+          # through: construction, object/array literals and spreads, class
+          # expressions with statics, property and element stores, closures.
+          # Kept to test-files/ so the corpus is versioned with the repo rather
+          # than depending on a private workload.
+          shopt -s nullglob
+          sources=(
+            test-files/test_gap_gc_*.ts
+            test-files/test_gap_class*.ts
+            test-files/test_gap_object*.ts
+            test-files/test_gap_static*.ts
+            test-files/test_gap_prop*.ts
+          )
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "::error::no corpus sources matched; the glob is stale"
+            exit 1
+          fi
+          for src in "${sources[@]}"; do
+            name="$(basename "$src" .ts)"
+            rm -rf .perry-trace/llvm
+            # A source that fails to compile must not silently shrink the
+            # corpus: --min-files below is the backstop, but say so here too.
+            if ! ./target/release/perry compile "$src" -o "/tmp/$name" --trace llvm >/dev/null 2>&1; then
+              echo "::warning::$src did not compile; skipping"
+              continue
+            fi
+            for ll in .perry-trace/llvm/*.ll; do
+              cp "$ll" "ir-corpus/${name}__$(basename "$ll")"
+            done
+          done
+          echo "corpus: $(ls ir-corpus | wc -l) .ll files"
+
+      - name: Check root-store dominance
+        run: |
+          set -euo pipefail
+          # No pipe: the checker's own exit status is the job's. --min-binds
+          # asserts the corpus actually contained root stores, so a green
+          # verdict cannot come from IR that never had a subject.
+          python3 scripts/gc_root_dominance_check.py ir-corpus \
+            --moving-only --min-files 5 --min-binds 50 -v
+
+      - name: Upload the IR corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-root-dominance-ir
+          path: ir-corpus
+          retention-days: 7

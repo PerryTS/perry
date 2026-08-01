@@ -51,9 +51,9 @@ fn lower_runtime_property_set_by_name(
 ) -> Result<String> {
     let recv_box = lower_expr(ctx, object)?;
     // #7154: root the receiver across the value's evaluation, which allocates.
-    let recv_guard = super::temp_root::guard_store_receiver(ctx, object, &recv_box, value);
+    let recv_guard = super::temp_root::guard_store_operand(ctx, object, &recv_box, value);
     let val_double = lower_expr(ctx, value)?;
-    let recv_box = super::temp_root::reread_store_receiver(ctx, &recv_guard, &recv_box);
+    let recv_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &recv_box);
     let key_idx = ctx.strings.intern(property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let blk = ctx.block();
@@ -63,7 +63,7 @@ fn lower_runtime_property_set_by_name(
         "js_object_set_field_by_property_id",
         &[(I64, &obj_bits), (I64, &property_id), (DOUBLE, &val_double)],
     );
-    super::temp_root::release_store_receiver(ctx, recv_guard);
+    super::temp_root::release_store_operand(ctx, recv_guard);
     Ok(val_double)
 }
 
@@ -1003,14 +1003,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // inside it relocates the receiver out from under `obj_box` --
             // `obj.k = f()` then writes `k` into abandoned from-space memory
             // and the field never appears on the object the program keeps.
-            let recv_guard = super::temp_root::guard_store_receiver(ctx, object, &obj_box, value);
+            let recv_guard = super::temp_root::guard_store_operand(ctx, object, &obj_box, value);
             let (val_double, _val_bits) = lower_value_for_dynamic_property_set(
                 ctx,
                 value,
                 "property_set.dynamic_value_bits",
                 "dynamic_property_set_helper_edge",
             )?;
-            let obj_box = super::temp_root::reread_store_receiver(ctx, &recv_guard, &obj_box);
+            let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
             // Intern the field name in the StringPool (same one the
             // matching getter uses, so they share the global string).
             let key_idx = ctx.strings.intern(property);
@@ -1033,7 +1033,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_object_set_field_by_name",
                     &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
                 );
-                super::temp_root::release_store_receiver(ctx, recv_guard);
+                super::temp_root::release_store_operand(ctx, recv_guard);
                 return Ok(val_double);
             }
             let site_id = emit_typed_feedback_register_site(
@@ -1051,7 +1051,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &val_double),
                 ],
             );
-            super::temp_root::release_store_receiver(ctx, recv_guard);
+            super::temp_root::release_store_operand(ctx, recv_guard);
             Ok(val_double)
         }
 

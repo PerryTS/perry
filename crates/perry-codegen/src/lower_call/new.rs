@@ -1138,12 +1138,33 @@ fn lower_new_impl_inner(
     // inside the (about-to-be-inlined) ctor body must apply spec
     // return-override semantics and yield the `new` expression's value —
     // NOT emit a function-level `ret` that terminates the enclosing
-    // function. `ctor_result_slot` starts as `this`; `Stmt::Return`
-    // overwrites it with a returned object (or throws for a derived ctor
-    // returning a primitive), then branches to `after_idx`. Refs
-    // class/subclass/derived-class-return-override-*.
+    // function. `Stmt::Return` overwrites the slot with the returned value
+    // (or throws for a derived ctor returning a primitive), then branches to
+    // `after_idx`. Refs class/subclass/derived-class-return-override-*.
+    //
+    // #7154: the slot starts at `undefined`, NOT at `this`.
+    //
+    // It is a plain entry alloca — not a shadow slot, not a temp root — so the
+    // collector neither marks nor rewrites it. Seeding it with `obj_box` put
+    // the PRE-constructor instance address in unrooted memory for the whole
+    // body; on fall-through (no explicit `return`) `js_ctor_return_override`
+    // then saw an *object* in `raw` and returned THAT — the stale address —
+    // discarding the re-read `obj_box` the reload below just recovered. The
+    // instance-root fix was defeated at its last instruction.
+    //
+    // `undefined` is exactly equivalent for every path and carries no address:
+    //   - fall-through     → `raw` is undefined → the override yields `this_val`,
+    //                        i.e. the RE-READ instance (previously: `raw`, the
+    //                        stale one — same value only when nothing moved);
+    //   - bare `return;`   → the slot is untouched, so also `this_val`;
+    //   - `return <expr>`  → `Stmt::Return` overwrote the slot; unchanged;
+    //   - inherited-symbol ctor → the call's return value overwrote it; unchanged.
     let ctor_result_slot = ctx.func.alloca_entry(DOUBLE);
-    ctx.block().store(DOUBLE, &obj_box, &ctor_result_slot);
+    ctx.block().store(
+        DOUBLE,
+        &double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+        &ctor_result_slot,
+    );
     let after_idx = ctx.new_block("ctor.return.after");
     let after_label = ctx.block_label(after_idx);
     ctx.inline_ctor_return.push(crate::expr::InlineCtorReturn {

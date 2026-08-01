@@ -319,8 +319,12 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         }
         Stmt::Return(None) => {
             // Inside an inlined constructor body, a bare `return;` keeps the
-            // implicit `this` (the result slot already holds it) and jumps to
-            // the shared after-block — never a function-level `ret`.
+            // implicit `this` and jumps to the shared after-block — never a
+            // function-level `ret`. Leaving the result slot untouched is what
+            // expresses that: it holds `undefined`, and the construction
+            // completion's `js_ctor_return_override` maps `undefined` to the
+            // re-read `this` (#7154 — the slot is a plain alloca the collector
+            // does not rewrite, so it must never carry an instance address).
             if let Some(target) = ctx.inline_ctor_return.last().cloned() {
                 for _ in 0..ctx.try_depth {
                     ctx.block().call_void("js_try_end", &[]);

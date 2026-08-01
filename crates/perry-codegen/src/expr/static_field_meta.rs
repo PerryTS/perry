@@ -12,6 +12,32 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, FnCtx};
 
+/// The compiled symbols for `template`'s `static { … }` blocks, in declaration
+/// order (#685).
+///
+/// Lifted out of `Expr::ClassExprFresh`'s body so the #7154 rooting predicate
+/// can ask "does this class expression run arbitrary user code?" *before* the
+/// object is exposed, instead of discovering it at the loop that invokes them.
+fn static_block_fns(ctx: &FnCtx<'_>, template: &str) -> Vec<String> {
+    ctx.classes
+        .get(template)
+        .map(|c| {
+            c.static_methods
+                .iter()
+                .filter(|m| m.name.starts_with("__perry_static_init_"))
+                .filter_map(|m| {
+                    ctx.methods
+                        .get(&(
+                            template.to_string(),
+                            crate::codegen::static_method_registry_key(&m.name),
+                        ))
+                        .cloned()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::StaticFieldGet {
@@ -436,8 +462,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // allocates a `js_array_alloc` accumulator and grows it with
             // `js_array_push_f64` per element, and those are collection points
             // even when every element is an inert `LocalGet`.
+            //
+            // So does a `static { … }` block, for the plainer reason that its
+            // body is arbitrary user code — which is why `block_fns` is computed
+            // HERE rather than at its loop below: the predicate has to see it.
+            // A class expression whose only statics are inert (`static x = 1`)
+            // but which carries a static block otherwise pushed no root at all,
+            // and the block's body could then relocate the object out from under
+            // the register the final `nanbox_pointer_inline` reads.
+            let block_fns = static_block_fns(ctx, template);
             let protect_handle = !captured_args.is_empty()
                 || !symbol_statics.is_empty()
+                || !block_fns.is_empty()
                 || super::temp_root::any_may_trigger_gc(ctx, named_statics.iter().map(|(_, v)| v));
             let rooted = super::temp_root::rooted_handle_begin(ctx, &obj, protect_handle);
             for (name, init) in named_statics {
@@ -503,7 +539,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             for (key, init) in symbol_statics {
                 let k = lower_expr(ctx, key)?;
+                // #7154: `key` is lowered before `init`, so the Symbol sits in
+                // an SSA register across an arbitrary initializer — the same
+                // exposure the receiver has, one operand over. Root it.
+                let key_guard = super::temp_root::guard_store_operand(ctx, key, &k, init);
                 let v = lower_expr(ctx, init)?;
+                let k = super::temp_root::reread_store_operand(ctx, &key_guard, &k);
                 // #7154: both lowerings above can collect; re-derive the
                 // receiver from the root rather than reusing the register.
                 let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
@@ -513,6 +554,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_object_set_symbol_property",
                     &[(DOUBLE, &obj_box), (DOUBLE, &k), (DOUBLE, &v)],
                 );
+                // Cut per iteration rather than letting `rooted`'s release do it
+                // at the end: the setter this call may invoke is user code, and
+                // N statics would otherwise hold N slots across all of them.
+                super::temp_root::release_store_operand(ctx, key_guard);
             }
             // #685: run the class's `static { … }` blocks NOW — at the class
             // expression's evaluation, with `this` = THIS fresh class object.
@@ -527,24 +572,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // object, not the shared template). Blocks run after the named
             // static fields above — the source interleaving of fields and
             // blocks is not reproduced on this path (pre-existing limitation).
-            let block_fns: Vec<String> = ctx
-                .classes
-                .get(template)
-                .map(|c| {
-                    c.static_methods
-                        .iter()
-                        .filter(|m| m.name.starts_with("__perry_static_init_"))
-                        .filter_map(|m| {
-                            ctx.methods
-                                .get(&(
-                                    template.clone(),
-                                    crate::codegen::static_method_registry_key(&m.name),
-                                ))
-                                .cloned()
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            //
+            // `block_fns` is computed above, next to `protect_handle`.
             for fn_name in block_fns {
                 // #7154: a static block runs arbitrary user code, so re-derive
                 // the receiver from the root before each one.

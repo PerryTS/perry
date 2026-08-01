@@ -551,52 +551,69 @@ pub(crate) fn temp_root_release(ctx: &mut FnCtx<'_>, guard: Option<String>) {
     }
 }
 
-/// The receiver of a property/element STORE, kept valid across the evaluation
-/// of the value being stored (#7154).
+/// An operand of a property/element STORE that is lowered *before* the value,
+/// kept valid across the value's evaluation (#7154).
 ///
-/// `o.k = f()` and `o[k] = f()` evaluate the reference first and the value
-/// second — spec order, and codegen follows it. That leaves the receiver in an
-/// SSA register while `f()` runs, and `f()` allocates. A back-edge poll inside
-/// it drives an evacuating minor which relocates the receiver; the *slot* the
-/// register was loaded from is a root and gets rewritten, but the register does
-/// not, so the store lands in abandoned from-space memory and the field never
-/// appears on the object the program keeps.
+/// Two operands are in that position, and both need it:
+///
+/// - the **receiver**. `o.k = f()` and `o[k] = f()` evaluate the reference
+///   first and the value second — spec order, and codegen follows it. That
+///   leaves the receiver in an SSA register while `f()` runs, and `f()`
+///   allocates. A back-edge poll inside it drives an evacuating minor which
+///   relocates the receiver; the *slot* the register was loaded from is a root
+///   and gets rewritten, but the register does not, so the store lands in
+///   abandoned from-space memory and the field never appears on the object the
+///   program keeps.
+/// - the **computed key**. `o[k] = f()` lowers `k` before `f`, and a
+///   non-literal string key is an ordinary heap string with the same exposure:
+///   `unbox_str_handle` below the call then reads a pre-move `StringHeader*`,
+///   so the field lands under a garbage key. Same for the `[sym]: init` pair of
+///   a class expression's symbol statics, where the Symbol is lowered before
+///   its initializer.
 ///
 /// This is the store-side instance of the [module invariant](self): property
 /// (2) — a rewritten location — is worthless without property (3), reading that
-/// location again below the collection point. It is #7114 with a receiver
-/// instead of a string literal.
+/// location again below the collection point. It is #7114 with a store operand
+/// instead of a call operand.
 ///
-/// A temp root (not a re-load) is the required strategy: re-lowering `object`
-/// would observe an assignment made by `f()` itself, which is a miscompile
-/// rather than a rooting fix — see [`operand_is_reloadable`].
-pub(crate) struct ReceiverGuard {
+/// A temp root (not a re-load) is the required strategy: re-lowering the
+/// operand would observe an assignment made by `f()` itself, which is a
+/// miscompile rather than a rooting fix — see [`operand_is_reloadable`].
+///
+/// Guards nest: push the receiver's first and the key's second, then release in
+/// the opposite order, because [`temp_root_truncate`] is a stack *cut* and a
+/// release of the outer one drops the inner.
+pub(crate) struct StoreOperandGuard {
     slot: Option<String>,
 }
 
-/// Root `recv` (the lowered `object`) if evaluating `value` can collect.
-/// Emits nothing otherwise, so stores with an inert RHS keep their old IR.
-pub(crate) fn guard_store_receiver(
+/// Root `lowered` (the already-lowered `operand`) if evaluating `value` can
+/// collect. Emits nothing otherwise, so stores with an inert RHS keep their old
+/// IR.
+pub(crate) fn guard_store_operand(
     ctx: &mut FnCtx<'_>,
-    object: &Expr,
-    recv: &str,
+    operand: &Expr,
+    lowered: &str,
     value: &Expr,
-) -> ReceiverGuard {
+) -> StoreOperandGuard {
     let collects = expr_may_trigger_gc(ctx, value);
-    let slot = match operand_protection(ctx, object, collects) {
-        OperandProtection::Root => Some(temp_root_push_double(ctx, recv)),
-        // `Reload`/`Reuse` both mean the register survives: a string literal
-        // cannot be a store receiver, and a proven non-pointer is not movable.
+    let slot = match operand_protection(ctx, operand, collects) {
+        OperandProtection::Root => Some(temp_root_push_double(ctx, lowered)),
+        // `Reload` means the operand is a string literal: a registered,
+        // immutable global root, so re-deriving it below the collection point
+        // is exact — and the call sites here re-lower nothing, they simply keep
+        // the register, which for a literal is a load from that same global.
+        // `Reuse` means a proven non-pointer, which relocation cannot touch.
         OperandProtection::Reload | OperandProtection::Reuse => None,
     };
-    ReceiverGuard { slot }
+    StoreOperandGuard { slot }
 }
 
-/// Re-read the receiver below the value's evaluation. Returns `recv` unchanged
-/// when nothing was rooted.
-pub(crate) fn reread_store_receiver(
+/// Re-read the operand below the value's evaluation. Returns `lowered`
+/// unchanged when nothing was rooted.
+pub(crate) fn reread_store_operand(
     ctx: &mut FnCtx<'_>,
-    guard: &ReceiverGuard,
+    guard: &StoreOperandGuard,
     recv: &str,
 ) -> String {
     match &guard.slot {
@@ -610,7 +627,7 @@ pub(crate) fn reread_store_receiver(
 
 /// Drop the guard. Call it *after* the store, not before: the store helper
 /// allocates (key interning, field-array growth, shape transition).
-pub(crate) fn release_store_receiver(ctx: &mut FnCtx<'_>, guard: ReceiverGuard) {
+pub(crate) fn release_store_operand(ctx: &mut FnCtx<'_>, guard: StoreOperandGuard) {
     if let Some(idx) = guard.slot {
         temp_root_truncate(ctx, &idx);
     }

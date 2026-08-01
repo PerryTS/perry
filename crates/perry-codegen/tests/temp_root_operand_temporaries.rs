@@ -855,3 +855,83 @@ fn a_class_that_runs_no_user_code_emits_no_instance_root() {
          rooting the instance would be pure TLS traffic:\n{ir}"
     );
 }
+
+/// #7154 follow-up: the inline-constructor **result slot** must not be seeded
+/// with the instance address.
+///
+/// `ctor_result_slot` is a plain entry alloca — not a shadow slot, not a temp
+/// root — so the collector neither marks nor rewrites it. Seeding it with the
+/// pre-constructor `obj_box` meant that on fall-through (no explicit `return`)
+/// `js_ctor_return_override` received an *object* in `raw` and returned THAT,
+/// discarding the re-read instance the reload had just recovered. The
+/// dominance fix was defeated at its last instruction, and
+/// `the_new_instance_is_rooted_across_the_constructor_body` could not see it:
+/// that test walks the FIRST operand, which is the re-read one.
+///
+/// Sabotage check: restore the `store double %obj_box, ptr %ctor_result_slot`
+/// seed in `lower_new_impl_inner` and this fails.
+#[test]
+fn the_inline_ctor_result_slot_never_carries_an_instance_address() {
+    let ir = String::from_utf8(
+        compile_module(
+            &module_with_new_running_ctor("new_inst_result_slot.ts"),
+            entry_opts(),
+        )
+        .unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let f = init_ir(&ir);
+
+    let override_line = f
+        .lines()
+        .find(|l| l.contains("call double @js_ctor_return_override"))
+        .unwrap_or_else(|| panic!("the return-override:\n{f}"));
+    // `call double @js_ctor_return_override(double %a, double %b, i32 N)` —
+    // `%b` is `raw`, the value loaded out of the result slot.
+    let args = override_line
+        .split_once("js_ctor_return_override(")
+        .expect("argument list")
+        .1;
+    let raw_reg = args
+        .split(", ")
+        .nth(1)
+        .and_then(|a| a.trim().strip_prefix("double %"))
+        .unwrap_or_else(|| panic!("no `raw` register operand in `{override_line}`"))
+        .trim_end_matches(')')
+        .to_string();
+
+    let raw_def = f
+        .lines()
+        .find(|l| l.trim_start().starts_with(&format!("%{raw_reg} = ")))
+        .unwrap_or_else(|| panic!("no definition of %{raw_reg} in:\n{f}"))
+        .to_string();
+    assert!(
+        raw_def.contains("load double"),
+        "`raw` should be a load from the inline-ctor result slot, got `{raw_def}`:\n{f}"
+    );
+    let slot = raw_def
+        .rsplit_once("ptr ")
+        .expect("the slot pointer operand")
+        .1
+        .trim()
+        .to_string();
+
+    // Every store into that slot must be a constant. A register operand means
+    // an address the collector cannot rewrite is sitting in unrooted memory
+    // across the constructor body.
+    for line in f
+        .lines()
+        .filter(|l| l.trim_end().ends_with(&format!("ptr {slot}")) && l.contains("store "))
+    {
+        let stored = line
+            .split_once("store double ")
+            .map(|(_, rest)| rest.split(',').next().unwrap_or("").trim().to_string())
+            .unwrap_or_default();
+        assert!(
+            !stored.starts_with('%'),
+            "the inline-ctor result slot is a plain alloca the collector does \
+             not rewrite, so it must never be seeded with a heap address — \
+             found `{line}` (#7154):\n{f}"
+        );
+    }
+}

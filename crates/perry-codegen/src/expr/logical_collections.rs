@@ -922,8 +922,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // from-space memory, so the fields silently vanish from the copy
             // the caller receives. This is the same rooting contract
             // `Expr::Object` has used since #6951; `ObjectSpread` never got it.
-            let protect_handle =
-                super::temp_root::any_may_trigger_gc(ctx, parts.iter().map(|(_, v)| v));
+            //
+            // A spread part forces protection on its own, independently of
+            // whether the spread *expression* collects. `js_object_copy_own_fields`
+            // reads every own key of the source, so a source carrying an accessor
+            // runs arbitrary user code inside the helper — `{ ...a }` over a plain
+            // `LocalGet` answers `false` to `any_may_trigger_gc` and is still a
+            // collection point.
+            //
+            // A plain `js_object_set_field_by_name` on an inert value is NOT one,
+            // which is why the rest of the predicate stays byte-identical to
+            // `Expr::Object`'s: an allocation inside a runtime helper can never
+            // *initiate* a moving collection. `gc_check_trigger`'s minor arm
+            // defers to the loop safepoint under `PERRY_GC_MOVING_LOOP_POLLS=1`
+            // (`gc/policy.rs`, `GC_SAFEPOINT_PENDING`) and is conservative-scanned
+            // or budgeted-non-moving otherwise, so the register stays valid.
+            let protect_handle = parts.iter().any(|(k, _)| k.is_none())
+                || super::temp_root::any_may_trigger_gc(ctx, parts.iter().map(|(_, v)| v));
             let rooted = super::temp_root::rooted_handle_begin(ctx, &obj_handle, protect_handle);
             for (key_opt, value_expr) in parts {
                 if let Some(key) = key_opt {
