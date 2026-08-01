@@ -143,3 +143,67 @@ fn fromspace_scan_ignores_references_held_by_from_space_objects() {
         (*young_header).gc_flags &= !GC_FLAG_FORWARDED;
     }
 }
+
+/// #7154: a FORWARDED owner is a dead relocation stub. Its payload legitimately
+/// still names pre-move addresses, so reporting it is a false positive — and
+/// unlike a from-space owner it can sit in old-gen, where the space check does
+/// not reach it. On a Perry-compiled zod workload this was the single largest
+/// population in the residue, which is what made it worth a predicate.
+///
+/// The skip must also be COUNTED. A filter that shrinks the offender count
+/// without saying so reads exactly like progress, which is the failure mode
+/// this whole instrument exists to prevent.
+#[test]
+fn fromspace_scan_skips_but_counts_forwarded_owners_7154() {
+    let holder = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+    let young = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    unsafe {
+        std::ptr::write_bytes(holder, 0, 64);
+    }
+
+    let baseline = scan_heap_for_fromspace_refs();
+
+    // Same planted offender as the positive test above...
+    unsafe {
+        plant_reference(holder, young);
+        let young_header = header_from_user_ptr(young) as *mut GcHeader;
+        (*young_header).gc_flags |= GC_FLAG_FORWARDED;
+    }
+    let reported = scan_heap_for_fromspace_refs();
+    assert!(
+        reported.missing_rewrites > baseline.missing_rewrites,
+        "test premise: the planted reference must be reported while the holder \
+         is live (baseline={}, reported={})",
+        baseline.missing_rewrites,
+        reported.missing_rewrites
+    );
+
+    // ...but once the HOLDER itself is forwarded it is dead, and the identical
+    // planted reference must stop being an offender.
+    unsafe {
+        let holder_header = header_from_user_ptr(holder) as *mut GcHeader;
+        (*holder_header).gc_flags |= GC_FLAG_FORWARDED;
+    }
+    let after = scan_heap_for_fromspace_refs();
+    assert_eq!(
+        after.missing_rewrites, baseline.missing_rewrites,
+        "#7154: a FORWARDED owner is a dead relocation stub — its stale payload \
+         must not be reported as a missing rewrite"
+    );
+    assert!(
+        after.forwarded_owners_skipped > baseline.forwarded_owners_skipped,
+        "#7154: the skip must be COUNTED, not silent — a suppressed population \
+         that does not show up in the report reads as a fixed one \
+         (baseline={}, after={})",
+        baseline.forwarded_owners_skipped,
+        after.forwarded_owners_skipped
+    );
+
+    unsafe {
+        clear_reference(holder);
+        let holder_header = header_from_user_ptr(holder) as *mut GcHeader;
+        (*holder_header).gc_flags &= !GC_FLAG_FORWARDED;
+        let young_header = header_from_user_ptr(young) as *mut GcHeader;
+        (*young_header).gc_flags &= !GC_FLAG_FORWARDED;
+    }
+}
