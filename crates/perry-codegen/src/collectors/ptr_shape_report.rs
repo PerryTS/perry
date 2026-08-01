@@ -77,8 +77,15 @@ pub(super) const UNBOUND_ALLOC: ShapeDenial = ShapeDenial {
 /// `collectors/ptr_shape_returns.rs` admits a bare `return new C(...)` with no
 /// local at all as a producer, so the class does reach every
 /// `const r = producer(…)` caller. Left under [`UNBOUND_ALLOC`] these rows
-/// counted as rule-1 misses, and #7170 measured the resulting 506/963 headline
-/// inflated by exactly them.
+/// counted as rule-1 misses.
+///
+/// **How big this correction actually is: 4 sites of 1842**, measured over 196
+/// real dependency modules. #7170 §5.2 expected it to be a material share of
+/// the rule-1 wall and it is not — because only 62 of those 1842 allocations
+/// are in a `function` region at all (1711 are in closures, which cannot carry
+/// a return-shape fact; #7170 §6). The bucket is separated anyway: 4 is the
+/// honest number only once the classification exists, and "small" is a result
+/// rather than a reason to leave two mechanisms merged.
 ///
 /// **What this asserts, precisely:** the fact was *issued* for the enclosing
 /// function. Whether any caller consumed it is a different question with a
