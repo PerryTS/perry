@@ -221,9 +221,23 @@ def structural_counters(ir_before: str, ir_after: str, assembly: str) -> dict[st
             "ptrtoint": ir_after.count(" ptrtoint "),
             "runtime_calls": runtime_calls,
             "boxed_number_allocations": after_calls.get("js_boxed_number_new", 0),
+            # Heap write barriers — the perf-relevant, optimizer-controlled
+            # barriers this gate exists to catch. Counted statically because a
+            # native region that stores a GC pointer into a heap object needs
+            # one; the proof budgets bound how many.
             "write_barriers": after_calls.get("js_write_barrier", 0)
-            + after_calls.get("js_write_barrier_slot", 0)
-            + after_calls.get("js_write_barrier_root_nanbox", 0)
+            + after_calls.get("js_write_barrier_slot", 0),
+            # GC shadow-stack root-shading barriers (#7088). Before #7088 these
+            # lived inside the `js_shadow_slot_bind` / `js_shadow_slot_set`
+            # runtime calls and were invisible to this static IR counter; #7088
+            # emits the shadow-slot store — and its barrier — inline, so the
+            # call site is now visible here. Each is emitted once per rooted
+            # pointer-capable local (a structural constant, not an optimizer
+            # choice) and is gated behind PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT,
+            # so it never fires unless incremental marking is live — meaning it
+            # is caught, if it ever regresses at runtime, by write_barriers_traced.
+            # Tracked separately so it does not inflate the heap-barrier budget.
+            "root_shading_barriers": after_calls.get("js_write_barrier_root_nanbox", 0)
             + after_calls.get("js_write_barrier_root_heap_word", 0),
             "buffer_slow_path_calls": sum(
                 count
@@ -445,6 +459,7 @@ def runtime_counter_summary(
         "allocations_traced": traced_allocations,
         "gc_collections_traced": gc_collections,
         "write_barriers_static": int(after.get("write_barriers", 0) or 0),
+        "root_shading_barriers_static": int(after.get("root_shading_barriers", 0) or 0),
         "write_barriers_traced": traced_write_barriers,
         "boxed_number_allocations_static": int(
             after.get("boxed_number_allocations", 0) or 0

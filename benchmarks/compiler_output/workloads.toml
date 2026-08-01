@@ -407,7 +407,10 @@ allowed_missed_reason_kinds = [
 [workloads.h1_native_rep_equivalence.runtime_budgets]
 allocations_traced = 0
 gc_collections_traced = 0
-# Includes root barrier setup now counted by the static analyzer.
+# Heap write barriers only. The inline shadow-stack root-shading barriers
+# added by #7088 (one per rooted Buffer local: src, dst, same) are counted
+# under root_shading_barriers_static, not here; they are gated behind
+# incremental marking and never fire in this workload (write_barriers_traced=0).
 write_barriers_static = 1
 write_barriers_traced = 0
 boxed_number_allocations_static = 0
@@ -445,7 +448,10 @@ no_conversions = true
 
 [[workloads.h1_native_rep_equivalence.named_regions.selectors]]
 function_contains = "main"
-label_any = ["for.body.2"]
+# for.body.2 -> for.body.14 after #7088: the inline shadow-slot stores add
+# ss.* blocks ahead of the module-init loops, shifting the deterministic
+# per-function block counter by 12 (2/6/10 -> 14/18/22).
+label_any = ["for.body.14"]
 counter_min = { load_i8 = 1, store_i8 = 1 }
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
@@ -457,7 +463,8 @@ no_conversions = true
 
 [[workloads.h1_native_rep_equivalence.named_regions.selectors]]
 function_contains = "main"
-label_any = ["for.body.6"]
+# for.body.6 -> for.body.18 after #7088 (see direct_bounded).
+label_any = ["for.body.18"]
 counter_min = { load_i8 = 1, store_i8 = 1 }
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
@@ -469,7 +476,8 @@ no_conversions = true
 
 [[workloads.h1_native_rep_equivalence.named_regions.selectors]]
 function_contains = "main"
-label_any = ["for.body.10"]
+# for.body.10 -> for.body.22 after #7088 (see direct_bounded).
+label_any = ["for.body.22"]
 counter_min = { load_i8 = 1, store_i8 = 1 }
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
