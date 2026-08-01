@@ -10,7 +10,7 @@
 //! process.
 
 use super::*;
-use perry_ffi::{alloc_string, nanbox_string_bits, JsValue};
+use perry_ffi::{alloc_string, nanbox_string_bits, JsValue, ObjectHeader};
 extern "C" {
     fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
     fn js_object_set_field_by_name(obj: *mut ObjectHeader, key: *const StringHeader, value: f64);
@@ -58,11 +58,9 @@ fn new_catching(opts: f64) -> Result<Handle, (String, String)> {
     match perry_runtime::exception::js_call_catching(|| js_lru_cache_new(opts) as f64) {
         Ok(handle) => Ok(handle as Handle),
         Err(bits) => {
-            let err = JsValue::from_bits(bits.to_bits());
-            let ptr = err.as_pointer::<ObjectHeader>();
             let field = |name: &str| {
                 let key = alloc_string(name);
-                let v = unsafe { js_object_get_field_by_name_f64(ptr, key.as_raw()) };
+                let v = unsafe { js_object_get_field_by_name_boxed(bits, key.as_raw()) };
                 read_string_value(v).unwrap_or_default()
             };
             Err((field("name"), field("message")))
@@ -447,3 +445,54 @@ fn non_integer_ttl_is_a_type_error() {
 // string (minor then reports `copied_objects=0`), and driving
 // `gc_collect_minor()` in a binary that has also allocated JS objects
 // SIGSEGVs the copying collector. See that file's module docs.
+
+// ── heap-typed non-object options ────────────────────────────────────
+
+extern "C" {
+    fn js_array_alloc(capacity: u32) -> *mut std::ffi::c_void;
+    fn js_array_set_f64_extend(arr: *mut std::ffi::c_void, index: u32, value: f64);
+    fn js_nanbox_pointer(ptr: i64) -> f64;
+}
+
+/// A heap value that is *not* a plain object must read as all-undefined
+/// fields, never as a dereference of a forged object pointer.
+///
+/// npm reaches its options by destructuring, so a string, an array, a
+/// function, a `Map` — anything without a `max` own property — lands on
+/// the same "At least one of max, maxSize, or ttl is required" TypeError.
+/// Measured against `lru-cache@11.5.2` under Node 26.5.1 for strings,
+/// arrays, `Map`, `Set`, functions, `Date`, `RegExp` and boxed numbers;
+/// `Object.assign([], { max: 3 })` constructs fine there, because the own
+/// property is what matters, not the exotic-ness of the receiver.
+///
+/// The point of the test is the *receiver classification*, not the error:
+/// `options` arrives as an untrusted NaN-boxed value, and the wrapper must
+/// not unbox it to a `*const ObjectHeader` on faith. Arrays and handle-band
+/// ids are the two shapes that pass a naive `is_pointer()` check.
+#[test]
+fn heap_typed_non_object_options_read_as_undefined_fields() {
+    const MSG: &str = "At least one of max, maxSize, or ttl is required";
+
+    assert_throws(string_value("longer-than-inline-string"), "TypeError", MSG);
+
+    let empty = unsafe { js_array_alloc(4) };
+    assert_throws(unsafe { js_nanbox_pointer(empty as i64) }, "TypeError", MSG);
+
+    // A populated array has real element bytes behind the cast, so a
+    // forged-object read would find *something* rather than a zeroed slot.
+    let populated = unsafe { js_array_alloc(8) };
+    for i in 0..8u32 {
+        unsafe { js_array_set_f64_extend(populated, i, 42.0 + f64::from(i)) };
+    }
+    assert_throws(
+        unsafe { js_nanbox_pointer(populated as i64) },
+        "TypeError",
+        MSG,
+    );
+
+    // Native handle ids: pointer-tagged, above the old hand-rolled 0x1000
+    // floor, but small integers rather than heap addresses.
+    for raw in [0x1001_i64, 0x2000, 0x8000, 0xF_FFFF] {
+        assert_throws(unsafe { js_nanbox_pointer(raw) }, "TypeError", MSG);
+    }
+}

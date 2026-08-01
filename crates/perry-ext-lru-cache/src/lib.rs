@@ -85,7 +85,7 @@ use lru::LruCache;
 use perry_ffi::{
     gc_register_mutable_root_scanner_named, iter_handles_of_mut, read_bytes, register_handle,
     throw_with_code, with_handle_mut, ErrorKind, GcRootVisitor, Handle, JsString, JsValue,
-    ObjectHeader, StringHeader,
+    StringHeader,
 };
 use std::num::NonZeroUsize;
 use std::sync::Once;
@@ -101,8 +101,6 @@ const MAX_ARRAY_LENGTH: f64 = 4_294_967_295.0;
 /// Above this npm's `getUintArray(max)` returns `null` and the constructor
 /// raises a plain `Error` instead of a `RangeError`.
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-/// Below this a "pointer" is a small integer handle, not a real object.
-const MIN_OBJECT_ADDRESS: usize = 0x1000;
 
 extern "C" {
     // Monotonic ms clock — same source npm lru-cache uses (`perf_now`);
@@ -111,8 +109,11 @@ extern "C" {
     // Materialize any string repr (heap `STRING_TAG` or inline SSO
     // `SHORT_STRING_TAG`) into a real `*StringHeader` so we can read bytes.
     fn js_get_string_pointer_unified(value: f64) -> i64;
-    // Read an option field off the NaN-boxed options object.
-    fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+    // Read an option field off the NaN-boxed options argument. The
+    // *boxed* variant validates its receiver instead of dereferencing it
+    // on faith, so a non-object `options` reads as all-undefined fields
+    // rather than a forged pointer deref (see `option_value`).
+    fn js_object_get_field_by_name_boxed(receiver: f64, key: *const StringHeader) -> f64;
     fn js_is_truthy(value: f64) -> i32;
     // JS `String(n)` — npm interpolates the offending `max` into its
     // "invalid max value" message, and JS renders `1e300` as `"1e+300"`
@@ -277,19 +278,28 @@ fn now_ms() -> f64 {
     unsafe { js_performance_now() }
 }
 
-/// Read `options.<name>` as a raw NaN-boxed value.
+/// Read `options.<name>` off the NaN-boxed options argument.
 ///
-/// `None` means `options` was not an object. npm destructures its options
-/// argument, and destructuring a primitive yields `undefined` for every
-/// field rather than throwing, so that is what a non-object reads as here.
-fn option_value(fields: Option<*const ObjectHeader>, name: &str) -> JsValue {
-    let Some(ptr) = fields else {
-        return JsValue::UNDEFINED;
-    };
+/// Routed through the runtime's *boxed*-receiver getter instead of
+/// unboxing to a `*const ObjectHeader` here. `options` is whatever the
+/// caller passed — an object, but equally a string, an array, a function,
+/// a native handle id, or a double whose bit pattern lands inside the
+/// heap-pointer window. The unboxed getter dereferences its argument on
+/// faith, which is fine only when codegen has *proven* the receiver is an
+/// object; nothing proves that here. The boxed entry point owns the
+/// classification (handle-band routing plus the canonical address check),
+/// so this wrapper does not re-implement a pointer-range test the runtime
+/// already exports — the previous hand-rolled `is_pointer() && >= 0x1000`
+/// pair was both a duplicate of that rule and subtly different from it.
+///
+/// npm reads these options by destructuring, which yields `undefined` for
+/// every field of a non-object rather than throwing, and that is exactly
+/// what the boxed getter returns for one.
+fn option_value(options: f64, name: &str) -> JsValue {
     let key = perry_ffi::alloc_string(name);
-    // SAFETY: `fields` is a validated non-null object pointer (see
-    // `js_lru_cache_new`), and `key` owns the freshly allocated header.
-    let raw = unsafe { js_object_get_field_by_name_f64(ptr, key.as_raw()) };
+    // SAFETY: `key` owns the freshly allocated header, and the boxed
+    // getter validates `options` itself.
+    let raw = unsafe { js_object_get_field_by_name_boxed(options, key.as_raw()) };
     JsValue::from_bits(raw.to_bits())
 }
 
@@ -323,8 +333,8 @@ fn js_number_string(n: f64) -> String {
 /// npm: `const { max = 0 } = options; if (max !== 0 && !isPosInt(max)) throw …`
 /// followed by the `getUintArray` / `Array.from({ length: max })` bounds.
 /// Returns the validated `max` (`0` = unbounded); diverges on a bad value.
-fn parse_max(fields: Option<*const ObjectHeader>) -> f64 {
-    let raw = option_value(fields, "max");
+fn parse_max(options: f64) -> f64 {
+    let raw = option_value(options, "max");
     if raw.is_undefined() {
         return 0.0; // npm's `max = 0` destructuring default
     }
@@ -355,8 +365,8 @@ fn parse_max(fields: Option<*const ObjectHeader>) -> f64 {
 
 /// npm: `this.ttl = ttl || 0; if (this.ttl && !isPosInt(this.ttl)) throw …`.
 /// Returns the validated ttl in ms (`0` = none); diverges on a bad value.
-fn parse_ttl(fields: Option<*const ObjectHeader>) -> f64 {
-    let raw = option_value(fields, "ttl");
+fn parse_ttl(options: f64) -> f64 {
+    let raw = option_value(options, "ttl");
     // `ttl || 0` — undefined, null, `0`, `NaN` and `""` all collapse to 0
     // *without* tripping the validation (npm only checks a truthy ttl).
     // SAFETY: `js_is_truthy` reads a NaN-boxed value by value.
@@ -400,16 +410,12 @@ pub extern "C" fn js_lru_cache_new(options: f64) -> Handle {
             ErrorKind::TypeError,
         );
     }
-    // Any other primitive destructures cleanly into all-undefined fields.
-    let fields = if opts.is_pointer() {
-        let ptr = opts.as_pointer::<ObjectHeader>();
-        (!ptr.is_null() && (ptr as usize) >= MIN_OBJECT_ADDRESS).then_some(ptr as *const _)
-    } else {
-        None
-    };
-
-    let max = parse_max(fields);
-    let ttl = parse_ttl(fields);
+    // Everything else — a primitive, a string, an array, a function, a
+    // native handle id — destructures cleanly into all-undefined fields on
+    // npm, and `option_value` reproduces that without this code having to
+    // classify the pointer itself.
+    let max = parse_max(options);
+    let ttl = parse_ttl(options);
     if max == 0.0 && ttl == 0.0 {
         // npm: "do not allow completely unbounded caches". `maxSize` would
         // also satisfy this on npm, but it is unimplemented here (see the
@@ -423,7 +429,7 @@ pub extern "C" fn js_lru_cache_new(options: f64) -> Handle {
     // SAFETY: `js_is_truthy` reads a NaN-boxed value by value.
     let update_age_on_get = unsafe {
         js_is_truthy(f64::from_bits(
-            option_value(fields, "updateAgeOnGet").bits(),
+            option_value(options, "updateAgeOnGet").bits(),
         )) != 0
     };
 
