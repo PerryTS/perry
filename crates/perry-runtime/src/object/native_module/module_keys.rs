@@ -1669,7 +1669,9 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
         "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
         "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
-        "inspector" | "inspector.default" | "inspector/promises" | "inspector/promises.default" => Some(INSPECTOR_NAMESPACE_KEYS),
+        "inspector" | "inspector.default" | "inspector/promises" | "inspector/promises.default" => {
+            Some(INSPECTOR_NAMESPACE_KEYS)
+        }
         "inspector.Network" => Some(INSPECTOR_NETWORK_KEYS),
         "inspector.NetworkResources" => Some(INSPECTOR_NETWORK_RESOURCES_KEYS),
         "inspector.DOMStorage" => Some(INSPECTOR_DOM_STORAGE_KEYS),

@@ -108,12 +108,12 @@
       }
     },
     "inspector": {
-      "pass": 4,
+      "pass": 37,
       "total": 37
     },
     "inspector-promises": {
-      "pass": 3,
-      "total": 30
+      "pass": 31,
+      "total": 31
     },
     "module": {
       "pass": 29,

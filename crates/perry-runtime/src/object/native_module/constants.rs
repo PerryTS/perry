@@ -464,10 +464,18 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "inspector" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
-            "console" => Some(cached_inspector_object("console", || crate::node_inspector::js_node_inspector_console_object())),
-            "Network" => Some(cached_inspector_object("Network", || create_sub_namespace("inspector.Network"))),
-            "NetworkResources" => Some(cached_inspector_object("NetworkResources", || create_sub_namespace("inspector.NetworkResources"))),
-            "DOMStorage" => Some(cached_inspector_object("DOMStorage", || create_sub_namespace("inspector.DOMStorage"))),
+            "console" => Some(cached_inspector_object("console", || {
+                crate::node_inspector::js_node_inspector_console_object()
+            })),
+            "Network" => Some(cached_inspector_object("Network", || {
+                create_sub_namespace("inspector.Network")
+            })),
+            "NetworkResources" => Some(cached_inspector_object("NetworkResources", || {
+                create_sub_namespace("inspector.NetworkResources")
+            })),
+            "DOMStorage" => Some(cached_inspector_object("DOMStorage", || {
+                create_sub_namespace("inspector.DOMStorage")
+            })),
             "Session" => {
                 let value = bound_native_callable_export_value("inspector", "Session");
                 crate::node_inspector::install_session_prototype(value, false);
@@ -485,7 +493,8 @@ pub(crate) unsafe fn get_native_module_constant(
             // Node's promise entry point spreads the callback namespace and
             // replaces only Session, so read the callback export itself.
             _ => {
-                let name = crate::string::js_string_from_bytes(property.as_ptr(), property.len() as u32);
+                let name =
+                    crate::string::js_string_from_bytes(property.as_ptr(), property.len() as u32);
                 let callback = cjs_default_export_value("inspector")?;
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let callback = scope.root_nanbox_f64(callback);

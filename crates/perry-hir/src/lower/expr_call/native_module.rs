@@ -310,7 +310,10 @@ pub(super) fn try_native_module_methods(
     // `Session` is a class export. A direct call is not construction, even
     // though the native constructor fast path handles `new Session()`.
     if let ast::Expr::Ident(ident) = expr {
-        if matches!(ctx.lookup_native_module(ident.sym.as_ref()), Some(("inspector/promises", Some("Session")))) {
+        if matches!(
+            ctx.lookup_native_module(ident.sym.as_ref()),
+            Some(("inspector/promises", Some("Session")))
+        ) {
             return Ok(Ok(Expr::NativeMethodCall {
                 module: "inspector/promises".to_string(),
                 class_name: None,

@@ -28,7 +28,11 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "events" => Some("js_nm_install_events"),
         "fs" => Some("js_nm_install_fs"),
         "http" | "http2" | "https" => Some("js_nm_install_http"),
-        "inspector" | "inspector.Network" | "inspector.NetworkResources" | "inspector.DOMStorage" | "inspector/promises" => Some("js_nm_install_inspector"),
+        "inspector"
+        | "inspector.Network"
+        | "inspector.NetworkResources"
+        | "inspector.DOMStorage"
+        | "inspector/promises" => Some("js_nm_install_inspector"),
         "module" => Some("js_nm_install_module"),
         "net" => Some("js_nm_install_net"),
         // #6563: node-pty + the API-identical @lydell fork share one bucket.

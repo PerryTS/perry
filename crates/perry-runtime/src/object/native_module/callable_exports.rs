@@ -334,10 +334,10 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         (
             "inspector.DOMStorage",
             "domStorageItemAdded"
-                | "domStorageItemRemoved"
-                | "domStorageItemUpdated"
-                | "domStorageItemsCleared"
-                | "registerStorage",
+            | "domStorageItemRemoved"
+            | "domStorageItemUpdated"
+            | "domStorageItemsCleared"
+            | "registerStorage",
         ) => Some(1),
         ("inspector.Session", "connect" | "connectToMainThread" | "disconnect") => Some(0),
         ("inspector.Session" | "inspector/promises.Session", "post") => Some(3),

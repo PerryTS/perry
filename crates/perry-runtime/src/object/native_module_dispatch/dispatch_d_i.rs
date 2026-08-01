@@ -531,26 +531,39 @@ pub(crate) unsafe fn nm_dispatch_inspector(
         }
         ("inspector.Session", "connectToMainThread")
         | ("inspector/promises.Session", "connectToMainThread") => {
-            crate::node_inspector::js_node_inspector_session_connect_to_main_thread(obj as usize as i64)
+            crate::node_inspector::js_node_inspector_session_connect_to_main_thread(
+                obj as usize as i64,
+            )
         }
         ("inspector.Session", "disconnect") | ("inspector/promises.Session", "disconnect") => {
             crate::node_inspector::js_node_inspector_session_disconnect(obj as usize as i64)
         }
-        ("inspector.Session", "post") => {
-            crate::node_inspector::js_node_inspector_session_post(obj as usize as i64, arg(0), arg(1), arg(2))
-        }
+        ("inspector.Session", "post") => crate::node_inspector::js_node_inspector_session_post(
+            obj as usize as i64,
+            arg(0),
+            arg(1),
+            arg(2),
+        ),
         ("inspector/promises.Session", "post") => {
-            crate::node_inspector::js_node_inspector_promises_session_post(obj as usize as i64, arg(0), arg(1), arg(2))
+            crate::node_inspector::js_node_inspector_promises_session_post(
+                obj as usize as i64,
+                arg(0),
+                arg(1),
+                arg(2),
+            )
         }
-        ("inspector.Network", method @ ("requestWillBeSent"
-        | "responseReceived"
-        | "loadingFinished"
-        | "loadingFailed"
-        | "dataSent"
-        | "dataReceived"
-        | "webSocketCreated"
-        | "webSocketClosed"
-        | "webSocketHandshakeResponseReceived")) => {
+        (
+            "inspector.Network",
+            method @ ("requestWillBeSent"
+            | "responseReceived"
+            | "loadingFinished"
+            | "loadingFailed"
+            | "dataSent"
+            | "dataReceived"
+            | "webSocketCreated"
+            | "webSocketClosed"
+            | "webSocketHandshakeResponseReceived"),
+        ) => {
             let protocol_method = match method {
                 "requestWillBeSent" => "Network.requestWillBeSent",
                 "responseReceived" => "Network.responseReceived",
@@ -560,7 +573,9 @@ pub(crate) unsafe fn nm_dispatch_inspector(
                 "dataReceived" => "Network.dataReceived",
                 "webSocketCreated" => "Network.webSocketCreated",
                 "webSocketClosed" => "Network.webSocketClosed",
-                "webSocketHandshakeResponseReceived" => "Network.webSocketHandshakeResponseReceived",
+                "webSocketHandshakeResponseReceived" => {
+                    "Network.webSocketHandshakeResponseReceived"
+                }
                 _ => unreachable!(),
             };
             crate::node_inspector::js_node_inspector_network_notify(protocol_method, arg(0))
@@ -568,11 +583,14 @@ pub(crate) unsafe fn nm_dispatch_inspector(
         ("inspector.NetworkResources", "put") => {
             crate::node_inspector::js_node_inspector_network_notify("NetworkResources.put", arg(0))
         }
-        ("inspector.DOMStorage", method @ ("domStorageItemAdded"
-        | "domStorageItemRemoved"
-        | "domStorageItemUpdated"
-        | "domStorageItemsCleared"
-        | "registerStorage")) => {
+        (
+            "inspector.DOMStorage",
+            method @ ("domStorageItemAdded"
+            | "domStorageItemRemoved"
+            | "domStorageItemUpdated"
+            | "domStorageItemsCleared"
+            | "registerStorage"),
+        ) => {
             let protocol_method = match method {
                 "domStorageItemAdded" => "DOMStorage.domStorageItemAdded",
                 "domStorageItemRemoved" => "DOMStorage.domStorageItemRemoved",

@@ -44,7 +44,10 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
             if matches!(ctx.lookup_native_module(ident.sym.as_ref()), Some(("events", Some("EventEmitter")))))
         {
             if let ast::Expr::Ident(session) = bin.left.as_ref() {
-                if matches!(ctx.lookup_native_instance(session.sym.as_ref()), Some(("inspector", "Session"))) {
+                if matches!(
+                    ctx.lookup_native_instance(session.sym.as_ref()),
+                    Some(("inspector", "Session"))
+                ) {
                     return Ok(Expr::Bool(true));
                 }
             }
