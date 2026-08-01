@@ -106,16 +106,6 @@ pub(super) fn is_pipeline_options_arg(value: f64) -> bool {
         && !is_array_like_value(value)
 }
 
-pub(super) fn pipeline_options_from_arg(value: f64) -> PipelineOptions {
-    let end_final = get_hidden_value(value, hidden_key(b"end"))
-        .map(|v| v.to_bits() != TAG_FALSE)
-        .unwrap_or(true);
-    PipelineOptions {
-        end_final,
-        signal: options_signal(value),
-    }
-}
-
 pub(super) fn pipe_options_end(value: f64) -> bool {
     get_hidden_value(value, hidden_key(b"end"))
         .map(|v| v.to_bits() != TAG_FALSE)
