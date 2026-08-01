@@ -555,6 +555,242 @@ fn proven_this_clone_binds_its_receiver_slot() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// #7142: the class-id dispatch tower, routed under an INLINE keys check.
+// ---------------------------------------------------------------------------
+
+/// `class Row { id; weight; score }` with the two methods the tower ratchets
+/// need: `rescore` (four declared-field sites — the shape of
+/// `benchmarks/app-patterns/kernels/batch.ts`'s hot method) and `tag` (exactly
+/// ONE, which is the profitability model's break-even and must be refused).
+fn row_class() -> Class {
+    let rescore = func(
+        97,
+        "rescore",
+        vec![param(82, "factor", Type::Number)],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "score".to_string(),
+                value: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(this_get("weight")),
+                        right: Box::new(Expr::LocalGet(82)),
+                    }),
+                    right: Box::new(this_get("id")),
+                }),
+            }),
+            Stmt::Return(Some(this_get("score"))),
+        ],
+    );
+    let tag = func(
+        98,
+        "tag",
+        Vec::new(),
+        Type::Number,
+        vec![Stmt::Return(Some(this_get("id")))],
+    );
+    class(
+        103,
+        "Row",
+        vec![
+            field("id", Type::Number),
+            field("weight", Type::Number),
+            field("score", Type::Number),
+        ],
+        vec![rescore, tag],
+    )
+}
+
+/// A module whose `probe(r: Shaped)` calls both `Row` methods on a receiver
+/// typed as an INTERFACE. `Shaped` is not in the class registry, which is
+/// exactly what `needs_dynamic_dispatch` keys on — so both calls lower to the
+/// `idispatch.*` class-id switch tower rather than to either of the two
+/// guard-dominated routing sites. This is `batch.ts`'s `rows.map((r) => …)`
+/// shape reduced to its essentials.
+fn tower_site_module() -> Module {
+    let mut m = Module::new("pshape_tower.ts");
+    m.classes = vec![row_class()];
+    m.functions = vec![func(
+        1,
+        "probe",
+        vec![param(2, "r", Type::Named("Shaped".to_string()))],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(call(
+                Expr::LocalGet(2),
+                "rescore",
+                vec![Expr::Number(1.5)],
+            )),
+            right: Box::new(call(Expr::LocalGet(2), "tag", Vec::new())),
+        }))],
+    )];
+    m.init_kind = ModuleInitKind::Eager;
+    m
+}
+
+/// Split rendered IR into `(label, body_lines)` — block labels render
+/// unindented and colon-terminated, every instruction is indented.
+fn blocks(ir: &str) -> Vec<(String, Vec<&str>)> {
+    let mut out: Vec<(String, Vec<&str>)> = Vec::new();
+    for line in ir.lines() {
+        if !line.starts_with(char::is_whitespace)
+            && line.ends_with(':')
+            && !line.starts_with("define")
+        {
+            out.push((line.trim_end_matches(':').to_string(), Vec::new()));
+        } else if let Some(last) = out.last_mut() {
+            last.1.push(line);
+        }
+    }
+    out
+}
+
+/// The block that contains a `call` to `name`.
+fn block_calling<'a>(bs: &'a [(String, Vec<&'a str>)], name: &str) -> Option<&'a (String, Vec<&'a str>)> {
+    let needle = format!("@{}(", name);
+    bs.iter()
+        .find(|(_, body)| body.iter().any(|l| l.contains("call ") && l.contains(&needle)))
+}
+
+/// Regression (#7142): the class-id dispatch tower routes its case to the
+/// proven-`this` clone.
+///
+/// This is the site #7141 deliberately left alone: `batch.ts`'s receiver has no
+/// static class, so neither existing routing site is ever reached and the clone
+/// stayed dead on the one workload `Ptr<Shape>` exists for.
+#[test]
+fn tower_case_routes_to_proven_this_clone() {
+    let ir = emit(&tower_site_module(), false);
+    // Anti-vacuity: this must really be the class-id tower, not one of the two
+    // guard-dominated sites that already routed before this change.
+    assert!(
+        ir.contains("idispatch.case"),
+        "the fixture no longer lowers through the class-id dispatch tower, so \
+         this test would pass for the wrong reason:\n{ir}"
+    );
+    let defs = pshape_definitions(&ir);
+    let calls = pshape_call_targets(&ir);
+    let rescore = defs
+        .iter()
+        .find(|d| d.contains("__rescore__pshape"))
+        .unwrap_or_else(|| panic!("no proven-`this` clone emitted for `rescore`: {defs:?}"));
+    assert!(
+        calls.iter().any(|c| c == rescore),
+        "the dispatch tower's case proves the receiver's class_id; under an \
+         inline keys check it must route to the proven-`this` clone instead of \
+         the guard-ridden public body. defined={defs:?} called={calls:?}"
+    );
+}
+
+/// Soundness ratchet (#7142): the routed call is dominated by a compare of the
+/// receiver's live `keys_array` against the class's `@perry_class_keys_*` token.
+///
+/// A `class_id` match alone is NOT a layout proof — `delete inst.f` compacts
+/// the packed slots while preserving `class_id`
+/// (`object/delete_rest.rs`), which is why #7141 refused to route this site at
+/// all. The compare below is the entire difference between sound and unsound,
+/// so it is traced end to end: global → entry-hoisted slot → reload in the
+/// guard block → `icmp eq i64` → the branch that enters the clone's block.
+#[test]
+fn tower_route_is_guarded_by_the_class_keys_token() {
+    let ir = emit(&tower_site_module(), false);
+    let bs = blocks(&ir);
+    let clone = pshape_definitions(&ir)
+        .into_iter()
+        .find(|d| d.contains("__rescore__pshape"))
+        .expect("no proven-`this` clone for `rescore`");
+    let (clone_block, _) = block_calling(&bs, &clone)
+        .unwrap_or_else(|| panic!("the clone is never called — nothing to guard:\n{ir}"));
+
+    // The block whose terminator enters the clone's block.
+    let (_, guard_body) = bs
+        .iter()
+        .find(|(_, body)| {
+            body.iter()
+                .any(|l| l.starts_with("  br i1 ") && l.contains(&format!("label %{}", clone_block)))
+        })
+        .unwrap_or_else(|| {
+            panic!("nothing conditionally branches to {clone_block} — the clone is reached unguarded:\n{ir}")
+        });
+
+    // 1. the class keys global is loaded once at function entry …
+    let global_load = ir
+        .lines()
+        .find(|l| l.contains("= load i64, ptr @perry_class_keys_"))
+        .unwrap_or_else(|| panic!("the class keys token is never read:\n{ir}"));
+    let global_reg = global_load.trim().split(' ').next().expect("ssa name");
+    // 2. … and parked in an entry slot …
+    let store = ir
+        .lines()
+        .find(|l| l.contains(&format!("store i64 {}, ptr ", global_reg)))
+        .unwrap_or_else(|| panic!("the hoisted keys token is never stored:\n{ir}"));
+    let slot = store.rsplit(' ').next().expect("slot name");
+    // 3. … which the guard block reloads …
+    let expected = guard_body
+        .iter()
+        .find_map(|l| {
+            let l = l.trim();
+            l.ends_with(&format!("load i64, ptr {}", slot))
+                .then(|| l.split(' ').next().expect("ssa name").to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("the guard block never reads the hoisted keys token:\n{guard_body:#?}")
+        });
+    // 4. … and compares against the receiver's live keys_array.
+    assert!(
+        guard_body
+            .iter()
+            .any(|l| l.contains("icmp eq i64") && l.contains(&expected)),
+        "the routed call is not dominated by a keys-token compare — a class_id \
+         match alone does not prove the packed layout (`delete` compacts slots \
+         while preserving class_id):\n{guard_body:#?}"
+    );
+    // The sticky prototype-descriptor / tracing latch the per-access inline
+    // guard reads must be honoured too, or the route would be weaker than the
+    // lowering it replaces.
+    assert!(
+        guard_body
+            .iter()
+            .any(|l| l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
+        "the routed call must also honour the sticky inline-guard latch:\n{guard_body:#?}"
+    );
+}
+
+/// Profitability ratchet (#7142): a clone that deletes exactly ONE guarded
+/// field site does not earn the tower's inline re-check, so the tower keeps
+/// calling the public body.
+///
+/// The re-check IS one instance of the same header check the body would have
+/// run at that single site, so routing there swaps a check for a check and adds
+/// a second call site for nothing. The clone is still emitted — the two
+/// guard-dominated routing sites pay no extra proof and take it happily.
+#[test]
+fn tower_route_refused_when_clone_deletes_one_field_site() {
+    let ir = emit(&tower_site_module(), false);
+    let defs = pshape_definitions(&ir);
+    let calls = pshape_call_targets(&ir);
+    let tag = defs
+        .iter()
+        .find(|d| d.contains("__tag__pshape"))
+        .unwrap_or_else(|| {
+            panic!(
+                "`tag` admits a proven-`this` clone (it reads a declared field), \
+                 so the refusal below would be vacuous without one: {defs:?}"
+            )
+        });
+    assert!(
+        !calls.iter().any(|c| c == tag),
+        "`tag` has a single guarded field site, so routing the tower to its \
+         clone trades one shape check for one shape check plus a branch and a \
+         second call site. It must be refused. defined={defs:?} called={calls:?}"
+    );
+}
+
 // NOTE on the `PERRY_PTR_SHAPE_LOCALS=0` direction: it is deliberately NOT a
 // test in this file. `ptr_shape_locals_enabled` memoises in a `OnceLock`, so a
 // test that sets the variable in-process observes whatever the first reader in
