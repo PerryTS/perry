@@ -25,104 +25,102 @@ fn arm_old_reclaim() {
 
 fn clear_old_reclaim_state() {
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
-    GC_SAFEPOINT_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
     GC_SAFEPOINT_PENDING.with(|pending| pending.set(false));
     let old_in_use = crate::arena::old_gen_in_use_bytes();
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
 }
 
 #[test]
-fn old_reclaim_defers_to_a_precise_safepoint_instead_of_scanning() {
+fn old_reclaim_runs_precisely_at_a_safepoint() {
     let _isolation = GcTestIsolationGuard::new();
     let _pacing = crate::gc::policy::force_moving_gc_pacing();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_old_reclaim_state();
     reset_scan_fallback_counters();
 
+    // `gc_safepoint_moving_minor` used to bail on OldReclaim ("stays on its
+    // existing full mark-sweep path"), so the ONLY place an old-gen reclaim
+    // could happen was the allocation point, behind `force_full_scan()`.
     arm_old_reclaim();
-    gc_check_trigger();
-
-    // Before #7148 this call ran a full mark-sweep here, at the allocation
-    // point, behind `force_full_scan()`.
-    assert_eq!(
-        scan_fallback_count(ConservativeScanSite::OldReclaimSlackValve),
-        0,
-        "old-gen reclaim must defer, not scan, while it is within slack"
-    );
-    assert!(
-        GC_SAFEPOINT_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
-        "the deferral must be recorded in the old-gen unit"
-    );
-    assert!(
-        GC_SAFEPOINT_PENDING.with(std::cell::Cell::get),
-        "`js_gc_loop_safepoint` polls GC_SAFEPOINT_PENDING, so the old-gen \
-         deferral must set it too or nothing drains the request"
-    );
-    assert!(
-        GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
-        "deferring must not retire the request — the trigger has to stay due \
-         so the safepoint finds it"
-    );
-
-    // Drain at the precise safepoint the deferral promised.
+    GC_SAFEPOINT_PENDING.with(|p| p.set(true));
     js_gc_loop_safepoint();
 
     assert_eq!(
         safepoint_drain_count(SafepointDrainKind::OldReclaim),
         1,
-        "LIVE SUBJECT: the deferred full mark-sweep must actually have run at \
-         the safepoint — 'nothing scanned' is worthless if nothing collected"
+        "LIVE SUBJECT: the full mark-sweep must actually have run at the \
+         safepoint — 'nothing scanned' is worthless if nothing collected"
     );
     assert_eq!(
-        scan_fallback_count(ConservativeScanSite::OldReclaimSlackValve),
+        automatic_scan_fallback_total(),
         0,
-        "the safepoint path must not force the scan"
+        "the safepoint path has precise roots, so it must not force the scan"
     );
     assert!(
         !GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
-        "the safepoint collection retires the request"
-    );
-    assert!(
-        !GC_SAFEPOINT_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
-        "the safepoint collection clears its own deferral flag"
+        "the safepoint collection retires the request, so the allocation-point \
+         arm finds nothing due and never runs a second, conservative cycle"
     );
 
     clear_old_reclaim_state();
 }
 
 #[test]
-fn old_reclaim_slack_valve_fires_when_the_deferral_never_drains() {
+fn old_reclaim_alloc_point_still_completes_immediately_and_is_counted() {
     let _isolation = GcTestIsolationGuard::new();
     let _pacing = crate::gc::policy::force_moving_gc_pacing();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_old_reclaim_state();
     reset_scan_fallback_counters();
 
-    // The other direction. A deferral whose slack cannot expire is #7024's bug
-    // wearing new clothes: RSS grows without bound and the branch that was
-    // supposed to bound it is dead. The shipped slack is 32 MB, so crossing it
-    // for real would mean committing 32 MB of old-gen inside a unit test;
-    // shrink it instead so the *real* branch in `gc_check_trigger` runs
-    // deterministically. Slack 0 with the baseline at the current pressure is
-    // the exact state "this deferral has used up its whole allowance".
-    let _slack = crate::gc::policy::force_old_reclaim_defer_slack(0);
+    // The other direction, and the reason this site is NOT deferred. #5476's
+    // own regression test asserts that a single `gc_check_trigger` call — what
+    // every allocation does — drives the reclaim to completion, because the
+    // workload it was filed for is a compute-only loop that reaches no host
+    // step. Deferring here would turn "RSS climbs unbounded" back on for one
+    // growth quantum. What #7148 changes is only that the cost is now visible.
+    let collections_before = gc_collection_count();
     arm_old_reclaim();
-    let pressure = old_reclaim_pressure_bytes();
-    GC_SAFEPOINT_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
-    GC_SAFEPOINT_OLD_RECLAIM_BASE.with(|base| base.set(pressure));
-
     gc_check_trigger();
 
-    assert_eq!(
-        scan_fallback_count(ConservativeScanSite::OldReclaimSlackValve),
-        1,
-        "past the slack the conservative valve MUST fire — it is the only \
-         thing bounding old-gen growth when no safepoint is reachable"
-    );
     assert!(
-        !GC_SAFEPOINT_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
-        "the valve retires the deferral; a stale exceeded baseline would \
-         disable deferral for the rest of the process"
+        gc_collection_count() > collections_before,
+        "a single gc_check_trigger call must still complete the reclaim (#5476)"
+    );
+    assert_eq!(
+        scan_fallback_count(ConservativeScanSite::OldReclaimAllocPoint),
+        1,
+        "and it is still a conservative-scan collection — counted, not hidden"
+    );
+
+    clear_old_reclaim_state();
+}
+
+#[test]
+fn old_reclaim_is_unchanged_when_moving_loop_polls_are_off() {
+    // #7161 proposes flipping `PERRY_GC_MOVING_LOOP_POLLS` OFF as a stopgap for
+    // #7154. The allocation-point arm must not consult that gate at all, so
+    // that the flip can never make this site behave differently — inert, not
+    // unsound. (The precise safepoint path is simply reached less often, which
+    // shows up as a higher census count, not as a correctness change.)
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    clear_old_reclaim_state();
+    reset_scan_fallback_counters();
+
+    let collections_before = gc_collection_count();
+    arm_old_reclaim();
+    gc_check_trigger();
+
+    assert!(
+        gc_collection_count() > collections_before,
+        "polls off must not stop the allocation-point reclaim completing"
+    );
+    assert_eq!(
+        scan_fallback_count(ConservativeScanSite::OldReclaimAllocPoint),
+        1,
+        "identical behaviour and identical census to the polls-on arm"
     );
 
     clear_old_reclaim_state();
@@ -288,4 +286,75 @@ fn conservative_scan_env_off_still_beats_a_forced_scan() {
     );
 
     crate::gc::roots::set_conservative_stack_scan_override(previous);
+}
+
+#[test]
+fn host_pressure_precise_collection_does_not_depend_on_moving_loop_polls() {
+    // The host-pressure win that matters — collecting with precise roots when
+    // no generated frame is live — is reached without consulting
+    // `PERRY_GC_MOVING_LOOP_POLLS` at all, so #7161's proposed flip cannot make
+    // this site scan conservatively again.
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = crate::gc::policy::force_legacy_gc_pacing();
+    clear_old_reclaim_state();
+    reset_shadow_stack();
+    reset_scan_fallback_counters();
+
+    let result = js_gc_memory_pressure(1);
+
+    assert_eq!(result, 2, "collected synchronously with polls off");
+    assert_eq!(
+        automatic_scan_fallback_total(),
+        0,
+        "still no conservative scan with polls off"
+    );
+    assert_eq!(
+        safepoint_drain_count(SafepointDrainKind::HostPressure),
+        1,
+        "LIVE SUBJECT: the precise collection ran"
+    );
+
+    clear_old_reclaim_state();
+}
+
+#[test]
+fn host_pressure_deferral_still_has_a_drain_when_moving_loop_polls_are_off() {
+    // With polls off `js_gc_loop_safepoint` is a no-op, so the frame-live
+    // deferral must not depend on it. Two backstops survive #7161: the
+    // outermost microtask-pump boundary (gated by `PERRY_GC_MOVING_SAFEPOINT`,
+    // a different knob) and the lowered arena trigger, which makes the ordinary
+    // allocation-point arm collect at the next check. This test pins the second
+    // one, because it is the one that holds even for a program that never
+    // yields to the event loop.
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = crate::gc::policy::force_legacy_gc_pacing();
+    clear_old_reclaim_state();
+    reset_shadow_stack();
+    reset_scan_fallback_counters();
+
+    let frame = js_shadow_frame_push(2);
+    let result = js_gc_memory_pressure(2);
+    js_shadow_frame_pop(frame);
+
+    assert_eq!(result, 1, "deferred, as with polls on");
+    assert_eq!(
+        automatic_scan_fallback_total(),
+        0,
+        "deferring never scans, whatever the pacing mode"
+    );
+    assert!(
+        GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
+        "the owed FULL cycle is still armed, so the next allocation-point \
+         trigger check collects it even with no safepoint machinery running"
+    );
+
+    // The polls-off backstop: an ordinary trigger check completes it.
+    let collections_before = gc_collection_count();
+    gc_check_trigger();
+    assert!(
+        gc_collection_count() > collections_before,
+        "LIVE SUBJECT: the deferred critical-pressure cycle actually ran"
+    );
+
+    clear_old_reclaim_state();
 }

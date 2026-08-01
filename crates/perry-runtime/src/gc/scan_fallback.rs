@@ -55,9 +55,13 @@ use std::cell::Cell;
 /// A `force_full_scan()` callsite. Ordering matters only for the counter array.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConservativeScanSite {
-    /// `gc_check_trigger` old-gen reclaim, at an allocation point, after the
-    /// safepoint deferral ran out of slack. Automatic.
-    OldReclaimSlackValve,
+    /// `gc_check_trigger` old-gen reclaim, at an allocation point. Automatic.
+    /// Deliberately NOT deferred — #5476 requires a single `gc_check_trigger`
+    /// call to complete the reclaim, and delaying it would regress the RSS bug
+    /// that arm exists for. What #7148 added is a competing PRECISE path at
+    /// safepoints (`SafepointDrainKind::OldReclaim`); this counter is how often
+    /// the allocation point still got there first.
+    OldReclaimAllocPoint,
     /// `gc_check_trigger` nursery-churn direct minor, at an allocation point,
     /// after the safepoint deferral ran out of slack. Automatic.
     NurseryChurnSlackValve,
@@ -83,7 +87,7 @@ impl ConservativeScanSite {
 
     const fn index(self) -> usize {
         match self {
-            Self::OldReclaimSlackValve => 0,
+            Self::OldReclaimAllocPoint => 0,
             Self::NurseryChurnSlackValve => 1,
             Self::EmergencyReclaim => 2,
             Self::ManualCollect => 3,
@@ -93,7 +97,7 @@ impl ConservativeScanSite {
 
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::OldReclaimSlackValve => "old_reclaim_slack_valve",
+            Self::OldReclaimAllocPoint => "old_reclaim_alloc_point",
             Self::NurseryChurnSlackValve => "nursery_churn_slack_valve",
             Self::EmergencyReclaim => "emergency_reclaim",
             Self::ManualCollect => "manual_collect",
@@ -106,7 +110,7 @@ impl ConservativeScanSite {
     /// collections a program pays for without asking for them.
     pub(crate) const fn is_automatic(self) -> bool {
         match self {
-            Self::OldReclaimSlackValve | Self::NurseryChurnSlackValve | Self::EmergencyReclaim => {
+            Self::OldReclaimAllocPoint | Self::NurseryChurnSlackValve | Self::EmergencyReclaim => {
                 true
             }
             Self::ManualCollect | Self::ManualMinor => false,
@@ -115,7 +119,7 @@ impl ConservativeScanSite {
 
     #[cfg(test)]
     pub(crate) const ALL: [Self; Self::COUNT] = [
-        Self::OldReclaimSlackValve,
+        Self::OldReclaimAllocPoint,
         Self::NurseryChurnSlackValve,
         Self::EmergencyReclaim,
         Self::ManualCollect,
