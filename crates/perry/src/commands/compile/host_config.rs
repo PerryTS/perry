@@ -41,6 +41,22 @@ fn compile_packages_means_auto(value: &serde_json::Value) -> bool {
     }
 }
 
+fn parse_boolean_switch(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn should_auto_grant_compile_allow(
+    has_universal_route: bool,
+    allow_was_explicit: bool,
+    env_forces_deny: bool,
+) -> bool {
+    has_universal_route && !allow_was_explicit && !env_forces_deny
+}
+
 pub(super) fn apply_pkg_and_toml_config(
     args: &CompileArgs,
     project_root: &Path,
@@ -58,6 +74,11 @@ pub(super) fn apply_pkg_and_toml_config(
     // (owner policy: perry is a compiler, not a supply-chain gate). An
     // explicit value — including the empty forms — opts out of that default.
     let mut compile_packages_explicit = false;
+    // An explicit allow policy remains authoritative when routing defaults to
+    // auto. In particular, `allow.compilePackages: false` / `[]` is a real
+    // fail-closed choice and must not be replaced with an implicit `"*"`.
+    let mut allow_compile_packages_explicit = false;
+    let mut allow_perry_features_forces_deny = false;
 
     // #2309: tree-shaking opt-in via env var (checked unconditionally, even
     // with no host package.json). `perry.experiments.treeShake: true` in the
@@ -125,6 +146,7 @@ pub(super) fn apply_pkg_and_toml_config(
                         }
                     }
                     if let Some(allow_compile) = allow.get("compilePackages") {
+                        allow_compile_packages_explicit = true;
                         // Scalar sugar: `true` / `"auto"` = universal trust
                         // (`"*"`), the companion to `compilePackages: "auto"`.
                         if compile_packages_means_auto(allow_compile) {
@@ -532,8 +554,12 @@ pub(super) fn apply_pkg_and_toml_config(
     // where editing `package.json` isn't an option (one-off CI run,
     // bisect script, etc.). `=0` enforces the refusal even when
     // `package.json` opted in (fail-closed CI gate).
-    match std::env::var("PERRY_ALLOW_PERRY_FEATURES") {
-        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => {
+    match std::env::var("PERRY_ALLOW_PERRY_FEATURES")
+        .ok()
+        .as_deref()
+        .and_then(parse_boolean_switch)
+    {
+        Some(true) => {
             if !ctx.allow_native_library.iter().any(|s| s == "*") {
                 ctx.allow_native_library.push("*".to_string());
             }
@@ -541,9 +567,10 @@ pub(super) fn apply_pkg_and_toml_config(
                 ctx.allow_compile_packages.push("*".to_string());
             }
         }
-        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => {
+        Some(false) => {
             ctx.allow_native_library.clear();
             ctx.allow_compile_packages.clear();
+            allow_perry_features_forces_deny = true;
         }
         _ => {}
     }
@@ -692,14 +719,14 @@ pub(super) fn apply_pkg_and_toml_config(
     if !compile_packages_explicit {
         ctx.compile_packages.insert("*".to_string());
     }
-    // Universal trust ⇒ universal allow. Whenever routing includes the `"*"`
-    // wildcard (from this auto default, the `"auto"` scalar, or a literal
-    // `["*"]`), the host is trusting its whole graph, so the #497 two-key
-    // allowlist below must not then block it. Supply-chain review is the
-    // user's responsibility (lockfiles, pinning, external tooling), not a
-    // hand-maintained perry allowlist.
-    if ctx.compile_packages.iter().any(|p| p == "*")
-        && !ctx.allow_compile_packages.iter().any(|p| p == "*")
+    // Universal routing with no explicit allow policy ⇒ universal allow. An
+    // explicit package.json allow value (including false/[]) or the CI
+    // fail-closed env override remains authoritative and is validated below.
+    if should_auto_grant_compile_allow(
+        ctx.compile_packages.iter().any(|p| p == "*"),
+        allow_compile_packages_explicit,
+        allow_perry_features_forces_deny,
+    ) && !ctx.allow_compile_packages.iter().any(|p| p == "*")
     {
         ctx.allow_compile_packages.push("*".to_string());
     }
@@ -784,8 +811,9 @@ pub(super) fn apply_pkg_and_toml_config(
     // parse loop populated `ctx.compile_packages` above; we validate
     // after env-var overrides). Every entry that flowed in needs a
     // match in `ctx.allow_compile_packages` — the two-key opt-in.
-    // Default-empty allowlist = nothing allowed = matches the
-    // "greenfield projects: nothing allowed" acceptance bullet.
+    // With auto routing, an omitted allow policy is granted automatically;
+    // an explicit allow policy (or `PERRY_ALLOW_PERRY_FEATURES=0`) remains a
+    // real constraint and is checked here.
     for name in ctx.compile_packages.iter() {
         if !allowlist_matches(name, &ctx.allow_compile_packages) {
             anyhow::bail!(
@@ -1092,6 +1120,47 @@ pub(super) fn apply_pkg_and_toml_config(
 
     let _ = (perry_toml, toml_root);
     Ok((i18n_config, i18n_translations))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_switch_accepts_only_documented_values() {
+        for value in [
+            serde_json::json!(true),
+            serde_json::json!("auto"),
+            serde_json::json!(" ALL "),
+        ] {
+            assert!(compile_packages_means_auto(&value), "value: {value}");
+        }
+        for value in [
+            serde_json::json!(false),
+            serde_json::json!("yes"),
+            serde_json::json!([]),
+        ] {
+            assert!(!compile_packages_means_auto(&value), "value: {value}");
+        }
+    }
+
+    #[test]
+    fn boolean_switch_is_explicit_and_case_insensitive() {
+        assert_eq!(parse_boolean_switch("1"), Some(true));
+        assert_eq!(parse_boolean_switch(" TRUE "), Some(true));
+        assert_eq!(parse_boolean_switch("0"), Some(false));
+        assert_eq!(parse_boolean_switch("False"), Some(false));
+        assert_eq!(parse_boolean_switch("yes"), None);
+        assert_eq!(parse_boolean_switch(""), None);
+    }
+
+    #[test]
+    fn auto_allow_never_overrides_an_explicit_deny() {
+        assert!(should_auto_grant_compile_allow(true, false, false));
+        assert!(!should_auto_grant_compile_allow(true, true, false));
+        assert!(!should_auto_grant_compile_allow(true, false, true));
+        assert!(!should_auto_grant_compile_allow(false, false, false));
+    }
 }
 
 fn parse_fp_contract_mode(value: &str, source: &str) -> Result<FpContractMode> {

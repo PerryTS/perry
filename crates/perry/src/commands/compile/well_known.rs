@@ -102,11 +102,28 @@ impl WellKnownBinding {
     /// Whether this binding is an audited complete drop-in — safe to
     /// auto-prefer over a user's `node_modules` copy without a caveat.
     pub fn is_faithful(&self) -> bool {
-        // Aliases inherit the faithfulness of their target (resolved by
-        // the caller when needed); the row's own `compat` still applies
-        // as a conservative floor.
-        matches!(self.compat, BindingCompat::Full)
+        binding_is_faithful(registry(), self)
     }
+}
+
+fn binding_is_faithful(
+    table: &BTreeMap<String, WellKnownBinding>,
+    binding: &WellKnownBinding,
+) -> bool {
+    let mut current = binding;
+    // At most one visit per row: exceeding the table length means aliases
+    // contain a cycle. Missing/cyclic targets are never granted faithfulness.
+    for _ in 0..=table.len() {
+        if let Some(target) = current.alias_of.as_deref() {
+            let Some(target_binding) = table.get(target) else {
+                return false;
+            };
+            current = target_binding;
+        } else {
+            return matches!(current.compat, BindingCompat::Full);
+        }
+    }
+    false
 }
 
 /// Provenance pin for a binding's upstream npm package — the same record
@@ -278,8 +295,7 @@ fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let compat =
-            BindingCompat::from_toml(entry_table.get("compat").and_then(|v| v.as_str()));
+        let compat = BindingCompat::from_toml(entry_table.get("compat").and_then(|v| v.as_str()));
 
         let upstream = match entry_table.get("upstream") {
             None => None,
@@ -419,8 +435,7 @@ mod tests {
     }
 
     /// The shipped table's audited posture: documented-subset wrappers
-    /// stay `Partial` (never auto-preferred silently), and the small
-    /// audited pure-ports opt in to `Full`.
+    /// stay `Partial` and are never silently treated as complete drop-ins.
     #[test]
     fn shipped_subset_bindings_are_partial() {
         for name in ["undici", "node-forge", "lru-cache"] {
@@ -434,15 +449,43 @@ mod tests {
     }
 
     #[test]
-    fn shipped_audited_bindings_are_full() {
+    fn shipped_unproven_bindings_are_partial() {
         for name in ["dotenv", "nanoid", "slugify", "uuid"] {
             let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
             assert_eq!(
                 b.compat,
-                BindingCompat::Full,
-                "{name} is audited as a full drop-in (compat=full)"
+                BindingCompat::Partial,
+                "{name} omits upstream API/behavior and must stay partial"
             );
         }
+    }
+
+    #[test]
+    fn aliases_inherit_target_compat_and_cycles_fail_closed() {
+        let raw = r#"
+            [bindings.full]
+            crate = "perry-ext-full"
+            lib = "perry_ext_full"
+            compat = "full"
+
+            [bindings.alias]
+            crate = "perry-ext-full"
+            lib = "perry_ext_full"
+            alias-of = "full"
+
+            [bindings.a]
+            crate = "perry-ext-a"
+            lib = "perry_ext_a"
+            alias-of = "b"
+
+            [bindings.b]
+            crate = "perry-ext-b"
+            lib = "perry_ext_b"
+            alias-of = "a"
+        "#;
+        let parsed = parse_well_known_toml(raw).expect("entries parse");
+        assert!(binding_is_faithful(&parsed, &parsed["alias"]));
+        assert!(!binding_is_faithful(&parsed, &parsed["a"]));
     }
 
     #[test]

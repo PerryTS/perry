@@ -43,9 +43,10 @@ tracking = "#466"
 # `compat` — how faithful this wrapper is to the npm package's public
 # API (see `BindingCompat` in well_known.rs). `full` = audited complete
 # drop-in, safe to auto-prefer over an on-disk node_modules copy.
-# ABSENT ⇒ conservative `partial` default. dotenv's surface is the small,
-# fully-ported `config()`/`parse()` pair.
-compat = "full"
+# ABSENT ⇒ conservative `partial` default. dotenv remains partial: this
+# wrapper has `config()` / `parse()`, but not the upstream decrypt/populate/
+# configDotenv surface and option/error semantics.
+compat = "partial"
 
 [bindings.dotenv.upstream]
 version = "17.4.2"
@@ -58,9 +59,9 @@ date = "2026-07-30"
 crate = "perry-ext-nanoid"
 lib = "perry_ext_nanoid"
 tracking = "#466"
-# Full drop-in: the complete `nanoid()` / `customAlphabet` / `urlAlphabet`
-# surface is ported.
-compat = "full"
+# Partial: the wrapper covers nanoid + custom alphabets, but not the complete
+# upstream export set and flattens the curried customAlphabet contract.
+compat = "partial"
 
 [bindings.nanoid.upstream]
 version = "6.0.0"
@@ -73,8 +74,9 @@ date = "2026-07-30"
 crate = "perry-ext-uuid"
 lib = "perry_ext_uuid"
 tracking = "#466"
-# Full drop-in: v1/v3/v4/v5/v7 generators + parse/stringify/validate/version.
-compat = "full"
+# Partial: several upstream exports and input forms are absent (including
+# parse/stringify and newer conversion/constants APIs).
+compat = "partial"
 
 [bindings.uuid.upstream]
 version = "14.0.1"
@@ -87,9 +89,9 @@ date = "2026-07-30"
 crate = "perry-ext-slugify"
 lib = "perry_ext_slugify"
 tracking = "#466"
-# Full drop-in: the single `slugify(str, opts)` entry point with the
-# documented option bag (replacement/remove/lower/strict/locale/trim).
-compat = "full"
+# Partial: `remove`, `locale`, the complete char map, and `slugify.extend`
+# are not implemented by this wrapper.
+compat = "partial"
 
 [bindings.slugify.upstream]
 version = "1.6.9"
