@@ -123,16 +123,25 @@ impl ConservativeScanSite {
     ];
 }
 
-/// A precise-root safepoint collection that ran *instead of* a conservative
-/// alloc-point collection. These are the "the deferral actually drained"
-/// counters — the live-subject assertion for every deferral gate.
+/// A precise-root collection that ran *instead of* a conservative one. These
+/// are the "the precise path actually ran" counters — the live-subject
+/// assertion for every gate in this family, without which "nothing scanned"
+/// would also be satisfied by "nothing collected".
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SafepointDrainKind {
     /// A deferred nursery-pressure trigger collected at a safepoint.
     NurseryMinor,
     /// A deferred old-gen reclaim collected at a safepoint (#7148).
     OldReclaim,
-    /// A host memory-pressure request collected at a safepoint (#7148).
+    /// A host memory-pressure request collected **synchronously, inline in
+    /// `js_gc_memory_pressure`**, with precise roots because no generated frame
+    /// was live (#7148). Unlike the other two kinds this is not a deferred
+    /// drain through `js_gc_loop_safepoint` → `gc_safepoint_moving_minor`: the
+    /// handler is already at a precise point, and deferring there would shed
+    /// nothing, since a process idle enough to get an OS memory warning reaches
+    /// no loop back-edge and pumps no microtasks. (When a frame *is* live the
+    /// handler defers, and the drain is counted as `OldReclaim` or
+    /// `NurseryMinor` by whichever trigger it armed.)
     HostPressure,
 }
 
