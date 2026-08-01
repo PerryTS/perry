@@ -1840,7 +1840,10 @@ mod tests {
         );
 
         // …and the staging file must never be mistaken for the real `.ll`.
-        assert_ne!(ll_staging_path(ll_p1, 1111, 0).file_name(), ll_p1.file_name());
+        assert_ne!(
+            ll_staging_path(ll_p1, 1111, 0).file_name(),
+            ll_p1.file_name()
+        );
     }
 
     #[test]
