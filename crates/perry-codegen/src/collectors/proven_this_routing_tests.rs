@@ -621,11 +621,7 @@ fn tower_site_module() -> Module {
         Type::Number,
         vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Add,
-            left: Box::new(call(
-                Expr::LocalGet(2),
-                "rescore",
-                vec![Expr::Number(1.5)],
-            )),
+            left: Box::new(call(Expr::LocalGet(2), "rescore", vec![Expr::Number(1.5)])),
             right: Box::new(call(Expr::LocalGet(2), "tag", Vec::new())),
         }))],
     )];
@@ -651,10 +647,15 @@ fn blocks(ir: &str) -> Vec<(String, Vec<&str>)> {
 }
 
 /// The block that contains a `call` to `name`.
-fn block_calling<'a>(bs: &'a [(String, Vec<&'a str>)], name: &str) -> Option<&'a (String, Vec<&'a str>)> {
+fn block_calling<'a>(
+    bs: &'a [(String, Vec<&'a str>)],
+    name: &str,
+) -> Option<&'a (String, Vec<&'a str>)> {
     let needle = format!("@{}(", name);
-    bs.iter()
-        .find(|(_, body)| body.iter().any(|l| l.contains("call ") && l.contains(&needle)))
+    bs.iter().find(|(_, body)| {
+        body.iter()
+            .any(|l| l.contains("call ") && l.contains(&needle))
+    })
 }
 
 /// Regression (#7142): the class-id dispatch tower routes its case to the
