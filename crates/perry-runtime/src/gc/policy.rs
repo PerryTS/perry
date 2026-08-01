@@ -429,6 +429,22 @@ pub(super) fn force_legacy_gc_pacing() -> LegacyGcPacingGuard {
     LegacyGcPacingGuard { previous }
 }
 
+/// Pin moving GC pacing (moving-loop polls ON) for the duration of the returned
+/// guard — the shipped default, pinned explicitly so a #7148 deferral test
+/// asserts against a *declared* pacing mode instead of inheriting whatever the
+/// process-wide `PERRY_GC_MOVING_LOOP_POLLS` OnceLock resolved to. A test that
+/// silently ran under legacy pacing would find the deferral branch dead and
+/// pass for the wrong reason.
+#[cfg(test)]
+pub(super) fn force_moving_gc_pacing() -> LegacyGcPacingGuard {
+    let previous = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| {
+        let previous = cell.get();
+        cell.set(Some(true));
+        previous
+    });
+    LegacyGcPacingGuard { previous }
+}
+
 pub(super) fn gc_trace_enabled() -> bool {
     #[cfg(test)]
     if GC_TRACE_TEST_FORCE.with(Cell::get) {
@@ -666,6 +682,54 @@ thread_local! {
 #[inline]
 pub(super) fn old_reclaim_pressure_bytes() -> usize {
     crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for the #7148 old-gen deferral slack. The shipped
+    /// slack is `gc_old_gen_reclaim_growth_dyn_bytes()` — 32 MB on an
+    /// unbudgeted host — and a test that wanted to watch the safety valve fire
+    /// would otherwise have to commit 32 MB of old-gen just to cross it.
+    /// Shrinking the slack lets the valve test drive the *real* branch in
+    /// `gc_check_trigger` deterministically and in microseconds.
+    static GC_OLD_RECLAIM_DEFER_SLACK_TEST_OVERRIDE: Cell<Option<usize>> =
+        const { Cell::new(None) };
+}
+
+/// Growth allowance, in the old-gen trigger's own unit, that a deferred
+/// old-gen reclaim may consume past its deferral point before the conservative
+/// safety valve fires (#7148).
+#[inline]
+pub(super) fn old_reclaim_defer_slack_bytes() -> usize {
+    #[cfg(test)]
+    if let Some(slack) = GC_OLD_RECLAIM_DEFER_SLACK_TEST_OVERRIDE.with(Cell::get) {
+        return slack;
+    }
+    gc_old_gen_reclaim_growth_dyn_bytes()
+}
+
+/// Scoped test-only override of the old-gen deferral slack. See
+/// [`GC_OLD_RECLAIM_DEFER_SLACK_TEST_OVERRIDE`].
+#[cfg(test)]
+pub(super) struct OldReclaimDeferSlackGuard {
+    previous: Option<usize>,
+}
+
+#[cfg(test)]
+impl Drop for OldReclaimDeferSlackGuard {
+    fn drop(&mut self) {
+        GC_OLD_RECLAIM_DEFER_SLACK_TEST_OVERRIDE.with(|cell| cell.set(self.previous));
+    }
+}
+
+#[cfg(test)]
+pub(super) fn force_old_reclaim_defer_slack(slack: usize) -> OldReclaimDeferSlackGuard {
+    let previous = GC_OLD_RECLAIM_DEFER_SLACK_TEST_OVERRIDE.with(|cell| {
+        let previous = cell.get();
+        cell.set(Some(slack));
+        previous
+    });
+    OldReclaimDeferSlackGuard { previous }
 }
 
 /// Committed arena bytes a deferred nursery trigger may allocate **past the
@@ -1352,11 +1416,8 @@ pub fn gc_check_trigger() {
             let already_deferred = GC_SAFEPOINT_OLD_RECLAIM_PENDING.with(Cell::get);
             let deferred_at =
                 already_deferred.then(|| GC_SAFEPOINT_OLD_RECLAIM_BASE.with(Cell::get));
-            if moving_defer_within_slack(
-                old_pressure,
-                deferred_at,
-                gc_old_gen_reclaim_growth_dyn_bytes(),
-            ) {
+            if moving_defer_within_slack(old_pressure, deferred_at, old_reclaim_defer_slack_bytes())
+            {
                 if !already_deferred {
                     GC_SAFEPOINT_OLD_RECLAIM_BASE.with(|base| base.set(old_pressure));
                     GC_SAFEPOINT_OLD_RECLAIM_PENDING.with(|p| p.set(true));
