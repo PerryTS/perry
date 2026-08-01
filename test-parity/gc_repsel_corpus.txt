@@ -232,3 +232,33 @@ test_gap_gc_closure_this_capture_rooting
 # the `requires=move` arms and prove nothing on `default`.
 test_gap_gc_method_receiver_rooting
 test_gap_gc_index_get_receiver_rooting
+
+# --- Stale REGISTERS on the generic dynamic call (#7214) ---------------------
+# The same class as #7206 above, on the hottest call path the compiler emits.
+# `js_closure_callN` held THREE classes of GC value in bare registers, each
+# across a DIFFERENT window:
+#
+#   receiver | the callee read off it + every argument
+#   callee   | every argument
+#   argument | the arguments after it + the rebind unbox
+#
+# The rebind unbox is a collection point that exists only on the member-shaped
+# path: `js_closure_unbox_callee_checked_rebind` calls
+# `clone_closure_rebind_this`, which allocates a replacement closure when the
+# callee captures `this`. It sits BELOW the last argument and ABOVE the
+# dispatch, so the arguments are re-read after it. The receiverless path takes
+# `js_closure_unbox_callee_checked` -- a tag check and a mask that allocates
+# nothing -- so `f(x, y)` on inert operands emits byte-identical IR.
+#
+# Measured with #7206 applied but NOT #7214, i.e. these are exactly the sites
+# #7206 left open. Compiled AND run with `PERRY_GC_MOVING_LOOP_POLLS=1`,
+# oracle node 26.5.1 (`bad 0` for all three):
+#   closure_call_callee_rooting    `TypeError: value is not a function`
+#   closure_call_this_rooting      `TypeError: value is not a function`
+#   closure_call_argument_rooting  `TypeError: value is not a function`
+# All three are `bad 0` with #7214 applied, including under PERRY_GC_ZEAL=1,
+# and clean on the shipped default on BOTH sides -- so they certify nothing on
+# the `default` arm and belong with the `requires=move` rows.
+test_gap_gc_closure_call_callee_rooting
+test_gap_gc_closure_call_this_rooting
+test_gap_gc_closure_call_argument_rooting

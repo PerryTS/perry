@@ -1359,12 +1359,7 @@ pub fn try_lower_closure_call_fallthrough(
             };
             // Rooted here, before the callee read below: nothing has collected
             // between the lowering above and this push.
-            roots.push(
-                ctx,
-                obj_expr,
-                &v,
-                callee_read_collects || any_arg_collects,
-            );
+            roots.push(ctx, obj_expr, &v, callee_read_collects || any_arg_collects);
             operand_exprs.push(obj_expr);
             Some(v)
         }
