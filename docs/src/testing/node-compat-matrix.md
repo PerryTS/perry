@@ -111,10 +111,16 @@ JSON **with a reason** rather than silently passing.
 
 ## The prefixed / unprefixed invariant
 
-Node treats `M` and `node:M` identically for builtins, and Perry's
-`is_native_module` strips the `node:` prefix — so the two forms **must** agree.
-The runner computes both and records `prefixParity`. A `false` there is a **real
-Perry bug** and fails `--check` if it previously held.
+For builtins where Node resolves both `M` and `node:M`, Node treats the forms
+identically and Perry's `is_native_module` strips the `node:` prefix — so those
+two forms **must** agree. The runner records `prefixParity` for that scope, and
+a `false` value is a **real Perry bug** that fails `--check` if parity previously
+held.
+
+Node also exposes prefix-only builtins such as `node:test`. The matrix still
+probes their bare spelling, but records `prefixParity: null` because Node has no
+two-form invariant there. If Perry accepts the bare alias, that cell is reported
+as `perry-extra`: a documented leniency, not prefix parity.
 
 ## Bumping the pinned Node
 

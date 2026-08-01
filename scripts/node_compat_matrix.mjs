@@ -480,11 +480,16 @@ async function runMatrix(args) {
         perryFp: fpHash(perryFp),
       }
     }
-    // Prefix-parity invariant: Perry must produce the SAME result for M and
-    // node:M (it strips the node: prefix). Compare Perry's own two forms.
+    // Prefix-parity invariant: when Node supports BOTH M and node:M, Perry
+    // must produce the same result for both forms. Prefix-only Node builtins
+    // still probe the bare spelling (where Perry may be more permissive), but
+    // that perry-extra cell is not part of the parity invariant.
     const u = entry.unprefixed
     const p = entry.prefixed
-    entry.prefixParity = u.perry === p.perry && u.perryFp === p.perryFp
+    entry.prefixParity =
+      u.node === 'ok' && p.node === 'ok'
+        ? u.perry === p.perry && u.perryFp === p.perryFp
+        : null
     if (skip[base]) entry.skipReason = skip[base].reason
     results[base] = entry
   }
@@ -587,7 +592,7 @@ const BASELINE_SCHEMA = {
   },
   fields: {
     prefixParity:
-      'true when perry produces the SAME result for M and node:M. false is a real perry bug (Node treats them identically; is_native_module strips the node: prefix).',
+      'true/false when Node resolves both M and node:M and Perry produces the same/different result; null for Node prefix-only builtins.',
     nodeFp: 'first 12 hex of sha256(oracle fingerprint)',
     perryFp: 'first 12 hex of sha256(perry fingerprint)',
   },
@@ -620,12 +625,41 @@ function writeBaseline(matrix, partial) {
   console.error(`[node-compat] wrote baseline ${path.relative(REPO_ROOT, BASELINE_PATH)}${scope}`)
 }
 
+function baselineValidationError(base) {
+  if (!base || typeof base !== 'object' || Array.isArray(base)) {
+    return 'baseline root must be an object'
+  }
+  if (!base.modules || typeof base.modules !== 'object' || Array.isArray(base.modules)) {
+    return 'baseline modules must be an object'
+  }
+  for (const [name, entry] of Object.entries(base.modules)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return `baseline module ${name} must be an object`
+    }
+    for (const form of ['unprefixed', 'prefixed']) {
+      const status = entry[form]?.status
+      if (typeof status !== 'string' || !Object.hasOwn(SEVERITY, status)) {
+        return `baseline module ${name} is missing a valid ${form}.status`
+      }
+    }
+    if (entry.prefixParity !== null && typeof entry.prefixParity !== 'boolean') {
+      return `baseline module ${name} prefixParity must be boolean or null`
+    }
+  }
+  return null
+}
+
 function checkAgainstBaseline(matrix) {
   if (!existsSync(BASELINE_PATH)) {
     console.error(`[node-compat] no baseline at ${BASELINE_PATH} — run --update-baseline first`)
     return 1
   }
   const base = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'))
+  const validationError = baselineValidationError(base)
+  if (validationError) {
+    console.error(`[node-compat] invalid baseline: ${validationError}`)
+    return 1
+  }
   // A baseline is scoped to the platform AND Node line it was generated
   // against — the fingerprints of platform-dependent surfaces (os, path/win32,
   // dgram, fs, inspector) and version-dependent export shapes only compare
@@ -678,7 +712,7 @@ function checkAgainstBaseline(matrix) {
     const prev = base.modules[name]
     if (!prev) continue // new module (e.g. after a node bump) — not a regression
     for (const form of ['unprefixed', 'prefixed']) {
-      const wasSev = SEVERITY[prev[form]?.status] ?? 0
+      const wasSev = SEVERITY[prev[form].status]
       const nowSev = SEVERITY[cur[form]?.status] ?? 0
       if (nowSev > wasSev) {
         regressions.push(`${name} [${form}]: ${prev[form]?.status} -> ${cur[form]?.status}`)

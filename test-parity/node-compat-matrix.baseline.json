@@ -10,7 +10,7 @@
       "skip": "curated skip (see test-parity/node-compat-matrix.skip.json)"
     },
     "fields": {
-      "prefixParity": "true when perry produces the SAME result for M and node:M. false is a real perry bug (Node treats them identically; is_native_module strips the node: prefix).",
+      "prefixParity": "true/false when Node resolves both M and node:M and Perry produces the same/different result; null for Node prefix-only builtins.",
       "nodeFp": "first 12 hex of sha256(oracle fingerprint)",
       "perryFp": "first 12 hex of sha256(perry fingerprint)"
     }
@@ -628,7 +628,7 @@
         "nodeFp": "9b8e1fc17061",
         "perryFp": "9b8e1fc17061"
       },
-      "prefixParity": true
+      "prefixParity": null
     },
     "sqlite": {
       "unprefixed": {
@@ -645,7 +645,7 @@
         "nodeFp": "7df7c3274f68",
         "perryFp": "48dde5b201d5"
       },
-      "prefixParity": true
+      "prefixParity": null
     },
     "stream": {
       "unprefixed": {
@@ -764,7 +764,7 @@
         "nodeFp": "8f35ace15037",
         "perryFp": "665f264ef3d1"
       },
-      "prefixParity": true
+      "prefixParity": null
     },
     "test/reporters": {
       "unprefixed": {
@@ -781,7 +781,7 @@
         "nodeFp": "fea44adf6f2d",
         "perryFp": "fea44adf6f2d"
       },
-      "prefixParity": true
+      "prefixParity": null
     },
     "timers": {
       "unprefixed": {
