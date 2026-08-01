@@ -9,9 +9,12 @@
 //! typed as an array**. Method NAME alone is not evidence: a module is free to
 //! export an object (or a function with statics) whose members happen to be
 //! called `map`, `filter`, `keys`, `slice`, … and folding those rewrites a
-//! call to a completely different function — silently dropping the arguments
-//! past the first and passing argument #1 into the Array builtin's callback /
-//! separator / index slot.
+//! call to a completely different function. The arguments are then
+//! reinterpreted against the builtin's own signature — argument #1 becomes the
+//! callback / separator / start index, later arguments become whatever slot the
+//! builtin has next (`slice`'s `end`, `with`'s `value`, `reduce`'s initial
+//! value) or are dropped outright when it has none (`map`, `filter`, `find`,
+//! `forEach`, `includes` past its `fromIndex`).
 //!
 //! Two arms already learned this the hard way and carried a local guard
 //! (`join`, #420 drizzle's `sql.join(list)`; `sort`, semver's
@@ -60,17 +63,20 @@ pub(super) fn try_imported_array_methods(
         if let ast::Expr::Member(member) = expr.as_ref() {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();
-                // NOTE (#6718): a spread method call on an IMPORTED array
-                // (`CHAIN_NAMES.map(...[fn])`, `CHAIN_NAMES.slice(...[1,3])`) is
-                // intentionally NOT declined here — unlike the local/inline/
-                // array-only fast paths, which decline any spread to the generic
-                // `Expr::CallSpread` tail. The imported binding lowers to an
-                // `ExternFuncRef` receiver, which that tail's member-callee arm
-                // skips (it may be an imported *function*), so routing there would
-                // fail to dispatch the native method. This niche receiver stays at
-                // its pre-existing behavior rather than trading one failure for
-                // another; the #6718 repro covers inline literals + local
-                // receivers + queueMicrotask.
+                // NOTE (#6718, superseded by #7154/#7191): spread method calls
+                // on an IMPORTED array (`CHAIN_NAMES.map(...[fn])`,
+                // `CHAIN_NAMES.slice(...[1,3])`) used to reach the folds below
+                // deliberately, because the generic `Expr::CallSpread` tail's
+                // member-callee arm skips `ExternFuncRef` receivers (they may be
+                // imported *functions*). That was never a working path — the
+                // spread argument list arrives as one array in the builtin's
+                // first slot, so `slice(...[1,3])` returned the whole array and
+                // `includes(...[20])` returned `false`, both silently wrong, and
+                // `map(...[fn])` threw. Measured 4/4 wrong before this change and
+                // 4/4 wrong after; the real fix is to let the `CallSpread` tail
+                // dispatch on an `ExternFuncRef` receiver, tracked in #7191.
+                // The #6718 repro covers inline literals + local receivers +
+                // queueMicrotask, not imported receivers.
                 if let ast::Expr::Ident(arr_ident) = member.obj.as_ref() {
                     let arr_name = arr_ident.sym.to_string();
                     // A module namespace import (`import * as NS from "..."`) is
@@ -102,7 +108,9 @@ pub(super) fn try_imported_array_methods(
                             // #7154: no static array evidence → the binding may
                             // be any exported value that merely has a member of
                             // this name. Decline to the generic call path, which
-                            // invokes the member itself with every argument.
+                            // invokes the member itself with its own arguments
+                            // instead of reinterpreting them against an Array
+                            // builtin's signature.
                             if !imported_binding_is_array(&extern_ref) {
                                 return Ok(Err(args));
                             }
