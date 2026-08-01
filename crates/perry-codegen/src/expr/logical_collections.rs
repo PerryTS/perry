@@ -913,6 +913,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_alloc",
                 &[(I32, &class_id), (I32, &count_str)],
             );
+            // #7154: the half-built object is a raw SSA register while every
+            // part is lowered, and a part's initializer allocates (zod's
+            // `classic/schemas.ts` builds a 269-key spread whose values are
+            // `$ZodAny()` etc. — full JS calls). An evacuating minor inside one
+            // of those relocates the object, and every later
+            // `js_object_set_field_by_name` then writes into abandoned
+            // from-space memory, so the fields silently vanish from the copy
+            // the caller receives. This is the same rooting contract
+            // `Expr::Object` has used since #6951; `ObjectSpread` never got it.
+            let protect_handle =
+                super::temp_root::any_may_trigger_gc(ctx, parts.iter().map(|(_, v)| v));
+            let rooted = super::temp_root::rooted_handle_begin(ctx, &obj_handle, protect_handle);
             for (key_opt, value_expr) in parts {
                 if let Some(key) = key_opt {
                     // Static key:value pair.
@@ -920,6 +932,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let key_idx = ctx.strings.intern(key);
                     let key_handle_global =
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let obj_handle = super::temp_root::rooted_handle_get(ctx, &rooted);
                     let blk = ctx.block();
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -932,13 +945,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `...expr` spread — copy all own fields from the
                     // source object into `obj_handle`.
                     let src_box = lower_expr(ctx, value_expr)?;
+                    let obj_handle = super::temp_root::rooted_handle_get(ctx, &rooted);
                     ctx.block().call_void(
                         "js_object_copy_own_fields",
                         &[(I64, &obj_handle), (DOUBLE, &src_box)],
                     );
                 }
             }
-            Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))
+            let obj_handle = super::temp_root::rooted_handle_get(ctx, &rooted);
+            let boxed = nanbox_pointer_inline(ctx.block(), &obj_handle);
+            super::temp_root::rooted_handle_release(ctx, rooted);
+            Ok(boxed)
         }
 
         // -------- Object.assign(target, ...sources) --------

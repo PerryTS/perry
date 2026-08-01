@@ -729,3 +729,129 @@ fn wtf8_literal_operand_is_rooted_not_merely_reused() {
          in a register, which is #7114 for lone-surrogate literals:\n{f}"
     );
 }
+
+// ---------------------------------------------------------------- #7154 ----
+
+/// `Pair` with an instance field, so construction runs user code (the field
+/// initializer) between the allocation and the value `new` yields.
+fn module_with_new_running_ctor(name: &str) -> Module {
+    let mut module = module_with_new(name, Vec::new());
+    module.classes[0].fields = vec![perry_hir::ClassField {
+        name: "v".to_string(),
+        key_expr: None,
+        ty: perry_hir::types::Type::Any,
+        // An object literal: a real collection point inside the constructor.
+        init: Some(Expr::Object(Vec::new())),
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    }];
+    module
+}
+
+/// #7154, the sibling of #7184: the freshly-allocated instance must be ROOTED
+/// across the constructor body and RE-READ afterwards.
+///
+/// The constructor body allocates, and under `PERRY_GC_MOVING_LOOP_POLLS=1` a
+/// back-edge poll inside it drives an evacuating minor. The instance survives —
+/// the callee's own `this` shadow slot roots it — which means it *moves*, and
+/// the collector rewrites the callee's root but not the caller's SSA register.
+/// Everything downstream in the caller (`js_gc_init_typed_shape_layout`, the
+/// capture write-back, `js_ctor_return_override`) then names from-space memory,
+/// and the override publishes that dead address into the caller's shadow slot:
+/// a *rooted* slot holding a dangling pointer, read back later as
+/// "TypeError: value is not a function".
+///
+/// Sabotage check: drop the `reload_instance` call in `lower_new_impl_inner`
+/// and the re-read disappears from between the allocation and the override.
+#[test]
+fn the_new_instance_is_rooted_across_the_constructor_body() {
+    let ir = String::from_utf8(
+        compile_module(
+            &module_with_new_running_ctor("new_inst_rooted.ts"),
+            entry_opts(),
+        )
+        .unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let f = init_ir(&ir);
+
+    // Assertions are on the DEF-USE chain, not on textual order: the override
+    // is emitted into the `ctor.return.after` block, which the writer appends
+    // below the block that re-reads the root.
+    let def_of = |reg: &str| -> String {
+        let needle = format!("  %{reg} = ");
+        f.lines()
+            .find(|l| l.starts_with(&needle))
+            .unwrap_or_else(|| panic!("no definition of %{reg} in:\n{f}"))
+            .to_string()
+    };
+    let first_operand_reg = |line: &str| -> String {
+        line.split("%")
+            .nth(1)
+            .and_then(|s| {
+                s.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+                    .next()
+            })
+            .unwrap_or_else(|| panic!("no register operand in `{line}`"))
+            .to_string()
+    };
+
+    // 1. The allocation's result is pushed as a temp root immediately.
+    let alloc_line = f
+        .lines()
+        .find(|l| l.contains("call i64 @js_object_alloc_class"))
+        .unwrap_or_else(|| panic!("the instance allocation:\n{f}"));
+    let inst_reg = alloc_line
+        .trim_start()
+        .trim_start_matches('%')
+        .split(' ')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(
+        f.contains(&format!("call i32 @js_gc_temp_root_push(i64 %{inst_reg})")),
+        "the instance %{inst_reg} must be rooted as soon as it is allocated, \
+         before the constructor body runs (#7154):\n{f}"
+    );
+
+    // 2. The value `js_ctor_return_override` publishes is re-derived from that
+    //    root, not carried across the constructor in the original register.
+    let override_line = f
+        .lines()
+        .find(|l| l.contains("call double @js_ctor_return_override"))
+        .unwrap_or_else(|| panic!("the return-override:\n{f}"));
+    let mut reg = first_operand_reg(
+        override_line
+            .split_once("js_ctor_return_override")
+            .expect("split")
+            .1,
+    );
+    let mut chain = vec![reg.clone()];
+    for _ in 0..8 {
+        let d = def_of(&reg);
+        if d.contains("@js_gc_temp_root_get") {
+            return;
+        }
+        reg = first_operand_reg(d.split_once(" = ").expect("assignment").1);
+        chain.push(reg.clone());
+    }
+    panic!(
+        "the instance handed to js_ctor_return_override must be re-read from \
+         its temp root after the constructor body — walked {chain:?} without \
+         reaching a js_gc_temp_root_get (#7154):\n{f}"
+    );
+}
+
+/// The gate: a class with no constructor, no fields and no heritage runs no
+/// user code between the allocation and the `new` value, so it must keep its
+/// pre-#7154 IR — no instance root, and no scope marker either.
+#[test]
+fn a_class_that_runs_no_user_code_emits_no_instance_root() {
+    let ir = ir_for_new("new_inst_no_ctor.ts", vec![Expr::Number(1.0)]);
+    assert!(
+        !ir.contains("call i32 @js_gc_temp_root_push"),
+        "nothing can collect between the allocation and the `new` value, so \
+         rooting the instance would be pure TLS traffic:\n{ir}"
+    );
+}

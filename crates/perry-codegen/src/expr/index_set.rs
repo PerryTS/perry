@@ -1426,12 +1426,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             if let Expr::String(literal) = index.as_ref() {
                 let obj_box = lower_expr(ctx, object)?;
+                // #7154: the value expression can collect, and an evacuating
+                // minor inside it relocates the receiver out from under
+                // `obj_box`. Root it across the evaluation and re-read below.
+                let recv_guard =
+                    super::temp_root::guard_store_receiver(ctx, object, &obj_box, value);
                 let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
                     ctx,
                     value,
                     "index_set.literal_string_value_bits",
                     "literal_string_index_set_helper_edge",
                 )?;
+                let obj_box = super::temp_root::reread_store_receiver(ctx, &recv_guard, &obj_box);
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
@@ -1470,10 +1476,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &val_double),
                     ],
                 );
+                super::temp_root::release_store_receiver(ctx, recv_guard);
                 return Ok(val_double);
             }
             if is_string_expr(ctx, index) {
                 let obj_box = lower_expr(ctx, object)?;
+                // #7154: see the literal-key arm above.
+                let recv_guard =
+                    super::temp_root::guard_store_receiver(ctx, object, &obj_box, value);
                 let key_box = lower_expr(ctx, index)?;
                 let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
                     ctx,
@@ -1481,6 +1491,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "index_set.string_value_bits",
                     "string_index_set_helper_edge",
                 )?;
+                let obj_box = super::temp_root::reread_store_receiver(ctx, &recv_guard, &obj_box);
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
                 super::property_set::emit_nullish_write_guard(
                     ctx,
@@ -1516,6 +1527,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &val_double),
                     ],
                 );
+                super::temp_root::release_store_receiver(ctx, recv_guard);
                 return Ok(val_double);
             }
             // Fallback with runtime STRING_TAG check, matching IndexGet.

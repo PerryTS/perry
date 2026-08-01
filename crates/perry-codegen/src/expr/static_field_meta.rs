@@ -424,10 +424,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_class_object_pin_parent",
                 &[(I64, &obj), (I32, &tcid_str)],
             );
+            // #7154: the fresh class object is a raw SSA register while every
+            // static initializer and captured argument is lowered, and those
+            // allocate. An evacuating minor relocates it, after which each
+            // remaining `js_object_set_field_by_name` writes into from-space —
+            // the statics land on the abandoned copy. Same rooting contract
+            // `Expr::Object` has used since #6951.
+            //
+            // `captured_args` forces protection on its own, independently of
+            // whether the capture *expressions* collect: the snapshot below
+            // allocates a `js_array_alloc` accumulator and grows it with
+            // `js_array_push_f64` per element, and those are collection points
+            // even when every element is an inert `LocalGet`.
+            let protect_handle = !captured_args.is_empty()
+                || !symbol_statics.is_empty()
+                || super::temp_root::any_may_trigger_gc(ctx, named_statics.iter().map(|(_, v)| v));
+            let rooted = super::temp_root::rooted_handle_begin(ctx, &obj, protect_handle);
             for (name, init) in named_statics {
                 let key_idx = ctx.strings.intern(name);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let v = lower_expr(ctx, init)?;
+                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
                 let blk = ctx.block();
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -472,6 +489,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
                 let key_idx = ctx.strings.intern("__perry_ctor_caps");
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                // #7154: re-read the class object — the capture lowerings above
+                // are arbitrary expressions and may have moved it.
+                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
                 let blk = ctx.block();
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -481,10 +501,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
                 );
             }
-            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
             for (key, init) in symbol_statics {
                 let k = lower_expr(ctx, key)?;
                 let v = lower_expr(ctx, init)?;
+                // #7154: both lowerings above can collect; re-derive the
+                // receiver from the root rather than reusing the register.
+                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
+                let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
                 ctx.block().call(
                     DOUBLE,
                     "js_object_set_symbol_property",
@@ -523,10 +546,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 })
                 .unwrap_or_default();
             for fn_name in block_fns {
+                // #7154: a static block runs arbitrary user code, so re-derive
+                // the receiver from the root before each one.
+                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
+                let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
                 ctx.block()
                     .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
                 ctx.block().call(DOUBLE, &fn_name, &[]);
             }
+            let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
+            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+            super::temp_root::rooted_handle_release(ctx, rooted);
             Ok(obj_box)
         }
         // Issue #711 part 2: `<expr>.prototype = <expr>` pattern.

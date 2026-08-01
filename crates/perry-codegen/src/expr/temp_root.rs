@@ -551,6 +551,71 @@ pub(crate) fn temp_root_release(ctx: &mut FnCtx<'_>, guard: Option<String>) {
     }
 }
 
+/// The receiver of a property/element STORE, kept valid across the evaluation
+/// of the value being stored (#7154).
+///
+/// `o.k = f()` and `o[k] = f()` evaluate the reference first and the value
+/// second — spec order, and codegen follows it. That leaves the receiver in an
+/// SSA register while `f()` runs, and `f()` allocates. A back-edge poll inside
+/// it drives an evacuating minor which relocates the receiver; the *slot* the
+/// register was loaded from is a root and gets rewritten, but the register does
+/// not, so the store lands in abandoned from-space memory and the field never
+/// appears on the object the program keeps.
+///
+/// This is the store-side instance of the [module invariant](self): property
+/// (2) — a rewritten location — is worthless without property (3), reading that
+/// location again below the collection point. It is #7114 with a receiver
+/// instead of a string literal.
+///
+/// A temp root (not a re-load) is the required strategy: re-lowering `object`
+/// would observe an assignment made by `f()` itself, which is a miscompile
+/// rather than a rooting fix — see [`operand_is_reloadable`].
+pub(crate) struct ReceiverGuard {
+    slot: Option<String>,
+}
+
+/// Root `recv` (the lowered `object`) if evaluating `value` can collect.
+/// Emits nothing otherwise, so stores with an inert RHS keep their old IR.
+pub(crate) fn guard_store_receiver(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    recv: &str,
+    value: &Expr,
+) -> ReceiverGuard {
+    let collects = expr_may_trigger_gc(ctx, value);
+    let slot = match operand_protection(ctx, object, collects) {
+        OperandProtection::Root => Some(temp_root_push_double(ctx, recv)),
+        // `Reload`/`Reuse` both mean the register survives: a string literal
+        // cannot be a store receiver, and a proven non-pointer is not movable.
+        OperandProtection::Reload | OperandProtection::Reuse => None,
+    };
+    ReceiverGuard { slot }
+}
+
+/// Re-read the receiver below the value's evaluation. Returns `recv` unchanged
+/// when nothing was rooted.
+pub(crate) fn reread_store_receiver(
+    ctx: &mut FnCtx<'_>,
+    guard: &ReceiverGuard,
+    recv: &str,
+) -> String {
+    match &guard.slot {
+        Some(idx) => {
+            let idx = idx.clone();
+            temp_root_get_double(ctx, &idx)
+        }
+        None => recv.to_string(),
+    }
+}
+
+/// Drop the guard. Call it *after* the store, not before: the store helper
+/// allocates (key interning, field-array growth, shape transition).
+pub(crate) fn release_store_receiver(ctx: &mut FnCtx<'_>, guard: ReceiverGuard) {
+    if let Some(idx) = guard.slot {
+        temp_root_truncate(ctx, &idx);
+    }
+}
+
 /// A freshly allocated container handle (object, array, …) that generated code
 /// keeps writing into while it lowers the initializer expressions.
 ///
@@ -727,10 +792,19 @@ pub(crate) fn operand_protection(
 /// at each, which is exactly the bookkeeping that gets missed.
 ///
 /// A null word decodes to nothing, so the marker itself roots no object.
-/// Emits nothing when no operand could ever need rooting.
-pub(crate) fn temp_root_scope_begin(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Option<String> {
-    args.iter()
-        .any(|a| operand_needs_root(ctx, a))
+/// Emits nothing when nothing inside the scope could ever need rooting.
+///
+/// #7154: `also_needed` is the caller's extra reason to open the scope beyond
+/// its operands. `lower_new_impl_inner` roots the freshly-allocated *instance*
+/// across the constructor body, and `new C()` with no arguments is precisely
+/// the shape that would otherwise push a slot with no marker above it to cut —
+/// a temp-root entry leaked per construction.
+pub(crate) fn temp_root_scope_begin(
+    ctx: &mut FnCtx<'_>,
+    args: &[Expr],
+    also_needed: bool,
+) -> Option<String> {
+    (also_needed || args.iter().any(|a| operand_needs_root(ctx, a)))
         .then(|| temp_root_push_i64(ctx, "0"))
 }
 

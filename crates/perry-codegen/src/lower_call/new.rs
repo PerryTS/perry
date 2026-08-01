@@ -24,6 +24,52 @@ use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, temp_r
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
+/// Does `new <class_name>(…)` run user code — an own or inherited constructor
+/// body, or field initializers — between the instance allocation and the value
+/// the `new` expression yields?
+///
+/// That is the window #7154 is about: user code allocates, a back-edge poll
+/// inside it drives an evacuating minor, and the instance moves while the
+/// caller holds it only in an SSA register. A class with none of these has no
+/// window at all (`js_gc_init_typed_shape_layout` is the only thing emitted in
+/// between, and it does not allocate), so it keeps its pre-#7154 IR exactly.
+///
+/// An unresolvable class name is `false` on purpose, not conservatively `true`:
+/// the instance root is pushed only on paths that resolved the class out of
+/// `ctx.classes`, so a name this returns `false` for never reaches the push and
+/// would leave the scope marker as pure overhead.
+fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    ctx.classes.get(class_name).is_some_and(|class| {
+        class.constructor.is_some()
+            || !class.fields.is_empty()
+            || class.extends.is_some()
+            || class.extends_name.is_some()
+            || class.native_extends.is_some()
+            || class.extends_expr.is_some()
+    })
+}
+
+/// Re-read the freshly-constructed instance from the temp-root slot that
+/// carried it across the constructor body (#7154).
+///
+/// Returns `(obj_handle, obj_box)` — the bare handle and its NaN-boxed form.
+/// When no root was pushed (nothing between the allocation and here can
+/// collect) the original registers are handed straight back, so those sites
+/// keep their old IR byte for byte.
+fn reload_instance(
+    ctx: &mut FnCtx<'_>,
+    instance_root: &Option<String>,
+    obj_handle: &str,
+    obj_box: &str,
+) -> (String, String) {
+    let Some(idx) = instance_root.clone() else {
+        return (obj_handle.to_string(), obj_box.to_string());
+    };
+    let handle = temp_root::temp_root_get_i64(ctx, &idx);
+    let boxed = nanbox_pointer_inline(ctx.block(), &handle);
+    (handle, boxed)
+}
+
 /// Emit the `js_gc_init_typed_shape_layout` call that registers the freshly
 /// constructed instance's raw-f64 / pointer slot masks with the GC so the
 /// typed-feedback class-field fast path engages. Must run AFTER the constructor
@@ -183,7 +229,14 @@ fn lower_new_impl(
     // here releases the group whichever path ran, instead of a
     // `temp_root_release` at each that reviewers and future edits must keep
     // balanced.
-    let scope = temp_root::temp_root_scope_begin(ctx, args);
+    //
+    // #7154: the body also roots the freshly-allocated instance across the
+    // constructor body, so the marker is required whenever construction runs
+    // user code — not only when an argument needs a root. `new C()` with no
+    // arguments is exactly the shape that would otherwise push a slot with no
+    // marker above it to cut.
+    let scope =
+        temp_root::temp_root_scope_begin(ctx, args, construction_runs_user_code(ctx, class_name));
     let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args);
     temp_root::temp_root_scope_end(ctx, scope);
     result
@@ -842,6 +895,29 @@ fn lower_new_impl_inner(
             ],
         )
     };
+    // #7154: root the instance for the duration of the constructor body.
+    //
+    // Until now the instance existed ONLY as an SSA register while that body
+    // ran, and a constructor body allocates. Under back-edge polls
+    // (`PERRY_GC_MOVING_LOOP_POLLS=1`) an evacuating minor inside the
+    // constructor RELOCATES it: the callee's own `this` shadow slot roots it,
+    // so it survives and moves, and the collector rewrites the callee's root —
+    // but not the caller's register, which is not a root at all. Every
+    // subsequent use in this function then names from-space memory, and
+    // `js_ctor_return_override` publishes that dead address straight into the
+    // caller's shadow slot. The result is a *rooted* slot holding a dangling
+    // pointer, which is why #7154's from-space scan only ever saw offenders
+    // one or more cycles after the target died, with correct layout coverage.
+    //
+    // This is #7184's sibling: there the root store landed outside the pushed
+    // frame, here it lands after a collection point. Same invariant — the root
+    // store must dominate every site that can collect — and the same symptom
+    // ("value is not a function" on a stale closure/instance field).
+    //
+    // The slot is released by the scope cut in `lower_new_impl`, which covers
+    // all ~20 return paths below.
+    let instance_root = construction_runs_user_code(ctx, class_name)
+        .then(|| temp_root::temp_root_push_i64(ctx, &obj_handle));
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
     // #6969: the instance allocation has run, so refresh every argument before
     // the constructor consumes them.
@@ -940,6 +1016,13 @@ fn lower_new_impl_inner(
                 ctx.block()
                     .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
             }
+            // #7154: the constructor body has run, so every register holding
+            // the instance is potentially pre-move. Re-read it from its root
+            // before anything else touches it — `emit_typed_shape_layout_init`
+            // would otherwise install the layout descriptor on the abandoned
+            // from-space copy, and `js_ctor_return_override` would hand the
+            // caller that copy's address.
+            let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
             // The constructor body has run and set the declared fields; register
             // the typed raw-f64/pointer slot layout so class-field accesses hit
             // the slot-direct fast path instead of the by-name hashmap fallback.
@@ -1780,6 +1863,11 @@ fn lower_new_impl_inner(
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
+    // #7154: same re-read as the standalone-symbol path above. The inlined
+    // constructor body (field initializers, `super(...)`, nested `new`s) can
+    // reach a back-edge poll, and the evacuating minor there relocates the
+    // instance out from under `obj_handle`/`obj_box`.
+    let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
     emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the
