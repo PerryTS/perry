@@ -136,6 +136,18 @@ test_gap_repsel_scalar_replaced_locals
 # the evacuating arms in that frame, not only inside a callee.
 test_gap_repsel_module_init_canonical
 
+# --- Raw pointer publishes into traced payload slots (#7154) -----------------
+# Not a representation file, so registered explicitly per the header rule.
+# Three runtime helpers published a pointer into a GC-traced slot with a raw
+# `*slot = bits`, skipping `layout_note_slot` (so the holder stayed
+# `POINTER_FREE` and `heap_payload_slot_selection` skipped its WHOLE payload)
+# and the write barrier (so an old->young edge never reached the remembered
+# set). LIVE BY CONSTRUCTION: measured 33 copying minors at default settings,
+# and every subject is read AFTER the churn that drives them, so a non-moving
+# collection cannot satisfy it. Verified to FAIL on the pre-fix stores
+# (`spread-method: 310 base:0 base:39` becomes a crash) and pass after.
+test_gap_gc_pointer_publish
+
 # --- The GC-live member ------------------------------------------------------
 # Every file above performs ZERO collections (measured, #6950), which makes the
 # GC arms inert against them. This one holds each representation's local live
