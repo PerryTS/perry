@@ -1,5 +1,6 @@
 mod alloc;
 mod barrier;
+mod barrier_decoded_parent;
 mod budgeted_step_api;
 mod buffer_side_tables;
 mod contract;

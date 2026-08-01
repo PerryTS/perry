@@ -964,20 +964,126 @@ pub(super) fn write_barrier_slot_inner(
     // unconditional thread-local access, which dominated tight numeric store
     // loops (#6011: `ema[i] = <f64>` spent more time in this preamble than
     // in the store itself).
-    let child_addr = decode_heap_addr(child);
-    if child_addr == 0 {
-        bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
-        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
+    let Some(child_addr) = barrier_child_prologue(child) else {
         return;
-    }
-    bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
-    incremental_mark_barrier_value(child);
+    };
     // Decode the parent — must be a NaN-boxed heap pointer.
     let parent_addr = decode_heap_addr(parent);
     if parent_addr == 0 {
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
         return;
     }
+    write_barrier_decoded_parent(parent_addr, slot_addr, child_addr, external_slot);
+}
+
+/// The never-skippable half of the barrier: decode the stored child and shade
+/// it for any in-progress incremental cycle. Returns the child's heap address,
+/// or `None` when the store published no heap pointer at all (every numeric
+/// array/field store — the #6011 fast path, which must stay the cheapest exit).
+#[inline]
+fn barrier_child_prologue(child: u64) -> Option<usize> {
+    let child_addr = decode_heap_addr(child);
+    bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
+    if child_addr == 0 {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
+        return None;
+    }
+    incremental_mark_barrier_value(child);
+    Some(child_addr)
+}
+
+/// [`write_barrier_slot_inner`] for a caller that already holds the parent as
+/// a plain GC user pointer — see [`write_barrier_decoded_parent`] for why the
+/// `u64` round-trip is worth avoiding (#7187).
+pub(super) fn write_barrier_slot_decoded(
+    parent_addr: usize,
+    slot_addr: usize,
+    child: u64,
+    external_slot: bool,
+) {
+    let Some(child_addr) = barrier_child_prologue(child) else {
+        return;
+    };
+    // The NaN-box round-trip this replaces was also FILTERING, not just
+    // decoding, and dropping the filter is a segfault rather than a wrong
+    // answer: `barrier_parent_needs_remembering` reaches
+    // `malloc_gc_parent_addr`, which dereferences. Two filters were in play
+    // and both are reproduced here, explicitly:
+    //
+    //   * bare-`u64` callers (`runtime_write_barrier_slot`) took
+    //     `decode_heap_addr`'s raw-pointer arm: 48-bit, above `0x10000`,
+    //     8-aligned, then an arena classification.
+    //   * NaN-boxing callers (`runtime_write_barrier_external_slot`) were
+    //     filtered by ACCIDENT — a parent address with high bits set ORs into
+    //     something that is no longer `POINTER_TAG`, so `decode_heap_addr`
+    //     returned 0. `closure/dynamic_props.rs` parks props under
+    //     non-address owner keys and relies on this (its unit test uses
+    //     `0xC10C_AB1E_0000_1803`).
+    //
+    // [`barrier_parent_addr_is_dereferenceable`] subsumes both. A real GC user
+    // pointer — arena block or malloc — satisfies every clause, so no genuine
+    // old→young edge is filtered here.
+    if !barrier_parent_addr_is_dereferenceable(parent_addr) {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
+        return;
+    }
+    write_barrier_decoded_parent(parent_addr, slot_addr, child_addr, external_slot);
+}
+
+/// May the barrier treat `parent_addr` as a GC user pointer — classify it and,
+/// on the external-slot path, read its `GcHeader`?
+///
+/// The canonical magnitude predicate plus the 8-alignment that
+/// `decode_heap_addr`'s raw-pointer arm checked and `addr_class` does not: a
+/// misaligned `GcHeader` read is UB before it is a wrong answer.
+///
+/// This is a *plausibility* test, not a validity test. Its contract is the one
+/// [`crate::value::addr_class::try_read_gc_header`] documents — an aligned,
+/// in-range, but stale or unmapped address is still dereferenced, and the
+/// `obj_type` / registry checks layered above are what catch reuse.
+#[inline]
+pub(super) fn barrier_parent_addr_is_dereferenceable(parent_addr: usize) -> bool {
+    crate::value::addr_class::is_plausible_heap_addr(parent_addr) && parent_addr.is_multiple_of(8)
+}
+
+/// The remembered-set half of the barrier, entered with the parent address
+/// **already decoded**.
+///
+/// #7187: every Rust-side barrier caller holds the parent as a plain `usize`
+/// GC user pointer. Routing those through [`write_barrier_slot_inner`] meant
+/// re-encoding the address as a bare `u64` so [`decode_heap_addr`] could
+/// re-derive it — and its bare-pointer arm pays a full
+/// `classify_heap_generation` to do so, immediately before
+/// [`barrier_parent_needs_remembering`] classifies the same address again.
+/// That was one of FOUR page-map classifications per barriered store on the
+/// `batch.ts` sort path (#7170 measured `classify_heap_generation` at 19.03%
+/// of that program, ~657M instructions, with zero collections running), and
+/// the only one that answered a question the caller had already answered.
+///
+/// Dropping the round-trip is outcome-preserving, including for the one
+/// operand class that reached the bare-pointer arm and failed it: a
+/// malloc-GC parent classifies `Unknown`, so `decode_heap_addr` used to
+/// return 0 and the barrier exited at `NonPointerParentSkips`. It now
+/// reaches `barrier_parent_needs_remembering(parent, external_slot)`, which
+/// classifies `Unknown`, is not `Old`, and — for the non-external callers
+/// that took this path — exits at `ParentNotOldSkips`. Different counter,
+/// same remembered-set effect (none). The external/malloc parents that
+/// genuinely need remembering arrive through
+/// [`runtime_write_barrier_external_slot`] / [`runtime_write_barrier_gc_slot`],
+/// which already tag their parent and are unaffected.
+///
+/// Callers must pass a real GC user pointer. `decode_heap_addr`'s shape
+/// pre-filter (48-bit, above the handle band, 8-aligned) is not applied
+/// here, because the Rust callers derive `parent_addr` from a live
+/// `*mut ArrayHeader` / `*mut ObjectHeader` / … rather than from JS value
+/// bits.
+#[inline]
+pub(super) fn write_barrier_decoded_parent(
+    parent_addr: usize,
+    slot_addr: usize,
+    child_addr: usize,
+    external_slot: bool,
+) {
     // Old → young check. Runtime-owned malloc GC objects are outside
     // the nursery and must be treated as old when the caller uses the
     // external-slot path for fields or side buffers.
@@ -1045,9 +1151,18 @@ pub(super) fn barrier_parent_needs_remembering(parent_addr: usize, external_slot
     external_slot && malloc_gc_parent_addr(parent_addr)
 }
 
+/// #7187: this DEREFERENCES `parent_addr - GC_HEADER_SIZE`, and its only
+/// pre-deref guard used to be a bare `< GC_HEADER_SIZE + 0x1000` floor —
+/// which admits every handle-band id and every out-of-range garbage word.
+/// It was safe purely because its callers happened to filter first
+/// (`decode_heap_addr`'s shape pre-filter, or a NaN-box tag that a
+/// non-canonical address corrupted into rejection). That is exactly the
+/// "raw address deref behind an accidental guard" class `addr_class` exists
+/// to end, and `forwarded_heap_owner` three modules over already reaches for
+/// the safe reader. Classify the magnitude FIRST, then dereference.
 #[inline]
 pub(super) fn malloc_gc_parent_addr(parent_addr: usize) -> bool {
-    if parent_addr < GC_HEADER_SIZE + 0x1000 {
+    if !barrier_parent_addr_is_dereferenceable(parent_addr) {
         return false;
     }
     unsafe {
@@ -1215,7 +1330,7 @@ pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, c
         incremental_mark_barrier_value(child_bits);
         return;
     }
-    js_write_barrier_slot(parent_addr as u64, slot_addr as u64, child_bits);
+    write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, false);
 }
 
 /// Canonicalize an **INT32-boxed** numeric store into a raw-f64-masked slot of
@@ -1299,12 +1414,7 @@ pub(crate) fn runtime_write_barrier_external_slot(
         incremental_mark_barrier_value(child_bits);
         return;
     }
-    write_barrier_slot_inner(
-        POINTER_TAG | (parent_addr as u64),
-        slot_addr,
-        child_bits,
-        true,
-    );
+    write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, true);
 }
 
 pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
@@ -1316,12 +1426,7 @@ pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize
         crate::arena::classify_heap_generation(parent_addr),
         crate::arena::HeapGeneration::Unknown
     ) && malloc_gc_parent_addr(parent_addr);
-    write_barrier_slot_inner(
-        POINTER_TAG | (parent_addr as u64 & POINTER_MASK),
-        slot_addr,
-        child_bits,
-        parent_is_malloc_gc,
-    );
+    write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, parent_is_malloc_gc);
 }
 
 #[inline]

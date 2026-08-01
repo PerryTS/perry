@@ -6,8 +6,7 @@
 
 pub(crate) use std::alloc::{alloc, Layout};
 pub(crate) use std::cell::{Cell, RefCell, UnsafeCell};
-pub(crate) use std::collections::{hash_map::Entry, HashMap};
-pub(crate) use std::hash::{BuildHasherDefault, Hasher};
+pub(crate) use std::collections::hash_map::Entry;
 
 mod allocators;
 mod block;
