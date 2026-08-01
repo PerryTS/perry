@@ -137,7 +137,7 @@ jobs:
               cp "$ll" "ir-corpus/${name}__$(basename "$ll")"
             done
           done
-          echo "corpus: $(ls ir-corpus | wc -l) .ll files"
+          echo "corpus: $(find ir-corpus -name '*.ll' | wc -l) .ll files"
 
       - name: Check root-store dominance
         run: |
@@ -150,7 +150,7 @@ jobs:
 
       - name: Upload the IR corpus on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gc-root-dominance-ir
           path: ir-corpus
