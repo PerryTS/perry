@@ -2003,7 +2003,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let recv_guard =
                     super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
                 let key_box = lower_expr(ctx, index)?;
-                let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
+                let obj_box =
+                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                 let obj_handle =
@@ -2034,7 +2035,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // evacuating minor inside the key relocates it.
             let recv_guard = super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
             let idx_box = lower_expr(ctx, index)?;
-            let obj_box = super::temp_root::reread_store_operand(ctx, &recv_guard, &obj_box);
+            let obj_box =
+                super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
             // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
             // a TypeError per spec, NOT silently return undefined. The dotted
             // PropertyGet path already guards nullish receivers; the computed
