@@ -114,6 +114,28 @@ pub(crate) fn lower_try(
             let slot = ctx.func.alloca_entry(DOUBLE);
             ctx.locals.insert(*id, slot.clone());
             ctx.block().store(DOUBLE, &exc, &slot);
+            // #7209: BIND the slot the frame is already sized for.
+            //
+            // `collect_pointer_typed_locals` assigns the catch parameter an
+            // index — it is implicitly `Any`, i.e. pointer-possible — so
+            // `js_shadow_frame_enter`'s count already includes it. Nothing ever
+            // bound it, so `active[idx]` stayed false and the collector never
+            // dereferenced this alloca: the frame was sized for a root that did
+            // not exist.
+            //
+            // Sharper than an ordinary missing root, because
+            // `js_clear_exception()` two lines up has already dropped the
+            // RUNTIME's reference. From here the exception is reachable only
+            // through this alloca, and the catch body is arbitrary user code —
+            // so a precise-roots collection can SWEEP it, not merely move it.
+            //
+            // Emitted here rather than hoisted to entry setup precisely because
+            // the slot must not go active before the store: on the non-throwing
+            // path this alloca is never written, and an entry-hoisted bind
+            // would hand the root-word decoder uninitialized stack bytes. After
+            // the store is what `Stmt::Let` does for every ordinary local, and
+            // it reuses the RESERVED index rather than growing the frame.
+            crate::expr::emit_shadow_slot_bind_for_local(ctx, *id);
         }
         if let Some(f) = finally {
             // Per spec TryStatement : try Block Catch Finally — a throw

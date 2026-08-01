@@ -190,3 +190,22 @@ test_gap_repsel_gc_stress
 test_gap_gc_spread_accessor_rooting
 test_gap_gc_static_block_this_rooting
 test_gap_gc_inline_ctor_this_rooting
+
+# --- The catch parameter and the closure `this` capture (#7209, #7208) -------
+# Two more sites from the #7202 bare-alloca enumeration, both reserved-or-
+# missing shadow slots rather than late root stores.
+#
+# Measured on `origin/main` (1679e22b4), compiled AND run with
+# `PERRY_GC_MOVING_LOOP_POLLS=1`:
+#   catch_param_rooting          `message 8 field 8` of 400, 3/3 deterministic
+#   closure_this_capture_rooting exit=139 (SIGSEGV) 3/3; `bad 4` on the
+#                                evacuating arm
+#
+# `catch_param_rooting` is the one file in this corpus that can go wrong under a
+# NON-moving precise-roots collection as well: `js_clear_exception()` drops the
+# runtime's own reference before the catch body runs, so with the slot unbound
+# the exception is reachable from nothing the collector scans and can be SWEPT,
+# not merely relocated. Keep it exercised on `cons_scan_off`, not only on the
+# `requires=move` arms.
+test_gap_gc_catch_param_rooting
+test_gap_gc_closure_this_capture_rooting

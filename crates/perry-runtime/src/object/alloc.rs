@@ -1141,12 +1141,42 @@ unsafe fn object_assign_string_source(
     let Ok(s) = std::str::from_utf8(bytes) else {
         return;
     };
+    // #7214: SNAPSHOT the source before allocating anything.
+    //
+    // `str_bytes_from_jsvalue` returns a pointer INTO the source
+    // `StringHeader`'s data region for any string past the SSO limit (header
+    // and payload are one contiguous `arena_alloc_gc` block), and its own
+    // safety note says so: "Callers must not hold this pointer past a
+    // subsequent `scratch` modification or a GC cycle that could sweep the
+    // heap-backed `StringHeader`." The loop below holds it across three
+    // allocation points per character.
+    //
+    // MEASURED, because the size argument that makes this survivable is not one
+    // to rely on. An instrumented build rooted both the source and the target
+    // and counted relocations across the loop: on a 26 001-character source,
+    // `src_moves=0 tgt_moves=1` — collections DO happen inside this function
+    // (which is what makes the #7200 target rooting above load-bearing), but
+    // that source could not move because at 26 KB it is over
+    // `LARGE_OBJECT_THRESHOLD_BYTES` and `arena_alloc_gc` births it TENURED in
+    // the non-moving old generation. Shrink it under the threshold and it
+    // becomes a movable nursery string — but then one call allocates too little
+    // to reliably span a collection, and none was observed.
+    //
+    // So the exposure is real and narrow: a source in the band just under
+    // 16 KiB is both movable and long enough to allocate ~32 000 times. There
+    // is NO runtime witness for it and I am not implying otherwise; what there
+    // is, is a documented callee contract this violated and a safety margin
+    // that rests entirely on a tunable constant. One owned copy on a path that
+    // is already O(n) removes the dependence.
+    let owned: String = s.to_string();
+
     // #7200: three allocations per iteration (`key_ptr`, `value_ptr`, and the
-    // write funnel's interning/growth) with `target` and `key_ptr` live across
-    // them. The second `js_string_from_bytes` alone can move the first.
+    // write funnel's interning / keys-array growth) with `target` and `key_ptr`
+    // live across them. The probe above measured `tgt_moves=1`, so the target
+    // half of this is not hypothetical.
     let scope = crate::gc::RuntimeHandleScope::new();
     let tgt_h = scope.root_raw_mut_ptr(target);
-    for (idx, ch) in s.chars().enumerate() {
+    for (idx, ch) in owned.chars().enumerate() {
         let iter_scope = crate::gc::RuntimeHandleScope::new();
         let key = idx.to_string();
         let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
