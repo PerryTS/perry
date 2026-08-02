@@ -76,7 +76,7 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
     for f in &funcs {
         let header = synth_define_header(f);
         let mut stream = crate::dialect::FnStream::begin(context, &module, &header)
-            .map_err(|e| anyhow!("native IR construction failed in @{}: {}", f.name, e))?;
+            .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
         if f.has_try {
             // The setjmp volatile pass needs whole-function analysis; keep
             // the materialized-text path for try-containing functions.
@@ -95,11 +95,11 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
             // The common case: finalized lines stream straight into the
             // C-API builder — no per-function text exists.
             f.for_each_final_line::<anyhow::Error>(&mut |line| stream.line(line))
-                .map_err(|e| anyhow!("native IR construction failed in @{}: {}", f.name, e))?;
+                .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
         }
         instructions += stream
             .finish()
-            .map_err(|e| anyhow!("native IR construction failed in @{}: {}", f.name, e))?;
+            .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
     }
     log::debug!(
         "perry-codegen: native construction built {} functions, {} instructions, skeleton {} bytes",

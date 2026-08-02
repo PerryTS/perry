@@ -692,11 +692,18 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         // call.
         let fn_ty = indirect_fn_type(self.ctx, sig_str, &arg_types)?;
         let callee_ptr = if let Some(fname) = callee.strip_prefix('@') {
-            self.module
-                .get_function(&unquote(fname))
-                .ok_or_else(|| anyhow!("call to undeclared @{fname}"))?
-                .as_global_value()
-                .as_pointer_value()
+            let name = unquote(fname);
+            let f = match self.module.get_function(&name) {
+                Some(f) => f,
+                // LLVM's own .ll parser auto-declares `@llvm.*` intrinsics at
+                // their first use (perry's clamp lowering emits smax/smin
+                // calls with no textual declare). Mirror that — for
+                // intrinsics ONLY; anything else undeclared stays a loud
+                // error.
+                None if name.starts_with("llvm.") => self.module.add_function(&name, fn_ty, None),
+                None => bail!("call to undeclared @{name}"),
+            };
+            f.as_global_value().as_pointer_value()
         } else {
             self.val(self.ctx.ptr_type(AddressSpace::default()).into(), callee)?
                 .into_pointer_value()
@@ -861,7 +868,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         }
 
         // Binary ops: `[flags] T A, B` where op may carry nsw/nuw/fmf tokens.
-        let mut op_base = op;
+        let op_base = op;
         let mut rest2 = rest;
         let mut flag_tokens: Vec<&str> = Vec::new();
         loop {
