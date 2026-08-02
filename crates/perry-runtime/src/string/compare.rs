@@ -12,7 +12,39 @@ use super::*;
 /// whereas raw UTF-8 byte order (= code-point order) sorts it after. Falls back
 /// to raw byte order if either side is not valid UTF-8 (WTF-8 lone surrogates —
 /// a known categorical gap).
+///
+/// # ASCII fast path
+///
+/// When **both** payloads are pure ASCII, every byte is its own UTF-16 code
+/// unit (0x00–0x7F zero-extends to 0x0000–0x007F), so lexicographic byte order
+/// and lexicographic UTF-16 code-unit order are the *same total order* — the
+/// prefix tie-break included, since `<[u8]>::cmp` and `Iterator::cmp` both rank
+/// a proper prefix `Less`. The fast path therefore returns `a.cmp(b)` (a
+/// `memcmp` + length compare) and skips the two `from_utf8` validations and the
+/// two scalar `encode_utf16` decoder iterators the general path runs.
+///
+/// The precondition is **checked, never assumed**. Perry heap-string payloads
+/// are not guaranteed valid UTF-8 (WTF-8 lone surrogates, `Buffer.toString`
+/// of arbitrary bytes, FFI blobs — #6085), so this must not lean on any
+/// derived metadata:
+///
+/// * `<[u8]>::is_ascii` inspects the actual bytes word-at-a-time and is total
+///   over arbitrary byte strings — no validity assumption at all.
+/// * The header-cached predicate `is_ascii_string` (`utf16_len == byte_len`)
+///   would be *cheaper* but is **not sound** here: `compute_utf16_len_wtf8`
+///   charges a truncated multi-byte lead its full nominal unit count while the
+///   payload holds fewer bytes, so e.g. `[0xC3]` records `utf16_len == 1 ==
+///   byte_len` and `[0xF0, 0x41]` records `utf16_len == 2 == byte_len` — both
+///   non-ASCII payloads that the cached predicate calls ASCII. Byte-scanning is
+///   the only precondition that holds for non-UTF-8 payloads.
+///
+/// Mixed operands (one ASCII, one not) deliberately fall through unchanged
+/// rather than reasoning about lead-byte ranges: the general path already
+/// handles them, and this stays a decision about *both* operands.
 pub(crate) fn utf16_cmp_bytes(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        return a.cmp(b);
+    }
     match (std::str::from_utf8(a), std::str::from_utf8(b)) {
         (Ok(a_str), Ok(b_str)) => a_str.encode_utf16().cmp(b_str.encode_utf16()),
         _ => a.cmp(b),
@@ -770,6 +802,240 @@ pub extern "C" fn js_string_to_well_formed(s: *const StringHeader) -> *mut Strin
         }
     }
     js_string_from_bytes(result.as_ptr(), result.len() as u32)
+}
+
+#[cfg(test)]
+mod utf16_cmp_ascii_fast_path_tests {
+    use super::utf16_cmp_bytes;
+    use std::cmp::Ordering;
+
+    /// Independent restatement of the pre-fast-path semantics: validate both
+    /// sides as UTF-8 and compare the UTF-16 code-unit sequences, falling back
+    /// to raw byte order when either side is not valid UTF-8.
+    ///
+    /// Deliberately *not* the production fallthrough — it is the oracle the
+    /// fast path is differentially checked against, so breaking either arm of
+    /// `utf16_cmp_bytes` in production code turns these tests red.
+    fn reference_cmp(a: &[u8], b: &[u8]) -> Ordering {
+        match (std::str::from_utf8(a), std::str::from_utf8(b)) {
+            (Ok(a_str), Ok(b_str)) => {
+                let au: Vec<u16> = a_str.encode_utf16().collect();
+                let bu: Vec<u16> = b_str.encode_utf16().collect();
+                au.cmp(&bu)
+            }
+            _ => a.cmp(b),
+        }
+    }
+
+    /// Every shape the fast path has to get right or fall through on.
+    /// WTF-8 lone surrogates are raw byte literals — they are not
+    /// representable as Rust `&str`.
+    fn corpus() -> Vec<Vec<u8>> {
+        let mut v: Vec<Vec<u8>> = Vec::new();
+        // Pure ASCII, incl. empty, prefixes, NUL, and the 0x7F boundary.
+        for s in [
+            "",
+            "a",
+            "A",
+            "ab",
+            "abc",
+            "abd",
+            "abcd",
+            "b",
+            "z",
+            "0",
+            "9",
+            "~",
+            "\u{7f}",
+            " ",
+            "!",
+            "Zebra",
+            "apple",
+            "Apple",
+            "apple pie",
+            "record-00001",
+            "record-00002",
+        ] {
+            v.push(s.as_bytes().to_vec());
+        }
+        // Embedded NUL — must not terminate the comparison early.
+        v.push(b"ab\0cd".to_vec());
+        v.push(b"ab\0ce".to_vec());
+        v.push(b"ab\0".to_vec());
+        v.push(vec![0u8]);
+        // Non-ASCII BMP, incl. the ASCII/non-ASCII 0x80 boundary and the
+        // 0xE000..0xFFFF band that is where UTF-16 order diverges from
+        // code-point order.
+        for s in [
+            "\u{80}",
+            "\u{7ff}",
+            "\u{800}",
+            "café",
+            "cafè",
+            "caf\u{e9}x",
+            "日本",
+            "日本語",
+            "\u{e000}",
+            "\u{fffd}",
+            "\u{ffff}",
+        ] {
+            v.push(s.as_bytes().to_vec());
+        }
+        // Astral (4-byte UTF-8 / surrogate pair in UTF-16).
+        for s in ["\u{10000}", "\u{1f600}", "a\u{1f600}", "\u{10ffff}"] {
+            v.push(s.as_bytes().to_vec());
+        }
+        // WTF-8 lone surrogates (invalid UTF-8) — the fallthrough's byte-order arm.
+        v.push(vec![0xED, 0xA0, 0x80]); // lone high surrogate U+D800
+        v.push(vec![0xED, 0xB0, 0x80]); // lone low surrogate U+DC00
+        v.push(vec![b'a', 0xED, 0xA0, 0x80]);
+        // Truncated / malformed sequences — exactly the payloads whose cached
+        // `utf16_len == byte_len` would lie about being ASCII.
+        v.push(vec![0xC3]);
+        v.push(vec![0xF0, 0x41]);
+        v.push(vec![0x80]);
+        v
+    }
+
+    /// The fast path must agree with the reference on every ordered pair, and
+    /// the corpus must actually exercise *both* arms (a green run that never
+    /// entered the fast path would prove nothing).
+    #[test]
+    fn fast_path_agrees_with_reference_on_every_pair() {
+        let corpus = corpus();
+        let (mut fast_arm, mut slow_arm) = (0usize, 0usize);
+        for a in &corpus {
+            for b in &corpus {
+                let got = utf16_cmp_bytes(a, b);
+                let want = reference_cmp(a, b);
+                assert_eq!(got, want, "utf16_cmp_bytes({a:?}, {b:?})");
+                if a.is_ascii() && b.is_ascii() {
+                    fast_arm += 1;
+                } else {
+                    slow_arm += 1;
+                }
+            }
+        }
+        assert!(fast_arm > 0, "corpus never entered the ASCII fast path");
+        assert!(slow_arm > 0, "corpus never entered the fallthrough");
+    }
+
+    /// Sort-safety: the relation must stay a total order (antisymmetric,
+    /// reflexive-equal) with the fast path spliced in — a comparator that
+    /// disagrees with itself corrupts `Array.prototype.sort`.
+    #[test]
+    fn fast_path_keeps_a_total_order() {
+        let corpus = corpus();
+        for a in &corpus {
+            assert_eq!(utf16_cmp_bytes(a, a), Ordering::Equal, "{a:?} != itself");
+            for b in &corpus {
+                assert_eq!(
+                    utf16_cmp_bytes(a, b),
+                    utf16_cmp_bytes(b, a).reverse(),
+                    "antisymmetry broken for ({a:?}, {b:?})"
+                );
+            }
+        }
+    }
+
+    /// Pure-ASCII orderings, spelled out (these are the pairs the fast path
+    /// answers on its own).
+    #[test]
+    fn pure_ascii_orderings() {
+        let c = |a: &str, b: &str| utf16_cmp_bytes(a.as_bytes(), b.as_bytes());
+        assert_eq!(c("", ""), Ordering::Equal);
+        assert_eq!(c("", "a"), Ordering::Less);
+        assert_eq!(c("a", ""), Ordering::Greater);
+        assert_eq!(c("abc", "abc"), Ordering::Equal);
+        assert_eq!(c("abc", "abd"), Ordering::Less);
+        assert_eq!(c("abd", "abc"), Ordering::Greater);
+        assert_eq!(c("abc", "abcd"), Ordering::Less); // proper prefix sorts first
+        assert_eq!(c("abcd", "abc"), Ordering::Greater);
+        // Uppercase < lowercase in code-unit order (JS `<`, not localeCompare).
+        assert_eq!(c("Zebra", "apple"), Ordering::Less);
+        assert_eq!(c("apple", "Apple"), Ordering::Greater);
+        // Embedded NUL is an ordinary code unit.
+        assert_eq!(
+            utf16_cmp_bytes(b"ab\0cd", b"ab\0ce"),
+            Ordering::Less,
+            "embedded NUL must not truncate the comparison"
+        );
+        assert_eq!(utf16_cmp_bytes(b"ab\0", b"ab"), Ordering::Greater);
+    }
+
+    /// Non-ASCII pairs must keep going through the general path — including
+    /// the astral-vs-BMP case where UTF-16 order and byte/code-point order
+    /// disagree, which is the whole reason this helper is not `a.cmp(b)`.
+    #[test]
+    fn non_ascii_keeps_utf16_code_unit_order() {
+        let c = |a: &str, b: &str| utf16_cmp_bytes(a.as_bytes(), b.as_bytes());
+        // U+FFFD (BMP) vs U+10000 (astral): code-point/byte order says Less,
+        // UTF-16 order says Greater because the surrogate lead is 0xD800.
+        assert_eq!(c("\u{fffd}", "\u{10000}"), Ordering::Greater);
+        assert_eq!(c("\u{10000}", "\u{fffd}"), Ordering::Less);
+        assert_eq!(c("\u{e000}", "\u{1f600}"), Ordering::Greater);
+        // Same, but only reachable past a shared ASCII prefix.
+        assert_eq!(c("a\u{ffff}", "a\u{10000}"), Ordering::Greater);
+        // Strings differing only past the ASCII range.
+        assert_eq!(c("café", "cafè"), Ordering::Greater); // U+00E9 > U+00E8
+        assert_eq!(c("cafe", "café"), Ordering::Less);
+        assert_eq!(c("日本", "日本語"), Ordering::Less);
+        assert_eq!(c("\u{7f}", "\u{80}"), Ordering::Less);
+    }
+
+    /// Mixed ASCII / non-ASCII operands take the fallthrough (`b.is_ascii()`
+    /// is false) and must still be ordered by UTF-16 code unit.
+    #[test]
+    fn mixed_ascii_and_non_ascii_operands() {
+        let c = |a: &str, b: &str| utf16_cmp_bytes(a.as_bytes(), b.as_bytes());
+        assert_eq!(c("z", "\u{80}"), Ordering::Less);
+        assert_eq!(c("\u{80}", "z"), Ordering::Greater);
+        assert_eq!(c("abc", "abc\u{e9}"), Ordering::Less);
+        assert_eq!(c("abc\u{e9}", "abc"), Ordering::Greater);
+        assert_eq!(c("", "\u{1f600}"), Ordering::Less);
+        assert_eq!(c("\u{1f600}", ""), Ordering::Greater);
+    }
+
+    /// WTF-8 lone surrogates are not valid UTF-8, so the general path falls
+    /// back to raw byte order. The fast path must not claim them (0xED > 0x7F)
+    /// and must not change the answer.
+    #[test]
+    fn lone_surrogates_fall_back_to_byte_order() {
+        let high: &[u8] = &[0xED, 0xA0, 0x80]; // U+D800
+        let low: &[u8] = &[0xED, 0xB0, 0x80]; // U+DC00
+        assert!(!high.is_ascii() && !low.is_ascii());
+        assert_eq!(utf16_cmp_bytes(high, low), Ordering::Less);
+        assert_eq!(utf16_cmp_bytes(low, high), Ordering::Greater);
+        assert_eq!(utf16_cmp_bytes(high, high), Ordering::Equal);
+        assert_eq!(utf16_cmp_bytes(high, b"a"), Ordering::Greater);
+        assert_eq!(utf16_cmp_bytes(b"a", high), Ordering::Less);
+        assert_eq!(utf16_cmp_bytes(high, b""), Ordering::Greater);
+    }
+
+    /// The header-cached `utf16_len == byte_len` predicate is unsound as an
+    /// ASCII test for these payloads; the byte scan the fast path uses is not.
+    /// This pins the reason the cheaper flag was rejected.
+    #[test]
+    fn cached_utf16_len_predicate_would_misclassify_these() {
+        for payload in [vec![0xC3u8], vec![0xF0u8, 0x41]] {
+            let cached_says_ascii =
+                crate::string::compute_utf16_len(payload.as_ptr(), payload.len() as u32) as usize
+                    == payload.len();
+            assert!(
+                cached_says_ascii,
+                "expected the cached predicate to (wrongly) call {payload:?} ASCII"
+            );
+            assert!(
+                !payload.is_ascii(),
+                "{payload:?} is not ASCII — the byte scan must reject it"
+            );
+            // And the answer is unchanged either way for these.
+            assert_eq!(
+                utf16_cmp_bytes(&payload, b"a"),
+                reference_cmp(&payload, b"a")
+            );
+        }
+    }
 }
 
 #[cfg(test)]
