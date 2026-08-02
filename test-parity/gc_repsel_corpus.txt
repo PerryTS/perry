@@ -48,6 +48,16 @@ test_gap_repsel_ptr_shape_barriers
 # is exactly the claim this phase's GC contract makes.
 test_gap_repsel_return_shape
 
+# --- Phase 3b / #7170 R1: the same mechanism inside Perry's own CJS IIFE -----
+# `cjs_wrap` puts every CommonJS module body in `(function () { ... })()`, which
+# turns every module-level `function` declaration into a closure -- so #7107's
+# producer walk (`hir.functions`) and its caller-side seed (`Expr::FuncRef`)
+# both missed it, and 91.6% of dependency-JS allocation sites were unreachable
+# (#7170 §6). The GC claim is the same one and needs its own cells: the
+# call-seeded local now lives in a CLOSURE region, whose shadow-slot binding is
+# emitted by `codegen/closure.rs`, not `codegen/function.rs`.
+test_gap_repsel_cjs_iife_return_shape
+
 # --- Phase 3b / #7034 §3: array-element shape facts -------------------------
 # `rows.push(row)` no longer disqualifies `row`, and `const r = rows[i]` under
 # an `i < rows.length` loop is rule-1 provenance. Every element local is an

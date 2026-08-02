@@ -88,6 +88,20 @@ pub struct ModuleDispatchFacts {
     /// (`collectors/ptr_shape_returns.rs`); a call to such a function is then
     /// a rule-1 provenance seed exactly as `new C(...)` is.
     return_shape_functions: HashMap<u32, String>,
+    /// Representation-selection Phase 3b, #7170 R1: `LocalId` -> `FuncId` for
+    /// every local that provably names one closure literal, module-wide.
+    ///
+    /// Perry's own `cjs_wrap` puts every CommonJS module body in an IIFE, so a
+    /// module-level `function` declaration lowers to `Stmt::Let { init:
+    /// Expr::Closure }` — never a `hir.functions` entry — and a call to it to
+    /// `Call { callee: LocalGet(id) }`, never `Expr::FuncRef`, which is all
+    /// #7107's caller-side seed accepted. #7170 §6 measured that as 91.6% of
+    /// dependency-JS allocation sites.
+    ///
+    /// The proof is in `collectors/spec_abi_sites.rs`
+    /// (`single_binding_closure_locals`), beside the module-wide reassignment
+    /// scan it rests on.
+    closure_bindings: HashMap<u32, u32>,
 }
 
 impl Default for ModuleDispatchFacts {
@@ -101,6 +115,7 @@ impl Default for ModuleDispatchFacts {
             numarray_prototype_index_barriers: true,
             freeze_barrier_sites: true,
             return_shape_functions: HashMap::new(),
+            closure_bindings: HashMap::new(),
         }
     }
 }
@@ -175,6 +190,15 @@ impl ModuleDispatchFacts {
             .get(&func_id)
             .map(String::as_str)
     }
+
+    /// Representation-selection Phase 3b, #7170 R1: the `FuncId` that
+    /// `LocalGet(local_id)` in callee position provably names, or `None`.
+    ///
+    /// `None` is the safe direction everywhere it is read: the seed is simply
+    /// not taken, exactly as before R1.
+    pub(crate) fn closure_binding_func(&self, local_id: u32) -> Option<u32> {
+        self.closure_bindings.get(&local_id).copied()
+    }
 }
 
 /// Scan a whole module — top-level init, every function, and every class body
@@ -188,6 +212,11 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         numarray_prototype_index_barriers: false,
         freeze_barrier_sites: false,
         return_shape_functions: HashMap::new(),
+        // #7170 R1. Purely structural — no barrier flag feeds it, and it is
+        // read only through `closure_binding_func`, whose every consumer treats
+        // `None` as "take no seed". Computed here rather than lazily so the one
+        // module-wide walk it needs happens once.
+        closure_bindings: super::spec_abi_sites::single_binding_closure_locals(hir),
     };
 
     // #7139: resolve the CommonJS wrap's `exports` / `require` scaffolding
@@ -649,6 +678,7 @@ mod tests {
             numarray_prototype_index_barriers: false,
             freeze_barrier_sites: false,
             return_shape_functions: HashMap::new(),
+            closure_bindings: HashMap::new(),
         }
     }
 

@@ -477,22 +477,27 @@ fn a_return_in_a_plain_function_is_still_a_rule_1_denial() {
     );
 }
 
-/// #7170 §6, as a test rather than a comment: **91.6% of dependency-JS
-/// allocation sites are in closure regions, and none of them is served.**
-/// `collect_return_shape_functions` issues facts only for `hir.functions`
-/// entries and the caller-side seed only fires on a bare `Expr::FuncRef`
-/// callee, which a closure call never is. A classifier that keyed servedness
-/// on the syntax of the returns alone — rather than on the fact — would mark
-/// this whole population served and delete the wall it is supposed to measure.
+/// A closure region **without** a return-shape fact is an ordinary rule-1
+/// denial — the closure half of `a_return_in_a_plain_function_…`.
+///
+/// R0 asserted the stronger statement (*no* closure is ever served) and that
+/// was the honest measurement then: `collect_return_shape_functions` issued
+/// facts only for `hir.functions` entries and the caller-side seed only fired
+/// on a bare `Expr::FuncRef` callee, which a closure call never is. #7170 R1
+/// makes both halves reach a closure, so the surviving assertion is the one
+/// that still bites: servedness keys on the FACT, never on the syntax of the
+/// returns. A classifier that read the return shape alone would mark this
+/// whole population — 91.6% of dependency-JS allocation sites (#7170 §2) —
+/// served and delete the wall it is supposed to measure.
 #[test]
-fn a_closure_region_never_reports_a_served_return() {
+fn a_closure_region_without_the_fact_is_still_a_rule_1_denial() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
     let stmts = vec![Stmt::Return(Some(new_c()))];
 
     let session = Session::start();
-    let _guard = crate::opt_report::enter_closure("mk", 7);
+    let _guard = crate::opt_report::enter_closure("mk", 7, false);
     let _ = run(&stmts, &classes);
     drop(_guard);
     let entries = session.entries();
@@ -502,8 +507,42 @@ fn a_closure_region_never_reports_a_served_return() {
     assert_eq!(
         rows[0].rule.as_deref(),
         Some("rule 1 (provenance)"),
-        "a closure body cannot carry a return-shape fact"
+        "servedness must come from the fact, not from the return's syntax"
     );
+    assert_eq!(
+        rows[0].tier,
+        Some(crate::opt_report::Tier::CompilerLimitation)
+    );
+}
+
+/// #7170 R1: a closure region **with** a return-shape fact reports its return
+/// site as served, exactly as a function region does.
+///
+/// This is what stops `codegen/closure.rs` reverting to R0's hard-coded
+/// `false`: with the flag pinned off, every CommonJS module's producer sites
+/// go back into the rule-1 bucket schedulers read, while the compiler is in
+/// fact serving them. Paired with the test above, the two directions cannot
+/// both be satisfied by a constant.
+#[test]
+fn a_closure_region_with_the_fact_reports_a_served_return() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(new_c()))];
+
+    let session = Session::start();
+    let _guard = crate::opt_report::enter_closure("mk", 7, true);
+    let _ = run(&stmts, &classes);
+    drop(_guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].rule.as_deref(),
+        Some("rule 1 (provenance) — already served by return-shape"),
+    );
+    assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
 }
 
 /// Only the RETURN position is served, across both nesting shapes a `return`

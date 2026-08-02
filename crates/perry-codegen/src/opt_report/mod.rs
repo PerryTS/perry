@@ -556,15 +556,19 @@ struct Scope {
     /// (`collectors/ptr_shape_returns.rs`, #7107), so its `return new C(...)`
     /// sites already feed an existing mechanism.
     ///
-    /// Set by exactly one caller — [`enter_function_region`], from
-    /// `codegen/function.rs`, which is the only place that holds both the
-    /// `FuncId` and `ModuleDispatchFacts`. Every other region (method, closure,
-    /// module-init) leaves it `false`, and that is CORRECT rather than
-    /// conservative: `collect_return_shape_functions` issues facts only for
-    /// `hir.functions` entries, and the caller-side seed
-    /// (`find_return_shape_candidates`) only fires on a bare `Expr::FuncRef`
-    /// callee — which a closure call never is. #7170 §6 is precisely the
-    /// measurement that closures are *not* served.
+    /// Set by exactly two callers — [`enter_function_region`] from
+    /// `codegen/function.rs` and [`enter_closure`] from `codegen/closure.rs`,
+    /// the only two places that hold both a `FuncId` and `ModuleDispatchFacts`.
+    ///
+    /// #7170 R1: the closure arm is not a widening of the report, it tracks a
+    /// widening of the mechanism. R0 recorded here that a closure could never
+    /// be served, because `collect_return_shape_functions` issued facts only
+    /// for `hir.functions` entries and the caller-side seed fired only on a
+    /// bare `Expr::FuncRef`. R1 makes both halves reach a closure, so a closure
+    /// region CAN now be a producer and reporting otherwise would put a served
+    /// site back in the rule-1 bucket schedulers read. Method and module-init
+    /// regions still leave it `false` and that is still correct — neither is a
+    /// `FuncId`-keyed producer.
     return_shape_producer: bool,
 }
 
@@ -704,7 +708,17 @@ pub(crate) fn enter(module: &str, function: &str, region: RegionKind) -> ScopeGu
 /// Like [`enter`], for a closure body. `func_id` resolves the per-element
 /// callback role recorded by [`scan_module`] — the honest hotness column for
 /// bodies that have no loop of their own (#7034 §8).
-pub(crate) fn enter_closure(function: &str, func_id: u32) -> ScopeGuard {
+///
+/// `return_shape_producer` comes from `ModuleDispatchFacts::return_shape_class`
+/// at the call site, exactly as [`enter_function_region`] takes it. Before
+/// #7170 R1 this was hard-coded `false` and that was a *measurement* — a
+/// closure could not carry the fact. R1 makes it one, so the flag has to be
+/// passed rather than assumed.
+pub(crate) fn enter_closure(
+    function: &str,
+    func_id: u32,
+    return_shape_producer: bool,
+) -> ScopeGuard {
     if !enabled() {
         return ScopeGuard {
             previous: None,
@@ -716,10 +730,7 @@ pub(crate) fn enter_closure(function: &str, func_id: u32) -> ScopeGuard {
         function: function.to_string(),
         region: RegionKind::Closure,
         invoked_per_element: per_element_role(Some(func_id)),
-        // #7170 §6: a closure is never a return-shape producer — the caller-side
-        // seed requires a bare `Expr::FuncRef` callee. This `false` is the
-        // measurement, not a default.
-        return_shape_producer: false,
+        return_shape_producer,
     };
     let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
     ScopeGuard {

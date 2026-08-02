@@ -9,7 +9,7 @@
 use super::*;
 use crate::collectors::PtrShapeLocal;
 use perry_hir::types::{FuncId, Type};
-use perry_hir::{ClassField, Param};
+use perry_hir::{ClassField, Function, Param};
 
 fn field(name: &str) -> ClassField {
     ClassField {
@@ -446,8 +446,13 @@ fn module_barrier_denies_every_fact() {
     assert_eq!(facts.return_shape_class(10), None);
 }
 
-/// Only a direct `Expr::FuncRef` callee names a statically-known function.
-/// A computed callee could be rebound between the fact and the call.
+/// A callee that names nothing statically is not seeded. #7170 R1 widened the
+/// resolution to a `LocalGet` whose binding provably names one closure literal
+/// module-wide, and local 31 here is bound by nothing at all — so it resolves
+/// to `None` and the seed is not taken, exactly as before R1.
+///
+/// Sabotage: make `callee_names_one_function`'s `LocalGet` arm return a fixed
+/// `FuncId` instead of consulting `closure_binding_func` and this fails.
 #[test]
 fn indirect_callee_is_not_seeded() {
     let (facts, c) = facts_for(vec![function(11, "mk", vec![Stmt::Return(Some(new_c()))])]);
@@ -460,7 +465,7 @@ fn indirect_callee_is_not_seeded() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
-                // A closure value in a local, not a FuncRef.
+                // A local the module never binds — nothing to resolve to.
                 callee: Box::new(Expr::LocalGet(31)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -587,4 +592,453 @@ fn boxed_producer_local_gets_no_fact() {
     ];
     let (facts, _) = facts_for(vec![function(16, "boxy", body)]);
     assert_eq!(facts.return_shape_class(16), None);
+}
+
+// ── #7170 R1: the mechanism inside Perry's own CommonJS IIFE ───────────────
+//
+// `cjs_wrap` emits every CommonJS module body inside `const _cjs = (function
+// () { … })();`, so a module-level `function` declaration never reaches
+// `hir.functions` — it lowers to `Stmt::Let { init: Expr::Closure }` inside
+// that IIFE, and a call to it to `Call { callee: LocalGet(id) }`. Both halves
+// of #7107 missed it, and #7170 §2 measured 91.6% of dependency-JS allocation
+// sites in `closure` regions as a result.
+//
+// The shapes below are transcribed from `--print-hir` of the §6 `p8_iife`
+// probe, `PreallocateBoxes` included: a hoisted inner `function` referenced
+// from a sibling closure is box-backed by construction
+// (`lower_decl/block.rs`), so a proof that refused boxed callees would refuse
+// the entire population this exists for.
+
+/// `Stmt::Let { id, init: Expr::Closure { func_id, body } }` — how a `function`
+/// declaration inside a function body lowers.
+fn let_closure(id: u32, name: &str, func_id: FuncId, body: Vec<Stmt>) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Closure {
+            func_id,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body,
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        }),
+    }
+}
+
+/// `const <bind> = <callee>()` followed by `<bind>.x = 1`, the caller shape the
+/// seed has to reach. The field store is deliberate: without it
+/// `escape_news.rs` deletes the object outright and the promotion is
+/// `unconsumed — scalar_replaced` (#7170 §6.1).
+fn call_and_store(bind: u32, callee: Expr) -> Vec<Stmt> {
+    vec![
+        Stmt::Let {
+            id: bind,
+            name: "p".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Call {
+                callee: Box::new(callee),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        },
+        store_x(bind),
+    ]
+}
+
+/// The `p8_iife` module: `const _cjs = (function () { function mk() { return
+/// new C(); } function run() { const p = mk(); p.x = 1; return p; } return
+/// run(); })();`, with `mk`'s binding box-backed exactly as the lowering
+/// emits it.
+///
+/// `extra_iife_stmts` is spliced in after the two declarations so a test can
+/// add the one thing that must break the proof.
+fn iife_module(extra_iife_stmts: Vec<Stmt>) -> Module {
+    let mut iife_body = vec![
+        Stmt::PreallocateBoxes(vec![1]),
+        let_closure(1, "mk", 1, vec![Stmt::Return(Some(new_c()))]),
+        let_closure(2, "run", 3, run_body()),
+    ];
+    iife_body.extend(extra_iife_stmts);
+    iife_body.push(Stmt::Return(Some(Expr::Call {
+        callee: Box::new(Expr::LocalGet(2)),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    })));
+
+    let mut hir = Module::new("t");
+    hir.classes.push(class_c());
+    hir.init = vec![Stmt::Let {
+        id: 0,
+        name: "_cjs".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Call {
+            callee: Box::new(match let_closure(99, "iife", 0, iife_body) {
+                Stmt::Let { init: Some(e), .. } => e,
+                _ => unreachable!(),
+            }),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    }];
+    hir
+}
+
+/// `run`'s body: `const p = mk(); p.x = 1; return p;`
+fn run_body() -> Vec<Stmt> {
+    let mut b = call_and_store(9, Expr::LocalGet(1));
+    b.push(Stmt::Return(Some(Expr::LocalGet(9))));
+    b
+}
+
+/// End to end, and the whole point of R1: the producer half reaches a closure
+/// and the consumer half resolves a `LocalGet` callee to it.
+///
+/// Sabotage, each alone: drop the `for_each_module_closure` loop in
+/// `collect_return_shape_functions` (the fact disappears); make
+/// `callee_names_one_function` accept only `Expr::FuncRef` (the seed
+/// disappears). Either one takes this red while every #7107 test stays green,
+/// which is exactly the state `main` is in.
+#[test]
+fn a_function_declared_inside_the_cjs_iife_is_a_producer_and_its_caller_is_seeded() {
+    let hir = iife_module(Vec::new());
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(
+        facts.return_shape_class(1),
+        Some("C"),
+        "a closure literal must be able to carry a return-shape fact"
+    );
+    assert_eq!(
+        facts.closure_binding_func(1),
+        Some(1),
+        "`mk`'s binding must resolve to the closure it is bound to"
+    );
+
+    let c = class_c();
+    let classes = classes_of(&c);
+    assert!(
+        promote(&run_body(), &classes, &facts).contains_key(&9),
+        "`const p = mk()` inside the IIFE must be a Ptr<Shape> candidate"
+    );
+}
+
+/// The `PreallocateBoxes` binding is not incidental: it is what the real
+/// lowering emits for a hoisted `function` referenced from a sibling closure,
+/// and it is the entire dependency-JS population. A binding proof that refused
+/// box-backed callees would be green on every hand-written fixture and dead on
+/// real code.
+#[test]
+fn a_box_backed_callee_binding_is_still_resolved() {
+    let hir = iife_module(Vec::new());
+    assert!(
+        matches!(
+            first_iife_stmt(&hir),
+            Some(Stmt::PreallocateBoxes(ids)) if ids.contains(&1)
+        ),
+        "fixture premise: `mk`'s binding is box-backed"
+    );
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(facts.closure_binding_func(1), Some(1));
+}
+
+fn first_iife_stmt(hir: &Module) -> Option<&Stmt> {
+    let Some(Stmt::Let {
+        init: Some(Expr::Call { callee, .. }),
+        ..
+    }) = hir.init.first()
+    else {
+        return None;
+    };
+    let Expr::Closure { body, .. } = callee.as_ref() else {
+        return None;
+    };
+    body.first()
+}
+
+/// Assert that adding `extra` to the IIFE body kills the binding proof, and
+/// that the seed it kills was really there without it.
+fn binding_is_killed_by(extra: Vec<Stmt>, what: &str) {
+    let hir = iife_module(extra);
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(
+        facts.closure_binding_func(1),
+        None,
+        "{what} must disqualify the callee binding"
+    );
+    let c = class_c();
+    let classes = classes_of(&c);
+    assert!(
+        !promote(&run_body(), &classes, &facts).contains_key(&9),
+        "{what} must also stop the caller-side seed"
+    );
+}
+
+/// A reassignment ANYWHERE in the module — including inside a sibling closure,
+/// which is where a CommonJS module actually puts them — means the callee no
+/// longer names one body.
+///
+/// Sabotage: drop the `!scan.writes.contains(id)` conjunct in
+/// `single_binding_closure_locals` and this fails.
+#[test]
+fn a_reassigned_callee_binding_is_not_resolved() {
+    binding_is_killed_by(
+        vec![Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Undefined)))],
+        "a bare reassignment",
+    );
+    // …and the same write hidden inside a closure body, which is the position
+    // a per-region scan would miss.
+    binding_is_killed_by(
+        vec![Stmt::Expr(Expr::Closure {
+            func_id: 77,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Undefined)))],
+            captures: vec![1],
+            mutable_captures: vec![1],
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        })],
+        "a reassignment inside a sibling closure",
+    );
+}
+
+/// Two `Stmt::Let`s on one id (the `var` re-declaration shape) means the
+/// binding is not unique, so the callee is whichever ran last.
+///
+/// Sabotage: drop the `let_counts == 1` conjunct and this fails.
+#[test]
+fn a_twice_bound_callee_binding_is_not_resolved() {
+    binding_is_killed_by(
+        vec![let_closure(1, "mk", 42, vec![Stmt::Return(Some(new_c()))])],
+        "a second binding of the same id",
+    );
+}
+
+/// `with (o) { mk = v }` stores into the LOCAL when `o` does not bind the name.
+/// The id lives in `WithSetFallback`, not in a child expression, so the
+/// module-wide walker could not see it before R1 added the arm.
+///
+/// Sabotage: delete the `Expr::WithSet` arm in
+/// `spec_abi_sites.rs::record_expr_use` and this fails.
+#[test]
+fn a_with_statement_write_disqualifies_the_callee_binding() {
+    binding_is_killed_by(
+        vec![Stmt::Expr(Expr::WithSet {
+            object: Box::new(Expr::Undefined),
+            property: "mk".to_string(),
+            value: Box::new(Expr::Undefined),
+            fallback: perry_hir::WithSetFallback::Local(1),
+            strict: false,
+        })],
+        "a `with` fallback store",
+    );
+}
+
+/// A `catch (mk)` clause rebinds the id for the duration of the handler, and
+/// `let_counts` cannot see it.
+///
+/// Sabotage: drop the `c.param` recording in `spec_abi_sites.rs`'s `Stmt::Try`
+/// arm and this fails.
+#[test]
+fn a_catch_bound_callee_id_is_not_resolved() {
+    binding_is_killed_by(
+        vec![Stmt::Try {
+            body: Vec::new(),
+            catch: Some(perry_hir::CatchClause {
+                param: Some((1, "mk".to_string())),
+                body: Vec::new(),
+            }),
+            finally: None,
+        }],
+        "a catch binding on the same id",
+    );
+}
+
+/// A parameter is written by the CALLER, which neither `let_counts` nor
+/// `writes` records. `var` hoisting can reuse a parameter's id for a body
+/// `var`, so a single-`Let`-and-no-writes id can still have held an argument
+/// before that `Let` ran.
+///
+/// Sabotage: drop `record_param_bindings` / the closure-param recording and
+/// this fails.
+#[test]
+fn a_callee_id_that_is_also_a_parameter_is_not_resolved() {
+    let mut hir = iife_module(Vec::new());
+    let mut f = function(60, "outer", vec![Stmt::Return(Some(new_c()))]);
+    f.params = vec![Param {
+        id: 1,
+        name: "mk".to_string(),
+        ty: Type::Any,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    }];
+    hir.functions.push(f);
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(facts.closure_binding_func(1), None);
+}
+
+/// A callee bound to something that is not a closure literal resolves to
+/// nothing — the map is a whitelist, so widening the seed set cannot make one
+/// of these appear.
+#[test]
+fn a_non_closure_binding_is_not_resolved() {
+    let hir = iife_module(Vec::new());
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(
+        facts.closure_binding_func(0),
+        None,
+        "`_cjs` is bound to a Call, not a Closure"
+    );
+    assert_eq!(facts.closure_binding_func(9), None, "`p` likewise");
+}
+
+/// Producer-side context exclusions, in the closure spellings.
+///
+/// `is_async` and `is_generator` live on the closure; the CPS-rewritten async
+/// closure CLEARS `is_async` and is identified only by
+/// `Module::async_step_closures`, so the flag alone would let it through.
+///
+/// Sabotage: drop any one conjunct of `boxed_or_resumable` in the closure arm
+/// and the matching case here fails.
+#[test]
+fn an_async_or_generator_closure_producer_gets_no_fact() {
+    for (label, mutate) in [
+        (
+            "async",
+            Box::new(|hir: &mut Module| set_mk_flag(hir, true, false)) as Box<dyn Fn(&mut Module)>,
+        ),
+        (
+            "generator",
+            Box::new(|hir: &mut Module| set_mk_flag(hir, false, true)),
+        ),
+        (
+            "async-step",
+            Box::new(|hir: &mut Module| {
+                hir.async_step_closures.insert(1);
+            }),
+        ),
+    ] {
+        let mut hir = iife_module(Vec::new());
+        mutate(&mut hir);
+        let facts = super::super::collect_module_dispatch_facts(&hir);
+        assert_eq!(
+            facts.return_shape_class(1),
+            None,
+            "a {label} closure producer must carry no return-shape fact"
+        );
+    }
+    // The control: untouched, the same fixture DOES carry the fact, so none of
+    // the three above is passing because the fixture stopped working.
+    let facts = super::super::collect_module_dispatch_facts(&iife_module(Vec::new()));
+    assert_eq!(facts.return_shape_class(1), Some("C"));
+}
+
+fn set_mk_flag(hir: &mut Module, async_: bool, generator: bool) {
+    let Some(Stmt::Let {
+        init: Some(Expr::Call { callee, .. }),
+        ..
+    }) = hir.init.first_mut()
+    else {
+        panic!("fixture shape");
+    };
+    let Expr::Closure { body, .. } = callee.as_mut() else {
+        panic!("fixture shape");
+    };
+    for s in body.iter_mut() {
+        if let Stmt::Let {
+            id: 1,
+            init:
+                Some(Expr::Closure {
+                    is_async,
+                    is_generator,
+                    ..
+                }),
+            ..
+        } = s
+        {
+            *is_async = async_;
+            *is_generator = generator;
+            return;
+        }
+    }
+    panic!("fixture shape: no `mk` binding");
+}
+
+/// Freshness still has to be discharged through the wrapper: a closure that
+/// hands back something it did not allocate carries no fact, exactly as the
+/// `hir.functions` arm requires.
+///
+/// Sabotage: skip the `collect_shape_proven_ptr_locals` body proof for the
+/// closure arm and this fails.
+#[test]
+fn a_closure_producer_returning_a_cached_value_gets_no_fact() {
+    let mut hir = iife_module(Vec::new());
+    let Some(Stmt::Let {
+        init: Some(Expr::Call { callee, .. }),
+        ..
+    }) = hir.init.first_mut()
+    else {
+        panic!("fixture shape");
+    };
+    let Expr::Closure { body, .. } = callee.as_mut() else {
+        panic!("fixture shape");
+    };
+    for s in body.iter_mut() {
+        if let Stmt::Let {
+            id: 1,
+            init: Some(Expr::Closure { body, .. }),
+            ..
+        } = s
+        {
+            // `return CACHE` — a local this body never allocated.
+            *body = vec![Stmt::Return(Some(Expr::LocalGet(500)))];
+        }
+    }
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(facts.return_shape_class(1), None);
+}
+
+/// The recursion invariant R1 inherits: `collect_return_shape_functions`
+/// re-enters `collect_shape_proven_ptr_locals` over each producer body while
+/// `return_shape_functions` is still empty. `closure_bindings` IS populated by
+/// then, so the seed can now RESOLVE a callee during that re-entry — and must
+/// still take no seed, because the class map it then consults is empty.
+///
+/// `mk` calling `mk2` and `mk2` calling `mk` is the shape that would diverge.
+#[test]
+fn mutually_calling_closure_producers_terminate() {
+    let mut hir = Module::new("t");
+    hir.classes.push(class_c());
+    let mut inner = call_and_store(20, Expr::LocalGet(11));
+    inner.push(Stmt::Return(Some(new_c())));
+    let mut inner2 = call_and_store(21, Expr::LocalGet(10));
+    inner2.push(Stmt::Return(Some(new_c())));
+    hir.init = vec![
+        let_closure(10, "mk", 1, inner),
+        let_closure(11, "mk2", 2, inner2),
+    ];
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(facts.return_shape_class(1), Some("C"));
+    assert_eq!(facts.return_shape_class(2), Some("C"));
 }

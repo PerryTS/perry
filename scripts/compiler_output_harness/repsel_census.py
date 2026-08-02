@@ -199,6 +199,21 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
     # CLAUDE.md failure mode 4, exactly. Three promotions: the pushed producer,
     # the `rows[i]` binding, and the `for…of` binding.
     "fixture_ptr_shape_elements": {"ptr-shape": 3, "ptr-shape-consumed": 3},
+    # #7170 R1 (Perry's own CommonJS IIFE). Byte-for-byte the same proof as
+    # `fixture_ptr_shape`, wrapped in `(function () { … })()` and nothing else.
+    # Inside that wrapper `mk` is not a `hir.functions` entry but a
+    # `Stmt::Let { init: Expr::Closure }`, and `mk(i)` is
+    # `Call { callee: LocalGet(id) }` — neither of which #7107's two halves
+    # accepted, which is why 91.6% of dependency-JS allocation sites sat in
+    # `closure` regions with no mechanism reaching them (#7170 §2/§6).
+    #
+    # Reverting either half of R1 takes this fixture to 0 while
+    # `fixture_ptr_shape` stays at 1: that one is at module scope and never
+    # needed the closure arm. The `-consumed` floor is the second half of the
+    # assertion — the fixture carries an in-loop field store precisely so
+    # `escape_news.rs` cannot delete the object and report a promotion that
+    # emits nothing (#7170 §6.1).
+    "fixture_ptr_shape_cjs_iife": {"ptr-shape": 1, "ptr-shape-consumed": 1},
     "fixture_ptr_numarray": {"ptr-numarray": 1},
     "fixture_canonical_slots": {
         "canonical-i32": 1,
@@ -320,7 +335,31 @@ REFUSAL_FLOORS: dict[str, dict[str, int]] = {
 #: coding `false` in `codegen/function.rs`, or dropping the fact conjunct in
 #: `deny_alloc_site`, takes it red while every compiler unit test still passes,
 #: because those set the report scope by hand.
+#: #7170 R1 added a second workload to this table for a reason the first one
+#: cannot cover. `fixture_alloc_buckets` is module-scope code, so its served row
+#: exercises `codegen/function.rs`. The served flag for a CLOSURE region is set
+#: in `codegen/closure.rs`, and **no compiler unit test can reach that wiring** —
+#: every one of them sets the report scope by hand, so hard-coding `false`
+#: (R0's shipped value) or `true` there leaves all 515 of them green. Measured:
+#: both sabotage arms are green holes in `cargo test` and red only here.
+#:
+#: The two rows are the two directions, and `fixture_ptr_shape_cjs_iife` is
+#: written to land one allocation in each from inside the same IIFE:
+#:
+#:   * `mk` carries a return-shape fact  -> its `{ x, y }` is SERVED
+#:   * `maybe` cannot (its returns disagree) -> its `{ tag }` is UNSERVED
+#:
+#: Pinning `false` empties the served row; pinning `true` empties the unserved
+#: one. Neither can be satisfied by a constant.
 ALLOC_BUCKET_FLOORS: dict[str, dict[tuple[str, str, str], int]] = {
+    "fixture_ptr_shape_cjs_iife": {
+        ("ptr-shape", "return", "rule 1 (provenance)"): 1,
+        (
+            "ptr-shape",
+            "return",
+            "rule 1 (provenance) — already served by return-shape",
+        ): 1,
+    },
     "fixture_alloc_buckets": {
         ("ptr-shape", "constructor argument", "rule 1 (provenance)"): 1,
         ("ptr-shape", "object literal property value", "rule 1 (provenance)"): 1,
@@ -1409,9 +1448,44 @@ def self_test(_args: argparse.Namespace) -> int:
         alloc_bucket_key("ptr-shape", c, r): 1 for c, r in bucket_rows
     }, buckets["alloc_buckets"]
 
-    fixture = next(iter(ALLOC_BUCKET_FLOORS))
-    good = {fixture: {"counts": buckets["counts"], **buckets}}
+    # Named, not `next(iter(...))`: #7170 R1 added a second fixture to the
+    # table, and an implicit "first entry" would have silently retargeted every
+    # sabotage assertion below at a fixture with different bucket rows.
+    fixture = "fixture_alloc_buckets"
+    assert fixture in ALLOC_BUCKET_FLOORS, sorted(ALLOC_BUCKET_FLOORS)
+    # Every fixture in the table has to be satisfiable from its own floors, or
+    # the table describes a shape nothing produces.
+    good = {
+        name: {
+            "counts": buckets["counts"],
+            "alloc_buckets": {
+                alloc_bucket_key(a, c, r): n for (a, c, r), n in minimums.items()
+            },
+        }
+        for name, minimums in ALLOC_BUCKET_FLOORS.items()
+    }
+    good[fixture]["alloc_buckets"] = dict(buckets["alloc_buckets"])
     assert not check_alloc_bucket_floors(good), check_alloc_bucket_floors(good)
+
+    # #7170 R1: the closure-region fixture's two rows are the two DIRECTIONS of
+    # the served classification, and `codegen/closure.rs` is wiring no compiler
+    # unit test can reach. Dropping either row must be red on its own.
+    closure_fixture = "fixture_ptr_shape_cjs_iife"
+    assert closure_fixture in ALLOC_BUCKET_FLOORS, sorted(ALLOC_BUCKET_FLOORS)
+    for dropped, expect in (
+        ("rule 1 (provenance) — already served by return-shape", "served"),
+        ("rule 1 (provenance)", "return"),
+    ):
+        one_sided = json.loads(json.dumps(good))
+        one_sided[closure_fixture]["alloc_buckets"] = {
+            k: v
+            for k, v in one_sided[closure_fixture]["alloc_buckets"].items()
+            if not k.endswith("| " + dropped)
+        }
+        failures = check_alloc_bucket_floors(one_sided)
+        assert any(
+            closure_fixture in f and expect in f for f in failures
+        ), (dropped, failures)
 
     # Re-merging the two literal buckets — the #7170 §5.1 defect — is red.
     merged = json.loads(json.dumps(good))

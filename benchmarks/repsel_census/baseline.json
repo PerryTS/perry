@@ -98,6 +98,39 @@
       "alloc_buckets": {}
     },
     {
+      "name": "fixture_ptr_shape_cjs_iife",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape_cjs_iife.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-shape-consumed": 1,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 3,
+        "ptr-numarray": 0,
+        "canonical-slot": 1,
+        "int-valued-ta": 0,
+        "spec-abi": 0
+      },
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {
+        "class_field_get.shape_proven_load": 1,
+        "ptr_shape_set": 1
+      },
+      "alloc_contexts": {},
+      "alloc_buckets": {
+        "ptr-shape | return | rule 1 (provenance) \u2014 already served by return-shape": 1,
+        "ptr-shape | return | rule 1 (provenance)": 1
+      }
+    },
+    {
       "name": "fixture_alloc_buckets",
       "role": "liveness",
       "source": "benchmarks/repsel_census/fixtures/fixture_alloc_buckets.ts",
@@ -805,5 +838,5 @@
       "alloc_buckets": {}
     }
   ],
-  "generated_at": "2026-08-01T09:57:46.100718Z"
+  "generated_at": "2026-08-02T04:34:29.412488Z"
 }

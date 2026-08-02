@@ -141,6 +141,48 @@ pub(crate) fn local_is_reassigned(stmts: &[Stmt], id: u32) -> bool {
     reassigned_locals(stmts).contains(&id)
 }
 
+/// Module-wide: every local that provably names ONE closure literal, mapped to
+/// that closure's `FuncId` (#7170 R1).
+///
+/// The binding must be, module-wide:
+///
+/// * bound by **exactly one** `Stmt::Let` (`let_counts == 1`), whose init is an
+///   `Expr::Closure`;
+/// * never reassigned at any depth, in any body — `writes` already covers
+///   `LocalSet` / `GlobalSet` / `Update` inside nested closures, which is the
+///   position that matters here (the CommonJS shape this exists for reads the
+///   binding from inside a *sibling* closure);
+/// * never bound by anything other than that `Let` — a function/closure
+///   parameter or a `catch` clause binding of the same id (`other_bindings`).
+///
+/// Those three make "`LocalGet(id)` in callee position names the function
+/// `Expr::Closure { func_id }` lowers" the same statement `Expr::FuncRef(id)`
+/// makes directly, which is the only property
+/// `collectors/ptr_shape_returns.rs`'s caller-side seed needs of a callee.
+/// Deliberately **not** required: that the binding is unboxed or uncaptured.
+/// A hoisted `function` declaration referenced from a sibling closure is
+/// `PreallocateBoxes`-boxed by construction (`lower_decl/block.rs`), and that
+/// is the entire population #7170 §6 measured — a box holds the same one
+/// closure value the single `Let` wrote into it.
+///
+/// This is NOT `FnCtx::local_closure_func_ids`, which `lower_call` pairs with a
+/// runtime `js_typed_feedback_closure_direct_call_guard` precisely because it
+/// is populated in statement order and a later rebinding can invalidate it.
+/// A `Ptr<Shape>` proof licenses a guard-free field load, so it needs the
+/// static statement, not the speculative one.
+pub(crate) fn single_binding_closure_locals(hir: &Module) -> HashMap<u32, u32> {
+    let scan = scan_whole_module(hir);
+    scan.let_closures
+        .iter()
+        .filter(|(id, _)| {
+            scan.let_counts.get(*id).copied() == Some(1)
+                && !scan.writes.contains(*id)
+                && !scan.other_bindings.contains(*id)
+        })
+        .map(|(id, func_id)| (*id, *func_id))
+        .collect()
+}
+
 /// Module-wide structural facts gathered in one walk.
 #[derive(Default)]
 struct ModuleScan {
@@ -162,6 +204,18 @@ struct ModuleScan {
     /// value would yield the box address, so these can never be `TaPtr`
     /// bindings.
     boxed_prealloc: HashSet<u32>,
+    /// #7170 R1: `Stmt::Let { id, init: Expr::Closure { func_id } }` — the id
+    /// the closure literal was bound to, and which function it lowers. Recorded
+    /// unconditionally; [`single_binding_closure_locals`] applies the
+    /// uniqueness and no-reassignment conditions.
+    let_closures: HashMap<u32, u32>,
+    /// #7170 R1: ids bound by something that is not a `Stmt::Let` — a function
+    /// or closure **parameter**, or a `catch` clause binding. `let_counts`
+    /// cannot see either, and `var` hoisting can reuse a parameter's id for a
+    /// body `var` (`function f(x) { var x = function(){} }`), so a
+    /// single-`Let`-plus-no-writes id can still have held the caller's argument
+    /// before that `Let` ran.
+    other_bindings: HashSet<u32>,
 }
 
 fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
@@ -215,6 +269,22 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             record_expr_use(key, depth, scan);
             record_expr_use(value, depth, scan);
         }
+        // `with (o) { x = v }` stores into the LOCAL `x` when `o` does not bind
+        // the name, so the fallback names a reassignment target. The id lives
+        // in `WithSetFallback`, not in a child expression, so the walker below
+        // cannot reach it — a hole this scan carried since it was written, and
+        // one #7170 R1's callee proof would inherit.
+        Expr::WithSet { fallback, .. } => {
+            if let perry_hir::WithSetFallback::Local(id)
+            | perry_hir::WithSetFallback::SloppyImplicit(id) = fallback
+            {
+                scan.writes.insert(*id);
+                if depth > 0 {
+                    scan.closure_refs.insert(*id);
+                }
+            }
+            perry_hir::walker::walk_expr_children(e, &mut |c| record_expr_use(c, depth, scan));
+        }
         // `new Int32Array(src)` consumes `src` by COPY (non-view: the arg is
         // not an ArrayBuffer when the binding proof later demands it), so the
         // ctor-arg position cannot change `src`'s length afterwards. Length
@@ -238,6 +308,9 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
                 scan.closure_refs.insert(*c);
             }
             for p in params {
+                // #7170 R1: a parameter is a binding written by the CALLER,
+                // which `let_counts` and `writes` both miss.
+                scan.other_bindings.insert(p.id);
                 if let Some(default) = &p.default {
                     record_expr_use(default, depth + 1, scan);
                 }
@@ -254,6 +327,15 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         _ => {
             perry_hir::walker::walk_expr_children(e, &mut |c| record_expr_use(c, depth, scan));
         }
+    }
+}
+
+/// #7170 R1: parameter ids of a top-level function, constructor, method or
+/// accessor. A parameter is bound by the caller, which neither `let_counts`
+/// nor `writes` records.
+fn record_param_bindings(params: &[perry_hir::Param], scan: &mut ModuleScan) {
+    for p in params {
+        scan.other_bindings.insert(p.id);
     }
 }
 
@@ -282,6 +364,10 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
             *scan.let_counts.entry(*id).or_insert(0) += 1;
             if depth > 0 {
                 scan.closure_refs.insert(*id);
+            }
+            // #7170 R1: which closure literal this binding names, if any.
+            if let Some(Expr::Closure { func_id, .. }) = init {
+                scan.let_closures.insert(*id, *func_id);
             }
             if let Some(e) = init {
                 record_expr_use(e, depth, scan);
@@ -337,6 +423,11 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
         } => {
             walk_stmts(body, depth, scan);
             if let Some(c) = catch {
+                // #7170 R1: the catch binding is a binding `let_counts` never
+                // sees.
+                if let Some((id, _)) = &c.param {
+                    scan.other_bindings.insert(*id);
+                }
                 walk_stmts(&c.body, depth, scan);
             }
             if let Some(f) = finally {
@@ -366,23 +457,29 @@ fn scan_whole_module(hir: &Module) -> ModuleScan {
     let mut scan = ModuleScan::default();
     walk_stmts(&hir.init, 0, &mut scan);
     for f in &hir.functions {
+        record_param_bindings(&f.params, &mut scan);
         walk_stmts(&f.body, 0, &mut scan);
     }
     for c in &hir.classes {
         if let Some(ctor) = &c.constructor {
+            record_param_bindings(&ctor.params, &mut scan);
             walk_stmts(&ctor.body, 0, &mut scan);
         }
         for m in c.methods.iter().chain(c.static_methods.iter()) {
+            record_param_bindings(&m.params, &mut scan);
             walk_stmts(&m.body, 0, &mut scan);
         }
         for (_, g) in &c.getters {
+            record_param_bindings(&g.params, &mut scan);
             walk_stmts(&g.body, 0, &mut scan);
         }
         for (_, s) in &c.setters {
+            record_param_bindings(&s.params, &mut scan);
             walk_stmts(&s.body, 0, &mut scan);
         }
         for cm in &c.computed_members {
             record_expr_use(&cm.key_expr, 0, &mut scan);
+            record_param_bindings(&cm.function.params, &mut scan);
             walk_stmts(&cm.function.body, 0, &mut scan);
         }
         for field in c.fields.iter().chain(c.static_fields.iter()) {

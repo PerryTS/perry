@@ -777,7 +777,18 @@ pub(super) fn compile_closure(
         .get(&func_id)
         .cloned()
         .unwrap_or_else(|| format!("closure#{func_id}"));
-    let _opt_report_scope = crate::opt_report::enter_closure(&opt_report_name, func_id);
+    // #7170 R1: a closure CAN carry a return-shape fact now — the CommonJS
+    // wrapper's IIFE makes every module-level `function` declaration one — so
+    // the served classification has to be told, exactly as
+    // `codegen/function.rs` tells it. Read by nothing but the report.
+    let _opt_report_scope = crate::opt_report::enter_closure(
+        &opt_report_name,
+        func_id,
+        cross_module
+            .module_dispatch
+            .return_shape_class(func_id)
+            .is_some(),
+    );
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         body,
         &[],

@@ -87,11 +87,30 @@
 
 use std::collections::{HashMap, HashSet};
 
-use perry_hir::{Class, Expr, Function, Module, Stmt};
+use perry_hir::types::Type;
+use perry_hir::{Class, Expr, Module, Stmt};
 
 use super::ptr_shape::{chain_admissible, ptr_shape_locals_enabled};
 use super::ptr_shape_report as report;
 use super::ModuleDispatchFacts;
+
+/// The producer-side view of one candidate body — the five things
+/// [`producer_return_class`] needs, and nothing else.
+///
+/// #7170 R1: a `hir.functions` entry and an `Expr::Closure` are the same thing
+/// to this proof, but they are different Rust types with differently-spelled
+/// context flags (`Function::was_plain_async` versus
+/// `Module::async_step_closures`). Projecting both onto one struct is what
+/// stops the closure arm from quietly proving something weaker than the
+/// function arm — the two callers below fill exactly the same fields.
+struct ProducerBody<'a> {
+    /// Any context that routes body locals through a shared mutable cell, or
+    /// whose `return` is not a single-exit terminator: `async`, generator, and
+    /// the CPS-rewritten async-step form of either.
+    boxed_or_resumable: bool,
+    return_type: &'a Type,
+    body: &'a [Stmt],
+}
 
 /// Module pre-pass: which module-level functions carry a return-shape fact.
 ///
@@ -99,6 +118,10 @@ use super::ModuleDispatchFacts;
 /// `return_shape_functions` map still EMPTY — the per-producer proof re-enters
 /// [`super::ptr_shape::collect_shape_proven_ptr_locals`], which consults that
 /// map, and an empty map is what makes the recursion impossible.
+/// `facts.closure_bindings` is already populated when this runs and that is
+/// harmless for the same reason: the caller-side seed
+/// ([`find_return_shape_candidates`]) resolves a callee through it and then
+/// asks `return_shape_class`, which is still empty, so no seed is taken.
 pub(crate) fn collect_return_shape_functions(
     facts: &ModuleDispatchFacts,
     hir: &Module,
@@ -113,16 +136,113 @@ pub(crate) fn collect_return_shape_functions(
         .map(|c| (c.name.clone(), c))
         .collect::<HashMap<_, _>>();
     for f in &hir.functions {
-        if let Some(class_name) = producer_return_class(f, &classes, facts) {
+        let view = ProducerBody {
+            boxed_or_resumable: f.is_async || f.is_generator || f.was_plain_async,
+            return_type: &f.return_type,
+            body: &f.body,
+        };
+        if let Some(class_name) = producer_return_class(&view, &classes, facts) {
             out.insert(f.id, class_name);
         }
     }
+    // #7170 R1: every closure literal in the module is a producer candidate
+    // too. Perry's own `cjs_wrap` emits each CommonJS module body inside an
+    // IIFE, so a module-level `function` declaration never reaches
+    // `hir.functions` at all — it lowers to `Stmt::Let { init: Expr::Closure }`
+    // inside that IIFE's body. #7170 §6 measured a probe that promotes and is
+    // consumed as a plain module and is *not even a candidate* wrapped, and
+    // §2 measured 91.6% of dependency-JS allocation sites in `closure` regions.
+    //
+    // The fact is keyed by `FuncId`, which `Expr::Closure` carries and which
+    // shares one module-wide counter with `hir.functions` (`fresh_func`), so
+    // no key can mean two things.
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut closure_facts: Vec<(u32, String)> = Vec::new();
+    for_each_module_closure(hir, &mut |closure| {
+        let Expr::Closure {
+            func_id,
+            return_type,
+            body,
+            is_async,
+            is_generator,
+            ..
+        } = closure
+        else {
+            return;
+        };
+        let func_id = *func_id;
+        if !seen.insert(func_id) {
+            return;
+        }
+        let view = ProducerBody {
+            // The closure spellings of the same three exclusions
+            // `codegen/closure.rs` maps onto the body gate's rule names:
+            // `is_async`, a `function*` expression, and the CPS-rewritten
+            // async closure (whose rewrite CLEARS `is_async`, so the flag alone
+            // would not catch it). A generator closure whose transform already
+            // ran has `is_generator` cleared too and is caught by
+            // `body_returns_generator_object`.
+            boxed_or_resumable: *is_async
+                || *is_generator
+                || hir.async_step_closures.contains(&func_id)
+                || crate::codegen::helpers::function_body_returns_generator_object(body),
+            return_type,
+            body,
+        };
+        if let Some(class_name) = producer_return_class(&view, &classes, facts) {
+            closure_facts.push((func_id, class_name));
+        }
+    });
+    out.extend(closure_facts);
     out
 }
 
-/// The class a call to `f` provably returns, or `None`.
+/// Visit every expression of every executable body in the module, including
+/// inside nested closure bodies.
+///
+/// Reuses `scalar_method_dispatch`'s own walker over the same body list
+/// `collect_module_dispatch_facts` scans for barriers, so a closure this pass
+/// proves and a barrier that pass finds are drawn from one set of bodies.
+/// A closure that neither reaches simply carries no fact, which is the safe
+/// direction.
+fn for_each_module_closure(hir: &Module, f: &mut dyn FnMut(&Expr)) {
+    use super::scalar_method_dispatch::{for_each_expr, for_each_expr_in_stmts};
+
+    for_each_expr_in_stmts(&hir.init, f);
+    for func in &hir.functions {
+        for_each_expr_in_stmts(&func.body, f);
+    }
+    for c in &hir.classes {
+        if let Some(ctor) = &c.constructor {
+            for_each_expr_in_stmts(&ctor.body, f);
+        }
+        for m in c
+            .methods
+            .iter()
+            .chain(c.static_methods.iter())
+            .chain(c.getters.iter().map(|(_, g)| g))
+            .chain(c.setters.iter().map(|(_, s)| s))
+            .chain(c.computed_members.iter().map(|m| &m.function))
+        {
+            for_each_expr_in_stmts(&m.body, f);
+        }
+        for field in c.fields.iter().chain(c.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                for_each_expr(init, f);
+            }
+            if let Some(key) = &field.key_expr {
+                for_each_expr(key, f);
+            }
+        }
+        for member in &c.computed_members {
+            for_each_expr(&member.key_expr, f);
+        }
+    }
+}
+
+/// The class a call to this body provably returns, or `None`.
 fn producer_return_class(
-    f: &Function,
+    f: &ProducerBody<'_>,
     classes: &HashMap<String, &Class>,
     facts: &ModuleDispatchFacts,
 ) -> Option<String> {
@@ -130,7 +250,7 @@ fn producer_return_class(
     // the async-to-generator transform boxes body locals into one shared
     // mutable cell, so no containment fact survives it. A generator's `return`
     // is also not a single-exit terminator in the sense rule 2 relies on.
-    if f.is_async || f.is_generator || f.was_plain_async {
+    if f.boxed_or_resumable {
         return None;
     }
     // GC: the caller's binding must be able to GET a shadow slot.
@@ -146,7 +266,7 @@ fn producer_return_class(
     // Calls `pointer_locals`'s own predicate rather than restating it: a second
     // copy drifting by one `Type` variant is precisely how a value ends up
     // unrooted there while this pass treats it as a live movable pointer.
-    if super::pointer_locals::is_definitely_non_pointer_type(&f.return_type) {
+    if super::pointer_locals::is_definitely_non_pointer_type(f.return_type) {
         return None;
     }
     // The body must not be able to fall off its end (module doc).
@@ -155,7 +275,7 @@ fn producer_return_class(
         _ => return None,
     }
     let mut returns = Vec::new();
-    if !collect_own_returns(&f.body, &mut returns) {
+    if !collect_own_returns(f.body, &mut returns) {
         // A bare `return;` — the caller would see `undefined`.
         return None;
     }
@@ -172,7 +292,7 @@ fn producer_return_class(
             Expr::LocalGet(id) => {
                 // Resolved against the producer's own Phase 3b proof below;
                 // find its declared class first so disagreement short-circuits.
-                let c = seeded_class_of_local(&f.body, *id)?;
+                let c = seeded_class_of_local(f.body, *id)?;
                 (c, Some(*id))
             }
             _ => return None,
@@ -202,21 +322,21 @@ fn producer_return_class(
         // `codegen/module_globals_emit.rs` only ever records ids of top-level
         // `hir.init` lets, and every candidate here comes from a `Stmt::Let`
         // inside this function body.
-        let boxed = crate::boxed_vars::collect_boxed_vars(&f.body);
+        let boxed = crate::boxed_vars::collect_boxed_vars(f.body);
         let _quiet = report::SuppressScope::new();
         // #7034 §3: the producer's own element-shape facts, so this body
         // proof reaches the same verdict the real pass will. Passing an empty
         // set instead would make the two disagree, and the aliasing check
         // below needs the facts anyway.
         let elements = super::ptr_shape_elements::collect_element_shape_facts(
-            &f.body,
+            f.body,
             &boxed,
             &HashMap::new(),
             classes,
             facts,
         );
         let promoted = super::ptr_shape::collect_shape_proven_ptr_locals(
-            &f.body,
+            f.body,
             &boxed,
             &HashMap::new(),
             classes,
@@ -357,18 +477,46 @@ pub(crate) fn find_return_shape_candidates(
         if boxed_vars.contains(id) || module_globals.contains_key(id) {
             return;
         }
-        // Only a direct `Expr::FuncRef` callee names one statically-known
-        // function — the same resolution `clamp3_functions` / hot-callee
-        // inlining already rely on. Anything computed could be rebound.
-        let Expr::FuncRef(func_id) = callee.as_ref() else {
+        let Some(func_id) = callee_names_one_function(callee, module_dispatch) else {
             return;
         };
-        if let Some(class_name) = module_dispatch.return_shape_class(*func_id) {
+        if let Some(class_name) = module_dispatch.return_shape_class(func_id) {
             candidates.insert(*id, class_name.to_string());
             seeded.insert(*id);
         }
     });
     seeded
+}
+
+/// The one statically-known function a callee expression names, or `None`.
+///
+/// * `Expr::FuncRef(id)` — a direct function symbol. The original #7107 form,
+///   and the same resolution `clamp3_functions` / hot-callee inlining rely on.
+/// * `Expr::LocalGet(id)` where `id` provably names one closure literal
+///   module-wide (#7170 R1). Perry's own `cjs_wrap` IIFE lowers every CommonJS
+///   module-level `function` declaration to a `Stmt::Let { init: Expr::Closure
+///   }`, so the `FuncRef` form never occurs inside one and #7107 was
+///   structurally unreachable across the CommonJS ecosystem (#7170 §6).
+///
+///   The binding proof — exactly one `Stmt::Let`, never reassigned at any
+///   depth in any body, never also a parameter or `catch` binding — lives in
+///   `collectors/spec_abi_sites.rs::single_binding_closure_locals`, beside the
+///   module-wide reassignment scan it is built from. It makes the same
+///   statement about the callee that `FuncRef` makes directly, and it is the
+///   only property this seed needs of a callee: **which body runs**.
+///   Deliberately NOT the same statement as `FnCtx::local_closure_func_ids`,
+///   which `lower_call` pairs with a runtime
+///   `js_typed_feedback_closure_direct_call_guard` because it is populated in
+///   statement order and a later rebinding invalidates it.
+///
+/// Anything else — a property get, a computed callee, an `ExternFuncRef` —
+/// could resolve to a different body, and yields `None`.
+fn callee_names_one_function(callee: &Expr, module_dispatch: &ModuleDispatchFacts) -> Option<u32> {
+    match callee {
+        Expr::FuncRef(func_id) => Some(*func_id),
+        Expr::LocalGet(local_id) => module_dispatch.closure_binding_func(*local_id),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
