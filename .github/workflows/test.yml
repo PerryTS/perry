@@ -187,6 +187,24 @@ jobs:
       - name: Platform-aware parity allowlist self-test
         run: python3 scripts/parity_known_failures.py --self-test
 
+      # Moving-GC gate wiring. The GC gates are the ones this repo has most
+      # often found unable to fail (CLAUDE.md's four hazards), and every miss so
+      # far was caught by a human re-deriving it mid-incident. This asserts the
+      # mechanical half from `lint`, which IS a required context: each gate job
+      # must actually execute on main-line code (a push to `main`, or the
+      # nightly `schedule` — a tag-only run adjudicates nothing, it fires after
+      # every merge it was supposed to judge), must not carry job-level
+      # `continue-on-error`, must not swallow its gating step's exit status, and
+      # must not let a new merge cancel the previous main run.
+      #
+      # It cannot check branch protection's required-context list — that is
+      # server-side state, not a file in the tree — and says so; `--list` prints
+      # what is and is not covered.
+      - name: Moving-GC gate wiring
+        run: |
+          python3 scripts/gc_gate_wiring_check.py --self-test
+          python3 scripts/gc_gate_wiring_check.py
+
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
@@ -910,14 +928,38 @@ jobs:
   #
   # Cost split: a PR runs the 4-arm subset, whose arms all share one
   # compile-time environment, so the corpus is compiled ONCE and run four
-  # times. push / workflow_dispatch run the full arm list (19 arms, 9 compile
-  # groups) as the deeper net. NOTE: this job is not yet in branch protection's
-  # required contexts — adding it there is what makes the gate blocking.
+  # times. push / schedule / workflow_dispatch run the full arm list as the
+  # deeper net. NOTE: this job is not yet in branch protection's required
+  # contexts — adding it there is what makes the gate blocking.
+  #
+  # ***`schedule` IS LOAD-BEARING IN THE `if:` BELOW (#7194).*** Without it this
+  # job had NO main-line execution at all, and the hole is invisible from either
+  # end on its own:
+  #
+  #   * this workflow's `push:` trigger is TAGS ONLY — "Direct pushes to main do
+  #     NOT trigger tests", stated at the top of this file — so `push` in the
+  #     `if:` only ever means a release tag;
+  #   * the nightly cron, which the concurrency comment above calls "the only
+  #     backstop for integration-suite regressions a scoped PR run can't see",
+  #     fires as `schedule`, which the `if:` did not list. Measured: twelve
+  #     consecutive nightly `main` runs, `gc-stress` reported `skipped` in every
+  #     one.
+  #
+  # So between release tags, nothing in CI ran scripts/gc_repsel_matrix.sh on
+  # `main` — and the matrix is the only place the `requires=move`
+  # allocation-point arms execute over the representation corpus. That is how
+  # test_gap_repsel_p4a3_ptr_numarray stayed red on ten arms for over a week
+  # with no CI event to say so, forcing three separate PRs (#7193, #7233, #7196)
+  # to hand-exonerate the same seventy cells. This is CLAUDE.md hazard 4 in its
+  # purest form: the job existed, was correctly written, and its subject never
+  # ran. scripts/gc_gate_wiring_check.py asserts this from `lint` so it cannot
+  # silently come back.
   # ---------------------------------------------------------------------------
   gc-stress:
     if: >-
       github.event_name == 'push' ||
       github.event_name == 'pull_request' ||
+      github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 90
