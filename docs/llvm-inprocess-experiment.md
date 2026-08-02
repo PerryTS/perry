@@ -231,7 +231,7 @@ suite green under the flag.
 
 The brief's Phase 1 places the seam "between lowering and IR construction"
 with two builder implementations. The codebase disagrees: perry-codegen is
-~340k lines of *string-oriented* emission (`LlModule` holds functions as
+~189k lines of *string-oriented* emission (`LlModule` holds functions as
 rendered text lines), so an instruction-level builder interface is not a
 seam, it is a rewrite of the whole emitter. The seam this codebase already
 has — and documents as such — is `compile_ll_to_object(ll_text) -> Vec<u8>`.
