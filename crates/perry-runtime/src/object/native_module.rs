@@ -13,9 +13,12 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 mod async_hooks_exports;
+mod callable_export_arity_table;
 mod callable_export_check;
+mod callable_export_table;
 pub(crate) mod callable_exports;
 mod constants;
+mod constants_tables;
 mod module_keys;
 mod namespace_builders;
 mod web_locks;

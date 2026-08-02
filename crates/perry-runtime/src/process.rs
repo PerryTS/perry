@@ -12,8 +12,10 @@ use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
+mod attributes;
 mod credentials;
 mod env_misc;
+mod exec_env;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
@@ -35,20 +37,24 @@ pub use ipc::*;
 pub use env_misc::{
     is_process_env_object, is_process_env_ptr, js_getenv, js_getenv_value, js_process_abort,
     js_process_active_resources_info, js_process_add_uncaught_exception_capture_callback,
-    js_process_available_memory, js_process_binding, js_process_chdir_jsv,
-    js_process_constrained_memory, js_process_cpu_usage, js_process_debug_end,
-    js_process_debug_process, js_process_dlopen, js_process_emit_warning, js_process_env,
-    js_process_execve, js_process_exit, js_process_exit_code_get, js_process_exit_code_set,
-    js_process_fatal_exception, js_process_get_active_handles, js_process_get_active_requests,
-    js_process_has_uncaught_exception_capture_callback, js_process_internal_kill,
-    js_process_linked_binding, js_process_load_env_file, js_process_memory_usage,
+    js_process_available_memory, js_process_binding, js_process_constrained_memory,
+    js_process_cpu_usage, js_process_debug_end, js_process_debug_process, js_process_dlopen,
+    js_process_emit_warning, js_process_env, js_process_exit, js_process_exit_code_get,
+    js_process_exit_code_set, js_process_fatal_exception, js_process_get_active_handles,
+    js_process_get_active_requests, js_process_has_uncaught_exception_capture_callback,
+    js_process_internal_kill, js_process_linked_binding, js_process_memory_usage,
     js_process_open_stdin, js_process_raw_debug, js_process_really_exit, js_process_ref,
-    js_process_resource_usage, js_process_set_title,
     js_process_set_uncaught_exception_capture_callback, js_process_start_profiler_idle_notifier,
     js_process_stop_profiler_idle_notifier, js_process_thread_cpu_usage, js_process_tick_callback,
-    js_process_title, js_process_umask, js_process_umask_set, js_process_unref, js_removeenv,
-    js_setenv,
+    js_process_unref, js_removeenv, js_setenv,
 };
+
+// ── exec_env / attributes re-exports (preserve `crate::process::*` paths) ───
+pub use attributes::{
+    js_process_resource_usage, js_process_set_title, js_process_title, js_process_umask,
+    js_process_umask_set,
+};
+pub use exec_env::{js_process_chdir_jsv, js_process_execve, js_process_load_env_file};
 
 // ── finalization re-exports ─────────────────────────────────────────────────
 pub use finalization::{
