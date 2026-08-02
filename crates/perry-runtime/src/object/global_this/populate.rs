@@ -40,6 +40,43 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // Only reachable when the conservative native-stack scan is off, which is
     // production's `Auto -> SkipDisabled` resolution; the scan was masking this
     // by pinning the argument register.
+    //
+    // #7217: rooting the singleton is necessary but NOT sufficient, and the
+    // difference is the whole point of the allocation-point route.
+    //
+    // The singleton is one pointer. The bootstrap it drives is a *graph*:
+    // `install_intl_namespace` -> `install_constructor` -> `install_function`
+    // holds `ctor`, `proto` and `ns_obj` as raw `*mut ObjectHeader` locals
+    // across dozens of allocating installs, and so do the error, typed-array,
+    // generator, Reflect, Atomics, WebAssembly, … installers, in a dozen files
+    // and several hundred call sites. Every one of those is a slot the
+    // collector does not rewrite.
+    //
+    // On the SAFEPOINT route none of them can be exposed: a collection reached
+    // from a loop back-edge poll only happens while user JS is running, and the
+    // bootstrap runs no user JS. On the ALLOCATION-POINT route every one of the
+    // bootstrap's own ~1.15 MB of allocations is a collection point, so the
+    // whole graph is exposed at once. That is why three separate rooting fixes
+    // verified green on `PERRY_GC_MOVING_LOOP_POLLS=1` were still red under
+    // `PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0
+    // PERRY_CONSERVATIVE_STACK_SCAN=off`: the collection they were failing on
+    // was not in the code they had fixed, it was minor #0 landing inside this
+    // bootstrap. `PERRY_GC_PROTECT_FROMSPACE=1` names it exactly —
+    // `set_builtin_property_attrs` <- `intl::install_function` <-
+    // `install_constructor` <- `install_intl_namespace` <- here, on an address
+    // `retired_by_minor=#0`.
+    //
+    // THE INVARIANT: a bootstrap that builds an IMMORTAL object graph through
+    // raw pointers held across its own allocations must run in a NO-MOVE
+    // WINDOW. Rooting each holder individually is unbounded (hundreds of sites
+    // across a dozen installer modules) and ungateable (no checker can prove
+    // the set complete), while the window is one line and provably enough. It
+    // costs nothing a collection would have recovered: every object born here
+    // is reachable from `globalThis` for the life of the process, so a
+    // collection inside the window frees nothing. Measured footprint of the
+    // whole window: ~1.15 MB allocated, ~410 KB of it live afterwards, once per
+    // thread.
+    let _no_move = crate::gc::GcSuppressScope::new();
     let scope = crate::gc::RuntimeHandleScope::new();
     let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
     let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();

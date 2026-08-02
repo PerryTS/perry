@@ -197,6 +197,19 @@ test_gap_repsel_gc_stress
 #   inline_ctor_this_rooting    green — see its own header; it is a STATIC
 #                               gate, pinned by the codegen test and by
 #                               `gc_root_dominance_check.py --unrooted-allocas`
+#
+# #7217 UPDATE: `spread_accessor_rooting` and `static_block_this_rooting` are now
+# ALSO green on the ALLOCATION-POINT route, which they were not when #7207
+# landed. That route's failure was never in the code #7207 fixed: it was minor #0
+# landing inside the lazy `globalThis` bootstrap, which threads raw
+# `*mut ObjectHeader` installer locals across its own ~1.15 MB of allocations.
+# The bootstrap now runs in a no-move window. Measured on `origin/main`
+# (8b024958f) vs this branch, same profile, same host, idle, 10 runs each, at
+# `PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off`
+# with NO compile-time GC env:
+#   spread_accessor_rooting     exit=139 10/10  ->  `plain 0 hot 0 tail 0` 10/10
+#   static_block_this_rooting   `bad 1`  10/10  ->  `bad 0`               10/10
+#   inline_ctor_this_rooting    green    10/10  ->  green                 10/10
 test_gap_gc_spread_accessor_rooting
 test_gap_gc_static_block_this_rooting
 test_gap_gc_inline_ctor_this_rooting
@@ -292,6 +305,13 @@ test_gap_gc_closure_call_argument_rooting
 # Measured on this commit (7d1dc9ca2), `--arms loop_polls --filter test_gap_gc_`:
 # both PASS with copy-minor > 0, i.e. they relocate and they are byte-exact.
 # Also measured on the `gc-stress` PR arm set: PASS/UNVER only, no new red.
+#
+# #7217 UPDATE for `assign_string_source_rooting`: partly improved by #7217's
+# no-move bootstrap window (`bad char 3 count 3` -> `bad char 1 count 1`, 10/10
+# each) but NOT green. The residual iteration is a stale `js_eq` left operand in
+# the test's own `got !== ALPHA[i % 26]` assertion, not anything in
+# `js_object_assign_one` — tracked as #7248 with the emitted IR; the triage
+# entries are retargeted there.
 test_gap_gc_new_instance_rooting
 test_gap_gc_assign_string_source_rooting
 
@@ -347,7 +367,13 @@ test_gap_gc_closure_call_prev_this_rooting
 # PASS on `loop_polls` 8/8 (`bad 0`, matching the oracle), and exit=139 on all
 # TEN allocation-point arms, also deterministic. See gc_repsel_triage.txt: the
 # fix in this PR is verified on the safepoint route and is NOT claimed on the
-# allocation-point route, which is #7217's open defect class at a second site.
+# allocation-point route.
+#
+# #7217 UPDATE: that class turned out to be TWO unrelated sites, not one. #7217
+# itself (the lazy `globalThis` bootstrap) is fixed and this file is UNCHANGED by
+# it — exit=139 10/10 both before and after. Its own site is `js_regexp_new`
+# holding `&str` borrows into a movable `StringHeader` across its whole body,
+# tracked as #7247; the triage entries are retargeted there.
 test_gap_gc_regexp_receiver_rooting
 # --- #7210: argument staging buffers filled interleaved with lowering -------
 # `setTimeout(cb, 0, {…}, churn())` kept the CALLBACK closure in a bare SSA

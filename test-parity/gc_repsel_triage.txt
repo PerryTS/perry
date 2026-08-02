@@ -16,88 +16,83 @@
 
 test_gap_repsel_ptr_shape_locals | rep_ptr_shape_off | #6976 -- REGRESSION IN THE REPRESENTATION'S OWN OFF-SWITCH, not a defect in this PR. Bisected: passes at 8327ced52, fails at 1a533a3a8 (#6925, repsel Phase 5a proven `this`). With PERRY_PTR_SHAPE_LOCALS=0 the program dies partway with `TypeError: Cannot read properties of undefined (reading 'area')`, losing its last five output lines. It was invisible until now because #6925 also left test_gap_repsel_proven_this_frozen.ts unregistered, which makes this script exit 3 before it runs anything -- the gate was dark, not green. REMOVE THIS ENTRY when #6976 is fixed; an OFF arm is supposed to be the safest cell in the matrix.
 
-# --- #7216's Object.assign witness on the ALLOCATION-POINT arms (#7217) ------
-# `test_gap_gc_assign_string_source_rooting` shipped with #7216 but was never
-# registered in the corpus, so it had never run anywhere. Registering it (see
-# gc_repsel_corpus.txt) surfaced a pre-existing red on every arm that forces the
-# collection at the register-imprecise ALLOCATION point (`%E%` without the
-# compile-time `PERRY_GC_MOVING_LOOP_POLLS=1`).
+# --- #7216's Object.assign witness on the ALLOCATION-POINT arms (#7248) ------
+# RETARGETED FROM #7217, AND ITS STATED CAUSE WAS WRONG.
 #
-# This is #7217, not a new defect and not a representation defect. #7217 already
-# says the mechanism in words -- "an allocation-point collection inside the
-# helper ... can fire between any two of the helper's own allocations, including
-# ones inside `object_assign_set_string_key`'s interning and keys-array growth,
-# where #7207 re-reads its handles only at the top of each key iteration" -- and
-# this file is that sentence's reproducer, and a sharper one than the
-# `spread_accessor_rooting` case #7217 names -- that one is load-dependent and
-# passed idle here, while this one reproduces on demand at the same env.
+# #7217 is fixed: the allocation-point failure it names was minor #0 landing
+# inside the lazy `globalThis` bootstrap, whose installers thread raw
+# `*mut ObjectHeader` locals across their own allocations. That bootstrap now
+# runs in a no-move window. It fixed `spread_accessor_rooting` (exit=139 ->
+# clean, 10/10) and `static_block_this_rooting` (`bad 1` -> `bad 0`, 10/10).
 #
-# Measured on 7d1dc9ca2, release, idle host, oracle node 26.5.1
-# (`bad char 0 count 0`):
-#   PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off
-#     -> `bad char 2 count 2`, 5/5
-#   shipped default                    -> `bad char 0 count 0`, 3/3
-#   compiled+run PERRY_GC_MOVING_LOOP_POLLS=1 (`loop_polls`) -> PASS, copy-minor > 0
+# It did NOT fix this file, and it moved the number rather than the verdict:
 #
-# EVERY %E% ARM IS LISTED, INCLUDING ONE THAT WAS GREEN WHEN FIRST SAMPLED.
-# `rep_str_off` PASSED on the first `--arms all` sweep and FAILED on the third --
-# same binary, same idle host. The first read ("PERRY_CANONICAL_STR_LOCALS=0
-# makes it pass, so the borrow is in a canonical Str local") was an artefact of a
-# single sample. The window is timing-sensitive within the allocation point and
-# the repsel knobs are not discriminators, so the entries cover the arm class
-# rather than the arms that happened to be red on one run. Anyone bisecting
-# #7217 with this file should repeat each candidate before believing a green.
+#   merge-base 8b024958f, perry-dev, idle    -> `bad char 3 count 3`, 10/10
+#   with the #7217 no-move window            -> `bad char 1 count 1`, 10/10
+#   loop_polls (safepoint route)             -> PASS, copy-minor > 0
+#   shipped default                          -> `bad char 0 count 0`
 #
-# THE FILE IS NOT DARK WHILE THESE ENTRIES EXIST. It is a hard gate on
+# Two of the three bad iterations were the bootstrap. The residual one is NOT in
+# `js_object_assign_one` / `object_assign_string_source` at all -- the old
+# triage text asserting "allocation-point relocation inside js_object_assign_one
+# ... interning and keys-array growth" is not what the quarantine shows. Under
+# `PERRY_GC_PROTECT_FROMSPACE=1` the fault is in the test's OWN assertion:
+#
+#   js_jsvalue_equals + 332  <- js_eq + 20  <- main       obj_type=3 (string)
+#   retired_by_minor=#2  (not #0 -- which is why the bootstrap fix missed it)
+#
+# and the emitted IR names it exactly: `got` is loaded into a register above the
+# allocating `js_string_index_get_boxed` lowering of `ALPHA[i % 26]` and handed
+# to `js_eq` below it, never re-read. That is the #7206/#7214 codegen operand
+# family, filed as #7248 with the IR.
+#
+# THE FILE IS NOT DARK WHILE THESE ENTRIES EXIST -- it is a hard gate on
 # `loop_polls`, which .github/workflows/gc-moving-witnesses.yml runs on every
-# collector-touching PR and which requires it to relocate before it may pass.
-# That arm was green 8/8 across these sweeps.
+# collector-touching PR.
 #
-# DELETE ALL TEN when #7217 is fixed. An entry that matches nothing fails
-# nothing here, but a stale triage is a gate quietly narrowed.
-test_gap_gc_assign_string_source_rooting | evac_minor           | #7217 -- allocation-point relocation inside js_object_assign_one / object_assign_string_source, pre-existing on main. Clean on the safepoint route (loop_polls) and on the shipped default.
-test_gap_gc_assign_string_source_rooting | force_evac           | #7217 -- same allocation-point window, with force-evacuate on top.
-test_gap_gc_assign_string_source_rooting | force_verify         | #7217 -- same allocation-point window, force + verify.
-test_gap_gc_assign_string_source_rooting | rep_i32_off          | #7217 -- %E% allocation-point window; the repsel knob is not the discriminator.
-test_gap_gc_assign_string_source_rooting | rep_str_off          | #7217 -- %E% allocation-point window. Green on the first sweep and red on the third, same binary and idle host: sampled, not fixed.
-test_gap_gc_assign_string_source_rooting | rep_str_static_off   | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_assign_string_source_rooting | rep_ptr_shape_off    | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_assign_string_source_rooting | rep_ptr_numarray_off | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_assign_string_source_rooting | rep_spec_abi_off     | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_assign_string_source_rooting | rep_int_valued_off   | #7217 -- %E% allocation-point window; see rep_i32_off.
-# --- The regexp receiver on the ALLOCATION-POINT arms (#7217 class) ----------
-# `test_gap_gc_regexp_receiver_rooting` is a HARD GATE on `loop_polls`, where the
-# fix it ships with is claimed and verified: `bad 0`, 8/8, byte-exact against the
-# oracle, with the copying minor live. These ten entries cover the arms where no
-# fix is claimed -- the ones that force the collection at the register-imprecise
-# ALLOCATION point (`%E%` without the compile-time PERRY_GC_MOVING_LOOP_POLLS=1)
-# rather than at a loop safepoint.
+# DELETE ALL TEN when #7248 is fixed.
+test_gap_gc_assign_string_source_rooting | evac_minor           | #7248 -- stale `js_eq` left operand in the test's own assertion (was mis-attributed to #7217/js_object_assign_one). `bad char 1 count 1`, 10/10. Clean on the safepoint route (loop_polls) and on the shipped default.
+test_gap_gc_assign_string_source_rooting | force_evac           | #7248 -- same allocation-point window, with force-evacuate on top.
+test_gap_gc_assign_string_source_rooting | force_verify         | #7248 -- same allocation-point window, force + verify.
+test_gap_gc_assign_string_source_rooting | rep_i32_off          | #7248 -- %E% allocation-point window; the repsel knob is not the discriminator.
+test_gap_gc_assign_string_source_rooting | rep_str_off          | #7248 -- %E% allocation-point window. Green on the first sweep and red on the third, same binary and idle host: sampled, not fixed.
+test_gap_gc_assign_string_source_rooting | rep_str_static_off   | #7248 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_assign_string_source_rooting | rep_ptr_shape_off    | #7248 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_assign_string_source_rooting | rep_ptr_numarray_off | #7248 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_assign_string_source_rooting | rep_spec_abi_off     | #7248 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_assign_string_source_rooting | rep_int_valued_off   | #7248 -- %E% allocation-point window; see rep_i32_off.
+# --- The regexp receiver on the ALLOCATION-POINT arms (#7247) ----------------
+# RETARGETED FROM #7217. #7217 is fixed (the lazy `globalThis` bootstrap now runs
+# in a no-move window) and this file is UNCHANGED by it:
 #
-# Measured on this branch, release, oracle node 26.5.1 (`bad 0`):
-#   PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off
-#     -> exit=139, no output, 8/8 deterministic
-#   compiled+run PERRY_GC_MOVING_LOOP_POLLS=1  -> `bad 0`, 8/8
+#   merge-base 8b024958f, perry-dev, idle -> exit=139, no output, 10/10
+#   with the #7217 no-move window         -> exit=139, no output, 10/10
+#   compiled+run PERRY_GC_MOVING_LOOP_POLLS=1  -> `bad 0`
 #   shipped default                            -> `bad 0`
-# `--arms all` reports the SAME `exit=139 cycles=1 scavenged=14` on all ten, and
-# PASS on `loop_polls`. The split is the route, not the arm's other knobs.
 #
-# THIS IS THE SECOND FILE WITH EXACTLY THIS SIGNATURE. #7216's
-# `test_gap_gc_assign_string_source_rooting` behaves the same way and is triaged
-# to #7217 for the same reason. Two independent sites where a rooting fix that
-# holds at a safepoint does not hold when the collection is forced inside the
-# allocating helper is a statement about the route, not about either fix -- and
-# it is what #7217 says in words about `object_assign_set_string_key`'s interning
-# and keys-array growth. Whoever closes #7217 should check this file too; if it
-# turns out to need its own fix, split these entries onto their own issue.
+# It is a separate site, and #7196's quarantine names it:
 #
-# DELETE ALL TEN when the allocation-point route is fixed.
-test_gap_gc_regexp_receiver_rooting | evac_minor           | #7217 -- allocation-point relocation; the fix is verified on the safepoint route (loop_polls, 8/8) and not claimed here. exit=139, deterministic.
-test_gap_gc_regexp_receiver_rooting | force_evac           | #7217 -- same allocation-point window, with force-evacuate on top.
-test_gap_gc_regexp_receiver_rooting | force_verify         | #7217 -- same allocation-point window, force + verify.
-test_gap_gc_regexp_receiver_rooting | rep_i32_off          | #7217 -- %E% allocation-point window; the repsel knob is not the discriminator (identical evidence on all ten).
-test_gap_gc_regexp_receiver_rooting | rep_str_off          | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_regexp_receiver_rooting | rep_str_static_off   | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_regexp_receiver_rooting | rep_ptr_shape_off    | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_regexp_receiver_rooting | rep_ptr_numarray_off | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_regexp_receiver_rooting | rep_spec_abi_off     | #7217 -- %E% allocation-point window; see rep_i32_off.
-test_gap_gc_regexp_receiver_rooting | rep_int_valued_off   | #7217 -- %E% allocation-point window; see rep_i32_off.
+#   LocalKey<RefCell<HashMap<(String,String), Arc<fancy_regex::Regex>>>>::with
+#     <- js_regexp_new + 1396   obj_type=3 (string)  retired_by_minor=#0
+#
+# `js_regexp_new` (`regex.rs:616`) opens with `string_as_str(pattern)` /
+# `string_as_str(flags)` -- `&str` borrows INTO the movable `StringHeader`
+# payload -- and holds them across the whole body, including the `REGEX_CACHE`
+# probe's `.to_string()` calls and the `RegExpHeader` allocation. That is the
+# #7215 borrow shape, the one #7216 fixed for `object_assign_string_source` with
+# one owned copy. Filed as #7247.
+#
+# THIS FILE IS A HARD GATE ON `loop_polls` and stays one: PASS 8/8 there, which
+# .github/workflows/gc-moving-witnesses.yml runs on every collector-touching PR.
+#
+# DELETE ALL TEN when #7247 is fixed.
+test_gap_gc_regexp_receiver_rooting | evac_minor           | #7247 -- `&str` borrowed into a movable StringHeader across js_regexp_new's body. The #7227 fix is verified on the safepoint route (loop_polls, 8/8) and not claimed here. exit=139, deterministic 10/10.
+test_gap_gc_regexp_receiver_rooting | force_evac           | #7247 -- same allocation-point window, with force-evacuate on top.
+test_gap_gc_regexp_receiver_rooting | force_verify         | #7247 -- same allocation-point window, force + verify.
+test_gap_gc_regexp_receiver_rooting | rep_i32_off          | #7247 -- %E% allocation-point window; the repsel knob is not the discriminator (identical evidence on all ten).
+test_gap_gc_regexp_receiver_rooting | rep_str_off          | #7247 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_str_static_off   | #7247 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_ptr_shape_off    | #7247 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_ptr_numarray_off | #7247 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_spec_abi_off     | #7247 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_int_valued_off   | #7247 -- %E% allocation-point window; see rep_i32_off.
