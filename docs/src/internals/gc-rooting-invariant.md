@@ -192,9 +192,13 @@ bind-anchored check is structurally blind to: the value lives in a plain
 `alloca_entry` for its whole lifetime, so there is no `js_shadow_slot_bind` to
 anchor on and a scan that starts from binds calls the function clean. It found
 `lower_call/new.rs`'s inline-ctor `this_slot` independently of any runtime
-probe. **The gate does not run this mode yet** — its remaining hits are the
-caches, staging arrays and inlined-callee params tracked as #7210, and they are
-deliberately not in the allowlist, which covers the bind-anchored shape only.
+probe.
+
+**The gate runs this mode as of #7236, and the corpus reads 0.** It could not
+before: #7210 measured 66 hits and triaged every one as a false positive, #7235
+split the heap-source predicate by movability (98 → 2 on a grown corpus), and
+the 2 residuals were one bug — `collectors/pointer_locals.rs` classified
+`Type::Symbol` as an immediate, so a `Symbol` local got no shadow slot at all.
 Run it by hand when you touch an `alloca_entry` site:
 
 ```bash
@@ -269,9 +273,27 @@ the exact thing this file exists to prevent.
 which means it cannot turn a merge red — hazard 2, and the reason the #7211 hits
 sat unread on `main` from #7198 onward while the job was visibly failing.
 
-With the allowlist the job is green on `main`, so the remaining step is for a
-repo admin to add `gc-root-dominance` to the required contexts. A workflow
-cannot do this to itself. Until it is done, this is documentation.
+Both of the conditions #7198 named are now met:
+
+- the bind-anchored dominance check is green on `main` with an **empty**
+  allowlist (the #7211 entries were deleted when that predicate was fixed);
+- `--unrooted-allocas --moving-only` reads **0** and is a step in the job
+  (#7236). That was the outstanding one: it was 98 before #7235, 2 after, and 0
+  once `Type::Symbol` stopped being classified as an immediate.
+
+So the remaining step is for a **repo admin** to add `gc-root-dominance` to
+branch protection's required contexts:
+
+```
+Settings → Branches → main → Require status checks to pass
+  → add:  gc-root-dominance
+```
+
+A workflow cannot do this to itself, and neither can a PR. Until it is done,
+this is documentation. Per CLAUDE.md's corollary, promote it **after** the job's
+first green run on `main` with the `--unrooted-allocas` step included — a gate
+that has never been green in its current shape blocks every open PR the day it
+becomes required.
 
 ## Rules of thumb
 

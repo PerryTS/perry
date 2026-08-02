@@ -188,12 +188,16 @@ impl HirTypeFacts for PointerAnalysisFacts<'_> {
 /// by construction rather than by review.** This used to be a second hand-
 /// maintained `matches!` list, and it had already drifted from that one by a
 /// single variant: `Type::Symbol`. `typed_shape` said pointer (correctly —
-/// `js_symbol_new` NaN-boxes a movable `gc_malloc`), this said non-pointer, so
-/// a `Symbol`-typed local got no shadow-stack slot and sat in a plain `alloca`
-/// across every collection point in its scope (#7236). That is precisely the
-/// failure the previous comment here predicted: "a second copy drifting by one
-/// `Type` variant … a use-after-move under the evacuating minor (#7019), not a
-/// cosmetic inconsistency."
+/// `js_symbol_new` NaN-boxes a `gc_malloc`'d `SymbolHeader` that a malloc
+/// sweep inside the copying minor frees when nothing marks it), this said
+/// non-pointer, so a `Symbol`-typed local got no shadow-stack slot and sat in a
+/// plain `alloca` across every collection point in its scope (#7236). That is
+/// precisely the failure the previous comment here predicted: "a second copy
+/// drifting by one `Type` variant … a use-after-move under the evacuating
+/// minor (#7019), not a cosmetic inconsistency." The realised failure turned
+/// out to be the sibling one — a premature free rather than a stale address,
+/// because `gc_malloc` is outside the arena — which is the distinction #7235
+/// drew between RECLAIMABLE and MOVABLE and the reason it drew it.
 ///
 /// So there is now one copy, it is exhaustive, and a new `Type` variant is a
 /// compile error over there instead of a silent "not a pointer" here.
@@ -1147,8 +1151,9 @@ mod tests {
     /// #7236: `is_definitely_non_pointer_type` and `typed_shape`'s
     /// `type_is_pointer_bearing` are two names for one question, and they had
     /// drifted by exactly one variant — `Symbol` — which is how a
-    /// `POINTER_TAG`-boxed, `gc_malloc`'d, MOVABLE object came to be classified
-    /// as an immediate. They are now the same function, so this test is about
+    /// `POINTER_TAG`-boxed, `gc_malloc`'d, collector-freed object came to be
+    /// classified as an immediate. They are now the same function, so this test
+    /// is about
     /// the ANSWERS: it enumerates the enum and fails if any classification
     /// flips. `type_is_pointer_bearing`'s exhaustive `match` covers the other
     /// half (a new variant is a compile error, not a silent "non-pointer").
@@ -1218,11 +1223,13 @@ mod tests {
     }
 
     /// #7236's reproducer, at the collector: `const s = Symbol("x")` must get a
-    /// slot. `alloc_symbol` is `gc_malloc(_, GC_TYPE_STRING)` and
-    /// `GC_TYPE_STRING` is `movable: true`, so without a slot the local sits in
-    /// a plain `alloca` across every collection point in its scope — exactly
-    /// what `gc_root_dominance_check.py --unrooted-allocas --moving-only`
-    /// reported twice on `test_gap_class_forward_capture_6523`.
+    /// slot. `alloc_symbol` is `gc_malloc(_, GC_TYPE_STRING)`, and a fresh
+    /// symbol is reachable from nothing else (`SYMBOL_POINTERS` is visited
+    /// metadata-only), so without a slot the local sits in a plain `alloca`
+    /// across every collection point in its scope and the malloc sweep inside
+    /// the copying minor frees it while it is live — exactly what
+    /// `gc_root_dominance_check.py --unrooted-allocas --moving-only` reported
+    /// twice on `test_gap_class_forward_capture_6523`.
     #[test]
     fn a_symbol_typed_local_gets_a_shadow_slot() {
         let stmts = vec![Stmt::Let {

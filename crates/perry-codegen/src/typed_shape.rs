@@ -20,11 +20,20 @@ use perry_hir::types::Type;
 ///
 /// * `Symbol` — **a pointer.** `js_symbol_new` returns `POINTER_TAG`-boxed
 ///   storage from `alloc_symbol`, which is
-///   `gc_malloc(size_of::<SymbolHeader>(), GC_TYPE_STRING)`, and
-///   `GC_TYPE_STRING`'s type-info entry is `movable: true`. It was listed as a
-///   non-pointer by `is_definitely_non_pointer_type` (#7236) while this
-///   function already answered `true` — the exact one-variant drift the doc
-///   comment over there warned about, which is why there is now one copy.
+///   `gc_malloc(size_of::<SymbolHeader>(), GC_TYPE_STRING)`. Note *which* way
+///   it is dangerous: `gc_malloc` is the SYSTEM allocator with a `GcHeader` in
+///   front, not an arena allocation, so the copying minor cannot relocate a
+///   symbol — it can `dealloc` it (`sweep_malloc_objects`, reached from the
+///   copying minor whenever `copied_minor_malloc_sweep_due`). Under #7235's
+///   taxonomy a symbol is RECLAIMABLE and not MOVABLE, and nothing else holds a
+///   fresh one: `alloc_symbol`'s own comment says it is kept alive "through the
+///   SYMBOL_REGISTRY … or NOT AT ALL", and `SYMBOL_POINTERS` is visited with
+///   `visit_metadata_usize_slot`, which rewrites without marking. So an
+///   unrooted `Symbol` local is a premature FREE (#7230's class), not a stale
+///   address. It was listed as a non-pointer by
+///   `is_definitely_non_pointer_type` (#7236) while this function already
+///   answered `true` — the exact one-variant drift the doc comment over there
+///   warned about, which is why there is now one copy.
 /// * `StringLiteral` — a string-LITERAL type (`"foo"`, or a `"a" | "b"`
 ///   discriminant union member) is an ordinary heap `String` at runtime.
 /// * `TypeVar` — an unresolved generic type parameter (`T`) can bind to any
