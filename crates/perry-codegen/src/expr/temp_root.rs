@@ -628,6 +628,20 @@ impl RootedOperands {
     pub(crate) fn release(self, ctx: &mut FnCtx<'_>) {
         temp_root_release(ctx, self.guard);
     }
+
+    /// The group's guard slot, for a caller that must release it together with
+    /// slots it pushed ITSELF.
+    ///
+    /// [`RootedOperands::release`] is the ordinary exit and consumes the group.
+    /// The rest-argument lowering cannot use it: it pushes accumulator slots
+    /// ([`rooted_array_begin`]) *above* this group, and because
+    /// [`temp_root_truncate`] is a stack cut, one truncate at the LOWEST index
+    /// drops both. So that caller needs the index rather than the act — and it
+    /// must not release early, since the accumulator has to stay rooted across
+    /// the consuming call too.
+    pub(crate) fn guard(&self) -> Option<String> {
+        self.guard.clone()
+    }
 }
 
 /// Release a guard returned by [`lower_exprs_rooted`]. Call it *after* the

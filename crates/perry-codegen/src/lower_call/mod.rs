@@ -195,6 +195,137 @@ pub(crate) fn emit_rooted_call(
     result
 }
 
+/// One array a rest/`arguments` call has to materialize from its argument
+/// list: every argument from `from` onwards, optionally flagged as an
+/// `arguments` object.
+///
+/// A call needs one of these for a real `...rest` binding, one for a synthetic
+/// `arguments` param — and #1816's shape needs BOTH, from different offsets
+/// over the same already-lowered arguments.
+pub(crate) struct RestBundle {
+    /// First argument index to bundle. `0` for a synthetic `arguments`
+    /// (which must reflect ALL passed args); `fixed_count` for a real rest.
+    pub from: usize,
+    /// Emit `js_array_mark_arguments_object` over the finished array.
+    pub mark_arguments_object: bool,
+}
+
+/// #7154: lower a rest/`arguments` call's argument list with every value
+/// protected across the array construction that follows it.
+///
+/// This is [`lower_call_args_rooted`]'s twin for the rest path, and it is a
+/// separate function because the hazard is strictly larger. #7240 fixed only
+/// the non-rest arm; the rest arm has **two** unprotected registers, not one:
+///
+///  1. **The fixed parameters**, exactly as in the non-rest arm — except their
+///     window does not end when the last argument is lowered. The rest array
+///     is materialized *afterwards*, and materializing it runs
+///     `js_array_alloc` plus one `js_array_push_f64` per trailing argument,
+///     every one of which allocates. So `lower_exprs_rooted` is the wrong tool
+///     here: it re-reads immediately, and the collection point it must re-read
+///     below is a step it never sees. [`RootedOperands`] exists for precisely
+///     that, and the caller picking the re-read point is the whole difference.
+///
+///  2. **The accumulator itself** — and this is the one with no analogue in
+///     the non-rest arm. `current` is a RAW `*mut ArrayHeader` in a bare SSA
+///     register, threaded through the push loop, holding the ONLY reference to
+///     every argument pushed so far while the NEXT argument's expression is
+///     lowered — arbitrary user code. Nothing roots it, so a minor in that
+///     window does not merely move the array, it is free to sweep it.
+///     [`temp_root::rooted_array_begin`]'s doc names this exact shape as "the
+///     shape behind every variadic / spread / rest argument list"; the helper
+///     has existed since #6951 and this path never adopted it.
+///
+/// `collects` is unconditionally true for the fixed parameters, and that is a
+/// statement about the code rather than a conservative shrug: the rest array
+/// is materialized on every path (a callee's rest binding must be `[]` even
+/// when nothing trailing was passed), so `js_array_alloc` is always between a
+/// fixed parameter and the call that consumes it. Scalar arguments still cost
+/// nothing — [`temp_root::operand_protection`] routes anything
+/// `expr_is_known_non_pointer_shadow_value` proves is not a heap reference to
+/// `Reuse`, so `f(1, 2, ...rest)` emits the IR it emitted before.
+///
+/// Returns the values to pass — fixed parameters first, re-read from their
+/// roots, then one boxed array per [`RestBundle`] — and the guard for
+/// [`emit_rooted_call`].
+///
+/// [`RootedOperands`]: crate::expr::temp_root::RootedOperands
+/// [`temp_root::rooted_array_begin`]: crate::expr::temp_root::rooted_array_begin
+/// [`temp_root::operand_protection`]: crate::expr::temp_root::operand_protection
+pub(crate) fn lower_rest_call_args_rooted(
+    ctx: &mut FnCtx<'_>,
+    args: &[Expr],
+    fixed_count: usize,
+    bundles: &[RestBundle],
+) -> Result<(Vec<String>, Option<String>)> {
+    use crate::expr::temp_root;
+    use crate::types::I64;
+
+    let refs: Vec<&Expr> = args.iter().collect();
+    // Incrementally, one argument at a time: root each BEFORE the next is
+    // lowered. Lowering the whole list and rooting it afterwards is not merely
+    // late, it is worse than doing nothing — by then an earlier value may
+    // already have been swept and the push publishes a dangling pointer into a
+    // slot the collector scans. See `root_operands_begin`.
+    let mut rooted = temp_root::root_operands_begin(refs.len());
+    for expr in &refs {
+        let value = crate::expr::lower_expr(ctx, expr)?;
+        rooted.push(ctx, expr, &value, true);
+    }
+
+    let mut lowered: Vec<String> = Vec::with_capacity(fixed_count + bundles.len());
+
+    // Build every array FIRST and leave each one in its temp-root slot, then
+    // read them all back at the end. Building array 2 allocates, so array 1's
+    // pointer must not be sitting in a bare register while it happens — #1816's
+    // shape wants both a `...rest` and an `arguments` bundle over the same
+    // list, and that second `js_array_alloc` is a collection point for the
+    // first array exactly as the push loop is for its elements.
+    let mut accs: Vec<String> = Vec::with_capacity(bundles.len());
+    for bundle in bundles {
+        let cap = (args.len().saturating_sub(bundle.from) as u32).to_string();
+        let acc = temp_root::rooted_array_begin(ctx, &cap);
+        for i in bundle.from..refs.len() {
+            // Re-read per element: the previous push allocated, so the register
+            // this argument was lowered into is already stale.
+            let value = rooted.reread_one(ctx, &refs, i)?;
+            temp_root::temp_rooted_array_push(ctx, &acc, &value);
+        }
+        accs.push(acc);
+    }
+
+    // Below every allocation now. `js_array_mark_arguments_object` only sets a
+    // flag bit and hands the same pointer back (`array/header.rs:1046`), so it
+    // is safe between the slot read and the box.
+    let mut boxed_bundles: Vec<String> = Vec::with_capacity(bundles.len());
+    for (bundle, acc) in bundles.iter().zip(accs.iter()) {
+        let mut current = temp_root::rooted_array_read(ctx, acc);
+        if bundle.mark_arguments_object {
+            current = ctx
+                .block()
+                .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
+        }
+        boxed_bundles.push(crate::expr::nanbox_pointer_inline(ctx.block(), &current));
+    }
+
+    let undefined_lit =
+        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    for i in 0..fixed_count {
+        lowered.push(if i < refs.len() {
+            rooted.reread_one(ctx, &refs, i)?
+        } else {
+            undefined_lit.clone()
+        });
+    }
+    lowered.extend(boxed_bundles);
+
+    // The operand group was pushed BEFORE the accumulators, so its guard is the
+    // lower index and one truncate at it drops both. When nothing needed a real
+    // root the first accumulator is the lowest slot and becomes the guard.
+    let guard = rooted.guard().or_else(|| accs.first().cloned());
+    Ok((lowered, guard))
+}
+
 /// Lower a `Call` expression. Two shapes are supported:
 /// 1. `FuncRef(id)(args...)` — direct call to a user function by HIR id.
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a

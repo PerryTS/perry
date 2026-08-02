@@ -5,7 +5,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{i32_bool_to_nanbox, i32_to_nanbox, lower_expr, nanbox_pointer_inline, FnCtx};
+use crate::expr::{i32_bool_to_nanbox, i32_to_nanbox, lower_expr, FnCtx};
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
@@ -380,101 +380,79 @@ pub fn try_lower_func_ref_call(
     let sig = ctx.func_signatures.get(fid).copied();
     let (declared_count, has_rest, _, synthetic_is_rest) =
         sig.unwrap_or((args.len(), false, false, false));
+    // #7154: the same-module twin of `extern_func.rs`'s cross-module path.
+    //
+    // #7240 fixed the cross-module lowering and needed a two-file fixture to do
+    // it, precisely because a same-file callee resolves here instead — so the
+    // identical defect sat one `else` away, unreached by that PR's test. All
+    // four arms below lowered their arguments into bare SSA registers and then
+    // held them across work that allocates: the rest arms across
+    // `js_array_alloc` + a `js_array_push_f64` per element (and the first arm
+    // across TWO such arrays), the plain arm across the later arguments' own
+    // lowering.
+    //
+    // The guard is released after the call rather than here — see the
+    // `temp_root_release` below the dispatch chain. That placement is the whole
+    // reason this was not folded into #7240: `lowered` is consumed by four
+    // specialized-ABI dispatch paths with block-splitting diamonds, so the
+    // release has to sit in the merge block that post-dominates all of them,
+    // not next to the lowering.
     let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
+    let arg_guard: Option<String>;
     if ctx.func_synthetic_arguments.contains(fid) && has_rest && !synthetic_is_rest {
-        let lowered_args: Vec<String> = args
-            .iter()
-            .map(|arg| lower_expr(ctx, arg))
-            .collect::<Result<_>>()?;
+        // #1816: a real `...rest` AND a synthetic `arguments`, over the same
+        // argument list at two different offsets.
         let fixed_count = declared_count.saturating_sub(2);
-        let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        for idx in 0..fixed_count {
-            if let Some(arg) = lowered_args.get(idx) {
-                lowered.push(arg.clone());
-            } else {
-                lowered.push(undef_lit.clone());
-            }
-        }
-
-        let rest_count = args.len().saturating_sub(fixed_count);
-        let cap = (rest_count as u32).to_string();
-        let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        for v in lowered_args.iter().skip(fixed_count) {
-            let blk = ctx.block();
-            current = blk.call(
-                I64,
-                "js_array_push_f64",
-                &[(I64, &current), (DOUBLE, v.as_str())],
-            );
-        }
-        let rest_box = nanbox_pointer_inline(ctx.block(), &current);
-        lowered.push(rest_box);
-
-        let cap = (args.len() as u32).to_string();
-        let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        for v in &lowered_args {
-            let blk = ctx.block();
-            current = blk.call(
-                I64,
-                "js_array_push_f64",
-                &[(I64, &current), (DOUBLE, v.as_str())],
-            );
-        }
-        let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
-        lowered.push(arguments_box);
+        let (values, guard) = super::lower_rest_call_args_rooted(
+            ctx,
+            args,
+            fixed_count,
+            &[
+                super::RestBundle {
+                    from: fixed_count,
+                    mark_arguments_object: false,
+                },
+                super::RestBundle {
+                    from: 0,
+                    mark_arguments_object: false,
+                },
+            ],
+        )?;
+        arg_guard = guard;
+        lowered.extend(values);
     } else if has_rest && ctx.func_synthetic_arguments.contains(fid) {
-        let lowered_args: Vec<String> = args
-            .iter()
-            .map(|arg| lower_expr(ctx, arg))
-            .collect::<Result<_>>()?;
         let fixed_count = declared_count.saturating_sub(1);
-        let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        for idx in 0..fixed_count {
-            if let Some(arg) = lowered_args.get(idx) {
-                lowered.push(arg.clone());
-            } else {
-                lowered.push(undef_lit.clone());
-            }
-        }
-
-        let cap = (args.len() as u32).to_string();
-        let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        for v in &lowered_args {
-            let blk = ctx.block();
-            current = blk.call(
-                I64,
-                "js_array_push_f64",
-                &[(I64, &current), (DOUBLE, v.as_str())],
-            );
-        }
-        current = ctx
-            .block()
-            .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
-        let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
-        lowered.push(arguments_box);
+        let (values, guard) = super::lower_rest_call_args_rooted(
+            ctx,
+            args,
+            fixed_count,
+            &[super::RestBundle {
+                from: 0,
+                mark_arguments_object: true,
+            }],
+        )?;
+        arg_guard = guard;
+        lowered.extend(values);
     } else if has_rest {
         // Rest is always the LAST declared param. Pass the
         // first (declared_count - 1) args as-is, then bundle
         // the rest into an array.
         let fixed_count = declared_count.saturating_sub(1);
-        for a in args.iter().take(fixed_count) {
-            lowered.push(lower_expr(ctx, a)?);
-        }
-        // Materialize the rest array.
-        let rest_count = args.len().saturating_sub(fixed_count);
-        let cap = (rest_count as u32).to_string();
-        let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        for a in args.iter().skip(fixed_count) {
-            let v = lower_expr(ctx, a)?;
-            let blk = ctx.block();
-            current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
-        }
-        let rest_box = nanbox_pointer_inline(ctx.block(), &current);
-        lowered.push(rest_box);
+        let (values, guard) = super::lower_rest_call_args_rooted(
+            ctx,
+            args,
+            fixed_count,
+            &[super::RestBundle {
+                from: fixed_count,
+                mark_arguments_object: false,
+            }],
+        )?;
+        arg_guard = guard;
+        lowered.extend(values);
     } else {
-        for a in args {
-            lowered.push(lower_expr(ctx, a)?);
-        }
+        let (values, guard) = super::lower_call_args_rooted(ctx, args)?;
+        arg_guard = guard;
+        lowered.extend(values);
     }
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
         lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
@@ -905,9 +883,28 @@ pub fn try_lower_func_ref_call(
     } else {
         ctx.block().call(DOUBLE, &fname, &arg_slices)
     };
+    // #7154: release the argument roots HERE and nowhere earlier.
+    //
+    // Every arm above either emits one call in the current block or splits into
+    // a fast/fallback diamond and leaves `ctx.current_block` on the merge, so
+    // this point post-dominates all five call sites. Below the call, because
+    // the callee allocates while reading these arguments; after the diamond,
+    // because releasing on one side of it would leave the other side's call
+    // reading dropped slots.
+    //
+    // AFTER `implicit_this_restore`, and that order is load-bearing rather than
+    // stylistic. `implicit_this_save` runs BELOW the argument lowering, so its
+    // slot sits ABOVE this group, and `js_gc_temp_root_truncate` drops `base`
+    // and everything above it. Releasing first therefore drops the saved
+    // receiver, and `js_gc_temp_root_get` answers an out-of-range read with
+    // `0` — so the restore would rebind the enclosing method's `this` to the
+    // NUMBER 0. `implicit_this_restore` truncates at its own (higher) slot, and
+    // its doc calls out that a caller holding a lower group may release
+    // afterwards and drop the slot a second time harmlessly.
     if let Some(prev) = prev_this {
         crate::expr::temp_root::implicit_this_restore(ctx, prev);
     }
+    crate::expr::temp_root::temp_root_release(ctx, arg_guard);
     if ctx.local_generator_funcs.contains(fid) {
         let wrap_ptr = format!("@__perry_wrap_{}", fname);
         let closure_handle =
