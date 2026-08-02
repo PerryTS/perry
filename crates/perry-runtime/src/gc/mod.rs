@@ -485,6 +485,18 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);
     gc_register_mutable_root_scanner(shape_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
+    // #7211: the eight interned `typeof` result strings, and JSON.rawJSON's
+    // interned `"rawJSON"` key. Both are thread-local caches of a RAW
+    // `StringHeader*` allocated in the nursery and referenced by nothing else,
+    // so before this registration the FIRST minor collection sweeps or
+    // evacuates them and the cached pointer names abandoned memory forever
+    // after. Not a timing-dependent stale register: a permanently wrong cache,
+    // which is why `sfw-registry --help` under a
+    // `PERRY_GC_MOVING_LOOP_POLLS=1` build failed 10/10 rather than
+    // intermittently, and why the from-space reporter blamed
+    // `retired_by_minor=#0`.
+    gc_register_mutable_root_scanner(crate::builtins::arithmetic::scan_typeof_string_roots_mut);
+    gc_register_mutable_root_scanner(crate::json::raw_json::scan_raw_json_key_root_mut);
     gc_register_mutable_root_scanner(crate::object::scan_exotic_expando_roots_mut);
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
     // #6981: the memoized `Array.prototype` / `Object.prototype` addresses in

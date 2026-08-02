@@ -272,6 +272,10 @@ NONCOLLECTING = {
     # object/this_binding.rs:160 -- a thread-local cell swap
     "js_implicit_this_set", "js_implicit_this_get",
     "js_gc_note_slot_layout", "js_string_addref_if_heap_string",
+    # `js_get_string_pointer_unified` is deliberately NOT here. Its SSO branch
+    # calls `js_string_materialize_to_heap`, which allocates (value/nanbox.rs:268),
+    # so it is a collection point by this file's one-sided rule even though the
+    # collection it can cause is currently always non-moving. See #7213.
 }
 
 # The single site where an evacuating (moving) minor runs.
@@ -1166,6 +1170,22 @@ ROOT_READ_CALLS = {
     "js_box_get_bits",               # box.rs mutable-capture cell read
     "js_implicit_this_get",          # object/this_binding.rs:160 thread-local
     "js_new_target_get",
+    # object/this_binding.rs:159 -- `js_implicit_this_SET` is a swap, so its
+    # RETURN value is a read of the same scanned mutable cell
+    # (`scan_implicit_this_roots_mut`, this_binding.rs:176) and the swap has
+    # already overwritten the only other copy. Listing the setter as a reader
+    # looks odd, which is exactly why #7214 left `prev_this` unrooted for a
+    # whole PR: the checker saw a call it knew could not collect, never
+    # classified the result as a heap value, and reported nothing at either
+    # end. Being non-collecting is what makes a call a root READ.
+    "js_implicit_this_set",
+    # `js_get_string_pointer_unified` is a candidate and is deliberately left
+    # out for now: its result IS a raw heap address in a bare register, but it
+    # is not in NONCOLLECTING (its SSO branch allocates), so classifying it as
+    # a source would report the whole `unbox_str_handle` family in one go --
+    # roughly forty sites across lower_string_method.rs alone. That is a real
+    # population and it needs its own measured count and its own triage rather
+    # than being folded into this change. #7213.
 }
 
 # Argument positions that make a stale pointer FATAL rather than merely wrong:
@@ -1646,6 +1666,27 @@ def _stale_probe(path, max_stale):
     return (int(m.group(1)) if m else -1), rc
 
 
+def _main_probe(argv):
+    """Exit status of a full `main()` run over `argv` (no `sys.exit`).
+
+    The guards these arms cover live in `main()`'s argument handling rather
+    than in a scannable function, and argparse reports a usage error by
+    raising `SystemExit(2)`. Driving `main()` is the only way to assert them;
+    calling the inner helpers would skip exactly the code under test.
+    """
+    saved = sys.argv
+    buf = io.StringIO()
+    try:
+        sys.argv = ["gc_root_dominance_check.py"] + list(argv)
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            try:
+                return main()
+            except SystemExit as exc:
+                return exc.code if isinstance(exc.code, int) else 1
+    finally:
+        sys.argv = saved
+
+
 def self_test():
     """Assert the checker reports the planted violation and clears the control.
 
@@ -1714,6 +1755,68 @@ def self_test():
         if _stale_probe(clean, 0) != (0, 0):
             print("self-test FAIL: --max-stale 0 over the control fixture must "
                   "report 0 uses and exit 0", file=sys.stderr)
+            ok = False
+
+        # --- the stale mode's own subject-liveness assertion ----------------
+        #
+        # `--stale-registers` classifies a shadow-slot load as a heap-value
+        # source by looking the alloca up in a map built from
+        # `js_shadow_slot_bind`. A corpus with no binds therefore has almost no
+        # sources, reports `total 0`, and is indistinguishable from a corpus
+        # with no stale registers. `--min-binds` is what makes that case an
+        # error, and before #7211 the stale path returned above the guard.
+        # Both directions, so the guard cannot be "always 2".
+        if _main_probe(["--stale-registers", "--min-binds", "50", planted]) != 2:
+            print("self-test FAIL: --stale-registers over a corpus with fewer "
+                  "than --min-binds root stores must exit 2. The scan's "
+                  "shadow-slot sources come from those stores, so a clean "
+                  "verdict over zero of them proves nothing.", file=sys.stderr)
+            ok = False
+        if _main_probe(["--stale-registers", "--min-binds", "2", planted]) != 0:
+            print("self-test FAIL: --stale-registers over a corpus that MEETS "
+                  "--min-binds must still exit 0 (diagnostic). The guard "
+                  "rejects every corpus, which is a gate that always fails.",
+                  file=sys.stderr)
+            ok = False
+        # `--min-funcs` is the BREADTH floor, and it used to be evaluated below
+        # the mode branches -- so `--stale-registers` and `--unrooted-allocas`
+        # both returned before reaching it and ran to a verdict over a corpus
+        # too thin to have exercised anything. A documented liveness control
+        # disarmed by a mode flag, inside the script whose job is to catch
+        # exactly that. The planted fixture has 2 functions; `--min-funcs 50`
+        # must be an error in every mode and `--min-funcs 2` must not be one in
+        # any of them, so the guard can be neither skipped nor always-on.
+        for mode in (["--stale-registers"], ["--unrooted-allocas"], []):
+            label = mode[0] if mode else "(bind-anchored default)"
+            if _main_probe(mode + ["--min-funcs", "50", "--min-binds", "1",
+                                   planted]) != 2:
+                print(f"self-test FAIL: {label} over a 2-function corpus must "
+                      "exit 2 at --min-funcs 50. A mode that returns above the "
+                      "breadth floor silently disables it.", file=sys.stderr)
+                ok = False
+        for mode, want in ((["--stale-registers"], 0),
+                           (["--unrooted-allocas"], 0),
+                           ([], 1)):
+            label = mode[0] if mode else "(bind-anchored default)"
+            if _main_probe(mode + ["--min-funcs", "2", "--min-binds", "1",
+                                   planted]) != want:
+                print(f"self-test FAIL: {label} over a corpus that MEETS "
+                      f"--min-funcs must exit {want}, not be rejected by the "
+                      "breadth floor. A guard that rejects every corpus is a "
+                      "gate that always fails.", file=sys.stderr)
+                ok = False
+        # A knob that is silently ignored is a disarmed knob -- the same rule
+        # `--max-stale` and `--fatal-sinks` already carry, read the other way.
+        if _main_probe(["--stale-registers", "--any-def", planted]) != 2:
+            print("self-test FAIL: --any-def with --stale-registers must be a "
+                  "usage error; the stale scan never consults the anchor, so "
+                  "accepting it promises a widening that never happens",
+                  file=sys.stderr)
+            ok = False
+        if _main_probe(["--any-def", planted]) != 1:
+            print("self-test FAIL: --any-def WITHOUT --stale-registers must "
+                  "still run the bind-anchored check and report the planted "
+                  "violations", file=sys.stderr)
             ok = False
 
         try:
@@ -1948,6 +2051,15 @@ def main():
         ap.error("--max-stale requires --stale-registers")
     if ns.fatal_sinks and not ns.stale_registers:
         ap.error("--fatal-sinks requires --stale-registers")
+    # Same rule read the other way. `--any-def` only selects the bind-anchored
+    # check's ANCHOR (`anchor = "any" if ns.any_def else "alloc"`, below), and
+    # the stale-register path never consults it -- it anchors on every
+    # heap-value source by construction, so there is no narrower or wider
+    # setting for it to pick. Passing both reads like "widen the stale scan"
+    # and does nothing at all.
+    if ns.any_def and ns.stale_registers:
+        ap.error("--any-def has no effect with --stale-registers "
+                 "(the stale scan already anchors on every heap-value source)")
     # Same rule: --stale-registers returns before the --unrooted-allocas block,
     # so passing both would run the stale scan and silently skip the alloca one
     # while the command line claims both.
@@ -1996,9 +2108,6 @@ def main():
         parsed.append((os.path.basename(p), parse_file(p)))
     poll_reaching, _known = compute_poll_reaching(
         [f for _m, fs in parsed for f in fs])
-    if ns.stale_registers:
-        return run_stale(parsed, poll_reaching, verbose, moving_only,
-                         ns.fatal_sinks, ns.max_stale)
     n_binds = sum(
         1
         for _m, fs in parsed
@@ -2007,6 +2116,53 @@ def main():
         for ins in f.insns[b]
         if BIND_RE.search(ins.text)
     )
+
+    # `--min-funcs` is a corpus-BREADTH floor that belongs to every mode, so it
+    # is computed HERE, above the mode branches, and not below them.
+    #
+    # It used to be computed below. `--stale-registers` and `--unrooted-allocas`
+    # both return before that point, so `--stale-registers --min-funcs 1200` ran
+    # to a verdict over a two-function corpus and exited 0 -- a documented
+    # liveness control silently disarmed by a mode flag, in the very script whose
+    # job is to catch gates that cannot fail. Reproduced on the self-test
+    # fixture (2 functions): stale mode and alloca mode both exited 0 at
+    # `--min-funcs 50` while the default bind-anchored mode correctly exited 2.
+    # Both modes consult it before returning now, and `self_test()` carries a
+    # failing and a passing arm for each so it cannot regress silently.
+    n_funcs = sum(len(fs) for _m, fs in parsed)
+
+    def funcs_floor_violated():
+        if n_funcs >= ns.min_funcs:
+            return False
+        print(f"error: checked {n_funcs} function(s), need at least "
+              f"{ns.min_funcs}. The corpus compiled but is too thin to have "
+              "exercised the lowerings this invariant runs through.",
+              file=sys.stderr)
+        return True
+
+    if ns.stale_registers:
+        # `--min-binds` is a CORPUS-sanity assertion, not a bind-anchored-check
+        # detail, so it has to be honoured here too. `heap_source_kind` decides
+        # a `slotload` is a heap-value source by looking the pointer up in
+        # `slot_of_alloca`, and that map is built from the same `BIND_RE`
+        # (`stale_uses_in_function`). Compile the corpus with
+        # PERRY_INLINE_SHADOW_SLOT=1 (or with a broken `--trace llvm`) and
+        # every shadow-slot source vanishes: `run_stale` reports `total 0`,
+        # exits 0, and looks exactly like a corpus with no stale registers in
+        # it. That is hazard 4 -- the gate runs but its subject never did.
+        if n_binds < ns.min_binds:
+            print(f"error: {n_binds} root store(s) in the corpus, need at "
+                  f"least {ns.min_binds}. The stale-register scan derives its "
+                  "shadow-slot sources from those stores, so a clean verdict "
+                  "here means the IR was not the IR you think it is "
+                  "(compile with PERRY_INLINE_SHADOW_SLOT=0).", file=sys.stderr)
+            return 2
+        # Breadth, same as the bind-anchored path applies below. A corpus can
+        # carry plenty of root stores and still be one module deep.
+        if funcs_floor_violated():
+            return 2
+        return run_stale(parsed, poll_reaching, verbose, moving_only,
+                         ns.fatal_sinks, ns.max_stale)
 
     if ns.unrooted_allocas:
         total = 0
@@ -2051,9 +2207,9 @@ def main():
             print(f"error: {n_allocas} gc-capable alloca(s) in the corpus, need "
                   f"at least {ns.min_binds}. Nothing was checked.", file=sys.stderr)
             return 2
+        if funcs_floor_violated():
+            return 2
         return 1 if total else 0
-
-    n_funcs = sum(len(fs) for _m, fs in parsed)
 
     found = []
     for mod, fs in parsed:
@@ -2106,11 +2262,7 @@ def main():
               "verdict here means the IR was not the IR you think it is "
               "(compile with PERRY_INLINE_SHADOW_SLOT=0).", file=sys.stderr)
         return 2
-    if n_funcs < ns.min_funcs:
-        print(f"error: checked {n_funcs} function(s), need at least "
-              f"{ns.min_funcs}. The corpus compiled but is too thin to have "
-              "exercised the lowerings this invariant runs through.",
-              file=sys.stderr)
+    if funcs_floor_violated():
         return 2
 
     # --- allowlist hygiene --------------------------------------------------

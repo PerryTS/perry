@@ -401,12 +401,13 @@ pub fn try_lower_closure_typed_local_call(
                         &format!("closure:{}", func_id),
                         TypedFeedbackContract::closure_direct_call(),
                     );
+                    // #7211: rooted save/restore. The displaced value is the
+                    // enclosing method's receiver and it is live across the
+                    // callee body; the restore below sits in the merge block,
+                    // so the slot index crosses the diamond exactly as the
+                    // bare register used to.
                     let prev_this = if callee_reads_this {
-                        Some(ctx.block().call(
-                            DOUBLE,
-                            "js_implicit_this_set",
-                            &[(DOUBLE, &undef_this)],
-                        ))
+                        Some(crate::expr::temp_root::implicit_this_save(ctx, &undef_this))
                     } else {
                         None
                     };
@@ -928,11 +929,7 @@ pub fn try_lower_closure_typed_local_call(
                     // body codegen never saw — reset `this` here (and only
                     // here) when the static gating skipped the outer reset.
                     let fallback_prev_this = if prev_this.is_none() {
-                        Some(ctx.block().call(
-                            DOUBLE,
-                            "js_implicit_this_set",
-                            &[(DOUBLE, &undef_this)],
-                        ))
+                        Some(crate::expr::temp_root::implicit_this_save(ctx, &undef_this))
                     } else {
                         None
                     };
@@ -943,10 +940,11 @@ pub fn try_lower_closure_typed_local_call(
                         fallback_args.push((DOUBLE, v.as_str()));
                     }
                     let fallback_value = ctx.block().call(DOUBLE, &runtime_fn, &fallback_args);
-                    if let Some(prev) = &fallback_prev_this {
-                        let _ = ctx
-                            .block()
-                            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, prev)]);
+                    // Inner save, released inside its own arm — so the outer
+                    // slot (restored in the merge block) is still live and the
+                    // temp-root depth matches on both paths into the merge.
+                    if let Some(prev) = fallback_prev_this {
+                        crate::expr::temp_root::implicit_this_restore(ctx, prev);
                     }
                     let after_fallback = ctx.block().label.clone();
                     if !ctx.block().is_terminated() {
@@ -961,10 +959,8 @@ pub fn try_lower_closure_typed_local_call(
                             (fallback_value.as_str(), after_fallback.as_str()),
                         ],
                     );
-                    if let Some(prev) = &prev_this {
-                        let _ = ctx
-                            .block()
-                            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, prev)]);
+                    if let Some(prev) = prev_this {
+                        crate::expr::temp_root::implicit_this_restore(ctx, prev);
                     }
                     return Ok(Some(merged));
                 }
@@ -972,18 +968,15 @@ pub fn try_lower_closure_typed_local_call(
             // Generic js_closure_callN dispatch (unknown func id, rest
             // params, or arity mismatch): the runtime-resolved callee may
             // read `this`, so the reset is unconditional here.
-            let prev_this =
-                ctx.block()
-                    .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &undef_this)]);
+            // #7211: rooted save/restore across the runtime-resolved callee.
+            let prev_this = crate::expr::temp_root::implicit_this_save(ctx, &undef_this);
             let runtime_fn = format!("js_closure_call{}", lowered_args.len());
             let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
             for v in &lowered_args {
                 call_args.push((DOUBLE, v.as_str()));
             }
             let result = ctx.block().call(DOUBLE, &runtime_fn, &call_args);
-            let _ = ctx
-                .block()
-                .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev_this)]);
+            crate::expr::temp_root::implicit_this_restore(ctx, prev_this);
             return Ok(Some(result));
         }
     }
