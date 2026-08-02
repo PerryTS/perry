@@ -1652,6 +1652,21 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             if !timer.cleared && timer.callback != 0 {
                 visitor.visit_i64_slot(&mut timer.callback);
             }
+            // #7210: `setInterval(fn, delay, ...args)` stores the trailing
+            // arguments in `IntervalTimer.args`, and this was the only one of
+            // the four blocks in this function that never walked them — the
+            // `CALLBACK_TIMERS` block above and both `MOCK_TIMERS` blocks below
+            // do. So `setInterval(fn, d, { … })` left the object in a table
+            // nothing scanned: swept at the first collection, then handed to the
+            // callback as a dangling pointer on the next tick.
+            //
+            // A partially-correct scanner is worse than an absent one — it reads
+            // as covered. This is also the runtime half of the codegen fix in
+            // the same change: rooting an argument across its own lowering buys
+            // nothing if the table it then lands in is not a root.
+            for arg in &mut timer.args {
+                visitor.visit_nanbox_f64_slot(arg);
+            }
             crate::async_context::scan_snapshot_roots_mut(&mut timer.context, visitor);
         }
     }

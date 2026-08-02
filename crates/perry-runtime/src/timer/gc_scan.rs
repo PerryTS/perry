@@ -174,6 +174,23 @@ fn scan_interval_timers_step(
             state.slot = 1;
         }
         if state.slot == 1 {
+            // #7210: the step twin of the `INTERVAL_TIMERS` args pass added to
+            // `scan_timer_roots_mut`. Cycle-based collections run ONLY the step
+            // scanner, so updating the stop-the-world function alone would leave
+            // `setInterval(fn, d, { … })` unrooted on exactly the incremental
+            // path — the same "only one of the two twins was updated" gap this
+            // file's `scan_mock_timers_step` comment already records.
+            while state.arg_index < timer.args.len() {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                visitor.visit_nanbox_f64_slot(&mut timer.args[state.arg_index]);
+                state.arg_index += 1;
+            }
+            state.slot = 2;
+            state.arg_index = 0;
+        }
+        if state.slot == 2 {
             if !crate::async_context::scan_snapshot_roots_mut_step(
                 &mut timer.context,
                 visitor,
@@ -183,7 +200,9 @@ fn scan_interval_timers_step(
             ) {
                 return false;
             }
-            state.slot = 2;
+            state.slot = 3;
+            state.context_entry = 0;
+            state.context_store = 0;
         }
         state.index += 1;
         state.finish_timer();

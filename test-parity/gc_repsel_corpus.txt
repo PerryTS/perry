@@ -350,3 +350,11 @@ test_gap_gc_regexp_receiver_rooting
 # Clean 5/5 on the shipped default (no polls, no pressure) both before and
 # after, so this is a `requires=move`-only witness like the #7207 trio.
 test_gap_gc_staging_args_rooting
+
+# --- #7210 runtime half: setInterval trailing args were in no root ----------
+# `scan_timer_roots_mut` walked `args` for CALLBACK_TIMERS and for both
+# MOCK_TIMERS lists, and NOT for INTERVAL_TIMERS; the incremental twin
+# `scan_interval_timers_step` had the same hole, and cycle-based collections run
+# only the step scanner. A partially-correct scanner is worse than an absent one
+# — it reads as covered. Measured at base: `BAD interval.a` from tick 2 onward.
+test_gap_gc_interval_args_rooting
