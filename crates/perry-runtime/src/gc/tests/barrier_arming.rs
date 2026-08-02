@@ -22,6 +22,26 @@ use super::support::*;
 //      without which (1) and (2) would both pass on a fixture that never
 //      produced an old→young edge at all.
 
+/// Opens the unarmed window for THIS TEST'S THREAD ONLY and closes it on drop.
+/// A global disarm would reach every concurrently-running test — measured: two
+/// `gc::tests::teardown` cases went red under the default parallel run before
+/// the override became thread-local. And closing on drop matters even so,
+/// because libtest may reuse the thread for a later test.
+struct UnarmedWindowGuard;
+
+impl UnarmedWindowGuard {
+    fn open() -> Self {
+        reset_barrier_arming_for_tests();
+        Self
+    }
+}
+
+impl Drop for UnarmedWindowGuard {
+    fn drop(&mut self) {
+        close_barrier_arming_window_for_tests();
+    }
+}
+
 /// The fixture the whole lever is about, and the shape of the bug it must not
 /// reintroduce: a **born-old** parent (`arena_alloc_gc_old`, exactly what
 /// `arena_alloc_gc` does for anything over `LARGE_OBJECT_THRESHOLD_BYTES` —
@@ -42,7 +62,7 @@ fn test_7187_unarmed_barrier_logs_nothing_and_first_snapshot_reconstructs() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    reset_barrier_arming_for_tests();
+    let _window = UnarmedWindowGuard::open();
 
     let (_old, fields, young) = unsafe { born_old_parent_with_young_child() };
     let slot_page = crate::arena::generation_page_for_addr(fields as usize);
@@ -125,7 +145,7 @@ fn test_7187_without_the_reconstruct_the_unarmed_edge_is_uncovered() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    reset_barrier_arming_for_tests();
+    let _window = UnarmedWindowGuard::open();
 
     let (_old, fields, young) = unsafe { born_old_parent_with_young_child() };
     let slot_page = crate::arena::generation_page_for_addr(fields as usize);
@@ -176,7 +196,7 @@ fn test_7187_minor_in_the_unarmed_window_has_complete_old_young_coverage() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    reset_barrier_arming_for_tests();
+    let _window = UnarmedWindowGuard::open();
 
     let (_old, _fields, _young) = unsafe { born_old_parent_with_young_child() };
     assert_eq!(

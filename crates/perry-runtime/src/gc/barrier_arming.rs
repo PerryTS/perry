@@ -56,6 +56,16 @@ static BARRIER_REMEMBERING_ARMED: std::sync::atomic::AtomicBool =
 
 #[inline]
 pub(super) fn barrier_remembering_armed() -> bool {
+    // The unarmed-window tests must not disarm the barrier for every OTHER test
+    // running concurrently — libtest gives each test its own thread but shares
+    // the process, and a global disarm made two `gc::tests::teardown` cases
+    // fail under the default parallel run. The override is thread-local so the
+    // window is opened only for the thread that asked for it. Production is a
+    // single relaxed load of the `static`; this arm compiles away entirely.
+    #[cfg(test)]
+    if let Some(forced) = TEST_ARMED_OVERRIDE.with(Cell::get) {
+        return forced;
+    }
     BARRIER_REMEMBERING_ARMED.load(Ordering::Relaxed)
 }
 
@@ -97,6 +107,12 @@ thread_local! {
 
     static RECONSTRUCT_CENSUS: Cell<RememberedReconstructCensus> =
         const { Cell::new(RememberedReconstructCensus::zero()) };
+
+    /// Test-only per-thread override of [`BARRIER_REMEMBERING_ARMED`]. See
+    /// [`barrier_remembering_armed`] for why the unarmed-window tests must not
+    /// reach for the global.
+    #[cfg(test)]
+    static TEST_ARMED_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 pub(super) fn remembered_reconstruct_census() -> RememberedReconstructCensus {
@@ -119,6 +135,10 @@ pub(super) fn arm_and_reconstruct_remembered_set_if_unarmed() {
     // hooks, and must not be able to recurse into a second reconstruct.
     REMEMBERED_SET_RECONSTRUCTED.with(|cell| cell.set(true));
     BARRIER_REMEMBERING_ARMED.store(true, Ordering::Relaxed);
+    // A thread that opened the unarmed window for itself has now closed it:
+    // drop the override so `barrier_remembering_armed` reads the real flag.
+    #[cfg(test)]
+    TEST_ARMED_OVERRIDE.with(|cell| cell.set(None));
 
     // `require_marked = false`: nothing is marked yet when a collector first
     // asks for the log, so the walk must consider every retained old parent.
@@ -144,21 +164,30 @@ pub(super) fn arm_and_reconstruct_remembered_set_if_unarmed() {
     });
 }
 
-/// Test-only: return the barrier to its process-start unarmed state so a test
-/// can exercise the unarmed window deliberately. Production has no way back —
-/// arming is one-way.
+/// Test-only: reopen the process-start unarmed window **for this thread only**,
+/// so a test can exercise it deliberately. Production has no way back — arming
+/// is one-way and global. Pair with [`close_barrier_arming_window_for_tests`],
+/// or the override outlives the test if libtest reuses the thread.
 #[cfg(test)]
 pub(super) fn reset_barrier_arming_for_tests() {
-    BARRIER_REMEMBERING_ARMED.store(false, Ordering::Relaxed);
+    TEST_ARMED_OVERRIDE.with(|cell| cell.set(Some(false)));
     REMEMBERED_SET_RECONSTRUCTED.with(|cell| cell.set(false));
     RECONSTRUCT_CENSUS.with(|cell| cell.set(RememberedReconstructCensus::zero()));
 }
 
-/// Test-only: arm the barrier without a reconstruct, for the barrier tests
-/// that assert the ARMED steady state and build their own heap shapes
-/// directly.
+/// Test-only: arm this thread's barrier WITHOUT a reconstruct. Only a test can
+/// reach this state, and reaching it is the point — it is the sabotage arm that
+/// proves the reconstruct is what recovers the unlogged edge.
 #[cfg(test)]
 pub(super) fn arm_barrier_for_tests() {
-    BARRIER_REMEMBERING_ARMED.store(true, Ordering::Relaxed);
+    TEST_ARMED_OVERRIDE.with(|cell| cell.set(Some(true)));
+    REMEMBERED_SET_RECONSTRUCTED.with(|cell| cell.set(true));
+}
+
+/// Test-only: drop this thread's override and restore the suite-wide armed
+/// default. Runs from the unarmed-window tests' RAII guard.
+#[cfg(test)]
+pub(super) fn close_barrier_arming_window_for_tests() {
+    TEST_ARMED_OVERRIDE.with(|cell| cell.set(None));
     REMEMBERED_SET_RECONSTRUCTED.with(|cell| cell.set(true));
 }
