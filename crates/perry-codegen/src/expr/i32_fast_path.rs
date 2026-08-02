@@ -1433,15 +1433,25 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             left,
             right,
         } if matches!(right.as_ref(), Expr::Integer(0)) => lower_expr_native_i32(ctx, left)?.value,
-        // Last-resort integer arithmetic, reached only when `lower_expr_value`
-        // could not produce a value at all. It is a SECOND emitter of the same
-        // `mul/add i32` chain the structural path above emits, so it carries
-        // the same #7232 exactness proof — otherwise a shape that reaches here
+        // Last-resort ARITHMETIC, reached when `lower_expr_value` could not
+        // produce a value at all. It is a SECOND emitter of the same
+        // `add/sub/mul i32` the structural path above emits, so it carries the
+        // same #7232 exactness proof — otherwise a shape that reaches here
         // would evaluate past double precision behind the fixed gate. Without
         // the proof the chain is evaluated in doubles and ToInt32-wrapped,
         // which is what the spec asks for.
+        //
+        // Scoped to `Add`/`Sub`/`Mul`, the only operators whose exact integer
+        // result can leave the double's exact range. The bitwise arm below is
+        // ToInt32-wrapped by definition and needs no proof — and must NOT get
+        // one: its operands here are untyped-but-ToInt32-consumed values
+        // (bcryptjs's `S[l >>> 24]` reaches exactly this arm), and routing
+        // those through `lower_expr` swaps a native `lshr` for a
+        // `js_dynamic_ushr` call. Measured on
+        // `benchmarks/suite/bench_typed_array_untyped_access.ts`.
         Expr::Binary { op, .. }
-            if is_i32_chain_op(*op) && region_i32_chain_magnitude_bits(ctx, e).is_none() =>
+            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                && region_i32_chain_magnitude_bits(ctx, e).is_none() =>
         {
             let d = lower_expr(ctx, e)?;
             ctx.block().toint32(&d)
