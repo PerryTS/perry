@@ -304,6 +304,201 @@ pub(crate) fn lower_imul_operand_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<St
     Ok(lower_expr_native_i32(ctx, e)?.value)
 }
 
+/// Every integer with `|v| <= 2^53` is exactly representable as an IEEE-754
+/// double; past that the ulp exceeds 1 and a JS `*`/`+` result is a *rounded*
+/// integer. This is the constant that makes an i32-native chain agree with JS —
+/// see [`i32_chain_magnitude_bits`].
+const F64_EXACT_INTEGER_BITS: u32 = 53;
+
+/// Magnitude bound of a leaf that is only known to be i32/u32-shaped.
+const I32_CHAIN_LEAF_BITS: u32 = 32;
+
+/// `|n| < 2^bits`.
+fn integer_magnitude_bits(n: i64) -> u32 {
+    64 - n.unsigned_abs().leading_zeros()
+}
+
+/// Cap an intermediate at the double's exact-integer range. `None` once the
+/// value could reach 2^53, which is where JS rounds and exact integer
+/// arithmetic does not.
+fn f64_exact_bits(bits: u32) -> Option<u32> {
+    (bits <= F64_EXACT_INTEGER_BITS).then_some(bits)
+}
+
+/// The combining operators an i32-native chain admits.
+fn is_i32_chain_op(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr
+    )
+}
+
+/// Magnitude bound of `left <op> right` from the operands' bounds.
+///
+/// `Add`/`Sub` grow the bound by one bit and `Mul` sums them — the same
+/// composition [`known_finite_magnitude_bits`] uses — but capped at 2^53
+/// instead of 2^63, because this bound gates *exact integer arithmetic* rather
+/// than a single `fptosi`.
+///
+/// The ToInt32/ToUint32-wrapped operators reset the bound to 32. Two of them
+/// carry a tighter one, which is what keeps masked/shifted hash mixing on the
+/// fast path once the cap exists: `x & m` with a non-negative literal mask
+/// lands in `[0, m]`, and `x >> k` / `x >>> k` by a literal `k` in `1..32` drop
+/// `k` bits off a 32-bit value. (Shift counts outside that range take the
+/// untightened 32 — JS masks the count to 5 bits, which this does not model.)
+fn combine_i32_chain_bits(op: BinaryOp, left: &Expr, right: &Expr, l: u32, r: u32) -> Option<u32> {
+    match op {
+        BinaryOp::Add | BinaryOp::Sub => f64_exact_bits(l.max(r) + 1),
+        BinaryOp::Mul => f64_exact_bits(l + r),
+        BinaryOp::BitAnd => {
+            let mask_bits = |e: &Expr| match e {
+                Expr::Integer(m) if *m >= 0 => Some(integer_magnitude_bits(*m)),
+                _ => None,
+            };
+            Some(
+                mask_bits(left)
+                    .into_iter()
+                    .chain(mask_bits(right))
+                    .min()
+                    .unwrap_or(I32_CHAIN_LEAF_BITS),
+            )
+        }
+        BinaryOp::Shr | BinaryOp::UShr => Some(match right {
+            Expr::Integer(k) if (1..32).contains(k) => I32_CHAIN_LEAF_BITS - *k as u32,
+            _ => I32_CHAIN_LEAF_BITS,
+        }),
+        BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl => Some(I32_CHAIN_LEAF_BITS),
+        _ => None,
+    }
+}
+
+/// Borrowed view of the fact tables the i32-chain rules consult, so the
+/// recursion carries one argument instead of eight.
+#[derive(Clone, Copy)]
+struct I32ChainEnv<'a> {
+    i32_slots: &'a std::collections::HashMap<u32, String>,
+    flat_const_arrays: &'a std::collections::HashMap<u32, FlatConstInfo>,
+    array_row_aliases: &'a std::collections::HashMap<u32, (u32, Box<Expr>)>,
+    integer_locals: &'a std::collections::HashSet<u32>,
+    clamp3_fns: &'a std::collections::HashSet<u32>,
+    clamp_u8_fns: &'a std::collections::HashSet<u32>,
+    integer_returning_fns: &'a std::collections::HashSet<u32>,
+    i32_identity_fns: &'a std::collections::HashSet<u32>,
+}
+
+/// (Issue #49) `Some(bits)` when `e` can be lowered as an i32-native
+/// expression — every leaf sourced from an i32 slot, a typed-array byte load,
+/// or an integer literal, combined by `Add/Sub/Mul` and the bitwise ops — where
+/// `bits` additionally proves the node's exact integer value satisfies
+/// `|v| < 2^bits`. `None` means "do not take the fast path".
+///
+/// ## The invariant (#7232)
+///
+/// An i32-native chain computes the **exact** two's-complement low 32 bits of
+/// the integer result. JS evaluates the same chain in doubles, rounding at
+/// *every* operator. The two agree only while each intermediate is exactly
+/// representable as a double, i.e. `|v| <= 2^53`: below that ceiling the JS
+/// double *is* the exact integer and `low32(exact) == ToInt32(double)`, above
+/// it the double has already discarded low bits the exact chain still carries.
+///
+/// `(x * 1103515245 + 12345) & 0x7fffffff` — an LCG step — is the shape that
+/// exposed this: the product is ~2^61, so Node's mask reads a rounded product
+/// (654583808) while an exact `mul i32` reads the true low bits (654583775).
+/// Capping the bound at 53 pushes such a chain onto the f64 path, whose
+/// `fmul`/`fadd` round exactly where the spec says to.
+///
+/// The old rule only required every *literal* to fit in i32, which is neither
+/// necessary (`Math.imul` is exempt) nor sufficient: `1103515245` fits, and its
+/// product with an i32-range local does not.
+fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
+    match e {
+        // Strict i32 range for a general leaf: a `>i32::MAX` literal must NOT
+        // enter an arbitrary i32 chain, because the i32 lowering truncates it
+        // to the low 32 bits while JS `*` sees the full value. Only
+        // `Math.imul` (below) and the runtime helper interpret an operand under
+        // exact-low-32 semantics.
+        Expr::Integer(n) => i32::try_from(*n).ok().map(|_| integer_magnitude_bits(*n)),
+        Expr::LocalGet(id) => (env.i32_slots.contains_key(id) || env.integer_locals.contains(id))
+            .then_some(I32_CHAIN_LEAF_BITS),
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => Some(8),
+        Expr::MathImul(a, b) => {
+            // `Math.imul(x, y) == ToInt32(ToUint32(x) * ToUint32(y) mod 2^32)`
+            // — defined as an exact low-32 multiply, so it is NOT subject to
+            // the 2^53 rule and an integer literal operand is exact under
+            // low-32 truncation even past `i32::MAX` (the `0x9e3779b1` mixer
+            // constant). Its *result* is an i32.
+            let operand_ok = |e: &Expr| {
+                matches!(e, Expr::Integer(n) if integer_is_i32_bit_representable(*n))
+                    || i32_chain_magnitude_bits(e, env).is_some()
+            };
+            (operand_ok(a) && operand_ok(b)).then_some(I32_CHAIN_LEAF_BITS)
+        }
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => {
+            i32_chain_magnitude_bits(left, env).map(|l| l.min(I32_CHAIN_LEAF_BITS))
+        }
+        Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
+            let l = i32_chain_magnitude_bits(left, env)?;
+            let r = i32_chain_magnitude_bits(right, env)?;
+            combine_i32_chain_bits(*op, left, right, l, r)
+        }
+        Expr::Call { callee, args, .. } => {
+            let Expr::FuncRef(fid) = callee.as_ref() else {
+                return None;
+            };
+            if !((env.clamp3_fns.contains(fid) && args.len() == 3)
+                || (env.clamp_u8_fns.contains(fid) && args.len() == 1)
+                || env.integer_returning_fns.contains(fid))
+            {
+                return None;
+            }
+            if env.integer_returning_fns.contains(fid)
+                && !env.clamp3_fns.contains(fid)
+                && !env.clamp_u8_fns.contains(fid)
+                && !env.i32_identity_fns.contains(fid)
+            {
+                return None;
+            }
+            args.iter()
+                .all(|a| i32_chain_magnitude_bits(a, env).is_some())
+                .then_some(I32_CHAIN_LEAF_BITS)
+        }
+        // Issue #50 bridge: element of a flat-const 2D int table.
+        Expr::IndexGet { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } => {
+                matches!(inner.as_ref(), Expr::LocalGet(id) if env.flat_const_arrays.contains_key(id))
+            }
+            Expr::LocalGet(id) => env
+                .array_row_aliases
+                .get(id)
+                .is_some_and(|(cid, _)| env.flat_const_arrays.contains_key(cid)),
+            _ => false,
+        }
+        .then_some(I32_CHAIN_LEAF_BITS),
+        _ => None,
+    }
+}
+
+/// (Issue #49) Return `true` if `e` can be lowered as an i32-native
+/// expression. Used by the `LocalSet` fast path to decide whether the rhs can
+/// bypass the fp round-trip.
+///
+/// The fallback `lower_expr_as_i32` path is `toint32(lower_expr())`, which is
+/// always correct — it evaluates the chain in doubles exactly as the spec
+/// requires — so returning `false` is always the safe direction. We only commit
+/// to the fast path when every leaf is recognizably int-sourced AND the whole
+/// chain is provably f64-exact ([`i32_chain_magnitude_bits`]).
 pub(crate) fn can_lower_expr_as_i32(
     e: &Expr,
     i32_slots: &std::collections::HashMap<u32, String>,
@@ -315,43 +510,9 @@ pub(crate) fn can_lower_expr_as_i32(
     integer_returning_fns: &std::collections::HashSet<u32>,
     i32_identity_fns: &std::collections::HashSet<u32>,
 ) -> bool {
-    match e {
-        // Strict i32 range for a general leaf: a `>i32::MAX` literal must NOT
-        // enter an arbitrary i32 chain. In particular `x * BIGLIT | 0` computes
-        // the product in f64 (JS `*`), which loses precision above 2^53, so an
-        // exact `mul i32` would diverge from `ToInt32(f64_product)`. Only
-        // `Math.imul` (below) and the runtime helper interpret the operand under
-        // exact-low-32 semantics.
-        Expr::Integer(n) => i32::try_from(*n).is_ok(),
-        Expr::LocalGet(id) => i32_slots.contains_key(id) || integer_locals.contains(id),
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
-        Expr::MathImul(a, b) => {
-            // `Math.imul(x, y) == ToInt32(ToUint32(x) * ToUint32(y) mod 2^32)`,
-            // so an integer literal operand is exact under low-32 truncation
-            // even when it exceeds `i32::MAX` (e.g. the `0x9e3779b1` mixer
-            // constant). Accept 32-bit-representable literal operands here only.
-            let operand_ok = |e: &Expr| {
-                matches!(e, Expr::Integer(n) if integer_is_i32_bit_representable(*n))
-                    || can_lower_expr_as_i32(
-                        e,
-                        i32_slots,
-                        flat_const_arrays,
-                        array_row_aliases,
-                        integer_locals,
-                        clamp3_fns,
-                        clamp_u8_fns,
-                        integer_returning_fns,
-                        i32_identity_fns,
-                    )
-            };
-            operand_ok(a) && operand_ok(b)
-        }
-        Expr::Binary {
-            op: BinaryOp::BitOr,
-            left,
-            right,
-        } if matches!(right.as_ref(), Expr::Integer(0)) => can_lower_expr_as_i32(
-            left,
+    i32_chain_magnitude_bits(
+        e,
+        I32ChainEnv {
             i32_slots,
             flat_const_arrays,
             array_row_aliases,
@@ -360,85 +521,9 @@ pub(crate) fn can_lower_expr_as_i32(
             clamp_u8_fns,
             integer_returning_fns,
             i32_identity_fns,
-        ),
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-                    | BinaryOp::UShr
-            ) =>
-        {
-            can_lower_expr_as_i32(
-                left,
-                i32_slots,
-                flat_const_arrays,
-                array_row_aliases,
-                integer_locals,
-                clamp3_fns,
-                clamp_u8_fns,
-                integer_returning_fns,
-                i32_identity_fns,
-            ) && can_lower_expr_as_i32(
-                right,
-                i32_slots,
-                flat_const_arrays,
-                array_row_aliases,
-                integer_locals,
-                clamp3_fns,
-                clamp_u8_fns,
-                integer_returning_fns,
-                i32_identity_fns,
-            )
-        }
-        Expr::Call { callee, args, .. } => {
-            if let Expr::FuncRef(fid) = callee.as_ref() {
-                if (clamp3_fns.contains(fid) && args.len() == 3)
-                    || (clamp_u8_fns.contains(fid) && args.len() == 1)
-                    || integer_returning_fns.contains(fid)
-                {
-                    if integer_returning_fns.contains(fid)
-                        && !clamp3_fns.contains(fid)
-                        && !clamp_u8_fns.contains(fid)
-                        && !i32_identity_fns.contains(fid)
-                    {
-                        return false;
-                    }
-                    return args.iter().all(|a| {
-                        can_lower_expr_as_i32(
-                            a,
-                            i32_slots,
-                            flat_const_arrays,
-                            array_row_aliases,
-                            integer_locals,
-                            clamp3_fns,
-                            clamp_u8_fns,
-                            integer_returning_fns,
-                            i32_identity_fns,
-                        )
-                    });
-                }
-            }
-            false
-        }
-        // Issue #50 bridge: element of a flat-const 2D int table.
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
-                matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_arrays.contains_key(id))
-            }
-            Expr::LocalGet(id) => array_row_aliases
-                .get(id)
-                .is_some_and(|(cid, _)| flat_const_arrays.contains_key(cid)),
-            _ => false,
         },
-        _ => false,
-    }
+    )
+    .is_some()
 }
 
 /// `object[index]` on a width-tracked typed-array local whose element kind is
@@ -708,79 +793,79 @@ fn packed_u32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
         .cloned()
 }
 
-pub(crate) fn can_lower_expr_as_i32_in_current_region(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    if matches!(e, Expr::IterResultGetValue) {
-        return true;
+/// The fact tables [`i32_chain_magnitude_bits`] consults, taken from `ctx`.
+fn ctx_i32_chain_env<'a>(ctx: &'a FnCtx<'_>) -> I32ChainEnv<'a> {
+    I32ChainEnv {
+        i32_slots: &ctx.i32_counter_slots,
+        flat_const_arrays: ctx.flat_const_arrays,
+        array_row_aliases: &ctx.array_row_aliases,
+        integer_locals: ctx.native_facts.integer_locals(),
+        clamp3_fns: ctx.clamp3_functions,
+        clamp_u8_fns: ctx.clamp_u8_functions,
+        integer_returning_fns: ctx.integer_returning_functions,
+        i32_identity_fns: ctx.i32_identity_functions,
     }
-    if can_lower_expr_as_i32(
-        e,
-        &ctx.i32_counter_slots,
-        ctx.flat_const_arrays,
-        &ctx.array_row_aliases,
-        ctx.native_facts.integer_locals(),
-        ctx.clamp3_functions,
-        ctx.clamp_u8_functions,
-        ctx.integer_returning_functions,
-        ctx.i32_identity_functions,
-    ) {
-        return true;
+}
+
+pub(crate) fn can_lower_expr_as_i32_in_current_region(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    region_i32_chain_magnitude_bits(ctx, e).is_some()
+}
+
+/// Region-aware [`i32_chain_magnitude_bits`]: the ctx-free leaf set plus the
+/// per-scope proofs (packed-loop element reads, bounds-proven typed-array
+/// loads, masked-window loads), all of which are i32-valued leaves. The 2^53
+/// exactness cap (#7232) is the same one, applied through the same combiner —
+/// a region leaf is not a licence to evaluate past double precision.
+fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
+    if matches!(e, Expr::IterResultGetValue) {
+        return Some(I32_CHAIN_LEAF_BITS);
+    }
+    if let Some(bits) = i32_chain_magnitude_bits(e, ctx_i32_chain_env(ctx)) {
+        return Some(bits);
     }
     if packed_i32_loop_index_get_fact(ctx, e).is_some() {
-        return true;
+        return Some(I32_CHAIN_LEAF_BITS);
     }
     match e {
-        Expr::MathImul(left, right) => {
-            imul_operand_i32_lowerable_in_current_region(ctx, left)
-                && imul_operand_i32_lowerable_in_current_region(ctx, right)
-        }
+        Expr::MathImul(left, right) => (imul_operand_i32_lowerable_in_current_region(ctx, left)
+            && imul_operand_i32_lowerable_in_current_region(ctx, right))
+        .then_some(I32_CHAIN_LEAF_BITS),
         Expr::Binary {
             op: BinaryOp::BitOr,
             left,
             right,
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
-            can_lower_expr_as_i32_in_current_region(ctx, left)
+            region_i32_chain_magnitude_bits(ctx, left).map(|l| l.min(I32_CHAIN_LEAF_BITS))
         }
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-                    | BinaryOp::UShr
-            ) =>
-        {
-            can_lower_expr_as_i32_in_current_region(ctx, left)
-                && can_lower_expr_as_i32_in_current_region(ctx, right)
+        Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
+            let l = region_i32_chain_magnitude_bits(ctx, left)?;
+            let r = region_i32_chain_magnitude_bits(ctx, right)?;
+            combine_i32_chain_bits(*op, left, right, l, r)
         }
         Expr::Call { callee, args, .. } => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
-                return false;
+                return None;
             };
-            ((ctx.clamp3_functions.contains(fid) && args.len() == 3)
+            (((ctx.clamp3_functions.contains(fid) && args.len() == 3)
                 || (ctx.clamp_u8_functions.contains(fid) && args.len() == 1)
                 || ctx.i32_identity_functions.contains(fid))
                 && args
                     .iter()
-                    .all(|arg| can_lower_expr_as_i32_in_current_region(ctx, arg))
+                    .all(|arg| can_lower_expr_as_i32_in_current_region(ctx, arg)))
+            .then_some(I32_CHAIN_LEAF_BITS)
         }
-        Expr::IndexGet { object, index } => {
-            ta_int_elem_load_is_i32_provable(ctx, object, index)
-                || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
-                // The checked-kind fast path lowers `index` through `fptosi`
-                // (ToInt32), so a fractional index like `S[3.9]` would read
-                // element 3 — JS reads a fractional typed-array index as
-                // `undefined` (→ 0 in this ToInt32 consumer). Only take it with a
-                // proven integer index (the same gate the sibling typed-array
-                // read paths use in `index_get.rs`).
-                || (checked_typed_array_i32_kind(ctx, object).is_some()
-                    && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index))
-        }
-        _ => false,
+        Expr::IndexGet { object, index } => (ta_int_elem_load_is_i32_provable(ctx, object, index)
+            || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
+            // The checked-kind fast path lowers `index` through `fptosi`
+            // (ToInt32), so a fractional index like `S[3.9]` would read
+            // element 3 — JS reads a fractional typed-array index as
+            // `undefined` (→ 0 in this ToInt32 consumer). Only take it with a
+            // proven integer index (the same gate the sibling typed-array
+            // read paths use in `index_get.rs`).
+            || (checked_typed_array_i32_kind(ctx, object).is_some()
+                && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index)))
+        .then_some(I32_CHAIN_LEAF_BITS),
+        _ => None,
     }
 }
 
@@ -1311,20 +1396,20 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             left,
             right,
         } if matches!(right.as_ref(), Expr::Integer(0)) => lower_expr_native_i32(ctx, left)?.value,
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-                    | BinaryOp::UShr
-            ) =>
+        // Last-resort integer arithmetic, reached only when `lower_expr_value`
+        // could not produce a value at all. It is a SECOND emitter of the same
+        // `mul/add i32` chain the structural path above emits, so it carries
+        // the same #7232 exactness proof — otherwise a shape that reaches here
+        // would evaluate past double precision behind the fixed gate. Without
+        // the proof the chain is evaluated in doubles and ToInt32-wrapped,
+        // which is what the spec asks for.
+        Expr::Binary { op, .. }
+            if is_i32_chain_op(*op) && region_i32_chain_magnitude_bits(ctx, e).is_none() =>
         {
+            let d = lower_expr(ctx, e)?;
+            ctx.block().toint32(&d)
+        }
+        Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
             let l = lower_expr_native_i32(ctx, left)?.value;
             let r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
