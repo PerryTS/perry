@@ -73,7 +73,8 @@ pub struct Rooted {
 }
 
 /// A register holding something the GC does not manage: i32, double, bool,
-/// a slot index. Freely copyable, no lifetime.
+/// a slot index. Freely clonable, no lifetime, no borrow of the emitter.
+#[derive(Clone)]
 pub struct Plain(String);
 ```
 
@@ -160,9 +161,11 @@ The honest number is large but the distribution is favourable.
 
 - **~2500 builder call sites**, 35 files. Most are *not* GC-managed: loop
   counters, `double` arithmetic, NaN-box bit twiddling, slot indices. Those
-  become `Plain`, which is `Copy` and imposes nothing. A rough read of the call
-  sites suggests **300–500 genuinely handle GC pointers** — the ones in
-  `expr/`, `lower_call/`, and the object/array/closure literal paths.
+  become `Plain`, which is `Clone` and imposes nothing — it holds a register
+  name, so it cannot be `Copy`, but it borrows nothing and outlives every `&mut`
+  emit. A rough read of the call sites suggests **300–500 genuinely handle GC
+  pointers** — the ones in `expr/`, `lower_call/`, and the object/array/closure
+  literal paths.
 - **8 `rooted_handle_begin` sites** exist today, so the *explicit* rooting
   surface is currently tiny. That is the point: the sites that need rooting and
   do not have it are the bugs.
@@ -216,6 +219,19 @@ than one known to be partial:
   table is trusted input. This is why the checker must stay: it derives its
   verdict from the emitted IR, so the two failure modes are not correlated.
 - **The escape hatch**, for as long as any caller uses it.
+- **Confusion of two emitters, or of two shadow frames.** `PhantomData<&'e
+  Emitter>` records a *lifetime*, not an *instance*, and `&'e T` makes `Raw<'e>`
+  **covariant** in `'e` — a longer-lived `Raw` shortens to any compatible `'e`.
+  Nothing in the type names *which* emitter it came from, so a `Raw` minted by
+  one emitter type-checks against a different `&mut Emitter` whose borrow
+  region fits. The same hole exists for `Rooted`, which carries a bare
+  `SlotIdx` and so does not name the `ShadowFrame` that allocated it; a
+  `Rooted` outliving its frame's pop, or read against a sibling frame, is
+  accepted. Closing this needs invariant branding (a generic `Id` parameter
+  over an invariant lifetime, `GhostToken`-style) rather than `PhantomData`
+  alone, and `Rooted` needs to borrow its frame. That is a real cost to price
+  into step 1 — as written, the design catches *ordering* mistakes, not
+  *provenance* ones.
 - **Runtime-side rooting.** `RuntimeHandleScope` in `perry-runtime` is a
   separate discipline over hand-written Rust; nothing here touches it.
 - **Anything interprocedural.** A lowering that returns a `Raw` to a caller that
