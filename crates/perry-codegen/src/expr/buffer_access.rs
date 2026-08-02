@@ -200,43 +200,19 @@ pub(crate) fn access_facts_for_spec(
     }
 }
 
+// Both of these used to branch on `can_lower_expr_as_i32` into two identical
+// arms — `lower_expr_native(.., I32)` either way, so the predicate's answer was
+// computed and thrown away. `lower_expr_native` makes the same decision
+// internally and correctly; the outer call was pure cost, and #7232 made it a
+// whole-subtree walk instead of a shape check. (CodeRabbit, PR #7237.)
+
 fn lower_index_i32_value(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<LoweredValue> {
-    let value = if can_lower_expr_as_i32(
-        index,
-        &ctx.i32_counter_slots,
-        ctx.flat_const_arrays,
-        &ctx.array_row_aliases,
-        ctx.native_facts.integer_locals(),
-        &ctx.const_number_locals,
-        ctx.clamp3_functions,
-        ctx.clamp_u8_functions,
-        ctx.integer_returning_functions,
-        ctx.i32_identity_functions,
-    ) {
-        lower_expr_native(ctx, index, crate::native_value::ExpectedNativeRep::I32)?.value
-    } else {
-        lower_expr_native(ctx, index, crate::native_value::ExpectedNativeRep::I32)?.value
-    };
+    let value = lower_expr_native(ctx, index, crate::native_value::ExpectedNativeRep::I32)?.value;
     Ok(LoweredValue::i32(value))
 }
 
 fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
-    if can_lower_expr_as_i32(
-        value,
-        &ctx.i32_counter_slots,
-        ctx.flat_const_arrays,
-        &ctx.array_row_aliases,
-        ctx.native_facts.integer_locals(),
-        &ctx.const_number_locals,
-        ctx.clamp3_functions,
-        ctx.clamp_u8_functions,
-        ctx.integer_returning_functions,
-        ctx.i32_identity_functions,
-    ) {
-        Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
-    } else {
-        Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
-    }
+    Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
 }
 
 pub(crate) fn can_lower_integer_typed_array_store_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {

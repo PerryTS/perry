@@ -273,7 +273,8 @@ fn literal_leaves_carry_their_own_width() {
 #[test]
 fn const_literal_locals_carry_their_literal_width() {
     assert_eq!(bits(&k()), Some(7));
-    // `(y + -1) * WIDTH + (x + -1)` — the convolution index. 33 + 7 = 40.
+    // `(x + -1) * WIDTH + (y + -1)` — the convolution index. The product is
+    // 33 + 7 = 40 bits; the outer `Add` takes it to 41.
     let row = add(x(), Expr::Integer(-1));
     let idx = add(mul(row, k()), add(y(), Expr::Integer(-1)));
     assert_eq!(bits(&idx), Some(41));

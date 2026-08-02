@@ -37,6 +37,6 @@
 
   Covered by `test-files/test_gap_7232_i32_chain_double_rounding.ts` (the
   issue's three shapes, every ToInt32-shaped consumer, the 2^53 boundary from
-  both sides, and the chains that must stay exact) and by twelve unit tests in
+  both sides, and the chains that must stay exact) and by fourteen unit tests in
   `crates/perry-codegen/src/expr/i32_fast_path/bits_tests.rs` that are
   sabotage-checked in both directions.
