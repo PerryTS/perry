@@ -17,6 +17,9 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
+#[cfg(test)]
+mod bits_tests;
+
 /// Returns true if `e` provably produces a finite double whose magnitude is
 /// small enough (`|v| < 2^63`) for the unguarded `toint32_fast` lowering.
 /// Used to skip the NaN/Inf/range guard in `toint32` for integer-arithmetic
