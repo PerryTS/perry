@@ -482,12 +482,110 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
 /// * **`PERRY_DEBUG_SYMBOLS`**: no effect on any of the above. It was believed
 ///   to put the `.ll`'s absolute path into DWARF; measured, it does not put
 ///   anything there at all. See `TEMP_NONCE_COUNTER`.
+/// exp/llvm-inprocess: truthy `PERRY_LLVM_INPROCESS` routes `.ll -> .o`
+/// through the LLVM C API inside this process (no clang subprocess, no `.ll`
+/// on disk). The flag participates in both the build cache and the object
+/// cache keys, so the two backends can never share a cached object.
+fn inprocess_requested() -> bool {
+    match env::var("PERRY_LLVM_INPROCESS").as_deref() {
+        Ok("") | Ok("0") | Ok("off") | Ok("false") | Err(_) => false,
+        Ok(_) => true,
+    }
+}
+
+#[cfg(feature = "llvm-inprocess")]
+fn compile_ll_inprocess_in(
+    tmp_dir: &Path,
+    ll_text: &str,
+    target_triple: Option<&str>,
+    policy: TempFilePolicy,
+) -> Result<Vec<u8>> {
+    let (paths, _pid, _nonce) = llvm_temp_paths(tmp_dir, ll_text);
+    // Same decision inputs as the clang path — opt level (#4880 fallback
+    // included), CPU tuning, inlinehint threshold — via the same plan
+    // constructor, so the backends cannot drift on a decision independently.
+    let plan = build_clang_compile_plan(
+        PathBuf::from("(in-process)"),
+        paths.ll_path.clone(),
+        paths.obj_path.clone(),
+        target_triple,
+        ll_text.len(),
+        count_ll_functions(ll_text),
+        policy.debug_symbols,
+    );
+    // #7131 parity: the module identifier is the content-addressed basename,
+    // the only name that can reach the object bytes.
+    let module_name = paths
+        .ll_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "perry_module.ll".to_string());
+    if policy.keep {
+        fs::create_dir_all(&paths.scratch_dir)
+            .with_context(|| format!("Failed to create {}", paths.scratch_dir.display()))?;
+        fs::write(&paths.ll_path, ll_text)
+            .with_context(|| format!("Failed to write {}", paths.ll_path.display()))?;
+        let metadata_path = PathBuf::from(format!("{}.compile-plan.json", plan.obj_path.display()));
+        write_compile_plan_metadata(&plan, &metadata_path)?;
+        eprintln!("[perry-codegen] kept LLVM IR: {}", paths.ll_path.display());
+        eprintln!(
+            "[perry-codegen] kept compile metadata: {}",
+            metadata_path.display()
+        );
+    }
+    match crate::inprocess::compile_ll_to_object_inprocess(
+        ll_text,
+        &plan.effective_target,
+        &plan.clang_args,
+        &module_name,
+    ) {
+        Ok(bytes) => Ok(bytes),
+        Err(e) => {
+            // Same contract as a failed clang compile: the IR that produced
+            // the failure is left on disk and named in the error.
+            let _ = fs::create_dir_all(&paths.scratch_dir);
+            let _ = fs::write(&paths.ll_path, ll_text);
+            Err(anyhow!(
+                "in-process LLVM compile failed (PERRY_LLVM_INPROCESS).\n\
+                 requested -target: {}\n\
+                 LLVM IR left at: {}\n\
+                 \n\
+                 {}",
+                plan.effective_target,
+                paths.ll_path.display(),
+                e
+            ))
+        }
+    }
+}
+
+#[cfg(not(feature = "llvm-inprocess"))]
+fn compile_ll_inprocess_in(
+    _tmp_dir: &Path,
+    _ll_text: &str,
+    _target_triple: Option<&str>,
+    _policy: TempFilePolicy,
+) -> Result<Vec<u8>> {
+    // Fail loudly rather than silently falling back: an A/B arm that asked
+    // for the in-process backend must never be served the text path.
+    bail!(
+        "PERRY_LLVM_INPROCESS is set, but this perry was built without the \
+         `llvm-inprocess` cargo feature. Rebuild with \
+         `cargo build -p perry --features llvm-inprocess` (needs LLVM 22: \
+         `brew install llvm`, and LLVM_SYS_221_PREFIX if llvm-config is not \
+         on PATH), or unset PERRY_LLVM_INPROCESS."
+    )
+}
+
 fn compile_ll_to_object_in(
     tmp_dir: &Path,
     ll_text: &str,
     target_triple: Option<&str>,
     policy: TempFilePolicy,
 ) -> Result<Vec<u8>> {
+    if inprocess_requested() {
+        return compile_ll_inprocess_in(tmp_dir, ll_text, target_triple, policy);
+    }
     // Validate the toolchain before creating the potentially large `.ll`
     // scratch file. Unsupported clang releases should fail without leaving
     // an artifact that was never passed to the compiler.

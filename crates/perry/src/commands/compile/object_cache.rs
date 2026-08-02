@@ -786,6 +786,13 @@ fn compute_object_cache_key_with_env(
         "env_llvm_clang",
         env_var("PERRY_LLVM_CLANG").as_deref().unwrap_or(""),
     );
+    // exp/llvm-inprocess: the in-process backend emits with its own pinned
+    // LLVM; sharing objects with the clang subprocess path would make every
+    // A/B between the backends vacuous.
+    h.field(
+        "env_llvm_inprocess",
+        env_var("PERRY_LLVM_INPROCESS").as_deref().unwrap_or(""),
+    );
     h.field(
         "env_write_barriers",
         env_var("PERRY_WRITE_BARRIERS").as_deref().unwrap_or(""),
