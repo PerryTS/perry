@@ -1,0 +1,11 @@
+target/
+demo-out/
+*.o
+*.out
+*.err
+*.log
+spike_text
+spike_inproc
+spike_text.ll
+spike_roundtrip.ll
+roundtrip.diff

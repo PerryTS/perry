@@ -40,8 +40,17 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
-use inkwell::values::AsValueRef;
+use inkwell::values::{AsValueRef, CallSiteValue, IntValue};
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
+
+/// inkwell 0.9 returns a `ValueKind` from `try_as_basic_value`; all demo
+/// callees return i64, so collapse to the IntValue or panic loudly.
+fn call_ret_i64(cs: CallSiteValue<'_>) -> IntValue<'_> {
+    match cs.try_as_basic_value() {
+        inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+        other => panic!("call did not produce a basic value: {other:?}"),
+    }
+}
 
 // NaN-box tags, mirrored from perry-runtime/src/value.rs.
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -332,27 +341,21 @@ fn run_demo(outdir: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     // Push the NaN-box constants through the bitcast fn and print their bits.
-    let undef_bits = builder
-        .build_call(bits_fn, &[undef_const.into()], "u")
-        .map_err(|e| e.to_string())?
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_int_value();
-    let int42_bits = builder
-        .build_call(bits_fn, &[int42_const.into()], "i")
-        .map_err(|e| e.to_string())?
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_int_value();
-    let gc_out = builder
-        .build_call(gc_fn, &[i64t.const_int(41, false).into()], "g")
-        .map_err(|e| e.to_string())?
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_int_value();
+    let undef_bits = call_ret_i64(
+        builder
+            .build_call(bits_fn, &[undef_const.into()], "u")
+            .map_err(|e| e.to_string())?,
+    );
+    let int42_bits = call_ret_i64(
+        builder
+            .build_call(bits_fn, &[int42_const.into()], "i")
+            .map_err(|e| e.to_string())?,
+    );
+    let gc_out = call_ret_i64(
+        builder
+            .build_call(gc_fn, &[i64t.const_int(41, false).into()], "g")
+            .map_err(|e| e.to_string())?,
+    );
     // Tag-check pattern from generated code: (bits >> 32) == 0x7FFE ?
     let hi = builder
         .build_right_shift(int42_bits, i64t.const_int(32, false), false, "hi")
