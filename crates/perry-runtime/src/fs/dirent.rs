@@ -129,13 +129,15 @@ pub(crate) unsafe fn options_with_file_types(options_value: f64) -> bool {
     } else {
         return false;
     };
-    if raw_ptr < 0x1000 {
+    // #7259: a POINTER_TAG payload can be a registry handle id rather than a
+    // heap address, and `< 0x1000` sits an order of magnitude below
+    // `HANDLE_BAND_MAX` — fetch/zlib/proxy ids passed it and were dereferenced
+    // as an ObjectHeader (the Linux-only fault class of #1843/#4004/#6271).
+    // `is_handle_band` also subsumes the null check that used to follow.
+    if crate::value::addr_class::is_handle_band(raw_ptr) {
         return false;
     }
     let obj_ptr = raw_ptr as *const crate::object::ObjectHeader;
-    if obj_ptr.is_null() {
-        return false;
-    }
     let key = crate::string::js_string_from_bytes(b"withFileTypes".as_ptr(), 13);
     let val = crate::object::js_object_get_field_by_name(obj_ptr, key);
     crate::value::js_is_truthy(f64::from_bits(val.bits())) != 0
@@ -181,13 +183,13 @@ pub(crate) unsafe fn options_field_value(
     } else {
         return None;
     };
-    if raw_ptr < 0x1000 {
+    // #7259: see `options_with_file_types` — a POINTER_TAG payload can be a
+    // registry handle id, and `is_handle_band` (not `< 0x1000`) is the floor
+    // that rejects the fetch/zlib/proxy bands. It subsumes the null check too.
+    if crate::value::addr_class::is_handle_band(raw_ptr) {
         return None;
     }
     let obj_ptr = raw_ptr as *const crate::object::ObjectHeader;
-    if obj_ptr.is_null() {
-        return None;
-    }
     let keys = (*obj_ptr).keys_array;
     if !keys.is_null() {
         let key_count = crate::array::js_array_length(keys) as usize;
@@ -214,13 +216,11 @@ pub(crate) unsafe fn options_field_value(
     } else {
         return None;
     };
-    if refreshed_ptr < 0x1000 {
+    // #7259: same handle-band floor after the GC-safe re-read of the handle.
+    if crate::value::addr_class::is_handle_band(refreshed_ptr) {
         return None;
     }
     let refreshed_obj_ptr = refreshed_ptr as *const crate::object::ObjectHeader;
-    if refreshed_obj_ptr.is_null() {
-        return None;
-    }
     let val = crate::object::js_object_get_field_by_name(refreshed_obj_ptr, key);
     if val.bits() == crate::value::TAG_UNDEFINED {
         None

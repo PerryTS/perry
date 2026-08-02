@@ -449,6 +449,36 @@ def run_self_tests() -> int:
         "gc/ must be exempt",
     )
 
+    # A hand-rolled floor rewritten through the addr_class predicates must
+    # clear the rule — otherwise the gate would block its own fix (#7259).
+    for fixed in (
+        "if crate::value::addr_class::is_handle_band(raw_ptr) {\n",
+        "raw > 0 && crate::value::addr_class::is_above_handle_band(raw as usize)\n",
+    ):
+        expect(
+            not any(f.rule == "handle-floor" for f in scan_text(runtime, fixed)),
+            f"handle-floor must not fire on the addr_class fix shape: {fixed.strip()}",
+        )
+
+    # fs.constants spells O_SYMLINK two ways; an allowlist entry keyed on one
+    # spelling silently stops covering the other (#7259). Both forms are the
+    # POSIX fcntl flag, and both must be suppressed by the single entry.
+    constants = "crates/perry-runtime/src/object/native_module/constants.rs"
+    o_symlink_entries = [
+        e for e in load_allowlist(DEFAULT_ALLOWLIST) if e.path_prefix == constants
+    ]
+    for spelling in (
+        '    ("O_SYMLINK", (0x200000) as f64),\n',
+        '        "O_SYMLINK" => Some(0x200000),\n',
+    ):
+        hits = scan_text(constants, spelling)
+        expect(
+            bool(hits) and all(
+                any(e.matches(h) for e in o_symlink_entries) for h in hits
+            ),
+            f"O_SYMLINK allowlist must cover the spelling: {spelling.strip()}",
+        )
+
     # Allowlist matching: prefix + substring, prefix + wildcard.
     finding = Finding(runtime, 1, "gcheader-cast", "x as *const GcHeader")
     expect(

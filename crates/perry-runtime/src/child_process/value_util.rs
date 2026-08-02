@@ -100,7 +100,13 @@ pub(crate) fn cp_box_string(s: &str) -> f64 {
 /// route through the unified accessor which materializes SSO bytes.
 pub(crate) fn cp_value_to_string(value: f64) -> Option<String> {
     let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
+    // #7259: `js_get_string_pointer_unified` forwards a POINTER_TAG payload
+    // verbatim, and those payloads carry registry handle ids as well as heap
+    // pointers. The old `< 0x1000` floor sat an order of magnitude below
+    // `HANDLE_BAND_MAX`, so a fetch/zlib/proxy id sailed through into the
+    // `(*ptr).byte_len` read below — the Linux-only segfault class of #1843 /
+    // #4004 / #6271, which macOS's high allocation base hides.
+    if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
         return None;
     }
     unsafe {
@@ -215,14 +221,28 @@ pub(crate) fn cp_args_from_value(value: f64) -> Vec<String> {
     }
 }
 
+/// True when a codegen-supplied raw argument slot holds a dereferenceable heap
+/// pointer, rather than an absent argument or a small registry handle id.
+///
+/// #7259: the previous `> 0x10000` / `<= 0x10000` floors sat an order of
+/// magnitude below `HANDLE_BAND_MAX`, so a fetch (0x40000..0xE0000), zlib
+/// (0xE0000..0xF0000) or proxy (0xF0000..0x100000) id in the slot was boxed as
+/// a pointer and then dereferenced by `cp_array_ptr` / `cp_object_ptr`. The
+/// explicit `raw > 0` keeps the old signed comparison's rejection of negative
+/// slots, which `as usize` alone would turn into a huge "above the band" value.
+#[inline]
+fn cp_raw_slot_is_heap_ptr(raw: i64) -> bool {
+    raw > 0 && crate::value::addr_class::is_above_handle_band(raw as usize)
+}
+
 /// Normalize `spawn*`/`fork`'s optional `(args, options)` slots after codegen
 /// has unboxed them: when the third argument is absent, a plain object in the
 /// second slot is the options object, not an argv list.
 pub(crate) fn cp_options_from_raw_args(args_ptr: i64, opts_ptr: i64) -> f64 {
-    if opts_ptr > 0x10000 {
+    if cp_raw_slot_is_heap_ptr(opts_ptr) {
         return cp_box_ptr(opts_ptr as *const u8);
     }
-    if args_ptr <= 0x10000 {
+    if !cp_raw_slot_is_heap_ptr(args_ptr) {
         return cp_undefined();
     }
     let args = cp_box_ptr(args_ptr as *const u8);
