@@ -98,6 +98,12 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             let new_elems =
                 (new_ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
             for i in old_capacity as usize..new_capacity as usize {
+                // GC_STORE_AUDIT(INIT): initialization of the freshly grown
+                // array's added [old_capacity, new_capacity) slack — storage
+                // this allocation has never published, written with the
+                // non-pointer TAG_HOLE sentinel. No edge is created, so no
+                // write barrier (the copied prefix replays its own barriers
+                // via replay_array_growth_write_barriers below).
                 ptr::write(new_elems.add(i), crate::value::TAG_HOLE);
             }
         }

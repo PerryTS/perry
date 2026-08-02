@@ -336,6 +336,8 @@ pub(crate) fn lower_index_set_fast(
                 // arithmetic / Math.* / coerce chain) — store verbatim.
                 blk.store(DOUBLE, val_double, &element_ptr);
             } else {
+                // GC_STORE_AUDIT(POINTER_FREE): js_array_numeric_value_to_raw_f64
+                // returns a plain unboxed f64 — no GC pointer, so no barrier.
                 let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
                 blk.store(DOUBLE, &numeric_value, &element_ptr);
             }
@@ -484,6 +486,8 @@ pub(crate) fn lower_index_set_fast(
             if value_is_canonical_raw_f64 {
                 blk.store(DOUBLE, val_double, &element_ptr);
             } else {
+                // GC_STORE_AUDIT(POINTER_FREE): js_array_numeric_value_to_raw_f64
+                // returns a plain unboxed f64 — no GC pointer, so no barrier.
                 let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
                 blk.store(DOUBLE, &numeric_value, &element_ptr);
             }
@@ -519,6 +523,8 @@ pub(crate) fn lower_index_set_fast(
         if value_is_canonical_raw_f64 {
             blk.store(DOUBLE, val_double, &element_ptr);
         } else {
+            // GC_STORE_AUDIT(POINTER_FREE): js_array_numeric_value_to_raw_f64
+            // returns a plain unboxed f64 — no GC pointer, so no barrier.
             let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
             blk.store(DOUBLE, &numeric_value, &element_ptr);
         }

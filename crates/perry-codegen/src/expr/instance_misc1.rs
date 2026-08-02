@@ -1497,7 +1497,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 }
                                 ctx.current_block = store_idx;
                                 {
+                                    // Reached only when the finite check above
+                                    // proved `new`'s exponent is NOT all-ones;
+                                    // every NaN-box tag (INT32/STRING/POINTER/
+                                    // BIGINT) has an all-ones exponent.
                                     let blk = ctx.block();
+                                    // GC_STORE_AUDIT(POINTER_FREE): a genuine
+                                    // unboxed double by the proof above, never
+                                    // a GC pointer — no edge, so no barrier.
                                     blk.store(DOUBLE, &new, &field_ptr);
                                     blk.br(&merge_label);
                                 }

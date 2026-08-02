@@ -52,6 +52,10 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
         // scan misreads as live from-space pointers.
         let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
         for i in 0..actual_capacity as usize {
+            // GC_STORE_AUDIT(INIT): initialization of a just-allocated array
+            // that is not yet reachable from any root, and TAG_HOLE is a
+            // non-pointer sentinel — there is no old value to remember and no
+            // new edge to record, so no write barrier.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }
         set_array_numeric_layout(ptr, NumericArrayLayout::RawF64);

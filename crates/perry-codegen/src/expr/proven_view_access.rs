@@ -388,23 +388,35 @@ pub(crate) fn try_lower_proven_view_checked_store(
             idx_i64
         };
         let elem_ptr = blk.gep(I8, &data_ptr, &[(I64, &byte_off)]);
+        // Every arm below stores into `elem_ptr`, which addresses the view's
+        // BACKING STORE (`view.data_slot`). Typed-array elements are raw
+        // numeric bytes and can never hold a JSValue, so none of these stores
+        // creates a heap edge and none needs a write barrier. This is the
+        // codegen-side counterpart of the runtime carve-out for the
+        // `typedarray` / `typedarray_view` / `buffer` modules
+        // (`is_pointer_free_module` in scripts/gc_store_site_inventory.py).
         match view.elem {
             BufferElem::I8 | BufferElem::U8 => {
                 let byte = blk.trunc(I32, &value_native.value, I8);
+                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
                 blk.store(I8, &byte, &elem_ptr);
             }
             BufferElem::I16 | BufferElem::U16 => {
                 let half = blk.trunc(I32, &value_native.value, I16);
+                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
                 blk.store(I16, &half, &elem_ptr);
             }
             BufferElem::I32 | BufferElem::U32 => {
+                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
                 blk.store(I32, &value_native.value, &elem_ptr);
             }
             BufferElem::F32 => {
                 let narrow = blk.fptrunc(DOUBLE, &value_native.value, F32);
+                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
                 blk.store(F32, &narrow, &elem_ptr);
             }
             BufferElem::F64 => {
+                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
                 blk.store(DOUBLE, &value_native.value, &elem_ptr);
             }
             BufferElem::U8Clamped => unreachable!("gated above"),

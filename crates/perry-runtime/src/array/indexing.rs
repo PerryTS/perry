@@ -108,6 +108,12 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
         }
         let mut addr = cached;
         if visitor.visit_usize_slot(&mut addr) {
+            // GC_STORE_AUDIT(ROOT): this IS the collector's root-rewrite of a
+            // registered side-table slot, running inside a root scan with the
+            // mutator stopped. `visit_usize_slot` returns true only when it
+            // relocated the object, and the value written is the visitor's own
+            // to-space address — barriering it would push an edge into the
+            // remembered set that this very cycle is rebuilding.
             cache.store(addr, Ordering::Relaxed);
         }
     }

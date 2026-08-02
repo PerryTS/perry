@@ -318,6 +318,33 @@ def call_window(lines: list[str], index: int) -> str:
     return " ".join(line.strip() for line in lines[start:end])
 
 
+def window_head_len(lines: list[str], index: int) -> int:
+    """Length of the window's first line as `call_window` renders it."""
+
+    return len(lines[index].strip())
+
+
+def anchored_search(
+    pattern: re.Pattern[str], window: str, head_len: int
+) -> re.Match[str] | None:
+    """Match `pattern` in `window` only when the match STARTS on the head line.
+
+    `call_window` exists so a call whose arguments are split across lines is
+    still classified from its opening line (`CACHE.store(` … `);`). Searching
+    the whole window unanchored, however, re-reports that one store from each
+    of the ~6 lines ABOVE it: the `array/indexing.rs` finding was six lines
+    wide and listed `continue;`, a bare `}` and two `if` lines as "raw atomic
+    cache/global pointer store" (#7258). Requiring the match to begin inside
+    the head line keeps the split-call coverage and reports each site once, at
+    the line that actually contains the store.
+    """
+
+    match = pattern.search(window)
+    if match is None or match.start() >= head_len:
+        return None
+    return match
+
+
 def has_nearby_marker(lines: list[str], index: int) -> bool:
     start = max(0, index - 6)
     end = min(len(lines), index + 7)
@@ -337,13 +364,14 @@ def is_risky_codegen_store(line: str) -> bool:
 def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
     line = lines[index]
     window = call_window(lines, index)
-    atomic_store = RUST_ATOMIC_STORE_RE.search(window)
+    head_len = window_head_len(lines, index)
+    atomic_store = anchored_search(RUST_ATOMIC_STORE_RE, window, head_len)
     if atomic_store and is_risky_atomic_root_store(
         atomic_store.group("target"), atomic_store.group("value")
     ):
         return "raw atomic cache/global pointer store"
 
-    atomic_cas = RUST_ATOMIC_COMPARE_EXCHANGE_RE.search(window)
+    atomic_cas = anchored_search(RUST_ATOMIC_COMPARE_EXCHANGE_RE, window, head_len)
     if atomic_cas and is_risky_atomic_root_store(
         atomic_cas.group("target"), atomic_cas.group("value")
     ):
@@ -446,13 +474,19 @@ def scan_file(path: Path) -> list[Finding]:
 def run_self_tests() -> int:
     failures: list[str] = []
 
-    def check(rel_path: str, lines: list[str], expected: str | None) -> None:
-        reason = classify_rust_store(REPO_ROOT / rel_path, lines, 0)
+    def check_at(
+        rel_path: str, lines: list[str], index: int, expected: str | None
+    ) -> None:
+        reason = classify_rust_store(REPO_ROOT / rel_path, lines, index)
+        where = f"{rel_path}[{index}]"
         if expected is None:
             if reason is not None:
-                failures.append(f"{rel_path}: expected clean, got {reason!r}")
+                failures.append(f"{where}: expected clean, got {reason!r}")
         elif reason is None or expected not in reason:
-            failures.append(f"{rel_path}: expected {expected!r}, got {reason!r}")
+            failures.append(f"{where}: expected {expected!r}, got {reason!r}")
+
+    def check(rel_path: str, lines: list[str], expected: str | None) -> None:
+        check_at(rel_path, lines, 0, expected)
 
     check(
         "crates/perry-runtime/src/array.rs",
@@ -619,6 +653,47 @@ def run_self_tests() -> int:
         ["ptr::copy_nonoverlapping(src_data, dst, (count as i64 * bpe) as usize);"],
         None,
     )
+
+    # The call window must classify a SPLIT call from its opening line, but must
+    # NOT re-report that one store from the lines above it. Before #7258 the
+    # unanchored window search made `scan_prototype_addr_cache_roots_mut` a
+    # SIX-line finding whose first five lines (`continue;`, a bare `}`, two
+    # `if`s, a `let`) contain no store at all.
+    split_atomic = [
+        "GLOBAL_CACHE.store(",
+        "    addr,",
+        "    Ordering::Relaxed,",
+        ");",
+    ]
+    check_at(
+        "crates/perry-runtime/src/object/mod.rs",
+        split_atomic,
+        0,
+        "raw atomic cache/global pointer store",
+    )
+    for above in range(1, len(split_atomic)):
+        check_at("crates/perry-runtime/src/object/mod.rs", split_atomic, above, None)
+
+    proto_cache_scan = [
+        "for cache in [&ARRAY_PROTO_ADDR, &OBJECT_PROTO_ADDR] {",
+        "    let cached = cache.load(Ordering::Relaxed);",
+        "    if cached == usize::MAX || cached == 0 {",
+        "        continue;",
+        "    }",
+        "    let mut addr = cached;",
+        "    if visitor.visit_usize_slot(&mut addr) {",
+        "        cache.store(addr, Ordering::Relaxed);",
+        "    }",
+        "}",
+    ]
+    store_index = 7
+    for index in range(len(proto_cache_scan)):
+        check_at(
+            "crates/perry-runtime/src/array/indexing.rs",
+            proto_cache_scan,
+            index,
+            "raw atomic cache/global pointer store" if index == store_index else None,
+        )
 
     # store_aligned/store_volatile are store emitters too.
     if not is_risky_codegen_store('.store_aligned(I64, &val, &field_ptr, 8);'):

@@ -590,12 +590,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 }
                                 ctx.current_block = store_idx;
                                 {
-                                    // The finite check proved a genuine
-                                    // unboxed double (INT32-boxed and every
-                                    // NaN-box tag share the all-ones
-                                    // exponent) — no canonicalization call,
-                                    // no barrier (pointer-free by proof).
+                                    // The finite check proved a genuine unboxed
+                                    // double (INT32-boxed and every NaN-box tag
+                                    // share the all-ones exponent), so no
+                                    // canonicalization call is needed.
                                     let blk = ctx.block();
+                                    // GC_STORE_AUDIT(POINTER_FREE): pointer-free
+                                    // by that proof — no GC pointer reaches the
+                                    // slot, so no write barrier.
                                     blk.store(DOUBLE, &val_double, &field_ptr);
                                     blk.br(&merge_label);
                                 }
