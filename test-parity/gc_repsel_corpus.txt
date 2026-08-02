@@ -286,6 +286,16 @@ test_gap_gc_closure_call_callee_rooting
 test_gap_gc_closure_call_this_rooting
 test_gap_gc_closure_call_argument_rooting
 
+# --- A THIRD witness that was registered nowhere (#7252) --------------------
+# `test_gap_gc_call_argument_rooting` shipped with #7252 (cross-module direct
+# call argument rooting, authored by @jdalton, restacked at merge). Same defect
+# as #7192 and #7216 above: the PR added the witness and did not add the line.
+# It was dark from merge until the `test_gap_gc_*` enforcement added for those
+# two caught it on the first `GC Moving Witnesses` run on main -- which is the
+# enforcement working exactly as designed, on the third occurrence of the same
+# mistake. Registering the file is the whole fix.
+test_gap_gc_call_argument_rooting
+
 # --- Two witnesses that were registered nowhere (#7192, #7216) ---------------
 # Both files exist in test-files/, both say in their own headers that they are
 # LIVE BY CONSTRUCTION and bite only on the moving arms, and neither was in this
