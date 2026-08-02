@@ -1,5 +1,50 @@
 use perry_hir::types::Type;
 
+/// ★ Can a value of this type be a heap reference the collector must see?
+///
+/// **This is the single definition of "pointer" for the whole codegen crate**,
+/// and every consumer of that question routes here:
+/// [`crate::collectors::pointer_locals::is_definitely_non_pointer_type`] (which
+/// is its exact negation, and through it the shadow-slot assignment pass and
+/// `collectors/ptr_shape_returns.rs`), the typed-shape pointer masks below, and
+/// `expr/object_literal.rs`.
+///
+/// It is an **exhaustive `match`, deliberately**, not a `matches!` list. A
+/// `matches!` list silently defaults a newly added `Type` variant to one answer,
+/// and here the two answers are not symmetric: defaulting to "not a pointer"
+/// means a local with **no shadow-stack slot**, i.e. a heap object the precise
+/// moving-GC root scan cannot see. That is a use-after-move / premature sweep,
+/// not a missed optimisation. The exhaustive match makes the compiler ask.
+///
+/// Per-variant notes, kept here because this is the only copy:
+///
+/// * `Symbol` — **a pointer.** `js_symbol_new` returns `POINTER_TAG`-boxed
+///   storage from `alloc_symbol`, which is
+///   `gc_malloc(size_of::<SymbolHeader>(), GC_TYPE_STRING)`, and
+///   `GC_TYPE_STRING`'s type-info entry is `movable: true`. It was listed as a
+///   non-pointer by `is_definitely_non_pointer_type` (#7236) while this
+///   function already answered `true` — the exact one-variant drift the doc
+///   comment over there warned about, which is why there is now one copy.
+/// * `StringLiteral` — a string-LITERAL type (`"foo"`, or a `"a" | "b"`
+///   discriminant union member) is an ordinary heap `String` at runtime.
+/// * `TypeVar` — an unresolved generic type parameter (`T`) can bind to any
+///   heap type; treat it as a pointer (fail-safe).
+/// * `Generic` — a generic instantiation (`Map<K,V>`, `Set<T>`, `WeakMap`,
+///   `Box<T>`, `Array<T>`, a user generic class, …) is always a heap-reference
+///   type. Without this a `Map`/`Set`-typed local got no shadow-stack slot and
+///   was reaped while live (#7019, crash: "grown Map must retain its
+///   side-allocation owner record"); the non-moving default GC hid it behind
+///   its conservative C-stack scan.
+/// * `Number` / `Int32` / `Boolean` / `Null` / `Void` — NaN-boxed immediates
+///   (a raw `f64`, `INT32_TAG`, `TAG_TRUE`/`TAG_FALSE`, `TAG_NULL`,
+///   `TAG_UNDEFINED`): no allocator produces one, so there is nothing to root.
+///   `Never` has no value at all. These six are the complete non-pointer set.
+/// * `Union` — pointer-bearing if ANY member is, so the negation is "every
+///   member is a non-pointer", which is what the root-slot decision needs.
+///
+/// Over-answering `true` is harmless: the GC decode rejects any slot value that
+/// is not a live heap pointer, so a spurious root costs one slot, never
+/// correctness. Under-answering is #7019 / #7236.
 pub(crate) fn type_is_pointer_bearing(ty: &Type) -> bool {
     match ty {
         Type::String

@@ -44,19 +44,28 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
         Expr::LocalGet(id) => {
             // A reserved shadow slot means the local is pointer-possible even
             // if its initializer refined `local_types` to a scalar.
+            //
+            // #7236: this list also carried `HirType::Symbol`, and it is a
+            // SEPARATE hazard from the missing shadow slot — a `true` here
+            // suppresses `temp_root`'s argument/operand rooting, so
+            // `obj[s] = alloc()` with `s: symbol` left the movable symbol
+            // unrooted across the allocating call even once the local itself
+            // had a slot. `lower_call/closure_analysis.rs`'s
+            // `local_is_inert_primitive` never listed `Symbol`; this copy and
+            // `collectors/pointer_locals.rs` were the two that did.
+            //
+            // Derived from the one definition rather than restated, but kept
+            // NON-`Union` on purpose: `type_is_pointer_bearing` answers `false`
+            // for an all-scalar union (`number | undefined`), which would
+            // WIDEN this suppression to locals it never covered. That is a
+            // plausible optimisation and an unmeasured one; it is not this
+            // change. The guard makes the arm exactly the old list minus
+            // `Symbol`.
             !ctx.shadow_slot_map.contains_key(id)
-                && matches!(
-                    ctx.local_types.get(id),
-                    Some(
-                        HirType::Number
-                            | HirType::Int32
-                            | HirType::Boolean
-                            | HirType::Null
-                            | HirType::Void
-                            | HirType::Never
-                            | HirType::Symbol
-                    )
-                )
+                && ctx.local_types.get(id).is_some_and(|ty| {
+                    !matches!(ty, HirType::Union(_))
+                        && !crate::typed_shape::type_is_pointer_bearing(ty)
+                })
         }
         Expr::Compare { .. } | Expr::Void(_) => true,
         Expr::Unary { .. } => true,

@@ -184,26 +184,23 @@ impl HirTypeFacts for PointerAnalysisFacts<'_> {
 /// Types that can NEVER hold a heap pointer, and therefore cost a local its
 /// shadow-stack slot in [`collect_pointer_typed_locals`].
 ///
-/// **This is the single definition.** It used to be a nested `fn` inside
-/// `collect_pointer_typed_locals`; it is module-level and `pub(crate)` because
-/// anything that decides a value may be treated as a rooted pointer has to
-/// agree with the pass that actually assigns the root slot. A second copy
-/// drifting by one `Type` variant would mean a value this collector left
-/// unrooted while another pass treated it as a live, movable pointer — a
-/// use-after-move under the evacuating minor (#7019), not a cosmetic
-/// inconsistency. `collectors/ptr_shape_returns.rs` (#7034 §4) is the current
-/// second caller.
+/// **Exactly the negation of [`crate::typed_shape::type_is_pointer_bearing`],
+/// by construction rather than by review.** This used to be a second hand-
+/// maintained `matches!` list, and it had already drifted from that one by a
+/// single variant: `Type::Symbol`. `typed_shape` said pointer (correctly —
+/// `js_symbol_new` NaN-boxes a movable `gc_malloc`), this said non-pointer, so
+/// a `Symbol`-typed local got no shadow-stack slot and sat in a plain `alloca`
+/// across every collection point in its scope (#7236). That is precisely the
+/// failure the previous comment here predicted: "a second copy drifting by one
+/// `Type` variant … a use-after-move under the evacuating minor (#7019), not a
+/// cosmetic inconsistency."
+///
+/// So there is now one copy, it is exhaustive, and a new `Type` variant is a
+/// compile error over there instead of a silent "not a pointer" here.
+/// `collectors/ptr_shape_returns.rs` (#7034 §4) is the second caller of this
+/// negation and inherits the answer.
 pub(crate) fn is_definitely_non_pointer_type(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Number
-            | Type::Int32
-            | Type::Boolean
-            | Type::Null
-            | Type::Void
-            | Type::Never
-            | Type::Symbol
-    ) || matches!(ty, Type::Union(variants) if variants.iter().all(is_definitely_non_pointer_type))
+    !crate::typed_shape::type_is_pointer_bearing(ty)
 }
 
 pub fn collect_pointer_typed_locals(
@@ -212,39 +209,18 @@ pub fn collect_pointer_typed_locals(
     flat_const_ids: &HashSet<u32>,
 ) -> std::collections::HashMap<u32, u32> {
     use perry_hir::Stmt;
+    /// Does this local need a shadow-stack slot?
+    ///
+    /// The third copy of the pointer question, now routed to the one
+    /// definition (#7236). It was the exact complement of
+    /// [`is_definitely_non_pointer_type`] over every `Type` variant *except*
+    /// `Symbol`, which neither of them claimed — so a `Symbol` local was
+    /// simultaneously "not a pointer" (no slot here) and "pointer-bearing"
+    /// (`typed_shape`, which lays out the GC's own field masks). The
+    /// per-variant rationale that used to live here moved to
+    /// `type_is_pointer_bearing`'s doc comment with it.
     fn is_ptr_typed(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::String
-                // A string-LITERAL type (`"foo"`, or a `"a" | "b"` discriminant
-                // union member) is a heap String at runtime — it needs a root
-                // slot exactly like `Type::String`, or the moving-GC precise scan
-                // reaps a live string → silent corruption.
-                | Type::StringLiteral(_)
-                | Type::Array(_)
-                | Type::Tuple(_)
-                | Type::Object(_)
-                | Type::Named(_)
-                // An unresolved generic type parameter (`T`) can bind to any
-                // heap type; treat it as a pointer (fail-safe).
-                | Type::TypeVar(_)
-                | Type::Promise(_)
-                | Type::Function(_)
-                // A generic instantiation (`Map<K,V>`, `Set<T>`, `WeakMap`,
-                // `Box<T>`, `Array<T>`, a user generic class, …) is always a
-                // heap-reference type. Without this, a `Map`/`Set`-typed local
-                // got NO shadow-stack slot, so the PRECISE moving-GC root scan
-                // never saw it — the object was reaped as dead while still live
-                // (crash: "grown Map must retain its side-allocation owner
-                // record"). The non-moving default GC hid this via its
-                // conservative C-stack scan. Treating a rare non-pointer generic
-                // value as a root is harmless: the GC decode rejects any slot
-                // value that isn't a live heap pointer.
-                | Type::Generic { .. }
-                | Type::BigInt
-                | Type::Any
-                | Type::Unknown
-        ) || matches!(ty, Type::Union(variants) if variants.iter().any(is_ptr_typed))
+        crate::typed_shape::type_is_pointer_bearing(ty)
     }
 
     fn expr_value_type(
@@ -1164,5 +1140,122 @@ mod tests {
         let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
         assert!(!slots.contains_key(&1));
         assert!(slots.contains_key(&2));
+    }
+
+    /// Every `Type` variant, with the answer pinned.
+    ///
+    /// #7236: `is_definitely_non_pointer_type` and `typed_shape`'s
+    /// `type_is_pointer_bearing` are two names for one question, and they had
+    /// drifted by exactly one variant — `Symbol` — which is how a
+    /// `POINTER_TAG`-boxed, `gc_malloc`'d, MOVABLE object came to be classified
+    /// as an immediate. They are now the same function, so this test is about
+    /// the ANSWERS: it enumerates the enum and fails if any classification
+    /// flips. `type_is_pointer_bearing`'s exhaustive `match` covers the other
+    /// half (a new variant is a compile error, not a silent "non-pointer").
+    #[test]
+    fn every_type_variant_has_its_pointer_classification_pinned() {
+        // The six immediates: a raw f64, INT32_TAG, TAG_TRUE/TAG_FALSE,
+        // TAG_NULL, TAG_UNDEFINED, and the uninhabited type. No allocator
+        // produces any of them, so there is nothing for the collector to see.
+        let non_pointers = [
+            Type::Number,
+            Type::Int32,
+            Type::Boolean,
+            Type::Null,
+            Type::Void,
+            Type::Never,
+        ];
+        // Everything else is, or can be, a heap reference. `Symbol` is in this
+        // list and not the one above: that IS #7236.
+        let pointers = [
+            Type::Symbol,
+            Type::String,
+            Type::StringLiteral("foo".to_string()),
+            Type::BigInt,
+            Type::Array(Box::new(Type::Number)),
+            Type::Tuple(vec![Type::Number]),
+            Type::Object(Default::default()),
+            Type::Function(FunctionType {
+                params: Vec::new(),
+                return_type: Box::new(Type::Any),
+                is_async: false,
+                is_generator: false,
+            }),
+            Type::Promise(Box::new(Type::Number)),
+            Type::Named("C".to_string()),
+            Type::Generic {
+                base: "Map".to_string(),
+                type_args: vec![Type::String, Type::Number],
+            },
+            Type::TypeVar("T".to_string()),
+            Type::Any,
+            Type::Unknown,
+        ];
+        for ty in &non_pointers {
+            assert!(
+                is_definitely_non_pointer_type(ty),
+                "{ty:?} must be a non-pointer"
+            );
+            assert!(!crate::typed_shape::type_is_pointer_bearing(ty));
+        }
+        for ty in &pointers {
+            assert!(
+                !is_definitely_non_pointer_type(ty),
+                "{ty:?} must be pointer-possible — a local of this type needs a \
+                 shadow-stack slot or the precise moving-GC root scan cannot see it"
+            );
+            assert!(crate::typed_shape::type_is_pointer_bearing(ty));
+        }
+        // A union is a non-pointer only when EVERY member is.
+        assert!(is_definitely_non_pointer_type(&Type::Union(vec![
+            Type::Number,
+            Type::Boolean
+        ])));
+        assert!(!is_definitely_non_pointer_type(&Type::Union(vec![
+            Type::Number,
+            Type::Symbol
+        ])));
+    }
+
+    /// #7236's reproducer, at the collector: `const s = Symbol("x")` must get a
+    /// slot. `alloc_symbol` is `gc_malloc(_, GC_TYPE_STRING)` and
+    /// `GC_TYPE_STRING` is `movable: true`, so without a slot the local sits in
+    /// a plain `alloca` across every collection point in its scope — exactly
+    /// what `gc_root_dominance_check.py --unrooted-allocas --moving-only`
+    /// reported twice on `test_gap_class_forward_capture_6523`.
+    #[test]
+    fn a_symbol_typed_local_gets_a_shadow_slot() {
+        let stmts = vec![Stmt::Let {
+            id: 1,
+            name: "s".to_string(),
+            ty: Type::Symbol,
+            mutable: false,
+            init: Some(Expr::SymbolNew(Some(Box::new(Expr::String(
+                "x".to_string(),
+            ))))),
+        }];
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(slots.contains_key(&1), "Symbol local must be shadow-rooted");
+    }
+
+    /// The other half, and the sharper one: the declared type is `any`, so the
+    /// slot survives only if the write-refinement fixpoint ALSO agrees that
+    /// `Symbol` is a pointer. `is_definitely_non_pointer_type` is what that
+    /// loop consults (`all_non_pointer`), so a fix applied to `is_ptr_typed`
+    /// alone would hand out the slot and then take it away again.
+    #[test]
+    fn an_inferred_symbol_local_keeps_its_shadow_slot() {
+        let stmts = vec![Stmt::Let {
+            id: 1,
+            name: "s".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::SymbolNew(None)),
+        }];
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(
+            slots.contains_key(&1),
+            "a local refined to Symbol must keep its shadow slot"
+        );
     }
 }
