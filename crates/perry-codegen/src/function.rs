@@ -616,113 +616,22 @@ impl LlFunction {
             "define {}{} @{}({}){} {{\n",
             linkage, self.return_type, self.name, param_str, attrs
         );
-
-        for (i, blk) in self.blocks.iter().enumerate() {
-            if i > 0 {
-                ir.push('\n');
-            }
-            // Block 0 (entry) gets two splices in its body:
-            //   1. `entry_allocas`: hoisted allocas + a few simple init
-            //      sequences. These go at the very top, between the
-            //      label line and any block instructions, so they
-            //      dominate every reachable use in the function.
-            //   2. `entry_post_init_setup`: hoisted setup that must
-            //      run AFTER the init prelude (gc_init / init_strings
-            //      calls) so it sees the up-to-date module state. The
-            //      splice point is `entry_init_boundary`, which the
-            //      codegen marks immediately after emitting the
-            //      prelude.
-            // Both splices are textual: we re-render the block label,
-            // the prefix instructions (up to the boundary), the
-            // post-init setup, and then the rest of the block body.
-            if i == 0 && (!self.entry_allocas.is_empty() || !self.entry_post_init_setup.is_empty())
-            {
-                ir.push_str(&blk.label);
-                ir.push_str(":\n");
-                // 1. Allocas + simple inits at the very top.
-                for alloca in &self.entry_allocas {
-                    ir.push_str(alloca);
-                    ir.push('\n');
-                }
-                // 2. Render the block instructions, with the post-init
-                //    splice at the boundary index.
-                let boundary = self
-                    .entry_init_boundary
-                    .unwrap_or(0)
-                    .min(blk.instruction_count());
-                let mut idx = 0;
-                for inst in blk.insts() {
-                    if idx == boundary {
-                        for line in &self.entry_post_init_setup {
-                            ir.push_str(line);
-                            ir.push('\n');
-                        }
-                    }
-                    inst.render_into(&mut ir);
-                    ir.push('\n');
-                    idx += 1;
-                }
-                // Boundary at end-of-block (or empty block).
-                if idx == boundary {
-                    for line in &self.entry_post_init_setup {
-                        ir.push_str(line);
-                        ir.push('\n');
-                    }
-                }
-            } else {
-                ir.push_str(&blk.to_ir());
-                ir.push('\n');
-            }
-        }
-
+        self.for_each_final_line::<std::convert::Infallible>(&mut |line| {
+            ir.push_str(line);
+            ir.push('\n');
+            Ok(())
+        })
+        .unwrap_or_else(|e| match e {});
         ir.push_str("}\n");
-
-        // Return-site rewrite hooks.
-        //
-        // Shadow-stack pop (gen-GC Phase A sub-phase 2) and entry
-        // diagnostics both need to run before every normal return,
-        // regardless of which lowering path emitted it. Textual rewrite
-        // on the full IR catches implicit returns, Stmt::Return, and any
-        // hand-emitted `ret`.
-        let ir = if self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty() {
-            let mut out = String::with_capacity(ir.len() + 512);
-            let mut seq: u32 = 0;
-            for line in ir.lines() {
-                let trimmed = line.trim_start();
-                if (trimmed.starts_with("ret ") || trimmed == "ret void")
-                    && !trimmed.starts_with("ret ptr ")
-                // skip rare ptr rets
-                {
-                    for func_name in &self.pre_return_void_calls {
-                        out.push_str(&format!("  call void @{}()\n", func_name));
-                    }
-                    if let Some(handle_slot) = &self.shadow_frame_slot {
-                        let load_reg = format!("%shadow_pop_l_{}", seq);
-                        seq += 1;
-                        out.push_str(&format!("  {} = load i64, ptr {}\n", load_reg, handle_slot));
-                        out.push_str(&format!(
-                            "  call void @js_shadow_frame_pop(i64 {})\n",
-                            load_reg
-                        ));
-                    }
-                }
-                out.push_str(line);
-                out.push('\n');
-            }
-            out
-        } else {
-            ir
-        };
 
         // setjmp volatile promotion (#6385).
         //
-        // Runs LAST so it sees every instruction, including the ones the
-        // return-site rewrite above just spliced in. Any alloca this function
+        // Runs LAST so it sees every instruction, including the return-site
+        // rewrites the visitor just streamed in. Any alloca this function
         // stores into between a `setjmp` and its `longjmp` (recorded by
         // `LlBlock::emit` while a try region was open) gets `volatile` loads
         // and stores, which is what stops mem2reg/SROA from promoting it into
-        // a register that `longjmp` would revert. This replaces the old
-        // `optnone`-the-whole-function hammer.
+        // a register that `longjmp` would revert.
         if self.has_try {
             let try_stores = self.reg_counter.try_region_stores();
             if !try_stores.is_empty() {
@@ -731,5 +640,108 @@ impl LlFunction {
         }
 
         ir
+    }
+
+    /// Stream every finalized BODY line of this function (block labels,
+    /// entry-alloca and post-init splices, instructions, return-site
+    /// rewrites; blank separator lines between blocks) in exactly the order
+    /// [`to_ir`] renders them — `to_ir` IS this visitor plus the define
+    /// header, closing brace, and the setjmp volatile pass (which needs
+    /// whole-function analysis and therefore text; native construction
+    /// falls back to `to_ir` for `has_try` functions).
+    ///
+    /// This is the seam the native backend consumes: per finalized line,
+    /// no per-function text materialization.
+    pub fn for_each_final_line<E>(
+        &self,
+        sink: &mut dyn FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let rewrite_rets =
+            self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty();
+        let mut seq: u32 = 0;
+        let mut line_buf = String::new();
+        for (i, blk) in self.blocks.iter().enumerate() {
+            if i > 0 {
+                sink("")?;
+            }
+            line_buf.clear();
+            line_buf.push_str(&blk.label);
+            line_buf.push(':');
+            sink(&line_buf)?;
+            let is_entry = i == 0;
+            if is_entry {
+                for alloca in &self.entry_allocas {
+                    self.emit_maybe_ret_rewritten(alloca, rewrite_rets, &mut seq, sink)?;
+                }
+            }
+            let boundary = if is_entry {
+                self.entry_init_boundary
+                    .unwrap_or(0)
+                    .min(blk.instruction_count())
+            } else {
+                usize::MAX
+            };
+            let mut idx = 0usize;
+            for inst in blk.insts() {
+                if idx == boundary {
+                    for line in &self.entry_post_init_setup {
+                        self.emit_maybe_ret_rewritten(line, rewrite_rets, &mut seq, sink)?;
+                    }
+                }
+                line_buf.clear();
+                inst.render_into(&mut line_buf);
+                // Split multi-line raw payloads exactly like text rendering
+                // followed by the line-based rewrite pass would.
+                if line_buf.contains('\n') {
+                    let whole = std::mem::take(&mut line_buf);
+                    for l in whole.split('\n') {
+                        self.emit_maybe_ret_rewritten(l, rewrite_rets, &mut seq, sink)?;
+                    }
+                } else {
+                    let whole = std::mem::take(&mut line_buf);
+                    self.emit_maybe_ret_rewritten(&whole, rewrite_rets, &mut seq, sink)?;
+                    line_buf = whole;
+                }
+                idx += 1;
+            }
+            if is_entry && idx == boundary {
+                for line in &self.entry_post_init_setup {
+                    self.emit_maybe_ret_rewritten(line, rewrite_rets, &mut seq, sink)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Return-site rewrite, streamed: before every `ret` (except `ret ptr`),
+    /// inject the pre-return void calls and the shadow-frame pop. Byte-equal
+    /// to the old whole-text line scan.
+    fn emit_maybe_ret_rewritten<E>(
+        &self,
+        line: &str,
+        rewrite_rets: bool,
+        seq: &mut u32,
+        sink: &mut dyn FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if rewrite_rets {
+            let trimmed = line.trim_start();
+            if (trimmed.starts_with("ret ") || trimmed == "ret void")
+                && !trimmed.starts_with("ret ptr ")
+            {
+                for func_name in &self.pre_return_void_calls {
+                    sink(&format!("  call void @{}()", func_name))?;
+                }
+                if let Some(handle_slot) = &self.shadow_frame_slot {
+                    let load_reg = format!("%shadow_pop_l_{}", seq);
+                    *seq += 1;
+                    sink(&format!("  {} = load i64, ptr {}", load_reg, handle_slot))?;
+                    sink(&format!(
+                        "  call void @js_shadow_frame_pop(i64 {})",
+                        load_reg
+                    ))?;
+                }
+            }
+        }
+        sink(line)
     }
 }

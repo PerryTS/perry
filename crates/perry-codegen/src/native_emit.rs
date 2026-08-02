@@ -19,15 +19,16 @@
 //! to the text pipeline, where `native`/`diff` still select the in-process
 //! *transport*, so no clang subprocess appears in any in-process mode.
 //!
-//! Construction consumes `LlFunction::to_ir()` output per function — the
-//! fully finalized text including entry-alloca hoists, boundary splices,
-//! return-site rewrites and setjmp volatile promotion — so those transforms
-//! have exactly one implementation. The per-function text is transient
-//! (dropped immediately after parsing); what stops existing is the
-//! module-scale concatenation and the full-grammar LLVM parse. The follow-up
-//! step (typed `LlInst` in `LlBlock`) removes the per-line text too; the
-//! `instructions=` counter logged per module is the ratchet metric for that
-//! migration.
+//! Construction consumes `LlFunction::for_each_final_line` — the finalized
+//! per-line stream including entry-alloca hoists, boundary splices and
+//! return-site rewrites, shared with `to_ir` so those transforms have
+//! exactly one implementation. No per-function text is materialized on this
+//! path; the exception is `has_try` functions, whose setjmp volatile pass
+//! needs whole-function analysis and therefore still renders text. What
+//! stops existing everywhere is the module-scale concatenation and the
+//! full-grammar LLVM parse. The follow-up (typed `LlInst` variants) removes
+//! the remaining per-LINE formatting; the `instructions=` counter logged per
+//! module is that migration's ratchet.
 
 use anyhow::{anyhow, Result};
 use inkwell::context::Context;
@@ -73,16 +74,32 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
     let mut instructions = 0usize;
     for f in &funcs {
-        let fn_text = f.to_ir();
-        instructions += crate::dialect::add_function_from_text(context, &module, &fn_text)
-            .map_err(|e| {
-                anyhow!(
-                    "native IR construction failed in @{}:\n{}\n--- function IR ---\n{}",
-                    f.name,
-                    e,
-                    fn_text
-                )
-            })?;
+        let header = synth_define_header(f);
+        let mut stream = crate::dialect::FnStream::begin(context, &module, &header)
+            .map_err(|e| anyhow!("native IR construction failed in @{}: {}", f.name, e))?;
+        if f.has_try {
+            // The setjmp volatile pass needs whole-function analysis; keep
+            // the materialized-text path for try-containing functions.
+            let fn_text = f.to_ir();
+            for line in fn_text.lines().skip(1) {
+                stream.line(line).map_err(|e| {
+                    anyhow!(
+                        "native IR construction failed in @{}:\n{}\n--- function IR ---\n{}",
+                        f.name,
+                        e,
+                        fn_text
+                    )
+                })?;
+            }
+        } else {
+            // The common case: finalized lines stream straight into the
+            // C-API builder — no per-function text exists.
+            f.for_each_final_line::<anyhow::Error>(&mut |line| stream.line(line))
+                .map_err(|e| anyhow!("native IR construction failed in @{}: {}", f.name, e))?;
+        }
+        instructions += stream
+            .finish()
+            .map_err(|e| anyhow!("native IR construction failed in @{}: {}", f.name, e))?;
     }
     log::debug!(
         "perry-codegen: native construction built {} functions, {} instructions, skeleton {} bytes",
@@ -175,4 +192,34 @@ pub fn compile_module_diff(llmod: &LlModule, target: Option<&str>) -> Result<Vec
             Ok(bytes_text)
         }
     }
+}
+
+/// The one-line define header for `f`, matching `LlFunction::to_ir`'s
+/// rendering (linkage, return type, params, inline/try attributes) so the
+/// reader applies identical linkage and function attributes.
+fn synth_define_header(f: &crate::function::LlFunction) -> String {
+    let params = f
+        .params
+        .iter()
+        .map(|(t, n)| format!("{t} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let linkage = if f.linkage.is_empty() {
+        String::new()
+    } else {
+        format!("{} ", f.linkage)
+    };
+    let attrs = if f.has_try {
+        " #1"
+    } else if f.force_inline {
+        " alwaysinline"
+    } else if f.inline_hint {
+        " inlinehint"
+    } else {
+        ""
+    };
+    format!(
+        "define {}{} @{}({}){} {{",
+        linkage, f.return_type, f.name, params, attrs
+    )
 }

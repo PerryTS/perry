@@ -44,6 +44,45 @@ pub(crate) fn predeclare_function_from_text<'ctx>(
     Ok(())
 }
 
+/// Streaming construction: begin from a define header, feed finalized body
+/// lines one at a time (the `LlFunction::for_each_final_line` seam — no
+/// per-function text materialization), then `finish`.
+pub(crate) struct FnStream<'ctx, 'm> {
+    inner: FnReader<'ctx, 'm>,
+}
+
+impl<'ctx, 'm> FnStream<'ctx, 'm> {
+    pub(crate) fn begin(
+        context: &'ctx Context,
+        module: &'m Module<'ctx>,
+        header: &str,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: FnReader::begin(context, module, header)?,
+        })
+    }
+
+    pub(crate) fn line(&mut self, line: &str) -> Result<()> {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with(';') || t == "}" {
+            return Ok(());
+        }
+        if let Some(label) = t.strip_suffix(':') {
+            // Block label lines are never indented instructions.
+            if !line.starts_with(' ') {
+                return self.inner.enter_block(label);
+            }
+        }
+        self.inner
+            .instruction(t)
+            .with_context(|| format!("in line: {t}"))
+    }
+
+    pub(crate) fn finish(self) -> Result<usize> {
+        self.inner.finish()
+    }
+}
+
 /// Parse `fn_text` (a complete `define ... { ... }`) and build it into
 /// `module`. Returns the number of instructions constructed.
 pub(crate) fn add_function_from_text<'ctx>(
@@ -53,25 +92,11 @@ pub(crate) fn add_function_from_text<'ctx>(
 ) -> Result<usize> {
     let mut lines = fn_text.lines();
     let header = lines.next().ok_or_else(|| anyhow!("empty function text"))?;
-    let mut b = FnReader::begin(context, module, header)?;
+    let mut stream = FnStream::begin(context, module, header)?;
     for line in lines {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with(';') {
-            continue;
-        }
-        if t == "}" {
-            break;
-        }
-        if let Some(label) = t.strip_suffix(':') {
-            // Block label lines are never indented instructions.
-            if !line.starts_with(' ') {
-                b.enter_block(label)?;
-                continue;
-            }
-        }
-        b.instruction(t).with_context(|| format!("in line: {t}"))?;
+        stream.line(line)?;
     }
-    b.finish()
+    stream.finish()
 }
 
 struct FnReader<'ctx, 'm> {
