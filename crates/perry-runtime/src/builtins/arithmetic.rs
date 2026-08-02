@@ -591,6 +591,10 @@ pub fn scan_typeof_string_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
 /// arenas between tests while thread-locals persist, so a cache entry from a
 /// previous test names memory the new arena does not own.
 #[cfg(test)]
+// #7277: no callers anywhere in the workspace. Kept rather than deleted because
+// it is the only handle on this cache's reset path, but it is dead today — if
+// nothing adopts it, delete it rather than letting it rot behind this attribute.
+#[allow(dead_code)]
 pub(crate) fn reset_typeof_string_cache_for_test() {
     for cache in [
         &TYPEOF_UNDEFINED,

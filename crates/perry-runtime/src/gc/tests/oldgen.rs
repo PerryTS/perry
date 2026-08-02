@@ -1185,7 +1185,10 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
     // Re-derived from the parent's slot after every minor (see the loop), so
     // both are `mut`: a relocating minor moves the child.
     let mut child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let mut child_header = unsafe { header_from_user_ptr(child as *const u8) };
+    // #7277: no initializer — the loop below re-derives this from the parent's
+    // slot after every minor (a relocating minor moves the child), so the
+    // initial value was never read.
+    let mut child_header;
     assert!(crate::arena::pointer_in_nursery(child));
     unsafe {
         *fields = ptr_bits(child);

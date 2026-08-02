@@ -67,7 +67,11 @@ pub(crate) use trace::*;
 mod barrier;
 pub use barrier::*;
 mod barrier_arming;
-pub(crate) use barrier_arming::*;
+// #7277: every item in `barrier_arming` is `pub(super)` (i.e. `pub(in gc)`),
+// which is narrower than `pub(crate)` — so the glob re-exported nothing and
+// rustc warned. A plain `use` brings them into `gc`'s namespace, which is all
+// the in-module callers (`telemetry.rs`, `cycle.rs`) actually need.
+use barrier_arming::*;
 mod copying;
 use copying::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry

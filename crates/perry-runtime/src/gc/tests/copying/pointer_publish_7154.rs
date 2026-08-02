@@ -228,23 +228,22 @@ fn test_weakmap_overwrite_value_is_traced_7154() {
 /// map's entries array the same way `js_weakmap_get` does.
 fn weak_entry_addr_for(map: f64, key: f64) -> usize {
     let map_ptr = (map.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-    unsafe {
-        let entries = crate::object::js_object_get_field(map_ptr, 0);
-        let entries_ptr = (entries.bits() & POINTER_MASK) as *mut crate::array::ArrayHeader;
-        let len = crate::array::js_array_length(entries_ptr) as usize;
-        for i in 0..len {
-            let entry_val = crate::array::js_array_get(entries_ptr, i as u32);
-            let entry = (entry_val.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-            if entry.is_null() {
-                continue;
-            }
-            let stored_key = crate::object::js_object_get_field(entry, 0);
-            if stored_key.bits() == key.to_bits() {
-                return entry as usize;
-            }
+    // #7277: the calls below are safe fns; the wrapper was redundant.
+    let entries = crate::object::js_object_get_field(map_ptr, 0);
+    let entries_ptr = (entries.bits() & POINTER_MASK) as *mut crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(entries_ptr) as usize;
+    for i in 0..len {
+        let entry_val = crate::array::js_array_get(entries_ptr, i as u32);
+        let entry = (entry_val.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        if entry.is_null() {
+            continue;
         }
-        0
+        let stored_key = crate::object::js_object_get_field(entry, 0);
+        if stored_key.bits() == key.to_bits() {
+            return entry as usize;
+        }
     }
+    0
 }
 
 /// A freshly allocated closure's capture slots must read as a non-pointer
