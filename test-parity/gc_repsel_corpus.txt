@@ -284,3 +284,36 @@ test_gap_gc_closure_call_argument_rooting
 # Also measured on the `gc-stress` PR arm set: PASS/UNVER only, no new red.
 test_gap_gc_new_instance_rooting
 test_gap_gc_assign_string_source_rooting
+
+# --- UNROOTED CACHES: a different failure class entirely (#7211) -------------
+# Every entry above is a stale REGISTER or a late/mis-indexed/missing root
+# STORE. In all of them the value is reachable from something the collector
+# scans and the defect is that one location did not get rewritten. These two are
+# neither: a thread-local cache and a swapped-out root cell hold a GC pointer
+# that NOTHING registers, so the FIRST collection kills it and the holder names
+# abandoned memory for the rest of the process.
+#
+# The distinction decides which instrument can find them:
+#
+#   stale register (#7154 class) | goes bad only when a collection lands in a
+#                                | narrow window -- timing-dependent, needs a
+#                                | workload plus repetition; the static IR pass
+#                                | CAN see the shape
+#   unrooted cache (#7211)       | goes bad at collection #0 and stays bad --
+#                                | reproduces 10/10; INVISIBLE to the static
+#                                | pass, which reads emitted LLVM IR and cannot
+#                                | see a runtime-side table at all
+#
+# So a CI arm that runs real workloads under PERRY_GC_MOVING_LOOP_POLLS=1 is the
+# ONLY thing that catches this class. Registering them here is what puts them in
+# front of it -- .github/workflows/gc-moving-witnesses.yml runs every registered
+# `test_gap_gc_*` on the `loop_polls` arm and refuses to pass a cell that did
+# not relocate.
+#
+# Measured on this branch, release, `--arms loop_polls --filter test_gap_gc_`:
+# both PASS with the copying minor live (the arm reported copy-minor 16/16 across
+# the whole gc-witness set). Measured on the #7227 branch, which is #7226 plus
+# the regexp-receiver fix -- a different subsystem, and not something that could
+# make a typeof cache or an implicit-this restore pass.
+test_gap_gc_typeof_string_cache_rooting
+test_gap_gc_closure_call_prev_this_rooting
