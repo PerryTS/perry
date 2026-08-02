@@ -284,9 +284,13 @@ fn self_recursive_number_function_keeps_a_double_body() {
             .unwrap_or_else(|| panic!("public f64 body for `{name}` must be emitted:\n{ir}"));
         // The removed wrapper was exactly `fptosi` → `call i64` → `sitofp`,
         // with no other instruction. Its argument truncation is the second of
-        // the two defects and is what this asserts is gone.
+        // the two defects and is what this asserts is gone. Matched on the
+        // opcode alone rather than on `fptosi double %arg`, so a rename of the
+        // emitted parameters cannot quietly turn this into a vacuous check —
+        // neither fixture has any other reason to narrow a double to an
+        // integer.
         assert!(
-            !body.contains("fptosi double %arg"),
+            !body.contains("fptosi"),
             "`{name}`'s public body must not truncate its arguments on entry:\n{body}"
         );
         assert!(

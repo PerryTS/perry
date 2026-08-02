@@ -7484,7 +7484,9 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
     }
 }
 
-fn typed_f64_i64_specialized_collision_module() -> Module {
+/// `function add(a: number, b: number): number { return a + b; }` — the
+/// simplest shape the removed i64 specializer claimed (#7238).
+fn number_add_module() -> Module {
     let mut module = typed_f64_clone_test_module(false);
     module.functions[0].body = vec![Stmt::Return(Some(Expr::Binary {
         op: BinaryOp::Add,
@@ -10038,17 +10040,20 @@ fn typed_f64_public_trampoline_dispatches_before_generic_body() {
 /// now be present.
 #[test]
 fn number_add_function_takes_the_typed_f64_clone_not_an_i64_body() {
-    let ir = String::from_utf8(
-        compile_module(&typed_f64_i64_specialized_collision_module(), empty_opts()).unwrap(),
-    )
-    .unwrap();
+    let ir =
+        String::from_utf8(compile_module(&number_add_module(), empty_opts()).unwrap()).unwrap();
     assert!(
         !ir.contains("perry_fn_typed_f64_function_abi_ts__add_i64"),
         "a `number` body must not be re-emitted in i64 registers:\n{ir}"
     );
+    // Scoped to the public body and matched on the opcode alone, so neither a
+    // parameter rename nor an unrelated `fptosi` elsewhere in the module can
+    // make this vacuous. `a + b` has no reason to narrow a double to an
+    // integer.
+    let public = function_ir_section(&ir, "perry_fn_typed_f64_function_abi_ts__add");
     assert!(
-        !ir.contains("fptosi double %arg"),
-        "a `number` function must not truncate its arguments on entry:\n{ir}"
+        !public.contains("fptosi"),
+        "a `number` function must not truncate its arguments on entry:\n{public}"
     );
     assert!(
         ir.contains("__typed_f64"),

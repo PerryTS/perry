@@ -181,8 +181,11 @@ fn ternary_self_recursion_keeps_an_exact_double_body() {
     let body = function_body(&ir, "@perry_fn_i64_spec_ternary_ts__idDown(")
         .expect("the public f64 body for idDown must be emitted");
     // The removed wrapper was exactly `fptosi` → `call i64` → `sitofp`.
+    // Matched on the opcode alone, not on `fptosi double %arg`, so renaming
+    // the emitted parameters cannot make this vacuous — this fixture has no
+    // other reason to narrow a double to an integer.
     assert!(
-        !body.contains("fptosi double %arg"),
+        !body.contains("fptosi"),
         "the public body must not truncate its argument on entry:\n{body}"
     );
     // The ternary still has to be real control flow — the #6221 shape.
@@ -208,8 +211,10 @@ fn fractional_literal_body_keeps_an_exact_double_body() {
         !ir.contains("halfDown_i64"),
         "a `number` body must not be re-emitted in i64 registers:\n{ir}"
     );
+    let body = function_body(&ir, "@perry_fn_i64_spec_ternary_ts__halfDown(")
+        .expect("the public f64 body for halfDown must be emitted");
     assert!(
-        !ir.contains("fptosi double %arg"),
-        "a `number` function must not truncate its arguments on entry:\n{ir}"
+        !body.contains("fptosi"),
+        "a `number` function must not truncate its arguments on entry:\n{body}"
     );
 }
