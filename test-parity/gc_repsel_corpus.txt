@@ -390,3 +390,38 @@ test_gap_gc_interval_args_rooting
 # bad at collection #0 and stays bad, where an unrooted REGISTER needs a
 # collection to land in a narrow window.
 test_gap_gc_process_env_cache_rooting
+
+# --- #7236: a Symbol-typed local had no shadow slot at all ------------------
+# Not a representation file, so registered explicitly per the header rule.
+# `collectors/pointer_locals.rs` classified `Type::Symbol` as a NON-pointer, so
+# `const s = Symbol("w")` got no shadow-stack slot and lived in a plain
+# `alloca` — the last violation `gc_root_dominance_check.py --unrooted-allocas
+# --moving-only` reported on the #7235 corpus, and the one thing standing
+# between `gc-root-dominance` and promotion to a required context (#7198).
+#
+# ★ THE FAILURE IS A PREMATURE FREE, NOT A STALE ADDRESS, and that dictates the
+# shape of the file. `alloc_symbol` is `gc_malloc(_, GC_TYPE_STRING)` and
+# `gc_malloc` is the SYSTEM allocator with a GcHeader in front, not an arena
+# allocation — so the copying minor cannot relocate a symbol, it can only
+# `dealloc` it. Under #7235's taxonomy the local is RECLAIMABLE and not
+# MOVABLE. `SYMBOL_POINTERS` does not save it:
+# `scan_symbol_pointer_metadata_roots_mut` uses `visit_metadata_usize_slot`,
+# which rewrites without marking, exactly as `alloc_symbol`'s own comment says
+# ("kept alive ... or NOT AT ALL").
+#
+# So the pressure is SYMBOLS, not objects. `copied_minor_malloc_sweep_due`
+# gates the malloc sweep on a `MallocCount` trigger or the malloc-object
+# threshold; object churn reaches the ARENA trigger instead, and with it the
+# defect reproduces intermittently — measured at 1 failure in 80 probes on one
+# object-churn shape, and 0 on four of five repeats of another. Symbol churn
+# makes the malloc-count trigger the one that fires AND makes the freed block
+# the exact size class the next `Symbol()` reuses.
+#
+# Measured at base (`f8f1e7188`), `--release`, oracle node 26.5.1 (`A 0 B 0`):
+# `A 30 B 20` on `loop_polls`, 3/3 identical, and `A 30 B 20` on the SHIPPED
+# DEFAULT with no GC env at all, 2/2. `A 0 B 0` after the fix on both, 3/3.
+#
+# It therefore does NOT need a `requires=move` arm — the conservative stack
+# scan is what was hiding it, and a malloc-count-driven collection stops it
+# hiding. Expect PASS rather than UNVER wherever the arm collects at all.
+test_gap_gc_symbol_local_rooting
