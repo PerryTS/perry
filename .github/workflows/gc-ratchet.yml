@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  # Separate groups per event, and cancel ONLY pull-request runs.
+  # ONE GROUP PER MAIN COMMIT, and cancel ONLY pull-request runs.
   #
   # A shared group with unconditional cancel-in-progress looked right and was
   # wrong: `main` is busy and the macOS runner pool is deep enough that a run
@@ -33,10 +33,24 @@ concurrency:
   # A gate that is always cancelled never fails, which is the same hole as
   # `continue-on-error: true` wearing a different hat.
   #
-  # Cancelling superseded PR runs is still correct: only the head commit's
-  # result gates the merge. Main-branch runs queue instead, so each merged
-  # commit eventually gets its own answer.
-  group: gc-ratchet-${{ github.event_name }}-${{ github.ref }}
+  # ***SCOPING `cancel-in-progress` TO PULL REQUESTS DID NOT FIX IT (#7205).***
+  # It protects a run that has already STARTED. GitHub additionally allows at
+  # most one PENDING run per group: when a new run enters a group, "any
+  # previously pending job or workflow in the concurrency group will be
+  # cancelled" — regardless of `cancel-in-progress`. Every `main` run here is
+  # pending for tens of minutes, so a merge cadence faster than the queue depth
+  # kept cancelling all of them. Re-measured after the first fix: runs
+  # 30707891646 (#7192), 30708370282 (#7198) and 30707189162 (#7195) all ended
+  # `cancelled` with `jobs: []` — never reached a runner, zero executions in
+  # three merges.
+  #
+  # Keying the group on the COMMIT for push events is what actually fixes it:
+  # each merged commit gets a group of its own, so no two `main` runs can ever
+  # contend and none can supersede another. They queue independently and each
+  # eventually gets its own answer. PR runs keep sharing a per-ref group and
+  # keep superseding themselves, which is still correct — only the head
+  # commit's result gates the merge.
+  group: gc-ratchet-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
