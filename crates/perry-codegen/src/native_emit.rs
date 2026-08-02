@@ -53,32 +53,24 @@ pub fn native_mode() -> NativeMode {
 /// Build the module natively: parse the skeleton text, then construct every
 /// function body through the C API via the dialect reader.
 fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result<Module<'ctx>> {
-    let skeleton = llmod.skeleton_ir();
-    let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
+    let mut skeleton = llmod.skeleton_ir();
     let funcs = llmod.deduped_function_refs();
-    // Pre-declare every define: calls to functions defined later in the
-    // module (and closure address captures) are module-scope forward
-    // references. Only the one-line header is synthesized here; bodies are
-    // read once, below.
+    // Append a declare for every define: the skeleton's globals can
+    // reference defined functions (extern-closure descriptors hold wrapper
+    // function addresses), and calls to functions defined later in the
+    // module are module-scope forward references. Parsing declares with the
+    // define's real signature covers both; `declare_from_header` upgrades
+    // linkage when the body is read.
     for f in &funcs {
-        let param_str = f
+        let tys = f
             .params
             .iter()
-            .map(|(t, n)| format!("{t} {n}"))
+            .map(|(t, _)| t.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        let linkage = if f.linkage.is_empty() {
-            String::new()
-        } else {
-            format!("{} ", f.linkage)
-        };
-        let header = format!(
-            "define {}{} @{}({}) {{",
-            linkage, f.return_type, f.name, param_str
-        );
-        crate::dialect::predeclare_function_from_text(context, &module, &header)
-            .map_err(|e| anyhow!("pre-declaring @{}: {}", f.name, e))?;
+        skeleton.push_str(&format!("declare {} @{}({})\n", f.return_type, f.name, tys));
     }
+    let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
     let mut instructions = 0usize;
     for f in &funcs {
         let fn_text = f.to_ir();

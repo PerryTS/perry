@@ -123,13 +123,20 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
     let mut toks = rest.split_whitespace().peekable();
     let mut linkage = None;
     if let Some(&t) = toks.peek() {
-        if t == "internal" || t == "private" {
-            linkage = Some(if t == "internal" {
-                Linkage::Internal
-            } else {
-                Linkage::Private
-            });
-            toks.next();
+        match t {
+            "internal" => {
+                linkage = Some(Linkage::Internal);
+                toks.next();
+            }
+            "private" => {
+                linkage = Some(Linkage::Private);
+                toks.next();
+            }
+            // Explicit default linkage (init_body functions carry it).
+            "external" => {
+                toks.next();
+            }
+            _ => {}
         }
     }
     let ret_tok = toks
