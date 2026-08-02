@@ -935,4 +935,124 @@ mod tests {
             "\"a\\bb\\fc\\u000bd\""
         );
     }
+
+    /// Materialize `src` exactly the way `JSON.parse` does once a property
+    /// read forces the lazy tape to become real objects, and return both the
+    /// value and the resulting `(field_count, keys_len)` of element 0.
+    unsafe fn materialized_array(src: &[u8]) -> (JSValue, u32, u32) {
+        let tape = crate::json_tape::build_tape(src).expect("tape builds for valid JSON");
+        let value = crate::json_tape::materialize(&tape, src);
+        let arr = (value.bits() & POINTER_MASK) as *mut crate::ArrayHeader;
+        let elem0 = crate::array::js_array_get(arr, 0);
+        let obj = (elem0.bits() & POINTER_MASK) as *const crate::ObjectHeader;
+        (value, (*obj).field_count, (*(*obj).keys_array).length)
+    }
+
+    #[test]
+    fn stringify_array_keeps_every_property_of_name_grown_elements() {
+        // #7264: `JSON.stringify` silently dropped every property past the
+        // 4th from EVERY element of a homogeneous array.
+        //
+        // The array fast path built its shape template with
+        // `min(keys_len, field_count)`. `field_count` is PHYSICAL — it never
+        // exceeds the object's inline slot allocation, so an object grown by
+        // name past `INLINE_SLOT_FLOOR` reports the floor (4) while the
+        // remaining values live in overflow storage. `JSON.parse`'s tape
+        // materializer produces exactly that shape (`js_object_alloc(0, 0)` +
+        // `js_object_set_field_by_name` per key), so `JSON.stringify` of a
+        // parsed-and-touched array truncated every record to 4 fields.
+        //
+        // Latent since the shape template landed (v0.5.65, 9-field threshold);
+        // exposed for ordinary 5–8-field records by #6712 (floor 8 → 4).
+        let src = br#"[{"f0":0,"f1":1,"f2":2,"f3":3,"f4":4,"f5":5},{"f0":10,"f1":11,"f2":12,"f3":13,"f4":14,"f5":15}]"#;
+        unsafe {
+            let (value, field_count, keys_len) = materialized_array(src);
+            // Assert the gate's SUBJECT is live: this test is only meaningful
+            // while the materializer really does leave `field_count` below
+            // `keys_len` (the overflow shape). If a future change pre-sizes
+            // the allocation, this assertion fires and the test must be
+            // re-pointed rather than silently passing on the easy path.
+            assert!(
+                field_count < keys_len,
+                "precondition lost: tape-materialized element is no longer an \
+                 overflow shape (field_count={field_count}, keys_len={keys_len}) — \
+                 re-point this regression test at a shape that still is"
+            );
+            assert_eq!(keys_len, 6);
+
+            let output = js_json_stringify(f64::from_bits(value.bits()), TYPE_ARRAY);
+            assert_eq!(
+                str_from_header(output).unwrap(),
+                std::str::from_utf8(src).unwrap(),
+                "array-element serialization must emit all {keys_len} properties"
+            );
+        }
+    }
+
+    #[test]
+    fn stringify_array_round_trips_every_field_count_across_the_inline_floor() {
+        // The truncation was invisible at ≤ INLINE_SLOT_FLOOR fields and
+        // produced IDENTICAL output for 5, 6 and 8 — the tell that emission
+        // stopped at the floor. Sweep across the boundary.
+        for n in 1..=10usize {
+            let record = |base: usize| {
+                let fields: Vec<String> =
+                    (0..n).map(|f| format!("\"f{f}\":{}", base + f)).collect();
+                format!("{{{}}}", fields.join(","))
+            };
+            let src = format!("[{},{}]", record(0), record(100));
+            unsafe {
+                let tape = crate::json_tape::build_tape(src.as_bytes()).expect("tape");
+                let value = crate::json_tape::materialize(&tape, src.as_bytes());
+                let output = js_json_stringify(f64::from_bits(value.bits()), TYPE_ARRAY);
+                assert_eq!(
+                    str_from_header(output).unwrap(),
+                    src.as_str(),
+                    "{n}-field records must round-trip"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stringify_array_keeps_nested_objects_and_arrays_past_the_inline_floor() {
+        // The shape reported in #7264: the 5th property is a nested object and
+        // the 4th an array, so the dropped field was a whole subtree.
+        let src = br#"[{"id":0,"name":"item_0","value":0,"tags":["tag_0","tag_0"],"nested":{"x":0,"y":0}},{"id":1,"name":"item_1","value":3,"tags":["tag_1","tag_1"],"nested":{"x":1,"y":2}}]"#;
+        unsafe {
+            let (value, field_count, keys_len) = materialized_array(src);
+            assert!(field_count < keys_len, "precondition: overflow shape");
+            let output = js_json_stringify(f64::from_bits(value.bits()), TYPE_ARRAY);
+            assert_eq!(
+                str_from_header(output).unwrap(),
+                std::str::from_utf8(src).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn stringify_array_stops_at_the_last_real_key_when_slots_were_pre_sized() {
+        // The opposite skew, and the reason the truncating `min` existed: an
+        // object allocated with MORE inline slots than it has keys
+        // (`js_object_alloc(0, 8)` holding 2 properties). `keys_len` alone must
+        // still stop at the last real key rather than dumping padding slots.
+        unsafe {
+            let mut arr = crate::array::js_array_alloc(2);
+            for base in [1.0f64, 10.0f64] {
+                let obj = crate::object::js_object_alloc(0, 8);
+                for (i, name) in ["a", "b"].iter().enumerate() {
+                    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::object::js_object_set_field_by_name(obj, key, base + i as f64);
+                }
+                assert!((*obj).field_count >= (*(*obj).keys_array).length);
+                arr = crate::array::js_array_push(arr, JSValue::object_ptr(obj as *mut u8));
+            }
+            let boxed = crate::value::js_nanbox_pointer(arr as i64);
+            let output = js_json_stringify(boxed, TYPE_ARRAY);
+            assert_eq!(
+                str_from_header(output).unwrap(),
+                r#"[{"a":1,"b":2},{"a":10,"b":11}]"#
+            );
+        }
+    }
 }

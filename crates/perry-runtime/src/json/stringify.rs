@@ -1451,9 +1451,28 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     if crate::object::keys_contain_array_index(keys_arr) {
         return None;
     }
-    let keys_len = (*keys_arr).length;
-    let field_count = (*obj).field_count;
-    let shape_fields = std::cmp::min(keys_len, field_count);
+    // `keys_len` is authoritative — it is the LOGICAL property count, and the
+    // only field that agrees with `Object.keys` / the slow object path.
+    // `field_count` is a PHYSICAL count: it never exceeds the object's inline
+    // slot allocation, so it under-counts any object grown past
+    // `INLINE_SLOT_FLOOR` by name (`js_object_set_field_by_name` parks slots
+    // ≥ `max(field_count, INLINE_SLOT_FLOOR)` in overflow storage and leaves
+    // `field_count` pinned at the floor). `JSON.parse`'s tape materializer is
+    // exactly that shape: it allocates with `js_object_alloc(0, 0)` and adds
+    // every property by name, so a 6-key record reports `field_count == 4`.
+    //
+    // The old `min(keys_len, field_count)` therefore truncated EVERY element of
+    // a homogeneous array to the first 4 properties with no diagnostic — silent
+    // data loss in `JSON.stringify(JSON.parse(x))` (#7264). Latent since the
+    // template landed (v0.5.65); exposed for ordinary 5–8-field records when
+    // #6712 lowered `INLINE_SLOT_FLOOR` from 8 to 4.
+    //
+    // `min` was never needed for the opposite skew either: a pre-sized object
+    // (`js_object_alloc(0, 8)` holding 2 real keys) has `field_count > keys_len`,
+    // and `keys_len` already stops at the last real key. Slots at or above the
+    // inline limit are read through `template_field_bits`, which routes them to
+    // `js_object_get_field`'s overflow fallback.
+    let shape_fields = (*keys_arr).length;
     if shape_fields == 0 || shape_fields > 32 {
         return None;
     }
@@ -1487,11 +1506,9 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // Sample first element to decide whether every field slot is already
     // a primitive (number/bool/null/string). When true, per-element emit
     // can skip the undefined/closure pre-scan.
-    let fields_ptr =
-        (first_ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     let mut primitive_only = true;
     for f in 0..shape_fields {
-        let fb = (*fields_ptr.add(f as usize)).to_bits();
+        let fb = template_field_bits(obj, f);
         if fb == TAG_UNDEFINED || (fb & 0xFFFF_0000_0000_0000) == POINTER_TAG {
             primitive_only = false;
             break;
@@ -1504,6 +1521,35 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         shape_fields,
         primitive_only,
     })
+}
+
+/// Physical inline-slot limit of `obj` — the number of field slots the
+/// allocator actually reserved. Mirrors `stringify_object_inner`'s
+/// `alloc_limit` and every other access path (`object/alloc.rs`); slots at or
+/// above it live in overflow storage, not in the inline region.
+#[inline]
+unsafe fn object_alloc_limit(obj: *const crate::ObjectHeader) -> u32 {
+    std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32)
+}
+
+/// Read shape-template field slot `f` of `obj`: inline when it fits in the
+/// physical allocation, overflow storage otherwise.
+///
+/// Reading `fields_ptr[f]` unconditionally is only correct while
+/// `shape_fields <= alloc_limit`. It is not: a `JSON.parse` tape object is
+/// allocated with `field_count = 0` and grown by name, so a 6-key record has
+/// 4 inline slots and 2 overflow slots. Blind inline reads dropped those two
+/// on every element of an array (#7264); worse, reading past the allocation
+/// would walk into the adjacent arena object.
+#[inline]
+unsafe fn template_field_bits(obj: *const crate::ObjectHeader, f: u32) -> u64 {
+    if f < object_alloc_limit(obj) {
+        let fields_ptr =
+            (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+        (*fields_ptr.add(f as usize)).to_bits()
+    } else {
+        crate::object::js_object_get_field(obj, f).bits()
+    }
 }
 
 /// Record field `f`'s property name (from the shape template's shared
@@ -1554,6 +1600,19 @@ pub(crate) unsafe fn try_emit_shape_element(
         (elem_ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     let shape_fields = template.shape_fields;
     let prefixes = template.prefixes.as_slice();
+    // Per ELEMENT, not per template: two objects can share a `keys_array`
+    // (same shape) while one was pre-sized and the other grown by name, so the
+    // inline/overflow split has to be re-derived from this element's own
+    // header. Hoisted out of the emit loops — the common case is
+    // `shape_fields <= alloc_limit` and the branch never taken.
+    let alloc_limit = object_alloc_limit(obj);
+    let field_bits_at = |f: usize| -> u64 {
+        if (f as u32) < alloc_limit {
+            (*fields_ptr.add(f)).to_bits()
+        } else {
+            crate::object::js_object_get_field(obj, f as u32).bits()
+        }
+    };
 
     // Primitive-only fast path (common case for JSON.parse output): skip
     // the undefined/closure pre-scan and trust that the sampled element 0
@@ -1563,8 +1622,8 @@ pub(crate) unsafe fn try_emit_shape_element(
     if template.primitive_only {
         let save_pos = buf.len();
         for f in 0..shape_fields as usize {
-            let field_val = *fields_ptr.add(f);
-            let fb = field_val.to_bits();
+            let fb = field_bits_at(f);
+            let field_val = f64::from_bits(fb);
             // UNDEFINED desyncs comma placement → roll back and let the
             // slow object path emit this element correctly.
             if fb == TAG_UNDEFINED {
@@ -1616,7 +1675,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     // respect toJSON).
     let mut has_pointer_fields = false;
     for f in 0..shape_fields as usize {
-        let fb = (*fields_ptr.add(f)).to_bits();
+        let fb = field_bits_at(f);
         if fb == TAG_UNDEFINED {
             return false;
         }
@@ -1637,8 +1696,8 @@ pub(crate) unsafe fn try_emit_shape_element(
     }
     for f in 0..shape_fields as usize {
         buf.push_str(&prefixes[f]);
-        let field_val = *fields_ptr.add(f);
-        let fb = field_val.to_bits();
+        let fb = field_bits_at(f);
+        let field_val = f64::from_bits(fb);
         let vtag = fb & 0xFFFF_0000_0000_0000;
         if fb == TAG_NULL {
             buf.push_str("null");
