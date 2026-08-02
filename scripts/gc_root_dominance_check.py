@@ -2077,6 +2077,11 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
         if not stores[reg] or not loads[reg]:
             continue
         reported = False
+        # Exemptions are TALLIED, never reported, and they must never
+        # short-circuit the store loop: one alloca can be written from an
+        # exempt source AND from a real one, and stopping at the exempt store
+        # would turn the accounting into a missed hazard.
+        exempt_seen = set()
         for st in stores[reg]:
             sm = STORE_RE.match(st.text)
             val = sm.group(2).strip()
@@ -2109,17 +2114,17 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
                                    poll_reaching)
                 if want_moving_only and not v.moving:
                     continue
-                if not hazardous:
-                    if exempt_counts is not None:
-                        for k in sorted(set(exemptions)):
-                            exempt_counts[k] += 1
+                if hazardous:
+                    out.append(v)
                     reported = True
-                    break
-                out.append(v)
-                reported = True
+                else:
+                    exempt_seen.update(exemptions)
                 break
             if reported:
                 break
+        if exempt_counts is not None:
+            for k in sorted(exempt_seen):
+                exempt_counts[k] += 1
     return out
 
 
@@ -2207,6 +2212,29 @@ entry.0:
   %ret = call double @js_gc_loop_safepoint(double %a)
   %k = load i64, ptr %slot
   %obj = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 %k)
+  %box = bitcast i64 %obj to double
+  ret double %box
+}
+"""
+
+# One slot, written from an EXEMPT source and then from a real one. The
+# exemption must tally and get out of the way; if tallying it also ends the
+# per-alloca search, the nursery store below it is never examined and the
+# accounting has become a missed hazard. That is a bug this file has already
+# had once, in the change that introduced the tally.
+_SELFTEST_EXEMPT_THEN_HAZARD = """\
+define double @perry_fn_selftest__mixed(double %a, i1 %c) {
+entry.0:
+  %slot = alloca i64
+  %keys = load i64, ptr @perry_class_keys_Foo_0
+  store i64 %keys, ptr %slot
+  %p1 = call double @js_gc_loop_safepoint(double %a)
+  %k1 = load i64, ptr %slot
+  %fresh = call i64 @js_array_alloc_with_length(i32 3)
+  store i64 %fresh, ptr %slot
+  %p2 = call double @js_gc_loop_safepoint(double %a)
+  %k2 = load i64, ptr %slot
+  %obj = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 %k2)
   %box = bitcast i64 %obj to double
   ret double %box
 }
@@ -2588,6 +2616,19 @@ def self_test():
                   "--moving-only. If it does not, '--unrooted-allocas "
                   "--moving-only reaches 0' would be a statement about the "
                   "filter rather than about the corpus.", file=sys.stderr)
+            ok = False
+
+        # One slot, exempt store first, real store second. The tally must not
+        # end the search for the alloca.
+        mixed = os.path.join(td, "exempt_then_hazard.ll")
+        with open(mixed, "w") as fh:
+            fh.write(_SELFTEST_EXEMPT_THEN_HAZARD)
+        found, _ = _scan_unrooted([mixed], moving_only=True)
+        if len(found) != 1:
+            print("self-test FAIL: an alloca written from an exempt source AND "
+                  f"from a nursery allocator must still be reported (got "
+                  f"{len(found)}). Tallying the exemption must not consume the "
+                  "alloca's report.", file=sys.stderr)
             ok = False
 
         # Every exemption must be reachable through its knob, or it is a dead
