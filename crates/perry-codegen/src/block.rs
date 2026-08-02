@@ -126,7 +126,7 @@ impl RegCounter {
 
 pub struct LlBlock {
     pub label: String,
-    instructions: Vec<String>,
+    instructions: Vec<crate::inst::LlInst>,
     terminated: bool,
     counter: Rc<RegCounter>,
     fp_flags: FpFlags,
@@ -178,7 +178,8 @@ impl LlBlock {
     /// check cannot be invalidated mid-loop). Intrinsic/libm-style calls
     /// never enter the perry runtime, so they cannot trigger a collection.
     pub fn contains_gc_unsafe_call(&self) -> bool {
-        self.instructions.iter().any(|line| {
+        self.instructions.iter().any(|inst| {
+            let line = inst.scan_str();
             let Some(pos) = line.find("call ") else {
                 return false;
             };
@@ -210,7 +211,8 @@ impl LlBlock {
         // #6385: note stores emitted inside a setjmp-protected region so
         // `LlFunction::to_ir` can make the backing allocas volatile.
         self.counter.note_emitted(&line);
-        self.instructions.push(format!("  {}", line));
+        self.instructions
+            .push(crate::inst::LlInst::Raw(format!("  {}", line)));
     }
 
     fn reg(&self) -> String {
@@ -235,12 +237,12 @@ impl LlBlock {
         self.instructions.len()
     }
 
-    /// Iterate over the raw instruction strings (each already prefixed
-    /// with two leading spaces, no trailing newline). Used by
-    /// `LlFunction::to_ir` when it needs to splice hoisted setup into
-    /// the entry block at a specific boundary.
-    pub fn instructions_iter(&self) -> impl Iterator<Item = &str> {
-        self.instructions.iter().map(|s| s.as_str())
+    /// The block's instructions. Used by `LlFunction::to_ir` (entry-block
+    /// boundary splice) and `estimated_ir_bytes`; renders happen through
+    /// [`crate::inst::LlInst::render_into`] so typed variants need no
+    /// intermediate `String` per line.
+    pub fn insts(&self) -> &[crate::inst::LlInst] {
+        &self.instructions
     }
 
     // -------- Arithmetic (double) --------
@@ -963,11 +965,21 @@ impl LlBlock {
 
     pub fn to_ir(&self) -> String {
         let mut out = String::with_capacity(
-            self.instructions.iter().map(|l| l.len() + 1).sum::<usize>() + self.label.len() + 2,
+            self.instructions
+                .iter()
+                .map(|l| l.text_len() + 1)
+                .sum::<usize>()
+                + self.label.len()
+                + 2,
         );
         out.push_str(&self.label);
         out.push_str(":\n");
-        out.push_str(&self.instructions.join("\n"));
+        for (i, inst) in self.instructions.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            inst.render_into(&mut out);
+        }
         out
     }
 }

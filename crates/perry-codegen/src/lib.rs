@@ -15,6 +15,7 @@ pub mod ext_registry;
 pub mod function;
 #[cfg(feature = "llvm-inprocess")]
 pub mod inprocess;
+pub mod inst;
 pub mod linker;
 pub(crate) mod loop_purity;
 pub(crate) mod lower_array_method;

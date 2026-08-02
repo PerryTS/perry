@@ -580,7 +580,7 @@ impl LlFunction {
         let body: usize = self
             .blocks
             .iter()
-            .map(|b| b.instructions_iter().map(|i| i.len() + 1).sum::<usize>() + b.label.len() + 4)
+            .map(|b| b.insts().iter().map(|i| i.text_len() + 1).sum::<usize>() + b.label.len() + 4)
             .sum();
         let allocas: usize = self.entry_allocas.iter().map(|a| a.len() + 1).sum();
         body + allocas + self.name.len() + 64
@@ -651,14 +651,14 @@ impl LlFunction {
                     .unwrap_or(0)
                     .min(blk.instruction_count());
                 let mut idx = 0;
-                for inst in blk.instructions_iter() {
+                for inst in blk.insts() {
                     if idx == boundary {
                         for line in &self.entry_post_init_setup {
                             ir.push_str(line);
                             ir.push('\n');
                         }
                     }
-                    ir.push_str(inst);
+                    inst.render_into(&mut ir);
                     ir.push('\n');
                     idx += 1;
                 }
