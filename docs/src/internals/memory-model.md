@@ -136,8 +136,8 @@ to collapse that detection latency. **All are default-off and inert when off.**
 | `PERRY_GC_ZEAL=1` | Force an evacuating minor at **every GC safepoint** — loop back-edge polls and the outermost microtask-pump boundary — instead of only when nursery pressure is due. Implies `PERRY_GC_FORCE_EVACUATE`, so survivors actually move — but an explicit `PERRY_GEN_GC_EVACUATE=0` still wins, and with it set zeal moves nothing and therefore surfaces nothing. Zeal also does **not** bypass `gc_safepoint_moving_minor`'s entry guards (in-allocation, suppressed, unsafe FFI zone, non-zero root-lock depth, budgeted cycle): a safepoint reached in any of those states still declines to collect. Modelled on V8 `--stress-scavenge` / SpiderMonkey `gcZeal`. Composes with the two above; that pairing is what turns a rooting bug into an immediate precise fault. |
 | `PERRY_GC_FROMSPACE_SCAN_ABORT=1` | Abort on the **first** offending slot the whole-heap from-space scan finds, printing slot, holder, target (including the target's `obj_type`) and a collector backtrace. Now implies `PERRY_GC_FROMSPACE_SCAN=1`; previously it was silently inert on its own. |
 
-Two caveats these instruments are explicit about, because both have burned
-prior investigations:
+These instruments have explicit caveats, because each has burned a prior
+investigation:
 
 - `PERRY_GC_PROTECT_FROMSPACE` gates **only** the copying minor's from-space
   reset. A run with the knob on and zero copying minors protects nothing. Check

@@ -106,3 +106,10 @@
   must report 2 uses and still exit `0`, `--max-stale 0` must exit `1`,
   `--max-stale 2` must exit `0`, and the control fixture must report zero.
   Reverting the default to `return 1 if total else 0` fails three of them.
+
+**File-size note.** `crates/perry-codegen/src/expr/index_get.rs` grew by 27 lines
+(2135 → 2162) to carry the receiver rooting. It was already 135 lines over the
+2000-line cap and unallowlisted before this change, and it is one of 16 files
+currently failing `scripts/check_file_size.sh` on `main` — so this neither
+introduced a new offender nor is it fixable by an allowlist entry. Decomposing
+that file is its own change.

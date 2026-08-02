@@ -1951,8 +1951,8 @@ def self_test():
                 fh.write("\n".join(_mutate(clean_lines, sites[0])) + "\n")
             got, _ = _scan([mutant], False, "alloc")
             if not got:
-                print("self-test FAIL: sinking the root store below the "
-                      "collecting call in the CLEAN fixture must produce a "
+                print("self-test FAIL: splicing a collecting call above the "
+                      "root store in the CLEAN fixture must produce a "
                       "violation; the mutator or the checker is broken",
                       file=sys.stderr)
                 ok = False
@@ -2033,6 +2033,12 @@ def main():
     if ns.any_def and ns.stale_registers:
         ap.error("--any-def has no effect with --stale-registers "
                  "(the stale scan already anchors on every heap-value source)")
+    # Same rule: --stale-registers returns before the --unrooted-allocas block,
+    # so passing both would run the stale scan and silently skip the alloca one
+    # while the command line claims both.
+    if ns.stale_registers and ns.unrooted_allocas:
+        ap.error("--stale-registers and --unrooted-allocas are separate "
+                 "passes; run them one at a time")
 
     if ns.self_test:
         return self_test()
@@ -2210,6 +2216,12 @@ def main():
         return 2
 
     # --- allowlist hygiene --------------------------------------------------
+    #
+    # Both reports are printed before either return. Fixing one violation and
+    # introducing a different one in the same PR makes an entry stale AND
+    # produces an uncovered violation; returning on the stale entry first would
+    # print only the bookkeeping problem and hide the actual new bug -- the one
+    # finding this gate exists for.
     stale = stale_entries(allowlist)
     if stale:
         print("error: allowlist entries matched nothing:", file=sys.stderr)
@@ -2219,7 +2231,6 @@ def main():
               "PR, that is the ratchet — or the corpus shrank and no longer "
               "contains the module it names, which means this run checked less "
               "than it claims to.", file=sys.stderr)
-        return 2
 
     if remaining:
         if not verbose:
@@ -2231,6 +2242,12 @@ def main():
               "gc-rooting-invariant.md. If this is genuinely known and tracked, "
               "add an entry with an issue and a justification — never a count "
               "bump.", file=sys.stderr)
+
+    # A stale entry is the more specific diagnosis (the allowlist itself is
+    # wrong), so it keeps its exit code where both fire.
+    if stale:
+        return 2
+    if remaining:
         return 1
 
     # --- can this gate still fail? ------------------------------------------
