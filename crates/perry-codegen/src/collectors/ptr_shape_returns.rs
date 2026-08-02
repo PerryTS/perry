@@ -94,7 +94,7 @@ use super::ptr_shape::{chain_admissible, ptr_shape_locals_enabled};
 use super::ptr_shape_report as report;
 use super::ModuleDispatchFacts;
 
-/// The producer-side view of one candidate body — the five things
+/// The producer-side view of one candidate body — the three things
 /// [`producer_return_class`] needs, and nothing else.
 ///
 /// #7170 R1: a `hir.functions` entry and an `Expr::Closure` are the same thing
@@ -112,7 +112,9 @@ struct ProducerBody<'a> {
     body: &'a [Stmt],
 }
 
-/// Module pre-pass: which module-level functions carry a return-shape fact.
+/// Module pre-pass: which bodies carry a return-shape fact — every
+/// `hir.functions` entry (#7107) and every `Expr::Closure` (#7170 R1), keyed by
+/// `FuncId`.
 ///
 /// `facts` must already have its barrier flags final and its own
 /// `return_shape_functions` map still EMPTY — the per-producer proof re-enters
