@@ -995,7 +995,7 @@ impl GcCycleTrace {
         // gate observe its own subject: a cycle reporting `unarmed_skips > 0`
         // with `reconstructs == 0` would mean the reconstruct never ran and
         // the collection is reading an incomplete log.
-        let reconstruct_census = crate::gc::barrier::remembered_reconstruct_census();
+        let reconstruct_census = crate::gc::remembered_reconstruct_census();
         let write_barrier_json = serde_json::json!({
             "calls": self.write_barrier.calls,
             "non_pointer_parent_skips": self.write_barrier.non_pointer_parent_skips,
@@ -1009,7 +1009,7 @@ impl GcCycleTrace {
             "new_dirty_pages": self.write_barrier.new_dirty_pages,
             "conservative_parent_span_marks": self.write_barrier.conservative_parent_span_marks,
             "unarmed_skips": self.write_barrier.unarmed_skips,
-            "armed": crate::gc::barrier::barrier_remembering_armed(),
+            "armed": crate::gc::barrier_remembering_armed(),
             "reconstructs": reconstruct_census.reconstructs,
             "reconstruct_recovered_old_pages": reconstruct_census.recovered_old_pages,
             "reconstruct_recovered_external_pages": reconstruct_census.recovered_external_pages,

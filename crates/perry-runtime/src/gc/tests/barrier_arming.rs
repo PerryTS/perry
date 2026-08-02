@@ -4,6 +4,7 @@
 //! at the 2 000-line cap `scripts/check_file_size.sh` enforces.
 
 use super::super::*;
+use super::barrier::assert_heap_child_marked;
 use super::support::*;
 
 // ── #7187 Phase A: lazy barrier arming ─────────────────────────────────────

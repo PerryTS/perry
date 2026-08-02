@@ -66,6 +66,8 @@ mod trace;
 pub(crate) use trace::*;
 mod barrier;
 pub use barrier::*;
+mod barrier_arming;
+pub(crate) use barrier_arming::*;
 mod copying;
 use copying::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry
