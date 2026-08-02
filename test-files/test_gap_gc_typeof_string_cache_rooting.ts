@@ -32,6 +32,13 @@
 // forces minor collections between the first population of the cache and the
 // later reads, which is the whole subject: the FIRST iteration primes the cache
 // and the ones after it are the test.
+//
+// ALL EIGHT CELLS. `scan_typeof_string_roots_mut` is eight hand-written
+// `visit(...)` calls, so a cell nothing exercises is a cell whose registration
+// can be dropped without a red test. `bigint` and `symbol` are here for that
+// reason and no other — they are the two the first cut of this test missed.
+// The Rust side asserts the same thing from the other direction, in
+// `gc/tests/runtime_roots/interned_string_caches.rs`.
 
 function churn(x: number): number {
   const bits: any[] = [];
@@ -43,7 +50,7 @@ function churn(x: number): number {
 
 function run(): number {
   let bad = 0;
-  const vals: any[] = ["a", 1, true, {}, undefined, run];
+  const vals: any[] = ["a", 1, true, {}, undefined, run, BigInt(1), Symbol()];
   const want: string[] = [
     "string",
     "number",
@@ -51,10 +58,12 @@ function run(): number {
     "object",
     "undefined",
     "function",
+    "bigint",
+    "symbol",
   ];
   for (let r = 0; r < 500; r++) {
     churn(r);
-    for (let k = 0; k < 6; k++) {
+    for (let k = 0; k < 8; k++) {
       // Reads the cached string and compares it against a literal. A cache
       // entry the collector moved but never rewrote makes this compare read
       // from-space.

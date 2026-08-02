@@ -587,23 +587,52 @@ pub fn scan_typeof_string_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
     visit(&TYPEOF_SYMBOL, visitor);
 }
 
-/// Drop every cached `typeof` string. Test-only: the unit-test harness resets
-/// arenas between tests while thread-locals persist, so a cache entry from a
-/// previous test names memory the new arena does not own.
+/// The eight cells and their payloads, in `scan_typeof_string_roots_mut`
+/// order. Test-only. It exists so a test can assert the scanner reaches EVERY
+/// cell: that scanner is eight hand-written `visit(...)` calls, and a dropped
+/// line is invisible to any test that exercises only some of them.
+#[cfg(test)]
+type TypeofCacheCell = &'static std::thread::LocalKey<std::cell::Cell<*mut StringHeader>>;
+
+#[cfg(test)]
+fn typeof_cache_entries_for_test() -> [(TypeofCacheCell, &'static str); 8] {
+    [
+        (&TYPEOF_UNDEFINED, "undefined"),
+        (&TYPEOF_OBJECT, "object"),
+        (&TYPEOF_BOOLEAN, "boolean"),
+        (&TYPEOF_NUMBER, "number"),
+        (&TYPEOF_STRING, "string"),
+        (&TYPEOF_FUNCTION, "function"),
+        (&TYPEOF_BIGINT, "bigint"),
+        (&TYPEOF_SYMBOL, "symbol"),
+    ]
+}
+
+/// Drop every cached `typeof` string. Test-only: a rooting test has to start
+/// from an empty cache so the strings it then allocates are its own, in a
+/// known arena, rather than survivors of whichever test ran first on this
+/// thread.
 #[cfg(test)]
 pub(crate) fn reset_typeof_string_cache_for_test() {
-    for cache in [
-        &TYPEOF_UNDEFINED,
-        &TYPEOF_OBJECT,
-        &TYPEOF_BOOLEAN,
-        &TYPEOF_NUMBER,
-        &TYPEOF_STRING,
-        &TYPEOF_FUNCTION,
-        &TYPEOF_BIGINT,
-        &TYPEOF_SYMBOL,
-    ] {
+    for (cache, _) in typeof_cache_entries_for_test() {
         cache.with(|cell| cell.set(std::ptr::null_mut()));
     }
+}
+
+/// Allocate all eight cached strings, exactly as eight `typeof` calls of eight
+/// different value shapes would. Test-only; reaching `bigint` and `symbol`
+/// from Rust otherwise means building a BigInt and a registered Symbol.
+#[cfg(test)]
+pub(crate) fn populate_typeof_string_cache_for_test() {
+    for (cache, text) in typeof_cache_entries_for_test() {
+        get_cached(cache, text);
+    }
+}
+
+/// Read the eight cells without populating them. Test-only.
+#[cfg(test)]
+pub(crate) fn typeof_string_cache_cells_for_test() -> [*mut StringHeader; 8] {
+    typeof_cache_entries_for_test().map(|(cache, _)| cache.with(|cell| cell.get()))
 }
 
 /// Return the typeof a value as a string

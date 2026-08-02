@@ -113,8 +113,8 @@ moving-reachable).
 
 ## What this does NOT close
 
-**`sfw-registry --help` under a genuine `POLLS=1` build is still red, so
-#7161's stopgap stays.** Measured on this build, compiled *and* run with the
+**`sfw-registry --help` under a genuine `POLLS=1` build is still red, so the
+stopgap from #7161 stays.** Measured on this build, compiled *and* run with the
 flag: **3/10 pass, 7/10 SIGSEGV**. Its default arm is clean **10/10**, so
 nothing was traded away. The three fixed registers were real and are now
 provably rooted, but they are not the last thing standing between the registry

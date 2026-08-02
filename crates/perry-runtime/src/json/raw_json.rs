@@ -105,6 +105,28 @@ pub fn scan_raw_json_key_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     });
 }
 
+/// Populate the cache the way `js_json_raw_json` does, and hand back the
+/// pointer it cached. Test-only.
+#[cfg(test)]
+pub(crate) fn raw_json_key_populate_for_test() -> *mut StringHeader {
+    raw_json_key() as *mut StringHeader
+}
+
+/// Read the cell WITHOUT populating it. Test-only.
+#[cfg(test)]
+pub(crate) fn raw_json_key_peek_for_test() -> *mut StringHeader {
+    RAW_JSON_KEY.with(|c| c.get())
+}
+
+/// Drop the cached key. Test-only, and the mirror of
+/// `builtins::arithmetic::reset_typeof_string_cache_for_test` — a rooting test
+/// has to start from an empty cache so the string it then allocates is its
+/// own, in a known arena.
+#[cfg(test)]
+pub(crate) fn reset_raw_json_key_cache_for_test() {
+    RAW_JSON_KEY.with(|c| c.set(std::ptr::null_mut()));
+}
+
 /// Cached `"rawJSON"` key string used for the wrapper's own property.
 fn raw_json_key() -> *const StringHeader {
     RAW_JSON_KEY.with(|c| {
