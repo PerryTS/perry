@@ -10,6 +10,7 @@
 //! - `parser`       — `DirectParser` recursive-descent implementation
 //! - `parse_api`    — `js_json_parse` / `js_json_parse_typed_array` FFI
 //! - `stringify`    — core stringify traversal (object/array/scalar emitters)
+//! - `stringify_shape_template` — homogeneous-array shape templates
 //! - `stringify_api` — `js_json_stringify*` / `js_json_get_*` FFI entries
 //! - `replacer`     — replacer + pretty/indent + array-replacer variants
 //! - `reviver`      — `JSON.parse(text, reviver)` support
@@ -33,6 +34,7 @@ mod stringify;
 mod stringify_api;
 mod stringify_buffer;
 mod stringify_scalars;
+mod stringify_shape_template;
 mod stringify_tojson_probe;
 
 // Public FFI re-exports — preserve the `crate::json::js_json_*` path used by
@@ -63,12 +65,12 @@ pub(crate) use simd::find_string_terminator;
 pub(crate) use stringify::{
     arm_to_json_result_guard, estimate_json_size, is_closure_value, is_object_pointer,
     is_symbol_value, object_get_to_json, stringify_value, write_escaped_string, write_number,
-    ShapeTemplate,
 };
 pub(crate) use stringify_api::{redirect_lazy_to_materialized, try_stringify_lazy_array};
 pub(crate) use stringify_buffer::{
     stringify_buffer, stringify_buffer_pretty, stringify_typed_array, stringify_typed_array_pretty,
 };
+pub(crate) use stringify_shape_template::ShapeTemplate;
 pub(crate) use stringify_tojson_probe::{
     current_to_json_key_arg, invalidate_object_proto_tojson_state, reset_to_json_key,
     set_to_json_key_index, set_to_json_key_str, set_to_json_key_value, to_json_definitely_absent,
@@ -1026,6 +1028,40 @@ mod tests {
             assert_eq!(
                 str_from_header(output).unwrap(),
                 std::str::from_utf8(src).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn stringify_array_omits_a_function_valued_property_of_a_later_element() {
+        // Second defect found in the same emitter while fixing #7264. The
+        // template's primitive-only fast path is chosen by SAMPLING element 0;
+        // it then trusted every later element to be primitive too. A function
+        // (or symbol) value in a later element must be OMITTED per
+        // SerializeJSONObject, but the fast path had already written the key
+        // prefix and rendered the closure as `null` — emitting a member that
+        // must not exist. Only the general (non-primitive-only) path pre-scanned
+        // for it. Applies to inline slots as much as overflow ones.
+        let src = br#"[{"f0":0,"f1":1,"f2":2,"f3":3,"f4":4,"f5":5},{"f0":10,"f1":11,"f2":12,"f3":13,"f4":14,"f5":15}]"#;
+        unsafe {
+            let (value, _, _) = materialized_array(src);
+            let arr = (value.bits() & POINTER_MASK) as *mut crate::ArrayHeader;
+            let elem1 = crate::array::js_array_get(arr, 1);
+            let obj1 = (elem1.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+            // `f4` is at index 4 — an OVERFLOW slot on this shape, so this also
+            // covers the fallback plumbing added for overflow reads.
+            let closure = crate::closure::js_closure_alloc(std::ptr::null(), 0);
+            let key = js_string_from_bytes(b"f4".as_ptr(), 2);
+            crate::object::js_object_set_field_by_name(
+                obj1,
+                key,
+                f64::from_bits(POINTER_TAG | (closure as u64 & POINTER_MASK)),
+            );
+
+            let output = js_json_stringify(f64::from_bits(value.bits()), TYPE_ARRAY);
+            assert_eq!(
+                str_from_header(output).unwrap(),
+                r#"[{"f0":0,"f1":1,"f2":2,"f3":3,"f4":4,"f5":5},{"f0":10,"f1":11,"f2":12,"f3":13,"f5":15}]"#
             );
         }
     }

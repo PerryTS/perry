@@ -542,8 +542,64 @@ echo
 echo "Wrote $(pwd)/RESULTS.md"
 cat RESULTS.md
 
+# ---------------------------------------------------------------------------
+# Cross-runtime correctness gate (#7264).
+#
+# Every workload prints `checksum:` — a fold over the parsed data plus the
+# length of the re-serialized blob. Perry, node and bun must agree exactly; a
+# disagreement means one of them produced different DATA, which is a
+# correctness bug, not a measurement artifact.
+#
+# This used to be checked only inside the optional JSON publisher below, so a
+# mismatch (a) did not fail a plain `run.sh` at all, and (b) under
+# run_public_baseline.sh surfaced ~40 minutes later as a confusing "could not
+# load json-polyglot.json" at final assembly. Check it here, immediately after
+# the runs, unconditionally, and name the offending runtimes.
+# ---------------------------------------------------------------------------
+checksum_failed=0
+for workload in roundtrip field_access; do
+    # Mirror the publisher's cell selection: perry's optimized row, node/bun's
+    # idiomatic row. Emits one "<runtime> <checksum>" line per runtime found.
+    observed=$(awk -F'\t' -v w="$workload" '
+        $1 != w { next }
+        {
+            split($3, parts, " ")
+            runtime = parts[1]
+            want = (runtime == "perry") ? "optimized" : "idiomatic"
+            if (runtime != "perry" && runtime != "node" && runtime != "bun") next
+            if ($2 != want || runtime in seen) next
+            split($5, cs, ",")
+            if (cs[1] == "") next
+            seen[runtime] = cs[1]
+            order[++n] = runtime
+        }
+        END { for (i = 1; i <= n; i++) print order[i], seen[order[i]] }
+    ' "$RAW_RESULTS_FILE")
+    [[ -z "$observed" ]] && continue
+    distinct=$(awk '{ print $2 }' <<< "$observed" | sort -u | wc -l | tr -d ' ')
+    if [[ "$distinct" -ne 1 ]]; then
+        checksum_failed=1
+        {
+            echo
+            echo "ERROR: json_polyglot/$workload — runtimes disagree on the DATA."
+            echo "       Each line is <runtime> <checksum>; they must all be equal."
+            sed 's/^/         /' <<< "$observed"
+            echo "       This is a correctness bug in whichever runtime is the odd one out,"
+            echo "       not benchmark noise. The results above are not publishable."
+        } >&2
+    fi
+done
+if [[ "$checksum_failed" -ne 0 ]]; then
+    echo >&2
+    echo "json_polyglot: FAILED the cross-runtime checksum gate — not publishing." >&2
+    exit 1
+fi
+
 if [[ -n "$PUBLIC_JSON_OUT" ]]; then
     mkdir -p "$(dirname "$PUBLIC_JSON_OUT")"
+    # Never leave a stale artifact behind: a previous run's file must not be
+    # mistaken for this run's output if the publisher aborts.
+    rm -f "$PUBLIC_JSON_OUT"
     PYTHONPATH="$(cd "$PERRY_ROOT" && pwd)" python3 - "$RAW_RESULTS_FILE" "$PUBLIC_JSON_OUT" "$(cd "$PERRY_ROOT" && pwd)" "$RUNS" "$PIN_NOTE" <<'PY'
 import json, shutil, subprocess, sys
 from datetime import datetime, timezone
@@ -614,5 +670,19 @@ component = {
 }
 Path(output_path).write_text(json.dumps(component, indent=2) + "\n")
 PY
+    # The script runs under `set -uo pipefail`, NOT `-e`: without this check a
+    # publisher that aborted via `raise SystemExit(...)` still fell through to
+    # the success line below and run.sh exited 0 having written nothing (#7264).
+    publish_status=$?
+    if [[ "$publish_status" -ne 0 || ! -s "$PUBLIC_JSON_OUT" ]]; then
+        {
+            echo
+            echo "ERROR: json_polyglot did not publish machine-readable results."
+            echo "       The publisher exited $publish_status and $PUBLIC_JSON_OUT is missing or empty."
+            echo "       The message above this line is the reason; nothing downstream can use this leg."
+        } >&2
+        [[ "$publish_status" -eq 0 ]] && publish_status=1
+        exit "$publish_status"
+    fi
     echo "Machine-readable results: $PUBLIC_JSON_OUT"
 fi
