@@ -50,6 +50,11 @@ mod malloc;
 pub use malloc::*;
 mod roots;
 pub use roots::*;
+/// #7148: the census of conservative-scan fallbacks and the precise-safepoint
+/// drains that replace them. Declared next to `roots` because
+/// `ManualGcScanGuard` is what records into it.
+mod scan_fallback;
+pub(crate) use scan_fallback::*;
 // The one decoder shared by the mark, rewrite and incremental-barrier paths
 // for words that may hold a heap reference (#6910). Declared before its
 // consumers for readability only — Rust module order is irrelevant.
@@ -77,7 +82,12 @@ mod verify;
 /// the rewrite pass own root enumeration. Debug-only
 /// (`PERRY_GC_FROMSPACE_SCAN=1`).
 mod fromspace_scan;
+/// #7154 tooling: force an evacuating minor at every safepoint so an unrooted
+/// value dies/moves on its FIRST exposure. Debug-only (`PERRY_GC_ZEAL=1`).
+mod zeal;
 pub use verify::*;
+pub use zeal::zeal_forced_collections;
+pub(crate) use zeal::{gc_zeal_enabled, note_zeal_forced_collection};
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 #[cfg(feature = "diagnostics")]
@@ -239,11 +249,17 @@ pub fn gen_gc_evacuate_enabled() -> bool {
 }
 
 fn gc_force_evacuate_enabled() -> bool {
+    // `PERRY_GC_ZEAL=1` implies forced evacuation (#7154 tooling): a zealous
+    // minor that leaves survivors in place would move nothing, and "an unrooted
+    // value moves on its first exposure" is the entire contract of zeal mode.
+    // Still subject to `gen_gc_evacuate_enabled()` — an explicit
+    // `PERRY_GEN_GC_EVACUATE=0` wins, so the two knobs cannot silently disagree.
     gen_gc_evacuate_enabled()
-        && matches!(
-            std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
+        && (gc_zeal_enabled()
+            || matches!(
+                std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
+                Ok("1") | Ok("on") | Ok("true")
+            ))
 }
 
 fn gc_verify_evacuation_enabled() -> bool {
@@ -322,6 +338,24 @@ fn gc_collect_emergency_full() -> GcCollectOutcome {
 /// alloc-point direct arm forces it: this runs at an arbitrary allocation
 /// site where locals of the current call chain may not be spilled to
 /// shadow slots.
+///
+/// ★ #7148 disposition: **keep, justified, observable.** This is the one site
+/// that provably cannot defer to a precise safepoint. Deferral trades a
+/// collection now for a collection at the next safepoint, and this path is
+/// entered only after a heap allocation has *already failed*: the caller's
+/// next act is to panic, so there is no "next safepoint" to defer to — the
+/// program does not survive to reach one. The pressure-spike question the
+/// other sites must answer is therefore vacuous here; the spike has already
+/// happened and this is the response to it.
+///
+/// It is instead made *measurable* (`ConservativeScanSite::EmergencyReclaim`
+/// + a `PERRY_GC_DIAG` line), so "emergency reclaim never fires in practice"
+/// stops being an assumption. The long-term plan for this site is the
+/// statepoint work (`docs/statepoint-gc-experiment.md` on branch
+/// `exp/stackmap-viability`, not on `main`): with native stack
+/// maps a precise root set exists at *any* mapped PC, so an OOM-time
+/// collection would not need the scan at all. That is the only mechanism that
+/// removes this site, and it is not a deferral.
 pub(crate) fn gc_try_emergency_reclaim() -> bool {
     thread_local! {
         static IN_EMERGENCY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -333,7 +367,7 @@ pub(crate) fn gc_try_emergency_reclaim() -> bool {
         return false;
     }
     IN_EMERGENCY.with(|c| c.set(true));
-    let _scan = roots::ManualGcScanGuard::force_full_scan();
+    let _scan = roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::EmergencyReclaim);
     let _ = gc_collect_emergency_full();
     IN_EMERGENCY.with(|c| c.set(false));
     true
@@ -498,6 +532,9 @@ pub fn gc_init() {
     // under concurrent load) must rewrite the cell, or the body's next
     // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
     gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
+    // Connected inspector sessions are retained only by the inspector's
+    // thread-local registry while they receive protocol notifications.
+    gc_register_mutable_root_scanner(crate::node_inspector::scan_inspector_roots_mut);
     // Issue #1790 (epic #1785 class-object dispatch / design #1772): the class
     // static-inheritance side-tables CLASS_PROTOTYPE_OBJECTS and
     // CLASS_PARENT_CLOSURES hold the heap parent (`class Sub extends make(...)`

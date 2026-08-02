@@ -11,6 +11,46 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// How faithful a bundled binding is to the npm package's public API.
+///
+/// This is the safety marker behind "just works" auto-preference (#466
+/// follow-up): perry routes a bare `import 'X'` to the bundled
+/// `perry-ext-X` wrapper even when a `node_modules/X` copy is on disk
+/// (see `is_native_module` + the resolver short-circuit). That is only
+/// safe-by-construction when the wrapper is a genuine drop-in. A wrapper
+/// that ports a *subset* of the surface (undici's dispatcher-only client,
+/// node-forge's PKI-only slice, lru-cache's numeric-only store) can
+/// silently diverge from the real package, so it is marked `Partial` and
+/// perry surfaces a diagnostic (and, under
+/// `PERRY_REQUIRE_FAITHFUL_BINDINGS=1`, refuses to auto-prefer it).
+///
+/// Conservative default: a binding with no `compat` field is treated as
+/// `Partial`. A wrapper opts IN to `Full` only once it is audited as a
+/// complete drop-in for the package's public API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BindingCompat {
+    /// Audited complete drop-in for the npm package's public API.
+    Full,
+    /// Ports a subset of the surface (or not yet audited). Not
+    /// auto-preferred under a strict-faithful build; a note is emitted
+    /// otherwise.
+    #[default]
+    Partial,
+}
+
+impl BindingCompat {
+    /// Parse the toml `compat = "..."` value. Unknown / absent → the
+    /// conservative `Partial` default.
+    fn from_toml(raw: Option<&str>) -> Self {
+        match raw {
+            Some("full") => BindingCompat::Full,
+            // Any other value (including "partial", or a typo) stays
+            // conservative — a binding is never faithful by accident.
+            _ => BindingCompat::Partial,
+        }
+    }
+}
+
 /// One row of the well-known bindings table — what perry's bundled
 /// wrappers expose to programs that import the bare npm name.
 #[derive(Debug, Clone)]
@@ -34,17 +74,56 @@ pub struct WellKnownBinding {
     /// gate in `scripts/binding_pins.mjs`. `None` for entries exempt
     /// from pinning (`node_builtin`, `alias_of`, and perry-owned
     /// packages).
+    // Provenance metadata parsed from `well_known_bindings.toml` and consulted
+    // by the lock-step review gate + unit tests, not by the compile/link path,
+    // so these carry no reader in the `perry` bins build and would trip
+    // `-D dead-code` without an explicit allow.
+    #[allow(dead_code)]
     pub upstream: Option<UpstreamPin>,
     /// `true` when this binding ports a Node.js **builtin** module
     /// (`node:zlib`/`net`/`http`/…) rather than a third-party npm
     /// package. Its upstream is Node core, not an npm dist, so it
     /// carries no npm provenance pin.
+    #[allow(dead_code)]
     pub node_builtin: bool,
     /// When set, this row is an **alias** for another binding (a
     /// package subpath like `mysql2/promise`, or a bare-name alias like
     /// `fetch` → `node-fetch`) and shares that binding's provenance
     /// instead of carrying its own pin.
+    #[allow(dead_code)]
     pub alias_of: Option<String>,
+    /// How faithful this wrapper is to the npm package's public API.
+    /// Governs whether auto-preference over an on-disk `node_modules`
+    /// copy is safe-by-construction. Absent in the toml → `Partial`.
+    pub compat: BindingCompat,
+}
+
+impl WellKnownBinding {
+    /// Whether this binding is an audited complete drop-in — safe to
+    /// auto-prefer over a user's `node_modules` copy without a caveat.
+    pub fn is_faithful(&self) -> bool {
+        binding_is_faithful(registry(), self)
+    }
+}
+
+fn binding_is_faithful(
+    table: &BTreeMap<String, WellKnownBinding>,
+    binding: &WellKnownBinding,
+) -> bool {
+    let mut current = binding;
+    // At most one visit per row: exceeding the table length means aliases
+    // contain a cycle. Missing/cyclic targets are never granted faithfulness.
+    for _ in 0..=table.len() {
+        if let Some(target) = current.alias_of.as_deref() {
+            let Some(target_binding) = table.get(target) else {
+                return false;
+            };
+            current = target_binding;
+        } else {
+            return matches!(current.compat, BindingCompat::Full);
+        }
+    }
+    false
 }
 
 /// Provenance pin for a binding's upstream npm package — the same record
@@ -216,6 +295,8 @@ fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>
             .and_then(|v| v.as_str())
             .map(String::from);
 
+        let compat = BindingCompat::from_toml(entry_table.get("compat").and_then(|v| v.as_str()));
+
         let upstream = match entry_table.get("upstream") {
             None => None,
             Some(value) => {
@@ -267,6 +348,7 @@ fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>
                 upstream,
                 node_builtin,
                 alias_of,
+                compat,
             },
         );
     }
@@ -312,6 +394,133 @@ mod tests {
     #[test]
     fn unknown_package_returns_none() {
         assert!(lookup_well_known("definitely-not-a-real-package").is_none());
+    }
+
+    /// `lru-cache` must stay `partial`, and for a reason that outlives the
+    /// comment in the toml.
+    ///
+    /// #7136 made the binding genuinely faithful for the surface it *does*
+    /// implement — JS-value keys and values, content-compared string keys, GC
+    /// rooting of cached values, `ttl`, `updateAgeOnGet` — which invites the
+    /// conclusion that the marker should be flipped. It should not. `full`
+    /// means an exhaustively audited drop-in for the package's ENTIRE public
+    /// API, and it licenses auto-preferring this wrapper over a user's
+    /// installed `node_modules/lru-cache`. Measured against npm
+    /// `lru-cache@11.5.2`, two of the wrapper's gaps fail SILENTLY rather
+    /// than loudly: `cache.forEach(...)` visits nothing where npm visits
+    /// every entry, and a `dispose` callback is never invoked where npm
+    /// invokes it on eviction. `maxSize`/`sizeCalculation`, `fetch`,
+    /// `allowStale`, per-call option objects, and the rest of the iterator
+    /// surface are absent too.
+    ///
+    /// Flipping this to `full` would therefore let Perry silently swap a
+    /// wrong implementation in for a correct installed one. Promote it only
+    /// once those surfaces exist and are conformance-tested — and update this
+    /// test with the evidence when you do.
+    #[test]
+    fn lru_cache_stays_partial_until_the_silent_gaps_are_closed() {
+        let binding =
+            lookup_well_known("lru-cache").expect("lru-cache must be a well-known binding");
+        assert_eq!(binding.krate, "perry-ext-lru-cache");
+        assert_eq!(
+            binding.compat,
+            BindingCompat::Partial,
+            "lru-cache's wrapper silently no-ops forEach/dispose — it cannot be \
+             auto-preferred over an installed copy"
+        );
+        assert!(!binding.is_faithful());
+    }
+
+    #[test]
+    fn compat_defaults_to_partial_when_absent() {
+        let raw = r#"
+            [bindings.foo]
+            crate = "perry-ext-foo"
+            lib = "perry_ext_foo"
+        "#;
+        let parsed = parse_well_known_toml(raw).expect("entry parses");
+        assert_eq!(parsed["foo"].compat, BindingCompat::Partial);
+        assert!(!parsed["foo"].is_faithful());
+    }
+
+    #[test]
+    fn compat_full_marks_binding_faithful() {
+        let raw = r#"
+            [bindings.foo]
+            crate = "perry-ext-foo"
+            lib = "perry_ext_foo"
+            compat = "full"
+        "#;
+        let parsed = parse_well_known_toml(raw).expect("entry parses");
+        assert_eq!(parsed["foo"].compat, BindingCompat::Full);
+        assert!(parsed["foo"].is_faithful());
+    }
+
+    #[test]
+    fn compat_unknown_value_stays_conservative() {
+        let raw = r#"
+            [bindings.foo]
+            crate = "perry-ext-foo"
+            lib = "perry_ext_foo"
+            compat = "mostly"
+        "#;
+        let parsed = parse_well_known_toml(raw).expect("entry parses");
+        // A typo / unrecognized level never grants faithfulness.
+        assert_eq!(parsed["foo"].compat, BindingCompat::Partial);
+    }
+
+    /// The shipped table's audited posture: documented-subset wrappers
+    /// stay `Partial` and are never silently treated as complete drop-ins.
+    #[test]
+    fn shipped_subset_bindings_are_partial() {
+        for name in ["undici", "node-forge", "lru-cache"] {
+            let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
+            assert_eq!(
+                b.compat,
+                BindingCompat::Partial,
+                "{name} is a documented subset and must stay compat=partial"
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_unproven_bindings_are_partial() {
+        for name in ["dotenv", "nanoid", "slugify", "uuid"] {
+            let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
+            assert_eq!(
+                b.compat,
+                BindingCompat::Partial,
+                "{name} omits upstream API/behavior and must stay partial"
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_inherit_target_compat_and_cycles_fail_closed() {
+        let raw = r#"
+            [bindings.full]
+            crate = "perry-ext-full"
+            lib = "perry_ext_full"
+            compat = "full"
+
+            [bindings.alias]
+            crate = "perry-ext-full"
+            lib = "perry_ext_full"
+            alias-of = "full"
+
+            [bindings.a]
+            crate = "perry-ext-a"
+            lib = "perry_ext_a"
+            alias-of = "b"
+
+            [bindings.b]
+            crate = "perry-ext-b"
+            lib = "perry_ext_b"
+            alias-of = "a"
+        "#;
+        let parsed = parse_well_known_toml(raw).expect("entries parse");
+        assert!(binding_is_faithful(&parsed, &parsed["alias"]));
+        assert!(!binding_is_faithful(&parsed, &parsed["a"]));
     }
 
     #[test]

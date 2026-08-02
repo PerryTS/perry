@@ -98,6 +98,7 @@ mod transform;
 mod writable;
 
 pub use tee::js_readable_stream_tee;
+pub(crate) use tee::tee_readable_stream_ids;
 use tee::{tee_branches_of, tee_error_branches, tee_source_of};
 
 pub use self::byob::{

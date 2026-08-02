@@ -44,6 +44,17 @@
 //! live exclusively (or primarily) outside `perry-runtime`. Symbols
 //! served by both `perry-runtime` AND a wrapper crate (most of `js_*`)
 //! aren't in the table; they resolve from the always-linked runtime.
+//!
+//! ## Prefix net (ext bindings with a `js_<binding>_*` convention)
+//!
+//! The exact table above is hand-maintained per symbol, which is right for
+//! bindings whose symbol names don't map cleanly to a binding key
+//! (`js_node_http_*` → `http`). But a large family of data-store / client
+//! wrappers name every symbol `js_<binding>_*` 1:1 with the binding key
+//! (`js_ioredis_*` → `perry-ext-ioredis`). Those are routed generically by
+//! [`EXT_PREFIX_REGISTRY`], so an AOT-compiled `iovalkey`/`undici`/`node-forge`
+//! (a `perry.compilePackages` member that never appears in any import set)
+//! still flips its wrapper onto the link line off the emitted FFI alone.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -576,6 +587,43 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_mysql2_connection_end",                    OwnerKind::WellKnown("mysql2")),
 ];
 
+/// Prefix-based routing for ext-binding FFI whose emitted symbols follow the
+/// stable `js_<binding>_*` naming convention 1:1 with a `perry-ext-*` wrapper.
+///
+/// The per-symbol [`FFI_REGISTRY`] above is exhaustive but hand-maintained: it
+/// only routes the exact symbols someone remembered to add. That is fine for
+/// bindings whose symbol names DON'T map cleanly to the binding key
+/// (`js_node_http_*` → `http`, `js_event_emitter_*` → `events`), but it silently
+/// loses whole families whose symbols DO follow the convention. A program that
+/// AOT-compiles `iovalkey` (in `perry.compilePackages`) lowers its client usage
+/// to `js_ioredis_new` — a symbol that is in NEITHER the exact table nor any
+/// import set — so the well-known flip never fires and the link dies with
+/// `Undefined symbols: _js_ioredis_new` even though `perry-ext-ioredis` exists.
+///
+/// This prefix net closes that gap generally: ANY emitted `js_<binding>_*`
+/// symbol for a listed ext binding flips its well-known wrapper onto the link
+/// line off codegen provenance alone — no source-level import, no
+/// `compilePackages` exclusion, no membership in the well-known iteration set
+/// required. Adding a symbol to one of these families needs no table edit.
+///
+/// The routing key is the exact `well_known_bindings.toml` binding key, so the
+/// driver's existing routing (`build_optimized_libs`) resolves the crate/lib and
+/// strips the duplicate perry-stdlib feature with no further wiring. Prefixes
+/// are checked only AFTER the exact table and the crypto net, so a symbol that
+/// wants bespoke routing can always override its family by adding an exact row.
+#[rustfmt::skip]
+const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
+    // Redis / Valkey RESP client (perry-ext-ioredis). `ioredis`, `iovalkey`,
+    // and `valkey` all share this wrapper + the `js_ioredis_*` surface, so the
+    // single `ioredis` binding key covers every RESP package that lowers here.
+    ("js_ioredis_",    "ioredis"),
+    // undici HTTP/1.1 client + Agent/ProxyAgent (perry-ext-undici).
+    ("js_undici_",     "undici"),
+    // node-forge PKI subset — RSA keygen, X.509 build/sign, PEM
+    // (perry-ext-node-forge). Hyphenated package → underscored prefix.
+    ("js_node_forge_", "node-forge"),
+];
+
 /// Process-wide collector of provider keys observed during codegen.
 /// Populated by [`record_ffi_call`] from `LlBlock::call` / `call_void`.
 /// Drained by [`take_used_providers`] right before `build_optimized_libs`.
@@ -656,6 +704,30 @@ pub(crate) fn record_ffi_call(symbol: &str) {
                 set.insert("js_crypto_");
             }
         });
+        return;
+    }
+
+    // Ext-binding prefix net: an emitted `js_<binding>_*` symbol flips its
+    // well-known wrapper onto the link line off codegen provenance alone. This
+    // is what lets an AOT-compiled `iovalkey` / `undici` / `node-forge` (in
+    // `perry.compilePackages`, so never in any import set) still link its
+    // `perry-ext-*` staticlib. The MODULE_CAPTURE marker is the matched prefix
+    // itself: replaying it (object-cache manifest, #6439) re-enters this arm
+    // and reproduces the same owner — `"js_ioredis_".starts_with("js_ioredis_")`.
+    for (prefix, binding) in EXT_PREFIX_REGISTRY {
+        if symbol.starts_with(prefix) {
+            let owner = OwnerKind::WellKnown(binding);
+            {
+                let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
+                guard.get_or_insert_with(HashSet::new).insert(owner);
+            }
+            MODULE_CAPTURE.with(|cell| {
+                if let Some(set) = cell.borrow_mut().as_mut() {
+                    set.insert(prefix);
+                }
+            });
+            return;
+        }
     }
 }
 
@@ -1022,5 +1094,79 @@ mod tests {
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown("net"));
         }
+    }
+
+    /// The measured `_js_ioredis_new` link gap: an AOT-compiled `iovalkey`
+    /// (a `perry.compilePackages` member, so never in `native_module_imports`
+    /// and never in the well-known iteration set) lowers its client usage to
+    /// `js_ioredis_new`. The prefix net must route the WHOLE `js_ioredis_*` /
+    /// `js_undici_*` / `js_node_forge_*` family to its well-known wrapper off
+    /// codegen provenance alone — no exact-table row per symbol required.
+    #[test]
+    fn emitted_ext_prefix_symbols_route_to_well_known_binding() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
+        for (symbol, binding) in [
+            ("js_ioredis_new", "ioredis"),
+            ("js_ioredis_set", "ioredis"),
+            ("js_ioredis_hgetall", "ioredis"),
+            ("js_undici_request", "undici"),
+            ("js_undici_proxy_agent_new", "undici"),
+            ("js_node_forge_generate_key_pair", "node-forge"),
+            ("js_node_forge_create_certificate", "node-forge"),
+        ] {
+            assert_symbol_routes_to(symbol, OwnerKind::WellKnown(binding));
+        }
+    }
+
+    /// The prefix net must NOT swallow symbols that are not part of a listed
+    /// ext family: an unknown `js_*` symbol records no provider, and a
+    /// prefix-family symbol must never leak into a DIFFERENT binding.
+    #[test]
+    fn ext_prefix_net_does_not_over_match() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
+        let _ = take_used_providers();
+        record_ffi_call("js_ioredis_new");
+        let got = take_used_providers();
+        assert!(got.contains(&OwnerKind::WellKnown("ioredis")));
+        assert!(
+            !got.contains(&OwnerKind::WellKnown("undici")),
+            "ioredis symbol must not flip undici, got {got:?}"
+        );
+
+        let _ = take_used_providers();
+        record_ffi_call("js_some_unrelated_runtime_symbol");
+        assert!(
+            take_used_providers().is_empty(),
+            "an unlisted js_* symbol must record no provider"
+        );
+    }
+
+    /// The prefix-family capture marker (the matched prefix) must survive an
+    /// object-cache round trip: replaying it reproduces the same well-known
+    /// flip, so a warm `.o` cache links identically to a cold one (#6439 shape).
+    #[test]
+    fn ext_prefix_marker_survives_module_capture_replay() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
+        let _ = take_used_providers();
+
+        begin_module_capture();
+        record_ffi_call("js_ioredis_new");
+        record_ffi_call("js_ioredis_get"); // same family: one marker, deduped
+        let captured = take_module_capture();
+        assert_eq!(captured, vec!["js_ioredis_"]);
+
+        let _ = take_used_providers();
+        replay_ffi_symbols(captured);
+        let got = take_used_providers();
+        assert!(
+            got.contains(&OwnerKind::WellKnown("ioredis")),
+            "replaying the captured prefix marker must reproduce the ioredis flip, got {got:?}"
+        );
     }
 }

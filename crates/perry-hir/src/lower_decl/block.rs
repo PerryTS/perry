@@ -1679,9 +1679,73 @@ pub fn lower_block_stmt_scoped(
     let mark = ctx.push_block_scope();
     // Via `lower_block_stmt` so this scope's pre-registered forward-captured
     // lets are re-bound at entry (`rebind_nested_forward_scope_lets`).
-    let stmts = lower_block_stmt(ctx, block)?;
+    let stmts = if ctx.current_strict {
+        lower_strict_block_fn_decls(ctx, block)?
+    } else {
+        lower_block_stmt(ctx, block)?
+    };
     ctx.pop_block_scope(mark);
     Ok(stmts)
+}
+
+/// Strict-mode block function declarations are lexical bindings initialized
+/// when the block is entered. Pre-register their locals before lowering an
+/// earlier callback that captures one, then move the declarations' closure
+/// initializers ahead of the block's executable statements.
+fn lower_strict_block_fn_decls(
+    ctx: &mut LoweringContext,
+    block: &ast::BlockStmt,
+) -> Result<Vec<Stmt>> {
+    use std::collections::HashSet;
+
+    rebind_nested_forward_scope_lets(ctx, &block.stmts);
+
+    let mut hoisted_ids = HashSet::new();
+    for stmt in &block.stmts {
+        let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt else {
+            continue;
+        };
+        if fn_decl.function.body.is_none() {
+            continue;
+        }
+        let name = fn_decl.ident.sym.to_string();
+        let id = ctx
+            .lookup_local_in_current_scope(&name)
+            .unwrap_or_else(|| ctx.define_local(name, Type::Any));
+        hoisted_ids.insert(id);
+    }
+    if hoisted_ids.is_empty() {
+        return lower_stmts_using_aware(ctx, &block.stmts);
+    }
+
+    // Lower in source order first: a declaration body may capture lexical
+    // bindings declared earlier in the block. Only its runtime initializer is
+    // hoisted after every reference has resolved to the correct LocalId.
+    let body = lower_stmts_using_aware(ctx, &block.stmts)?;
+    let mut hoisted = Vec::new();
+    let mut other = Vec::new();
+    for stmt in body {
+        let is_hoisted = matches!(
+            &stmt,
+            Stmt::Let { id, init: Some(Expr::Closure { .. } | Expr::FuncRef(_)), .. }
+                if hoisted_ids.contains(id)
+        );
+        if is_hoisted {
+            hoisted.push(stmt);
+        } else {
+            other.push(stmt);
+        }
+    }
+
+    let combined: Vec<_> = hoisted.iter().chain(other.iter()).cloned().collect();
+    let prealloc = compute_prealloc_for_hoisted_closures(&combined, &hoisted_ids);
+    let mut result = Vec::new();
+    if !prealloc.is_empty() {
+        result.push(Stmt::PreallocateBoxes(prealloc));
+    }
+    result.extend(hoisted);
+    result.extend(other);
+    Ok(result)
 }
 
 /// Lower a sequence of body statements, desugaring `using` / `await using`

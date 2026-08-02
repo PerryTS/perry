@@ -852,11 +852,52 @@ pub fn try_lower_native_method_str_dispatch(
                     return Ok(Some(reg));
                 }
             }
+            // #7154: `recv.m(f())` evaluates the receiver first and the
+            // arguments second — spec order, and codegen follows it. That left
+            // the receiver in a bare SSA register while every argument was
+            // lowered, and an argument that allocates reaches a back-edge poll
+            // and an evacuating minor. The minor RELOCATES the receiver: the
+            // location it was read from (a closure capture cell, a shadow slot,
+            // a module global) is a root and gets rewritten, but the register is
+            // not a root and keeps naming from-space. The dispatch below then
+            // resolves the method against abandoned memory and throws
+            // `TypeError: value is not a function`.
+            //
+            // This is the site that kept `sfw-registry --help` red under
+            // `PERRY_GC_MOVING_LOOP_POLLS=1` after #7192. zod's
+            // `classic/schemas.ts:301` builds
+            // `inst.regex = (...args) => inst.check(checks.regex(...args))`;
+            // `inst` is read out of the arrow's capture cell, held across
+            // `checks.regex(...args)` (a real user call, so it polls), and then
+            // used as the receiver of `.check`.
+            //
+            // Same shape, same fix as #7192's property/element STORE receiver:
+            // a temp root, not a re-lower. Re-lowering `object` would observe an
+            // assignment made by an argument, which is a miscompile rather than
+            // a rooting fix (see `temp_root::operand_is_reloadable`). Each
+            // argument is likewise rooted before the NEXT one is lowered, so an
+            // earlier argument cannot go stale across a later one.
+            let arg_collects: Vec<bool> = args
+                .iter()
+                .map(|a| crate::expr::temp_root::expr_may_trigger_gc(ctx, a))
+                .collect();
+            let any_arg_collects = arg_collects.iter().any(|&c| c);
+            let operand_exprs: Vec<&Expr> = std::iter::once(object.as_ref())
+                .chain(args.iter())
+                .collect();
+            let mut roots = crate::expr::temp_root::root_operands_begin(args.len() + 1);
             let recv_box = lower_expr(ctx, object)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                lowered_args.push(lower_expr(ctx, a)?);
+            roots.push(ctx, object.as_ref(), &recv_box, any_arg_collects);
+            for (i, a) in args.iter().enumerate() {
+                let v = lower_expr(ctx, a)?;
+                roots.push(ctx, a, &v, arg_collects[i + 1..].iter().any(|&c| c));
             }
+            // Re-read below the last collection point. Mandatory, not
+            // defensive: the temp-root slot is a MUTABLE root, so an evacuating
+            // cycle rewrites it and the register pushed beforehand is stale.
+            let rereads = roots.reread(ctx, &operand_exprs)?;
+            let recv_box = rereads[0].clone();
+            let lowered_args: Vec<String> = rereads[1..].to_vec();
             // Pass a tagged pointer to the immutable StringPool dispatch
             // descriptor. A GC-backed string handle belongs to the main
             // thread's arena and cannot be resolved safely by a
@@ -893,7 +934,7 @@ pub fn try_lower_native_method_str_dispatch(
             // call's location no longer shadows this one.
             crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
             let blk = ctx.block();
-            return Ok(Some(blk.call(
+            let result = blk.call(
                 DOUBLE,
                 "js_typed_feedback_native_call_method_by_id",
                 &[
@@ -903,7 +944,11 @@ pub fn try_lower_native_method_str_dispatch(
                     (PTR, &args_ptr),
                     (I64, &args_len_str),
                 ],
-            )));
+            );
+            // Release AFTER the dispatch, not before: the dispatcher allocates
+            // while it reads these values.
+            roots.release(ctx);
+            return Ok(Some(result));
         }
     }
     Ok(None)
@@ -1212,6 +1257,65 @@ pub fn try_lower_closure_call_fallthrough(
     // throw an `at <file>:<line>` frame under `--debug-symbols`. `0` (and the
     // default build) → no emission, unchanged `<anonymous>` frame.
     let call_byte_offset = ctx.strings.pending_call_offset();
+
+    // #7154: this lowering held THREE classes of GC value in bare SSA
+    // registers across work that can collect, and a bare register is not a GC
+    // root. Under `PERRY_GC_MOVING_LOOP_POLLS=1` a back-edge poll inside any of
+    // that work runs an evacuating minor: each value SURVIVES (the capture
+    // cell, shadow slot or module global it was read from is a root) and
+    // therefore MOVES, the collector rewrites that location, and the register
+    // keeps naming from-space.
+    //
+    //   * the CALLEE, held across the whole argument list. The checked unbox
+    //     then masks a pre-move address and `js_closure_callN` reads a closure
+    //     header out of abandoned memory — `TypeError: value is not a
+    //     function`, the failure shape #7154 has worn since #7184.
+    //   * the `this` RECEIVER, held across the read of the callee off it AND
+    //     the argument list. #7206 fixed this operand on the sibling
+    //     `js_native_call_method_by_id` dispatch; this is the same operand on
+    //     the generic one.
+    //   * each already-lowered ARGUMENT, held across the arguments that follow
+    //     it and across the rebind unbox below.
+    //
+    // The three windows are NOT the same, which is why they are computed
+    // separately rather than protected as one block:
+    //
+    //   receiver | the callee read + every argument
+    //   callee   | every argument
+    //   argument | the arguments after it + the rebind unbox
+    //
+    // The rebind unbox is a collection point that only exists on the
+    // member-shaped path: `js_closure_unbox_callee_checked_rebind` calls
+    // `clone_closure_rebind_this`, which allocates a fresh closure
+    // (`closure/dynamic_props.rs:1040`) when the callee captures `this`. It
+    // sits BELOW the last argument and ABOVE `js_closure_callN`, so the
+    // arguments are re-read after it, not before — see
+    // `RootedOperands::reread_one`. The receiverless path takes
+    // `js_closure_unbox_callee_checked`, which is a tag check and a mask and
+    // allocates nothing, so `f(x, y)` on inert operands emits exactly the IR it
+    // emitted before this change.
+    //
+    // Temp roots, not re-lowering: re-lowering the callee or the receiver would
+    // observe an assignment made by an argument, which is a miscompile rather
+    // than a rooting fix (`temp_root::operand_is_reloadable`).
+    let arg_collects: Vec<bool> = args
+        .iter()
+        .map(|a| crate::expr::temp_root::expr_may_trigger_gc(ctx, a))
+        .collect();
+    let any_arg_collects = arg_collects.iter().any(|&c| c);
+    // Reading the callee off the receiver: a by-name property get walks a
+    // prototype chain and can run an accessor, so it is a collection point in
+    // the receiver's window (and only in the receiver's).
+    let callee_read_collects = crate::expr::temp_root::expr_may_trigger_gc(ctx, callee);
+
+    // Operands are recorded in the order their values are produced — receiver,
+    // callee, then arguments — because `RootedOperands` roots each one BEFORE
+    // the next is lowered. Rooting a finished list afterwards is worse than
+    // doing nothing: by then an earlier operand may already have been swept and
+    // the push publishes a dangling pointer into a slot the collector scans.
+    let mut roots = crate::expr::temp_root::root_operands_begin(args.len() + 2);
+    let mut operand_exprs: Vec<&Expr> = Vec::with_capacity(args.len() + 2);
+
     let prelowered_recv: Option<(String, String)> =
         if let Expr::PropertyGet {
             object, property, ..
@@ -1226,23 +1330,43 @@ pub fn try_lower_closure_call_fallthrough(
             None
         };
 
-    let method_recv: Option<String> = if let Some((ref obj_v, _)) = prelowered_recv {
-        Some(obj_v.clone())
-    } else if let Expr::PropertyGet { object, .. } = callee {
-        // Skip the method-binding when the receiver is a global,
-        // namespace import, or NativeModuleRef — those aren't
-        // user objects and shouldn't influence `this`.
-        if matches!(
-            object.as_ref(),
-            Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
-        ) {
-            None
-        } else {
-            Some(lower_expr(ctx, object)?)
+    // The receiver expression, when this call binds one. Skip the
+    // method-binding when the receiver is a global, namespace import, or
+    // NativeModuleRef — those aren't user objects and shouldn't influence
+    // `this`. (`receiver_must_eval_once` never matches those forms, so the
+    // prelowered arm cannot disagree with this test.)
+    let method_recv_expr: Option<&Expr> = match callee {
+        Expr::PropertyGet { object, .. } => {
+            if prelowered_recv.is_some() {
+                Some(object.as_ref())
+            } else if matches!(
+                object.as_ref(),
+                Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
+            ) {
+                None
+            } else {
+                Some(object.as_ref())
+            }
         }
-    } else {
-        None
+        _ => None,
     };
+
+    let method_recv: Option<String> = match method_recv_expr {
+        Some(obj_expr) => {
+            let v = match prelowered_recv {
+                Some((ref obj_v, _)) => obj_v.clone(),
+                None => lower_expr(ctx, obj_expr)?,
+            };
+            // Rooted here, before the callee read below: nothing has collected
+            // between the lowering above and this push.
+            roots.push(ctx, obj_expr, &v, callee_read_collects || any_arg_collects);
+            operand_exprs.push(obj_expr);
+            Some(v)
+        }
+        None => None,
+    };
+    let recv_slot = method_recv.as_ref().map(|_| 0usize);
+    let callee_slot = if recv_slot.is_some() { 1 } else { 0 };
 
     let recv_box = if let Some((ref obj_v, ref property)) = prelowered_recv {
         // Read `property` off the once-lowered receiver value via the
@@ -1264,10 +1388,31 @@ pub fn try_lower_closure_call_fallthrough(
     } else {
         lower_expr(ctx, callee)?
     };
-    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-    for a in args {
-        lowered_args.push(lower_expr(ctx, a)?);
+    roots.push(ctx, callee, &recv_box, any_arg_collects);
+    operand_exprs.push(callee);
+
+    // The rebind unbox allocates (see the header above), and it sits between
+    // the last argument and `js_closure_callN`, so every argument's window
+    // includes it. Receiverless calls take the non-allocating unbox and keep
+    // their old IR.
+    let rebind_allocates = method_recv.is_some();
+    for (i, a) in args.iter().enumerate() {
+        let v = lower_expr(ctx, a)?;
+        let collects = rebind_allocates || arg_collects[i + 1..].iter().any(|&c| c);
+        roots.push(ctx, a, &v, collects);
+        operand_exprs.push(a);
     }
+
+    // Re-read the receiver and the callee HERE: below every argument, above the
+    // unbox that consumes them. Mandatory, not defensive — the temp-root slot
+    // is a MUTABLE root, so an evacuating cycle rewrites it and the register
+    // pushed beforehand is stale.
+    let method_recv: Option<String> = match recv_slot {
+        Some(i) => Some(roots.reread_one(ctx, &operand_exprs, i)?),
+        None => None,
+    };
+    let recv_box = roots.reread_one(ctx, &operand_exprs, callee_slot)?;
+
     let prev_this: Option<String> = if let Some(ref this_val) = method_recv {
         let blk = ctx.block();
         Some(blk.call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, this_val)]))
@@ -1289,38 +1434,58 @@ pub fn try_lower_closure_call_fallthrough(
     // argument's location no longer shadows this one. Applies to both arity
     // branches below (the checked unbox throws in either). No-op default build.
     crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
-    let result = if lowered_args.len() <= 16 {
+
+    // #5504: tag-check the callee before masking to a closure pointer.
+    // A non-callable value (number/string/bool/null/undefined) whose
+    // low-48 bits form an in-range address would otherwise be handed to
+    // `js_closure_callN` as a wild `*const ClosureHeader` and SIGSEGV on
+    // the header read. The checked unbox throws `TypeError: value is not
+    // a function` for any non-`POINTER_TAG` value.
+    // #6475: a member-shaped call (`o.m(args)`) must rebind an
+    // object-literal method's baked `this` capture slot to the receiver —
+    // the slot wins over the IMPLICIT_THIS cell set above, so a method
+    // inherited via `Object.setPrototypeOf(obj, proto)` otherwise runs
+    // with `this` bound to the proto literal (effect's Pipeable
+    // `TagClass.pipe(...)` composed against the wrong `this` and
+    // HttpApiBuilder.group returned a curried function instead of a
+    // Layer). The rebind variant is a no-op for closures that don't
+    // capture `this`, so plain functions and arrows are untouched;
+    // receiverless calls keep the plain checked unbox.
+    //
+    // #7154: this is also the collection point that sits between the arguments
+    // and the dispatch. `clone_closure_rebind_this` ALLOCATES a replacement
+    // closure when the callee captures `this`, so the arguments are re-read
+    // below it — hoisting the unbox above the argument list instead is not an
+    // option, because its throw is observable and the spec evaluates arguments
+    // before it.
+    let closure_handle = {
         let blk = ctx.block();
-        // #5504: tag-check the callee before masking to a closure pointer.
-        // A non-callable value (number/string/bool/null/undefined) whose
-        // low-48 bits form an in-range address would otherwise be handed to
-        // `js_closure_callN` as a wild `*const ClosureHeader` and SIGSEGV on
-        // the header read. The checked unbox throws `TypeError: value is not
-        // a function` for any non-`POINTER_TAG` value.
-        // #6475: a member-shaped call (`o.m(args)`) must rebind an
-        // object-literal method's baked `this` capture slot to the receiver —
-        // the slot wins over the IMPLICIT_THIS cell set above, so a method
-        // inherited via `Object.setPrototypeOf(obj, proto)` otherwise runs
-        // with `this` bound to the proto literal (effect's Pipeable
-        // `TagClass.pipe(...)` composed against the wrong `this` and
-        // HttpApiBuilder.group returned a curried function instead of a
-        // Layer). The rebind variant is a no-op for closures that don't
-        // capture `this`, so plain functions and arrows are untouched;
-        // receiverless calls keep the plain checked unbox.
-        let closure_handle = if let Some(ref this_val) = method_recv {
-            blk.call(
+        match method_recv {
+            Some(ref this_val) => blk.call(
                 I64,
                 "js_closure_unbox_callee_checked_rebind",
                 &[(DOUBLE, &recv_box), (DOUBLE, this_val)],
-            )
-        } else {
-            blk.call(
+            ),
+            None => blk.call(
                 I64,
                 "js_closure_unbox_callee_checked",
                 &[(DOUBLE, &recv_box)],
-            )
-        };
+            ),
+        }
+    };
+
+    // Re-read the arguments BELOW the unbox. `closure_handle` itself is a raw
+    // pointer in a register, but nothing between here and the dispatch can
+    // collect, so it needs no protection of its own.
+    let arg_base = callee_slot + 1;
+    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    for i in 0..args.len() {
+        lowered_args.push(roots.reread_one(ctx, &operand_exprs, arg_base + i)?);
+    }
+
+    let result = if lowered_args.len() <= 16 {
         let runtime_fn = format!("js_closure_call{}", lowered_args.len());
+        let blk = ctx.block();
         let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
         for v in &lowered_args {
             call_args.push((DOUBLE, v.as_str()));
@@ -1332,6 +1497,12 @@ pub fn try_lower_closure_call_fallthrough(
         // variadic `js_closure_call_array(closure_i64, args_ptr, argc)`. This
         // mirrors the `js_native_call_value` marshaling used elsewhere in
         // lower_call. `args_ptr` is non-null here since argc > 16 > 0.
+        //
+        // #7154: the stores happen below the unbox now. A stack buffer is not a
+        // GC root, so filling it above an allocating rebind would freeze
+        // pre-move addresses into it — the same staleness one indirection
+        // further out. The stores have no observable effect, so moving them
+        // below the throw-capable unbox changes nothing else.
         let n = lowered_args.len();
         let buf = ctx.func.alloca_entry_array(DOUBLE, n);
         let blk = ctx.block();
@@ -1339,35 +1510,6 @@ pub fn try_lower_closure_call_fallthrough(
             let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
             blk.store(DOUBLE, v, &slot);
         }
-        // #5504: tag-check the callee before masking to a closure pointer.
-        // A non-callable value (number/string/bool/null/undefined) whose
-        // low-48 bits form an in-range address would otherwise be handed to
-        // `js_closure_callN` as a wild `*const ClosureHeader` and SIGSEGV on
-        // the header read. The checked unbox throws `TypeError: value is not
-        // a function` for any non-`POINTER_TAG` value.
-        // #6475: a member-shaped call (`o.m(args)`) must rebind an
-        // object-literal method's baked `this` capture slot to the receiver —
-        // the slot wins over the IMPLICIT_THIS cell set above, so a method
-        // inherited via `Object.setPrototypeOf(obj, proto)` otherwise runs
-        // with `this` bound to the proto literal (effect's Pipeable
-        // `TagClass.pipe(...)` composed against the wrong `this` and
-        // HttpApiBuilder.group returned a curried function instead of a
-        // Layer). The rebind variant is a no-op for closures that don't
-        // capture `this`, so plain functions and arrows are untouched;
-        // receiverless calls keep the plain checked unbox.
-        let closure_handle = if let Some(ref this_val) = method_recv {
-            blk.call(
-                I64,
-                "js_closure_unbox_callee_checked_rebind",
-                &[(DOUBLE, &recv_box), (DOUBLE, this_val)],
-            )
-        } else {
-            blk.call(
-                I64,
-                "js_closure_unbox_callee_checked",
-                &[(DOUBLE, &recv_box)],
-            )
-        };
         let argc = n.to_string();
         blk.call(
             DOUBLE,
@@ -1375,6 +1517,10 @@ pub fn try_lower_closure_call_fallthrough(
             &[(I64, &closure_handle), (PTR, &buf), (I64, &argc)],
         )
     };
+
+    // Released AFTER the dispatch, not before: the dispatcher allocates while
+    // it reads these values.
+    roots.release(ctx);
 
     if let Some(prev) = prev_this {
         ctx.block()

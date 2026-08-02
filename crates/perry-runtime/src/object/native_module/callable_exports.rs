@@ -7,9 +7,17 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     // can be minted via the codegen NativeModuleRef fast path without any
     // namespace object existing. Install here too.
     install_native_module_vtable();
-    let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
+    let module_name = if module_name == "wasi.default" {
+        "wasi"
+    } else {
+        cjs_default_base_module(module_name).unwrap_or(module_name)
+    };
     let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
+    // node:inspector/promises is the callback namespace with Session replaced.
+    if module_name == "inspector/promises" && property_name != "Session" {
+        return bound_native_callable_export_value("inspector", property_name);
+    }
     let export_module_name = if property_name == "Assert" && module_name == "assert/strict" {
         "assert"
     } else {
@@ -212,6 +220,10 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
             | "emit"
             | "eventNames"
             | "listenerCount"
+            | "listeners"
+            | "rawListeners"
+            | "getMaxListeners"
+            | "setMaxListeners"
     )
 }
 
@@ -229,6 +241,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
         ("cluster", "emit") => Some(1),
         ("cluster", "eventNames") => Some(0),
+        ("cluster", "getMaxListeners") => Some(0),
         (
             "cluster",
             "on"
@@ -240,6 +253,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
             | "off"
             | "listenerCount",
         ) => Some(2),
+        ("cluster", "listeners" | "rawListeners" | "setMaxListeners") => Some(1),
         ("cluster", "removeAllListeners") => Some(1),
         // #6563: node-pty `spawn(file, args, options)`.
         ("node-pty", "spawn") => Some(3),
@@ -326,6 +340,17 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
             | "webSocketClosed"
             | "webSocketHandshakeResponseReceived",
         ) => Some(1),
+        ("inspector.NetworkResources", "put") => Some(1),
+        (
+            "inspector.DOMStorage",
+            "domStorageItemAdded"
+            | "domStorageItemRemoved"
+            | "domStorageItemUpdated"
+            | "domStorageItemsCleared"
+            | "registerStorage",
+        ) => Some(1),
+        ("inspector.Session", "connect" | "connectToMainThread" | "disconnect") => Some(0),
+        ("inspector.Session" | "inspector/promises.Session", "post") => Some(3),
         (
             "process",
             "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback",
@@ -1868,6 +1893,18 @@ pub(crate) unsafe fn nm_attach_child_process(
     }
 }
 
+pub(crate) unsafe fn nm_attach_cluster(
+    property_name: &str,
+    value: f64,
+    _closure_addr: usize,
+) -> f64 {
+    if property_name == "Worker" {
+        crate::cluster::ensure_worker_constructor(value)
+    } else {
+        value
+    }
+}
+
 #[allow(unused_mut)]
 pub(crate) unsafe fn nm_attach_sqlite(
     property_name: &str,
@@ -2113,14 +2150,18 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("emit", 1),
             ("eventNames", 0),
             ("fork", 1),
+            ("getMaxListeners", 0),
             ("listenerCount", 2),
+            ("listeners", 1),
             ("off", 2),
             ("on", 2),
             ("once", 2),
             ("prependListener", 2),
             ("prependOnceListener", 2),
+            ("rawListeners", 1),
             ("removeAllListeners", 1),
             ("removeListener", 2),
+            ("setMaxListeners", 1),
             ("setupMaster", 1),
             ("setupPrimary", 1),
         ],
@@ -2223,6 +2264,16 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
     ),
     ("https", &[("Agent", 1), ("get", 3), ("request", 0)]),
     (
+        "inspector.DOMStorage",
+        &[
+            ("domStorageItemAdded", 1),
+            ("domStorageItemRemoved", 1),
+            ("domStorageItemUpdated", 1),
+            ("domStorageItemsCleared", 1),
+            ("registerStorage", 1),
+        ],
+    ),
+    (
         "inspector.Network",
         &[
             ("dataReceived", 1),
@@ -2236,6 +2287,17 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("webSocketHandshakeResponseReceived", 1),
         ],
     ),
+    ("inspector.NetworkResources", &[("put", 1)]),
+    (
+        "inspector.Session",
+        &[
+            ("connect", 0),
+            ("connectToMainThread", 0),
+            ("disconnect", 0),
+            ("post", 3),
+        ],
+    ),
+    ("inspector/promises.Session", &[("post", 3)]),
     (
         "module",
         &[

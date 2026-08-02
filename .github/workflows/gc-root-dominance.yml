@@ -1,0 +1,153 @@
+name: GC Root Dominance
+
+# Static gate for the invariant a GC-managed value's root store must DOMINATE
+# every subsequent site that can trigger a collection (#7154).
+#
+# Two bugs of this class shipped before there was an instrument for it. #7184:
+# the root store was emitted but its shadow-slot index fell outside the pushed
+# frame, so `js_shadow_slot_bind` bounds-checked it into a silent no-op. #7192:
+# the store was emitted in-frame but AFTER a call that allocates. Both present
+# identically — a *rooted* slot holding a dangling pointer, surfacing cycles
+# later as "TypeError: value is not a function" — and neither is visible to any
+# runtime GC probe, because at the moment of the collection there is nothing
+# for the collector to find. A static pass over the emitted IR is the only
+# instrument that sees them before they crash, which is why this is a gate and
+# not a benchmark.
+#
+# THIS JOB IS DESIGNED TO BE ABLE TO FAIL, and is checked against all four ways
+# a gate can be unable to (CLAUDE.md):
+#
+#   1. no `continue-on-error`, no `|| true`, no pipe between the checker and
+#      the shell's exit status;
+#   2. NOT yet in branch protection's required contexts. This was deliberate at
+#      first — a new gate has never been green, so promoting it immediately
+#      blocks every open PR — but the second step was never taken, and in the
+#      meantime the job WAS red on `main` and blocked nothing: the five
+#      ClassExprFresh hits now tracked in #7211 have been reported on every run
+#      since #7198 and went unread. That is hazard 2 doing exactly what the
+#      corollary in CLAUDE.md warns about.
+#
+#      **ACTION REQUIRED, and it is not something this workflow can do to
+#      itself**: with the allowlist below the job is green on `main`, so a
+#      repo admin must add `gc-root-dominance` to branch protection's required
+#      contexts. Until that happens this file is documentation, not a gate.
+#      See docs/src/internals/gc-rooting-invariant.md, "Promoting this gate".
+#   3. `concurrency` cancels pull-request runs only, never `main` runs;
+#   4. the subject is ASSERTED live, not assumed, at three levels.
+#      `--self-test` proves the checker still reports a planted violation in
+#      hand-written IR and still clears the control. `--seeded-violations`
+#      goes further and plants collection points into the REAL corpus,
+#      requiring every one to be reported -- that is what catches the case
+#      where perry's emitted IR drifts to a shape the parser can no longer
+#      read, which frozen fixtures cannot detect. And `--min-files` /
+#      `--min-binds` / `--min-funcs` refuse a clean verdict over a corpus with
+#      too few modules, root stores or functions to have exercised anything.
+#      An empty `.perry-trace/llvm` is a routine outcome of a failed compile,
+#      so "0 violations" over 0 files must be an error rather than a pass.
+#
+# Known-remaining violations live in scripts/gc_root_dominance_allowlist.json,
+# one named entry each with an issue and a written justification -- NOT a
+# numeric threshold, which cannot tell a new violation from an old one. An
+# entry that matches nothing fails the build, so a fixed bug's entry must be
+# deleted rather than left to widen coverage later.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per-event groups, cancelling PR runs only. A shared group with an
+  # unconditional cancel-in-progress starves `main`: on a deep runner queue
+  # every merge cancels the previous main run before it reaches a runner, and a
+  # gate that is always cancelled never fails. Same reasoning as gc-ratchet.yml.
+  group: gc-root-dominance-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  gc-root-dominance:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Fast structural failure first: prove the checker can still fail before
+      # spending a compiler build on it. This is the arm that would have caught
+      # `PERRY_GC_FORCE_EVACUATE` being inert for every test that "exercised"
+      # it (#6942/#6946).
+      - name: Checker self-test (can this gate still fail?)
+        run: python3 scripts/gc_root_dominance_check.py --self-test
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gcdom-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build perry and the runtime archives
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only; the .a files come from
+          # the -static wrapper crates. The package set is fixed so cargo
+          # feature unification matches every other job that builds the
+          # compiler.
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      # The source list and the env knobs live in the script, not here, so that
+      # reproducing a CI failure is one command rather than a re-read of this
+      # YAML. A retyped invocation that drops PERRY_GC_MOVING_LOOP_POLLS
+      # produces IR in which the bug is not expressible at all, and the local
+      # run then "cannot reproduce" a real finding.
+      - name: Emit the IR corpus
+        run: ./scripts/gc_root_dominance_corpus.sh ir-corpus
+
+      - name: Check root-store dominance
+        run: |
+          set -euo pipefail
+          # No pipe: the checker's own exit status is the job's.
+          #
+          # The floors are asserted, not hoped for. On the corpus as of this
+          # commit the run reports ~1993 functions / 117 modules / 2501 root
+          # stores, so these sit below that with room for churn and well above
+          # "something compiled". Raise them when the corpus grows; never lower
+          # one to make a run pass -- a shrinking corpus is the finding.
+          #
+          # --seeded-violations plants 40 collection points into this very IR
+          # and requires all 40 to be reported. That is the arm that fails if
+          # the checker has stopped understanding perry's output, which is the
+          # only way a green verdict here could be a lie.
+          python3 scripts/gc_root_dominance_check.py ir-corpus \
+            --moving-only \
+            --min-files 90 --min-binds 1500 --min-funcs 1200 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+
+      - name: Upload the IR corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-root-dominance-ir
+          path: ir-corpus
+          retention-days: 7

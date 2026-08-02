@@ -290,6 +290,127 @@ fn source_fingerprint_follows_workspace_dep_closure() {
     );
 }
 
+/// The GC-iteration "stale runtime" trap: perry-runtime / perry-stdlib are the
+/// crates a runtime dev edits most, yet the pre-existing fingerprint coverage
+/// only exercised the routed ext crates. A CONTENT edit to a runtime/stdlib
+/// source file must rotate the fingerprint even when the file's mtime does NOT
+/// advance (a `git checkout`, `cp -p`, or cache restore can hand back a fresh
+/// checkout whose sources look "older" than a cached archive) — the #5892/#5930
+/// content fingerprint is exactly what makes that safe, where the mtime gate
+/// alone is blind. Rewriting identical bytes must NOT rotate it, so the common
+/// no-edit rebuild stays a fast cache hit.
+#[test]
+fn source_fingerprint_tracks_runtime_and_stdlib_content_not_mtimes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    minimal_auto_workspace(dir.path());
+
+    let fp0 = auto_optimized_source_fingerprint(dir.path(), &[]);
+
+    // mtime-only churn (identical bytes, later write time) must not rotate the
+    // key — this is the no-edit fast path the freshness gate relies on.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write_file(
+        &dir.path().join("crates/perry-runtime/src/lib.rs"),
+        b"pub fn rt() {}\n",
+    );
+    assert_eq!(
+        fp0,
+        auto_optimized_source_fingerprint(dir.path(), &[]),
+        "rewriting identical runtime bytes must not rotate the fingerprint"
+    );
+
+    // A content edit to an EXISTING perry-runtime source file must rotate it.
+    // Editing in place (rather than adding a new file) is what makes this
+    // assertion depend on the file CONTENT hash: a fingerprint that hashed only
+    // the path set would still rotate on an added file, and the test could not
+    // fail. See `runtime_source_edit_rotates_build_stamp_and_fails_freshness`
+    // for the same reasoning applied to the freshness gate.
+    write_file(
+        &dir.path().join("crates/perry-runtime/src/lib.rs"),
+        b"pub fn rt_changed() {}\n",
+    );
+    let fp_rt = auto_optimized_source_fingerprint(dir.path(), &[]);
+    assert_ne!(
+        fp0, fp_rt,
+        "a perry-runtime source edit must rotate the fingerprint"
+    );
+
+    // Same guarantee for perry-stdlib.
+    write_file(
+        &dir.path().join("crates/perry-stdlib/src/lib.rs"),
+        b"pub fn stdlib_changed() {}\n",
+    );
+    let fp_std = auto_optimized_source_fingerprint(dir.path(), &[]);
+    assert_ne!(
+        fp_rt, fp_std,
+        "a perry-stdlib source edit must rotate the fingerprint"
+    );
+}
+
+/// Ties the runtime-source fingerprint to the freshness gate the compile driver
+/// actually consults: a content edit to perry-runtime rotates the build stamp,
+/// so a `target/perry-auto-<hash>` dir stamped for the OLD source can never pass
+/// `auto_optimized_archives_are_fresh` — no manual `rm libperry_runtime.a`.
+///
+/// The stamp gate is the ONLY thing this test lets answer "stale": the archives
+/// are planted *after* the source edit, so every source is older than them and
+/// the mtime half of `auto_optimized_archives_are_fresh` votes "fresh". That
+/// ordering is deliberate — plant them first and the edit's own mtime makes the
+/// gate reject on the mtime path alone, so the assertion would still pass with
+/// the stamp comparison deleted and the test could never fail (the repo's
+/// "a gate must assert its subject was live" rule). It is also the real-world
+/// case the content fingerprint exists for: a `git checkout` / `cp -p` / CI
+/// cache restore hands back sources whose mtimes never advance past a cached
+/// archive.
+#[test]
+fn runtime_source_edit_rotates_build_stamp_and_fails_freshness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    minimal_auto_workspace(dir.path());
+
+    let fp_before = auto_optimized_source_fingerprint(dir.path(), &[]);
+    let stamp_before = auto_optimized_build_stamp("key", None, &[], &[], &fp_before);
+
+    // Content edit to an EXISTING runtime source file (in place, so the
+    // assertion rides on the content hash rather than on the path set).
+    write_file(
+        &dir.path().join("crates/perry-runtime/src/lib.rs"),
+        b"pub fn rt_v2() {}\n",
+    );
+
+    // Only now plant the archives + the stamp recorded for the PRE-edit source,
+    // so their mtimes are newer than every source and the mtime half of the gate
+    // says "fresh". Anything but the stamp mismatch would let this pass.
+    let runtime = dir
+        .path()
+        .join("target/perry-auto/release/libperry_runtime.a");
+    let stdlib = dir
+        .path()
+        .join("target/perry-auto/release/libperry_stdlib.a");
+    let stamp_path = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write_file(&runtime, b"!<arch>\n");
+    write_file(&stdlib, b"!<arch>\n");
+    write_file(&stamp_path, stamp_before.as_bytes());
+
+    let fp_after = auto_optimized_source_fingerprint(dir.path(), &[]);
+    let stamp_after = auto_optimized_build_stamp("key", None, &[], &[], &fp_after);
+    assert_ne!(
+        stamp_before, stamp_after,
+        "a runtime source edit must rotate the build stamp"
+    );
+    assert!(
+        !auto_optimized_archives_are_fresh(
+            dir.path(),
+            &runtime,
+            &stdlib,
+            &[],
+            &stamp_path,
+            &stamp_after,
+        ),
+        "archives stamped for the pre-edit runtime source must not pass the freshness gate"
+    );
+}
+
 /// Closes #507. The well-known flip's "shared tokio" allowlist
 /// must match the set of perry-ext-* crates whose own
 /// `Cargo.toml` pulls tokio. If a new wrapper is added that uses
@@ -317,6 +438,38 @@ fn undici_needs_shared_tokio() {
     // perry-ext-undici is network-I/O-family glue over the native fetch
     // stack; it rides the shared build (see the freshness.rs comment).
     assert!(binding_needs_shared_tokio("undici"));
+}
+
+/// The emitted-FFI → link derivation resolves to real well-known bindings.
+/// The codegen prefix net routes `js_ioredis_*` / `js_undici_*` /
+/// `js_node_forge_*` to these binding keys; each must exist in the shipped
+/// `well_known_bindings.toml` and map to its `perry-ext-*` crate, or the
+/// driver's routing loop would silently drop the flip.
+#[test]
+fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
+    for (key, krate) in [
+        ("ioredis", "perry-ext-ioredis"),
+        ("undici", "perry-ext-undici"),
+        ("node-forge", "perry-ext-node-forge"),
+    ] {
+        let binding = super::super::well_known::lookup_well_known(key)
+            .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
+        assert_eq!(binding.krate, krate, "binding `{key}` routes to `{krate}`");
+    }
+}
+
+/// The auto-build selection split: ioredis/undici carry their own tokio and
+/// must ride the shared auto-optimize invocation, while node-forge is CPU-only
+/// (routes async through perry-stdlib's spawn_blocking shim) and is auto-built
+/// by the isolated leaf-build path in the driver's CPU-only branch.
+#[test]
+fn ext_binding_build_routing_split() {
+    assert!(binding_needs_shared_tokio("ioredis"));
+    assert!(binding_needs_shared_tokio("undici"));
+    assert!(
+        !binding_needs_shared_tokio("node-forge"),
+        "node-forge is CPU-only and must not ride the shared-tokio invocation"
+    );
 }
 
 #[test]
@@ -680,6 +833,84 @@ printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_ext_http.a"
     assert_eq!(
         got.expect("missing archive should be built from workspace source"),
         target_dir.join("release/libperry_ext_http.a")
+    );
+}
+
+/// Issue #76 follow-up: a bare `perry compile` of a `WebAssembly.*` program
+/// must auto-build `perry-wasm-host` instead of hard-failing with
+/// `libperry_wasm_host.a not found`. The build is a plain leaf
+/// `cargo build --release -p perry-wasm-host` into `target/release`; drive it
+/// with a fake cargo (so no real toolchain runs) and assert the resolved path.
+#[cfg(unix)]
+#[test]
+fn wasm_host_auto_build_produces_staticlib_from_workspace_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = env_lock();
+    let old_path = std::env::var_os("PATH");
+    let old_cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR");
+    let old_workspace_root = std::env::var_os("PERRY_WORKSPACE_ROOT");
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    // A crate dir + workspace marker so `find_perry_workspace_root` (via
+    // PERRY_WORKSPACE_ROOT) and the `crate_dir.is_dir()` guard both pass.
+    for dir in [
+        "crates/perry-wasm-host",
+        "crates/perry-runtime",
+        "crates/perry-ui-geisterhand",
+    ] {
+        std::fs::create_dir_all(workspace.path().join(dir)).expect("mkdir workspace marker");
+    }
+
+    let fake_bin = workspace.path().join("fake-bin");
+    std::fs::create_dir_all(&fake_bin).expect("mkdir fake bin");
+    let fake_cargo = fake_bin.join("cargo");
+    std::fs::write(
+        &fake_cargo,
+        r#"#!/bin/sh
+case "$*" in
+  *"-p perry-wasm-host"*) ;;
+  *) exit 43 ;;
+esac
+mkdir -p "$CARGO_TARGET_DIR/release"
+printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_wasm_host.a"
+"#,
+    )
+    .expect("write fake cargo");
+    let mut perms = std::fs::metadata(&fake_cargo)
+        .expect("fake cargo metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_cargo, perms).expect("chmod fake cargo");
+
+    let target_dir = workspace.path().join("out-target");
+    let test_path = match old_path.as_ref() {
+        Some(path) => {
+            let mut paths = vec![fake_bin.clone()];
+            paths.extend(std::env::split_paths(path));
+            std::env::join_paths(paths).expect("join PATH")
+        }
+        None => fake_bin.clone().into_os_string(),
+    };
+    std::env::set_var("PATH", test_path);
+    std::env::set_var("CARGO_TARGET_DIR", &target_dir);
+    std::env::set_var("PERRY_WORKSPACE_ROOT", workspace.path());
+
+    let got = super::super::library_search::build_wasm_host_library(None, OutputFormat::Json, 0);
+
+    set_env_var("PATH", old_path.as_deref().and_then(|v| v.to_str()));
+    set_env_var(
+        "CARGO_TARGET_DIR",
+        old_cargo_target_dir.as_deref().and_then(|v| v.to_str()),
+    );
+    set_env_var(
+        "PERRY_WORKSPACE_ROOT",
+        old_workspace_root.as_deref().and_then(|v| v.to_str()),
+    );
+
+    assert_eq!(
+        got.expect("missing wasm host lib should be built from workspace source"),
+        target_dir.join("release/libperry_wasm_host.a")
     );
 }
 

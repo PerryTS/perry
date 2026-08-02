@@ -100,10 +100,13 @@ pub(crate) use builder::{
 };
 
 // options.rs — command option application (cwd/env/uid/gid/argv0/detached/stdio).
+#[cfg(unix)]
+pub(crate) use options::cp_resolve_program_path;
 pub(crate) use options::{
     cp_abort_signal_is_aborted, cp_apply_argv0, cp_apply_detached, cp_apply_live_stdio,
-    cp_apply_options, cp_build_command, cp_read_abort_signal, cp_read_stdio, cp_spawnargs_argv0,
-    cp_stdio_from_fd, cp_stdio_js_value, cp_stdio_stream_fd, CpStdio,
+    cp_apply_options, cp_build_command, cp_command_for_program, cp_read_abort_signal,
+    cp_read_stdio, cp_spawnargs_argv0, cp_stdio_from_fd, cp_stdio_js_value, cp_stdio_stream_fd,
+    CpStdio,
 };
 
 // output.rs — output encoding, error shape, exit decoding.

@@ -461,6 +461,13 @@ fn visit_expr_for_dyn_imports_ref<F: FnMut(&Expr)>(expr: &Expr, f: &mut F) {
             visit_stmt_for_dyn_imports_ref(s, f);
         }
     }
+    // Closure bodies — mirror the mutable visitor so the collect pass and the
+    // fill pass traverse dynamic import sites in the same order.
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            visit_stmt_for_dyn_imports_ref(s, f);
+        }
+    }
     walk_expr_children(expr, &mut |child| visit_expr_for_dyn_imports_ref(child, f));
 }
 

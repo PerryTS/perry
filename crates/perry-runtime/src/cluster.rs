@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 use crate::array::ArrayHeader;
 use crate::closure::{js_closure_get_capture_f64, ClosureHeader};
@@ -54,6 +54,21 @@ thread_local! {
 }
 
 static CLUSTER_INIT: Once = Once::new();
+static CLUSTER_WORKER_ID: OnceLock<Option<String>> = OnceLock::new();
+
+fn cluster_worker_id() -> Option<&'static str> {
+    CLUSTER_WORKER_ID
+        .get_or_init(|| {
+            let id = std::env::var("NODE_UNIQUE_ID")
+                .ok()
+                .filter(|value| !value.is_empty());
+            if id.is_some() {
+                std::env::remove_var("NODE_UNIQUE_ID");
+            }
+            id
+        })
+        .as_deref()
+}
 
 fn empty_object_value() -> f64 {
     let obj = js_object_alloc(0, 0);
@@ -63,10 +78,7 @@ fn empty_object_value() -> f64 {
 /// True when this process was `cluster.fork()`ed — Node's convention is a
 /// non-empty `NODE_UNIQUE_ID` in the worker's environment.
 pub fn is_cluster_worker() -> bool {
-    std::env::var("NODE_UNIQUE_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .is_some()
+    cluster_worker_id().is_some()
 }
 
 /// Bind a TCP listener with SO_REUSEPORT (+SO_REUSEADDR) so N cluster
@@ -185,10 +197,8 @@ pub fn cluster_property(property: &str) -> Option<f64> {
 // EventEmitter.prototype, not as named module exports). Perry models the
 // default import as a distinct `cluster.default` native-module namespace whose
 // EventEmitter method reads resolve here; the namespace import keeps the
-// `undefined` shape via `cluster_property`. Real worker-lifecycle events are
-// still deferred (closed umbrella #3605) — this is module-level listener
-// bookkeeping plus a synchronous `fork` emit so feature-detection and manual
-// `emit()` round-trips match Node.
+// `undefined` shape via `cluster_property`. The module-level emitter also
+// receives the primary-side worker lifecycle events implemented below.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
@@ -197,10 +207,20 @@ struct ClusterListener {
     once: bool,
 }
 
-#[derive(Default)]
 struct ClusterEmitter {
     events: HashMap<String, Vec<ClusterListener>>,
     order: Vec<String>,
+    max_listeners: f64,
+}
+
+impl Default for ClusterEmitter {
+    fn default() -> Self {
+        Self {
+            events: HashMap::new(),
+            order: Vec::new(),
+            max_listeners: 10.0,
+        }
+    }
 }
 
 thread_local! {
@@ -232,9 +252,7 @@ fn cluster_emitter_event_name(event: f64) -> Option<String> {
 }
 
 fn cluster_register_listener(event: f64, listener: f64, once: bool, prepend: bool) -> f64 {
-    if !is_closure_value(listener) {
-        return cluster_default_value();
-    }
+    crate::validators::validate_function(listener, "listener");
     if let Some(name) = cluster_emitter_event_name(event) {
         CLUSTER_EMITTER.with(|emitter| {
             let mut emitter = emitter.borrow_mut();
@@ -364,17 +382,76 @@ pub extern "C" fn js_cluster_event_names() -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_cluster_listener_count(event: f64) -> f64 {
+pub extern "C" fn js_cluster_listeners(event: f64) -> f64 {
+    ensure_cluster_runtime();
+    let Some(name) = cluster_emitter_event_name(event) else {
+        return alloc_array_value(0);
+    };
+    let callbacks = CLUSTER_EMITTER.with(|emitter| {
+        emitter
+            .borrow()
+            .events
+            .get(&name)
+            .map(|listeners| {
+                listeners
+                    .iter()
+                    .map(|listener| listener.callback_bits)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    let mut arr = crate::array::js_array_alloc(callbacks.len() as u32);
+    for bits in callbacks {
+        arr = crate::array::js_array_push_f64(arr, f64::from_bits(bits));
+    }
+    box_ptr(arr as *const u8)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_raw_listeners(event: f64) -> f64 {
+    // Perry stores once listeners directly and removes them before dispatch,
+    // so the raw and unwrapped listener arrays carry the same callable values.
+    js_cluster_listeners(event)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_set_max_listeners(value: f64) -> f64 {
+    ensure_cluster_runtime();
+    let validated = crate::node_stream::validate_max_listeners(value);
+    CLUSTER_EMITTER.with(|emitter| emitter.borrow_mut().max_listeners = validated);
+    cluster_default_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_get_max_listeners() -> f64 {
+    ensure_cluster_runtime();
+    CLUSTER_EMITTER.with(|emitter| emitter.borrow().max_listeners)
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_listener_count(event: f64, listener: f64) -> f64 {
     ensure_cluster_runtime();
     let Some(name) = cluster_emitter_event_name(event) else {
         return 0.0;
     };
+    let listener_value = JSValue::from_bits(listener.to_bits());
+    let filter_listener = !listener_value.is_undefined() && !listener_value.is_null();
     CLUSTER_EMITTER.with(|emitter| {
         emitter
             .borrow()
             .events
             .get(&name)
-            .map(|l| l.len() as f64)
+            .map(|listeners| {
+                if filter_listener {
+                    let bits = listener.to_bits();
+                    listeners
+                        .iter()
+                        .filter(|entry| entry.callback_bits == bits)
+                        .count() as f64
+                } else {
+                    listeners.len() as f64
+                }
+            })
             .unwrap_or(0.0)
     })
 }
@@ -382,6 +459,7 @@ pub extern "C" fn js_cluster_listener_count(event: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_cluster_remove_listener(event: f64, listener: f64) -> f64 {
     ensure_cluster_runtime();
+    crate::validators::validate_function(listener, "listener");
     if let Some(name) = cluster_emitter_event_name(event) {
         let bits = listener.to_bits();
         CLUSTER_EMITTER.with(|emitter| {
@@ -401,13 +479,12 @@ pub extern "C" fn js_cluster_remove_listener(event: f64, listener: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_cluster_remove_all_listeners(event: f64) -> f64 {
+pub extern "C" fn js_cluster_remove_all_listeners(event: f64, has_event: i32) -> f64 {
     ensure_cluster_runtime();
-    let jv = JSValue::from_bits(event.to_bits());
-    let target = if jv.is_undefined() || jv.is_null() {
-        None
-    } else {
+    let target = if has_event != 0 {
         cluster_emitter_event_name(event)
+    } else {
+        None
     };
     CLUSTER_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
@@ -423,6 +500,17 @@ pub extern "C" fn js_cluster_remove_all_listeners(event: f64) -> f64 {
         }
     });
     cluster_default_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_cluster_remove_all_listeners_args(args: *const ArrayHeader) -> f64 {
+    let has_event = !args.is_null() && crate::array::js_array_length(args) > 0;
+    let event = if has_event {
+        crate::array::js_array_get_f64(args, 0)
+    } else {
+        TAG_UNDEFINED_F64
+    };
+    js_cluster_remove_all_listeners(event, has_event as i32)
 }
 
 #[no_mangle]
@@ -448,8 +536,13 @@ pub extern "C" fn js_cluster_fork(env: f64) -> f64 {
     }
 
     let args = get_field(settings, b"args");
+    unsafe {
+        crate::child_process::js_child_process_validate_command(module, b"exec".as_ptr(), 4);
+    }
+    crate::child_process::js_child_process_validate_args(args);
     let args_ptr = array_ptr(args).map(|p| p as i64).unwrap_or(0);
     let opts = build_fork_options(settings, env);
+    crate::child_process::js_child_process_validate_options(box_ptr(opts as *const u8), 0, 1);
     let module_ptr = crate::string::js_string_materialize_to_heap(module) as i64;
     let worker =
         crate::child_process::fork::js_child_process_fork(module_ptr, args_ptr, opts as i64);
@@ -466,9 +559,7 @@ pub extern "C" fn js_cluster_fork(env: f64) -> f64 {
 
     decorate_worker(worker, id);
     register_worker(id, worker);
-    // Node fires the cluster-level `fork` event synchronously when the worker
-    // object is created (`online`/`exit`/etc. remain deferred — #3605).
-    cluster_emit_event("fork", &[worker]);
+    defer_cluster_fork_event(worker);
     worker
 }
 
@@ -524,17 +615,195 @@ fn cluster_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 }
 
 fn register_cluster_arities() {
-    let arities: [(*const u8, u32); 7] = [
-        (worker_is_connected as *const u8, 0),
-        (worker_is_dead as *const u8, 0),
-        (worker_disconnect as *const u8, 0),
-        (worker_destroy as *const u8, 0),
+    let arities: [(*const u8, u32); 3] = [
         (cluster_internal_online as *const u8, 0),
         (cluster_internal_disconnect as *const u8, 0),
         (cluster_internal_exit as *const u8, 2),
     ];
     for (func, arity) in arities {
         crate::closure::js_register_closure_arity(func, arity);
+    }
+    for (func, arity, length) in [
+        (cluster_worker_send as *const u8, 4, 0),
+        (cluster_worker_kill as *const u8, 1, 0),
+        (cluster_worker_destroy as *const u8, 1, 1),
+        (cluster_worker_disconnect as *const u8, 0, 0),
+        (cluster_worker_is_connected as *const u8, 0, 0),
+        (cluster_worker_is_dead as *const u8, 0, 0),
+        (cluster_setup_emit_thunk as *const u8, 0, 0),
+        (cluster_fork_emit_thunk as *const u8, 0, 0),
+        (cluster_callback_thunk as *const u8, 0, 0),
+        (cluster_disconnect_emit_thunk as *const u8, 0, 0),
+        (cluster_exit_emit_thunk as *const u8, 0, 0),
+        (cluster_internal_message as *const u8, 1, 1),
+    ] {
+        crate::closure::js_register_closure_arity(func, arity);
+        crate::closure::js_register_closure_length(func, length);
+    }
+}
+
+pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
+    let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if raw == 0 || !crate::closure::is_closure_ptr(raw) {
+        return value;
+    }
+    let existing = crate::closure::closure_get_dynamic_prop(raw, "prototype");
+    if object_ptr(existing).is_some() {
+        return value;
+    }
+
+    ensure_cluster_runtime();
+    let proto = js_object_alloc(0, 7);
+    let proto_value = box_ptr(proto as *const u8);
+    set_field(proto_value, b"constructor", value);
+    crate::object::set_builtin_property_attrs(
+        proto as usize,
+        "constructor".to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+    for (name, func, length) in [
+        ("send", cluster_worker_send as *const u8, 0),
+        ("kill", cluster_worker_kill as *const u8, 0),
+        ("destroy", cluster_worker_destroy as *const u8, 1),
+        ("disconnect", cluster_worker_disconnect as *const u8, 0),
+        ("isConnected", cluster_worker_is_connected as *const u8, 0),
+        ("isDead", cluster_worker_is_dead as *const u8, 0),
+    ] {
+        let method = crate::closure::js_closure_alloc(func, 0);
+        crate::object::set_bound_native_closure_name(method, name);
+        crate::object::set_builtin_closure_length(method as usize, length);
+        set_field(proto_value, name.as_bytes(), box_ptr(method as *const u8));
+        crate::object::set_builtin_property_attrs(
+            proto as usize,
+            name.to_string(),
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    let event_emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    let event_emitter_id = crate::object::function_class_id(event_emitter);
+    let event_emitter_proto =
+        crate::object::ensure_function_prototype_object(event_emitter, event_emitter_id);
+    if !event_emitter_proto.is_null() {
+        crate::object::prototype_chain::object_set_static_prototype(
+            proto as usize,
+            box_ptr(event_emitter_proto as *const u8).to_bits(),
+        );
+    }
+
+    crate::closure::closure_set_dynamic_prop(raw, "prototype", proto_value);
+    crate::object::set_builtin_property_attrs(
+        raw,
+        "prototype".to_string(),
+        crate::object::PropertyAttrs::new(true, false, false),
+    );
+    value
+}
+
+fn worker_prototype_value() -> f64 {
+    let constructor = crate::object::bound_native_callable_export_value("cluster", "Worker");
+    let constructor = ensure_worker_constructor(constructor);
+    let raw = (constructor.to_bits() & crate::value::POINTER_MASK) as usize;
+    crate::closure::closure_get_dynamic_prop(raw, "prototype")
+}
+
+pub extern "C" fn js_cluster_worker_new(options: f64) -> f64 {
+    ensure_cluster_runtime();
+    let worker = alloc_object_value(4);
+    set_field(worker, b"__clusterWorker", TAG_TRUE_F64);
+    let id = get_field(options, b"id");
+    let state = get_field(options, b"state");
+    let process = get_field(options, b"process");
+    set_field(
+        worker,
+        b"id",
+        if JSValue::from_bits(id.to_bits()).is_undefined() {
+            0.0
+        } else {
+            id
+        },
+    );
+    set_field(
+        worker,
+        b"state",
+        if JSValue::from_bits(state.to_bits()).is_undefined() {
+            box_string("none")
+        } else {
+            state
+        },
+    );
+    if !JSValue::from_bits(process.to_bits()).is_undefined() {
+        set_field(worker, b"process", process);
+    }
+    if let (Some(obj), Some(proto)) = (object_ptr(worker), object_ptr(worker_prototype_value())) {
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj as usize,
+            box_ptr(proto as *const u8).to_bits(),
+        );
+    }
+    worker
+}
+
+pub(crate) fn is_worker_instance_value(value: f64) -> bool {
+    get_field(value, b"__clusterWorker").to_bits() == TAG_TRUE_F64.to_bits()
+}
+
+extern "C" fn cluster_worker_send(
+    _closure: *const ClosureHeader,
+    message: f64,
+    a2: f64,
+    a3: f64,
+    a4: f64,
+) -> f64 {
+    if is_self_worker_value(crate::object::js_implicit_this_get()) {
+        return crate::process::process_ipc_send_call(message, a2, a3, a4);
+    }
+    crate::child_process::cp_method_send(std::ptr::null(), message, a2, a3, a4)
+}
+
+extern "C" fn cluster_worker_kill(_closure: *const ClosureHeader, signal: f64) -> f64 {
+    if is_self_worker_value(crate::object::js_implicit_this_get()) {
+        let _ = crate::os::js_process_kill(crate::os::js_process_pid(), signal);
+        return TAG_UNDEFINED_F64;
+    }
+    let _ = crate::child_process::cp_method_kill(std::ptr::null(), signal);
+    TAG_UNDEFINED_F64
+}
+
+extern "C" fn cluster_worker_destroy(_closure: *const ClosureHeader, signal: f64) -> f64 {
+    cluster_worker_kill(std::ptr::null(), signal)
+}
+
+extern "C" fn cluster_worker_disconnect(_closure: *const ClosureHeader) -> f64 {
+    let worker = crate::object::js_implicit_this_get();
+    set_field(worker, b"exitedAfterDisconnect", TAG_TRUE_F64);
+    if is_self_worker_value(worker) {
+        let _ = crate::process::process_ipc_disconnect_call();
+    } else {
+        let _ = crate::child_process::cp_method_disconnect(std::ptr::null());
+    }
+    worker
+}
+
+extern "C" fn cluster_worker_is_connected(_closure: *const ClosureHeader) -> f64 {
+    let worker = crate::object::js_implicit_this_get();
+    let connected = if is_self_worker_value(worker) {
+        crate::process::ipc::process_ipc_property("connected").unwrap_or(TAG_FALSE_F64)
+    } else {
+        get_field(worker, b"connected")
+    };
+    if connected.to_bits() == TAG_TRUE_F64.to_bits() {
+        TAG_TRUE_F64
+    } else {
+        TAG_FALSE_F64
+    }
+}
+
+extern "C" fn cluster_worker_is_dead(_closure: *const ClosureHeader) -> f64 {
+    if is_worker_dead(crate::object::js_implicit_this_get()) {
+        TAG_TRUE_F64
+    } else {
+        TAG_FALSE_F64
     }
 }
 
@@ -568,20 +837,45 @@ fn self_worker_value() -> f64 {
         if bits != 0 {
             return f64::from_bits(bits);
         }
-        let worker = alloc_object_value(3);
-        let id = std::env::var("NODE_UNIQUE_ID")
-            .ok()
+        let worker = alloc_object_value(8);
+        let id = cluster_worker_id()
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
         set_field(worker, b"id", id);
-        set_field(worker, b"process", TAG_UNDEFINED_F64);
+        set_field(
+            worker,
+            b"process",
+            crate::object::js_create_native_module_namespace(b"process".as_ptr(), 7),
+        );
+        set_field(worker, b"state", box_string("online"));
         set_field(worker, b"exitedAfterDisconnect", TAG_FALSE_F64);
+        set_field(worker, b"__clusterWorker", TAG_TRUE_F64);
+        set_field(worker, b"__clusterState", box_string("online"));
+        if let (Some(obj), Some(proto)) = (object_ptr(worker), object_ptr(worker_prototype_value()))
+        {
+            crate::object::prototype_chain::object_set_static_prototype(
+                obj as usize,
+                box_ptr(proto as *const u8).to_bits(),
+            );
+        }
         state.borrow_mut().self_worker_bits = worker.to_bits();
         worker
     })
 }
 
+fn is_self_worker_value(value: f64) -> bool {
+    is_cluster_worker()
+        && CLUSTER_STATE.with(|state| state.borrow().self_worker_bits == value.to_bits())
+}
+
 fn apply_setup_primary(settings_arg: f64) {
+    let policy = scheduling_policy_value();
+    if !matches!(policy, 1 | 2) {
+        crate::fs::validate::throw_error_with_code(
+            "Bad cluster scheduling policy: must be one of SCHED_RR or SCHED_NONE",
+            "ERR_INTERNAL_ASSERTION",
+        );
+    }
     let previous = settings_value();
     let next = alloc_default_settings();
     copy_object_fields(previous, next);
@@ -592,6 +886,27 @@ fn apply_setup_primary(settings_arg: f64) {
         state.setup_called = true;
         state.settings_bits = next.to_bits();
     });
+    let deferred = crate::closure::js_closure_alloc(cluster_setup_emit_thunk as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(deferred, 0, next);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+}
+
+extern "C" fn cluster_setup_emit_thunk(closure: *const ClosureHeader) -> f64 {
+    let settings = js_closure_get_capture_f64(closure, 0);
+    cluster_emit_event("setup", &[settings]);
+    TAG_UNDEFINED_F64
+}
+
+fn defer_cluster_fork_event(worker: f64) {
+    let deferred = crate::closure::js_closure_alloc(cluster_fork_emit_thunk as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+}
+
+extern "C" fn cluster_fork_emit_thunk(closure: *const ClosureHeader) -> f64 {
+    let worker = js_closure_get_capture_f64(closure, 0);
+    cluster_emit_event("fork", &[worker]);
+    TAG_UNDEFINED_F64
 }
 
 fn alloc_default_settings() -> f64 {
@@ -669,6 +984,7 @@ fn build_fork_options(settings: f64, env_arg: f64) -> *mut ObjectHeader {
     copy_setting_to_option(settings, opts_val, b"cwd");
     copy_setting_to_option(settings, opts_val, b"execArgv");
     copy_setting_to_option(settings, opts_val, b"execPath");
+    copy_setting_to_option(settings, opts_val, b"inspectPort");
     copy_setting_to_option(settings, opts_val, b"serialization");
     copy_setting_to_option(settings, opts_val, b"silent");
     copy_setting_to_option(settings, opts_val, b"stdio");
@@ -709,6 +1025,10 @@ fn build_worker_env(env_arg: f64, worker_id: u32) -> f64 {
 /// SCHED_RR (2); a user assignment lands in the native-namespace override table
 /// (CJS exports are mutable), so we read it back from there. SCHED_NONE is `1`.
 fn scheduling_policy_is_sched_none() -> bool {
+    scheduling_policy_value() == 1
+}
+
+fn scheduling_policy_value() -> i32 {
     for module in ["cluster", "cluster.default"] {
         if let Some(v) =
             crate::object::native_namespace_prop_override_get(module, "schedulingPolicy")
@@ -719,41 +1039,37 @@ fn scheduling_policy_is_sched_none() -> bool {
             } else {
                 v as i32
             };
-            return n == 1;
+            return n;
         }
     }
-    false
+    2
 }
 
 fn decorate_worker(worker: f64, id: u32) {
     set_field(worker, b"id", id as f64);
     set_field(worker, b"process", worker);
-    set_field(worker, b"exitedAfterDisconnect", TAG_FALSE_F64);
+    set_field(worker, b"state", box_string("none"));
+    set_field(worker, b"exitedAfterDisconnect", TAG_UNDEFINED_F64);
     set_field(worker, b"__clusterWorker", TAG_TRUE_F64);
-    set_field(worker, b"__clusterState", box_string("online"));
+    set_field(worker, b"__clusterState", box_string("none"));
 
-    let original_disconnect = get_field(worker, b"disconnect");
-    set_field(worker, b"__clusterDisconnect", original_disconnect);
-    set_field(
-        worker,
-        b"isConnected",
-        closure_value(worker_is_connected as *const u8, worker),
-    );
-    set_field(
-        worker,
-        b"isDead",
-        closure_value(worker_is_dead as *const u8, worker),
-    );
-    set_field(
-        worker,
-        b"disconnect",
-        closure_value(worker_disconnect as *const u8, worker),
-    );
-    set_field(
-        worker,
-        b"destroy",
-        closure_value(worker_destroy as *const u8, worker),
-    );
+    if let (Some(obj), Some(proto)) = (object_ptr(worker), object_ptr(worker_prototype_value())) {
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj as usize,
+            box_ptr(proto as *const u8).to_bits(),
+        );
+        for name in [
+            "send",
+            "kill",
+            "destroy",
+            "disconnect",
+            "isConnected",
+            "isDead",
+        ] {
+            let key = str_key(name.as_bytes());
+            js_object_delete_field(obj, key);
+        }
+    }
 
     register_listener(
         worker,
@@ -769,6 +1085,11 @@ fn decorate_worker(worker: f64, id: u32) {
         worker,
         "exit",
         closure_value(cluster_internal_exit as *const u8, worker),
+    );
+    register_listener(
+        worker,
+        "message",
+        closure_value(cluster_internal_message as *const u8, worker),
     );
 }
 
@@ -876,6 +1197,7 @@ fn mark_worker_online(worker: f64) {
     }
     set_field(worker, b"__clusterOnlineEmitted", TAG_TRUE_F64);
     set_field(worker, b"__clusterState", box_string("online"));
+    set_field(worker, b"state", box_string("online"));
     emit(worker, "online", &[]);
     cluster_emit_event("online", &[worker]);
 }
@@ -929,50 +1251,18 @@ fn drain_disconnect_callbacks_if_idle() {
     });
 
     for bits in callbacks {
-        let cb = f64::from_bits(bits);
-        unsafe {
-            let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
-        }
+        let deferred = crate::closure::js_closure_alloc(cluster_callback_thunk as *const u8, 1);
+        crate::closure::js_closure_set_capture_ptr(deferred, 0, bits as i64);
+        crate::timer::js_set_immediate_callback(deferred as i64);
     }
 }
 
-extern "C" fn worker_is_connected(closure: *const ClosureHeader) -> f64 {
-    let worker = closure_this(closure);
-    let connected = get_field(worker, b"connected");
-    if JSValue::from_bits(connected.to_bits()).is_bool()
-        && connected.to_bits() == crate::value::TAG_TRUE
-    {
-        TAG_TRUE_F64
-    } else {
-        TAG_FALSE_F64
+extern "C" fn cluster_callback_thunk(closure: *const ClosureHeader) -> f64 {
+    let callback = f64::from_bits(crate::closure::js_closure_get_capture_ptr(closure, 0) as u64);
+    unsafe {
+        let _ = crate::closure::js_native_call_value(callback, std::ptr::null(), 0);
     }
-}
-
-extern "C" fn worker_is_dead(closure: *const ClosureHeader) -> f64 {
-    if is_worker_dead(closure_this(closure)) {
-        TAG_TRUE_F64
-    } else {
-        TAG_FALSE_F64
-    }
-}
-
-extern "C" fn worker_disconnect(closure: *const ClosureHeader) -> f64 {
-    let worker = closure_this(closure);
-    set_field(worker, b"exitedAfterDisconnect", TAG_TRUE_F64);
-    call_original_disconnect(worker);
-    worker
-}
-
-extern "C" fn worker_destroy(closure: *const ClosureHeader) -> f64 {
-    let worker = closure_this(closure);
-    set_field(worker, b"exitedAfterDisconnect", TAG_TRUE_F64);
-    let kill = get_field(worker, b"kill");
-    if is_closure_value(kill) {
-        unsafe {
-            let _ = crate::closure::js_native_call_value(kill, std::ptr::null(), 0);
-        }
-    }
-    worker
+    TAG_UNDEFINED_F64
 }
 
 extern "C" fn cluster_internal_online(closure: *const ClosureHeader) -> f64 {
@@ -982,6 +1272,11 @@ extern "C" fn cluster_internal_online(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn cluster_internal_disconnect(closure: *const ClosureHeader) -> f64 {
     mark_worker_disconnected(closure_this(closure));
+    TAG_UNDEFINED_F64
+}
+
+extern "C" fn cluster_internal_message(closure: *const ClosureHeader, message: f64) -> f64 {
+    cluster_emit_event("message", &[closure_this(closure), message]);
     TAG_UNDEFINED_F64
 }
 
@@ -995,12 +1290,25 @@ fn mark_worker_disconnected(worker: f64) {
         return;
     }
     set_field(worker, b"__clusterDisconnectEmitted", TAG_TRUE_F64);
+    set_field(worker, b"state", box_string("disconnected"));
+    let deferred = crate::closure::js_closure_alloc(cluster_disconnect_emit_thunk as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+}
+
+extern "C" fn cluster_disconnect_emit_thunk(closure: *const ClosureHeader) -> f64 {
+    let worker = js_closure_get_capture_f64(closure, 0);
     cluster_emit_event("disconnect", &[worker]);
+    TAG_UNDEFINED_F64
 }
 
 extern "C" fn cluster_internal_exit(closure: *const ClosureHeader, code: f64, signal: f64) -> f64 {
     let worker = closure_this(closure);
+    if JSValue::from_bits(get_field(worker, b"exitedAfterDisconnect").to_bits()).is_undefined() {
+        set_field(worker, b"exitedAfterDisconnect", TAG_FALSE_F64);
+    }
     set_field(worker, b"__clusterState", box_string("dead"));
+    set_field(worker, b"state", box_string("dead"));
     mark_worker_disconnected(worker);
     // #4962 — drop the dead worker from any SCHED_RR rotation it joined.
     #[cfg(unix)]
@@ -1008,8 +1316,36 @@ extern "C" fn cluster_internal_exit(closure: *const ClosureHeader, code: f64, si
         crate::cluster_sched::primary_remove_worker(handle);
     }
     remove_worker(worker);
+    let deferred = crate::closure::js_closure_alloc(cluster_exit_emit_thunk as *const u8, 3);
+    crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
+    crate::closure::js_closure_set_capture_f64(deferred, 1, code);
+    crate::closure::js_closure_set_capture_f64(deferred, 2, signal);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+    invoke_disconnect_callbacks_if_idle();
+    TAG_UNDEFINED_F64
+}
+
+fn invoke_disconnect_callbacks_if_idle() {
+    let callbacks = CLUSTER_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if !state.worker_bits_by_id.is_empty() {
+            return Vec::new();
+        }
+        std::mem::take(&mut state.disconnect_callbacks)
+    });
+    for bits in callbacks {
+        let callback = f64::from_bits(bits);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(callback, std::ptr::null(), 0);
+        }
+    }
+}
+
+extern "C" fn cluster_exit_emit_thunk(closure: *const ClosureHeader) -> f64 {
+    let worker = js_closure_get_capture_f64(closure, 0);
+    let code = js_closure_get_capture_f64(closure, 1);
+    let signal = js_closure_get_capture_f64(closure, 2);
     cluster_emit_event("exit", &[worker, code, signal]);
-    drain_disconnect_callbacks_if_idle();
     TAG_UNDEFINED_F64
 }
 
@@ -1022,21 +1358,17 @@ fn call_worker_disconnect(worker: f64) {
     }
 }
 
-fn call_original_disconnect(worker: f64) {
-    let original = get_field(worker, b"__clusterDisconnect");
-    if !is_closure_value(original) {
-        return;
-    }
-    unsafe {
-        let _ = crate::closure::js_native_call_value(original, std::ptr::null(), 0);
-    }
-}
-
 fn is_worker_dead(worker: f64) -> bool {
     let exit_code = get_field(worker, b"exitCode");
     let signal_code = get_field(worker, b"signalCode");
     !JSValue::from_bits(exit_code.to_bits()).is_null()
         || !JSValue::from_bits(signal_code.to_bits()).is_null()
+}
+
+pub(crate) fn exit_worker_on_unexpected_primary_disconnect(unexpected: bool) {
+    if unexpected && is_cluster_worker() {
+        std::process::exit(0);
+    }
 }
 
 fn closure_this(closure: *const ClosureHeader) -> f64 {

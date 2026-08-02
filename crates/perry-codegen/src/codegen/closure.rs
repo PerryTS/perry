@@ -586,7 +586,21 @@ pub(super) fn compile_closure(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
-        lf.enable_shadow_frame(m.len() as u32);
+        // #7208: reserve one slot per CAPTURED `this` / `new.target`, exactly
+        // as `codegen/method.rs:316` and `:1344` do with their `+ 1`.
+        //
+        // Both are `blk.alloca(DOUBLE)` holding a heap receiver for the WHOLE
+        // closure body, read by every `ctx.this_stack.last()` consumer. Without
+        // a reserved index there is nothing to bind them to, so an evacuating
+        // minor neither marked nor rewrote them and every load below a
+        // collection point named from-space. The in-tree note further down
+        // ("the `this` / `new.target` capture reads ... run in the entry-block
+        // prologue, ahead of any statement that could collect") justifies the
+        // timing of the READ; it says nothing about the lifetime of the SLOT,
+        // which spans the body.
+        let capture_root_slots =
+            u32::from(captures_this || enclosing_class.is_some()) + u32::from(captures_new_target);
+        lf.enable_shadow_frame(m.len() as u32 + capture_root_slots);
         m
     } else {
         std::collections::HashMap::new()
@@ -681,6 +695,13 @@ pub(super) fn compile_closure(
     // Arrow-in-class leftover path (`enclosing_class.is_some()` without
     // the object-literal patch) keeps the old 0.0 sentinel — reads
     // return a bogus value but don't crash.
+    // #7208: the two reserved indices sit immediately above the local slots,
+    // mirroring `method.rs`'s single `this_shadow_slot_idx`. Bound INLINE right
+    // after each store, in the same entry block, so the store dominates the
+    // bind — an entry-setup hoist would make the slot active while the alloca
+    // still held stack garbage.
+    let capture_root_base = shadow_slot_map.len() as u32;
+    let bind_capture_slot = super::helpers::shadow_stack_enabled();
     let new_target_stack = if captures_new_target {
         let new_target_cap_idx = auto_captures.len() as u32;
         let blk = lf.block_mut(0).unwrap();
@@ -693,6 +714,12 @@ pub(super) fn compile_closure(
         );
         let v = blk.bitcast_i64_to_double(&bits);
         blk.store(DOUBLE, &v, &slot);
+        if bind_capture_slot {
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &capture_root_base.to_string()), (PTR, &slot)],
+            );
+        }
         vec![slot]
     } else {
         Vec::new()
@@ -713,6 +740,14 @@ pub(super) fn compile_closure(
             blk.store(DOUBLE, &v, &slot);
         } else {
             blk.store(DOUBLE, "0.0", &slot);
+        }
+        if bind_capture_slot {
+            // The `new.target` slot took `capture_root_base` when it existed.
+            let idx = capture_root_base + u32::from(captures_new_target);
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &idx.to_string()), (PTR, &slot)],
+            );
         }
         vec![slot]
     } else {
@@ -1000,6 +1035,7 @@ pub(super) fn compile_closure(
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
+        pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,

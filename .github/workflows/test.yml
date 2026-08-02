@@ -967,6 +967,20 @@ jobs:
         if: github.event_name != 'pull_request'
         run: ./scripts/gc_repsel_matrix.sh --no-build --arms all --json gc-repsel-matrix.json
 
+      # GATING, and deliberately so. CLAUDE.md's GC knob kill-policy requires
+      # every GC knob to have an arm that exercises it; the #7154 instruments
+      # (PERRY_GC_PROTECT_FROMSPACE, PERRY_GC_ZEAL) would otherwise be dark
+      # knobs on the subsystem with this repo's worst history of configuration
+      # rot. This asserts BOTH defaults — inert with the knobs unset, live with
+      # them set — and refuses to pass unless the zeal arm forced strictly more
+      # collections than the pressure-only arm, so it cannot go green having
+      # run zero copying minors (the #6942 / #7024 / #7025 failure mode).
+      # The detection property itself is a required-gate unit test:
+      # gc/tests/fromspace_protect.rs::quarantine_catches_a_planted_stale_from_space_deref.
+      # ~20s: the fixture is sized for ~1200 back-edge polls, not #7154's 240k.
+      - name: GC rooting-bug instruments (inert-when-off, live-when-on)
+        run: ./scripts/gc_instrument_smoke.sh target/release/perry
+
       - name: Run GC write-barrier stress tests
         # Informational: these are ~200s nondeterministic corruption-window
         # hunts (#5029). Kept out of the gate so a flake never blocks a PR.
@@ -1218,6 +1232,7 @@ jobs:
           python3 scripts/compiler_output_regression.py census-self-test
           python3 scripts/compiler_output_regression.py census-knob-isolation-self-test
           python3 scripts/compiler_output_regression.py census-determinism-self-test
+          python3 scripts/compiler_output_regression.py census-temp-hygiene-self-test
           python3 -m unittest tests.test_repsel_census
 
       - name: Build compiler
@@ -1231,6 +1246,21 @@ jobs:
       - name: Emission determinism
         run: |
           python3 scripts/compiler_output_regression.py census-determinism \
+            --perry target/debug/perry \
+            --repeat 2 \
+            --jobs 4
+
+      # #7144. The other consequence of content-addressing the `.ll`: workers
+      # holding identical IR share the name, so #7135 stopped deleting it and
+      # nothing else did — one leftover per distinct IR ever compiled. CI never
+      # saw it (runner temp dirs are reclaimed) while developer machines
+      # reached 29 GB. This step compiles with `TMPDIR` pointed at an empty
+      # directory and asserts it is still empty afterwards; note that a
+      # repeat-and-compare check would NOT have caught it, because identical
+      # IR reuses the identical name.
+      - name: Temp-directory hygiene
+        run: |
+          python3 scripts/compiler_output_regression.py census-temp-hygiene \
             --perry target/debug/perry \
             --repeat 2 \
             --jobs 4

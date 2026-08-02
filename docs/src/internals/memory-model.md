@@ -119,6 +119,48 @@ Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the O
 | `PERRY_WRITE_BARRIERS=0` / `off` / `false` | Disable codegen-emitted write barriers at compile time and runtime exact helper barriers at runtime for benchmark/debug bisection. Unset, `=1`, `=on`, and `=true` keep barriers enabled. |
 | `PERRY_GC_DIAG=1` | Print per-cycle diagnostics, including one evacuation-policy line for cycles where evacuation was considered and for `barriers_inactive` skips. |
 
+## Rooting-bug instruments
+
+A value that is live but not rooted across a collection point leaves nothing
+behind at collection time — there is literally nothing for the collector to
+find. The nursery then recycles the address immediately, so the stale pointer
+reads a valid unrelated object and the program dies a cycle or more later, in a
+different function, as `TypeError: value is not a function`. These knobs exist
+to collapse that detection latency. **All are default-off and inert when off.**
+
+| Env var | Effect |
+|---|---|
+| `PERRY_GC_PROTECT_FROMSPACE=1` | After an **evacuating (copying) minor**, do not recycle from-space. Retired Eden and active-survivor blocks are detached into a bounded quarantine, filled with a poison pattern whose first byte reads as an invalid `obj_type` (`0xDE`), and `mprotect(PROT_NONE)`'d over their page-aligned interior. A stale dereference then SIGSEGVs **at the faulting instruction**, with the holder still on the stack. The installed reporter prints the faulting address, which minor retired it, and the last-known object that lived there (`obj_type`, size) plus a native backtrace, then restores `SIG_DFL` and returns so the instruction re-faults — a core file or debugger still sees the real crash site. |
+| `PERRY_GC_PROTECT_FROMSPACE=poison` | As above without `mprotect`: poison only. Use where a fault is unwanted, or for the sub-page block edges `mprotect` cannot cover (those are always poison-filled and counted separately). |
+| `PERRY_GC_PROTECT_FROMSPACE_DEPTH=N` | How many retired page-sets stay quarantined (default `4`, minimum `1`). Expired sets are restored to read/write and **recycled back into Eden**, never freed, so the quarantine is a ring: steady-state footprint is bounded by `N × from-space bytes` and no `mprotect`'d page is ever handed to the system allocator. |
+| `PERRY_GC_ZEAL=1` | Force an evacuating minor at **every GC safepoint** — loop back-edge polls and the outermost microtask-pump boundary — instead of only when nursery pressure is due. Implies `PERRY_GC_FORCE_EVACUATE`, so survivors actually move — but an explicit `PERRY_GEN_GC_EVACUATE=0` still wins, and with it set zeal moves nothing and therefore surfaces nothing. Zeal also does **not** bypass `gc_safepoint_moving_minor`'s entry guards (in-allocation, suppressed, unsafe FFI zone, non-zero root-lock depth, budgeted cycle): a safepoint reached in any of those states still declines to collect. Modelled on V8 `--stress-scavenge` / SpiderMonkey `gcZeal`. Composes with the two above; that pairing is what turns a rooting bug into an immediate precise fault. |
+| `PERRY_GC_FROMSPACE_SCAN_ABORT=1` | Abort on the **first** offending slot the whole-heap from-space scan finds, printing slot, holder, target (including the target's `obj_type`) and a collector backtrace. Now implies `PERRY_GC_FROMSPACE_SCAN=1`; previously it was silently inert on its own. |
+
+Two caveats these instruments are explicit about, because both have burned
+prior investigations:
+
+- `PERRY_GC_PROTECT_FROMSPACE` gates **only** the copying minor's from-space
+  reset. A run with the knob on and zero copying minors protects nothing. Check
+  for a `[gc-fromspace-protect] retired_set=#N` line under `PERRY_GC_DIAG=1`.
+- **Depth is the knob to raise when a suspected bug does not fault.** A stale
+  pointer is only caught while the page-set it names is still quarantined, and
+  under zeal a value can cross hundreds of collections between its last valid
+  observation and its stale use — one per loop back-edge poll. On #7154's
+  `new C(…)` reproducer the constructor body runs 600 polls, so the caller's
+  stale register is 600 retirements old by the time the return-override
+  publishes it: the default depth of 4 misses it silently, and
+  `PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` faults on the first use. Rule of thumb:
+  depth ≥ the number of safepoints the suspect value survives.
+- `PERRY_GC_ZEAL` cannot emit loop back-edge polls that codegen never produced.
+  Those require the **compile-time** `PERRY_GC_MOVING_LOOP_POLLS=1` (default off
+  since #7161). Without it, zeal only fires at event-loop boundaries and a
+  compute-only loop never collects at all. Compile *and* run with the poll opt-in.
+- **Page protection is Unix-only.** `mprotect` / `sigaction` / `sysconf` are not
+  exposed by the `libc` crate on `x86_64-pc-windows-msvc`, a target
+  `perry-runtime` is genuinely built for. On non-Unix hosts `=1` degrades to
+  `poison`, which is visible rather than silent: `bytes_protected` stays `0`
+  while `bytes_poisoned` counts the whole retired range.
+
 ## Why this design
 
 The combination — NaN-boxing for cheap value representation, per-thread arenas to avoid cross-thread sync, precise shadow stack + conservative stack scan for safe root discovery under an opaque optimizer (LLVM), generational aging for nursery-friendly workloads — is what lets Perry both go through LLVM and run a managed language without a fight.

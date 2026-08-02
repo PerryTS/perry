@@ -101,7 +101,17 @@ pub(crate) fn active_survivor_block_index_range() -> std::ops::Range<usize> {
 
 /// Reset Eden and the active survivor from-space, then flip the survivor
 /// roles so the to-space populated by the copying collector becomes active.
+///
+/// **This is the single site `PERRY_GC_PROTECT_FROMSPACE` gates** (#7154
+/// tooling). With the knob on, the from-space blocks are quarantined instead of
+/// recycled, so a stale pointer faults immediately; with it off — the default —
+/// the branch below is not taken and this function behaves exactly as it always
+/// has. No other reclaim path (the non-moving minor's `arena_reset_empty_blocks`,
+/// the full mark-sweep, old-gen defrag) is affected by that knob.
 pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
+    if protect_fromspace_enabled() {
+        return copying_quarantine_from_spaces_and_flip();
+    }
     sync_inline_arena_state();
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;

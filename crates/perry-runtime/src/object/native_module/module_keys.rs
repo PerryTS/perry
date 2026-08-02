@@ -1069,6 +1069,8 @@ const INSPECTOR_NAMESPACE_KEYS: &[&[u8]] = &[
     b"console",
     b"Session",
     b"Network",
+    b"NetworkResources",
+    b"DOMStorage",
 ];
 
 const INSPECTOR_NETWORK_KEYS: &[&[u8]] = &[
@@ -1081,6 +1083,16 @@ const INSPECTOR_NETWORK_KEYS: &[&[u8]] = &[
     b"webSocketCreated",
     b"webSocketClosed",
     b"webSocketHandshakeResponseReceived",
+];
+
+const INSPECTOR_NETWORK_RESOURCES_KEYS: &[&[u8]] = &[b"put"];
+
+const INSPECTOR_DOM_STORAGE_KEYS: &[&[u8]] = &[
+    b"domStorageItemAdded",
+    b"domStorageItemRemoved",
+    b"domStorageItemUpdated",
+    b"domStorageItemsCleared",
+    b"registerStorage",
 ];
 
 const URL_DEFAULT_KEYS: &[&[u8]] = &[
@@ -1657,8 +1669,12 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
         "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
         "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
-        "inspector" | "inspector.default" => Some(INSPECTOR_NAMESPACE_KEYS),
+        "inspector" | "inspector.default" | "inspector/promises" | "inspector/promises.default" => {
+            Some(INSPECTOR_NAMESPACE_KEYS)
+        }
         "inspector.Network" => Some(INSPECTOR_NETWORK_KEYS),
+        "inspector.NetworkResources" => Some(INSPECTOR_NETWORK_RESOURCES_KEYS),
+        "inspector.DOMStorage" => Some(INSPECTOR_DOM_STORAGE_KEYS),
         "timers" => Some(TIMERS_NAMESPACE_KEYS),
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
@@ -1823,6 +1839,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "vm.constants" => Some(VM_CONSTANTS_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
+        "wasi" => Some(&[b"WASI", b"default"]),
+        "wasi.default" => Some(&[b"WASI"]),
         "zlib" => Some(&[b"codes"]),
         "tls" => Some(&[
             b"checkServerIdentity",

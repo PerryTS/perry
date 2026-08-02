@@ -75,6 +75,17 @@ test_gap_repsel_p4b_field_store_elision
 # was failing on main for every PR until this line landed.
 test_gap_repsel_proven_this_frozen
 
+# --- Phase 5a routing: class-id dispatch tower -> proven `this` (#7142) ------
+# The tower case proves `class_id`, which `delete` preserves while compacting
+# the packed slots, so the route carries an INLINE keys-token check. Registered
+# because the routed path has its own GC contract: the receiver is re-derived
+# from the NaN-boxed argument at the call site and the clone shadow-binds its
+# own receiver slot (#6925/#6990 -- `GC_TYPE_OBJECT` is movable, the `TaPtr`
+# no-bind shortcut does not transfer). `churn()` allocates past the matrix's
+# `--pressure 8` heap limit with `rows` live across it, so the evacuating arms
+# have a receiver to move rather than reporting the file inert.
+test_gap_repsel_pshape_tower_delete
+
 # --- Typed-array constructor source rooting (#6981) --------------------------
 # Not a representation file, so the UNREGISTERED gate does not auto-detect it:
 # registered explicitly per the header rule above. Gates the runtime-side half
@@ -125,6 +136,33 @@ test_gap_repsel_scalar_replaced_locals
 # the evacuating arms in that frame, not only inside a callee.
 test_gap_repsel_module_init_canonical
 
+# --- Raw pointer publishes into traced payload slots (#7154) -----------------
+# Not a representation file, so registered explicitly per the header rule.
+# Three runtime helpers published a pointer into a GC-traced slot with a raw
+# `*slot = bits`, skipping `layout_note_slot` (so the holder stayed
+# `POINTER_FREE` and `heap_payload_slot_selection` skipped its WHOLE payload)
+# and the write barrier (so an old->young edge never reached the remembered
+# set). Every subject is read AFTER the churn that drives collection, so a
+# non-moving collection cannot satisfy it. Verified to FAIL on the pre-fix
+# stores (SIGBUS, exit 138) and pass after.
+#
+# ***THIS FILE IS LIVE ONLY ON THE MOVING ARMS, AND THAT IS THE POINT.***
+# Measured 33 copying minors under `PERRY_GC_MOVING_LOOP_POLLS=1` /
+# `evac_minor` / `force_evac`, and ZERO under the shipped default -- because
+# #7161 flipped the evacuating minor off by default pending #7154. So its
+# `default` / `verify_evac` / `cons_scan_off*` cells are UNVER, correctly: the
+# bug it guards cannot manifest without a moving collector, and a PASS there
+# would be the false confidence this harness exists to remove.
+#
+# The consequence to keep in view: `loop_polls` (and the other `requires=move`
+# arms) are now the ONLY place this file bites end to end. If #7161 is ever
+# reverted the cells flip to PASS on their own; if instead the moving-loop knob
+# is deleted, this file goes dark and must be re-tuned or retired with it. The
+# collector-side coverage does NOT depend on that knob: the three Rust tests in
+# `gc/tests/copying/pointer_publish_7154.rs` call `gc_collect_minor` directly,
+# which takes the copying path regardless, and each asserts `copied_objects > 0`.
+test_gap_gc_pointer_publish
+
 # --- The GC-live member ------------------------------------------------------
 # Every file above performs ZERO collections (measured, #6950), which makes the
 # GC arms inert against them. This one holds each representation's local live
@@ -132,3 +170,95 @@ test_gap_repsel_module_init_canonical
 # "collect" arms actually bite. Keep it registered and keep it collecting.
 test_gap_repsel_gc_stress
 
+
+# --- The three residual root-store holes (#7200, #7201, #7202) --------------
+# Not representation files, so registered explicitly per the header rule.
+#
+# ***ALL THREE ARE LIVE ONLY ON THE `requires=move` ARMS, AND THAT IS THE
+# POINT.*** Each is clean under the shipped default, because #7161 flipped the
+# evacuating minor off pending #7154 — so their `default` / `verify_evac` /
+# `cons_scan_off*` cells are UNVER, correctly. `loop_polls` is where they bite
+# end to end today; when #7161 is reverted the rest flip to PASS on their own.
+#
+# Measured on `origin/main` (3a983ca6a), compiled AND run with
+# `PERRY_GC_MOVING_LOOP_POLLS=1`:
+#   spread_accessor_rooting     exit=139 (SIGSEGV) 3/3
+#   static_block_this_rooting   `bad 4` 3/3 (deterministic)
+#   inline_ctor_this_rooting    green — see its own header; it is a STATIC
+#                               gate, pinned by the codegen test and by
+#                               `gc_root_dominance_check.py --unrooted-allocas`
+test_gap_gc_spread_accessor_rooting
+test_gap_gc_static_block_this_rooting
+test_gap_gc_inline_ctor_this_rooting
+
+# --- The catch parameter and the closure `this` capture (#7209, #7208) -------
+# Two more sites from the #7202 bare-alloca enumeration, both reserved-or-
+# missing shadow slots rather than late root stores.
+#
+# Measured on `origin/main` (1679e22b4), compiled AND run with
+# `PERRY_GC_MOVING_LOOP_POLLS=1`:
+#   catch_param_rooting          `message 8 field 8` of 400, 3/3 deterministic
+#   closure_this_capture_rooting exit=139 (SIGSEGV) 3/3; `bad 4` on the
+#                                evacuating arm
+#
+# `catch_param_rooting` is the one file in this corpus that can go wrong under a
+# NON-moving precise-roots collection as well: `js_clear_exception()` drops the
+# runtime's own reference before the catch body runs, so with the slot unbound
+# the exception is reachable from nothing the collector scans and can be SWEPT,
+# not merely relocated. Keep it exercised on `cons_scan_off`, not only on the
+# `requires=move` arms.
+test_gap_gc_catch_param_rooting
+test_gap_gc_closure_this_capture_rooting
+
+# --- Stale REGISTERS: a receiver and a computed base (#7206) -----------------
+# A different failure from every entry above. The sites above are root stores
+# that are late, mis-indexed or missing; these two values are never rooted at
+# all. Spec order evaluates the object first and the sibling operand second, so
+# `recv.m(f())` and `o[f()]` leave the base in a bare SSA register while `f()`
+# runs. It SURVIVES the minor -- the capture cell or module global it was read
+# from is a root -- and therefore MOVES, the collector rewrites that location,
+# and the register keeps naming from-space. A bare register is not a root, so
+# no runtime GC probe can see it.
+#
+# Measured on `origin/main` (91170973c), compiled AND run with
+# `PERRY_GC_MOVING_LOOP_POLLS=1`, oracle node 26.5.1 (`bad 0` for both):
+#   method_receiver_rooting    `TypeError: value is not a function`, and
+#                              exit=139 (SIGSEGV) under PERRY_GC_ZEAL=1 +
+#                              PERRY_GC_PROTECT_FROMSPACE=1
+#   index_get_receiver_rooting `TypeError: Cannot read properties of undefined
+#                              (reading 'v')`
+# Both are `bad 0` with #7206 applied, and `bad 0` on the shipped default on
+# BOTH sides -- the default cannot express the bug, which is why these belong on
+# the `requires=move` arms and prove nothing on `default`.
+test_gap_gc_method_receiver_rooting
+test_gap_gc_index_get_receiver_rooting
+
+# --- Stale REGISTERS on the generic dynamic call (#7214) ---------------------
+# The same class as #7206 above, on the hottest call path the compiler emits.
+# `js_closure_callN` held THREE classes of GC value in bare registers, each
+# across a DIFFERENT window:
+#
+#   receiver | the callee read off it + every argument
+#   callee   | every argument
+#   argument | the arguments after it + the rebind unbox
+#
+# The rebind unbox is a collection point that exists only on the member-shaped
+# path: `js_closure_unbox_callee_checked_rebind` calls
+# `clone_closure_rebind_this`, which allocates a replacement closure when the
+# callee captures `this`. It sits BELOW the last argument and ABOVE the
+# dispatch, so the arguments are re-read after it. The receiverless path takes
+# `js_closure_unbox_callee_checked` -- a tag check and a mask that allocates
+# nothing -- so `f(x, y)` on inert operands emits byte-identical IR.
+#
+# Measured with #7206 applied but NOT #7214, i.e. these are exactly the sites
+# #7206 left open. Compiled AND run with `PERRY_GC_MOVING_LOOP_POLLS=1`,
+# oracle node 26.5.1 (`bad 0` for all three):
+#   closure_call_callee_rooting    `TypeError: value is not a function`
+#   closure_call_this_rooting      `TypeError: value is not a function`
+#   closure_call_argument_rooting  `TypeError: value is not a function`
+# All three are `bad 0` with #7214 applied, including under PERRY_GC_ZEAL=1,
+# and clean on the shipped default on BOTH sides -- so they certify nothing on
+# the `default` arm and belong with the `requires=move` rows.
+test_gap_gc_closure_call_callee_rooting
+test_gap_gc_closure_call_this_rooting
+test_gap_gc_closure_call_argument_rooting

@@ -202,6 +202,7 @@ pub extern "C" fn js_response_static_error() -> f64 {
             redirected: false,
             cached_headers_id: None,
             cached_body_stream_id: None,
+            body_stream_id: None,
         },
     );
     handle_to_f64(id)

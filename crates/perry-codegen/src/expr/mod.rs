@@ -156,7 +156,7 @@ pub(crate) use slot_rep::{
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
 pub(crate) use scalar_slot_root::{
-    root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
+    root_entry_alloca, root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
 };
 pub(crate) use shadow_slot::{
     current_closure_ptr_value, emit_persistent_shadow_root_barrier,
@@ -876,6 +876,12 @@ pub(crate) struct FnCtx<'a> {
     pub pshape_methods:
         &'a std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
 
+    /// #7142: the subset of [`Self::pshape_methods`] the class-id dispatch
+    /// tower may route to. A profitability filter only — see
+    /// `collectors::pshape_tower_route_profitable`. Soundness at that site comes
+    /// entirely from the emitted inline keys check, never from this set.
+    pub pshape_tower_routable: &'a std::collections::HashSet<(String, String)>,
+
     /// Locals referenced anywhere inside a nested closure body (including
     /// explicit capture lists). Excluded from canonical-i32 selection — the
     /// capture machinery stays on the boxed protocol. Empty when
@@ -1521,6 +1527,12 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 }
 
 impl<'a> FnCtx<'a> {
+    pub(crate) fn has_imported_extern_binding(&self, name: &str) -> bool {
+        self.imported_vars.contains(name)
+            || self.import_function_prefixes.contains_key(name)
+            || self.import_function_v8_specifiers.contains_key(name)
+    }
+
     /// The `Ptr<Shape>` proof for a receiver expression, if any — the single
     /// entry point every representation-selection object site consults.
     ///

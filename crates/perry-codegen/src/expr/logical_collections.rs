@@ -913,6 +913,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_alloc",
                 &[(I32, &class_id), (I32, &count_str)],
             );
+            // #7154: the half-built object is a raw SSA register while every
+            // part is lowered, and a part's initializer allocates (zod's
+            // `classic/schemas.ts` builds a 269-key spread whose values are
+            // `$ZodAny()` etc. — full JS calls). An evacuating minor inside one
+            // of those relocates the object, and every later
+            // `js_object_set_field_by_name` then writes into abandoned
+            // from-space memory, so the fields silently vanish from the copy
+            // the caller receives. This is the same rooting contract
+            // `Expr::Object` has used since #6951; `ObjectSpread` never got it.
+            //
+            // A spread part forces protection on its own, independently of
+            // whether the spread *expression* collects. `js_object_copy_own_fields`
+            // reads every own key of the source, so a source carrying an accessor
+            // runs arbitrary user code inside the helper — `{ ...a }` over a plain
+            // `LocalGet` answers `false` to `any_may_trigger_gc` and is still a
+            // collection point.
+            //
+            // A plain `js_object_set_field_by_name` on an inert value is NOT one,
+            // which is why the rest of the predicate stays byte-identical to
+            // `Expr::Object`'s: an allocation inside a runtime helper can never
+            // *initiate* a moving collection. `gc_check_trigger`'s minor arm
+            // defers to the loop safepoint under `PERRY_GC_MOVING_LOOP_POLLS=1`
+            // (`gc/policy.rs`, `GC_SAFEPOINT_PENDING`) and is conservative-scanned
+            // or budgeted-non-moving otherwise, so the register stays valid.
+            let protect_handle = parts.iter().any(|(k, _)| k.is_none())
+                || super::temp_root::any_may_trigger_gc(ctx, parts.iter().map(|(_, v)| v));
+            let rooted = super::temp_root::rooted_handle_begin(ctx, &obj_handle, protect_handle);
             for (key_opt, value_expr) in parts {
                 if let Some(key) = key_opt {
                     // Static key:value pair.
@@ -920,6 +947,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let key_idx = ctx.strings.intern(key);
                     let key_handle_global =
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let obj_handle = super::temp_root::rooted_handle_get(ctx, &rooted);
                     let blk = ctx.block();
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -932,13 +960,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `...expr` spread — copy all own fields from the
                     // source object into `obj_handle`.
                     let src_box = lower_expr(ctx, value_expr)?;
+                    let obj_handle = super::temp_root::rooted_handle_get(ctx, &rooted);
                     ctx.block().call_void(
                         "js_object_copy_own_fields",
                         &[(I64, &obj_handle), (DOUBLE, &src_box)],
                     );
                 }
             }
-            Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))
+            let obj_handle = super::temp_root::rooted_handle_get(ctx, &rooted);
+            let boxed = nanbox_pointer_inline(ctx.block(), &obj_handle);
+            super::temp_root::rooted_handle_release(ctx, rooted);
+            Ok(boxed)
         }
 
         // -------- Object.assign(target, ...sources) --------
@@ -951,7 +983,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Refs #590.
         Expr::ObjectAssign { target, sources } => {
             let target_box = lower_expr(ctx, target)?;
-            let mut acc = ctx.block().call(
+            let acc = ctx.block().call(
                 DOUBLE,
                 "js_object_assign_validate_target",
                 &[(DOUBLE, &target_box)],
@@ -966,14 +998,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if sources.is_empty() {
                 return Ok(acc);
             }
+            // #7200: `acc` is a live object handle across every remaining
+            // source's lowering AND across every `js_object_assign_one` call —
+            // that helper reads every own key of the source, so an accessor
+            // there runs arbitrary user code inside the helper. `Expr::Object`
+            // has rooted its accumulator since #6951; this arm never copied it.
+            //
+            // Unconditional whenever there is a source: the user-code re-entry
+            // is inside the callee, so no property of the *source expression*
+            // can rule it out. (#7198 declined the "a helper's own allocation
+            // initiates a moving collection" argument on evidence; this is the
+            // route it accepted instead.)
+            let acc_slot = super::temp_root::temp_root_push_double(ctx, &acc);
             for src in sources {
                 let src_box = lower_expr(ctx, src)?;
-                acc = ctx.block().call(
+                let acc_now = super::temp_root::temp_root_get_double(ctx, &acc_slot);
+                let next = ctx.block().call(
                     DOUBLE,
                     "js_object_assign_one",
-                    &[(DOUBLE, &acc), (DOUBLE, &src_box)],
+                    &[(DOUBLE, &acc_now), (DOUBLE, &src_box)],
                 );
+                // The helper now returns the post-collection target address, so
+                // publish that back into the root rather than keeping the
+                // pre-call one: `Object.assign(t, a, b)` threads it into `b`'s
+                // link, and the caller receives it.
+                super::temp_root::temp_root_set_double(ctx, &acc_slot, &next);
             }
+            let acc = super::temp_root::temp_root_get_double(ctx, &acc_slot);
+            super::temp_root::temp_root_truncate(ctx, &acc_slot);
             Ok(acc)
         }
 

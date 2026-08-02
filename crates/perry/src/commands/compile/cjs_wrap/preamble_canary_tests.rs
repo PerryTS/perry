@@ -18,6 +18,14 @@
 //!
 //! This canary closes that. It runs the real template through the real
 //! recogniser: wrap → parse → lower → `module_has_ptr_shape_barrier`.
+//!
+//! #7152 adds the same coupling for the preamble's own ALLOCATIONS. The
+//! recogniser there keys on the `__cjs_module` binding name, the
+//! `{ exports: {} }` literal, and the `var module = __cjs_module` alias that
+//! denies it — three more things this file's template controls and nothing
+//! else checks. Its failure mode is quieter still: the report silently goes
+//! back to charging Perry's own scaffolding to the user, which is what #7139
+//! and #7149 both misread as evidence about dependency code.
 
 use std::path::Path;
 
@@ -99,4 +107,83 @@ fn the_canary_chain_still_reports_a_genuine_barrier() {
          the canary above is passing vacuously (parse/lower produced nothing, or the \
          exemption is far wider than #7139 intended)"
     );
+}
+
+// ── #7152: the preamble's own allocations ──────────────────────────────────
+
+/// The record `Let` plus the four allocating preamble statements behind it:
+/// `defineProperty(require, 'name', …)`, `require.cache = {}`,
+/// `require.extensions = { … }`, and the transpiler's
+/// `defineProperty(exports, "__esModule", …)`.
+const EXPECTED_PREAMBLE_ALLOC_STMTS: usize = 5;
+
+/// The #7152 half of the canary. Red means `wrap.rs` and
+/// `perry-codegen/src/collectors/cjs_scaffolding.rs` disagree about what the
+/// preamble looks like — fix one or the other, do not delete this test.
+#[test]
+fn the_cjs_preamble_is_still_recognised_as_scaffolding_allocation() {
+    let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None);
+
+    // Anti-vacuity on the template, one assertion per recogniser conjunct, so
+    // a template edit names the conjunct it broke rather than failing as an
+    // opaque count mismatch.
+    for (needle, conjunct) in [
+        (
+            "const __cjs_module = { exports: {} };",
+            "R1/R2 (the record and its `{ exports: {} }` literal)",
+        ),
+        (
+            "var module = __cjs_module;",
+            "R4 (the alias that denies the record)",
+        ),
+        ("require.cache = {}", "the `require.cache` allocation"),
+        (
+            "require.extensions = {",
+            "the `require.extensions` allocation",
+        ),
+    ] {
+        assert!(
+            wrapped.contains(needle),
+            "the CJS preamble no longer emits `{needle}`.\n\
+             That is conjunct {conjunct} of the #7152 recogniser in \
+             perry-codegen/src/collectors/cjs_scaffolding.rs. Either update the \
+             recogniser to match the new template, or — if the statement is \
+             gone for good — delete its arm there and lower \
+             EXPECTED_PREAMBLE_ALLOC_STMTS here."
+        );
+    }
+
+    let hir = wrap_and_lower(CJS_FIXTURE);
+    let census = perry_codegen::cjs_preamble_census(&hir);
+    assert_eq!(
+        census.module_records, 1,
+        "the `Ptr<Shape>` report no longer recognises `const __cjs_module = \
+         {{ exports: {{}} }}` as Perry's own scaffolding. Every CommonJS module \
+         is now back to reporting it as a denied user candidate (#7152)."
+    );
+    assert_eq!(
+        census.preamble_alloc_stmts, EXPECTED_PREAMBLE_ALLOC_STMTS,
+        "the number of recognised preamble allocation statements changed. \
+         Compare `cjs_preamble` in wrap.rs against \
+         `CjsPreamble::stmt_allocates_only_scaffolding`."
+    );
+}
+
+/// Positive control: the recogniser is per module, not a constant. A module
+/// that was never `cjs_wrap`ped has no preamble at all — without this, the
+/// assertions above would pass just as well against a recogniser that counted
+/// every module as scaffolding.
+#[test]
+fn a_module_that_was_never_cjs_wrapped_has_no_preamble() {
+    let ast = perry_parser::parse_typescript(
+        "class Point { x = 0; }\nexport const p = new Point();\n",
+        "plain.ts",
+    )
+    .expect("fixture must parse");
+    let hir = perry_hir::lower_module(&ast, "plain", "/tmp/perry-canary/plain.ts")
+        .expect("fixture must lower");
+    let census = perry_codegen::cjs_preamble_census(&hir);
+    assert_eq!(census.module_records, 0);
+    assert_eq!(census.preamble_alloc_stmts, 0);
 }

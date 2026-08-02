@@ -86,7 +86,7 @@ pub(crate) fn root_scalar_replaced_slot(ctx: &mut FnCtx<'_>, slot: &str, value: 
     if expr_is_known_non_pointer_shadow_value(ctx, value) {
         return;
     }
-    bind_scalar_replaced_slot(ctx, slot);
+    root_entry_alloca(ctx, slot);
 }
 
 /// Root a scalar-replacement alloca whose stored value has no HIR expression
@@ -96,10 +96,35 @@ pub(crate) fn root_scalar_replaced_slot(ctx: &mut FnCtx<'_>, slot: &str, value: 
 /// slots receive `js_string_split_part_value` results — heap strings with
 /// nothing else referring to them.
 pub(crate) fn root_scalar_replaced_slot_unconditional(ctx: &mut FnCtx<'_>, slot: &str) {
-    bind_scalar_replaced_slot(ctx, slot);
+    root_entry_alloca(ctx, slot);
 }
 
-fn bind_scalar_replaced_slot(ctx: &mut FnCtx<'_>, slot: &str) {
+/// Make an arbitrary entry-block alloca a **rewritten** GC root (#7202).
+///
+/// Scalar replacement is not the only producer of storage that holds a heap
+/// value and has no HIR local: the inline-constructor `this` slot
+/// (`lower_call/new.rs`), a closure's captured `this` / `new.target` slots
+/// (`codegen/closure.rs`) and a `catch (e)` parameter slot (`stmt/try_stmt.rs`)
+/// are all bare `alloca_entry`s that live across arbitrary user code. A bare
+/// alloca is neither a shadow slot nor a temp root, so an evacuating minor
+/// neither marks nor rewrites it and every load below the collection point
+/// names from-space.
+///
+/// # Contract for callers
+///
+/// 1. **Seed the alloca to `undefined` in `entry_allocas` first.** The bind is
+///    hoisted to entry setup, which makes the slot `active` from function entry
+///    — the collector dereferences it before any store reaches it, and
+///    uninitialized stack garbage can pass `is_plausible_heap_addr`.
+/// 2. **Call this *after* the store**, not before: the emitted root barrier
+///    reads the alloca back.
+///
+/// Binding (rather than temp-rooting) is what makes this a one-line fix at
+/// ~30 read sites: every reader already does `load DOUBLE, ptr <slot>`, and
+/// `js_shadow_slot_bind` records `slot_ptrs[idx] = alloca`, so evacuation
+/// rewrites the alloca in place and those loads become correct without being
+/// touched.
+pub(crate) fn root_entry_alloca(ctx: &mut FnCtx<'_>, slot: &str) {
     if !ctx.scalar_slot_shadow_slots.contains_key(slot) {
         // `None` means shadow-stack emission is off for this build; the
         // caller must not emit slot traffic either.

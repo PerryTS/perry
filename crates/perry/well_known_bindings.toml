@@ -40,6 +40,13 @@ lib = "perry_ext_dotenv"
 # Tracking issue for the migration; surfaced in error messages
 # when the bundled .a is missing at link time.
 tracking = "#466"
+# `compat` — how faithful this wrapper is to the npm package's public
+# API (see `BindingCompat` in well_known.rs). `full` = audited complete
+# drop-in, safe to auto-prefer over an on-disk node_modules copy.
+# ABSENT ⇒ conservative `partial` default. dotenv remains partial: this
+# wrapper has `config()` / `parse()`, but not the upstream decrypt/populate/
+# configDotenv surface and option/error semantics.
+compat = "partial"
 
 [bindings.dotenv.upstream]
 version = "17.4.2"
@@ -52,6 +59,9 @@ date = "2026-07-30"
 crate = "perry-ext-nanoid"
 lib = "perry_ext_nanoid"
 tracking = "#466"
+# Partial: the wrapper covers nanoid + custom alphabets, but not the complete
+# upstream export set and flattens the curried customAlphabet contract.
+compat = "partial"
 
 [bindings.nanoid.upstream]
 version = "6.0.0"
@@ -64,6 +74,9 @@ date = "2026-07-30"
 crate = "perry-ext-uuid"
 lib = "perry_ext_uuid"
 tracking = "#466"
+# Partial: several upstream exports and input forms are absent (including
+# parse/stringify and newer conversion/constants APIs).
+compat = "partial"
 
 [bindings.uuid.upstream]
 version = "14.0.1"
@@ -76,6 +89,9 @@ date = "2026-07-30"
 crate = "perry-ext-slugify"
 lib = "perry_ext_slugify"
 tracking = "#466"
+# Partial: `remove`, `locale`, the complete char map, and `slugify.extend`
+# are not implemented by this wrapper.
+compat = "partial"
 
 [bindings.slugify.upstream]
 version = "1.6.9"
@@ -135,6 +151,39 @@ date = "2026-07-30"
 crate = "perry-ext-lru-cache"
 lib = "perry_ext_lru_cache"
 tracking = "#466"
+# PARTIAL (explicit) — but NOT for the reason this comment used to give.
+#
+# The old wording ("the wrapper's store is numeric-value-oriented") went
+# stale when #7136 landed: the store holds real JS keys and values, string
+# keys hash and compare by CONTENT, cached heap values are registered GC
+# roots (marked and rewritten across copying evacuation), and `ttl` /
+# `updateAgeOnGet` follow npm's clock semantics. A 20-assertion probe of
+# real-world usage — string keys, object values, object identity, mutation
+# through the cached reference, overwrite, size, delete, clear, miss,
+# has, eviction at max, get-promotes / peek-does-not, numeric values, ttl,
+# and object survival across forced heap churn — prints IDENTICAL output
+# under npm `lru-cache@11.5.2` on Node 26.5.0 and under this binding.
+#
+# It stays `partial` because `full` is a stronger claim than "faithful for
+# what it implements": per docs/src/native-libraries/zero-config-and-
+# faithfulness.md it means an exhaustively audited drop-in for the pinned
+# package's ENTIRE public API, and it licenses auto-preferring this wrapper
+# over a user's installed `node_modules/lru-cache`. This wrapper exports 8
+# entry points and does not cover `maxSize`/`sizeCalculation`,
+# `dispose`/`disposeAfter`, `fetch`/`forceFetch`, `allowStale`, per-call
+# `set`/`get` option objects, or the iterator / `forEach` / `entries` /
+# `keys` / `values` surface (the ABI only carries `(key, value)`).
+#
+# Two of those gaps fail SILENTLY rather than loudly, which is precisely
+# what the marker exists to prevent: measured against the same probe,
+# `cache.forEach(...)` visits nothing (npm visits every entry) and a
+# `dispose` callback is never invoked (npm invokes it on eviction). Both
+# print a wrong answer instead of throwing, so a `full` marker here would
+# let Perry silently substitute this wrapper for a correct installed copy.
+# Promote to `full` only once those surfaces exist and are conformance-
+# tested; until then `PERRY_REQUIRE_FAITHFUL_BINDINGS=1` refusing this
+# binding is the correct outcome, not a false positive.
+compat = "partial"
 
 [bindings.lru-cache.upstream]
 version = "11.5.2"
@@ -562,6 +611,9 @@ tracking = "#867"
 crate = "perry-ext-node-forge"
 lib = "perry_ext_node_forge"
 tracking = "#466"
+# PARTIAL (explicit): only the PKI subset (RSA keygen, X.509 build/sign,
+# PEM round-trips) is ported — forge's cipher/md/util/asn1 surface is not.
+compat = "partial"
 
 # Upstream provenance pin (see PR #7031 / docs upstream-pins.md).
 [bindings.node-forge.upstream]
@@ -583,6 +635,10 @@ date = "2026-07-30"
 crate = "perry-ext-undici"
 lib = "perry_ext_undici"
 tracking = "#466"
+# PARTIAL (explicit): ProxyAgent / Agent / setGlobalDispatcher /
+# getGlobalDispatcher + native `fetch` are real; `request` and the
+# pool/mock/stream surface are not implemented.
+compat = "partial"
 
 # Upstream provenance pin (see PR #7031 / docs upstream-pins.md). undici's
 # stable dispatcher API (ProxyAgent/Agent/setGlobalDispatcher) is unchanged

@@ -234,95 +234,124 @@ impl Serializer {
         }
         if jsval.is_pointer() {
             let raw = (bits & crate::value::POINTER_MASK) as usize;
-            if raw >= 0x10000 {
-                if crate::buffer::is_registered_buffer(raw) {
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_host_buffer(value);
-                    return;
-                }
-                if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_host_typed_array(value, kind);
-                    return;
-                }
-                if crate::map::is_registered_map(raw) {
-                    if self.depth >= MAX_DEPTH {
-                        self.out.push(TAG_UNDEFINED);
-                        return;
-                    }
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_map(raw as *const crate::map::MapHeader);
-                    return;
-                }
-                if crate::set::is_registered_set(raw) {
-                    if self.depth >= MAX_DEPTH {
-                        self.out.push(TAG_UNDEFINED);
-                        return;
-                    }
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_set(raw as *const crate::set::SetHeader);
-                    return;
-                }
-                if crate::regex::regex_header_has_magic(raw as *const crate::regex::RegExpHeader) {
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_regexp(raw as *const crate::regex::RegExpHeader);
-                    return;
-                }
-                if crate::error::js_error_is_error(value).to_bits() == TAG_TRUE_F64.to_bits() {
-                    if self.depth >= MAX_DEPTH {
-                        self.out.push(TAG_UNDEFINED);
-                        return;
-                    }
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_error(raw as *mut crate::error::ErrorHeader);
-                    return;
-                }
-                if crate::date::is_date_value(value) {
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.out.push(TAG_DATE);
-                    self.write_double(crate::date::js_date_get_time(value));
-                    return;
-                }
-                if let Some(arr) = cp_array_ptr(value) {
-                    if self.depth >= MAX_DEPTH {
-                        self.out.push(TAG_UNDEFINED);
-                        return;
-                    }
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_dense_array(arr);
-                    return;
-                }
-                if let Some(obj) = cp_object_ptr(value) {
-                    if self.depth >= MAX_DEPTH {
-                        self.out.push(TAG_UNDEFINED);
-                        return;
-                    }
-                    if self.write_reference_or_register(raw) {
-                        return;
-                    }
-                    self.write_object(obj);
-                    return;
-                }
+            if self.write_heap_value(value, raw) {
+                return;
             }
         }
         // Functions, symbols, unknown — degrade to undefined.
         self.out.push(TAG_UNDEFINED);
+    }
+
+    fn write_heap_value(&mut self, value: f64, raw: usize) -> bool {
+        if crate::value::addr_class::is_handle_band(raw) {
+            return false;
+        }
+        if crate::buffer::is_registered_buffer(raw) {
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            if crate::buffer::is_array_buffer(raw) {
+                self.write_array_buffer(raw as *const crate::buffer::BufferHeader);
+            } else {
+                self.write_host_buffer(value);
+            }
+            return true;
+        }
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            self.write_host_typed_array(value, kind);
+            return true;
+        }
+        if crate::map::is_registered_map(raw) {
+            if self.depth >= MAX_DEPTH {
+                self.out.push(TAG_UNDEFINED);
+                return true;
+            }
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            self.write_map(raw as *const crate::map::MapHeader);
+            return true;
+        }
+        if crate::set::is_registered_set(raw) {
+            if self.depth >= MAX_DEPTH {
+                self.out.push(TAG_UNDEFINED);
+                return true;
+            }
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            self.write_set(raw as *const crate::set::SetHeader);
+            return true;
+        }
+        if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_F64.to_bits() {
+            if self.depth >= MAX_DEPTH {
+                self.out.push(TAG_UNDEFINED);
+                return true;
+            }
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            let array = crate::array::js_array_from_value(value);
+            self.write_dense_array(array);
+            return true;
+        }
+        if crate::regex::regex_header_has_magic(raw as *const crate::regex::RegExpHeader) {
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            self.write_regexp(raw as *const crate::regex::RegExpHeader);
+            return true;
+        }
+        if crate::error::js_error_is_error(value).to_bits() == TAG_TRUE_F64.to_bits() {
+            if self.depth >= MAX_DEPTH {
+                self.out.push(TAG_UNDEFINED);
+                return true;
+            }
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            self.write_error(raw as *mut crate::error::ErrorHeader);
+            return true;
+        }
+        if crate::date::is_date_value(value) {
+            if self.write_reference_or_register(raw) {
+                return true;
+            }
+            self.out.push(TAG_DATE);
+            self.write_double(crate::date::js_date_get_time(value));
+            return true;
+        }
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(raw) } {
+            if matches!(
+                header.obj_type,
+                crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+            ) {
+                if self.depth >= MAX_DEPTH {
+                    self.out.push(TAG_UNDEFINED);
+                    return true;
+                }
+                if self.write_reference_or_register(raw) {
+                    return true;
+                }
+                self.write_dense_array(raw as *mut crate::array::ArrayHeader);
+                return true;
+            }
+            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                if self.depth >= MAX_DEPTH {
+                    self.out.push(TAG_UNDEFINED);
+                    return true;
+                }
+                if self.write_reference_or_register(raw) {
+                    return true;
+                }
+                self.write_object(raw as *const ObjectHeader);
+                return true;
+            }
+        }
+        false
     }
 
     fn write_number(&mut self, value: f64) {
@@ -419,6 +448,17 @@ impl Serializer {
             unsafe { std::slice::from_raw_parts(data, len) }
         };
         self.write_host_view(NODE_BUFFER_VIEW_INDEX, bytes);
+    }
+
+    fn write_array_buffer(&mut self, buffer: *const crate::buffer::BufferHeader) {
+        let len = unsafe { (*buffer).length as usize };
+        let data = crate::buffer::buffer_data(buffer);
+        self.out.push(TAG_ARRAY_BUFFER);
+        self.write_varint(len as u64);
+        if !data.is_null() && len != 0 {
+            self.out
+                .extend_from_slice(unsafe { std::slice::from_raw_parts(data, len) });
+        }
     }
 
     fn write_host_typed_array(&mut self, value: f64, kind: u8) {
@@ -941,7 +981,15 @@ impl<'a> Deserializer<'a> {
     fn read_array_buffer(&mut self) -> Option<f64> {
         let len = self.read_varint()? as usize;
         let bytes = self.read_raw(len)?;
-        let v = cp_make_buffer(bytes);
+        let buffer = crate::buffer::js_array_buffer_new(len as i32);
+        if buffer.is_null() {
+            return Some(cp_undefined());
+        }
+        let data = crate::buffer::buffer_data_mut(buffer);
+        if !data.is_null() && len != 0 {
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, len) };
+        }
+        let v = cp_box_ptr(buffer as *const u8);
         self.id_table.push(v);
         Some(v)
     }

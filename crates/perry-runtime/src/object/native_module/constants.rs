@@ -133,6 +133,19 @@ fn dns_lookup_flag_constant(property: &str) -> Option<f64> {
     }
 }
 
+fn cached_inspector_object(property: &str, create: impl FnOnce() -> f64) -> f64 {
+    let key = format!("inspector\0object\0{property}");
+    if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|cache| cache.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+    let value = create();
+    NATIVE_CALLABLE_EXPORTS.with(|cache| {
+        cache.borrow_mut().insert(key, value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    });
+    value
+}
+
 fn dns_error_alias(property: &str) -> Option<&'static str> {
     match property {
         "NODATA" => Some("ENODATA"),
@@ -176,7 +189,11 @@ pub(crate) unsafe fn get_native_module_constant(
     };
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
-    let module_name = cjs_default_base.unwrap_or(module_name);
+    let module_name = if module_name == "wasi.default" {
+        "wasi"
+    } else {
+        cjs_default_base.unwrap_or(module_name)
+    };
     if module_name == "process.namespace" && property == "default" {
         return cjs_default_export_value("process");
     }
@@ -451,18 +468,45 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "inspector" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
-            "console" => Some(crate::node_inspector::js_node_inspector_console_object()),
-            "Network" => Some(create_sub_namespace("inspector.Network")),
-            "Session" => Some(bound_native_callable_export_value("inspector", "Session")),
+            "console" => Some(cached_inspector_object("console", || {
+                crate::node_inspector::js_node_inspector_console_object()
+            })),
+            "Network" => Some(cached_inspector_object("Network", || {
+                create_sub_namespace("inspector.Network")
+            })),
+            "NetworkResources" => Some(cached_inspector_object("NetworkResources", || {
+                create_sub_namespace("inspector.NetworkResources")
+            })),
+            "DOMStorage" => Some(cached_inspector_object("DOMStorage", || {
+                create_sub_namespace("inspector.DOMStorage")
+            })),
+            "Session" => {
+                let value = bound_native_callable_export_value("inspector", "Session");
+                crate::node_inspector::install_session_prototype(value, false);
+                Some(value)
+            }
             _ => None,
         },
         "inspector/promises" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("inspector/promises"),
-            "Session" => Some(bound_native_callable_export_value(
-                "inspector/promises",
-                "Session",
-            )),
-            _ => None,
+            "Session" => {
+                let value = bound_native_callable_export_value("inspector/promises", "Session");
+                crate::node_inspector::install_session_prototype(value, true);
+                Some(value)
+            }
+            // Node's promise entry point spreads the callback namespace and
+            // replaces only Session, so read the callback export itself.
+            _ => {
+                let name =
+                    crate::string::js_string_from_bytes(property.as_ptr(), property.len() as u32);
+                let callback = cjs_default_export_value("inspector")?;
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let callback = scope.root_nanbox_f64(callback);
+                let raw = (callback.get_nanbox_u64() & crate::value::POINTER_MASK)
+                    as *const crate::ObjectHeader;
+                let value = crate::object::js_object_get_field_by_name_f64(raw, name);
+                (value.to_bits() != crate::value::TAG_UNDEFINED).then_some(value)
+            }
         },
         "process" => crate::process::process_metadata_property(property),
         "dns" => match property {
@@ -690,7 +734,7 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "test" => crate::node_test::property(property),
         "wasi" => match property {
-            "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
+            "default" if !is_cjs_default_object => cjs_default_export_value("wasi"),
             _ => None,
         },
         "vm" => match property {

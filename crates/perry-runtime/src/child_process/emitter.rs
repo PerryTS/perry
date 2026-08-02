@@ -311,13 +311,29 @@ pub(crate) extern "C" fn cp_method_send(
     a3: f64,
     a4: f64,
 ) -> f64 {
+    let message_value = JSValue::from_bits(message.to_bits());
+    if message_value.is_undefined() {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"message\" argument must be specified",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    if unsafe { crate::symbol::js_is_symbol(message) != 0 }
+        || (message_value.is_pointer() && !crate::fs::extract_closure_ptr(message).is_null())
+    {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"message\" argument must be one of type string, object, number, or boolean",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
     let this = cp_this(closure);
 
     // The callback is the last argument when it is a function. dispatch pads
     // missing slots with `undefined`, so scan slots 4→2 for a closure.
-    let callback = [a4, a3, a2]
-        .into_iter()
-        .find(|v| !crate::fs::extract_closure_ptr(*v).is_null());
+    let callback = [a4, a3, a2].into_iter().find(|v| {
+        JSValue::from_bits(v.to_bits()).is_pointer()
+            && !crate::fs::extract_closure_ptr(*v).is_null()
+    });
 
     // A closed IPC channel (after `disconnect()`, or never connected) returns
     // `false` and reports `ERR_IPC_CHANNEL_CLOSED` to the callback.
@@ -394,7 +410,16 @@ pub(crate) extern "C" fn cp_method_disconnect(closure: *const ClosureHeader) -> 
     }
     cp_set_field(this, b"connected", TAG_FALSE_F64);
     cp_set_field(this, b"channel", TAG_NULL_F64);
-    cp_emit(this, "disconnect", &[]);
+    js_register_closure_arity(cp_disconnect_emit_thunk as *const u8, 0);
+    let deferred = js_closure_alloc(cp_disconnect_emit_thunk as *const u8, 1);
+    js_closure_set_capture_ptr(deferred, 0, this.to_bits() as i64);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+    cp_undefined()
+}
+
+extern "C" fn cp_disconnect_emit_thunk(closure: *const ClosureHeader) -> f64 {
+    let child = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    cp_emit(child, "disconnect", &[]);
     cp_undefined()
 }
 

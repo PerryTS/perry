@@ -247,6 +247,12 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("sqlite", "@@__perry_wk_dispose", true, None),
     method("sqlite", "exec", true, None),
     method("sqlite", "prepare", true, None),
+    // DatabaseSync.serialize()/deserialize() — dispatched by
+    // js_node_sqlite_database_sync_{serialize,deserialize}. Receiver
+    // methods on the base DatabaseSync instance (no class_filter), so
+    // they mirror the `open`/`close`/`exec`/`prepare` rows above.
+    method("sqlite", "serialize", true, None),
+    method("sqlite", "deserialize", true, None),
     method("sqlite", "function", true, Some("DatabaseSync")),
     method("sqlite", "aggregate", true, Some("DatabaseSync")),
     method("sqlite", "enableDefensive", true, Some("DatabaseSync")),
@@ -327,6 +333,14 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         "returns immediately after open(); there is no debugger to wait for (#4916)",
     ),
     property("inspector", "console"),
+    // `inspector.console.*` — the Chrome-DevTools console forwarders (#7090).
+    // Dispatch carries `class_filter: Some("console")`, so these hang off the
+    // `console` property above rather than being named exports of the module.
+    method("inspector", "log", false, Some("console")),
+    method("inspector", "info", false, Some("console")),
+    method("inspector", "debug", false, Some("console")),
+    method("inspector", "warn", false, Some("console")),
+    method("inspector", "error", false, Some("console")),
     property("inspector", "Network"),
     class("inspector", "Session"),
     method("inspector", "Session", false, None),
@@ -355,6 +369,11 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     property("inspector/promises", "default"),
     class("inspector/promises", "Session"),
     method("inspector/promises", "Session", false, None),
+    // Synthetic dispatch row for `Session(...)` invoked without `new`
+    // (js_node_inspector_session_call_without_new, #7090). It is not a public
+    // named export, so it stays `internal_method` — the .d.ts must keep
+    // advertising `Session`, not `SessionCall`.
+    internal_method("inspector/promises", "SessionCall", false, None),
     method("inspector/promises", "connect", true, Some("Session")),
     method(
         "inspector/promises",
@@ -534,6 +553,9 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     class("dgram", "Socket"),
     method("dgram", "Socket", false, None),
     method("dgram", "send", true, Some("Socket")),
+    // Socket.sendto() — dispatched by js_dgram_socket_sendto (sibling of
+    // `send`); same Socket-filtered receiver shape.
+    method("dgram", "sendto", true, Some("Socket")),
     method("dgram", "bind", true, Some("Socket")),
     method("dgram", "close", true, Some("Socket")),
     method("dgram", "address", true, Some("Socket")),
@@ -991,6 +1013,8 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("lru-cache", "delete", true, None),
     method("lru-cache", "clear", true, None),
     method("lru-cache", "size", true, None),
+    // `peek(key)` — read without refreshing recency (#7136).
+    method("lru-cache", "peek", true, None),
     method("commander", "name", true, None),
     method("commander", "description", true, None),
     method("commander", "version", true, None),
@@ -1217,6 +1241,27 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("nodemailer", "sendMail", true, None),
     method("nodemailer", "verify", true, None),
     method_sig("dotenv", "config", false, None, &[], TypeSpec::Any),
+    // `dotenv.parse(src)` — the native impl (`js_dotenv_parse`) has shipped
+    // since the module was added, but the manifest never registered the
+    // symbol, so the #463 gate compiled every call site to a deferred
+    // throw-on-reach error. Callers that wrap config loading in
+    // `try { … } catch {}` swallowed that throw and silently got no config
+    // at all, which is why this is registered as a data-loss fix, not a
+    // missing-feature one. The extern returns a JSON string; the dispatch
+    // row's `NR_OBJ_FROM_JSON_STR` pipes it through `js_json_parse` so the
+    // user-visible value is a real object.
+    method_sig(
+        "dotenv",
+        "parse",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "src",
+            ty: TypeSpec::String,
+            optional: false,
+        }],
+        TypeSpec::Any,
+    ),
     method_sig(
         "nanoid",
         "nanoid",

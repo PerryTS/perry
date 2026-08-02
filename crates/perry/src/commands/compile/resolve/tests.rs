@@ -1452,6 +1452,8 @@ mod declaration_sidecar_tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
 
+    mod compile_package;
+
     fn write_typed_js_package(root: &Path, package_name: &str) -> (PathBuf, PathBuf, PathBuf) {
         let package_dir = root.join("node_modules").join(package_name);
         std::fs::create_dir_all(package_dir.join("dist")).expect("mkdir package dist");
@@ -1556,35 +1558,6 @@ mod declaration_sidecar_tests {
         assert_eq!(
             declaration_sidecar_for_resolved_import("typed-js", &resolved.0).expect("sidecar"),
             declaration.canonicalize().expect("canonical declaration")
-        );
-    }
-
-    #[test]
-    fn extract_compile_package_dir_uses_path_components() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        let path = root
-            .join("node_modules")
-            .join("@noble")
-            .join("curves")
-            .join("node_modules")
-            .join("@noble")
-            .join("hashes")
-            .join("src")
-            .join("sha256.ts");
-
-        assert_eq!(
-            extract_compile_package_dir(&path, "@noble/hashes").expect("package dir"),
-            root.join("node_modules")
-                .join("@noble")
-                .join("curves")
-                .join("node_modules")
-                .join("@noble")
-                .join("hashes")
-        );
-        assert_eq!(
-            extract_compile_package_dir(&path, "@noble/curves").expect("outer package dir"),
-            root.join("node_modules").join("@noble").join("curves")
         );
     }
 

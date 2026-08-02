@@ -1361,14 +1361,19 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         // never reflectable own properties. Drop them for class instances
         // (class_id != 0); plain `{"#fff": 1}` literals keep class_id 0.
         let hide_private = (*obj).class_id != 0;
+        let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
+            || crate::wasi::is_wasi_instance(f64::from_bits(
+                crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+            ));
         let result = crate::array::js_array_alloc(len as u32);
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, pos(i));
-            if hide_private {
+            if hide_private || hide_wasi_state {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
                     if b.first() == Some(&b'#')
                         || super::field_get_set::is_internal_runtime_key_bytes(b)
+                        || (hide_wasi_state && b.starts_with(b"__wasi"))
                     {
                         continue;
                     }

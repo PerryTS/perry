@@ -13,7 +13,8 @@ use crate::lower::{lower_expr, LoweringContext};
 pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement) -> Result<Expr> {
     let type_expr = lower_jsx_element_name(ctx, &jsx.opening.name)?;
 
-    let mut props_fields: Vec<(String, Expr)> = Vec::new();
+    let mut props_parts: Vec<(Option<String>, Expr)> = Vec::new();
+    let mut has_spread_attr = false;
     for attr in &jsx.opening.attrs {
         match attr {
             ast::JSXAttrOrSpread::JSXAttr(jsx_attr) => {
@@ -31,12 +32,11 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
                     None => Expr::Bool(true), // Boolean attribute: <input disabled />
                     Some(val) => lower_jsx_attr_value(ctx, val)?,
                 };
-                props_fields.push((attr_name, attr_val));
+                props_parts.push((Some(attr_name), attr_val));
             }
             ast::JSXAttrOrSpread::SpreadElement(spread) => {
-                // Spread attributes ({...obj}) are not yet representable in HIR Object.
-                // Evaluate for side effects but don't propagate into props.
-                let _ = lower_expr(ctx, &spread.expr);
+                has_spread_attr = true;
+                props_parts.push((None, lower_expr(ctx, &spread.expr)?));
             }
         }
     }
@@ -54,17 +54,24 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     match children.len() {
         0 => {}
         1 => {
-            props_fields.push(("children".to_string(), children.remove(0)));
+            props_parts.push((Some("children".to_string()), children.remove(0)));
         }
         _ => {
-            props_fields.push(("children".to_string(), Expr::Array(children)));
+            props_parts.push((Some("children".to_string()), Expr::Array(children)));
         }
     }
 
-    let props_expr = if props_fields.is_empty() {
+    let props_expr = if props_parts.is_empty() {
         Expr::Null
+    } else if has_spread_attr {
+        Expr::ObjectSpread { parts: props_parts }
     } else {
-        Expr::Object(props_fields)
+        Expr::Object(
+            props_parts
+                .into_iter()
+                .map(|(key, value)| (key.expect("non-spread JSX prop"), value))
+                .collect(),
+        )
     };
 
     // #4950: a module that default-imports the npm `react` package gets

@@ -1019,9 +1019,11 @@ pub enum Expr {
         module: Box<Expr>,
         name: Box<Expr>,
     },
-    /// `WebAssembly.instantiate(bytes)` -> opaque instance handle (Perry
-    /// MVP shape — sync, no Promise, no `{module, instance}` pair).
-    WebAssemblyInstantiate(Box<Expr>),
+    /// `WebAssembly.instantiate(bytes, imports?)` -> an instance result.
+    WebAssemblyInstantiate {
+        bytes: Box<Expr>,
+        imports: Option<Box<Expr>>,
+    },
     /// `WebAssembly.callExport(instance, name, ...args)` — Perry-specific
     /// helper for invoking numeric exports (see issue #76 PoC scope).
     WebAssemblyCallExport {

@@ -594,8 +594,18 @@ pub(super) fn compile_function(
         .unwrap_or_default();
     // `--opt-report` (#6952): attribute every representation decision the
     // collectors below make to this function. No-op when the report is off.
-    let _opt_report_scope =
-        crate::opt_report::enter_region(&f.name, crate::opt_report::RegionKind::Function);
+    //
+    // #7170 R0: this is the only region opener holding both the `FuncId` and
+    // `ModuleDispatchFacts`, so it is the only one that can say whether this
+    // body's `return new C(...)` sites are already served by #7107's
+    // return-shape mechanism. Read by nothing but the report.
+    let _opt_report_scope = crate::opt_report::enter_function_region(
+        &f.name,
+        cross_module
+            .module_dispatch
+            .return_shape_class(f.id)
+            .is_some(),
+    );
     let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_lens(
         &f.body,
         &f.params,
@@ -835,6 +845,7 @@ pub(super) fn compile_function(
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
+        pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,

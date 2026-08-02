@@ -47,7 +47,26 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_NO_AUTO_OPTIMIZE",
     "PERRY_DISABLE_WELL_KNOWN",
     "PERRY_FORCE_WELL_KNOWN",
+    // Both switches change native-vs-JavaScript module routing and therefore
+    // the linked artifact, not merely diagnostics.
+    "PERRY_ALLOW_PERRY_FEATURES",
+    "PERRY_REQUIRE_FAITHFUL_BINDINGS",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::BUILD_CACHE_ENV_VARS;
+
+    #[test]
+    fn binding_policy_switches_are_build_cache_inputs() {
+        for name in [
+            "PERRY_ALLOW_PERRY_FEATURES",
+            "PERRY_REQUIRE_FAITHFUL_BINDINGS",
+        ] {
+            assert!(BUILD_CACHE_ENV_VARS.contains(&name), "missing {name}");
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct BuildCacheProbe {

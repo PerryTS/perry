@@ -24,6 +24,67 @@ use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, temp_r
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
+/// Does `new <class_name>(…)` run user code — an own or inherited constructor
+/// body, or field initializers — between the instance allocation and the value
+/// the `new` expression yields?
+///
+/// That is the window #7154 is about: user code allocates, a back-edge poll
+/// inside it drives an evacuating minor, and the instance moves while the
+/// caller holds it only in an SSA register. A class with none of these has no
+/// window at all (`js_gc_init_typed_shape_layout` is the only thing emitted in
+/// between, and it does not allocate), so it keeps its pre-#7154 IR exactly.
+///
+/// An unresolvable class name is `false` on purpose, not conservatively `true`:
+/// the instance root is pushed only on paths that resolved the class out of
+/// `ctx.classes`, so a name this returns `false` for never reaches the push and
+/// would leave the scope marker as pure overhead.
+fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    // #7207: an IMPORTED constructor runs user code while leaving no trace in
+    // the local class table — `ctx.classes[class_name].constructor` is `None`
+    // for it. A class that also declares no fields and no heritage therefore
+    // answered `false` here while `lower_new_impl_inner` went on to dispatch
+    // `ctx.imported_class_ctors[class_name]` (its `has_imported_ctor` arm, and
+    // the `Stmt::Return` writer at the tail of this file). That left BOTH
+    // consumers of this predicate unprotected across a real constructor body:
+    // #7192's `instance_root`, and the `this`-slot bind added for #7202.
+    //
+    // Keeping it ONE predicate rather than two is the point — the consumers
+    // have to agree by construction, which is what stops the divergence
+    // #7114's pair of predicates produced.
+    if ctx.imported_class_ctors.contains_key(class_name) {
+        return true;
+    }
+    ctx.classes.get(class_name).is_some_and(|class| {
+        class.constructor.is_some()
+            || !class.fields.is_empty()
+            || class.extends.is_some()
+            || class.extends_name.is_some()
+            || class.native_extends.is_some()
+            || class.extends_expr.is_some()
+    })
+}
+
+/// Re-read the freshly-constructed instance from the temp-root slot that
+/// carried it across the constructor body (#7154).
+///
+/// Returns `(obj_handle, obj_box)` — the bare handle and its NaN-boxed form.
+/// When no root was pushed (nothing between the allocation and here can
+/// collect) the original registers are handed straight back, so those sites
+/// keep their old IR byte for byte.
+fn reload_instance(
+    ctx: &mut FnCtx<'_>,
+    instance_root: &Option<String>,
+    obj_handle: &str,
+    obj_box: &str,
+) -> (String, String) {
+    let Some(idx) = instance_root.clone() else {
+        return (obj_handle.to_string(), obj_box.to_string());
+    };
+    let handle = temp_root::temp_root_get_i64(ctx, &idx);
+    let boxed = nanbox_pointer_inline(ctx.block(), &handle);
+    (handle, boxed)
+}
+
 /// Emit the `js_gc_init_typed_shape_layout` call that registers the freshly
 /// constructed instance's raw-f64 / pointer slot masks with the GC so the
 /// typed-feedback class-field fast path engages. Must run AFTER the constructor
@@ -183,7 +244,14 @@ fn lower_new_impl(
     // here releases the group whichever path ran, instead of a
     // `temp_root_release` at each that reviewers and future edits must keep
     // balanced.
-    let scope = temp_root::temp_root_scope_begin(ctx, args);
+    //
+    // #7154: the body also roots the freshly-allocated instance across the
+    // constructor body, so the marker is required whenever construction runs
+    // user code — not only when an argument needs a root. `new C()` with no
+    // arguments is exactly the shape that would otherwise push a slot with no
+    // marker above it to cut.
+    let scope =
+        temp_root::temp_root_scope_begin(ctx, args, construction_runs_user_code(ctx, class_name));
     let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args);
     temp_root::temp_root_scope_end(ctx, scope);
     result
@@ -842,6 +910,29 @@ fn lower_new_impl_inner(
             ],
         )
     };
+    // #7154: root the instance for the duration of the constructor body.
+    //
+    // Until now the instance existed ONLY as an SSA register while that body
+    // ran, and a constructor body allocates. Under back-edge polls
+    // (`PERRY_GC_MOVING_LOOP_POLLS=1`) an evacuating minor inside the
+    // constructor RELOCATES it: the callee's own `this` shadow slot roots it,
+    // so it survives and moves, and the collector rewrites the callee's root —
+    // but not the caller's register, which is not a root at all. Every
+    // subsequent use in this function then names from-space memory, and
+    // `js_ctor_return_override` publishes that dead address straight into the
+    // caller's shadow slot. The result is a *rooted* slot holding a dangling
+    // pointer, which is why #7154's from-space scan only ever saw offenders
+    // one or more cycles after the target died, with correct layout coverage.
+    //
+    // This is #7184's sibling: there the root store landed outside the pushed
+    // frame, here it lands after a collection point. Same invariant — the root
+    // store must dominate every site that can collect — and the same symptom
+    // ("value is not a function" on a stale closure/instance field).
+    //
+    // The slot is released by the scope cut in `lower_new_impl`, which covers
+    // all ~20 return paths below.
+    let instance_root = construction_runs_user_code(ctx, class_name)
+        .then(|| temp_root::temp_root_push_i64(ctx, &obj_handle));
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
     // #6969: the instance allocation has run, so refresh every argument before
     // the constructor consumes them.
@@ -940,6 +1031,13 @@ fn lower_new_impl_inner(
                 ctx.block()
                     .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
             }
+            // #7154: the constructor body has run, so every register holding
+            // the instance is potentially pre-move. Re-read it from its root
+            // before anything else touches it — `emit_typed_shape_layout_init`
+            // would otherwise install the layout descriptor on the abandoned
+            // from-space copy, and `js_ctor_return_override` would hand the
+            // caller that copy's address.
+            let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
             // The constructor body has run and set the declared fields; register
             // the typed raw-f64/pointer slot layout so class-field accesses hit
             // the slot-direct fast path instead of the by-name hashmap fallback.
@@ -1024,7 +1122,49 @@ fn lower_new_impl_inner(
     // closures that capture `this`), so hoist to the entry block for
     // dominance safety.
     let this_slot = ctx.func.alloca_entry(DOUBLE);
-    ctx.block().store(DOUBLE, &obj_box, &this_slot);
+    // #7202: this alloca holds the INSTANCE for the whole inlined constructor
+    // body, and every `this` read below is a `load` from it. It is a plain
+    // `alloca_entry` — not a shadow slot, not a temp root — so an evacuating
+    // minor at a field initializer's back-edge poll neither marks nor rewrites
+    // it, and every `this.x = …` after that collection stores into abandoned
+    // from-space memory.
+    //
+    // #7192 rooted the instance for the *caller* (`instance_root` above,
+    // re-read by `reload_instance` at the tail) precisely because this window
+    // collects — so the object survives and MOVES. That made the caller's copy
+    // correct and left this one behind: the same address, taken one line later,
+    // that nothing rewrites. The #7154 comment on `ctor_result_slot` states the
+    // invariant and applies it only to that sibling.
+    //
+    // Reachability is the default, not an opt-in: `force_ctor_call` requires
+    // `class.constructor.is_some()`, so `class C { payload = mk() }` and
+    // `class C extends B {}` take this path with `PERRY_INLINE_CTOR` unset —
+    // and `construction_runs_user_code` (which gates `instance_root`) is true
+    // for exactly those, i.e. the code already asserts this window collects.
+    //
+    // Binding it — rather than routing `Expr::This` through a temp root —
+    // leaves all ~30 `ctx.this_stack.last()` readers untouched: they load from
+    // the alloca, and `js_shadow_slot_bind` makes evacuation rewrite the alloca
+    // in place. The `undefined` seed is required by `root_entry_alloca`'s
+    // contract: the bind is hoisted to entry setup, so the slot is live to the
+    // collector before this store executes.
+    //
+    // Gated on `instance_root.is_some()`, i.e. on the very same
+    // `construction_runs_user_code` predicate that decided the instance needed
+    // a temp root at all. When it is false no user code runs between this store
+    // and the pop, so nothing in the window can collect and the slot cannot go
+    // stale — and a class with no constructor, no fields and no heritage keeps
+    // its previous IR exactly, frame size included. One predicate, one place:
+    // forking a second one here is how #7114's two predicates diverged.
+    if instance_root.is_some() {
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        ctx.func
+            .entry_allocas_push_store(DOUBLE, &undef, &this_slot);
+        ctx.block().store(DOUBLE, &obj_box, &this_slot);
+        crate::expr::root_entry_alloca(ctx, &this_slot);
+    } else {
+        ctx.block().store(DOUBLE, &obj_box, &this_slot);
+    }
     ctx.this_stack.push(this_slot);
     ctx.class_stack.push(class_name.to_string());
 
@@ -1055,12 +1195,33 @@ fn lower_new_impl_inner(
     // inside the (about-to-be-inlined) ctor body must apply spec
     // return-override semantics and yield the `new` expression's value —
     // NOT emit a function-level `ret` that terminates the enclosing
-    // function. `ctor_result_slot` starts as `this`; `Stmt::Return`
-    // overwrites it with a returned object (or throws for a derived ctor
-    // returning a primitive), then branches to `after_idx`. Refs
-    // class/subclass/derived-class-return-override-*.
+    // function. `Stmt::Return` overwrites the slot with the returned value
+    // (or throws for a derived ctor returning a primitive), then branches to
+    // `after_idx`. Refs class/subclass/derived-class-return-override-*.
+    //
+    // #7154: the slot starts at `undefined`, NOT at `this`.
+    //
+    // It is a plain entry alloca — not a shadow slot, not a temp root — so the
+    // collector neither marks nor rewrites it. Seeding it with `obj_box` put
+    // the PRE-constructor instance address in unrooted memory for the whole
+    // body; on fall-through (no explicit `return`) `js_ctor_return_override`
+    // then saw an *object* in `raw` and returned THAT — the stale address —
+    // discarding the re-read `obj_box` the reload below just recovered. The
+    // instance-root fix was defeated at its last instruction.
+    //
+    // `undefined` is exactly equivalent for every path and carries no address:
+    //   - fall-through     → `raw` is undefined → the override yields `this_val`,
+    //                        i.e. the RE-READ instance (previously: `raw`, the
+    //                        stale one — same value only when nothing moved);
+    //   - bare `return;`   → the slot is untouched, so also `this_val`;
+    //   - `return <expr>`  → `Stmt::Return` overwrote the slot; unchanged;
+    //   - inherited-symbol ctor → the call's return value overwrote it; unchanged.
     let ctor_result_slot = ctx.func.alloca_entry(DOUBLE);
-    ctx.block().store(DOUBLE, &obj_box, &ctor_result_slot);
+    ctx.block().store(
+        DOUBLE,
+        &double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+        &ctor_result_slot,
+    );
     let after_idx = ctx.new_block("ctor.return.after");
     let after_label = ctx.block_label(after_idx);
     ctx.inline_ctor_return.push(crate::expr::InlineCtorReturn {
@@ -1780,6 +1941,11 @@ fn lower_new_impl_inner(
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
+    // #7154: same re-read as the standalone-symbol path above. The inlined
+    // constructor body (field initializers, `super(...)`, nested `new`s) can
+    // reach a back-edge poll, and the evacuating minor there relocates the
+    // instance out from under `obj_handle`/`obj_box`.
+    let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
     emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the

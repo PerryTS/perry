@@ -176,6 +176,27 @@ fn cp_validate_options(value: f64, sync: bool, allow_null: bool) {
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
+    // Node normalizes stdio before the remaining spawn options. Preserve that
+    // precedence when a cumulative cluster.settings snapshot contains more
+    // than one invalid field.
+    let stdio = cp_get_field(value, b"stdio");
+    if !cp_is_undefined(stdio) {
+        let mut ipc_count = 0;
+        if let Some(arr) = cp_array_ptr(stdio) {
+            for index in 0..unsafe { (*arr).length } {
+                cp_validate_stdio_entry(
+                    crate::array::js_array_get_f64(arr, index),
+                    sync,
+                    true,
+                    index as usize,
+                    &mut ipc_count,
+                );
+            }
+        } else {
+            cp_validate_stdio_entry(stdio, sync, false, 0, &mut ipc_count);
+        }
+    }
+
     let required_string = ["cwd", "argv0"];
     for name in required_string {
         let item = cp_get_field(value, name.as_bytes());
@@ -225,6 +246,34 @@ fn cp_validate_options(value: f64, sync: bool, allow_null: bool) {
         }
     }
 
+    for name in ["uid", "gid"] {
+        let item = cp_get_field(value, name.as_bytes());
+        if !cp_is_undefined(item) && !cp_is_number(item) {
+            let message = format!(
+                "The \"options.{name}\" property must be of type number. Received {}",
+                crate::fs::validate::describe_received(item)
+            );
+            crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+        }
+    }
+
+    let inspect_port = cp_get_field(value, b"inspectPort");
+    if JSValue::from_bits(inspect_port.to_bits()).is_null() {
+        crate::fs::validate::throw_range_error_named(
+            "The value of \"options.inspectPort\" is out of range",
+            "ERR_SOCKET_BAD_PORT",
+        );
+    }
+    if !cp_is_undefined(inspect_port)
+        && !cp_is_number(inspect_port)
+        && crate::fs::extract_closure_ptr(inspect_port).is_null()
+    {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"options.inspectPort\" property must be of type number or function",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+
     let signal = cp_get_field(value, b"killSignal");
     if !cp_is_undefined(signal) && !cp_signal_is_valid(signal) {
         crate::fs::validate::throw_type_error_with_code("Unknown signal", "ERR_UNKNOWN_SIGNAL");
@@ -242,25 +291,6 @@ fn cp_validate_options(value: f64, sync: bool, allow_null: bool) {
             "The \"options.serialization\" property must be one of: 'json', 'advanced'",
             "ERR_INVALID_ARG_VALUE",
         );
-    }
-
-    let stdio = cp_get_field(value, b"stdio");
-    if cp_is_undefined(stdio) {
-        return;
-    }
-    let mut ipc_count = 0;
-    if let Some(arr) = cp_array_ptr(stdio) {
-        for index in 0..unsafe { (*arr).length } {
-            cp_validate_stdio_entry(
-                crate::array::js_array_get_f64(arr, index),
-                sync,
-                true,
-                index as usize,
-                &mut ipc_count,
-            );
-        }
-    } else {
-        cp_validate_stdio_entry(stdio, sync, false, 0, &mut ipc_count);
     }
 }
 

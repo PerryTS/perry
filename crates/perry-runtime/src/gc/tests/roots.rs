@@ -816,7 +816,8 @@ fn manual_gc_scan_guard_forces_full_scan_only_when_unpinned() {
     // Unpinned: the guard engages a Full override for its lifetime (#4977 —
     // explicit gc() must see top-level locals held only on the native stack).
     {
-        let _scan = ManualGcScanGuard::force_full_scan();
+        let _scan =
+            ManualGcScanGuard::force_full_scan(crate::gc::ConservativeScanSite::ManualCollect);
         assert_eq!(
             CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()),
             Some(ConservativeStackScanMode::Full)
@@ -828,7 +829,8 @@ fn manual_gc_scan_guard_forces_full_scan_only_when_unpinned() {
     // reclaim native-stack locals): the guard must not replace the override.
     set_conservative_stack_scan_override(Some(ConservativeStackScanMode::Auto));
     {
-        let _scan = ManualGcScanGuard::force_full_scan();
+        let _scan =
+            ManualGcScanGuard::force_full_scan(crate::gc::ConservativeScanSite::ManualCollect);
         assert_eq!(
             CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()),
             Some(ConservativeStackScanMode::Auto)

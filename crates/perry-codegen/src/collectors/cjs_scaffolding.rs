@@ -71,6 +71,73 @@
 //! identity of the mutated object, not about which analysis consults the
 //! flag, so it carries over unchanged: `exports` and `require` are likewise
 //! never `Ptr<NumArray>` locals nor proven-`this` receivers.
+//!
+//! ---
+//!
+//! # The preamble's own ALLOCATIONS (#7152)
+//!
+//! Everything above is about the rule-5 barrier. [`preamble_in_region`] is
+//! about a different self-inflicted wound in the same template: the objects
+//! the preamble *allocates* are counted as `Ptr<Shape>` candidates and then
+//! denied, in every CommonJS module, and on real dependency code they are the
+//! majority of the report.
+//!
+//! Measured over 195 `__esModule` CJS modules from `scriptc/node_modules`:
+//! 136 of the 140 rule-2 "bare reference" denials, 55 of the 187 rule-5
+//! denials, and 188 of the 194 "constructor argument" unbound-allocation
+//! denials are one of these two statements — 379 rows, ~2 per module, 31 % of
+//! every `Ptr<Shape>` candidate in the corpus. #7139 read its share of them as
+//! "containment is the wall in dependency JS" and scheduled #7149 on it; #7152
+//! re-measured and put the wall at rule 1. Both readings were partly about
+//! Perry's own scaffolding.
+//!
+//! ## What is recognised
+//!
+//! One **region** (a lowered statement list — the `cjs_wrap` IIFE's body, or
+//! module init on the flat path) is a CommonJS preamble when its top level
+//! carries all four of:
+//!
+//! * **R1** `Stmt::Let` named `__cjs_module`, `mutable: false`, initialized by
+//!   an `Expr::New` of an `__AnonShape_…` class (an object literal);
+//! * **R2** that literal is exactly `{ exports: {} }` — one field whose value
+//!   is an argument-less `__AnonShape_…` allocation;
+//! * **R3** exactly one top-level statement satisfying R1+R2, so "the record"
+//!   is unambiguous;
+//! * **R4** the same top level binds `var module = __cjs_module` —
+//!   `Stmt::Let { mutable: true, init: LocalGet(<the record>) }`.
+//!
+//! Then, and only then, three things stop being reported: the record local
+//! itself, the `{}` inside it, and the object literals of the preamble
+//! statements [`CjsPreamble::stmt_allocates_only_scaffolding`] names.
+//!
+//! ## Why it is sound
+//!
+//! **This is a candidate SUPPRESSION, not a proof relaxation** — the opposite
+//! direction from the barrier exemption above. Dropping a candidate can only
+//! remove facts, never add one, so it cannot make codegen unsound; the entire
+//! obligation is to show it never removes a fact that would otherwise exist.
+//!
+//! **R4 discharges that obligation outright.** It is not a heuristic about
+//! the template, it is the denial itself: a `Stmt::Let` whose init is a bare
+//! `Expr::LocalGet` of the record, with `mutable: true` so the alias pre-pass
+//! in `ptr_shape.rs` refuses to track it, walks into `UseWalk`'s `LocalGet`
+//! arm under the default escape context and disqualifies the record with
+//! `ESC_BARE_REFERENCE` on every path. A region satisfying R4 therefore
+//! *cannot* promote its record, so removing it from the candidate set leaves
+//! the returned `HashMap` bit-identical. R1-R3 only make the recognition
+//! unambiguous; they carry no soundness weight, and if any of them drifts the
+//! candidate simply reappears in the report.
+//!
+//! And the escape R4 names is not incidental to the template — it is load
+//! bearing. `var module` is what CommonJS bodies write `module.exports = X`
+//! through, and the preamble goes on to store it into `require.main`. The
+//! record is genuinely, permanently escaped; there is no narrowing of rule 2
+//! that could promote it, which is why this is a suppression and not an
+//! exemption.
+//!
+//! The allocation-site half is **report-only** in the strongest sense:
+//! `ptr_shape_report::unbound_new_sites` is called exclusively under
+//! `opt_report::enabled()`, and its output feeds nothing but the report.
 
 use std::collections::HashSet;
 
@@ -205,6 +272,252 @@ fn init_is_never_a_seed(init: Option<&Expr>) -> bool {
     )
 }
 
+// ── #7152: the preamble's own allocations, region by region ────────────────
+
+/// The `cjs_wrap` module record's binding name. Perry writes it; no
+/// transpiler emits it, and a user writing it is not a reason to promote.
+const RECORD_BINDING: &str = "__cjs_module";
+/// The `var module = __cjs_module;` alias — R4, the denial itself.
+const MODULE_BINDING: &str = "module";
+/// Object literals lower to `Expr::New` of a synthesised class with this
+/// prefix (`perry-hir`'s anon-shape naming).
+const ANON_SHAPE_PREFIX: &str = "__AnonShape_";
+/// The two `require` properties the preamble installs with an object-literal
+/// value. `require.resolve` / `require.resolve.paths` take closures, which
+/// `unbound_new_sites` does not descend into, so they need no arm here.
+const REQUIRE_LITERAL_KEYS: [&str; 2] = ["cache", "extensions"];
+
+/// Perry's `cjs_wrap` preamble as it appears in ONE lowered region.
+///
+/// The record local and the scaffolding bindings live in ONE `Option` on
+/// purpose. "Recognition failed" then has no representation in which anything
+/// could still be suppressed — the `Default` is not a flag every reader has to
+/// remember to test, it is the absence of the data they would need. Every
+/// recognition failure lands there.
+#[derive(Debug, Default)]
+pub(super) struct CjsPreamble {
+    /// `(the `const __cjs_module = { exports: {} }` local, the region's
+    /// `exports` / `require` bindings resolved by the same whitelist [`collect`]
+    /// applies module-wide)` — `Some` only when R1-R4 all hold.
+    recognised: Option<(u32, CjsScaffolding)>,
+}
+
+impl CjsPreamble {
+    /// Is `id` the recognised CommonJS module record? `ptr_shape.rs` drops it
+    /// from the `Ptr<Shape>` candidate set — see the module doc for why that
+    /// cannot change a fact.
+    pub(super) fn is_module_record(&self, id: u32) -> bool {
+        matches!(self.recognised, Some((record, _)) if record == id)
+    }
+
+    /// Does this statement allocate **only** preamble scaffolding, so that
+    /// `ptr_shape_report::unbound_new_sites` should not walk it?
+    ///
+    /// Four shapes, all from the one template, all gated on the record having
+    /// been recognised:
+    ///
+    /// 1. `const __cjs_module = { exports: {} };` — the inner `{}` is
+    ///    `module.exports`, reported today as an unbound allocation in
+    ///    *constructor-argument* position. It is the single most common
+    ///    `Ptr<Shape>` denial in dependency JS.
+    /// 2/3. The two `defineProperty` sites #7139 already recognises. Their
+    ///    descriptor is a literal allocated in the call; the target check is
+    ///    [`CjsScaffolding::exempts_shape_barrier`] verbatim, so the two
+    ///    exemptions can never disagree about what "scaffolding" means.
+    /// 4. `require.cache = {}` and `require.extensions = { … }`.
+    ///
+    /// Nothing else. A `Stmt::Expr` of anything else, and any statement in a
+    /// region whose record was not recognised, is walked exactly as before.
+    pub(super) fn stmt_allocates_only_scaffolding(&self, stmt: &Stmt) -> bool {
+        let Some((record, scaffolding)) = &self.recognised else {
+            return false;
+        };
+        match stmt {
+            Stmt::Let { id, .. } => id == record,
+            Stmt::Expr(expr) => match expr {
+                Expr::ObjectDefineProperty(..) => scaffolding.exempts_shape_barrier(expr),
+                Expr::PutValueSet { target, key, .. } => {
+                    matches!(
+                        (target.as_ref(), key.as_ref()),
+                        (Expr::LocalGet(id), Expr::String(k))
+                            if scaffolding.require.contains(id)
+                                && REQUIRE_LITERAL_KEYS.contains(&k.as_str())
+                    )
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+/// Recognise the `cjs_wrap` preamble in one lowered region.
+///
+/// Runs for **every** region of every module, so the first thing it does is a
+/// single pass over the region's top-level statements looking for R1/R2. Only
+/// `cjs_wrap` output binds `__cjs_module` to that literal, so on ordinary
+/// TypeScript this returns `Default` after one `Vec` scan.
+///
+/// Deliberately NOT gated on [`crate::opt_report::enabled`], even though the
+/// only observable effect is on the report. Gating it would make the candidate
+/// set differ between a reporting build and an ordinary one — the facts would
+/// still be identical (that is R4's argument), but "the report describes a
+/// different compile than the one you ran" is the exact confusion this whole
+/// report exists to remove. The cost of not gating it is one string compare per
+/// top-level statement per region.
+pub(super) fn preamble_in_region(stmts: &[Stmt]) -> CjsPreamble {
+    // R1 + R2 (`record_binding`), on top-level bindings of R1's name.
+    let records: Vec<u32> = stmts
+        .iter()
+        .filter(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == RECORD_BINDING))
+        .filter_map(record_binding)
+        .collect();
+    // R3: two records in one region means "the record" is ambiguous, so
+    // recognise neither and let both stay candidates.
+    let [record] = records[..] else {
+        return CjsPreamble::default();
+    };
+    // R4: the bare reference that denies it. Without this the suppression
+    // would be a claim about the template; with it, it is a claim about this
+    // region's own statements.
+    if !binds_module_alias(stmts, record) {
+        return CjsPreamble::default();
+    }
+    let mut acc = Acc::default();
+    note_stmt_root(stmts, &mut acc);
+    CjsPreamble {
+        recognised: Some((
+            record,
+            CjsScaffolding {
+                exports: acc.exports.difference(&acc.disqualified).copied().collect(),
+                require: acc.require.difference(&acc.disqualified).copied().collect(),
+            },
+        )),
+    }
+}
+
+/// What the `Ptr<Shape>` report suppresses as `cjs_wrap` scaffolding in one
+/// module. See [`census`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CjsPreambleCensus {
+    /// Regions whose CommonJS module record was recognised (R1-R4) and
+    /// therefore dropped from `Ptr<Shape>` candidacy.
+    pub module_records: usize,
+    /// Top-level preamble statements, summed over those regions, whose object
+    /// literals `unbound_new_sites` no longer walks.
+    pub preamble_alloc_stmts: usize,
+}
+
+/// Count what [`preamble_in_region`] recognises across every lowering region
+/// of `module`.
+///
+/// Exists **solely** for the `perry` crate's `cjs_wrap` template canary
+/// (`commands/compile/cjs_wrap/preamble_canary_tests.rs`), the same coupling
+/// [`crate::module_has_ptr_shape_barrier`] exists for: the template is in
+/// `perry`, the recogniser is here, and a template edit would otherwise
+/// silently un-recognise the preamble with no test going red. Nothing in the
+/// compile pipeline calls it.
+pub fn census(module: &Module) -> CjsPreambleCensus {
+    let mut out = CjsPreambleCensus::default();
+    let mut roots: Vec<&[Stmt]> = vec![&module.init];
+    for function in &module.functions {
+        roots.push(&function.body);
+    }
+    for class in &module.classes {
+        if let Some(ctor) = &class.constructor {
+            roots.push(&ctor.body);
+        }
+        for method in class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .chain(class.getters.iter().map(|(_, f)| f))
+            .chain(class.setters.iter().map(|(_, f)| f))
+            .chain(class.computed_members.iter().map(|m| &m.function))
+        {
+            roots.push(&method.body);
+        }
+    }
+    for root in roots {
+        note_region(root, &mut out);
+        // Recurses through `Expr::Closure`, so this reaches every closure body
+        // at any nesting depth exactly once — including the `cjs_wrap` IIFE,
+        // which is where the preamble actually lives.
+        for_each_expr_in_stmts(root, &mut |expr| {
+            if let Expr::Closure { body, .. } = expr {
+                note_region(body, &mut out);
+            }
+        });
+    }
+    out
+}
+
+/// Recognise one region and fold it into the census.
+fn note_region(stmts: &[Stmt], out: &mut CjsPreambleCensus) {
+    let preamble = preamble_in_region(stmts);
+    if preamble.recognised.is_none() {
+        return;
+    }
+    out.module_records += 1;
+    out.preamble_alloc_stmts += stmts
+        .iter()
+        .filter(|s| preamble.stmt_allocates_only_scaffolding(s))
+        .count();
+}
+
+/// R1 + R2 for a statement the caller has already matched on R1's binding
+/// NAME. The name is checked exactly once, in [`preamble_in_region`]: two
+/// enforcement points for one conjunct is how a sabotage hole gets in — either
+/// one can be deleted with every test still green.
+fn record_binding(stmt: &Stmt) -> Option<u32> {
+    let Stmt::Let {
+        id,
+        mutable: false,
+        init: Some(Expr::New {
+            class_name, args, ..
+        }),
+        ..
+    } = stmt
+    else {
+        return None;
+    };
+    if !class_name.starts_with(ANON_SHAPE_PREFIX) {
+        return None;
+    }
+    // Exactly one field, whose value is an argument-less object literal. A
+    // record with more fields, or a non-literal field value, is not the
+    // template's `{ exports: {} }` and keeps its candidacy.
+    let [Expr::New {
+        class_name: inner,
+        args: inner_args,
+        ..
+    }] = args.as_slice()
+    else {
+        return None;
+    };
+    (inner.starts_with(ANON_SHAPE_PREFIX) && inner_args.is_empty()).then_some(*id)
+}
+
+/// R4: `var module = __cjs_module;` at the region's top level.
+///
+/// `mutable: true` is required, not incidental: a `const` alias WOULD be
+/// tracked by `ptr_shape.rs`'s alias pre-pass, and the record would then be
+/// denied for a different reason (or, in principle, not at all) — so the
+/// fact-neutrality argument would no longer hold.
+fn binds_module_alias(stmts: &[Stmt], record: u32) -> bool {
+    stmts.iter().any(|stmt| {
+        matches!(
+            stmt,
+            Stmt::Let {
+                name,
+                mutable: true,
+                init: Some(Expr::LocalGet(src)),
+                ..
+            } if name == MODULE_BINDING && *src == record
+        )
+    })
+}
+
 /// A statement list plus every closure body reachable from it.
 fn note_stmt_root(stmts: &[Stmt], acc: &mut Acc) {
     for_each_stmt(stmts, &mut |stmt| acc.note_let(stmt));
@@ -295,6 +608,7 @@ mod tests {
     const REQUIRE_ID: u32 = 10;
     const CJS_MODULE_ID: u32 = 12;
     const EXPORTS_ID: u32 = 7;
+    const MODULE_ID: u32 = 6;
     const POINT_ID: u32 = 42;
 
     fn closure(func_id: u32, body: Vec<Stmt>) -> Expr {
@@ -325,6 +639,18 @@ mod tests {
         }
     }
 
+    /// `const <name> = <init>;` — `mutable: false`, which is what the template
+    /// emits for `require` and `__cjs_module` and what R1 requires.
+    fn let_const(id: u32, name: &str, init: Expr) -> Stmt {
+        Stmt::Let {
+            id,
+            name: name.to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(init),
+        }
+    }
+
     fn anon_shape(class_name: &str, args: Vec<Expr>) -> Expr {
         Expr::New {
             class_name: class_name.to_string(),
@@ -348,20 +674,28 @@ mod tests {
         ))
     }
 
-    /// The `cjs_wrap` preamble, verbatim in HIR shape: a `require` closure, the
-    /// `__cjs_module` record, and `exports` read out of it. `extra` is appended
-    /// to the CommonJS body inside the IIFE.
-    fn cjs_module(extra: Vec<Stmt>) -> perry_hir::Module {
-        let mut body = vec![
-            let_stmt(REQUIRE_ID, "require", closure(7, Vec::new())),
-            let_stmt(
-                CJS_MODULE_ID,
-                "__cjs_module",
-                anon_shape(
-                    "__AnonShape_module",
-                    vec![anon_shape("__AnonShape_exports", Vec::new())],
-                ),
+    /// `const __cjs_module = { exports: {} };` — R1 + R2, exactly as the
+    /// template lowers (checked against `--print-hir` on a wrapped module).
+    fn record_stmt() -> Stmt {
+        let_const(
+            CJS_MODULE_ID,
+            "__cjs_module",
+            anon_shape(
+                "__AnonShape_module",
+                vec![anon_shape("__AnonShape_exports", Vec::new())],
             ),
+        )
+    }
+
+    /// The `cjs_wrap` preamble as ONE lowered region, verbatim in HIR shape:
+    /// the `require` closure, the `__cjs_module` record, the `var module`
+    /// alias that denies it (R4), and `var exports = __cjs_module.exports`.
+    /// `extra` is appended as the CommonJS body.
+    fn cjs_region(extra: Vec<Stmt>) -> Vec<Stmt> {
+        let mut body = vec![
+            let_const(REQUIRE_ID, "require", closure(7, Vec::new())),
+            record_stmt(),
+            let_stmt(MODULE_ID, "module", Expr::LocalGet(CJS_MODULE_ID)),
             let_stmt(
                 EXPORTS_ID,
                 "exports",
@@ -373,12 +707,17 @@ mod tests {
             ),
         ];
         body.extend(extra);
+        body
+    }
+
+    /// The same region wrapped in the IIFE the wrap emits, as a whole module.
+    fn cjs_module(extra: Vec<Stmt>) -> perry_hir::Module {
         let mut module = perry_hir::Module::new("node_modules/dep/index.js");
         module.init.push(let_stmt(
             0,
             "_cjs",
             Expr::Call {
-                callee: Box::new(closure(2, body)),
+                callee: Box::new(closure(2, cjs_region(extra))),
                 args: Vec::new(),
                 type_args: Vec::new(),
                 byte_offset: 0,
@@ -652,5 +991,407 @@ mod tests {
             EXPORTS_ID,
         )))));
         assert!(!promotes_with(sites));
+    }
+
+    // ── #7152: the preamble's own allocations ──────────────────────────────
+
+    /// `require.cache = {}` / `require.extensions = { … }`.
+    fn require_install(key: &str, value: Expr) -> Stmt {
+        Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(REQUIRE_ID)),
+            key: Box::new(Expr::String(key.to_string())),
+            value: Box::new(value),
+            receiver: Box::new(Expr::LocalGet(REQUIRE_ID)),
+            strict: true,
+        })
+    }
+
+    /// Every ALLOCATING statement the preamble emits after the record itself,
+    /// in template order.
+    fn preamble_alloc_stmts() -> Vec<Stmt> {
+        vec![
+            define_property(
+                Expr::LocalGet(REQUIRE_ID),
+                Expr::String(REQUIRE_KEY.to_string()),
+            ),
+            require_install("cache", anon_shape("__AnonShape_cache", Vec::new())),
+            require_install(
+                "extensions",
+                anon_shape("__AnonShape_ext", vec![closure(12, Vec::new())]),
+            ),
+            define_property(
+                Expr::LocalGet(EXPORTS_ID),
+                Expr::String(EXPORTS_KEY.to_string()),
+            ),
+        ]
+    }
+
+    /// A user allocation in statement position — never suppressed, and the
+    /// anti-vacuity control for every suppression assertion below.
+    fn user_alloc_stmt() -> Stmt {
+        Stmt::Expr(anon_shape("__AnonShape_user", Vec::new()))
+    }
+
+    fn recognises(region: &[Stmt]) -> bool {
+        preamble_in_region(region).is_module_record(CJS_MODULE_ID)
+    }
+
+    /// Swap the region's record `Let` for `replacement`.
+    fn region_with_record(replacement: Stmt) -> Vec<Stmt> {
+        let mut region = cjs_region(Vec::new());
+        let at = region
+            .iter()
+            .position(|s| matches!(s, Stmt::Let { id, .. } if *id == CJS_MODULE_ID))
+            .expect("the fixture binds the record");
+        region[at] = replacement;
+        region
+    }
+
+    #[test]
+    fn the_wrap_preamble_record_is_recognised() {
+        assert!(recognises(&cjs_region(Vec::new())));
+    }
+
+    /// **Anti-vacuity for everything in this section.** The record IS a rule-1
+    /// provenance seed: without the suppression it becomes a `Ptr<Shape>`
+    /// candidate, is denied, and is reported. If this ever goes red the
+    /// suppression is a no-op and the tests below prove nothing.
+    #[test]
+    fn the_record_is_a_ptr_shape_seed_in_the_first_place() {
+        let mut seeds = HashMap::new();
+        super::super::find_new_candidates(
+            &cjs_region(Vec::new()),
+            &HashSet::new(),
+            &HashMap::new(),
+            &mut seeds,
+        );
+        assert!(
+            seeds.contains_key(&CJS_MODULE_ID),
+            "the record stopped being a rule-1 seed; the #7152 suppression now \
+             removes nothing and every assertion in this section is vacuous"
+        );
+    }
+
+    /// **The fact-neutrality argument, tested.** R4's statement shape IS the
+    /// rule-2 denial: a `var` alias of a local that otherwise promotes denies
+    /// it. So a region carrying that alias can never promote its record, and
+    /// dropping the record from candidacy cannot lose a promotion.
+    #[test]
+    fn a_var_alias_denies_a_local_that_otherwise_promotes() {
+        let point = point_class();
+        let classes = HashMap::from([("Point".to_string(), &point)]);
+        let facts = collect_module_dispatch_facts(&perry_hir::Module::new("m.ts"));
+        let proven = |body: &[Stmt]| {
+            !collect_shape_proven_ptr_locals(
+                body,
+                &HashSet::new(),
+                &HashMap::new(),
+                &classes,
+                &facts,
+                &HashSet::new(),
+                &crate::collectors::ptr_shape_elements::ElementShapeFacts::default(),
+            )
+            .is_empty()
+        };
+        // Control: the same body without the alias DOES promote.
+        assert!(proven(&promotable_body()));
+        let mut aliased = promotable_body();
+        aliased.insert(1, let_stmt(MODULE_ID, "module", Expr::LocalGet(POINT_ID)));
+        assert!(
+            !proven(&aliased),
+            "a `var m = p` alias no longer denies `p`. R4 is then not the \
+             denial it is documented to be, and the #7152 suppression could \
+             be dropping a value that would have been promoted."
+        );
+    }
+
+    // ---- sabotage: one red set per conjunct ----
+
+    /// R1: `mutable: false`. A reassignable record is not the template's.
+    #[test]
+    fn a_mutable_record_binding_is_not_recognised() {
+        assert!(!recognises(&region_with_record(let_stmt(
+            CJS_MODULE_ID,
+            "__cjs_module",
+            anon_shape(
+                "__AnonShape_module",
+                vec![anon_shape("__AnonShape_exports", Vec::new())],
+            ),
+        ))));
+    }
+
+    /// R1: the binding name. Only `cjs_wrap` writes this one.
+    #[test]
+    fn a_differently_named_record_binding_is_not_recognised() {
+        assert!(!recognises(&region_with_record(let_const(
+            CJS_MODULE_ID,
+            "__cjs_modul",
+            anon_shape(
+                "__AnonShape_module",
+                vec![anon_shape("__AnonShape_exports", Vec::new())],
+            ),
+        ))));
+    }
+
+    /// R1: an object literal, not a user class. `new Wrapper({})` is a value
+    /// with a constructor that can do anything.
+    #[test]
+    fn a_record_of_a_declared_class_is_not_recognised() {
+        assert!(!recognises(&region_with_record(let_const(
+            CJS_MODULE_ID,
+            "__cjs_module",
+            anon_shape(
+                "Wrapper",
+                vec![anon_shape("__AnonShape_exports", Vec::new())]
+            ),
+        ))));
+    }
+
+    /// R2: exactly one field. `{ exports: {}, id: {} }` is not the template.
+    #[test]
+    fn a_record_literal_with_a_second_field_is_not_recognised() {
+        assert!(!recognises(&region_with_record(let_const(
+            CJS_MODULE_ID,
+            "__cjs_module",
+            anon_shape(
+                "__AnonShape_module",
+                vec![
+                    anon_shape("__AnonShape_exports", Vec::new()),
+                    anon_shape("__AnonShape_extra", Vec::new()),
+                ],
+            ),
+        ))));
+    }
+
+    /// R2: the field's value is an EMPTY literal. `{ exports: { a: 1 } }`
+    /// carries state the suppression makes no claim about.
+    #[test]
+    fn a_record_whose_exports_literal_is_not_empty_is_not_recognised() {
+        assert!(!recognises(&region_with_record(let_const(
+            CJS_MODULE_ID,
+            "__cjs_module",
+            anon_shape(
+                "__AnonShape_module",
+                vec![anon_shape("__AnonShape_exports", vec![Expr::Number(1.0)])],
+            ),
+        ))));
+    }
+
+    /// R2: the field's value is an allocation at all.
+    #[test]
+    fn a_record_whose_exports_field_is_not_an_allocation_is_not_recognised() {
+        assert!(!recognises(&region_with_record(let_const(
+            CJS_MODULE_ID,
+            "__cjs_module",
+            anon_shape("__AnonShape_module", vec![Expr::Undefined]),
+        ))));
+    }
+
+    /// R3: two top-level bindings of the name — "the record" is ambiguous, so
+    /// neither is recognised and both keep their candidacy.
+    #[test]
+    fn two_record_bindings_in_one_region_are_ambiguous() {
+        let mut region = cjs_region(Vec::new());
+        region.push(let_const(
+            CJS_MODULE_ID + 100,
+            "__cjs_module",
+            anon_shape(
+                "__AnonShape_module",
+                vec![anon_shape("__AnonShape_exports", Vec::new())],
+            ),
+        ));
+        assert!(!recognises(&region));
+    }
+
+    /// R4: no alias at all. Without the escape that denies it, the record is
+    /// a candidate like any other and must stay in the report.
+    #[test]
+    fn without_the_module_alias_the_record_is_not_recognised() {
+        let region: Vec<Stmt> = cjs_region(Vec::new())
+            .into_iter()
+            .filter(|s| !matches!(s, Stmt::Let { id, .. } if *id == MODULE_ID))
+            .collect();
+        assert!(!recognises(&region));
+    }
+
+    /// R4: `mutable: true`. A `const` alias is TRACKED by `ptr_shape.rs`'s
+    /// alias pre-pass rather than treated as an escape, so it does not
+    /// discharge the fact-neutrality obligation.
+    #[test]
+    fn a_const_module_alias_does_not_satisfy_r4() {
+        let mut region = cjs_region(Vec::new());
+        let at = region
+            .iter()
+            .position(|s| matches!(s, Stmt::Let { id, .. } if *id == MODULE_ID))
+            .expect("the fixture binds the alias");
+        region[at] = let_const(MODULE_ID, "module", Expr::LocalGet(CJS_MODULE_ID));
+        assert!(!recognises(&region));
+    }
+
+    /// R4: the alias must be of THIS record.
+    #[test]
+    fn a_module_alias_of_another_local_does_not_satisfy_r4() {
+        let mut region = cjs_region(Vec::new());
+        let at = region
+            .iter()
+            .position(|s| matches!(s, Stmt::Let { id, .. } if *id == MODULE_ID))
+            .expect("the fixture binds the alias");
+        region[at] = let_stmt(MODULE_ID, "module", Expr::LocalGet(REQUIRE_ID));
+        assert!(!recognises(&region));
+    }
+
+    // ---- the allocation-site suppression ----
+
+    #[test]
+    fn the_preamble_allocation_statements_are_suppressed() {
+        let region = cjs_region(preamble_alloc_stmts());
+        let preamble = preamble_in_region(&region);
+        let suppressed: Vec<bool> = region
+            .iter()
+            .map(|s| preamble.stmt_allocates_only_scaffolding(s))
+            .collect();
+        // record `Let` + the four preamble statements; `require`, the alias
+        // and the `exports` read allocate nothing and are irrelevant either
+        // way, but must not be claimed.
+        assert_eq!(
+            suppressed.iter().filter(|b| **b).count(),
+            5,
+            "{suppressed:?}"
+        );
+        assert!(preamble.stmt_allocates_only_scaffolding(&record_stmt()));
+        for stmt in preamble_alloc_stmts() {
+            assert!(
+                preamble.stmt_allocates_only_scaffolding(&stmt),
+                "not suppressed: {stmt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_allocations_are_never_suppressed() {
+        let region = cjs_region(preamble_alloc_stmts());
+        let preamble = preamble_in_region(&region);
+        let kept = [
+            user_alloc_stmt(),
+            // A `defineProperty` whose target is neither scaffolding binding.
+            define_property(Expr::LocalGet(77), Expr::String(EXPORTS_KEY.to_string())),
+            // The right target, a key the preamble does not install.
+            require_install("main", anon_shape("__AnonShape_user", Vec::new())),
+            // The right key on the wrong object.
+            Stmt::Expr(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(77)),
+                key: Box::new(Expr::String("cache".to_string())),
+                value: Box::new(anon_shape("__AnonShape_user", Vec::new())),
+                receiver: Box::new(Expr::LocalGet(77)),
+                strict: true,
+            }),
+            // A user `let` of an object literal — a real rule-1 candidate.
+            let_const(55, "row", anon_shape("__AnonShape_row", Vec::new())),
+        ];
+        for stmt in kept {
+            assert!(
+                !preamble.stmt_allocates_only_scaffolding(&stmt),
+                "wrongly suppressed: {stmt:?}"
+            );
+        }
+    }
+
+    /// Nothing is suppressed in a region whose record was not recognised —
+    /// the whole exemption is gated on R1-R4, one instance at a time.
+    #[test]
+    fn an_unrecognised_region_suppresses_nothing() {
+        let region: Vec<Stmt> = cjs_region(preamble_alloc_stmts())
+            .into_iter()
+            .filter(|s| !matches!(s, Stmt::Let { id, .. } if *id == MODULE_ID))
+            .collect();
+        let preamble = preamble_in_region(&region);
+        for stmt in &region {
+            assert!(
+                !preamble.stmt_allocates_only_scaffolding(stmt),
+                "suppressed without a recognised record: {stmt:?}"
+            );
+        }
+    }
+
+    /// End to end through the report walk that consumes this: the scaffolding
+    /// allocations disappear from `unbound_new_sites` and the user's does not.
+    #[test]
+    fn the_report_walk_drops_the_scaffolding_allocations_only() {
+        let region = cjs_region({
+            let mut body = preamble_alloc_stmts();
+            body.push(user_alloc_stmt());
+            body
+        });
+        let base =
+            super::super::ptr_shape_report::unbound_new_sites(&region, &CjsPreamble::default());
+        let contexts: Vec<&str> = base.iter().map(|s| s.context).collect();
+        // #7170 §5.1 / R0 renamed this bucket, and the rename is measured on
+        // exactly this statement: `const __cjs_module = { exports: {} }` is an
+        // anonymous-shape allocation whose constructor arguments ARE its
+        // property values, so the inner `{}` is a *component of a literal*, not
+        // an argument of a `new C(...)`. It was 188 of the 194 rows the old
+        // `constructor argument` label carried (PR #7171 §1) — which is why
+        // that label could not be read as "constructor arguments".
+        assert!(
+            contexts.contains(&"object literal property value"),
+            "the `{{ exports: {{}} }}` inner literal is no longer reported \
+             unsuppressed; this test's premise is gone: {contexts:?}"
+        );
+        assert!(base.len() >= 6, "{contexts:?}");
+
+        let fixed = super::super::ptr_shape_report::unbound_new_sites(
+            &region,
+            &preamble_in_region(&region),
+        );
+        assert_eq!(
+            fixed.len(),
+            1,
+            "{:?}",
+            fixed.iter().map(|s| s.context).collect::<Vec<_>>()
+        );
+        assert_eq!(fixed[0].context, "statement");
+    }
+
+    /// The suppression itself, at the one place it is applied: the record is
+    /// not a rule-1 candidate, a user record in the same region still is, and
+    /// with the recogniser unarmed the record comes straight back.
+    #[test]
+    fn the_record_is_not_a_ptr_shape_candidate() {
+        let region = cjs_region(vec![let_const(
+            55,
+            "row",
+            anon_shape("__AnonShape_row", Vec::new()),
+        )]);
+        let seeds = |p: &CjsPreamble| {
+            super::super::ptr_shape_report::candidate_seeds(
+                &region,
+                &HashSet::new(),
+                &HashMap::new(),
+                p,
+            )
+        };
+        let fixed = seeds(&preamble_in_region(&region));
+        assert!(!fixed.contains_key(&CJS_MODULE_ID));
+        assert!(
+            fixed.contains_key(&55),
+            "a user object literal in the same region must still be a candidate"
+        );
+        assert!(seeds(&CjsPreamble::default()).contains_key(&CJS_MODULE_ID));
+    }
+
+    /// The census the `perry` crate's template canary reads.
+    #[test]
+    fn the_census_counts_one_preamble_per_wrapped_module() {
+        let c = census(&cjs_module(preamble_alloc_stmts()));
+        assert_eq!(c.module_records, 1);
+        assert_eq!(c.preamble_alloc_stmts, 5);
+        // An ordinary module has none.
+        let mut plain = perry_hir::Module::new("m.ts");
+        plain.init.push(let_const(
+            55,
+            "row",
+            anon_shape("__AnonShape_row", Vec::new()),
+        ));
+        assert_eq!(census(&plain), CjsPreambleCensus::default());
     }
 }

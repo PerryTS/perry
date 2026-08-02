@@ -607,9 +607,31 @@ pub fn cp_ipc_send_raw_json(handle: u64, json: &str) -> bool {
     #[cfg(unix)]
     {
         use std::io::Write;
-        let mut frame = Vec::with_capacity(json.len() + 1);
-        frame.extend_from_slice(json.as_bytes());
-        frame.push(b'\n');
+        // Match the channel's selected framing. Cluster's query-server reply
+        // is built as JSON in Rust, but an advanced channel still requires a
+        // V8-serialized payload just like every user-visible IPC message.
+        let advanced = {
+            let guard = cp_live_lock();
+            guard
+                .as_ref()
+                .and_then(|map| map.get(&handle))
+                .map(|lc| lc.ipc_advanced)
+                .unwrap_or(false)
+        };
+        let frame = if advanced {
+            let sh = crate::string::js_string_from_bytes(json.as_ptr(), json.len() as u32);
+            let message = f64::from_bits(unsafe { crate::json::js_json_parse(sh) }.bits());
+            let payload = super::v8_serde::v8_serialize(message);
+            let mut frame = Vec::with_capacity(payload.len() + 4);
+            frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            frame.extend_from_slice(&payload);
+            frame
+        } else {
+            let mut frame = Vec::with_capacity(json.len() + 1);
+            frame.extend_from_slice(json.as_bytes());
+            frame.push(b'\n');
+            frame
+        };
         let mut guard = cp_live_lock();
         if let Some(map) = guard.as_mut() {
             if let Some(lc) = map.get_mut(&handle) {

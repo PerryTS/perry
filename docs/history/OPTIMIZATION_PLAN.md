@@ -182,11 +182,11 @@ After each fix:
 
 ```bash
 # Rebuild Perry compiler
-cd /Users/amlug/projects/perry && cargo build --release
+cd ~/projects/perry && cargo build --release
 
 # Rebuild demo
-cd /Users/amlug/projects/perry-demo
-/Users/amlug/projects/perry/target/release/perry src/perry-server.ts -o dist/perry-server
+cd ~/projects/perry-demo
+~/projects/perry/target/release/perry src/perry-server.ts -o dist/perry-server
 
 # Start server and test
 PORT=3003 PERRY_RUNTIME=1 ./dist/perry-server &

@@ -229,6 +229,7 @@ pub(crate) async fn run_request(
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
                 let result_bits = super::handle_to_f64(response_id).to_bits();

@@ -5,7 +5,9 @@ session.connect();
 try {
   let persistent = 0;
   let once = 0;
+  let generic = 0;
   const listener = () => persistent++;
+  session.on("inspectorNotification", () => generic++);
   session.on("Runtime.consoleAPICalled", listener);
   session.once("Runtime.consoleAPICalled", () => once++);
   await new Promise<void>((resolve) =>
@@ -15,6 +17,8 @@ try {
   inspector.console.log(2);
   await new Promise((resolve) => setImmediate(resolve));
   session.off("Runtime.consoleAPICalled", listener);
+  session.on("Runtime.consoleAPICalled", () => persistent += 100);
+  session.removeAllListeners("Runtime.consoleAPICalled");
   inspector.console.log(3);
   await new Promise((resolve) => setImmediate(resolve));
   console.log(
@@ -22,6 +26,8 @@ try {
     persistent,
     once,
     session.listenerCount("Runtime.consoleAPICalled"),
+    generic,
+    session.listenerCount("inspectorNotification"),
   );
 } finally {
   session.removeAllListeners();

@@ -648,6 +648,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
                         blk.call_void(s, &[]);
                     }
+                    if name == "wasi" {
+                        blk.call(DOUBLE, "js_wasi_emit_warning", &[]);
+                    }
                     blk.call(
                         DOUBLE,
                         "js_create_native_module_namespace",

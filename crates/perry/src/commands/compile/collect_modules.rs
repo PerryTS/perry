@@ -1,13 +1,8 @@
 //! Module discovery + transitive import walk.
-//!
-//! Tier 2.1 follow-up (v0.5.341) — extracts `collect_modules` (~380
-//! LOC) from `compile.rs`. Walks the import graph from the entry
-//! file, lowers every TypeScript module to HIR, classifies each as
-//! native-compiled vs JS-runtime-loaded, and accumulates the result
-//! in `CompilationContext.native_modules` / `js_modules`. Runs
-//! per-module HIR passes (inline_functions, transform_generators)
-//! before adding the module to the context. Source hashes feed the
-//! V2.2 codegen cache key derivation.
+//! Walks the import graph, lowers TypeScript to HIR, classifies native-compiled
+//! versus JS-runtime-loaded modules, and accumulates them in the compilation context.
+//! Per-module HIR passes run before insertion, and source hashes feed
+//! the V2.2 codegen cache key.
 
 use anyhow::{anyhow, Result};
 use perry_hir::ModuleKind;
@@ -31,6 +26,7 @@ use super::{
     ParseCache,
 };
 
+mod binding_faithfulness;
 mod crypto_ns;
 mod dynamic_glob;
 mod eval_worker;
@@ -38,19 +34,19 @@ mod feature_detect;
 mod import_helpers;
 mod native_addon;
 mod parse_error;
+mod script_string;
 mod static_require_transform;
 #[cfg(test)]
 mod tests;
 mod wasm_asset;
 
+use binding_faithfulness::audit_native_binding_choice;
 use dynamic_glob::expand_dynamic_import_glob;
 use eval_worker::materialize_eval_worker_source;
+pub(super) use import_helpers::known_node_submodule_key;
 use import_helpers::{
     cached_resolve_import_with_lexical_base, collect_js_module_imports, env_defines_for_lowering,
 };
-// Re-exported at `pub(super)` because `compile.rs` (the parent module) calls
-// `collect_modules::known_node_submodule_key` directly.
-pub(super) use import_helpers::known_node_submodule_key;
 use native_addon::{refuse_compile_package_native_addon, refuse_node_addon_binary};
 use parse_error::annotate_parse_error;
 use static_require_transform::transform_static_literal_requires;
@@ -1180,6 +1176,7 @@ fn collect_module_one(
 
         if import.is_native {
             import.module_kind = ModuleKind::NativeRust;
+            audit_native_binding_choice(&import.source, entry_path, &canonical, ctx)?;
             if import.source == "perry/ui" {
                 ctx.needs_ui = true;
             }
@@ -1299,6 +1296,10 @@ fn collect_module_one(
                     .to_string();
                 ctx.native_module_imports.insert(normalized);
             }
+            continue;
+        }
+
+        if script_string::resolve(ctx, &canonical, import, &mut pending)? {
             continue;
         }
 

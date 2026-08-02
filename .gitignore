@@ -40,6 +40,8 @@ benchmarks/suite/assets/
 
 # `perry compile --trace llvm` dumps per-module .ll files here.
 .perry-trace/
+# scripts/gc_root_dominance_corpus.sh output (regenerate, never commit)
+ir-corpus/
 
 # Compiled test executables in the project root (no extension)
 /test_*

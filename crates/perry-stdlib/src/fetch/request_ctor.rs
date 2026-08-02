@@ -61,7 +61,8 @@ pub unsafe extern "C" fn js_request_new(
     // real Blob / buffer / string body is untouched. Mirrors the #5437 fix already
     // in `js_response_body_init_ptr` (the Response twin), which falls through via
     // `or_else` rather than if/else.
-    let body: Option<Vec<u8>> =
+    let pending_stream_id = take_pending_fetch_body_stream_id();
+    let non_stream_body: Option<Vec<u8>> =
         if perry_runtime::value::addr_class::is_handle_band(body_ptr as usize) {
             crate::fetch::blob_bytes_clone(body_ptr as usize)
                 .or_else(|| dispatch::incoming_message_raw_body_bytes(body_ptr as usize))
@@ -73,9 +74,14 @@ pub unsafe extern "C" fn js_request_new(
                 .or_else(|| dispatch::body_bytes_from_header(body_ptr))
         };
     // GET/HEAD requests may not carry a body (WHATWG fetch). Refs #2643.
-    if body.is_some() && (method == "GET" || method == "HEAD") {
+    if (pending_stream_id.is_some() || non_stream_body.is_some())
+        && (method == "GET" || method == "HEAD")
+    {
         throw_fetch_type_error("Request with GET/HEAD method cannot have body.");
     }
+    let body = pending_stream_id
+        .map(crate::streams::drain_readable_into_bytes)
+        .or(non_stream_body);
     let headers_id_in = handle_id(headers_handle);
     let headers = if headers_id_in != 0 {
         HEADERS_REGISTRY

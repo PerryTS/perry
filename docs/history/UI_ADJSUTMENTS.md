@@ -1,6 +1,6 @@
 PLAN A: Perry Framework Changes
 
- All work in /Users/amlug/projects/perry. These are the perry-ui enhancements needed to make Pry possible.
+ All work in ~/projects/perry. These are the perry-ui enhancements needed to make Pry possible.
 
  Current State
 

@@ -131,6 +131,8 @@ mod bun_store_tests;
 #[cfg(test)]
 mod declaration_map_source_tests;
 #[cfg(test)]
+mod dedup_version_tests;
+#[cfg(test)]
 mod extension_resolution_tests;
 #[cfg(test)]
 mod tests;
@@ -188,6 +190,83 @@ pub(super) fn extract_compile_package_dir(
         .ancestors()
         .find(|candidate| is_compile_package_dir(candidate, package_name))
         .map(Path::to_path_buf)
+}
+
+/// Read a package directory's declared `version`, if it has a readable
+/// `package.json` with a string `version` field.
+fn package_json_version(package_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(package_dir.join("package.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Whether `chosen` is a *different* copy from `found` with a *different*
+/// declared version. Identical versions are a genuine duplicate install and
+/// collapsing them is intended; differing versions mean the build silently
+/// dropped one of them.
+pub(super) fn dedup_collapses_distinct_versions(chosen: &Path, found: &Path) -> bool {
+    if chosen == found {
+        return false;
+    }
+    match (package_json_version(chosen), package_json_version(found)) {
+        (Some(a), Some(b)) => a != b,
+        // A copy with no readable version can't be proven distinct; stay
+        // quiet rather than warning on every unversioned local link.
+        _ => false,
+    }
+}
+
+/// The copy plain Node resolution would have picked for `package_name` as
+/// imported from `importer_path`: the nearest ancestor `node_modules` that
+/// holds the package. Perry's compile-package path deliberately searches the
+/// project root first instead (see `search_paths` in `resolve_import`), so
+/// the two can disagree.
+pub(super) fn node_nearest_package_dir(
+    package_name: &str,
+    importer_path: &Path,
+) -> Option<PathBuf> {
+    let start = importer_path.parent().unwrap_or(importer_path);
+    ancestor_node_modules_dirs(start)
+        .into_iter()
+        .map(|node_modules| node_modules.join(package_name))
+        .find(|candidate| candidate.is_dir())
+}
+
+/// Warn, at most once per package, when the compile-package resolution path
+/// hands an importer a different *version* than Node would have. Covers both
+/// the root-first search order and the `compile_package_dirs` first-found
+/// dedup, since `chosen` is the directory actually used.
+fn warn_on_version_shadowed_resolution(package_name: &str, chosen: &Path, importer_path: &Path) {
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let Some(nearest) = node_nearest_package_dir(package_name, importer_path) else {
+        return;
+    };
+    if !dedup_collapses_distinct_versions(chosen, &nearest) {
+        return;
+    }
+    let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut warned) = warned.lock() else {
+        return;
+    };
+    if !warned.insert(package_name.to_string()) {
+        return;
+    }
+    let chosen_version = package_json_version(chosen).unwrap_or_else(|| "?".to_string());
+    let nearest_version = package_json_version(&nearest).unwrap_or_else(|| "?".to_string());
+    eprintln!(
+        "  warning: `{package_name}` is installed at two different versions and \
+         Perry compiles ONE copy per package name. `{importer}` gets \
+         {chosen_version} (from {chosen}); Node would have given it \
+         {nearest_version} (from {nearest}). Deduplicate the dependency (npm \
+         dedupe / a package override), or list the package explicitly in \
+         `perry.compilePackages` only where you want it compiled.",
+        importer = importer_path.display(),
+        chosen = chosen.display(),
+        nearest = nearest.display(),
+    );
 }
 
 /// Check if a file path is inside a package listed in compile_packages
@@ -824,7 +903,11 @@ pub(super) fn resolve_package_source_entry(
         }
     }
 
-    // For subpaths, try src/<subpath>.ts
+    // For subpaths, try src/<subpath>.ts first. If that shorthand does not
+    // exist, respect package.json "exports" for the subpath before considering
+    // the package root. Falling back to src/index.ts for a subpath misroutes
+    // imports like `@tanstack/router-core/isServer` to the root barrel and
+    // leaves callers linked against symbols that the root never exports.
     if let Some(sub) = subpath {
         let src_path = package_dir.join("src").join(sub);
         if let Some(resolved) = resolve_with_extensions(&src_path) {
@@ -832,6 +915,9 @@ pub(super) fn resolve_package_source_entry(
                 return Some(resolved);
             }
         }
+
+        let normal_entry = normal_entry?;
+        return prefer_ts_source_for_package_entry(package_dir, normal_entry);
     }
 
     // Try src/index.ts (most common TS source entry)
@@ -844,24 +930,38 @@ pub(super) fn resolve_package_source_entry(
 
     // Try using normal entry resolution but prefer TS over JS
     let normal_entry = normal_entry?;
-    if is_js_file(&normal_entry) {
-        // Try .ts equivalent of the .js entry
-        let ts_path = normal_entry.with_extension("ts");
-        if ts_path.exists() && !is_hybrid_cjs_emit_input(&ts_path) {
+    prefer_ts_source_for_package_entry(package_dir, normal_entry)
+}
+
+fn prefer_ts_source_for_package_entry(
+    package_dir: &Path,
+    normal_entry: PathBuf,
+) -> Option<PathBuf> {
+    if !is_js_file(&normal_entry) {
+        return Some(normal_entry);
+    }
+
+    // Try native TypeScript equivalents of the JS entry first, in the
+    // same preference order used by resolve_with_extensions.
+    for ext in ["ts", "tsx", "mts"] {
+        let ts_path = normal_entry.with_extension(ext);
+        if ts_path.is_file() && !is_hybrid_cjs_emit_input(&ts_path) {
             return Some(ts_path);
         }
-        // Check src/ directory mirror of lib/ or dist/ path
-        if let Ok(rel) = normal_entry.strip_prefix(package_dir) {
-            let rel_str = rel.to_string_lossy();
-            if rel_str.starts_with("lib") || rel_str.starts_with("dist") {
-                let stripped = if rel_str.starts_with("lib") {
-                    rel.strip_prefix("lib")
-                } else {
-                    rel.strip_prefix("dist")
-                };
-                if let Ok(rest) = stripped {
-                    let src_equiv = package_dir.join("src").join(rest).with_extension("ts");
-                    if src_equiv.exists() && !is_hybrid_cjs_emit_input(&src_equiv) {
+    }
+    // Check src/ directory mirror of lib/ or dist/ path
+    if let Ok(rel) = normal_entry.strip_prefix(package_dir) {
+        let rel_str = rel.to_string_lossy();
+        if rel_str.starts_with("lib") || rel_str.starts_with("dist") {
+            let stripped = if rel_str.starts_with("lib") {
+                rel.strip_prefix("lib")
+            } else {
+                rel.strip_prefix("dist")
+            };
+            if let Ok(rest) = stripped {
+                for ext in ["ts", "tsx", "mts"] {
+                    let src_equiv = package_dir.join("src").join(rest).with_extension(ext);
+                    if src_equiv.is_file() && !is_hybrid_cjs_emit_input(&src_equiv) {
                         return Some(src_equiv);
                     }
                 }
@@ -938,6 +1038,11 @@ fn resolve_exports_with_conditions(
 /// perry_fn_…unicorn_magic…__toPath`). Matches the `resolve_subpath_import`
 /// condition order (chalk's `#supports-color` `{ node, default }`); the two
 /// resolvers must agree.
+// First-match convenience wrapper. Current call sites use
+// `resolve_exports_candidates` / `resolve_exports_with_conditions` directly, so
+// this has no non-test caller and would trip `-D dead-code`; kept as the
+// documented single-result entry point (mirrors `resolve_subpath_import`).
+#[allow(dead_code)]
 pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String> {
     resolve_exports_with_conditions(
         exports,
@@ -1447,6 +1552,18 @@ pub(super) fn resolve_import(
                 let effective_dir = compile_package_dirs
                     .get(&package_name)
                     .unwrap_or(&package_dir);
+                // #7137 follow-up. Two mechanisms route this import away from
+                // the copy Node would have used: the root-first `search_paths`
+                // order just above (chosen for compile packages so a top-level
+                // ESM copy beats a nested CJS one), and this first-found
+                // `compile_package_dirs` dedup. Both were narrow while
+                // `compile_packages` held only hand-listed names — opting a
+                // package in was a deliberate act. The auto-compile default
+                // puts the WHOLE reachable graph in that set, so both now apply
+                // to every bare specifier in the project, and a tree carrying
+                // two majors of one package silently gets one of them. Report
+                // it when the versions actually differ.
+                warn_on_version_shadowed_resolution(&package_name, effective_dir, importer_path);
                 // Prefer TypeScript source over compiled JS
                 if let Some(src_entry) =
                     resolve_package_source_entry(effective_dir, subpath.as_deref())

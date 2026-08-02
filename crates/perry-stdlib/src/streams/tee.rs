@@ -453,9 +453,7 @@ extern "C" fn tee_pull_microtask(closure: *const ClosureHeader) -> f64 {
 /// previous implementation snapshot-drained the source's current buffer and
 /// closed it, which yielded two empty branches for a pull-driven source (e.g.
 /// react-server-dom's RSC flight producer, which only produces on pull) — #5989.
-#[no_mangle]
-pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
     let mut was_locked = false;
     let mut is_byte_stream = false;
     let mut source_state = ReadableState::Readable;
@@ -549,6 +547,12 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
         idalloc::retire_readable_terminal(id_b);
     }
 
+    (id_a, id_b)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
+    let (id_a, id_b) = tee_readable_stream_ids(stream_handle as usize);
     let arr = js_array_alloc(2);
     js_array_push(arr, JSValue::from_bits(f64::to_bits(id_a as f64)));
     js_array_push(arr, JSValue::from_bits(f64::to_bits(id_b as f64)));

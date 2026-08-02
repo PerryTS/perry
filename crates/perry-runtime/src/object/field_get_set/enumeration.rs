@@ -1010,7 +1010,11 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // path for class instances (class_id != 0) so they are dropped. Plain
         // object literals keep class_id 0, so `{"#fff": 1}` stays visible.
         let hide_private = (*obj).class_id != 0;
-        if !has_descriptors && !hide_private {
+        let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
+            || crate::wasi::is_wasi_instance(f64::from_bits(
+                crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+            ));
+        if !has_descriptors && !hide_private && !hide_wasi_state {
             let out = crate::array::js_array_alloc(len as u32);
             for j in 0..len {
                 let key_val = crate::array::js_array_get(keys, pos(j));
@@ -1034,7 +1038,9 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if hide_private && (key_str.starts_with('#') || is_internal_runtime_key(key_str)) {
+            if (hide_private && (key_str.starts_with('#') || is_internal_runtime_key(key_str)))
+                || (hide_wasi_state && key_str.starts_with("__wasi"))
+            {
                 continue;
             }
             // If a descriptor explicitly marks this key non-enumerable, skip it.

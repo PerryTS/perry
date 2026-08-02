@@ -106,6 +106,16 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
     // Keep the parentless baseline rather than mis-throwing; native-parent
     // method inheritance is handled by codegen's extends_name machinery, not
     // by this registry edge.
+    if let Some((module, method)) = unsafe {
+        super::super::native_module::bound_native_callable_module_and_method(parent_value)
+    } {
+        if super::super::native_module::normalize_native_module_alias(&module) == "wasi"
+            && method == "WASI"
+        {
+            register_class(class_id, crate::wasi::CLASS_ID_WASI);
+        }
+        return;
+    }
     if is_bound_native_method_closure_value(parent_value) {
         return;
     }

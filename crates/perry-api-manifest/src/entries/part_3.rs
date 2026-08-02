@@ -605,6 +605,13 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     internal_method("cluster", "removeListener", false, None),
     internal_method("cluster", "off", false, None),
     internal_method("cluster", "removeAllListeners", false, None),
+    // #7105 (Node 26 cluster semantics) added these four to
+    // NATIVE_MODULE_TABLE; they belong to the same EventEmitter surface, so
+    // they are `internal_method` like their siblings above.
+    internal_method("cluster", "listeners", false, None),
+    internal_method("cluster", "rawListeners", false, None),
+    internal_method("cluster", "setMaxListeners", false, None),
+    internal_method("cluster", "getMaxListeners", false, None),
     // Keep property reads registered so the #463 strict gate accepts the
     // namespace-export shape; `get_native_module_constant` returns undefined
     // for these names at runtime.
@@ -619,6 +626,10 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     internal_property("cluster", "emit"),
     internal_property("cluster", "eventNames"),
     internal_property("cluster", "listenerCount"),
+    internal_property("cluster", "listeners"),
+    internal_property("cluster", "rawListeners"),
+    internal_property("cluster", "setMaxListeners"),
+    internal_property("cluster", "getMaxListeners"),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`

@@ -152,6 +152,18 @@ pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *
         (*ptr).func_ptr = func_ptr;
         (*ptr).capture_count = capture_count; // Preserve flag in high bit
         (*ptr).type_tag = CLOSURE_MAGIC;
+        // #7154: a fresh closure's capture slots are raw recycled arena bytes.
+        // They are invisible to the collector while the layout says
+        // POINTER_FREE, but any code path (conservative scan, diagnostic
+        // from-space scan, a later layout rebuild over the whole slot range)
+        // that reads them decodes garbage as a reference. Initialize them to a
+        // non-pointer sentinel, mirroring what `js_object_alloc` does for
+        // object fields and what #7138 did for unused array capacity.
+        let slots = closure_capture_slots_mut(ptr);
+        for i in 0..actual_count {
+            // GC_STORE_AUDIT(INIT): fresh closure capture slot, pointer-free sentinel.
+            std::ptr::write(slots.add(i), crate::value::TAG_UNDEFINED);
+        }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 

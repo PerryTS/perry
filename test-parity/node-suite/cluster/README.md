@@ -10,13 +10,13 @@ terminal path. It does not depend on the historical broad parity files.
 ## Coverage
 
 - module/default export identity, role flags, constants, descriptors, and
-  EventEmitter/Worker prototype shape;
+  EventEmitter/Worker prototype shape, listener validation, and bookkeeping;
 - setup defaults, cumulative snapshots, aliases, setup events, fork option
   forwarding, and synchronous validation;
 - fork registry/id/respawn behavior and primary/worker role state;
 - worker online/message/disconnect/exit ordering, payloads, methods, channel,
   send callbacks/errors, kill metadata, and cluster-wide disconnect;
-- JSON and advanced IPC serialization;
+- JSON and advanced IPC serialization, including advanced-mode TCP handoff;
 - single-worker TCP listening descriptors and request/response behavior on
   port 0.
 

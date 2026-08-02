@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2899 entries across 122 modules.
+Total: 2924 entries across 124 modules.
 
 ## Modules
 
@@ -50,6 +50,7 @@ Total: 2899 entries across 122 modules.
 - [`inspector`](#inspector)
 - [`inspector/promises`](#inspectorpromises)
 - [`ioredis`](#ioredis)
+- [`iovalkey`](#iovalkey)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
@@ -63,6 +64,7 @@ Total: 2899 entries across 122 modules.
 - [`net`](#net)
 - [`node-cron`](#node-cron)
 - [`node-fetch`](#node-fetch)
+- [`node-forge`](#node-forge)
 - [`node-pty`](#node-pty)
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
@@ -947,6 +949,7 @@ Total: 2899 entries across 122 modules.
 - `remoteAddress` — instance *(class: `Socket`)*
 - `removeListener` — instance *(class: `Socket`)*
 - `send` — instance *(class: `Socket`)*
+- `sendto` — instance *(class: `Socket`)*
 - `setBroadcast` — instance *(class: `Socket`)*
 - `setMulticastInterface` — instance *(class: `Socket`)*
 - `setMulticastLoopback` — instance *(class: `Socket`)*
@@ -1200,6 +1203,7 @@ Total: 2899 entries across 122 modules.
 ### Methods
 
 - `config` — module
+- `parse` — module
 
 ## `ethers`
 
@@ -1766,13 +1770,18 @@ Total: 2899 entries across 122 modules.
 - `close` — module
 - `connect` — instance *(class: `Session`)*
 - `connectToMainThread` — instance *(class: `Session`)*
+- `debug` — module *(class: `console`)*
 - `disconnect` — instance *(class: `Session`)*
+- `error` — module *(class: `console`)*
+- `info` — module *(class: `console`)*
+- `log` — module *(class: `console`)*
 - `on` — instance *(class: `Session`)*
 - `once` — instance *(class: `Session`)*
 - `open` — module ⚠ **stub** — accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916)
 - `post` — instance *(class: `Session`)* ⚠ **stub** — only Runtime.enable and a canned Runtime.evaluate subset respond; every other protocol method throws Inspector error -32601 (#4916)
 - `url` — module ⚠ **stub** — always undefined: Perry never exposes a real inspector endpoint (#4916)
 - `waitForDebugger` — module ⚠ **stub** — returns immediately after open(); there is no debugger to wait for (#4916)
+- `warn` — module *(class: `console`)*
 
 ### Properties
 
@@ -1819,6 +1828,16 @@ Total: 2899 entries across 122 modules.
 - `incr` — instance
 - `quit` — instance
 - `set` — instance
+
+## `iovalkey`
+
+### Classes
+
+- `Redis`
+
+### Methods
+
+- `createClient` — module
 
 ## `iroh`
 
@@ -1887,6 +1906,7 @@ Total: 2899 entries across 122 modules.
 - `delete` — instance
 - `get` — instance
 - `has` — instance
+- `peek` — instance
 - `set` — instance
 - `size` — instance
 
@@ -2173,6 +2193,23 @@ Total: 2899 entries across 122 modules.
 ### Methods
 
 - `default` — module
+
+## `node-forge`
+
+### Methods
+
+- `certificateFromPem` — module
+- `certificateToPem` — module
+- `create` — module
+- `createCertificate` — module
+- `generateKeyPair` — module
+- `privateKeyFromPem` — module
+- `privateKeyToPem` — module
+- `publicKeyToPem` — module
+- `setExtensions` — instance *(class: `Certificate`)*
+- `setIssuer` — instance *(class: `Certificate`)*
+- `setSubject` — instance *(class: `Certificate`)*
+- `sign` — instance *(class: `Certificate`)*
 
 ## `node-pty`
 
@@ -3128,6 +3165,7 @@ Total: 2899 entries across 122 modules.
 - `createSession` — instance
 - `createTagStore` — instance *(class: `DatabaseSync`)*
 - `db` — instance *(class: `SQLTagStore`)*
+- `deserialize` — instance
 - `enableDefensive` — instance *(class: `DatabaseSync`)*
 - `enableLoadExtension` — instance
 - `exec` — instance
@@ -3147,6 +3185,7 @@ Total: 2899 entries across 122 modules.
 - `prepare` — instance
 - `run` — instance *(class: `SQLTagStore`)*
 - `run` — instance
+- `serialize` — instance
 - `setAllowBareNamedParameters` — instance
 - `setAllowUnknownNamedParameters` — instance
 - `setAuthorizer` — instance *(class: `DatabaseSync`)*
@@ -3461,6 +3500,7 @@ Total: 2899 entries across 122 modules.
 - `checkServerIdentity` — module
 - `close` — instance *(class: `Server`)*
 - `connect` — module
+- `convertALPNProtocols` — module
 - `createSecureContext` — module
 - `createServer` — module
 - `eventNames` — instance *(class: `Server`)*

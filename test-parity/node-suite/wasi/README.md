@@ -50,11 +50,10 @@ for source in test-parity/node-suite/wasi/fixtures/*.wat; do
 done
 ```
 
-The real-wasm tests do not substitute plain objects when Perry's loader lacks
-Node's standard `Promise<{ module, instance }>` shape. Separate lifecycle API
-cases use a real `WebAssembly.Memory` under Node and a guarded object fallback
-under Perry so loader limitations and WASI lifecycle limitations remain
-separately observable.
+The real-wasm tests require the standard `{ module, instance }` result shape and
+do not substitute plain objects. Separate lifecycle API cases isolate the
+`WebAssembly.Memory` and WASI lifecycle contracts so loader failures cannot be
+mistaken for lifecycle behavior.
 
 ## Upstream comparison
 
@@ -86,7 +85,8 @@ Coverage was compared against primary sources at these revisions:
   finalization, and warning cases selected by Deno are represented here. Its
   warning is constructor-triggered (`0` after import, `1` after two
   constructions), while Node emits once at module load (`1`, then still `1`).
-  Bun and Perry emit neither phase. Deno's mixed coercion case is split
+  Bun emits neither phase, while Perry matches Node's once-at-import behavior.
+  Deno's mixed coercion case is split
   deliberately: its args/env assertions are represented, but its non-empty
   preopen object coercion is not. That preopen portion, the standalone preopen
   case, and hello-world `fd_write` cross the host-fd boundary. Its getter-only
@@ -147,9 +147,9 @@ lifecycle entry methods and are not duplicated for `finalizeBindings()`. Node's
 `lifecycle/finalize-state.ts`, which isolates both transition directions for the
 public entry methods from the unrelated explicit-memory validation gaps. Node's
 parameter destructuring is covered in
-`lifecycle/finalize-options-validation.ts`: Node reads an `options.memory`
-accessor before instance/state validation, Deno reads it only after instance
-validation, and Perry currently ignores the second argument entirely. Node's
+`lifecycle/finalize-options-validation.ts`: Node and Perry read an
+`options.memory` accessor before instance/state validation, while Deno reads it
+only after instance validation. Node's
 eager `Array.prototype.map`/`Object.entries` copies in `lib/wasi.js` map to
 `semantics/options-snapshot.ts`; Deno matches those snapshots, while Bun's
 current implementation retains both caller-owned inputs by reference. The same
@@ -167,66 +167,43 @@ before and after binding; exhaustive repetition across all 46 wrappers would be
 redundant because they share the same callback template. The upstream lifecycle
 validation tests override `instance.exports` with a getter. The representative
 callbacks in `imports/function-descriptors.ts` also cover own-`prototype` shape:
-Node replaces every native callback with a bound function, Deno defines
+Node and Perry expose non-constructable bound functions, Deno defines
 object-literal methods, and Bun uses arrow functions, so none has an own
-constructor prototype; Perry currently gives each callback an object-valued own
-`prototype`. The same fixture checks one ordinary callback's independent
+constructor prototype. The same fixture checks one ordinary callback's independent
 constructibility with valid arity: Node creates its shared native callback
 template with `ConstructorBehavior::kThrow`, while Deno's method and Bun's arrow
-also reject construction; Perry currently constructs an object. It does not use
+also reject construction. It does not use
 the replaced `proc_exit` wrapper for this check because Node's bound exit helper
 throws its private exit sentinel when invoked.
 `lifecycle/exports-access-order.ts` makes that observable ordering explicit:
-Node reads it for default memory, validation, and entrypoint lookup, while Deno,
-Bun, and Perry snapshot at most once per implemented entry method. Its export
+Node and Perry read it for default memory, validation, and entrypoint lookup,
+while Deno and Bun snapshot at most once per implemented entry method. Its export
 member accessors separately show Node reading `memory`, `_start`, and
-`_initialize` exactly once in that order for both entry methods. Deno and Bun
-re-read members around validation and invocation; Perry matches the Node member
-order for `start()` but does not invoke it, while `initialize()` stops after
-reading `memory` and `_start` without reading or invoking `_initialize`.
+`_initialize` exactly once in that order for both entry methods, which Perry
+matches while invoking the selected entrypoint. Deno and Bun re-read members
+around validation and invocation.
 `constructor/options-access-order.ts` applies the same accessor-based method to
 the constructor's complete option surface. Node's `lib/wasi.js` reads version
 twice, args/env/preopens and `returnOnExit` three times, and each stdio property
-once in a stable sequence. Deno performs additional validation/default reads,
-Bun reads only its legacy preopens/env/args inputs, and Perry reads every option
-once in a different order.
+once in a stable sequence, which Perry matches. Deno performs additional
+validation/default reads, while Bun reads only its legacy preopens/env/args
+inputs.
 
 ## Measured result and stopping evidence
 
-With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, focused runs were stable at **17/51**, with **34 behavioral
-diffs**, no compile failures, no timeouts, and no harness errors. A related
-`globals,wasi` run completed at **129/171** (`globals` 112/120 and `wasi`
-17/51), also without compile failures or timeouts.
+With Node 26.5.0 and a release Perry compiler/runtime plus the wasm host archive,
+the 2026-08-01 audited run completed at **51/51**: no parity failures, compile
+failures, crashes, skips, or harness errors.
 
 An independent bounded sweep of all fixtures completed under Deno with 50
 status-0 results and the one intentional status-7 exit, and under Bun with 48
 status-0 results and the three intentional status-7 exits. Neither sweep had a
 timeout or another nonzero result.
 
-The stable mismatch families are:
-
-- module namespace, descriptor/enumerability (including an enumerable,
-  configurable, writable constructor `prototype` property), and
-  subclass-construction differences plus no normalized experimental warning;
-- import-function name/arity, own-`prototype`, constructibility, and receiver
-  differences, plus loss of the `wasi_unstable` namespace after replacing
-  `wasiImport`;
-- import syscalls return `28` before memory binding instead of throwing
-  `ERR_WASI_NOT_STARTED`;
-- `WebAssembly.Memory` construction/branding and standard async instance shape
-  differ, while the optional wasm host uses Perry's synchronous opaque handle;
-- lifecycle methods validate but do not invoke `_start`/`_initialize`, and
-  `initialize()` does not even read the latter; they do not consume state after
-  post-bind validation failures, implement exit-code flow, bind or honor
-  explicitly overridden syscall memory, or validate `finalizeBindings()`
-  memory/options;
-- args/env encoding and constructor snapshots plus clock/random semantics remain
-  unavailable behind those memory/syscall gaps.
-
-The suite stops before upstream filesystem/fd cases because the core standard
-wasm instance, memory binding, and syscall lifecycle are not yet stable. It also
-excludes sockets, threads, preview2/component model, external runtimes,
+The suite intentionally stops before upstream filesystem/fd cases: this focused
+surface validates instance shape, memory binding, lifecycle, and deterministic
+syscall boundaries without claiming host filesystem support. It also excludes
+sockets, threads, preview2/component model, external runtimes,
 platform-specific errno or error text, actual entropy/time values, large or
 concurrent modules, permissions/locking, symlink escape, signals,
 GC/finalization, worker termination, and stress. Those require separate
@@ -253,17 +230,13 @@ external-process harness. Node's explicit cross-realm `WebAssembly.Instance`
 validation case is not a separate fixture: current `lib/wasi.js` validates the
 instance structurally and brands only its memory, so
 `lifecycle/cross-realm-memory.ts` exercises the distinct cross-realm WASI
-contract without duplicating the same Perry failure.
+contract without duplicating the same structural instance check.
 
 ## Verification
 
 From the repository root:
 
 ```sh
-cargo build --profile perry-dev \
-  -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host
 test "$(node --version)" = "v26.5.0"
-NODE_BIN="$(command -v node)" \
-PERRY_RUNTIME_DIR="$PWD/target/perry-dev" \
-python3 scripts/node_suite_run.py target/perry-dev/perry "$PWD" wasi
+./run_parity_tests.sh --suite node-suite --module wasi
 ```

@@ -526,16 +526,80 @@ pub(crate) unsafe fn nm_dispatch_inspector(
         ("inspector/promises", "Session") => {
             crate::node_inspector::js_node_inspector_promises_session_new()
         }
-        ("inspector.Network", "requestWillBeSent")
-        | ("inspector.Network", "responseReceived")
-        | ("inspector.Network", "loadingFinished")
-        | ("inspector.Network", "loadingFailed")
-        | ("inspector.Network", "dataSent")
-        | ("inspector.Network", "dataReceived")
-        | ("inspector.Network", "webSocketCreated")
-        | ("inspector.Network", "webSocketClosed")
-        | ("inspector.Network", "webSocketHandshakeResponseReceived") => {
-            crate::node_inspector::js_node_inspector_network_notify(arg(0))
+        ("inspector.Session", "connect") | ("inspector/promises.Session", "connect") => {
+            crate::node_inspector::js_node_inspector_session_connect(obj as usize as i64)
+        }
+        ("inspector.Session", "connectToMainThread")
+        | ("inspector/promises.Session", "connectToMainThread") => {
+            crate::node_inspector::js_node_inspector_session_connect_to_main_thread(
+                obj as usize as i64,
+            )
+        }
+        ("inspector.Session", "disconnect") | ("inspector/promises.Session", "disconnect") => {
+            crate::node_inspector::js_node_inspector_session_disconnect(obj as usize as i64)
+        }
+        ("inspector.Session", "post") => crate::node_inspector::js_node_inspector_session_post(
+            obj as usize as i64,
+            arg(0),
+            arg(1),
+            arg(2),
+        ),
+        ("inspector/promises.Session", "post") => {
+            crate::node_inspector::js_node_inspector_promises_session_post(
+                obj as usize as i64,
+                arg(0),
+                arg(1),
+                arg(2),
+            )
+        }
+        (
+            "inspector.Network",
+            method @ ("requestWillBeSent"
+            | "responseReceived"
+            | "loadingFinished"
+            | "loadingFailed"
+            | "dataSent"
+            | "dataReceived"
+            | "webSocketCreated"
+            | "webSocketClosed"
+            | "webSocketHandshakeResponseReceived"),
+        ) => {
+            let protocol_method = match method {
+                "requestWillBeSent" => "Network.requestWillBeSent",
+                "responseReceived" => "Network.responseReceived",
+                "loadingFinished" => "Network.loadingFinished",
+                "loadingFailed" => "Network.loadingFailed",
+                "dataSent" => "Network.dataSent",
+                "dataReceived" => "Network.dataReceived",
+                "webSocketCreated" => "Network.webSocketCreated",
+                "webSocketClosed" => "Network.webSocketClosed",
+                "webSocketHandshakeResponseReceived" => {
+                    "Network.webSocketHandshakeResponseReceived"
+                }
+                _ => unreachable!(),
+            };
+            crate::node_inspector::js_node_inspector_network_notify(protocol_method, arg(0))
+        }
+        ("inspector.NetworkResources", "put") => {
+            crate::node_inspector::js_node_inspector_network_notify("NetworkResources.put", arg(0))
+        }
+        (
+            "inspector.DOMStorage",
+            method @ ("domStorageItemAdded"
+            | "domStorageItemRemoved"
+            | "domStorageItemUpdated"
+            | "domStorageItemsCleared"
+            | "registerStorage"),
+        ) => {
+            let protocol_method = match method {
+                "domStorageItemAdded" => "DOMStorage.domStorageItemAdded",
+                "domStorageItemRemoved" => "DOMStorage.domStorageItemRemoved",
+                "domStorageItemUpdated" => "DOMStorage.domStorageItemUpdated",
+                "domStorageItemsCleared" => "DOMStorage.domStorageItemsCleared",
+                "registerStorage" => "DOMStorage.registerStorage",
+                _ => unreachable!(),
+            };
+            crate::node_inspector::js_node_inspector_network_notify(protocol_method, arg(0))
         }
         _ => f64::from_bits(JSValue::undefined().bits()),
     }

@@ -308,6 +308,8 @@ const INFER_TYPE_RECURSION_CAP: u32 = 48;
 const INFER_TYPE_STACK_RED_ZONE: usize = 256 * 1024;
 const INFER_TYPE_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
+pub(crate) mod hoisted_text_codec;
+
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     thread_local! {
         static INFER_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };

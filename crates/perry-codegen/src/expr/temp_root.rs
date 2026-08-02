@@ -86,6 +86,16 @@ pub(crate) fn temp_root_set_i64(ctx: &mut FnCtx<'_>, idx: &str, value_i64: &str)
         .call_void("js_gc_temp_root_set", &[(I32, idx), (I64, value_i64)]);
 }
 
+/// Overwrite slot `idx` with a new NaN-boxed `double`.
+///
+/// The `Object.assign` accumulator (#7200) is the same shape as the `concat`
+/// one: `js_object_assign_one` returns the target's *post-collection* address,
+/// so each link must republish rather than keep the address it passed in.
+pub(crate) fn temp_root_set_double(ctx: &mut FnCtx<'_>, idx: &str, value: &str) {
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    temp_root_set_i64(ctx, idx, &bits);
+}
+
 /// Drop slot `idx` and everything pushed above it.
 pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
     ctx.block()
@@ -514,18 +524,40 @@ impl RootedOperands {
         operands: &[&Expr],
     ) -> anyhow::Result<Vec<String>> {
         let mut out = Vec::with_capacity(self.values.len());
-        for (i, original) in self.values.iter().enumerate() {
-            let value = match &self.slots[i] {
-                Some(idx) => {
-                    let idx = idx.clone();
-                    temp_root_get_double(ctx, &idx)
-                }
-                None if self.reloadable[i] => super::lower_expr(ctx, operands[i])?,
-                None => original.clone(),
-            };
-            out.push(value);
+        for i in 0..self.values.len() {
+            out.push(self.reread_one(ctx, operands, i)?);
         }
         Ok(out)
+    }
+
+    /// Re-read ONE operand, at a point the caller picks.
+    ///
+    /// [`RootedOperands::reread`] re-reads the whole group at a single point,
+    /// which is right when one collection point separates the group from its
+    /// consumer. It is wrong when the operands are consumed by *different*
+    /// instructions with a collection point between them — the generic
+    /// dynamic-call lowering is exactly that shape (#7154): the callee and the
+    /// `this` receiver are consumed by `js_closure_unbox_callee_checked_rebind`,
+    /// that rebind CLONES a `this`-capturing closure and therefore allocates,
+    /// and only then does `js_closure_callN` consume the arguments. Re-reading
+    /// the arguments above the rebind would put them right back in the window
+    /// the roots exist to close.
+    ///
+    /// Same three cases as [`RootedOperands::reread`]; see its documentation.
+    pub(crate) fn reread_one(
+        &self,
+        ctx: &mut FnCtx<'_>,
+        operands: &[&Expr],
+        i: usize,
+    ) -> anyhow::Result<String> {
+        Ok(match &self.slots[i] {
+            Some(idx) => {
+                let idx = idx.clone();
+                temp_root_get_double(ctx, &idx)
+            }
+            None if self.reloadable[i] => super::lower_expr(ctx, operands[i])?,
+            None => self.values[i].clone(),
+        })
     }
 
     /// True when this group actually pushed slots — the signal a caller uses to
@@ -547,6 +579,129 @@ impl RootedOperands {
 /// values.
 pub(crate) fn temp_root_release(ctx: &mut FnCtx<'_>, guard: Option<String>) {
     if let Some(idx) = guard {
+        temp_root_truncate(ctx, &idx);
+    }
+}
+
+/// An operand of a property/element STORE that is lowered *before* the value,
+/// kept valid across the value's evaluation (#7154).
+///
+/// Two operands are in that position, and both need it:
+///
+/// - the **receiver**. `o.k = f()` and `o[k] = f()` evaluate the reference
+///   first and the value second — spec order, and codegen follows it. That
+///   leaves the receiver in an SSA register while `f()` runs, and `f()`
+///   allocates. A back-edge poll inside it drives an evacuating minor which
+///   relocates the receiver; the *slot* the register was loaded from is a root
+///   and gets rewritten, but the register does not, so the store lands in
+///   abandoned from-space memory and the field never appears on the object the
+///   program keeps.
+/// - the **computed key**. `o[k] = f()` lowers `k` before `f`, and a
+///   non-literal string key is an ordinary heap string with the same exposure:
+///   `unbox_str_handle` below the call then reads a pre-move `StringHeader*`,
+///   so the field lands under a garbage key. Same for the `[sym]: init` pair of
+///   a class expression's symbol statics, where the Symbol is lowered before
+///   its initializer.
+///
+/// This is the store-side instance of the [module invariant](self): property
+/// (2) — a rewritten location — is worthless without property (3), reading that
+/// location again below the collection point. It is #7114 with a store operand
+/// instead of a call operand.
+///
+/// A temp root (not a re-load) is the required strategy: re-lowering the
+/// operand would observe an assignment made by `f()` itself, which is a
+/// miscompile rather than a rooting fix — see [`operand_is_reloadable`].
+///
+/// Guards nest: push the receiver's first and the key's second, then release in
+/// the opposite order, because [`temp_root_truncate`] is a stack *cut* and a
+/// release of the outer one drops the inner.
+pub(crate) struct StoreOperandGuard {
+    slot: Option<String>,
+    /// The operand took [`OperandProtection::Reload`]: no runtime slot, but the
+    /// re-read below the collection point must re-emit the lowering rather than
+    /// reuse the register. See [`reread_store_operand`].
+    reload: bool,
+}
+
+/// Root `lowered` (the already-lowered `operand`) if evaluating `value` can
+/// collect. Emits nothing otherwise, so stores with an inert RHS keep their old
+/// IR.
+pub(crate) fn guard_store_operand(
+    ctx: &mut FnCtx<'_>,
+    operand: &Expr,
+    lowered: &str,
+    value: &Expr,
+) -> StoreOperandGuard {
+    let collects = expr_may_trigger_gc(ctx, value);
+    guard_store_operand_across(ctx, operand, lowered, collects)
+}
+
+/// [`guard_store_operand`] with the window stated explicitly.
+///
+/// The hazard is not visible from a single sibling expression: a receiver
+/// lowered before both the key and the value is live across *both*, so its
+/// `collects` is the disjunction. Deriving it from the value alone — which is
+/// what every caller did before #7201 — leaves `o[f()] = 1` unguarded, because
+/// the literal `1` cannot collect while `f()` obviously can. This mirrors
+/// [`RootedOperands::push`], whose doc already states that "for `m.set(k, v)`
+/// the receiver's window covers both `key`'s lowering and `value`'s".
+pub(crate) fn guard_store_operand_across(
+    ctx: &mut FnCtx<'_>,
+    operand: &Expr,
+    lowered: &str,
+    collects: bool,
+) -> StoreOperandGuard {
+    let protection = operand_protection(ctx, operand, collects);
+    let slot = match protection {
+        OperandProtection::Root => Some(temp_root_push_double(ctx, lowered)),
+        // `Reload` emits no runtime call, but it is NOT "keep the register":
+        // [`reread_store_operand`] re-lowers the operand below the collection
+        // point. `Reuse` means a proven non-pointer, which relocation cannot
+        // touch, so its register is genuinely reusable.
+        OperandProtection::Reload | OperandProtection::Reuse => None,
+    };
+    StoreOperandGuard {
+        slot,
+        reload: protection == OperandProtection::Reload,
+    }
+}
+
+/// Re-read the operand below the value's evaluation. Returns `lowered`
+/// unchanged only when the operand is a proven non-pointer.
+///
+/// # Why `Reload` must re-lower, not reuse (#7201)
+///
+/// Until this was fixed, the `Reload` arm returned the caller's register
+/// unchanged, on the reasoning that "for a literal [the register] is a load
+/// from that same global". It is a load from that global *taken before the
+/// collection point*. A string literal's `__perry_init_strings_*` handle is a
+/// registered root that evacuation **rewrites** — that is the whole content of
+/// #7114 — so the pre-collection register names from-space and the global does
+/// not. Emitting the load again is the entire fix and costs no runtime call.
+///
+/// This now matches [`RootedOperands::reread`], which has always re-lowered its
+/// `Reload` operands. The two helper families answering the same question
+/// differently is exactly the drift that produced #7114.
+pub(crate) fn reread_store_operand(
+    ctx: &mut FnCtx<'_>,
+    guard: &StoreOperandGuard,
+    operand: &Expr,
+    lowered: &str,
+) -> anyhow::Result<String> {
+    match &guard.slot {
+        Some(idx) => {
+            let idx = idx.clone();
+            Ok(temp_root_get_double(ctx, &idx))
+        }
+        None if guard.reload => super::lower_expr(ctx, operand),
+        None => Ok(lowered.to_string()),
+    }
+}
+
+/// Drop the guard. Call it *after* the store, not before: the store helper
+/// allocates (key interning, field-array growth, shape transition).
+pub(crate) fn release_store_operand(ctx: &mut FnCtx<'_>, guard: StoreOperandGuard) {
+    if let Some(idx) = guard.slot {
         temp_root_truncate(ctx, &idx);
     }
 }
@@ -727,10 +882,19 @@ pub(crate) fn operand_protection(
 /// at each, which is exactly the bookkeeping that gets missed.
 ///
 /// A null word decodes to nothing, so the marker itself roots no object.
-/// Emits nothing when no operand could ever need rooting.
-pub(crate) fn temp_root_scope_begin(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Option<String> {
-    args.iter()
-        .any(|a| operand_needs_root(ctx, a))
+/// Emits nothing when nothing inside the scope could ever need rooting.
+///
+/// #7154: `also_needed` is the caller's extra reason to open the scope beyond
+/// its operands. `lower_new_impl_inner` roots the freshly-allocated *instance*
+/// across the constructor body, and `new C()` with no arguments is precisely
+/// the shape that would otherwise push a slot with no marker above it to cut —
+/// a temp-root entry leaked per construction.
+pub(crate) fn temp_root_scope_begin(
+    ctx: &mut FnCtx<'_>,
+    args: &[Expr],
+    also_needed: bool,
+) -> Option<String> {
+    (also_needed || args.iter().any(|a| operand_needs_root(ctx, a)))
         .then(|| temp_root_push_i64(ctx, "0"))
 }
 

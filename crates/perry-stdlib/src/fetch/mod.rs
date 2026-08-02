@@ -7,6 +7,7 @@ use perry_runtime::{
     js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
     js_string_from_bytes, JSValue, StringHeader,
 };
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -43,6 +44,12 @@ pub use body_metadata::*;
 // `headers`.
 mod request_ctor;
 pub use request_ctor::*;
+
+// Web Fetch `Response` constructor/accessors — split out to keep this file
+// under the 2,000-line lint gate.
+mod response_ctor;
+use response_ctor::alloc_response;
+pub use response_ctor::{js_response_clone, js_response_get_headers, js_response_new};
 
 // Web Fetch constructor validation helpers (#2640 / #2643) — split out to
 // keep this file under the 2,000-line lint gate.
@@ -264,6 +271,27 @@ struct FetchResponse {
     /// each time would silently un-lock a reader). None for an empty body —
     /// `Response.body` is `ReadableStream | null` (#1650).
     cached_body_stream_id: Option<usize>,
+    /// Original ReadableStream body passed to `new Response(stream, init)`.
+    /// Unlike buffered bodies, this must stay lazy: constructing a Response
+    /// must not synchronously drain a producer whose chunks appear only after
+    /// downstream pulls (TanStack Start / React SSR relies on that).
+    body_stream_id: Option<usize>,
+}
+
+thread_local! {
+    static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
+}
+
+fn take_pending_fetch_body_stream_id() -> Option<usize> {
+    PENDING_FETCH_BODY_STREAM_ID.with(|pending| {
+        let id = pending.get();
+        pending.set(0);
+        if id != 0 && crate::streams::js_stream_handle_kind(id) == 1 {
+            Some(id)
+        } else {
+            None
+        }
+    })
 }
 
 /// Extract the registry id from a Web Fetch handle f64 value.
@@ -428,6 +456,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -503,6 +532,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -580,6 +610,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -664,6 +695,7 @@ pub unsafe extern "C" fn js_fetch_post(
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -793,18 +825,24 @@ pub extern "C" fn js_response_body_used(handle: f64) -> f64 {
 
 fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
     let response_id = handle_id(handle);
-    let mut guard = FETCH_RESPONSES.lock().unwrap();
-    let resp = guard
-        .get_mut(&response_id)
-        .ok_or("Invalid response handle")?;
-    if !resp.body_present {
-        return Ok(Vec::new());
+    let (body, stream_id) = {
+        let mut guard = FETCH_RESPONSES.lock().unwrap();
+        let resp = guard
+            .get_mut(&response_id)
+            .ok_or("Invalid response handle")?;
+        if !resp.body_present {
+            return Ok(Vec::new());
+        }
+        if resp.body_used {
+            return Err(BODY_ALREADY_USED_MESSAGE);
+        }
+        resp.body_used = true;
+        (resp.body.clone(), resp.body_stream_id)
+    };
+    if let Some(stream_id) = stream_id {
+        return Ok(crate::streams::drain_readable_into_bytes(stream_id));
     }
-    if resp.body_used {
-        return Err(BODY_ALREADY_USED_MESSAGE);
-    }
-    resp.body_used = true;
-    Ok(resp.body.clone())
+    Ok(body)
 }
 
 /// Get response body as text
@@ -1264,155 +1302,11 @@ fn alloc_headers(store: HeadersStore) -> usize {
     id
 }
 
-fn alloc_response(
-    status: u16,
-    status_text: String,
-    headers: HeadersStore,
-    body: Vec<u8>,
-    body_present: bool,
-) -> usize {
-    let id = alloc_fetch_handle_id();
-    FETCH_RESPONSES.lock().unwrap().insert(
-        id,
-        FetchResponse {
-            status,
-            status_text,
-            headers,
-            body,
-            body_present,
-            body_used: false,
-            type_name: "default".to_string(),
-            url: String::new(),
-            redirected: false,
-            cached_headers_id: None,
-            cached_body_stream_id: None,
-        },
-    );
-    id
-}
-
 // ----------------- Headers FFI -----------------
 // Moved to the `headers` sub-module (#1649 pushed fetch.rs past the 2,000-line
 // lint gate; mirrors the earlier fetch_blob.rs extraction). Re-exported below.
 
 // ----------------- Response FFI (constructor + extra methods) -----------------
-
-/// new Response(body, statusOpt, statusTextPtrOpt, headersHandleOpt)
-/// - body_ptr: StringHeader for the body, or null for ""
-/// - status: f64 (200 default)
-/// - status_text_ptr: StringHeader for statusText, or null for ""
-/// - headers_handle: f64 numeric handle from js_headers_new, or 0
-#[no_mangle]
-pub unsafe extern "C" fn js_response_new(
-    body_ptr: *const StringHeader,
-    status: f64,
-    status_text_ptr: *const StringHeader,
-    headers_handle: f64,
-) -> f64 {
-    // Lossless raw-byte read so binary bodies survive byte-for-byte (#5435).
-    let body_opt = dispatch::body_bytes_from_header(body_ptr);
-    let body_present = body_opt.is_some();
-    let body = body_opt.unwrap_or_default();
-    // NaN / 0.0 are the codegen "no status field" sentinels. Node defaults
-    // missing status to 200; any explicit value is truncated toward zero
-    // then range-checked against 200..=599 (199.9 → RangeError, 599.9 →
-    // 599). Refs #2640.
-    let status_u16 = if status.is_nan() || status == 0.0 {
-        200
-    } else {
-        let truncated = status.trunc();
-        if !(200.0..=599.0).contains(&truncated) {
-            throw_fetch_range_error(
-                "init[\"status\"] must be in the range of 200 to 599, inclusive.",
-            );
-        }
-        truncated as u16
-    };
-    // Node defaults statusText to the empty string (NOT the canonical
-    // reason phrase) and validates the reason-phrase token. Refs #2640.
-    let status_text = match string_from_header(status_text_ptr) {
-        Some(s) => {
-            if !is_valid_status_text(&s) {
-                throw_fetch_type_error("Invalid statusText");
-            }
-            s
-        }
-        None => String::new(),
-    };
-    if body_present && is_null_body_status(status_u16) {
-        throw_fetch_type_error(&format!(
-            "Response constructor: Invalid response status code {status_u16}"
-        ));
-    }
-    let headers_id = handle_id(headers_handle);
-    let headers = if headers_id != 0 {
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&headers_id)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        HeadersStore::default()
-    };
-    handle_to_f64(alloc_response(
-        status_u16,
-        status_text,
-        headers,
-        body,
-        body_present,
-    ))
-}
-
-/// response.headers — returns a Headers handle (f64). Lazily allocates a Headers entry
-/// from the response's stored header HashMap if one doesn't exist yet.
-#[no_mangle]
-pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
-    let id = handle_id(handle);
-    let store = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        match guard.get(&id) {
-            Some(resp) => resp.headers.clone(),
-            None => return f64::from_bits(TAG_UNDEFINED),
-        }
-    };
-    handle_to_f64(alloc_headers(store))
-}
-
-/// response.clone() — duplicates the response (deep copy of body + headers)
-#[no_mangle]
-pub extern "C" fn js_response_clone(handle: f64) -> f64 {
-    let id = handle_id(handle);
-    let cloned = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        guard.get(&id).map(|resp| {
-            if resp.body_present && resp.body_used {
-                unsafe {
-                    throw_fetch_type_error("Response.clone: Body has already been consumed.")
-                };
-            }
-            FetchResponse {
-                status: resp.status,
-                status_text: resp.status_text.clone(),
-                headers: resp.headers.clone(),
-                body: resp.body.clone(),
-                body_present: resp.body_present,
-                body_used: false,
-                type_name: resp.type_name.clone(),
-                url: resp.url.clone(),
-                redirected: resp.redirected,
-                cached_headers_id: None,
-                cached_body_stream_id: None,
-            }
-        })
-    };
-    if let Some(new_resp) = cloned {
-        let new_id = alloc_fetch_handle_id();
-        FETCH_RESPONSES.lock().unwrap().insert(new_id, new_resp);
-        return handle_to_f64(new_id);
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
 
 /// response.arrayBuffer() — returns a real BufferHeader holding the body bytes,
 /// NaN-boxed as POINTER_TAG so that `new Uint8Array(buf)` and `Buffer.from(buf)`
@@ -1681,6 +1575,14 @@ pub unsafe extern "C" fn js_blob_stream(handle: f64) -> f64 {
 /// single stream, and a fresh one each call would silently unlock a held
 /// reader (#1650).
 fn response_body_stream(resp_id: usize) -> f64 {
+    if let Some(id) = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&resp_id)
+        .and_then(|r| r.body_stream_id)
+    {
+        return id as f64;
+    }
     if let Some(id) = FETCH_RESPONSES
         .lock()
         .unwrap()

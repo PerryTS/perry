@@ -219,8 +219,13 @@ pub(crate) fn lower_module_decl(
                                     ("util.types".to_string(), None)
                                 } else if source == "punycode" && imported == "ucs2" {
                                     ("punycode.ucs2".to_string(), None)
-                                } else if source == "inspector" && imported == "Network" {
-                                    ("inspector.Network".to_string(), None)
+                                } else if source == "inspector"
+                                    && matches!(
+                                        imported.as_str(),
+                                        "Network" | "NetworkResources" | "DOMStorage"
+                                    )
+                                {
+                                    (format!("inspector.{imported}"), None)
                                 } else if matches!(source.as_str(), "fs" | "dns" | "stream")
                                     && imported == "promises"
                                 {
@@ -407,7 +412,7 @@ pub(crate) fn lower_module_decl(
                             // so JSX in this module lowers to
                             // `<local>.createElement(...)` instead of Perry's
                             // eager `js_jsx` adapter (see jsx.rs).
-                            if source == "react" {
+                            if source == "react" && !whole_decl_type_only {
                                 ctx.react_default_import_local = Some(local.clone());
                             }
                         }
@@ -438,6 +443,15 @@ pub(crate) fn lower_module_decl(
                             // not lower to StaticMethodCall — see the heuristic
                             // in expr_call::static_and_instance.
                             ctx.namespace_import_locals.insert(local.clone());
+                            // React namespace imports are the common TSX shape
+                            // (`import * as React from "react"`). They need the
+                            // same non-eager React element semantics as default
+                            // React imports; Perry's native JSX adapter calls
+                            // function components immediately and therefore runs
+                            // hooks outside the reconciler.
+                            if source == "react" && !whole_decl_type_only {
+                                ctx.react_default_import_local = Some(local.clone());
+                            }
                             // Remember the source so a later bare `export { local }`
                             // re-exports the namespace itself rather than a bare
                             // function symbol (see the local-export branch below).

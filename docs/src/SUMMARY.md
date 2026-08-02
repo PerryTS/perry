@@ -26,6 +26,7 @@
   - [`perry-ffi` ABI Reference](native-libraries/abi.md)
   - [Manifest Schema (spec v1)](native-libraries/manifest-v1.md)
   - [Upstream Provenance Pins](native-libraries/upstream-pins.md)
+  - [Zero-config Bindings and Faithfulness](native-libraries/zero-config-and-faithfulness.md)
 
 # Multi-Threading
 
@@ -173,6 +174,8 @@
 
 - [Memory Model](internals/memory-model.md)
 - [Explicit Memory Control](internals/explicit-memory.md)
+- [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
+- [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
 
 # Contributing
 

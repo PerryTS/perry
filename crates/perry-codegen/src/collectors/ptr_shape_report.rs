@@ -6,9 +6,12 @@
 //! sites) that let those `continue` sites record `(value, reason)` instead of
 //! dropping the information on the floor.
 //!
-//! **Everything here runs only when [`crate::opt_report::enabled`] is true.**
-//! The collector's returned facts are untouched either way: recording happens
-//! *next to* the `continue`, never instead of it.
+//! **Everything here runs only when [`crate::opt_report::enabled`] is true**,
+//! with one deliberate exception: [`candidate_seeds`] is the collector's own
+//! rule-1 seeding, shared so that the report and the proof can never disagree
+//! about what a candidate is. The collector's returned facts are untouched
+//! either way: recording happens *next to* the `continue`, never instead of
+//! it.
 //!
 //! ## On the actionability tiers
 //!
@@ -29,6 +32,7 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Class, Expr, Stmt};
 
+use super::cjs_scaffolding::CjsPreamble;
 use crate::opt_report::{self, Analysis, Denial, Position, Tier};
 
 /// A named denial: the rule as the collector numbers it, a human expansion,
@@ -42,6 +46,11 @@ pub(super) struct ShapeDenial {
 }
 
 const RULE1: &str = "rule 1 (provenance)";
+/// #7170 R0. A **separate rule string**, not a flavour of [`RULE1`]: the rule
+/// name is what every scheduler-facing tally buckets on (#7152 and #7170 both
+/// counted `rule 1` rows straight off the report), so a site that an existing
+/// mechanism already serves has to leave that bucket, not merely annotate it.
+const RULE1_SERVED: &str = "rule 1 (provenance) — already served by return-shape";
 const RULE2: &str = "rule 2 (containment)";
 const RULE3: &str = "rule 3 (this-flow containment)";
 const RULE4: &str = "rule 4 (dispatch stability)";
@@ -58,6 +67,39 @@ pub(super) const UNBOUND_ALLOC: ShapeDenial = ShapeDenial {
              `.map(x => ({...}))` / `return { ... }` idiom.",
     tier: Tier::CompilerLimitation,
     issue: Some("#7034 §4 (return-shape facts)"),
+};
+
+/// #7170 §5.2, R0: the same syntactic site as [`UNBOUND_ALLOC`], in the return
+/// position of a function that **already carries a return-shape fact**.
+///
+/// `report::deny_alloc_site` runs at the top of
+/// `collect_shape_proven_ptr_locals`, before any seeding — it cannot see that
+/// `collectors/ptr_shape_returns.rs` admits a bare `return new C(...)` with no
+/// local at all as a producer, so the class does reach every
+/// `const r = producer(…)` caller. Left under [`UNBOUND_ALLOC`] these rows
+/// counted as rule-1 misses.
+///
+/// **How big this correction actually is: 4 sites of 1842**, measured over 196
+/// real dependency modules. #7170 §5.2 expected it to be a material share of
+/// the rule-1 wall and it is not — because only 62 of those 1842 allocations
+/// are in a `function` region at all (1711 are in closures, which cannot carry
+/// a return-shape fact; #7170 §6). The bucket is separated anyway: 4 is the
+/// honest number only once the classification exists, and "small" is a result
+/// rather than a reason to leave two mechanisms merged.
+///
+/// **What this asserts, precisely:** the fact was *issued* for the enclosing
+/// function. Whether any caller consumed it is a different question with a
+/// different counter (`Outcome::Consumed`), and this row makes no claim about
+/// it.
+pub(super) const UNBOUND_ALLOC_SERVED_RETURN: ShapeDenial = ShapeDenial {
+    rule: RULE1_SERVED,
+    reason: "returned from a function that carries a return-shape fact, so its \
+             class already reaches every `const r = producer(...)` call site \
+             (#7107). The allocation itself is still unbound — rule 1 cannot \
+             anchor to it — but this is NOT an unserved position, and counting \
+             it as one over-states the rule-1 wall.",
+    tier: Tier::Served,
+    issue: Some("#7107 (return-shape facts, shipped)"),
 };
 
 pub(super) const LET_INIT_NOT_NEW: ShapeDenial = ShapeDenial {
@@ -361,23 +403,44 @@ pub(super) fn deny_local(
 }
 
 /// Record an allocation site that never became a candidate (rule 1).
+///
+/// #7170 R0 changed two things here and nothing else:
+///
+/// 1. The denial is [`UNBOUND_ALLOC_SERVED_RETURN`] when the site is in return
+///    position of a function that already carries a return-shape fact, so the
+///    served population leaves the rule-1 bucket instead of inflating it.
+/// 2. The syntactic position and the site's walk ordinal are recorded as
+///    first-class fields, which is what lets `Entry::dedup_key` tell two
+///    allocations in one function apart. Every object literal renders as
+///    `object literal { ... }` and carries `byte_offset: 0`, so before this
+///    they collapsed onto one row.
 pub(super) fn deny_alloc_site(site: &NewSite) {
     if !opt_report::enabled() || suppressed() {
         return;
     }
-    opt_report::deny(Denial {
-        position: Position::AllocSite,
-        name: &site.display,
-        local_id: None,
-        analysis: Analysis::PtrShape,
-        rule: UNBOUND_ALLOC.rule,
-        reason: UNBOUND_ALLOC.reason,
-        tier: UNBOUND_ALLOC.tier,
-        issue: UNBOUND_ALLOC.issue,
-        loop_depth: site.loop_depth,
-        detail: Some(format!("allocation position: {}", site.context)),
-        byte_offset: (site.byte_offset != 0).then_some(site.byte_offset),
-    });
+    let served = site.is_return_position && opt_report::region_is_return_shape_producer();
+    let d = if served {
+        UNBOUND_ALLOC_SERVED_RETURN
+    } else {
+        UNBOUND_ALLOC
+    };
+    opt_report::deny_alloc(
+        Denial {
+            position: Position::AllocSite,
+            name: &site.display,
+            local_id: None,
+            analysis: Analysis::PtrShape,
+            rule: d.rule,
+            reason: d.reason,
+            tier: d.tier,
+            issue: d.issue,
+            loop_depth: site.loop_depth,
+            detail: Some(format!("allocation position: {}", site.context)),
+            byte_offset: (site.byte_offset != 0).then_some(site.byte_offset),
+        },
+        site.context,
+        site.ordinal,
+    );
 }
 
 // ── Auxiliary walks (only run under the report flag) ───────────────────────
@@ -452,6 +515,56 @@ fn walk_lets(stmts: &[Stmt], depth: u32, f: &mut impl FnMut(u32, &str, u32)) {
     }
 }
 
+// ── Allocation-position vocabulary ─────────────────────────────────────────
+//
+// Named constants rather than inline literals, because #7170 §5.1 is a bug
+// about exactly one of these strings meaning two different things.
+//
+// None of these strings is load-bearing: servedness is decided by
+// [`NewSite::is_return_position`], set at the one site that knows it. A label
+// here can be renamed without silently disabling a classification.
+
+/// The allocation IS the function's return value: `return new C(...)`.
+const RETURN: &str = "return";
+/// The allocation sits *inside* a returned expression but is not the returned
+/// value — a conditional arm, a `&&` operand, an awaited operand, a member
+/// access base.
+///
+/// Split out in review of #7176. `RETURN` was set once, at
+/// `Stmt::Return(Some(e))`, and `scan_expr` propagates its context unchanged
+/// through the fallback arm, so `return cond ? new C() : new D()` filed both
+/// arms as return positions. That over-counted the `return` bucket — 323 of
+/// which was published on #7170 as R1's ceiling — and would have handed
+/// `Tier::Served` to operands the return-shape fact does not cover the moment
+/// the producer side widened.
+const RETURNED_OPERAND: &str = "returned expression operand";
+/// A genuine `new C(arg)` argument — the developer wrote a constructor call.
+const CTOR_ARG: &str = "constructor argument";
+/// A property value of an anonymous-shape object literal.
+///
+/// #7170 §5.1: a closed-shape literal lowers to
+/// `new __AnonShape_N(v0, v1, …)` whose constructor arguments *are* its
+/// property values (`perry-hir/src/lower/expr_object.rs`), so `{a: {b: 1}}`
+/// filed its inner literal under [`CTOR_ARG`]. Measured on 197 dependency
+/// modules the two are 2.0% and 24.5% of sites respectively — one bucket was
+/// 92% the other thing. They are not the same opportunity: a nested literal is
+/// a field value of a parent allocation that is itself unbound, so proving its
+/// shape licenses nothing on its own.
+const ANON_SHAPE_COMPONENT: &str = "object literal property value";
+
+/// The allocation-position label for the arguments of `class_name`.
+fn arg_context(class_name: &str) -> &'static str {
+    if is_anon_shape(class_name) {
+        ANON_SHAPE_COMPONENT
+    } else {
+        CTOR_ARG
+    }
+}
+
+fn is_anon_shape(class_name: &str) -> bool {
+    class_name.starts_with("__AnonShape")
+}
+
 /// An object allocation that is not the initializer of a `Stmt::Let`.
 pub(super) struct NewSite {
     /// `new Row(...)` / `{ key, value }` — what the developer wrote.
@@ -459,6 +572,18 @@ pub(super) struct NewSite {
     /// Where it sits: `return`, `call argument`, `array element`, …
     pub context: &'static str,
     pub loop_depth: u32,
+    /// Index of this site in the region's walk. A de-duplication discriminant;
+    /// see [`crate::opt_report::Entry::alloc_ordinal`].
+    pub ordinal: u32,
+    /// This allocation **is** the expression of a `Stmt::Return` — the value the
+    /// function hands back — rather than something nested inside it.
+    ///
+    /// The only input to the served-return classification, and set in exactly
+    /// one place ([`scan_return`]) together with the `context` label, so a
+    /// sabotage cannot kill one without the other. Deriving servedness from the
+    /// label string instead would make a cosmetic rename of a report bucket
+    /// silently disable it.
+    pub is_return_position: bool,
     /// Byte offset of the `new` expression in its module's source. `Expr::New`
     /// is the one HIR node that already carries a source position (#5253,
     /// captured for constructor TypeErrors), so allocation sites — which have
@@ -471,23 +596,42 @@ pub(super) struct NewSite {
 /// are never bound to a local. **Does not descend into closure bodies** —
 /// those are lowered as their own regions and reported under their own
 /// function name.
-pub(super) fn unbound_new_sites(stmts: &[Stmt]) -> Vec<NewSite> {
+///
+/// `preamble` (#7152) suppresses the object literals Perry's own `cjs_wrap`
+/// preamble allocates. On the dependency corpus that is the whole
+/// "constructor argument" bucket — `{ exports: {} }`, once per CommonJS
+/// module — plus the descriptor / `require.cache` / `require.extensions`
+/// literals behind it. Recognition is per region and fails to `Default`, in
+/// which case nothing is suppressed.
+pub(super) fn unbound_new_sites(stmts: &[Stmt], preamble: &CjsPreamble) -> Vec<NewSite> {
     let mut out = Vec::new();
-    scan_stmts(stmts, 0, "statement", &mut out);
+    scan_stmts(stmts, 0, "statement", preamble, &mut out);
     out
 }
 
-fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
+fn scan_stmts(
+    stmts: &[Stmt],
+    depth: u32,
+    ctx: &'static str,
+    preamble: &CjsPreamble,
+    out: &mut Vec<NewSite>,
+) {
     for s in stmts {
+        if preamble.stmt_allocates_only_scaffolding(s) {
+            continue;
+        }
         match s {
             // The Let init IS the provenance site rule 1 accepts; skip it and
             // scan only its arguments.
             Stmt::Let {
-                init: Some(Expr::New { args, .. }),
+                init: Some(Expr::New {
+                    class_name, args, ..
+                }),
                 ..
             } => {
+                let ctx = arg_context(class_name);
                 for a in args {
-                    scan_expr(a, depth, "constructor argument", out);
+                    scan_expr(a, depth, ctx, out);
                 }
             }
             Stmt::Let { init, .. } => {
@@ -497,7 +641,7 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
             }
             Stmt::Expr(e) => scan_expr(e, depth, ctx, out),
             Stmt::Throw(e) => scan_expr(e, depth, "throw", out),
-            Stmt::Return(Some(e)) => scan_expr(e, depth, "return", out),
+            Stmt::Return(Some(e)) => scan_return(e, depth, out),
             Stmt::Return(None) => {}
             Stmt::If {
                 condition,
@@ -505,14 +649,14 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                 else_branch,
             } => {
                 scan_expr(condition, depth, "condition", out);
-                scan_stmts(then_branch, depth, ctx, out);
+                scan_stmts(then_branch, depth, ctx, preamble, out);
                 if let Some(eb) = else_branch {
-                    scan_stmts(eb, depth, ctx, out);
+                    scan_stmts(eb, depth, ctx, preamble, out);
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 scan_expr(condition, depth + 1, "condition", out);
-                scan_stmts(body, depth + 1, ctx, out);
+                scan_stmts(body, depth + 1, ctx, preamble, out);
             }
             Stmt::For {
                 init,
@@ -521,7 +665,13 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                 body,
             } => {
                 if let Some(init) = init {
-                    scan_stmts(std::slice::from_ref(init.as_ref()), depth + 1, ctx, out);
+                    scan_stmts(
+                        std::slice::from_ref(init.as_ref()),
+                        depth + 1,
+                        ctx,
+                        preamble,
+                        out,
+                    );
                 }
                 if let Some(c) = condition {
                     scan_expr(c, depth + 1, "condition", out);
@@ -529,19 +679,19 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                 if let Some(u) = update {
                     scan_expr(u, depth + 1, "loop update", out);
                 }
-                scan_stmts(body, depth + 1, ctx, out);
+                scan_stmts(body, depth + 1, ctx, preamble, out);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                scan_stmts(body, depth, ctx, out);
+                scan_stmts(body, depth, ctx, preamble, out);
                 if let Some(c) = catch {
-                    scan_stmts(&c.body, depth, ctx, out);
+                    scan_stmts(&c.body, depth, ctx, preamble, out);
                 }
                 if let Some(f) = finally {
-                    scan_stmts(f, depth, ctx, out);
+                    scan_stmts(f, depth, ctx, preamble, out);
                 }
             }
             Stmt::Switch {
@@ -553,15 +703,65 @@ fn scan_stmts(stmts: &[Stmt], depth: u32, ctx: &'static str, out: &mut Vec<NewSi
                     if let Some(t) = &c.test {
                         scan_expr(t, depth, "case test", out);
                     }
-                    scan_stmts(&c.body, depth, ctx, out);
+                    scan_stmts(&c.body, depth, ctx, preamble, out);
                 }
             }
-            Stmt::Labeled { body, .. } => {
-                scan_stmts(std::slice::from_ref(body.as_ref()), depth, ctx, out)
-            }
+            Stmt::Labeled { body, .. } => scan_stmts(
+                std::slice::from_ref(body.as_ref()),
+                depth,
+                ctx,
+                preamble,
+                out,
+            ),
             _ => {}
         }
     }
+}
+
+/// Scan the expression of a `Stmt::Return`.
+///
+/// **The direct expression of a `return` is the function's return value;
+/// anything nested inside it is an operand.** `return cond ? new C() : new D()`
+/// returns the *conditional*, not either allocation, and #7107's return-shape
+/// fact says nothing about them.
+///
+/// This is the only place `RETURN` and [`NewSite::is_return_position`] are set,
+/// and they are set together, so no sabotage can leave the label and the
+/// classification disagreeing.
+fn scan_return(e: &Expr, depth: u32, out: &mut Vec<NewSite>) {
+    match e {
+        Expr::New {
+            class_name,
+            args,
+            byte_offset,
+            ..
+        } => {
+            push_new_site(out, class_name, RETURN, depth, *byte_offset, true);
+            let arg_ctx = arg_context(class_name);
+            for a in args {
+                scan_expr(a, depth, arg_ctx, out);
+            }
+        }
+        _ => scan_expr(e, depth, RETURNED_OPERAND, out),
+    }
+}
+
+fn push_new_site(
+    out: &mut Vec<NewSite>,
+    class_name: &str,
+    context: &'static str,
+    depth: u32,
+    byte_offset: u32,
+    is_return_position: bool,
+) {
+    out.push(NewSite {
+        display: display_class(class_name),
+        context,
+        loop_depth: depth,
+        ordinal: out.len() as u32,
+        byte_offset,
+        is_return_position,
+    });
 }
 
 fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
@@ -574,14 +774,12 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
             byte_offset,
             ..
         } => {
-            out.push(NewSite {
-                display: display_class(class_name),
-                context: ctx,
-                loop_depth: depth,
-                byte_offset: *byte_offset,
-            });
+            // Never a return position: `scan_return` handles the one expression
+            // that is, and it does not route through here.
+            push_new_site(out, class_name, ctx, depth, *byte_offset, false);
+            let arg_ctx = arg_context(class_name);
             for a in args {
-                scan_expr(a, depth, "constructor argument", out);
+                scan_expr(a, depth, arg_ctx, out);
             }
         }
         Expr::Call { callee, args, .. } => {
@@ -603,7 +801,7 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
 /// "__AnonShape_…" }`; render them as the object literals the developer
 /// actually wrote rather than leaking the synthetic class name.
 fn display_class(class_name: &str) -> String {
-    if class_name.starts_with("__AnonShape") {
+    if is_anon_shape(class_name) {
         String::from("object literal { ... }")
     } else {
         format!("new {class_name}(...)")
@@ -651,16 +849,26 @@ pub(super) fn admission_cause(
     None
 }
 
-/// Enumerate the `Stmt::Let`-bound allocation candidates in a region without
-/// running the proof — used on the early-bail paths (gate off, module
-/// barrier) so the report can still name what *would* have been considered.
+/// The rule-1 candidate seeds of a region.
+///
+/// Used by the collector itself and, on the early-bail paths (gate off, module
+/// barrier), by the report so it can still name what *would* have been
+/// considered. One function, so a value cannot be a candidate for one and not
+/// the other.
 pub(super) fn candidate_seeds(
     stmts: &[Stmt],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
+    preamble: &CjsPreamble,
 ) -> HashMap<u32, String> {
     let mut out = HashMap::new();
     super::find_new_candidates(stmts, boxed_vars, module_globals, &mut out);
+    // #7152: mirror the collector's own filter. Without it a module whose
+    // rule-5 barrier is armed reports `__cjs_module` under rule 5 while an
+    // unarmed one reports it under rule 2, and the same scaffolding value
+    // moves between buckets depending on what the package source happens to
+    // do.
+    out.retain(|id, _| !preamble.is_module_record(*id));
     out
 }
 

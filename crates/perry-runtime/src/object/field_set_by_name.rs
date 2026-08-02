@@ -1428,12 +1428,18 @@ pub extern "C" fn js_object_set_field_by_name(
 
             // Reallocate fields to hold at least one value
             // Note: We assume the object has enough field slots pre-allocated
-            js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
-            mirror_class_object_static_write(obj, key, value);
+            // #7154 publication order: `gc_field_slot_range` bounds the
+            // collector's view of the payload by `field_count`, so a slot at an
+            // index the count does not yet cover is invisible to BOTH tracing
+            // and evacuation rewriting. Widen the count FIRST — every physical
+            // slot is undefined-initialized at allocation, so the widened range
+            // can only expose non-pointer sentinels — then publish the value.
             // Bump field_count so Object.keys()/values()/entries() see the new property.
             if (*obj).field_count == 0 {
                 (*obj).field_count = 1;
             }
+            js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
+            mirror_class_object_static_write(obj, key, value);
             // Record the null→single-key transition so the next object
             // that starts with `{}` and sets the same first key hits the
             // fast path above instead of allocating a fresh 4-elem
@@ -1647,11 +1653,17 @@ pub extern "C" fn js_object_set_field_by_name(
             if !keys_shared {
                 super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
             }
-            js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
-            mirror_class_object_static_write(obj, key, value);
+            // #7154 publication order: `gc_field_slot_range` bounds the
+            // collector's view of the payload by `field_count`, so a slot at an
+            // index the count does not yet cover is invisible to BOTH tracing
+            // and evacuation rewriting. Widen the count FIRST — every physical
+            // slot is undefined-initialized at allocation, so the widened range
+            // can only expose non-pointer sentinels — then publish the value.
             if new_index as u32 >= (*obj).field_count {
                 (*obj).field_count = new_index as u32 + 1;
             }
+            js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+            mirror_class_object_static_write(obj, key, value);
             transition_cache_insert(
                 prev_keys_usize,
                 interned_key,
@@ -1841,12 +1853,18 @@ pub extern "C" fn js_object_set_field_by_name(
         }
 
         // Set the field at the new index and update logical field_count
-        js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
-        mirror_class_object_static_write(obj, key, value);
+        // #7154 publication order: `gc_field_slot_range` bounds the
+        // collector's view of the payload by `field_count`, so a slot at an
+        // index the count does not yet cover is invisible to BOTH tracing
+        // and evacuation rewriting. Widen the count FIRST — every physical
+        // slot is undefined-initialized at allocation, so the widened range
+        // can only expose non-pointer sentinels — then publish the value.
         // Bump field_count to reflect the newly added property
         if new_index as u32 >= (*obj).field_count {
             (*obj).field_count = new_index as u32 + 1;
         }
+        js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+        mirror_class_object_static_write(obj, key, value);
         // Record the shape transition — see above for semantics.
         transition_cache_insert(
             prev_keys_usize,

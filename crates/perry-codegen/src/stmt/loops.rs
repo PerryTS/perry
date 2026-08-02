@@ -5227,15 +5227,16 @@ fn lower_for_after_init_with_i32_bound(
 fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    // DEFAULT ON (moving-nursery flip): emit the back-edge poll, but ONLY for
-    // allocating loops (see the `loop_may_allocate` gate in
-    // `emit_gc_loop_safepoint`) so numeric/vectorizable loops stay call-free.
-    // Kill switch: PERRY_GC_MOVING_LOOP_POLLS=0/off/false. Must match the runtime
-    // `gc_moving_loop_polls_enabled` (same env) so deferrals always have a drain.
+    // DEFAULT OFF (stopgap for #7154): the runtime moving-loop minor this poll
+    // drives has a use-after-free that corrupts the heap even in the default
+    // config, so the default reverts to the non-moving minor and the poll is
+    // emitted only under an explicit PERRY_GC_MOVING_LOOP_POLLS=1/on/true opt-in.
+    // Must match the runtime `gc_moving_loop_polls_enabled` (same env) so a
+    // deferred collection always has a drain and vice versa.
     *CACHED.get_or_init(|| {
-        !matches!(
+        matches!(
             std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
+            Ok("1") | Ok("on") | Ok("true")
         )
     })
 }

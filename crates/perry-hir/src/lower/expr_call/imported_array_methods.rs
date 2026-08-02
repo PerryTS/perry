@@ -1,6 +1,30 @@
 //! Array methods on imported variables (e.g., `CHAIN_NAMES.join`).
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
+//!
+//! # Invariant (#7154)
+//!
+//! An imported binding's `.map`/`.filter`/`.slice`/… is folded to the
+//! corresponding `Expr::Array*` builtin **only when the binding is statically
+//! typed as an array**. Method NAME alone is not evidence: a module is free to
+//! export an object (or a function with statics) whose members happen to be
+//! called `map`, `filter`, `keys`, `slice`, … and folding those rewrites a
+//! call to a completely different function. The arguments are then
+//! reinterpreted against the builtin's own signature — argument #1 becomes the
+//! callback / separator / start index, later arguments become whatever slot the
+//! builtin has next (`slice`'s `end`, `with`'s `value`, `reduce`'s initial
+//! value) or are dropped outright when it has none (`map`, `filter`, `find`,
+//! `forEach`, `includes` past its `fromIndex`).
+//!
+//! Two arms already learned this the hard way and carried a local guard
+//! (`join`, #420 drizzle's `sql.join(list)`; `sort`, semver's
+//! `sort(list)`). The remaining ~18 arms did not, so e.g. zod's
+//! `z.map(keyType, valueType)` — `z` is a named import of a module namespace
+//! object, `map` is `export function map(k, v)` — lowered to
+//! `Expr::ArrayMap { array: z, callback: keyType }`, dropped `valueType`, and
+//! threw `TypeError: object is not a function` from
+//! `js_validate_array_callback`. The guard is now applied once, up front, for
+//! every method name.
 
 use crate::types::Type;
 use anyhow::Result;
@@ -9,6 +33,24 @@ use swc_ecma_ast as ast;
 use crate::ir::*;
 
 use super::super::LoweringContext;
+
+/// Is this imported binding statically known to hold an array?
+///
+/// The only positive evidence available at this point is the declared type
+/// recorded for the imported binding (`lookup_extern_func_types`'s return
+/// type). `Type::Any` — the fallback used when nothing is known — is **not**
+/// evidence and must decline, which is what keeps a non-array export from
+/// being rewritten into an Array builtin.
+fn imported_binding_is_array(extern_ref: &Expr) -> bool {
+    let Expr::ExternFuncRef { return_type, .. } = extern_ref else {
+        return false;
+    };
+    match return_type {
+        Type::Array(_) | Type::Tuple(_) => true,
+        Type::Generic { base, .. } => base == "Array" || base == "ReadonlyArray",
+        _ => false,
+    }
+}
 
 pub(super) fn try_imported_array_methods(
     ctx: &mut LoweringContext,
@@ -21,17 +63,20 @@ pub(super) fn try_imported_array_methods(
         if let ast::Expr::Member(member) = expr.as_ref() {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();
-                // NOTE (#6718): a spread method call on an IMPORTED array
-                // (`CHAIN_NAMES.map(...[fn])`, `CHAIN_NAMES.slice(...[1,3])`) is
-                // intentionally NOT declined here — unlike the local/inline/
-                // array-only fast paths, which decline any spread to the generic
-                // `Expr::CallSpread` tail. The imported binding lowers to an
-                // `ExternFuncRef` receiver, which that tail's member-callee arm
-                // skips (it may be an imported *function*), so routing there would
-                // fail to dispatch the native method. This niche receiver stays at
-                // its pre-existing behavior rather than trading one failure for
-                // another; the #6718 repro covers inline literals + local
-                // receivers + queueMicrotask.
+                // NOTE (#6718, superseded by #7154/#7191): spread method calls
+                // on an IMPORTED array (`CHAIN_NAMES.map(...[fn])`,
+                // `CHAIN_NAMES.slice(...[1,3])`) used to reach the folds below
+                // deliberately, because the generic `Expr::CallSpread` tail's
+                // member-callee arm skips `ExternFuncRef` receivers (they may be
+                // imported *functions*). That was never a working path — the
+                // spread argument list arrives as one array in the builtin's
+                // first slot, so `slice(...[1,3])` returned the whole array and
+                // `includes(...[20])` returned `false`, both silently wrong, and
+                // `map(...[fn])` threw. Measured 4/4 wrong before this change and
+                // 4/4 wrong after; the real fix is to let the `CallSpread` tail
+                // dispatch on an `ExternFuncRef` receiver, tracked in #7191.
+                // The #6718 repro covers inline literals + local receivers +
+                // queueMicrotask, not imported receivers.
                 if let ast::Expr::Ident(arr_ident) = member.obj.as_ref() {
                     let arr_name = arr_ident.sym.to_string();
                     // A module namespace import (`import * as NS from "..."`) is
@@ -60,6 +105,15 @@ pub(super) fn try_imported_array_methods(
                                 param_types,
                                 return_type,
                             };
+                            // #7154: no static array evidence → the binding may
+                            // be any exported value that merely has a member of
+                            // this name. Decline to the generic call path, which
+                            // invokes the member itself with its own arguments
+                            // instead of reinterpreting them against an Array
+                            // builtin's signature.
+                            if !imported_binding_is_array(&extern_ref) {
+                                return Ok(Err(args));
+                            }
                             match method_name {
                                 "join" => {
                                     // Issue #420 (drizzle): `sql.join(arr)` — `sql`
@@ -69,21 +123,13 @@ pub(super) fn try_imported_array_methods(
                                     // ArrayJoin, so `sql.join(valuesSqlList)` was
                                     // dispatched as `js_array_join(sql, list)`
                                     // (treating `sql` as the array, list as the
-                                    // separator). Result: empty string back.
-                                    //
-                                    // Only fold when the imported variable's
-                                    // return_type is statically Array. Otherwise
-                                    // fall through to generic dispatch which
-                                    // respects the imported's own `.join` method.
-                                    if matches!(extern_ref, Expr::ExternFuncRef { ref return_type, .. } if matches!(return_type, Type::Array(_)))
-                                    {
-                                        let separator = args.into_iter().next().map(Box::new);
-                                        return Ok(Ok(Expr::ArrayJoin {
-                                            array: Box::new(extern_ref),
-                                            separator,
-                                        }));
-                                    }
-                                    // Fall through.
+                                    // separator). Result: empty string back. The
+                                    // static-array gate above now covers this.
+                                    let separator = args.into_iter().next().map(Box::new);
+                                    return Ok(Ok(Expr::ArrayJoin {
+                                        array: Box::new(extern_ref),
+                                        separator,
+                                    }));
                                 }
                                 "map"
                                     if !args.is_empty() => {
@@ -132,16 +178,10 @@ pub(super) fn try_imported_array_methods(
                                     // comparator: list }` mis-routed the single
                                     // `list` arg into the comparator slot →
                                     // "comparison function must be either a
-                                    // function or undefined". Fall through to the
-                                    // generic call path, which invokes the imported
-                                    // `sort` function correctly.
-                                    if !args.is_empty()
-                                        && matches!(
-                                            extern_ref,
-                                            Expr::ExternFuncRef { ref return_type, .. }
-                                                if matches!(return_type, Type::Array(_))
-                                        )
-                                    => {
+                                    // function or undefined". The static-array gate
+                                    // above now covers this; the arg check stays
+                                    // because a 0-arg `sort()` has no comparator.
+                                    if !args.is_empty() => {
                                         return Ok(Ok(Expr::ArraySort {
                                             array: Box::new(extern_ref),
                                             comparator: Box::new(args.into_iter().next().unwrap()),
@@ -270,4 +310,63 @@ pub(super) fn try_imported_array_methods(
     }
 
     Ok(Err(args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{FunctionType, ObjectType};
+
+    fn extern_ref(return_type: Type) -> Expr {
+        Expr::ExternFuncRef {
+            name: "z".to_string(),
+            param_types: Vec::new(),
+            return_type,
+        }
+    }
+
+    #[test]
+    fn static_array_evidence_admits_the_fold() {
+        assert!(imported_binding_is_array(&extern_ref(Type::Array(
+            Box::new(Type::Number)
+        ))));
+        assert!(imported_binding_is_array(&extern_ref(Type::Tuple(vec![
+            Type::Number,
+            Type::String
+        ]))));
+        assert!(imported_binding_is_array(&extern_ref(Type::Generic {
+            base: "Array".to_string(),
+            type_args: vec![Type::Number],
+        })));
+        assert!(imported_binding_is_array(&extern_ref(Type::Generic {
+            base: "ReadonlyArray".to_string(),
+            type_args: vec![Type::Number],
+        })));
+    }
+
+    #[test]
+    fn absent_or_non_array_evidence_declines_the_fold() {
+        // `Type::Any` is the fallback used whenever nothing is known about the
+        // imported binding — the zod `z.map(keyType, valueType)` case. It must
+        // NOT be read as "probably an array".
+        assert!(!imported_binding_is_array(&extern_ref(Type::Any)));
+        assert!(!imported_binding_is_array(&extern_ref(Type::Unknown)));
+        assert!(!imported_binding_is_array(&extern_ref(Type::Object(
+            ObjectType::default()
+        ))));
+        assert!(!imported_binding_is_array(&extern_ref(Type::Function(
+            FunctionType {
+                params: Vec::new(),
+                return_type: Box::new(Type::Any),
+                is_async: false,
+                is_generator: false,
+            }
+        ))));
+        assert!(!imported_binding_is_array(&extern_ref(Type::Generic {
+            base: "Map".to_string(),
+            type_args: vec![Type::String, Type::Number],
+        })));
+        // A non-`ExternFuncRef` receiver never reaches the fold either.
+        assert!(!imported_binding_is_array(&Expr::Number(1.0)));
+    }
 }

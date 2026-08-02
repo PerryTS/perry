@@ -10,7 +10,9 @@ for (
   // setupPrimary merges into cluster.settings, so restore valid defaults each
   // iteration and spread the invalid field last; otherwise the previous case's bad
   // value (e.g. serialization: "bad") leaks in and masks this case's validation.
-  cluster.setupPrimary({ serialization: "json", inspectPort: undefined, ...options } as any);
+  cluster.setupPrimary(
+    { serialization: "json", inspectPort: undefined, ...options } as any,
+  );
   try {
     cluster.fork();
     console.log(name, "accepted");

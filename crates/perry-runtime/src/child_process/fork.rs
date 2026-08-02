@@ -174,12 +174,25 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     cp_set_field(cp, b"spawnfile", cp_box_string(&exec_path));
 
     // Build the command: <execPath> [execArgv] <module> [args].
+    let native_self = std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+        .is_some_and(|path| path == exec_path && module == exec_path);
     let mut command = Command::new(&exec_path);
-    command.args(&exec_argv);
-    command.arg(&module);
-    command.args(&arg_strs);
+    let native_exec_argv = if native_self {
+        command.args(&arg_strs);
+        Some(serde_json::to_string(&exec_argv).unwrap_or_else(|_| "[]".to_string()))
+    } else {
+        command.args(&exec_argv);
+        command.arg(&module);
+        command.args(&arg_strs);
+        None
+    };
     cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
+    if let Some(exec_argv) = native_exec_argv {
+        command.env("PERRY_PROCESS_EXEC_ARGV", exec_argv);
+    }
     cp_apply_detached(&mut command, opts_val);
     let launch = match cp_apply_live_stdio(&mut command, &stdio_kinds) {
         Ok(extra_readers) => fork_launch(
@@ -280,7 +293,13 @@ fn fork_launch(
             // The child now holds fd 3; the parent keeps `parent_sock`.
             drop(child_sock);
             cp_set_field(cp, b"connected", TAG_TRUE_F64);
-            let channel = crate::object::js_object_alloc(0, 0);
+            let channel = cp_build_object(
+                &[
+                    ("ref", cp_cast0(cp_method_this0)),
+                    ("unref", cp_cast0(cp_method_this0)),
+                ],
+                CP_SHAPE_ID + 0x40,
+            );
             cp_set_field(cp, b"channel", cp_box_ptr(channel as *const u8));
             let handle = reactor::cp_register_live_child(
                 cp,

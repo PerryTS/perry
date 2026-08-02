@@ -619,8 +619,20 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
     sym_f64: f64,
     closure_f64: f64,
 ) -> f64 {
-    bind_reserved_this_slot(closure_f64, obj_f64);
-    js_object_set_symbol_property_infer_name(obj_f64, sym_f64, closure_f64)
+    // #7154 review: `bind_reserved_this_slot` is a *collection point* (see the
+    // note on that function). Every value that outlives it — the receiver, the
+    // symbol, the closure — is rooted and re-derived afterwards rather than
+    // carried in a raw register across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(obj_f64);
+    let sym_h = scope.root_nanbox_f64(sym_f64);
+    let closure_h = scope.root_nanbox_f64(closure_f64);
+    bind_reserved_this_slot(closure_h.get_nanbox_f64(), obj_h.get_nanbox_f64());
+    js_object_set_symbol_property_infer_name(
+        obj_h.get_nanbox_f64(),
+        sym_h.get_nanbox_f64(),
+        closure_h.get_nanbox_f64(),
+    )
 }
 
 /// Patch the closure's reserved (LAST) capture slot with `obj_f64` so a
@@ -637,6 +649,29 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
 /// non-closure value (e.g. a Proxy of a function) has no capture array to patch,
 /// so it is simply stored as-is; the call site then dispatches it through the
 /// proxy `[[Call]]` path.
+///
+/// #7154: the store MUST go through `js_closure_set_capture_f64`, not a raw
+/// `*slot = bits`. A closure is allocated `GC_LAYOUT_POINTER_FREE` and only
+/// leaves that state when a capture store *records* the pointer
+/// (`layout_note_slot`). `heap_payload_slot_selection` short-circuits on
+/// `POINTER_FREE` and skips the ENTIRE capture payload without consulting any
+/// mask, so a raw store left the receiver untraced: the evacuating young-gen
+/// minor neither kept it alive nor rewrote the slot when it moved, and the
+/// method later read a pointer into reclaimed nursery memory ("value is not a
+/// function", or a SIGSEGV in the collector on the next cycle). The raw store
+/// also skipped the write barrier, so an old-gen closure -> young receiver edge
+/// never entered the remembered set.
+///
+/// ***TREAT THIS FUNCTION AS A COLLECTION POINT.*** The barriered store reaches
+/// `layout_note_slot` (which resolves forwarded headers recursively and can
+/// populate the layout side tables) and `runtime_write_barrier_gc_slot` (which
+/// can insert into the remembered set). Neither allocates from the arena
+/// *today*, so no caller is miscompiled right now — but that is a reachability
+/// argument about someone else's code, and #7114 is what happens when one of
+/// those goes stale. Callers root `obj_f64`/`closure_f64` across this call and
+/// re-derive afterwards instead of relying on it; both entry points do.
+/// `c_ptr` is derived from `closure_f64` immediately before its only use, with
+/// no intervening call.
 unsafe fn bind_reserved_this_slot(closure_f64: f64, obj_f64: f64) {
     let c_bits = closure_f64.to_bits();
     if c_bits & 0xFFFF_0000_0000_0000 != POINTER_TAG {
@@ -649,10 +684,7 @@ unsafe fn bind_reserved_this_slot(closure_f64: f64, obj_f64: f64) {
     let c_ptr = c_addr as *mut crate::closure::ClosureHeader;
     let real_count = crate::closure::real_capture_count((*c_ptr).capture_count);
     if real_count >= 1 {
-        let captures_ptr = (c_ptr as *mut u8)
-            .add(std::mem::size_of::<crate::closure::ClosureHeader>())
-            as *mut f64;
-        *captures_ptr.add((real_count - 1) as usize) = obj_f64;
+        crate::closure::js_closure_set_capture_f64(c_ptr, real_count - 1, obj_f64);
     }
 }
 
@@ -675,18 +707,29 @@ pub unsafe extern "C" fn js_object_set_method_by_name(
     key_f64: f64,
     closure_f64: f64,
 ) -> f64 {
+    // #7154 review: `bind_reserved_this_slot` is a collection point (see its
+    // doc comment), and step 2 dereferences the receiver as an `ObjectHeader`.
+    // Root the receiver, key and closure across step 1 and re-derive every raw
+    // pointer from the handles afterwards, so a minor GC inside the barriered
+    // capture store cannot leave `obj_ptr` naming a from-space copy — the #7114
+    // failure shape (an operand register outliving a collection point).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(obj_f64);
+    let key_h = scope.root_nanbox_f64(key_f64);
+    let closure_h = scope.root_nanbox_f64(closure_f64);
+
     // 1) Patch the closure's reserved (last) `this` capture slot with obj.
     //    No-op for anything that is not a real heap closure (#6320).
-    bind_reserved_this_slot(closure_f64, obj_f64);
+    bind_reserved_this_slot(closure_h.get_nanbox_f64(), obj_h.get_nanbox_f64());
 
     // 2) Set the field by name. `js_object_set_field_by_name` strips the
     //    NaN-box tag off `obj` itself, so passing the raw bits is fine; the
-    //    key must be a real `StringHeader*` (tag stripped).
-    let key_bits = key_f64.to_bits();
-    let key_ptr = (key_bits & POINTER_MASK) as *const StringHeader;
-    let obj_ptr = obj_f64.to_bits() as *mut crate::object::ObjectHeader;
+    //    key must be a real `StringHeader*` (tag stripped). Both pointers are
+    //    re-derived from the handles here, AFTER step 1.
+    let key_ptr = (key_h.get_nanbox_f64().to_bits() & POINTER_MASK) as *const StringHeader;
+    let obj_ptr = obj_h.get_nanbox_f64().to_bits() as *mut crate::object::ObjectHeader;
     if crate::value::addr_class::is_above_handle_band(key_ptr as usize) {
-        crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, closure_f64);
+        crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, closure_h.get_nanbox_f64());
     }
-    obj_f64
+    obj_h.get_nanbox_f64()
 }

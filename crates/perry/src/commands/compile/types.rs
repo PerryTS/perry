@@ -882,6 +882,15 @@ pub struct CompilationContext {
     /// name (for `node_modules/<pkg>/...` files) is derived at
     /// diagnostic-emission time. Empty until `collect_modules` runs.
     pub js_runtime_importers: Vec<PathBuf>,
+    /// Bare npm package names that were routed to a bundled well-known
+    /// binding whose `compat` is `Partial` (see `well_known.rs`), even
+    /// though a `node_modules/<name>` copy is present on disk. Perry
+    /// auto-prefers the binding (this is the "just works" path), but the
+    /// wrapper is not an audited full drop-in — so the choice is surfaced
+    /// with a one-line note after collection (and, under
+    /// `PERRY_REQUIRE_FAITHFUL_BINDINGS=1`, refused). Insertion-ordered
+    /// dedup so the summary is stable. Empty until `collect_modules` runs.
+    pub partial_binding_autoprefers: std::collections::BTreeSet<String>,
     /// #501: host-controlled per-package capability policy. Map of
     /// `<package_name>` (or `"*"` for the default) → allowed
     /// capability token list (e.g. `["fs:read", "net:fetch"]`).
@@ -1133,6 +1142,7 @@ impl CompilationContext {
             strict_unimplemented: false,
             allow_dynamic_stdlib_packages: HashSet::new(),
             js_runtime_importers: Vec::new(),
+            partial_binding_autoprefers: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
             host_package_name: None,
             allow_unsandboxed_build: Vec::new(),

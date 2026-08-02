@@ -65,11 +65,16 @@ pub struct WasmInstanceHandle {
 }
 
 struct InstanceInner {
-    store: Store<()>,
+    store: Store<WasmHostState>,
     instance: wasmi::Instance,
     /// Keep the module alive for the lifetime of the instance so `engine` /
     /// `module` references stay valid.
     _module: WasmModuleHandle,
+}
+
+#[derive(Default)]
+struct WasmHostState {
+    exit_code: Option<i32>,
 }
 
 #[derive(Debug)]
@@ -111,12 +116,47 @@ pub fn compile(bytes: &[u8]) -> Result<WasmModuleHandle, WasmHostError> {
     Ok(WasmModuleHandle(Arc::new(ModuleInner { engine, module })))
 }
 
-/// Instantiate without imports. The MVP host-imports bridge is wired
-/// separately via [`instantiate_with_imports`] once we have a JS closure to
-/// trampoline.
+/// Instantiate with the module's imported functions linked to no-op host
+/// functions. `proc_exit` records its status so the JS WASI wrapper can
+/// return it after `_start` completes.
 pub fn instantiate(module: &WasmModuleHandle) -> Result<WasmInstanceHandle, WasmHostError> {
-    let mut store = Store::new(&module.0.engine, ());
-    let linker = <Linker<()>>::new(&module.0.engine);
+    let mut store = Store::new(&module.0.engine, WasmHostState::default());
+    let mut linker = <Linker<WasmHostState>>::new(&module.0.engine);
+    for import in module.0.module.imports() {
+        let ExternType::Func(ty) = import.ty() else {
+            return Err(WasmHostError::Link(format!(
+                "unsupported import {}.{}",
+                import.module(),
+                import.name()
+            )));
+        };
+        let module_name = import.module().to_owned();
+        let import_name = import.name().to_owned();
+        let callback_module = module_name.clone();
+        let callback_name = import_name.clone();
+        linker
+            .func_new(
+                &module_name,
+                &import_name,
+                ty.clone(),
+                move |mut caller, params, results| {
+                    if matches!(
+                        callback_module.as_str(),
+                        "wasi_snapshot_preview1" | "wasi_unstable"
+                    ) && callback_name == "proc_exit"
+                    {
+                        if let Some(Val::I32(code)) = params.first() {
+                            caller.data_mut().exit_code = Some(*code);
+                        }
+                    }
+                    for result in results {
+                        *result = Val::default(result.ty());
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|e| WasmHostError::Link(e.to_string()))?;
+    }
     let instance = linker
         .instantiate_and_start(&mut store, &module.0.module)
         .map_err(|e| WasmHostError::Link(e.to_string()))?;
@@ -425,6 +465,60 @@ pub extern "C" fn perry_wasm_host_instance_drop(inst: *mut WasmInstanceHandle) {
     }
 }
 
+/// Return the byte length of the exported `memory`, or zero when absent.
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_instance_memory_len(inst: *mut WasmInstanceHandle) -> usize {
+    let Some(inst) = (unsafe { inst.as_ref() }) else {
+        return 0;
+    };
+    inst.inner
+        .instance
+        .get_memory(&inst.inner.store, "memory")
+        .map(|memory| memory.data_size(&inst.inner.store))
+        .unwrap_or(0)
+}
+
+/// Copy the exported `memory` into caller-provided storage.
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_instance_memory_copy(
+    inst: *mut WasmInstanceHandle,
+    out: *mut u8,
+    len: usize,
+) -> usize {
+    if out.is_null() {
+        return 0;
+    }
+    let Some(inst) = (unsafe { inst.as_ref() }) else {
+        return 0;
+    };
+    let Some(memory) = inst.inner.instance.get_memory(&inst.inner.store, "memory") else {
+        return 0;
+    };
+    let data = memory.data(&inst.inner.store);
+    let copied = data.len().min(len);
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out, copied) };
+    copied
+}
+
+/// Consume the status captured by WASI `proc_exit`, if that import ran.
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_instance_take_exit_code(
+    inst: *mut WasmInstanceHandle,
+    out_code: *mut i32,
+) -> i32 {
+    if out_code.is_null() {
+        return 0;
+    }
+    let Some(inst) = (unsafe { inst.as_mut() }) else {
+        return 0;
+    };
+    let Some(code) = inst.inner.store.data_mut().exit_code.take() else {
+        return 0;
+    };
+    unsafe { *out_code = code };
+    1
+}
+
 /// Numeric value type tags for the C ABI — must match
 /// `perry_wasm_host_call_export`'s `arg_kinds` / `ret_kind` encoding.
 pub const WASM_VAL_KIND_I32: u8 = 0;
@@ -529,6 +623,14 @@ mod tests {
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01,
         0x7f, 0x02, 0x09, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00,
     ];
+    /// `(module (import "env" "f" (func $f (result f64)))
+    ///          (func (export "call") (result f64) call $f))`.
+    const IMPORT_F64_RESULT_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7c,
+        0x02, 0x09, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00,
+        0x07, 0x08, 0x01, 0x04, 0x63, 0x61, 0x6c, 0x6c, 0x00, 0x01, 0x0a, 0x06, 0x01, 0x04, 0x00,
+        0x10, 0x00, 0x0b,
+    ];
     /// `(module (@custom "meta" "\01\02\03"))`.
     const CUSTOM_WASM: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x04, 0x6d, 0x65, 0x74, 0x61,
@@ -548,6 +650,24 @@ mod tests {
         let result =
             call_export(&mut inst, "add", &[WasmVal::I32(2), WasmVal::I32(3)]).expect("call");
         assert_eq!(result, Some(WasmVal::I32(5)));
+    }
+
+    #[test]
+    fn wasi_proc_exit_import_records_status() {
+        let bytes =
+            include_bytes!("../../../test-parity/node-suite/wasi/fixtures/exit-7-command.wasm");
+        let module = compile(bytes).expect("compile");
+        let mut inst = instantiate(&module).expect("instantiate with proc_exit");
+        call_export(&mut inst, "_start", &[]).expect("call _start");
+        assert_eq!(inst.inner.store.data_mut().exit_code.take(), Some(7));
+    }
+
+    #[test]
+    fn placeholder_import_results_preserve_the_declared_wasm_type() {
+        let module = compile(IMPORT_F64_RESULT_WASM).expect("compile");
+        let mut inst = instantiate(&module).expect("instantiate with f64 import");
+        let result = call_export(&mut inst, "call", &[]).expect("call import");
+        assert_eq!(result, Some(WasmVal::F64(0.0)));
     }
 
     #[test]

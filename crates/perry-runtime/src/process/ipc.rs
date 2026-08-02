@@ -2,7 +2,8 @@
 //!
 //! Node initializes this from `NODE_CHANNEL_FD` during bootstrap. Perry adopts
 //! the same inherited Unix fd convention used by its `child_process.fork()`
-//! parent side and speaks newline-delimited JSON frames for this cut.
+//! parent side and speaks either newline-delimited JSON or Node's advanced
+//! `[u32 BE length][V8 payload]` frames.
 
 #![cfg_attr(not(feature = "proc-ipc"), allow(dead_code))]
 
@@ -16,7 +17,7 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[cfg(unix)]
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 #[cfg(unix)]
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
@@ -24,6 +25,7 @@ use std::os::unix::net::UnixStream;
 
 enum IpcEvent {
     Message(String),
+    MessageAdvanced(Vec<u8>),
     Closed,
 }
 
@@ -33,6 +35,7 @@ struct ChildIpcState {
     connected: bool,
     refed: bool,
     disconnect_emitted: bool,
+    advanced: bool,
     #[cfg(unix)]
     send: Option<UnixStream>,
     queue: VecDeque<IpcEvent>,
@@ -46,6 +49,7 @@ impl ChildIpcState {
             connected: false,
             refed: false,
             disconnect_emitted: false,
+            advanced: false,
             #[cfg(unix)]
             send: None,
             queue: VecDeque::new(),
@@ -138,9 +142,6 @@ pub(crate) fn process_ipc_ensure_initialized() {
 
 #[cfg(unix)]
 fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
-    if serialization_mode == "advanced" {
-        return;
-    }
     let Some(fd) = fd_var
         .and_then(|s| s.parse::<i32>().ok())
         .filter(|fd| *fd >= 0)
@@ -153,29 +154,37 @@ fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
         Ok(send) => send,
         Err(_) => return,
     };
-    spawn_ipc_reader(stream);
+    let advanced = serialization_mode == "advanced";
+    spawn_ipc_reader(stream, advanced);
 
     let mut state = ipc_lock();
     state.available = true;
     state.connected = true;
     state.refed = false;
     state.disconnect_emitted = false;
+    state.advanced = advanced;
     state.send = Some(send);
 }
 
 #[cfg(unix)]
-fn spawn_ipc_reader(sock: UnixStream) {
+fn spawn_ipc_reader(sock: UnixStream, advanced: bool) {
     // Cluster workers (#4962) need a recvmsg-based reader to receive SCM_RIGHTS
-    // connection fds for SCHED_RR; it still surfaces ordinary JSON frames
-    // identically. Plain forks keep the lighter BufReader path.
+    // connection fds for SCHED_RR in both serialization modes. Plain forks
+    // keep the lighter framing-specific readers.
     if crate::cluster::is_cluster_worker() {
         std::thread::spawn(move || {
             crate::cluster_sched::worker_recv_loop(
                 sock,
+                advanced,
                 |line| push_ipc_event(IpcEvent::Message(line)),
+                |bytes| push_ipc_event(IpcEvent::MessageAdvanced(bytes)),
                 || push_ipc_event(IpcEvent::Closed),
             );
         });
+        return;
+    }
+    if advanced {
+        spawn_ipc_reader_advanced(sock);
         return;
     }
     std::thread::spawn(move || {
@@ -185,6 +194,42 @@ fn spawn_ipc_reader(sock: UnixStream) {
                 Ok(line) if !line.is_empty() => push_ipc_event(IpcEvent::Message(line)),
                 Ok(_) => {}
                 Err(_) => break,
+            }
+        }
+        push_ipc_event(IpcEvent::Closed);
+    });
+}
+
+#[cfg(unix)]
+fn spawn_ipc_reader_advanced(mut sock: UnixStream) {
+    std::thread::spawn(move || {
+        let mut acc = Vec::with_capacity(8192);
+        let mut chunk = [0u8; 8192];
+        loop {
+            let n = match sock.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            acc.extend_from_slice(&chunk[..n]);
+
+            let mut consumed = 0;
+            while acc.len() - consumed >= 4 {
+                let len = u32::from_be_bytes([
+                    acc[consumed],
+                    acc[consumed + 1],
+                    acc[consumed + 2],
+                    acc[consumed + 3],
+                ]) as usize;
+                if acc.len() - consumed - 4 < len {
+                    break;
+                }
+                let start = consumed + 4;
+                push_ipc_event(IpcEvent::MessageAdvanced(acc[start..start + len].to_vec()));
+                consumed = start + len;
+            }
+            if consumed != 0 {
+                acc.drain(..consumed);
             }
         }
         push_ipc_event(IpcEvent::Closed);
@@ -302,9 +347,10 @@ extern "C" fn process_ipc_send_fn(
 }
 
 pub(crate) fn process_ipc_send_call(message: f64, a2: f64, a3: f64, a4: f64) -> f64 {
-    let callback = [a4, a3, a2]
-        .into_iter()
-        .find(|v| !crate::fs::extract_closure_ptr(*v).is_null());
+    let callback = [a4, a3, a2].into_iter().find(|v| {
+        JSValue::from_bits(v.to_bits()).is_pointer()
+            && !crate::fs::extract_closure_ptr(*v).is_null()
+    });
     let ok = process_ipc_send_message(message);
     if let Some(cb) = callback {
         defer_send_callback(cb, ok);
@@ -331,8 +377,14 @@ fn process_ipc_send_message(message: f64) -> bool {
 
     #[cfg(unix)]
     {
-        let Some(frame) = json_frame(message) else {
-            return false;
+        let advanced = ipc_lock().advanced;
+        let frame = if advanced {
+            advanced_frame(message)
+        } else {
+            let Some(frame) = json_frame(message) else {
+                return false;
+            };
+            frame
         };
         let mut emit_disconnect = false;
         let ok = {
@@ -378,9 +430,17 @@ pub(crate) fn process_ipc_send_raw_json(json: &str) -> bool {
     }
     #[cfg(unix)]
     {
-        let mut frame = Vec::with_capacity(json.len() + 1);
-        frame.extend_from_slice(json.as_bytes());
-        frame.push(b'\n');
+        let advanced = ipc_lock().advanced;
+        let frame = if advanced {
+            let sh = js_string_from_bytes(json.as_ptr(), json.len() as u32);
+            let message = f64::from_bits(unsafe { crate::json::js_json_parse(sh) }.bits());
+            advanced_frame(message)
+        } else {
+            let mut frame = Vec::with_capacity(json.len() + 1);
+            frame.extend_from_slice(json.as_bytes());
+            frame.push(b'\n');
+            frame
+        };
         let mut state = ipc_lock();
         if !state.available || !state.connected {
             return false;
@@ -390,6 +450,15 @@ pub(crate) fn process_ipc_send_raw_json(json: &str) -> bool {
             .as_mut()
             .is_some_and(|sock| sock.write_all(&frame).is_ok())
     }
+}
+
+#[cfg(unix)]
+fn advanced_frame(message: f64) -> Vec<u8> {
+    let payload = crate::child_process::v8_serialize(message);
+    let mut frame = Vec::with_capacity(payload.len() + 4);
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&payload);
+    frame
 }
 
 #[cfg(unix)]
@@ -518,10 +587,17 @@ pub extern "C" fn js_process_ipc_drain() -> i32 {
                 crate::os::emit_process_event("message", &[msg]);
                 count = count.saturating_add(1);
             }
+            IpcEvent::MessageAdvanced(bytes) => {
+                let msg = crate::child_process::v8_deserialize(&bytes);
+                crate::os::emit_process_event("message", &[msg]);
+                count = count.saturating_add(1);
+            }
             IpcEvent::Closed => {
-                if mark_closed_from_event() {
+                let unexpected = mark_closed_from_event();
+                if unexpected {
                     crate::os::emit_process_event("disconnect", &[]);
                 }
+                crate::cluster::exit_worker_on_unexpected_primary_disconnect(unexpected);
                 count = count.saturating_add(1);
             }
         }
