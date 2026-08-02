@@ -53,3 +53,26 @@
   The checker's `_is_heap_source` conflates "a location the collector rewrites"
   with "an object the collector can move"; the sites it names are the former and
   not the latter.
+
+- **GC: `setInterval`'s trailing arguments are now scanned (#7210, runtime half).**
+  `scan_timer_roots_mut` walked `timer.args` for `CALLBACK_TIMERS` and for both
+  `MOCK_TIMERS` lists, and never for `INTERVAL_TIMERS`; the incremental twin
+  `scan_interval_timers_step` had the same hole, and cycle-based collections run
+  **only** the step scanner. So `setInterval(fn, delay, { … })` left the object
+  in a table nothing scanned — swept at the first collection, then handed to the
+  callback as a dangling pointer on the next tick.
+
+  This is a different failure class from a stale register: it does not need a
+  collection to land in a narrow window, it goes wrong at collection #0 and
+  stays wrong, and no static IR checker can see it (the table is not in the
+  emitted IR). A partially-correct scanner is worse than an absent one, because
+  it reads as covered.
+
+  It is also the other half of the codegen fix above — rooting an argument
+  across its own lowering buys nothing if the table it then lands in is not a
+  root. Witness `test-files/test_gap_gc_interval_args_rooting.ts`, registered in
+  the corpus: `BAD interval.a`/`BAD interval.b` from tick 1, 3/3 at base under
+  `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_HEAP_LIMIT=8`; `bad 0` 5/5 after; clean
+  3/3 on the shipped default; byte-exact against node 26.5.1.
+
+  The wider population this came from is enumerated in #7231.
