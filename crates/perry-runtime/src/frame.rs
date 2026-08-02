@@ -24,9 +24,22 @@ struct FrameCallback {
     cleared: bool,
 }
 
-// SAFETY: closure pointers point to global compiled code / GC-rooted data.
+// SAFETY: `callback` is a heap `ClosureHeader*`, kept live and address-current
+// by `scan_frame_callback_roots_mut` (registered in `gc_init`). It is NOT
+// "global compiled code", which is what this comment used to claim — that was
+// the premise under which the queue went unrooted for its whole existence
+// (#7231).
 unsafe impl Send for FrameCallback {}
 
+/// Pending `onFrame(cb)` registrations.
+///
+/// **This is a GC root, and must stay one (#7231).** `js_on_frame_callback`
+/// roots the closure with a `RuntimeHandleScope` only for the duration of the
+/// registration call; once that scope drops, this queue is the sole reference
+/// to it until the next `js_frame_tick`. Before
+/// `scan_frame_callback_roots_mut` a collection between registration and the
+/// next vsync reclaimed or relocated the closure and `js_closure_call2` then
+/// called through a dangling `ClosureHeader*`.
 static FRAME_CALLBACKS: Mutex<Vec<FrameCallback>> = Mutex::new(Vec::new());
 static NEXT_FRAME_ID: Mutex<i64> = Mutex::new(1);
 static LAST_FIRE_BY_CLOSURE: Mutex<Option<HashMap<i64, f64>>> = Mutex::new(None);
@@ -60,15 +73,32 @@ pub extern "C" fn js_on_frame_callback(callback: i64) -> i64 {
     let cb_handle = scope.root_raw_const_ptr(callback as *const ClosureHeader);
 
     let id = next_frame_id();
+    // `capture_context` can allocate, so it runs BEFORE the queue lock is
+    // taken. Evaluating it inside the `push(...)` argument list held the
+    // mutex across an allocation, which — now that a root scanner locks the
+    // same mutex — would be a self-deadlock the moment that allocation
+    // triggered a collection.
+    let context = crate::async_context::capture_context();
 
     FRAME_CALLBACKS.lock().unwrap().push(FrameCallback {
         id,
+        // Re-read below the allocation: `capture_context` may have moved it.
         callback: cb_handle.get_raw_const_ptr::<ClosureHeader>() as i64,
-        context: crate::async_context::capture_context(),
+        context,
         cleared: false,
     });
 
     id
+}
+
+/// Root + rewrite every pending frame callback closure.
+pub(crate) fn scan_frame_callback_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut queue = FRAME_CALLBACKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for cb in queue.iter_mut() {
+        visitor.visit_i64_slot(&mut cb.callback);
+    }
 }
 
 /// Cancel a previously-registered frame callback. No-op if `id` is unknown
@@ -109,10 +139,22 @@ pub extern "C" fn js_frame_tick(timestamp_ms: f64) -> i32 {
         queue.drain(..).filter(|t| !t.cleared).collect()
     };
 
+    // The drain removes every callback from the (now scanned) queue, so for
+    // the length of this loop `pending` is the ONLY reference to all of them
+    // — and callback #1 runs arbitrary user code that allocates. Rooting each
+    // one individually inside the loop covers the callback being invoked and
+    // leaves #2..#N naked, which is the same shape as #7230's staging buffer.
+    // One batch scope, entered before the first call, covers the whole set.
+    let batch = crate::gc::RuntimeHandleScope::new();
+    let batch_handles: Vec<_> = pending
+        .iter()
+        .map(|cb| batch.root_raw_const_ptr(cb.callback as *const ClosureHeader))
+        .collect();
+
     let mut fired = 0;
-    for cb in pending {
+    for (cb, batch_handle) in pending.iter().zip(batch_handles.iter()) {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let cb_handle = scope.root_raw_const_ptr(cb.callback as *const ClosureHeader);
+        let cb_handle = scope.root_raw_const_ptr(batch_handle.get_raw_const_ptr::<ClosureHeader>());
 
         let delta_ms = {
             let mut slot = LAST_FIRE_BY_CLOSURE.lock().unwrap();

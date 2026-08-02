@@ -143,7 +143,8 @@ pub(crate) use math_temporal::install_temporal_namespace;
 pub(crate) use math_temporal::temporal_kind_prototype;
 pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
 pub(crate) use populate::{
-    default_prepare_stack_trace_func_ptr, populate_global_this_builtins, ERROR_CONSTRUCTOR_PTR,
+    default_prepare_stack_trace_func_ptr, populate_global_this_builtins,
+    scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
     install_error_prototype_data_properties, populate_builtin_prototype_methods,

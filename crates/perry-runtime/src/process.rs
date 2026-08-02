@@ -17,6 +17,7 @@ mod env_misc;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
+    scan_process_env_cache_roots_mut,
 };
 mod finalization;
 pub(crate) mod ipc;
@@ -56,7 +57,10 @@ pub use finalization::{
 };
 
 // ── permission re-exports ───────────────────────────────────────────────────
-pub(crate) use permission::process_permission_enabled;
+pub(crate) use permission::{process_permission_enabled, scan_permission_cache_roots_mut};
+
+// ── report re-exports ───────────────────────────────────────────────────────
+pub(crate) use report::scan_report_cache_roots_mut;
 
 // ── node_module re-exports ──────────────────────────────────────────────────
 pub use node_module::{

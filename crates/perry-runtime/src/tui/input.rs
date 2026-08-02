@@ -35,6 +35,14 @@ static READER_STARTED: AtomicBool = AtomicBool::new(false);
 static READING: AtomicBool = AtomicBool::new(false);
 /// Registered useInput handler — at most one for v1. Multiple-handler
 /// dispatch lands in Phase 2.5. Stored as the raw closure pointer.
+///
+/// **This is a GC root, and must stay one (#7231).** `useInput(cb)` is
+/// written inline in idiomatic ink style, so the arrow closure is a
+/// nursery allocation that NOTHING else refers to once
+/// `js_perry_tui_use_input` returns. Before
+/// `scan_tui_input_handler_root_mut` the next collection reclaimed it and
+/// `drain_input` called through a dangling `ClosureHeader*` on the first
+/// keystroke.
 static INPUT_HANDLER: AtomicI64 = AtomicI64::new(0);
 /// Set when the user calls exit() — render loop checks this each frame.
 pub static EXIT_FLAG: AtomicBool = AtomicBool::new(false);
@@ -162,6 +170,18 @@ pub fn enable_raw_mode() {
 pub fn disable_raw_mode() {
     let _ = termios_impl::disable();
     READING.store(false, Ordering::Release);
+}
+
+/// Root + rewrite the registered `useInput` handler closure.
+///
+/// Process-global rather than thread-local, matching the slot it scans. A
+/// `perry/thread` agent registering its own handler would already be
+/// clobbering the main thread's, which is a pre-existing single-handler
+/// limitation and not something this scanner changes: it visits whatever
+/// address is currently published, and a foreign-arena address is rejected by
+/// the visitor's own heap-attribution check rather than rewritten.
+pub(crate) fn scan_tui_input_handler_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    visitor.visit_atomic_i64_slot(&INPUT_HANDLER, Ordering::Acquire, Ordering::Release);
 }
 
 /// Register the user's `useInput` handler. Replaces any prior handler

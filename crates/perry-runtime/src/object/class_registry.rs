@@ -39,6 +39,7 @@ use super::*;
 
 mod class_meta;
 mod construct;
+pub(crate) use construct::scan_current_new_target_root_mut;
 mod dispatch;
 mod gc_roots;
 pub(crate) mod parent_static;

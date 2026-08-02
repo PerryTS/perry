@@ -36,6 +36,7 @@ mod class_constructors;
 mod class_gc_roots;
 mod class_handles;
 mod class_registry;
+pub(crate) use class_registry::scan_current_new_target_root_mut;
 mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
@@ -45,12 +46,16 @@ mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
 mod field_get_set;
+pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod global_fetch;
+pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 mod global_this;
 pub mod handle_expando;
 pub(crate) mod prop_plan;
-pub(crate) use global_this::{default_prepare_stack_trace_func_ptr, ERROR_CONSTRUCTOR_PTR};
+pub(crate) use global_this::{
+    default_prepare_stack_trace_func_ptr, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+};
 mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;

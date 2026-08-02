@@ -105,12 +105,27 @@ fn process_report_default_filename() -> String {
     format!("report.{}.json", std::process::id())
 }
 
-pub(crate) fn process_report_value() -> f64 {
-    use std::cell::Cell;
-    thread_local! {
-        static CACHED_REPORT: Cell<f64> = const { Cell::new(0.0) };
-    }
+thread_local! {
+    /// The materialized `process.report` controller object.
+    ///
+    /// **This is a GC root, and must stay one (#7231).** Same shape as
+    /// `CACHED_PERMISSION` and `CACHED_ENV`: nursery-allocated, cached
+    /// forever, referenced by nothing else. Hoisted out of the function body
+    /// so the scanner can reach it.
+    static CACHED_REPORT: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
 
+/// Root + rewrite the cached `process.report` controller object.
+pub(crate) fn scan_report_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CACHED_REPORT.with(|cell| {
+        let mut value = cell.get();
+        if value != 0.0 && visitor.visit_nanbox_f64_slot(&mut value) {
+            cell.set(value);
+        }
+    });
+}
+
+pub(crate) fn process_report_value() -> f64 {
     let cached = CACHED_REPORT.with(|c| c.get());
     if cached != 0.0 {
         return cached;

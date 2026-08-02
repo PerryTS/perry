@@ -2,8 +2,34 @@ use super::*;
 use crate::JSValue;
 
 thread_local! {
+    /// `new.target` for the construction currently on this thread's stack.
+    ///
+    /// **This is a GC root, and must stay one (#7231).** It holds a NaN-boxed
+    /// closure/class value for the whole constructor body, and a constructor
+    /// body runs arbitrary user code. `this_binding.rs`'s `NEW_TARGET` holds
+    /// the same value under `scan_implicit_this_roots_mut`; this is a second
+    /// copy on a different path, and a second copy of a root that is not
+    /// itself a root is exactly the shape #7226 found in `prev_this`.
+    ///
+    /// RESIDUAL, deliberately not closed here: the save/restore idiom parks
+    /// the DISPLACED value in a bare Rust local (`prev_current_new_target`)
+    /// across the construction and republishes it afterwards. Runtime frames
+    /// are not covered by the precise scan, so that local is #7226's
+    /// `prev_this` defect in Rust rather than in codegen. Closing it means
+    /// routing the three save sites through a `RuntimeHandleScope`, which
+    /// wants its own before/after rather than being appended here.
     static CURRENT_NEW_TARGET: std::cell::Cell<u64> =
         const { std::cell::Cell::new(crate::value::TAG_UNDEFINED) };
+}
+
+/// Root + rewrite the in-flight `new.target`.
+pub(crate) fn scan_current_new_target_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CURRENT_NEW_TARGET.with(|cell| {
+        let mut bits = cell.get();
+        if visitor.visit_nanbox_u64_slot(&mut bits) {
+            cell.set(bits);
+        }
+    });
 }
 
 #[no_mangle]

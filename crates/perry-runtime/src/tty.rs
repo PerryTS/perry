@@ -55,7 +55,23 @@ static RAW_MODE_SAVED: Mutex<Option<libc::termios>> = Mutex::new(None);
 thread_local! {
     /// Callback for `process.stdout.on('resize', cb)`. Stored on main
     /// thread; only touched by the drain (which runs on main).
+    ///
+    /// **This is a GC root, and must stay one (#7231).** `register_resize_callback`
+    /// is a NATIVE slot that bypasses the (rooted) EventEmitter listener
+    /// array, so this is the only reference to the closure. Before
+    /// `scan_tty_resize_callback_root_mut`, a collection between registration
+    /// and the first SIGWINCH left `js_closure_call0` calling a reclaimed or
+    /// relocated `ClosureHeader*`.
     static RESIZE_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
+}
+
+/// Root + rewrite the `process.stdout.on('resize')` callback closure.
+pub(crate) fn scan_tty_resize_callback_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    RESIZE_CALLBACK.with(|cell| {
+        if let Some(cb) = cell.borrow_mut().as_mut() {
+            visitor.visit_i64_slot(cb);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

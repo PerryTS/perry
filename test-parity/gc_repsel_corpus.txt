@@ -368,3 +368,25 @@ test_gap_gc_staging_args_rooting
 # only the step scanner. A partially-correct scanner is worse than an absent one
 # — it reads as covered. Measured at base: `BAD interval.a` from tick 2 onward.
 test_gap_gc_interval_args_rooting
+
+# --- #7231: unrooted runtime-side caches (nothing static can find these) ----
+# `js_process_env_impl` builds `process.env` once with `js_object_alloc` (the
+# NURSERY) and stores it in a thread-local `Cell<f64>` that no scanner visited.
+# That cell is the whole reference graph — `process.env` is a getter CALL, not
+# a field of `process` — so the first minor swept or evacuated the object and
+# every later `process.env.X = v` wrote through a dangling pointer.
+#
+# The observable is ENUMERATION (`Object.keys(process.env)`, spread, `for…in`),
+# because a direct `process.env.KEY` read lowers to `js_getenv` and asks the OS.
+#
+# Measured at base (`c9cd73ba5`), compiled and run under
+# `PERRY_GC_MOVING_LOOP_POLLS=1` with `PERRY_GC_INCREMENTAL=0
+# PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_HEAP_LIMIT=8`: **SIGBUS 10/10**,
+# `[gc-fromspace-protect] obj_type=2 size=416 … RETIRED FROM-SPACE`. Clean 5/5
+# on the shipped default both before and after, so this is a `requires=move`
+# witness. 10/10 green after, byte-exact vs node 26.5.1.
+#
+# The determinism is the diagnostic signature (#7226): an unrooted CACHE goes
+# bad at collection #0 and stays bad, where an unrooted REGISTER needs a
+# collection to land in a narrow window.
+test_gap_gc_process_env_cache_rooting

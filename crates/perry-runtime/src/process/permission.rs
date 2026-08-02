@@ -186,13 +186,33 @@ extern "C" fn process_permission_drop_thunk(
     undefined_value()
 }
 
+thread_local! {
+    /// The materialized `process.permission` object.
+    ///
+    /// **This is a GC root, and must stay one (#7231).** Nursery-allocated by
+    /// `process_permission_value` and referenced by nothing else — `process`
+    /// has no `permission` field, the getter returns this cache. The write
+    /// barrier below is an incremental MARK barrier, not a root registration:
+    /// it keeps a value published during an in-progress mark from being
+    /// missed, and does nothing at all for the sweep or the evacuation
+    /// rewrite. Hoisted out of the function body so
+    /// `scan_process_lazy_singleton_roots_mut` can reach it.
+    static CACHED_PERMISSION: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Root + rewrite the cached `process.permission` object.
+pub(crate) fn scan_permission_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CACHED_PERMISSION.with(|cell| {
+        let mut value = cell.get();
+        if value != 0.0 && visitor.visit_nanbox_f64_slot(&mut value) {
+            cell.set(value);
+        }
+    });
+}
+
 pub(crate) fn process_permission_value() -> Option<f64> {
     if !process_permission_enabled() {
         return None;
-    }
-    use std::cell::Cell;
-    thread_local! {
-        static CACHED_PERMISSION: Cell<f64> = const { Cell::new(0.0) };
     }
 
     let cached = CACHED_PERMISSION.with(|c| c.get());

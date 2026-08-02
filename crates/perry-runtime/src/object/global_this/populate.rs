@@ -819,8 +819,27 @@ thread_local! {
     /// `perry/thread` agent has its own arena + realm, and an `Error`
     /// constructor / `prepareStackTrace` from another thread's arena can be a
     /// foreign or freed pointer — the same reason `globalThis` is per-thread.
+    ///
+    /// **This is a GC root, and must stay one (#7231).** The address is a RAW
+    /// `*mut ClosureHeader` from `js_closure_alloc` — a nursery allocation.
+    /// The canonical `Error` closure is also a field of `globalThis`, so the
+    /// structural trace keeps it alive and rewrites THAT reference; this
+    /// duplicate lives outside the object graph, so an evacuating collection
+    /// leaves it naming from-space and `error_prepare_stack_trace_override`
+    /// then reads `prepareStackTrace` off an abandoned closure. Rooted by
+    /// `scan_error_constructor_root_mut`.
     pub(crate) static ERROR_CONSTRUCTOR_PTR: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+}
+
+/// Root + rewrite the raw `Error` constructor address.
+pub(crate) fn scan_error_constructor_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    ERROR_CONSTRUCTOR_PTR.with(|cell| {
+        let mut addr = cell.get();
+        if addr != 0 && visitor.visit_usize_slot(&mut addr) {
+            cell.set(addr);
+        }
+    });
 }
 
 /// The default `Error.prepareStackTrace` thunk's address — used to tell a

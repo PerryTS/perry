@@ -206,8 +206,33 @@ thread_local! {
     /// `[[Get]](P, Receiver)`. (object-literal getters on a `Object.create`
     /// prototype — e.g. @hono/node-server's request prototype reading
     /// `this[incomingKey].method`.)
+    ///
+    /// **This is a GC root, and must stay one (#7231).** The stashed receiver
+    /// is a NaN-boxed heap value that stays armed for the whole prototype
+    /// walk, and a walk can reach a Proxy `get` trap — arbitrary user code
+    /// that allocates. Nothing else refers to it while it sits here, so
+    /// without `scan_accessor_receiver_override_root_mut` the getter is
+    /// invoked with a `this` naming from-space.
+    ///
+    /// RESIDUAL, same shape as `CURRENT_NEW_TARGET`: the displaced value that
+    /// `accessor_receiver_override_begin` returns rides a bare Rust local
+    /// through the walk and is republished by `_end`. Rooting the cell
+    /// protects the ARMED value, not the saved one.
     static ACCESSOR_RECEIVER_OVERRIDE: std::cell::Cell<Option<f64>>
         = const { std::cell::Cell::new(None) };
+}
+
+/// Root + rewrite the in-flight inherited-accessor receiver.
+pub(crate) fn scan_accessor_receiver_override_root_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    ACCESSOR_RECEIVER_OVERRIDE.with(|cell| {
+        if let Some(mut value) = cell.get() {
+            if visitor.visit_nanbox_f64_slot(&mut value) {
+                cell.set(Some(value));
+            }
+        }
+    });
 }
 
 pub(crate) fn accessor_receiver_override_begin(receiver: f64) -> Option<f64> {

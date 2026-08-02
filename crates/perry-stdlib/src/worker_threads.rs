@@ -1870,14 +1870,46 @@ fn ensure_parent_port_event_gc_scanner() {
     });
 }
 
+/// Visit one raw closure pointer stored as `i64`.
+///
+/// Factored out because this scanner covers three sibling slots and three
+/// copies of the box/visit/unbox dance is how the fourth one gets forgotten —
+/// which is precisely what happened to `MESSAGE_CALLBACK` and `CLOSE_CALLBACK`
+/// (#7231).
+fn visit_raw_closure_i64(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>, cb: &mut i64) {
+    // Box it into a NaN-boxed pointer slot so the GC can visit + relocate it,
+    // then unbox.
+    let mut boxed = perry_runtime::value::js_nanbox_pointer(*cb).to_bits();
+    visitor.visit_nanbox_u64_slot(&mut boxed);
+    *cb = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(boxed));
+}
+
+/// Root + rewrite every `parentPort` listener closure.
+///
+/// **#7231: this scanner used to walk one of three sibling slots.**
+/// `MESSAGE_EVENT_CALLBACKS`, `MESSAGE_CALLBACK` and `CLOSE_CALLBACK` are
+/// declared in the same `thread_local!` block and all hold the same thing — a
+/// raw `ClosureHeader*` as `i64`, the only reference to a closure the user
+/// passed to `parentPort.on(...)` / `.addEventListener(...)`. Only the first
+/// was visited, so the Node-style `on('message')` and `on('close')` handlers
+/// were reclaimed or relocated by the next collection inside a worker.
+///
+/// A partially-correct scanner is worse than an absent one: it reads as
+/// covered.
 fn scan_parent_port_event_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
     MESSAGE_EVENT_CALLBACKS.with(|cbs| {
         for cb in cbs.borrow_mut().iter_mut() {
-            // Stored as a raw closure pointer (i64). Box it into a NaN-boxed
-            // pointer slot so the GC can visit + relocate it, then unbox.
-            let mut boxed = perry_runtime::value::js_nanbox_pointer(*cb).to_bits();
-            visitor.visit_nanbox_u64_slot(&mut boxed);
-            *cb = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(boxed));
+            visit_raw_closure_i64(visitor, cb);
+        }
+    });
+    MESSAGE_CALLBACK.with(|cb| {
+        if let Some(ptr) = cb.borrow_mut().as_mut() {
+            visit_raw_closure_i64(visitor, ptr);
+        }
+    });
+    CLOSE_CALLBACK.with(|cb| {
+        if let Some(ptr) = cb.borrow_mut().as_mut() {
+            visit_raw_closure_i64(visitor, ptr);
         }
     });
 }

@@ -12,8 +12,24 @@ thread_local! {
     /// The `signal` from the in-progress `fetch(url, { signal })` call, stashed
     /// so the stdlib `js_fetch_with_options` (whose 4-arg ABI predates
     /// AbortSignal support) can pick it up at entry without an ABI change.
+    ///
+    /// **This is a GC root, and must stay one (#7231).** The `AbortSignal` is
+    /// a NaN-boxed heap object, and between the stash and
+    /// `js_fetch_with_options`'s consume the argument lowering for the fetch
+    /// call itself still runs and allocates. The window is short, but the
+    /// cell is the only reference across it.
     static PENDING_FETCH_SIGNAL: Cell<f64> =
         const { Cell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
+}
+
+/// Root + rewrite the stashed in-flight `fetch` `AbortSignal`.
+pub(crate) fn scan_pending_fetch_signal_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PENDING_FETCH_SIGNAL.with(|cell| {
+        let mut value = cell.get();
+        if visitor.visit_nanbox_f64_slot(&mut value) {
+            cell.set(value);
+        }
+    });
 }
 
 /// Stash the `signal` for the fetch call about to be dispatched. Set on the main

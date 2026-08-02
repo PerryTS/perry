@@ -1073,10 +1073,41 @@ pub extern "C" fn js_process_env() -> f64 {
 }
 
 thread_local! {
+    /// The materialized `process.env` object.
+    ///
+    /// **This is a GC root, and must stay one (#7231).** The object is
+    /// `js_object_alloc`'d in the NURSERY by `js_process_env_impl`, and this
+    /// cell is the only reference to it: `process.env` is not a field on the
+    /// `process` object, it is a `js_process_env()` call that returns the
+    /// cache. Before `scan_process_env_cache_roots_mut` existed the first
+    /// minor collection swept or evacuated it, and every later
+    /// `process.env.X = v` wrote through a dangling pointer into abandoned
+    /// memory — so `Object.keys(process.env)` / spread / `for…in` after any
+    /// collection saw a stale key set, and under an evacuating minor the write
+    /// landed in whatever object was recycled into those bytes.
+    ///
+    /// Not a stale-register defect: the cache goes wrong at collection #0 and
+    /// stays wrong, which is why its reproducer is 10/10 rather than
+    /// intermittent (#7226).
     static CACHED_ENV: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
     /// Prevent the cached object's internal mirror update from re-entering the
     /// `process.env` object hooks and calling `set_var` / `remove_var` again.
     static ENV_CACHE_MUTATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Root + rewrite the cached `process.env` object.
+///
+/// Mirrors `scan_process_finalization_roots_mut`, the sibling
+/// materialize-once cache that was already registered — the omission this
+/// closes is that the two idioms are identical and only one of them was a
+/// root.
+pub(crate) fn scan_process_env_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CACHED_ENV.with(|cell| {
+        let mut value = cell.get();
+        if value != 0.0 && visitor.visit_nanbox_f64_slot(&mut value) {
+            cell.set(value);
+        }
+    });
 }
 
 #[cfg(windows)]

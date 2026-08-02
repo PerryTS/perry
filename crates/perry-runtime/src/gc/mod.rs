@@ -625,6 +625,41 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);
+    // #7231: the materialize-once `process.*` caches. Each is a thread-local
+    // cell holding a NURSERY-allocated object that nothing else refers to —
+    // `process.env` / `.permission` / `.report` are getter CALLS, not fields
+    // of the `process` object, so the cache is the whole reference graph.
+    // `scan_process_finalization_roots_mut` above is the identical idiom and
+    // was already registered; these three were an omission, not a design.
+    // `CACHED_ENV` is the load-bearing one: `process.env` is touched by nearly
+    // every real Node program, and every `process.env.X = v` after the first
+    // collection wrote through a dangling pointer.
+    gc_register_mutable_root_scanner(crate::process::scan_process_env_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::process::scan_permission_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::process::scan_report_cache_roots_mut);
+    // #7231: the raw `Error` constructor address behind
+    // `Error.prepareStackTrace`. The closure is reachable through `globalThis`
+    // so it is not swept, but this duplicate lives outside the object graph
+    // and goes stale on a move.
+    gc_register_mutable_root_scanner(crate::object::scan_error_constructor_root_mut);
+    // #7231: native callback slots that bypass their rooted sibling
+    // structures. `RESIZE_CALLBACK` bypasses the EventEmitter listener array;
+    // `FRAME_CALLBACKS` is rooted only transiently by a `RuntimeHandleScope`
+    // during registration; `INPUT_HANDLER` holds the `useInput` arrow, which
+    // in idiomatic inline form has no other reference at all.
+    gc_register_mutable_root_scanner(crate::tty::scan_tty_resize_callback_root_mut);
+    gc_register_mutable_root_scanner(crate::frame::scan_frame_callback_roots_mut);
+    gc_register_mutable_root_scanner(crate::tui::input::scan_tui_input_handler_root_mut);
+    // #7231: three in-flight cells that hold a NaN-boxed heap value across a
+    // window in which user code can run. Each is a second copy of a value
+    // whose original is rooted elsewhere, or the only copy for the length of
+    // the window; both shapes are the #7226 `prev_this` family. Rooting the
+    // CELL is the half a scanner can close — the displaced value each
+    // save/restore idiom parks in a bare Rust local is noted at each
+    // declaration and needs `RuntimeHandleScope` plumbing, not a scanner.
+    gc_register_mutable_root_scanner(crate::object::scan_current_new_target_root_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_accessor_receiver_override_root_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_pending_fetch_signal_root_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
     // #6077: keep promises tracked for an unhandled rejection alive + address-
     // stable until reported, so the program-end report is not a stale/UAF read.
