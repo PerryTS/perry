@@ -308,8 +308,7 @@ pub(crate) fn lower_rest_call_args_rooted(
         boxed_bundles.push(crate::expr::nanbox_pointer_inline(ctx.block(), &current));
     }
 
-    let undefined_lit =
-        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let undefined_lit = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     for i in 0..fixed_count {
         lowered.push(if i < refs.len() {
             rooted.reread_one(ctx, &refs, i)?

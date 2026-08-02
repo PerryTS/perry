@@ -296,6 +296,16 @@ test_gap_gc_closure_call_argument_rooting
 # mistake. Registering the file is the whole fix.
 test_gap_gc_call_argument_rooting
 
+# --- #7270's two witnesses, registered here rather than dark -----------------
+# `rest_argument_rooting` and `same_module_call_argument_rooting` shipped with
+# #7270. Registering them at merge rather than after: they are the FOURTH
+# instance of the add-a-witness-forget-the-line defect (#7192, #7216, #7252
+# above), and #7252's was caught only by the `test_gap_gc_*` enforcement firing
+# on the first main-line `GC Moving Witnesses` run after #7253 gave that matrix
+# a trigger at all. Four occurrences is a process problem, not four mistakes.
+test_gap_gc_rest_argument_rooting
+test_gap_gc_same_module_call_argument_rooting
+
 # --- Two witnesses that were registered nowhere (#7192, #7216) ---------------
 # Both files exist in test-files/, both say in their own headers that they are
 # LIVE BY CONSTRUCTION and bite only on the moving arms, and neither was in this
