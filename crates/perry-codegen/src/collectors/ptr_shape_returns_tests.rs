@@ -1042,3 +1042,68 @@ fn mutually_calling_closure_producers_terminate() {
     assert_eq!(facts.return_shape_class(1), Some("C"));
     assert_eq!(facts.return_shape_class(2), Some("C"));
 }
+
+/// #7170 R1, key uniqueness. `return_shape_functions` is keyed by raw `FuncId`
+/// and read after every transform. `monomorph::MonomorphizationContext::new`
+/// seeds its fresh ids at `max(hir.functions ids) + 1000` computed over
+/// `hir.functions` ONLY, so a module with few generic functions and many
+/// closures can hand a specialization the id of an existing closure; a pass
+/// that clones a body without renumbering does the same thing to two closures.
+///
+/// A fact attributed to the wrong body is a guard-free load at the wrong
+/// offsets. Both directions must therefore lose the key, not resolve it by
+/// walk order.
+///
+/// Sabotage: restore "first occurrence wins" (`if !seen.insert(func_id)
+/// { return; }`) and both halves fail.
+#[test]
+fn a_contested_func_id_carries_no_fact() {
+    // (a) two closures wearing one id, only the FIRST of which is a producer.
+    let mut hir = Module::new("t");
+    hir.classes.push(class_c());
+    hir.init = vec![
+        let_closure(10, "mk", 1, vec![Stmt::Return(Some(new_c()))]),
+        let_closure(11, "other", 1, vec![Stmt::Return(Some(Expr::Number(1.0)))]),
+    ];
+    let facts = super::super::collect_module_dispatch_facts(&hir);
+    assert_eq!(
+        facts.return_shape_class(1),
+        None,
+        "a FuncId two closure bodies claim cannot carry a fact"
+    );
+
+    // The control: the same module with distinct ids does carry it, so (a) is
+    // not passing because the fixture stopped producing facts.
+    let mut ok = Module::new("t");
+    ok.classes.push(class_c());
+    ok.init = vec![
+        let_closure(10, "mk", 1, vec![Stmt::Return(Some(new_c()))]),
+        let_closure(11, "other", 2, vec![Stmt::Return(Some(Expr::Number(1.0)))]),
+    ];
+    assert_eq!(
+        super::super::collect_module_dispatch_facts(&ok).return_shape_class(1),
+        Some("C")
+    );
+
+    // (b) a `hir.functions` entry and a closure wearing one id — the
+    // monomorph-collision shape. The FUNCTION's fact goes too: once the id is
+    // ambiguous neither body is attributable.
+    let mut collide = Module::new("t");
+    collide.classes.push(class_c());
+    collide.functions = vec![function(1, "fn_mk", vec![Stmt::Return(Some(new_c()))])];
+    collide.init = vec![let_closure(10, "mk", 1, vec![Stmt::Return(Some(new_c()))])];
+    assert_eq!(
+        super::super::collect_module_dispatch_facts(&collide).return_shape_class(1),
+        None,
+        "a FuncId a function and a closure both claim cannot carry a fact"
+    );
+
+    // Control for (b): the function alone keeps its #7107 fact.
+    let mut alone = Module::new("t");
+    alone.classes.push(class_c());
+    alone.functions = vec![function(1, "fn_mk", vec![Stmt::Return(Some(new_c()))])];
+    assert_eq!(
+        super::super::collect_module_dispatch_facts(&alone).return_shape_class(1),
+        Some("C")
+    );
+}

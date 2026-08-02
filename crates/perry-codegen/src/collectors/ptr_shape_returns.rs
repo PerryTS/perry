@@ -153,10 +153,25 @@ pub(crate) fn collect_return_shape_functions(
     // consumed as a plain module and is *not even a candidate* wrapped, and
     // §2 measured 91.6% of dependency-JS allocation sites in `closure` regions.
     //
-    // The fact is keyed by `FuncId`, which `Expr::Closure` carries and which
-    // shares one module-wide counter with `hir.functions` (`fresh_func`), so
-    // no key can mean two things.
-    let mut seen: HashSet<u32> = HashSet::new();
+    // The fact is keyed by `FuncId`. Lowering allocates closure ids and
+    // `hir.functions` ids from one module-wide counter (`fresh_func`), so
+    // within one lowering pass a key means one thing — but that is NOT true
+    // after every pass, and this map is read after all of them:
+    //
+    //   * `monomorph::MonomorphizationContext::new` seeds its fresh ids at
+    //     `max(hir.functions ids) + 1000`, computed over `hir.functions`
+    //     ONLY. A module with few generic functions and many closures can hand
+    //     a specialization the id of an existing closure.
+    //   * any pass that clones a body without renumbering leaves two closures
+    //     wearing one id.
+    //
+    // Neither is reachable today through this map alone — a monomorphized
+    // function and a closure lower to differently-named symbols — but a fact
+    // attributed to the wrong body is a guard-free load at the wrong offsets,
+    // so the key's uniqueness is ENFORCED here rather than assumed. Any
+    // `FuncId` claimed by more than one producer body loses its fact entirely,
+    // in both directions (closure-vs-closure and closure-vs-function).
+    let mut claims: HashMap<u32, usize> = HashMap::new();
     let mut closure_facts: Vec<(u32, String)> = Vec::new();
     for_each_module_closure(hir, &mut |closure| {
         let Expr::Closure {
@@ -171,7 +186,8 @@ pub(crate) fn collect_return_shape_functions(
             return;
         };
         let func_id = *func_id;
-        if !seen.insert(func_id) {
+        *claims.entry(func_id).or_insert(0) += 1;
+        if claims[&func_id] > 1 {
             return;
         }
         let view = ProducerBody {
@@ -193,7 +209,28 @@ pub(crate) fn collect_return_shape_functions(
             closure_facts.push((func_id, class_name));
         }
     });
-    out.extend(closure_facts);
+    for (func_id, class_name) in closure_facts {
+        // A closure id that a `hir.functions` entry already claimed, or that a
+        // second closure also carries, describes two bodies. Drop the key, not
+        // just the new claim: the function-side fact is no more attributable
+        // than the closure-side one once the id is ambiguous.
+        if claims.get(&func_id).copied().unwrap_or(0) > 1 || out.contains_key(&func_id) {
+            out.remove(&func_id);
+            continue;
+        }
+        out.insert(func_id, class_name);
+    }
+    // A closure that carried NO fact still contests the key.
+    for (func_id, n) in &claims {
+        if *n > 1 {
+            out.remove(func_id);
+        }
+    }
+    for f in &hir.functions {
+        if claims.contains_key(&f.id) {
+            out.remove(&f.id);
+        }
+    }
     out
 }
 
