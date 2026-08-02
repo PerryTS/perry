@@ -10030,19 +10030,30 @@ fn typed_f64_public_trampoline_dispatches_before_generic_body() {
     );
 }
 
+/// #7238: the whole-function i64 specializer used to claim this shape (`a + b`
+/// over two `number` params) and, in claiming it, suppress both the ordinary
+/// f64 body and every typed-ABI clone. It was removed because neither half of
+/// its contract — integral arguments, `|intermediate| <= 2^53` — is statically
+/// provable for a `number` signature. The coverage it displaced is what must
+/// now be present.
 #[test]
-fn typed_f64_function_clone_does_not_call_unemitted_i64_specialized_clone() {
+fn number_add_function_takes_the_typed_f64_clone_not_an_i64_body() {
     let ir = String::from_utf8(
         compile_module(&typed_f64_i64_specialized_collision_module(), empty_opts()).unwrap(),
     )
     .unwrap();
     assert!(
-        ir.contains("define i64 @perry_fn_typed_f64_function_abi_ts__add_i64"),
-        "fixture should exercise the existing i64 specializer:\n{ir}"
+        !ir.contains("perry_fn_typed_f64_function_abi_ts__add_i64"),
+        "a `number` body must not be re-emitted in i64 registers:\n{ir}"
     );
     assert!(
-        !ir.contains("__typed_f64"),
-        "i64-specialized functions must not select a missing typed-f64 clone:\n{ir}"
+        !ir.contains("fptosi double %arg"),
+        "a `number` function must not truncate its arguments on entry:\n{ir}"
+    );
+    assert!(
+        ir.contains("__typed_f64"),
+        "the typed-f64 clone must be reachable once the i64 pass no longer \
+         suppresses it:\n{ir}"
     );
 }
 

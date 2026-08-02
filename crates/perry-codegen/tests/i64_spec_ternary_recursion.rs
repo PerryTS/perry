@@ -1,10 +1,19 @@
-//! #6221: a self-recursive function whose recursive call sits inside a
-//! ternary was admitted by the i64-specialization gate (`i64s_expr` accepts
-//! `Expr::Conditional`) but the i64 body emitter had no `Conditional` arm and
-//! fell into its `_ => "0"` catch-all — producing an empty specialized body
-//! (`ret i64 0`) that shadowed the real function. Also covers the sibling
-//! gate bug: fractional `Number` literals were admitted and then truncated
-//! by the emitter's `as i64` lowering.
+//! #6221 / #7238 — the ternary-recursion shape that the i64-specialization
+//! pass mis-lowered, kept as a permanent guard now that the pass is gone.
+//!
+//! #6221: a self-recursive function whose recursive call sat inside a ternary
+//! was admitted by the gate (`i64s_expr` accepted `Expr::Conditional`) but the
+//! i64 body emitter had no `Conditional` arm and fell into its `_ => "0"`
+//! catch-all — an empty specialized body (`ret i64 0`) that shadowed the real
+//! function. A `Conditional` arm was added, and fractional `Number` literals
+//! were excluded from the gate because the emitter's `as i64` truncated them.
+//!
+//! #7238 removed the pass outright: the fractional-literal exclusion only
+//! covered literals *inside* the body, while every `number` **parameter** was
+//! `fptosi`'d on entry by the wrapper, and no intermediate was bounded at
+//! `2^53` where JS starts rounding and exact i64 arithmetic does not. Neither
+//! is statically provable for a self-recursive `number` signature. Both
+//! shapes below must therefore keep an exact double body.
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
@@ -160,40 +169,47 @@ fn function_body<'a>(ir: &'a str, marker: &str) -> Option<&'a str> {
 }
 
 #[test]
-fn ternary_self_recursion_gets_real_i64_body() {
+fn ternary_self_recursion_keeps_an_exact_double_body() {
     let f = ternary_recursive_fn(1, "idDown", Expr::Number(100.0));
     let ir =
         String::from_utf8(compile_module(&module_with(vec![f]), empty_opts()).unwrap()).unwrap();
 
-    let body =
-        function_body(&ir, "idDown_i64").expect("i64 specialization for idDown should be emitted");
-    // The specialized body must branch on the ternary condition and make the
-    // self-recursive call — not collapse to the empty `ret i64 0` stub.
+    assert!(
+        !ir.contains("idDown_i64"),
+        "a `number` body must not be re-emitted in i64 registers:\n{ir}"
+    );
+    let body = function_body(&ir, "@perry_fn_i64_spec_ternary_ts__idDown(")
+        .expect("the public f64 body for idDown must be emitted");
+    // The removed wrapper was exactly `fptosi` → `call i64` → `sitofp`.
+    assert!(
+        !body.contains("fptosi double %arg"),
+        "the public body must not truncate its argument on entry:\n{body}"
+    );
+    // The ternary still has to be real control flow — the #6221 shape.
     assert!(
         body.contains("br i1"),
         "ternary must lower to a conditional branch, got:\n{body}"
     );
     assert!(
-        body.contains("call i64"),
-        "recursive call must survive in the i64 body, got:\n{body}"
-    );
-    assert!(
-        !body.trim_end().ends_with("ret i64 0") || body.contains("br i1"),
-        "i64 body is the empty stub:\n{body}"
+        body.contains("call double"),
+        "recursive call must survive in the double body, got:\n{body}"
     );
 }
 
 #[test]
-fn fractional_literal_blocks_i64_specialization() {
-    // `return n <= 0 ? 0.5 : halfDown(n - 1);` — the i64 emitter would
-    // truncate 0.5 to 0, so the gate must reject the function entirely and
-    // leave the exact f64 body in place.
+fn fractional_literal_body_keeps_an_exact_double_body() {
+    // `return n <= 0 ? 0.5 : halfDown(n - 1);` — an i64 lowering would
+    // truncate 0.5 to 0.
     let f = ternary_recursive_fn(1, "halfDown", Expr::Number(0.5));
     let ir =
         String::from_utf8(compile_module(&module_with(vec![f]), empty_opts()).unwrap()).unwrap();
 
     assert!(
         !ir.contains("halfDown_i64"),
-        "function with a fractional literal must not be i64-specialized"
+        "a `number` body must not be re-emitted in i64 registers:\n{ir}"
+    );
+    assert!(
+        !ir.contains("fptosi double %arg"),
+        "a `number` function must not truncate its arguments on entry:\n{ir}"
     );
 }

@@ -50,10 +50,11 @@ mod function;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 pub(crate) mod helpers;
-mod i64_spec;
 mod method;
 mod method_registry;
 mod module_globals_emit;
+#[cfg(test)]
+mod number_exactness_tests;
 mod opts;
 mod spec_abi;
 mod string_pool;
@@ -2152,82 +2153,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
-    // Integer-specialization pass. See `i64_spec::emit_i64_specializations`.
-    let i64_specialized =
-        i64_spec::emit_i64_specializations(&mut llmod, hir, &func_names, &module_globals);
-
-    // From here on, this set means "a typed-f64 clone is present in the
-    // module", not just "the HIR body was eligible." The i64 specializer owns
-    // its public wrapper and may skip the ordinary f64 body entirely, so direct
-    // call lowering must not branch to an unemitted typed-f64 clone.
-    for f in &hir.functions {
-        if i64_specialized.contains(&f.id) && cross_module.typed_f64_functions.contains(&f.id) {
-            record_typed_clone_rejection(
-                &mut typed_clone_rejection_records,
-                f.name.clone(),
-                "typed_f64_function_clone_decision",
-                typed_abi::TypedCloneRejectionReason::I64Specialized,
-                vec![
-                    "typed_clone_kind=typed_f64_function".to_string(),
-                    format!("function_id={}", f.id),
-                    format!(
-                        "symbol={}",
-                        func_names.get(&f.id).map(String::as_str).unwrap_or(&f.name)
-                    ),
-                ],
-            );
-        }
-        if i64_specialized.contains(&f.id) && cross_module.typed_i32_functions.contains(&f.id) {
-            record_typed_clone_rejection(
-                &mut typed_clone_rejection_records,
-                f.name.clone(),
-                "typed_i32_function_clone_decision",
-                typed_abi::TypedCloneRejectionReason::I64Specialized,
-                vec![
-                    "typed_clone_kind=typed_i32_function".to_string(),
-                    format!("function_id={}", f.id),
-                    format!(
-                        "symbol={}",
-                        func_names.get(&f.id).map(String::as_str).unwrap_or(&f.name)
-                    ),
-                ],
-            );
-        }
-        if i64_specialized.contains(&f.id) && cross_module.typed_i1_functions.contains(&f.id) {
-            record_typed_clone_rejection(
-                &mut typed_clone_rejection_records,
-                f.name.clone(),
-                "typed_i1_function_clone_decision",
-                typed_abi::TypedCloneRejectionReason::I64Specialized,
-                vec![
-                    "typed_clone_kind=typed_i1_function".to_string(),
-                    format!("function_id={}", f.id),
-                    format!(
-                        "symbol={}",
-                        func_names.get(&f.id).map(String::as_str).unwrap_or(&f.name)
-                    ),
-                ],
-            );
-        }
-    }
-    cross_module
-        .typed_f64_functions
-        .retain(|id| !i64_specialized.contains(id));
-    cross_module
-        .typed_i32_functions
-        .retain(|id| !i64_specialized.contains(id));
-    cross_module
-        .typed_i1_functions
-        .retain(|id| !i64_specialized.contains(id));
-    cross_module
-        .typed_i1_function_param_reps
-        .retain(|id, _| !i64_specialized.contains(id));
-
     // ---- Representation-selection Phase 2: specialized-ABI plan selection.
-    // Runs AFTER the i64-specialization pass and the typed_abi clone sets so
-    // mutual exclusion is decidable; the entries themselves are emitted below
-    // in the pre-public loop. Bounded: one entry per function (the dominant
-    // tuple), `PERRY_SPECIALIZED_ABI_MAX` per module.
+    // Runs AFTER the typed_abi clone sets so mutual exclusion is decidable;
+    // the entries themselves are emitted below in the pre-public loop.
+    // Bounded: one entry per function (the dominant tuple),
+    // `PERRY_SPECIALIZED_ABI_MAX` per module.
     if spec_abi::spec_abi_enabled() {
         let spec_facts = crate::collectors::collect_spec_abi_facts(hir);
         let spec_budget = spec_abi::spec_abi_max();
@@ -2291,13 +2221,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             if cross_module.funcs_reading_dynamic_this.contains(&f.id) {
                 reject(
                     typed_abi::TypedCloneRejectionReason::SpecReadsDynamicThis,
-                    &mut typed_clone_rejection_records,
-                );
-                continue;
-            }
-            if i64_specialized.contains(&f.id) {
-                reject(
-                    typed_abi::TypedCloneRejectionReason::I64Specialized,
                     &mut typed_clone_rejection_records,
                 );
                 continue;
@@ -2434,11 +2357,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .with_context(|| format!("lowering specialized entry for function '{}'", f.name))?;
     }
 
-    // Lower each user function into the module (skip i64-specialized ones).
+    // Lower each user function into the module.
     for f in &hir.functions {
-        if i64_specialized.contains(&f.id) {
-            continue;
-        }
         let typed_public_trampoline = if cross_module.typed_f64_functions.contains(&f.id) {
             Some(typed_abi::TypedFunctionTrampolineKind::F64)
         } else if cross_module.typed_i32_functions.contains(&f.id) {

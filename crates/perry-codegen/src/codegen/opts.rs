@@ -740,7 +740,7 @@ pub(crate) struct CrossModuleCtx {
     /// Representation-selection Phase 2 (`codegen/spec_abi.rs`): FuncId →
     /// specialization plan for functions with an emitted full-body specialized
     /// entry (internal linkage, named by `spec_function_name`). Mutually
-    /// exclusive with the typed_abi clone families and `i64_specialized`.
+    /// exclusive with the typed_abi clone families.
     pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
     /// Phase 2 pre-pass: LocalIds proven to permanently hold one specific
     /// non-view typed array (see `collectors/spec_abi_sites.rs`).

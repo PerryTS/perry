@@ -150,23 +150,14 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
     matches!(&f.body[2], Stmt::Return(Some(e)) if returns_int_expr(e))
 }
 
-/// A function is i64-specializable if it's a pure numeric recursive fn.
-pub fn is_integer_specializable(f: &Function) -> bool {
-    if f.is_async || f.is_generator || f.was_plain_async {
-        return false;
-    }
-    if !matches!(f.return_type, perry_hir::types::Type::Number) {
-        return false;
-    }
-    if !f
-        .params
-        .iter()
-        .all(|p| matches!(p.ty, perry_hir::types::Type::Number))
-    {
-        return false;
-    }
-    i64s_stmts(&f.body, f.id)
-}
+// `is_integer_specializable` / `i64s_stmts` / `i64s_expr` used to live here.
+// They were the admission rule for the whole-function i64 specialization pass
+// (`codegen/i64_spec.rs`), removed in #7238 — see that issue and the module
+// header of `test-files/test_gap_7238_i64_specialization_exactness.ts` for why
+// the rule could not be repaired: it admitted `number` parameters as integers
+// without proof and bounded no intermediate, and neither is statically
+// provable for the self-recursive bodies the pass existed to serve.
+
 /// Detect functions that always return an integer value (all return paths
 /// end with `| 0`, `>>> 0`, or another bitwise op). These functions can be
 /// treated as int-producing at call sites, enabling the i32 fast path for
@@ -253,50 +244,6 @@ pub fn returns_int_expr(e: &Expr) -> bool {
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
         ),
         Expr::MathImul(_, _) => true,
-        _ => false,
-    }
-}
-
-pub fn i64s_stmts(ss: &[Stmt], sid: u32) -> bool {
-    ss.iter().all(|s| match s {
-        Stmt::Return(Some(e)) => i64s_expr(e, sid),
-        Stmt::Return(None) => true,
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            i64s_expr(condition, sid)
-                && i64s_stmts(then_branch, sid)
-                && else_branch.as_ref().is_none_or(|eb| i64s_stmts(eb, sid))
-        }
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } => i64s_expr(e, sid),
-        Stmt::Let { init: None, .. } => true,
-        _ => false,
-    })
-}
-pub fn i64s_expr(e: &Expr, sid: u32) -> bool {
-    match e {
-        Expr::Integer(_) | Expr::LocalGet(_) => true,
-        // The i64 emitter lowers Number literals with `as i64`, so only admit
-        // values that round-trip exactly — a fractional constant (`? 0.5 :`)
-        // would silently truncate in the specialized body.
-        Expr::Number(n) => *n as i64 as f64 == *n,
-        Expr::Binary { op, left, right } => {
-            matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-                && i64s_expr(left, sid)
-                && i64s_expr(right, sid)
-        }
-        Expr::Compare { left, right, .. } => i64s_expr(left, sid) && i64s_expr(right, sid),
-        Expr::Call { callee, args, .. } => {
-            matches!(callee.as_ref(), Expr::FuncRef(id) if *id == sid)
-                && args.iter().all(|a| i64s_expr(a, sid))
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => i64s_expr(condition, sid) && i64s_expr(then_expr, sid) && i64s_expr(else_expr, sid),
         _ => false,
     }
 }

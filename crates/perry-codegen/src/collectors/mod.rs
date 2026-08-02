@@ -16,7 +16,6 @@ mod escape_objects;
 mod hir_facts;
 mod hot_callees;
 mod i32_locals;
-mod i64_emit;
 mod index_uses;
 mod int_valued_ta_locals;
 mod integer_locals;
@@ -42,13 +41,9 @@ mod spec_abi_sites;
 mod this_as_value;
 mod uppercase_strings;
 
-// Public re-exports for the visible API (`pub fn emit_i64_function` etc.).
+// Public re-exports for the visible API.
 pub use cjs_scaffolding::{census as cjs_preamble_census, CjsPreambleCensus};
-pub use clamp_detect::{
-    detect_clamp3, detect_clamp_u8, is_integer_specializable, returns_i32_identity_arg,
-    returns_integer,
-};
-pub use i64_emit::emit_i64_function;
+pub use clamp_detect::{detect_clamp3, detect_clamp_u8, returns_i32_identity_arg, returns_integer};
 
 // Internal-to-crate re-exports — explicit names because globs don't
 // transitively expose through `pub(crate) use crate::collectors::*`.

@@ -57,12 +57,6 @@ impl TypedCloneRejectionReason {
                 Tier::CompilerLimitation,
                 None,
             ),
-            Self::I64Specialized => (
-                "the function is already i64-specialized, which takes \
-                 precedence over a representation-tuple entry.",
-                Tier::CompilerLimitation,
-                None,
-            ),
             Self::Captures | Self::CapturesThis | Self::CapturesNewTarget => (
                 "the function captures from an enclosing scope; captures are \
                  passed through the closure environment, not the raw ABI.",
