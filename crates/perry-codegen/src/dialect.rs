@@ -114,10 +114,16 @@ struct FnReader<'ctx, 'm> {
     /// Non-phi forward references (measured in the corpus: the megamorphic
     /// `idispatch.tower` shape uses a register before its defining block
     /// appears in the text). Each unresolved `%reg` use gets a placeholder
-    /// instruction (`select true, undef, undef`) that is RAUW'd and erased
-    /// when the real definition arrives — the same strategy LLVM's own
-    /// `.ll` parser uses.
-    placeholders: HashMap<String, BasicValueEnum<'ctx>>,
+    /// that is RAUW'd and erased when the real definition arrives — the
+    /// same strategy LLVM's own `.ll` parser uses.
+    ///
+    /// The placeholder is a `load` from a scratch `alloca` — real
+    /// instructions the builder can never constant-fold. The first version
+    /// used `select true, undef, undef`, which the C-API builder folds to
+    /// the uniqued constant `undef`: un-RAUW-able, verifier-clean, and it
+    /// silently turned every non-phi forward reference into `undef` (caught
+    /// as the class-family miscompile: `(number).set is not a function`).
+    placeholders: HashMap<String, (BasicValueEnum<'ctx>, inkwell::values::PointerValue<'ctx>)>,
     /// Most recently *entered* (label line) block, used to keep the
     /// function's block order equal to textual order even when a forward
     /// branch created the block object earlier.
@@ -299,14 +305,18 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         Ok(())
     }
 
-    fn def(&mut self, name: &str, v: BasicValueEnum<'ctx>) {
-        if let Some(ph) = self.placeholders.remove(name) {
-            rauw(ph, v);
+    fn def(&mut self, name: &str, v: BasicValueEnum<'ctx>) -> Result<()> {
+        if let Some((ph, scratch)) = self.placeholders.remove(name) {
+            rauw(name, ph, v)?;
             if let Some(inst) = ph.as_instruction_value() {
+                let _ = inst.erase_from_basic_block();
+            }
+            if let Some(inst) = scratch.as_instruction_value() {
                 let _ = inst.erase_from_basic_block();
             }
         }
         self.vals.insert(name.to_string(), v);
+        Ok(())
     }
 
     /// Resolve `(type, token)` to a value. An undefined `%reg` becomes a
@@ -317,22 +327,22 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             return Ok(*v);
         }
         if tok.starts_with('%') {
-            let undef: BasicValueEnum = match ty {
-                BasicTypeEnum::FloatType(t) => t.get_undef().into(),
-                BasicTypeEnum::IntType(t) => t.get_undef().into(),
-                BasicTypeEnum::PointerType(t) => t.get_undef().into(),
-                other => bail!("forward reference {tok} of unsupported type {other:?}"),
-            };
+            // Non-foldable placeholder: load from a scratch alloca. Both
+            // instructions are erased when the definition arrives.
+            let reg = tok.trim_start_matches('%');
+            let scratch = self
+                .builder
+                .build_alloca(ty, &format!("fwdslot.{reg}"))
+                .map_err(be)?;
             let ph = self
                 .builder
-                .build_select(
-                    self.ctx.bool_type().const_int(1, false),
-                    undef,
-                    undef,
-                    &format!("fwd.{}", tok.trim_start_matches('%')),
-                )
+                .build_load(ty, scratch, &format!("fwd.{reg}"))
                 .map_err(be)?;
-            self.placeholders.insert(tok.to_string(), ph);
+            debug_assert!(
+                ph.as_instruction_value().is_some(),
+                "placeholder must be a real instruction"
+            );
+            self.placeholders.insert(tok.to_string(), (ph, scratch));
             self.vals.insert(tok.to_string(), ph);
             return Ok(ph);
         }
@@ -418,7 +428,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             }
             _ => self.binary_or_cast(dst, op, rest)?,
         };
-        self.def(dst, v);
+        self.def(dst, v)?;
         Ok(())
     }
 
@@ -555,7 +565,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 b.trim().trim_start_matches('%').to_string(),
             ));
         }
-        self.def(dst, phi.as_basic_value());
+        self.def(dst, phi.as_basic_value())?;
         self.pending_phis.push((phi, ty, pending));
         Ok(())
     }
@@ -998,8 +1008,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
     }
 }
 
-/// Replace every use of a placeholder with the real definition.
-fn rauw<'ctx>(ph: BasicValueEnum<'ctx>, real: BasicValueEnum<'ctx>) {
+/// Replace every use of a placeholder with the real definition. A type
+/// mismatch means the operand-context type at the USE disagreed with the
+/// defining instruction — always a reader bug, and silently leaving the
+/// placeholder in place is exactly how the select-undef version shipped a
+/// miscompile, so it is a hard error.
+fn rauw<'ctx>(name: &str, ph: BasicValueEnum<'ctx>, real: BasicValueEnum<'ctx>) -> Result<()> {
     match (ph, real) {
         (BasicValueEnum::IntValue(a), BasicValueEnum::IntValue(b)) => a.replace_all_uses_with(b),
         (BasicValueEnum::FloatValue(a), BasicValueEnum::FloatValue(b)) => {
@@ -1008,10 +1022,13 @@ fn rauw<'ctx>(ph: BasicValueEnum<'ctx>, real: BasicValueEnum<'ctx>) {
         (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
             a.replace_all_uses_with(b)
         }
-        // Type mismatch between forward use and definition: leave the
-        // placeholder in place — the verifier reports it with context.
-        _ => {}
+        (a, b) => bail!(
+            "forward reference {name} used as {:?} but defined as {:?}",
+            a.get_type(),
+            b.get_type()
+        ),
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

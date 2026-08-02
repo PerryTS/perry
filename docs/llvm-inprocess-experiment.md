@@ -42,20 +42,31 @@ Results so far:
 - `spike.ts`: text-parsed arm and natively-constructed arm emit
   **byte-identical objects**; the native-mode binary matches the pinned Node
   oracle.
-- `batch.ts`: all pre-opt divergences are one class — the C-API builder
-  constant-folds at construction (`zext i1 false`, `select i1 false`,
-  constant GEPs) — which is why `=diff`'s verdict is **emitted object
-  bytes**, not pre-opt prints. The arms' objects differ by 336 bytes of
-  *tighter* native-arm code (register-allocation divergence downstream of
-  pre-folded input; same symbols, verified at the disassembly level to be
-  layout/regalloc, not semantics).
-- Behavior: 26-test gap-corpus slice under `=native` (one binary, flag-only
-  A/B, liveness asserted): first pass 25/25 byte-identical outputs with one
-  compile failure — a multi-module test that exposed two reader bugs
-  (explicit `external` linkage keyword; skeleton globals referencing defined
-  wrapper functions, fixed by parsing the skeleton with synthesized declares
-  for every define). After the fix the failing test compiles natively with
-  identical output; the full slice re-run is recorded in the tracking issue.
+- `batch.ts` and `spike.ts`: after the placeholder fix below, both corpora
+  emit **byte-identical objects** from the two construction paths. The
+  pre-opt representations still differ in exactly one class — the C-API
+  builder constant-folds at construction (`zext i1 false`, `select i1
+  false`, constant GEPs) — which is why `=diff`'s verdict is emitted object
+  bytes, not pre-opt prints. There is no "benign object divergence" class:
+  a byte mismatch is a bug.
+- **The bug the full gap sweep caught (and the sampled slices missed):**
+  the original forward-reference placeholder was `select true, undef,
+  undef`, which the C-API builder constant-folds to the uniqued constant
+  `undef` — un-RAUW-able, verifier-clean, and silently substituting `undef`
+  for every non-phi forward reference. Symptom: a class/prototype test
+  family failing with `(number).set is not a function`; the earlier
+  "336-byte tighter native code" on `batch.ts` was the same bug deleting
+  real (never-executed-in-that-kernel) code, initially misread as benign
+  regalloc divergence. Fix: the placeholder is now a `load` from a scratch
+  `alloca` (real instructions, never foldable, erased on resolution), and a
+  use/def type mismatch is a hard error instead of a silent leak. Lesson
+  encoded in the harness: the byte verdict was right; explanations of red
+  are not.
+- Behavior: 26-test slices passed 25/25+26/26; the authoritative full
+  466-test sweep result under `=native` is recorded in the tracking issue.
+  Earlier slice findings: a multi-module test exposed two reader bugs
+  (explicit `external` linkage; skeleton globals referencing defined
+  wrapper functions — fixed by synthesized declares for every define).
 
 Modes: `PERRY_LLVM_INPROCESS=1` transport (parse whole text in-process),
 `=native` construction, `=diff` both-arms harness (returns the text arm's
