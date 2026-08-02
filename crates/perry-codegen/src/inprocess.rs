@@ -49,8 +49,7 @@ fn global_init(mllvm: &[String]) {
                     argv.push(c);
                 }
             }
-            let ptrs: Vec<*const std::os::raw::c_char> =
-                argv.iter().map(|c| c.as_ptr()).collect();
+            let ptrs: Vec<*const std::os::raw::c_char> = argv.iter().map(|c| c.as_ptr()).collect();
             unsafe {
                 llvm_sys::support::LLVMParseCommandLineOptions(
                     ptrs.len() as i32,
@@ -121,7 +120,12 @@ pub fn compile_ll_to_object_inprocess(
     announce();
 
     let context = Context::create();
-    let buf = MemoryBuffer::create_from_memory_range_copy(ll_text.as_bytes(), module_name);
+    // inkwell 0.9's copy constructor requires (and then strips) a trailing
+    // NUL. One extra copy of the IR text; fine for the transport phase.
+    let mut ir = Vec::with_capacity(ll_text.len() + 1);
+    ir.extend_from_slice(ll_text.as_bytes());
+    ir.push(0);
+    let buf = MemoryBuffer::create_from_memory_range_copy(&ir, module_name);
     let module = context
         .create_module_from_ir(buf)
         .map_err(|e| anyhow!("LLVM IR parse error:\n{}", e.to_string()))?;

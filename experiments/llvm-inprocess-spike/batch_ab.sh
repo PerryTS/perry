@@ -8,7 +8,13 @@ set -u
 WT=/Users/amlug/projects/perry/wt-llvmbackend
 SPIKE=$WT/experiments/llvm-inprocess-spike/target/release/perry-llvmc-spike
 PERRY=$WT/target/perry-dev/perry
-WORK=${1:?usage: batch_ab.sh <workdir>}
+WORK=${1:?usage: batch_ab.sh <workdir> [shim|flag] [stride] [offset]}
+# Arm P mechanism: "shim" = PERRY_LLVM_CLANG=<spike binary> through an
+# unmodified perry; "flag" = PERRY_LLVM_INPROCESS=1 through a perry built
+# with the llvm-inprocess feature.
+MODE=${2:-shim}
+STRIDE=${3:-6}
+OFFSET=${4:-0}
 mkdir -p "$WORK"
 export PERRY_RUNTIME_DIR=$WT/target/perry-dev
 export PERRY_NO_AUTO_OPTIMIZE=1
@@ -18,15 +24,24 @@ export PERRY_LLVMC_SPIKE_LOG=$WORK/liveness.log
 i=0 same=0 diff=0 cfail_t=0 cfail_p=0 cfail_both=0
 for t in $(ls "$WT"/test-files/test_gap_*.ts | sort); do
   i=$((i+1))
-  [ $((i % 6)) -ne 0 ] && continue
+  [ $((i % STRIDE)) -ne $OFFSET ] && continue
   name=$(basename "$t" .ts)
   free_gb=$(df -g /System/Volumes/Data | awk 'NR==2{print $4}')
   if [ "$free_gb" -lt 6 ]; then echo "ABORT: only ${free_gb}GB free" | tee -a "$WORK/summary.txt"; exit 2; fi
 
   gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.t" >"$WORK/$name.t.compile" 2>&1
   ct=$?
-  PERRY_LLVM_CLANG=$SPIKE gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
-  cp=$?
+  if [ "$MODE" = "flag" ]; then
+    PERRY_LLVM_INPROCESS=1 gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
+    cp=$?
+    # Liveness: the arm must have announced the in-process backend.
+    if [ $cp -eq 0 ] && ! grep -q "in-process LLVM backend active" "$WORK/$name.p.compile"; then
+      echo "NOT_LIVE $name" >> "$WORK/results.txt"; cp=97
+    fi
+  else
+    PERRY_LLVM_CLANG=$SPIKE gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
+    cp=$?
+  fi
 
   if [ $ct -ne 0 ] && [ $cp -ne 0 ]; then cfail_both=$((cfail_both+1)); echo "CFAIL_BOTH $name" >> "$WORK/results.txt"; rm -f "$WORK/$name".[tp]; continue; fi
   if [ $ct -ne 0 ]; then cfail_t=$((cfail_t+1)); echo "CFAIL_T $name" >> "$WORK/results.txt"; rm -f "$WORK/$name".[tp]; continue; fi
@@ -41,7 +56,11 @@ for t in $(ls "$WT"/test-files/test_gap_*.ts | sort); do
   fi
   rm -f "$WORK/$name.t" "$WORK/$name.p"
 done
-compiles=$(grep -c . "$WORK/liveness.log" || true)
+if [ "$MODE" = "flag" ]; then
+  compiles=$(grep -l "in-process LLVM backend active" "$WORK"/*.p.compile 2>/dev/null | wc -l | tr -d ' ')
+else
+  compiles=$(grep -c . "$WORK/liveness.log" || true)
+fi
 {
   echo "batch A/B complete: same=$same diff=$diff cfail_t=$cfail_t cfail_p=$cfail_p cfail_both=$cfail_both"
   echo "in-process compiles proven live: $compiles"
