@@ -265,8 +265,10 @@ fn self_recursive_number_function_gets_no_i64_body() {
             !ir.contains(&format!("{name}_i64")),
             "{NO_I64_BODY}, but `{name}` still has one:\n{ir}"
         );
+        // Independent of the `_i64` naming convention: no user function in
+        // this module may be defined with an integer return type at all.
         assert!(
-            !ir.contains("alwaysinline") || !ir.contains("define i64 @perry_fn_number_exactness"),
+            !ir.contains("define i64 @perry_fn_number_exactness"),
             "{NO_I64_BODY}, but an i64 user-function body was emitted:\n{ir}"
         );
     }
