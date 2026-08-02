@@ -325,6 +325,7 @@ pub fn try_lower_func_ref_call(
                 ctx.flat_const_arrays,
                 &ctx.array_row_aliases,
                 ctx.integer_locals,
+                &ctx.const_number_locals,
                 ctx.clamp3_functions,
                 ctx.clamp_u8_functions,
                 ctx.integer_returning_functions,

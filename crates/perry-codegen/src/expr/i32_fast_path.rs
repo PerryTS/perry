@@ -175,6 +175,7 @@ pub(crate) fn try_lower_flat_const_index_get(
         &flat_ca,
         &ara,
         &int_locals,
+        &ctx.const_number_locals,
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
         ctx.integer_returning_functions,
@@ -191,6 +192,7 @@ pub(crate) fn try_lower_flat_const_index_get(
         &flat_ca,
         &ara,
         &int_locals,
+        &ctx.const_number_locals,
         ctx.clamp3_functions,
         ctx.clamp_u8_functions,
         ctx.integer_returning_functions,
@@ -383,14 +385,27 @@ fn combine_i32_chain_bits(op: BinaryOp, left: &Expr, right: &Expr, l: u32, r: u3
     }
 }
 
+/// Magnitude bound of a `const` local bound to a numeric literal — an exact
+/// integer, or `None` to leave the caller on the untightened 32-bit default.
+/// Never *widens* past 32: the i32 chain reads the local's i32 slot, so the
+/// value it computes with is ToInt32-shaped whatever the literal was.
+fn const_number_magnitude_bits(v: f64) -> Option<u32> {
+    if !v.is_finite() || v.trunc() != v {
+        return None;
+    }
+    let as_i64 = v as i64;
+    (as_i64 as f64 == v).then(|| integer_magnitude_bits(as_i64).min(I32_CHAIN_LEAF_BITS))
+}
+
 /// Borrowed view of the fact tables the i32-chain rules consult, so the
-/// recursion carries one argument instead of eight.
+/// recursion carries one argument instead of nine.
 #[derive(Clone, Copy)]
 struct I32ChainEnv<'a> {
     i32_slots: &'a std::collections::HashMap<u32, String>,
     flat_const_arrays: &'a std::collections::HashMap<u32, FlatConstInfo>,
     array_row_aliases: &'a std::collections::HashMap<u32, (u32, Box<Expr>)>,
     integer_locals: &'a std::collections::HashSet<u32>,
+    const_number_locals: &'a std::collections::HashMap<u32, f64>,
     clamp3_fns: &'a std::collections::HashSet<u32>,
     clamp_u8_fns: &'a std::collections::HashSet<u32>,
     integer_returning_fns: &'a std::collections::HashSet<u32>,
@@ -429,8 +444,23 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
         // `Math.imul` (below) and the runtime helper interpret an operand under
         // exact-low-32 semantics.
         Expr::Integer(n) => i32::try_from(*n).ok().map(|_| integer_magnitude_bits(*n)),
-        Expr::LocalGet(id) => (env.i32_slots.contains_key(id) || env.integer_locals.contains(id))
-            .then_some(I32_CHAIN_LEAF_BITS),
+        Expr::LocalGet(id) => {
+            if !(env.i32_slots.contains_key(id) || env.integer_locals.contains(id)) {
+                return None;
+            }
+            // A `const` bound to a numeric literal has an exactly-known
+            // magnitude, and that is what keeps the dominant strided-index
+            // shape on the exact path once the 2^53 cap exists: in
+            // `buf[y * WIDTH + x]` the product is measured against WIDTH's
+            // actual width, not the 32-bit default a plain local gets.
+            Some(
+                env.const_number_locals
+                    .get(id)
+                    .copied()
+                    .and_then(const_number_magnitude_bits)
+                    .unwrap_or(I32_CHAIN_LEAF_BITS),
+            )
+        }
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => Some(8),
         Expr::MathImul(a, b) => {
             // `Math.imul(x, y) == ToInt32(ToUint32(x) * ToUint32(y) mod 2^32)`
@@ -502,12 +532,14 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
 /// requires — so returning `false` is always the safe direction. We only commit
 /// to the fast path when every leaf is recognizably int-sourced AND the whole
 /// chain is provably f64-exact ([`i32_chain_magnitude_bits`]).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn can_lower_expr_as_i32(
     e: &Expr,
     i32_slots: &std::collections::HashMap<u32, String>,
     flat_const_arrays: &std::collections::HashMap<u32, FlatConstInfo>,
     array_row_aliases: &std::collections::HashMap<u32, (u32, Box<Expr>)>,
     integer_locals: &std::collections::HashSet<u32>,
+    const_number_locals: &std::collections::HashMap<u32, f64>,
     clamp3_fns: &std::collections::HashSet<u32>,
     clamp_u8_fns: &std::collections::HashSet<u32>,
     integer_returning_fns: &std::collections::HashSet<u32>,
@@ -520,6 +552,7 @@ pub(crate) fn can_lower_expr_as_i32(
             flat_const_arrays,
             array_row_aliases,
             integer_locals,
+            const_number_locals,
             clamp3_fns,
             clamp_u8_fns,
             integer_returning_fns,
@@ -803,6 +836,7 @@ fn ctx_i32_chain_env<'a>(ctx: &'a FnCtx<'_>) -> I32ChainEnv<'a> {
         flat_const_arrays: ctx.flat_const_arrays,
         array_row_aliases: &ctx.array_row_aliases,
         integer_locals: ctx.native_facts.integer_locals(),
+        const_number_locals: &ctx.const_number_locals,
         clamp3_fns: ctx.clamp3_functions,
         clamp_u8_fns: ctx.clamp_u8_functions,
         integer_returning_fns: ctx.integer_returning_functions,

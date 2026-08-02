@@ -27,6 +27,7 @@ struct Tables {
     flat_const_arrays: HashMap<u32, FlatConstInfo>,
     array_row_aliases: HashMap<u32, (u32, Box<Expr>)>,
     integer_locals: HashSet<u32>,
+    const_number_locals: HashMap<u32, f64>,
     empty_fns: HashSet<u32>,
 }
 
@@ -37,6 +38,9 @@ impl Tables {
             flat_const_arrays: HashMap::new(),
             array_row_aliases: HashMap::new(),
             integer_locals: (1..=4).collect(),
+            // Local 4 is `const K = 100`, a numeric-literal binding whose
+            // magnitude is exactly known (7 bits).
+            const_number_locals: HashMap::from([(4, 100.0)]),
             empty_fns: HashSet::new(),
         }
     }
@@ -47,6 +51,7 @@ impl Tables {
             flat_const_arrays: &self.flat_const_arrays,
             array_row_aliases: &self.array_row_aliases,
             integer_locals: &self.integer_locals,
+            const_number_locals: &self.const_number_locals,
             clamp3_fns: &self.empty_fns,
             clamp_u8_fns: &self.empty_fns,
             integer_returning_fns: &self.empty_fns,
@@ -87,6 +92,12 @@ fn x() -> Expr {
 
 fn y() -> Expr {
     Expr::LocalGet(2)
+}
+
+/// `const K = 100` — an integer-valued local whose magnitude is 7 bits, not
+/// the 32-bit default.
+fn k() -> Expr {
+    Expr::LocalGet(4)
 }
 
 fn byte() -> Expr {
@@ -253,4 +264,30 @@ fn literal_leaves_carry_their_own_width() {
     assert_eq!(bits(&Expr::Integer(-31)), Some(5));
     assert_eq!(bits(&Expr::Integer(i32::MAX as i64)), Some(31));
     assert_eq!(bits(&Expr::Integer(i32::MIN as i64)), Some(32));
+}
+
+/// A `const` bound to a numeric literal carries its literal's magnitude, which
+/// is what keeps the dominant strided-index shape `buf[y * WIDTH + x]` exact
+/// after the cap. Delete the `const_number_locals` lookup in the `LocalGet`
+/// arm and this goes red while `bench_int_arithmetic` loses half its `mul i32`.
+#[test]
+fn const_literal_locals_carry_their_literal_width() {
+    assert_eq!(bits(&k()), Some(7));
+    // `(y + -1) * WIDTH + (x + -1)` — the convolution index. 33 + 7 = 40.
+    let row = add(x(), Expr::Integer(-1));
+    let idx = add(mul(row, k()), add(y(), Expr::Integer(-1)));
+    assert_eq!(bits(&idx), Some(41));
+    // A plain integer local on the same spot is 32 bits and stays rejected.
+    assert_eq!(bits(&add(mul(add(x(), Expr::Integer(-1)), y()), x())), None);
+}
+
+/// A `const` whose literal is not an exact integer, or is outside i32 range,
+/// falls back to the untightened 32 rather than widening the bound.
+#[test]
+fn const_bits_never_widen_past_the_leaf_default() {
+    assert_eq!(super::const_number_magnitude_bits(100.0), Some(7));
+    assert_eq!(super::const_number_magnitude_bits(0.5), None);
+    assert_eq!(super::const_number_magnitude_bits(f64::NAN), None);
+    assert_eq!(super::const_number_magnitude_bits(f64::INFINITY), None);
+    assert_eq!(super::const_number_magnitude_bits(1e18), Some(32));
 }
