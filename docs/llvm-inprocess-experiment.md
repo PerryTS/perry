@@ -11,7 +11,7 @@ Companion artifacts:
 - `experiments/llvm-inprocess-spike/` — the Phase 0 spike binary (see below).
 - `crates/perry-codegen/src/inprocess.rs` — the integrated backend
   (`llvm-inprocess` cargo feature).
-- Tracking issue: filed on PerryTS/perry with the Phase 0 answers.
+- Tracking issue: PerryTS/perry#7241 (Phase 0 answers in the opening post).
 
 ## Thesis (from the experiment brief)
 
